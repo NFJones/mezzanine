@@ -357,8 +357,12 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     conversation_id: String,
     /// Exact pane state restored before each rich-source reprojection.
     baseline_screen: std::sync::Arc<TerminalScreen>,
+    /// Direct batch rationale accumulated from the provider stream.
+    rationale: Option<RuntimeStreamingTextSource>,
     /// Established streamed actions keyed by their MAAP array index.
     actions: std::collections::BTreeMap<usize, RuntimeStreamingSayAction>,
+    /// Established shell-command source keyed by MAAP action index.
+    shell_commands: std::collections::BTreeMap<usize, RuntimeStreamingTextSource>,
     /// Monotonic source generation used to fence worker projections.
     revision: u64,
     /// Newest complete projection atomically installed in the pane.
@@ -374,6 +378,15 @@ pub(crate) struct RuntimeStreamingSayAction {
     status: mez_agent::SayStatus,
     /// Normalized presentation media type.
     content_type: String,
+    /// Complete decoded source received so far.
+    text: String,
+    /// Whether the JSON source string has closed.
+    complete: bool,
+}
+
+/// Accumulated source for one streamed plain-text presentation field.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RuntimeStreamingTextSource {
     /// Complete decoded source received so far.
     text: String,
     /// Whether the JSON source string has closed.
@@ -406,8 +419,18 @@ pub(crate) struct RuntimeStreamingSayProjectionWork {
     pub(crate) revision: u64,
     /// Pre-stream screen from which the complete candidate is rebuilt.
     pub(crate) baseline_screen: std::sync::Arc<TerminalScreen>,
+    /// Complete batch rationale state captured for this generation.
+    pub(crate) rationale: Option<RuntimeStreamingTextSource>,
     /// Complete action state captured for this generation.
     pub(crate) actions: std::collections::BTreeMap<usize, RuntimeStreamingSayAction>,
+    /// Complete shell-command state captured for this generation.
+    pub(crate) shell_commands: std::collections::BTreeMap<usize, RuntimeStreamingTextSource>,
+    /// Whether thinking text is visible for this pane.
+    pub(crate) thinking_enabled: bool,
+    /// Shell dialect used by the existing command-preview highlighter.
+    pub(crate) shell_classification: mez_agent::ShellClassification,
+    /// Current pane presentation width used by the static thinking renderer.
+    pub(crate) presentation_columns: usize,
     /// Available width inside the agent presentation gutter.
     pub(crate) frame_width: usize,
     /// Full terminal width used by table and fenced renderers.
@@ -429,6 +452,12 @@ pub(crate) struct RuntimeStreamingSayProjectionResult {
     pub(crate) conversation_id: String,
     /// Exact source generation represented by the candidate.
     pub(crate) revision: u64,
+    /// Thinking visibility captured by the worker input.
+    pub(crate) thinking_enabled: bool,
+    /// Shell dialect captured by the worker input.
+    pub(crate) shell_classification: mez_agent::ShellClassification,
+    /// Pane presentation width captured by the worker input.
+    pub(crate) presentation_columns: usize,
     /// Available width used to build the candidate.
     pub(crate) frame_width: usize,
     /// Full terminal width used to build tables and fenced content.

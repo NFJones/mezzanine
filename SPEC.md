@@ -2081,33 +2081,47 @@ overwrite it. If a PTY read contains both a Mezzanine transaction-end marker and
 the parent shell's next prompt repaint, prompt bytes after the marker MUST NOT
 be considered command output for this transient preview. The transient preview
 SHOULD use the same muted foreground treatment as agent thinking or status text.
-While a provider response streams, Mezzanine MUST treat each structurally
-established supported `say` action as the canonical assistant presentation, not
-as a command-style preview. It MUST display `mez> ` before the first text
-character, decode and apply every source character in order without dropping or
-truncating deltas, and MUST NOT apply `terminal.shell_output_preview_lines` to
-streamed `say` output. Provider deltas and physical client redraws MAY be
-coalesced at bounded sequence points, but the canonical source model MUST accept
-every decoded character exactly once and in order. Incomplete source MUST remain
-visible as one literal provisional component. Rich Markdown or unified-diff
-content MUST be built outside the serialized runtime actor from an immutable
-source generation and MUST replace the source-backed region only as one complete
-screen generation. Rendering budgets and cancellation MAY pause or discard
-private work, but MUST NOT publish a partial rich component, a partial terminal
-screen, or rows from mixed generations. Results captured before a source,
-conversation, geometry, or theme change MUST be rejected. Raw provider fields
-other than a structurally established `say.text`, including rationale and
-non-`say` action payloads, MUST NOT become visible through this streaming path.
-After provider completion, an exactly matching validated action index, status,
-content type, and raw text MUST promote the matching atomically published rich
+While a provider response streams, Mezzanine MUST accept provisional visible
+source only from a structurally established supported `say.text`, the direct
+batch-level `rationale` string, or a direct `shell_command.command` string. A
+supported `say` action remains canonical assistant presentation and MUST display
+`mez> ` before its first source character. Direct rationale source MUST append
+only after the existing `thinking: ` prefix and shell command source MUST append
+only after the existing `$ ` prefix; those prefixes and their styles MUST be the
+same as ordinary complete presentation. `thought`, action-local rationale,
+shell summaries, and every other raw provider field or action payload MUST NOT
+enter this streaming path.
+
+For every allowlisted source, Mezzanine MUST decode and apply every source
+character exactly once and in order without dropping or truncating deltas.
+Provider deltas and physical client redraws MAY be coalesced only at bounded
+sequence points that preserve source identity and lifecycle barriers. Incomplete
+source MUST remain one literal provisional component and MUST NOT become
+durable presentation, executable shell input, policy input, audit execution
+state, or model-context material. Completed rich `say`, rationale, and command
+preview projections MUST be built outside the serialized runtime actor from an
+immutable source generation using their ordinary static renderers and MUST
+replace the source-backed region only as one complete screen generation.
+Rendering budgets and cancellation MAY pause or discard private work, but MUST
+NOT publish a partial rich component, partial terminal screen, or rows from
+mixed generations. Results captured before a source, conversation, geometry,
+theme, thinking-visibility, presentation-width, or shell-classification change
+MUST be rejected.
+
+After provider completion, an exactly matching validated `say` action index,
+status, content type, and raw text MAY promote the matching atomically published
 generation in place, persist its semantic source once, and suppress ordinary
-immediate or deferred replay. If rich projection fails or is unavailable, the
-validated action MUST fall back to ordinary complete presentation rather than
-promoting provisional literal rows. A mismatch MUST restore the pre-stream pane
-state and present only the validated action through the normal renderer.
-Provider failure, cancellation, retry, stale completion, claim loss, or
-pane/session replacement MUST discard unvalidated live state and restore that
-pre-stream state.
+immediate or deferred replay. A response containing provisional rationale or
+command source MUST first validate the complete raw source against the accepted
+batch, then restore the pre-stream pane and use the ordinary validated response
+presentation and shell-dispatch paths. This restoration MUST ensure the settled
+pane has exactly the same ordering, prefixes, styling, wrapping, command bounds,
+persistence, approval behavior, and execution behavior as a non-streamed
+response. If projection is unavailable, validation fails, or any source
+mismatches, Mezzanine MUST restore the pre-stream pane and present only validated
+source through the normal renderers. Provider failure, cancellation, retry,
+stale completion, claim loss, or pane/session replacement MUST likewise discard
+unvalidated live state and restore that pre-stream state.
 Mezzanine MUST NOT impose a total per-turn automatic shell dispatch count cap,
 because broad but finite inspection batches are ordinary agent work. Mezzanine
 MUST still prevent provably duplicate file mutations from replaying after the

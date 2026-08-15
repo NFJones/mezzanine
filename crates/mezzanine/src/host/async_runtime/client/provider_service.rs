@@ -27,22 +27,49 @@ fn push_coalesced_streaming_say_event(
     events: &mut Vec<mez_agent::StreamingSayEvent>,
     event: mez_agent::StreamingSayEvent,
 ) {
-    if let mez_agent::StreamingSayEvent::TextDelta { action_index, text } = event {
-        if let Some(mez_agent::StreamingSayEvent::TextDelta {
-            action_index: previous_action_index,
-            text: previous_text,
-        }) = events.last_mut()
-            && *previous_action_index == action_index
-            && previous_text.len().saturating_add(text.len())
-                <= STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES
-        {
-            previous_text.push_str(&text);
-            return;
+    match event {
+        mez_agent::StreamingSayEvent::RationaleTextDelta { text } => {
+            if let Some(mez_agent::StreamingSayEvent::RationaleTextDelta {
+                text: previous_text,
+            }) = events.last_mut()
+                && previous_text.len().saturating_add(text.len())
+                    <= STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES
+            {
+                previous_text.push_str(&text);
+                return;
+            }
+            events.push(mez_agent::StreamingSayEvent::RationaleTextDelta { text });
         }
-        events.push(mez_agent::StreamingSayEvent::TextDelta { action_index, text });
-        return;
+        mez_agent::StreamingSayEvent::TextDelta { action_index, text } => {
+            if let Some(mez_agent::StreamingSayEvent::TextDelta {
+                action_index: previous_action_index,
+                text: previous_text,
+            }) = events.last_mut()
+                && *previous_action_index == action_index
+                && previous_text.len().saturating_add(text.len())
+                    <= STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES
+            {
+                previous_text.push_str(&text);
+                return;
+            }
+            events.push(mez_agent::StreamingSayEvent::TextDelta { action_index, text });
+        }
+        mez_agent::StreamingSayEvent::ShellCommandTextDelta { action_index, text } => {
+            if let Some(mez_agent::StreamingSayEvent::ShellCommandTextDelta {
+                action_index: previous_action_index,
+                text: previous_text,
+            }) = events.last_mut()
+                && *previous_action_index == action_index
+                && previous_text.len().saturating_add(text.len())
+                    <= STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES
+            {
+                previous_text.push_str(&text);
+                return;
+            }
+            events.push(mez_agent::StreamingSayEvent::ShellCommandTextDelta { action_index, text });
+        }
+        event => events.push(event),
     }
-    events.push(event);
 }
 
 /// Converts coalesced provider progress into one bounded actor event batch.

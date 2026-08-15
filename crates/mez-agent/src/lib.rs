@@ -384,7 +384,8 @@ pub use permissions::{
     PermissionPreset, RuleDecision,
 };
 pub use progress::{
-    RationaleSuppression, StreamingSayEvent, StreamingSayExtractor, normalize_progress_say_entry,
+    RationaleSuppression, StreamingPresentationEvent, StreamingPresentationExtractor,
+    StreamingSayEvent, StreamingSayExtractor, normalize_progress_say_entry,
     normalize_rationale_entry, progress_say_entries_are_redundant,
     progress_say_entries_for_execution, progress_say_significant_tokens, progress_say_stem_token,
     progress_say_token_is_stopword, push_progress_say_token, rationale_entries_are_redundant,

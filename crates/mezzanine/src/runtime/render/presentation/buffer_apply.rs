@@ -1221,7 +1221,9 @@ impl RuntimeSessionService {
                             turn_id: turn_id.to_string(),
                             conversation_id,
                             baseline_screen: std::sync::Arc::new(baseline_screen),
+                            rationale: None,
                             actions: std::collections::BTreeMap::new(),
+                            shell_commands: std::collections::BTreeMap::new(),
                             revision: 1,
                             projected_revision: None,
                             projected_actions: None,
@@ -1297,7 +1299,291 @@ impl RuntimeSessionService {
                 presentation.revision = presentation.revision.wrapping_add(1);
                 presentation.projected_revision = None;
             }
+            mez_agent::StreamingSayEvent::RationaleStarted => {
+                self.ensure_agent_streaming_presentation(pane_id, turn_id)?;
+                let presentation = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("streaming rationale presentation is unavailable")
+                    })?;
+                presentation.rationale.get_or_insert_with(Default::default);
+                presentation.revision = presentation.revision.wrapping_add(1);
+                presentation.projected_revision = None;
+            }
+            mez_agent::StreamingSayEvent::RationaleTextDelta { text } => {
+                let visible = self.agent_thinking_enabled(pane_id);
+                let should_start = visible
+                    && self
+                        .presentation
+                        .agent_streaming_say_presentations
+                        .get(pane_id)
+                        .and_then(|presentation| presentation.rationale.as_ref())
+                        .is_some_and(|rationale| rationale.text.is_empty())
+                    && !text.is_empty();
+                if should_start {
+                    self.append_agent_streaming_plain_started(
+                        pane_id,
+                        AgentTerminalPresentationStyle::Status,
+                        "thinking: ",
+                        "starting streaming rationale source",
+                    )?;
+                }
+                self.append_agent_streaming_plain_delta_if_visible(
+                    pane_id,
+                    text,
+                    visible,
+                    AgentTerminalPresentationStyle::Status,
+                    "          ",
+                    "appending streaming rationale source",
+                )?;
+                let presentation = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .filter(|presentation| presentation.turn_id == turn_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "streaming rationale arrived before its start event",
+                        )
+                    })?;
+                let rationale = presentation.rationale.as_mut().ok_or_else(|| {
+                    MezError::invalid_state("streaming rationale arrived before its start event")
+                })?;
+                rationale.text.push_str(text);
+                presentation.revision = presentation.revision.wrapping_add(1);
+                presentation.projected_revision = None;
+            }
+            mez_agent::StreamingSayEvent::RationaleTextComplete => {
+                let presentation = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .filter(|presentation| presentation.turn_id == turn_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "streaming rationale completion arrived before its start event",
+                        )
+                    })?;
+                let rationale = presentation.rationale.as_mut().ok_or_else(|| {
+                    MezError::invalid_state(
+                        "streaming rationale completion arrived before its start event",
+                    )
+                })?;
+                rationale.complete = true;
+                presentation.revision = presentation.revision.wrapping_add(1);
+                presentation.projected_revision = None;
+            }
+            mez_agent::StreamingSayEvent::ShellCommandStarted { action_index } => {
+                self.ensure_agent_streaming_presentation(pane_id, turn_id)?;
+                let presentation = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("streaming command presentation is unavailable")
+                    })?;
+                presentation
+                    .shell_commands
+                    .entry(*action_index)
+                    .or_insert_with(Default::default);
+                presentation.revision = presentation.revision.wrapping_add(1);
+                presentation.projected_revision = None;
+                self.append_agent_streaming_plain_started(
+                    pane_id,
+                    AgentTerminalPresentationStyle::Command,
+                    "$ ",
+                    "starting streaming command source",
+                )?;
+            }
+            mez_agent::StreamingSayEvent::ShellCommandTextDelta { action_index, text } => {
+                let exists = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get(pane_id)
+                    .filter(|presentation| presentation.turn_id == turn_id)
+                    .is_some_and(|presentation| {
+                        presentation.shell_commands.contains_key(action_index)
+                    });
+                if !exists {
+                    return Err(MezError::invalid_state(
+                        "streaming command arrived before its start event",
+                    ));
+                }
+                self.append_agent_streaming_plain_delta_if_visible(
+                    pane_id,
+                    text,
+                    true,
+                    AgentTerminalPresentationStyle::Command,
+                    "  ",
+                    "appending streaming command source",
+                )?;
+                let presentation = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("streaming command presentation disappeared")
+                    })?;
+                let command = presentation
+                    .shell_commands
+                    .get_mut(action_index)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("streaming command source disappeared")
+                    })?;
+                command.text.push_str(text);
+                presentation.revision = presentation.revision.wrapping_add(1);
+                presentation.projected_revision = None;
+            }
+            mez_agent::StreamingSayEvent::ShellCommandTextComplete { action_index } => {
+                let presentation = self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .get_mut(pane_id)
+                    .filter(|presentation| presentation.turn_id == turn_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "streaming command completion arrived before its start event",
+                        )
+                    })?;
+                let command = presentation
+                    .shell_commands
+                    .get_mut(action_index)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "streaming command completion arrived before its start event",
+                        )
+                    })?;
+                command.complete = true;
+                presentation.revision = presentation.revision.wrapping_add(1);
+                presentation.projected_revision = None;
+            }
         }
+        Ok(())
+    }
+
+    /// Initializes response-scoped provisional presentation for any source kind.
+    fn ensure_agent_streaming_presentation(&mut self, pane_id: &str, turn_id: &str) -> Result<()> {
+        self.ensure_current_agent_presentation_screen(pane_id)?;
+        self.clear_agent_shell_output_status_line(pane_id)?;
+        let conversation_id = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone())
+            .ok_or_else(|| {
+                MezError::invalid_state("streaming presentation has no active conversation")
+            })?;
+        let replace = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get(pane_id)
+            .is_some_and(|presentation| {
+                presentation.turn_id != turn_id || presentation.conversation_id != conversation_id
+            });
+        if replace {
+            self.discard_agent_streaming_say_presentation(pane_id, None)?;
+        }
+        if !self
+            .presentation
+            .agent_streaming_say_presentations
+            .contains_key(pane_id)
+        {
+            let baseline_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
+                MezError::invalid_state("streaming presentation screen was not initialized")
+            })?;
+            self.presentation
+                .agent_promoted_streaming_say_actions
+                .remove(&(pane_id.to_string(), turn_id.to_string()));
+            self.presentation.agent_streaming_say_presentations.insert(
+                pane_id.to_string(),
+                RuntimeStreamingSayPresentation {
+                    turn_id: turn_id.to_string(),
+                    conversation_id,
+                    baseline_screen: std::sync::Arc::new(baseline_screen),
+                    rationale: None,
+                    actions: std::collections::BTreeMap::new(),
+                    shell_commands: std::collections::BTreeMap::new(),
+                    revision: 1,
+                    projected_revision: None,
+                    projected_actions: None,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Appends one existing styled prefix for a provisional plain-text source.
+    fn append_agent_streaming_plain_started(
+        &mut self,
+        pane_id: &str,
+        style: AgentTerminalPresentationStyle,
+        prefix: &str,
+        context: &str,
+    ) -> Result<()> {
+        let presentation = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get(pane_id)
+            .ok_or_else(|| MezError::invalid_state("streaming presentation is unavailable"))?;
+        let conversation_id = presentation.conversation_id.clone();
+        let mut candidate = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
+            MezError::invalid_state("streaming presentation screen was not initialized")
+        })?;
+        let cursor = candidate.cursor_state();
+        let current_line_has_content = candidate
+            .visible_lines()
+            .get(cursor.row)
+            .is_some_and(|line| !line.trim().is_empty());
+        let mut bytes = if cursor.column == 0 && !current_line_has_content {
+            "\r".to_string()
+        } else {
+            "\r\n".to_string()
+        };
+        append_styled_agent_terminal_line(
+            &mut bytes,
+            style,
+            prefix,
+            &self.presentation.settings.ui_theme,
+        );
+        Self::feed_agent_terminal_screen(&mut candidate, bytes.as_bytes(), context)?;
+        self.set_agent_pane_screen(pane_id, conversation_id, candidate);
+        Ok(())
+    }
+
+    /// Appends decoded plain source while retaining static continuation indentation.
+    fn append_agent_streaming_plain_delta_if_visible(
+        &mut self,
+        pane_id: &str,
+        text: &str,
+        visible: bool,
+        style: AgentTerminalPresentationStyle,
+        continuation: &str,
+        context: &str,
+    ) -> Result<()> {
+        if text.is_empty() || !visible {
+            return Ok(());
+        }
+        let presentation = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get(pane_id)
+            .ok_or_else(|| MezError::invalid_state("streaming presentation is unavailable"))?;
+        let conversation_id = presentation.conversation_id.clone();
+        let mut candidate = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
+            MezError::invalid_state("streaming presentation screen was not initialized")
+        })?;
+        let ui_theme = self.presentation.settings.ui_theme.clone();
+        let mut bytes = String::new();
+        for (index, line) in text.split('\n').enumerate() {
+            if index > 0 {
+                bytes.push_str("\r\n");
+                append_styled_agent_terminal_line(&mut bytes, style, continuation, &ui_theme);
+            }
+            bytes.push_str(&sanitized_agent_terminal_line(line));
+        }
+        Self::feed_agent_terminal_screen(&mut candidate, bytes.as_bytes(), context)?;
+        self.set_agent_pane_screen(pane_id, conversation_id, candidate);
         Ok(())
     }
 
@@ -1396,8 +1682,20 @@ impl RuntimeSessionService {
         else {
             return Ok(None);
         };
-        if presentation.actions.is_empty()
+        let has_source = presentation.rationale.is_some()
+            || !presentation.actions.is_empty()
+            || !presentation.shell_commands.is_empty();
+        let source_incomplete = presentation
+            .rationale
+            .as_ref()
+            .is_some_and(|source| !source.complete)
             || presentation.actions.values().any(|action| !action.complete)
+            || presentation
+                .shell_commands
+                .values()
+                .any(|source| !source.complete);
+        if !has_source
+            || source_incomplete
             || presentation.projected_revision == Some(presentation.revision)
         {
             return Ok(None);
@@ -1414,7 +1712,12 @@ impl RuntimeSessionService {
             conversation_id: presentation.conversation_id.clone(),
             revision: presentation.revision,
             baseline_screen: presentation.baseline_screen.clone(),
+            rationale: presentation.rationale.clone(),
             actions: presentation.actions.clone(),
+            shell_commands: presentation.shell_commands.clone(),
+            thinking_enabled: self.agent_thinking_enabled(pane_id),
+            shell_classification: self.shell_classification_for_pane(pane_id),
+            presentation_columns: self.agent_terminal_presentation_columns(pane_id)?,
             frame_width: self.agent_terminal_markdown_frame_width(pane_id)?,
             table_width: self.agent_terminal_markdown_terminal_width(pane_id)?,
             ui_theme: self.presentation.settings.ui_theme.clone(),
@@ -1426,7 +1729,7 @@ impl RuntimeSessionService {
     pub(crate) fn build_agent_streaming_say_projection(
         work: crate::runtime::RuntimeStreamingSayProjectionWork,
     ) -> Result<crate::runtime::RuntimeStreamingSayProjectionResult> {
-        let projections = work
+        let say_projections = work
             .actions
             .iter()
             .map(|(action_index, action)| {
@@ -1441,6 +1744,70 @@ impl RuntimeSessionService {
                 )
             })
             .collect::<Vec<_>>();
+        let rationale_projection = work.rationale.as_ref().and_then(|source| {
+            work.thinking_enabled.then(|| {
+                let rendition = agent_terminal_label_rendition(
+                    AgentTerminalPresentationStyle::Status,
+                    &work.ui_theme,
+                );
+                StreamingSayProjection {
+                    style: AgentTerminalPresentationStyle::Status,
+                    rendered_lines: agent_thinking_display_lines_for_width(
+                        &source.text,
+                        work.presentation_columns,
+                    )
+                    .into_iter()
+                    .map(|display| {
+                        let length = UnicodeWidthStr::width(display.as_str());
+                        RichTextLine {
+                            display,
+                            style_spans: vec![TerminalStyleSpan {
+                                start: 0,
+                                length,
+                                rendition,
+                            }],
+                            copy_text: None,
+                            kind: mez_mux::render::RichTextLineKind::Normal,
+                        }
+                    })
+                    .collect(),
+                    copy_lines: Vec::new(),
+                }
+            })
+        });
+        let command_content_columns =
+            bounded_agent_terminal_presentation_columns(usize::from(work.screen_size.columns))
+                .saturating_sub(
+                    UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX)
+                        .saturating_add(UnicodeWidthStr::width("$ ")),
+                )
+                .max(1);
+        let command_projections = work
+            .shell_commands
+            .iter()
+            .map(|(action_index, source)| {
+                let bounded = bounded_command_preview_source(&source.text);
+                let rendered_lines = command_preview_terminal_rendered_lines(
+                    &bounded.text,
+                    bounded.truncated,
+                    command_content_columns,
+                    10,
+                    work.shell_classification,
+                    &work.ui_theme,
+                );
+                (
+                    *action_index,
+                    StreamingSayProjection {
+                        style: AgentTerminalPresentationStyle::Command,
+                        copy_lines: rendered_lines
+                            .iter()
+                            .map(|line| line.display.clone())
+                            .collect(),
+                        rendered_lines,
+                    },
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
         let mut candidate = work.baseline_screen.as_ref().clone();
         let mut bytes = String::new();
         let cursor = candidate.cursor_state();
@@ -1454,7 +1821,7 @@ impl RuntimeSessionService {
             bytes.push_str("\r\n");
         }
         let mut first_line = true;
-        for (_action_index, projection) in &projections {
+        if let Some(projection) = rationale_projection.as_ref() {
             for line in &projection.rendered_lines {
                 if !first_line {
                     bytes.push_str("\r\n");
@@ -1469,12 +1836,49 @@ impl RuntimeSessionService {
                 first_line = false;
             }
         }
+        let mut command_copy_lines = Vec::new();
+        let action_indices = work
+            .actions
+            .keys()
+            .chain(work.shell_commands.keys())
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        for action_index in action_indices {
+            let projection = say_projections
+                .iter()
+                .find_map(|(candidate, projection)| {
+                    (*candidate == action_index).then_some(projection)
+                })
+                .or_else(|| command_projections.get(&action_index));
+            let Some(projection) = projection else {
+                continue;
+            };
+            for line in &projection.rendered_lines {
+                if !first_line {
+                    bytes.push_str("\r\n");
+                }
+                append_styled_agent_terminal_rendered_line(
+                    &mut bytes,
+                    projection.style,
+                    line,
+                    &work.ui_theme,
+                );
+                bytes.push_str("\x1b[0m");
+                first_line = false;
+            }
+            if command_projections.contains_key(&action_index) {
+                command_copy_lines.extend(projection.copy_lines.iter().cloned());
+            }
+        }
         Self::feed_agent_terminal_screen(
             &mut candidate,
             bytes.as_bytes(),
             "projecting streaming say output",
         )?;
-        let projected_actions = projections
+        if !command_copy_lines.is_empty() {
+            candidate.set_recent_normal_copy_texts(&command_copy_lines, AGENT_COPY_SKIP_LINE);
+        }
+        let projected_actions = say_projections
             .into_iter()
             .map(|(action_index, projection)| {
                 crate::runtime::render::RuntimeStreamingSayProjectedAction {
@@ -1494,6 +1898,9 @@ impl RuntimeSessionService {
             turn_id: work.turn_id,
             conversation_id: work.conversation_id,
             revision: work.revision,
+            thinking_enabled: work.thinking_enabled,
+            shell_classification: work.shell_classification,
+            presentation_columns: work.presentation_columns,
             frame_width: work.frame_width,
             table_width: work.table_width,
             ui_theme: work.ui_theme,
@@ -1516,7 +1923,15 @@ impl RuntimeSessionService {
                 presentation.turn_id == result.turn_id
                     && presentation.conversation_id == result.conversation_id
                     && presentation.revision == result.revision
+                    && presentation
+                        .rationale
+                        .as_ref()
+                        .is_none_or(|source| source.complete)
                     && presentation.actions.values().all(|action| action.complete)
+                    && presentation
+                        .shell_commands
+                        .values()
+                        .all(|source| source.complete)
             });
         let conversation_current = self
             .agent_shell_store()
@@ -1527,6 +1942,10 @@ impl RuntimeSessionService {
             || self
                 .agent_pane_screen(&result.pane_id)
                 .is_none_or(|screen| screen.size() != result.screen_size)
+            || self.agent_thinking_enabled(&result.pane_id) != result.thinking_enabled
+            || self.shell_classification_for_pane(&result.pane_id) != result.shell_classification
+            || self.agent_terminal_presentation_columns(&result.pane_id)?
+                != result.presentation_columns
             || self.agent_terminal_markdown_frame_width(&result.pane_id)? != result.frame_width
             || self.agent_terminal_markdown_terminal_width(&result.pane_id)? != result.table_width
             || self.presentation.settings.ui_theme != result.ui_theme
@@ -1729,28 +2148,47 @@ impl RuntimeSessionService {
             .get(pane_id)
             .is_some_and(|session| session.session_id == presentation.conversation_id);
         let batch = execution.response.action_batch.as_ref();
-        let matches = presentation.turn_id == turn_id
-            && conversation_matches
-            && batch.is_some_and(|batch| {
-                presentation.actions.iter().all(|(action_index, streamed)| {
-                    let Some(mez_agent::AgentActionPayload::Say {
-                        status,
-                        text,
-                        content_type,
-                    }) = batch
-                        .actions
-                        .get(*action_index)
-                        .map(|action| &action.payload)
-                    else {
-                        return false;
-                    };
-                    streamed.complete
-                        && streamed.status == *status
-                        && streamed.text == *text
-                        && streamed.content_type
-                            == mez_agent::normalize_agent_output_content_type(Some(content_type))
-                })
-            });
+        let matches =
+            presentation.turn_id == turn_id
+                && conversation_matches
+                && batch.is_some_and(|batch| {
+                    presentation.rationale.as_ref().is_none_or(|streamed| {
+                        streamed.complete && streamed.text == batch.rationale
+                    }) && presentation.actions.iter().all(|(action_index, streamed)| {
+                        let Some(mez_agent::AgentActionPayload::Say {
+                            status,
+                            text,
+                            content_type,
+                        }) = batch
+                            .actions
+                            .get(*action_index)
+                            .map(|action| &action.payload)
+                        else {
+                            return false;
+                        };
+                        streamed.complete
+                            && streamed.status == *status
+                            && streamed.text == *text
+                            && streamed.content_type
+                                == mez_agent::normalize_agent_output_content_type(Some(
+                                    content_type,
+                                ))
+                    }) && presentation
+                        .shell_commands
+                        .iter()
+                        .all(|(action_index, streamed)| {
+                            let Some(mez_agent::AgentActionPayload::ShellCommand {
+                                command, ..
+                            }) = batch
+                                .actions
+                                .get(*action_index)
+                                .map(|action| &action.payload)
+                            else {
+                                return false;
+                            };
+                            streamed.complete && streamed.text == *command
+                        })
+                });
         if !matches {
             self.presentation
                 .agent_promoted_streaming_say_actions
@@ -1762,6 +2200,25 @@ impl RuntimeSessionService {
                     presentation.baseline_screen.as_ref().clone(),
                 );
             }
+            return Ok(std::collections::BTreeSet::new());
+        }
+
+        // Thinking and command preview rows have additional authoritative
+        // completion-time ordering rules: rationale de-duplication, action
+        // rationale/summary presentation, approval, and dispatch. Restore the
+        // shared baseline and let that existing static pipeline produce the
+        // durable final rows after exact source validation. This preserves the
+        // streamed text while guaranteeing the settled pane is identical to a
+        // non-streamed response.
+        if presentation.rationale.is_some() || !presentation.shell_commands.is_empty() {
+            self.presentation
+                .agent_promoted_streaming_say_actions
+                .remove(&(pane_id.to_string(), turn_id.to_string()));
+            self.set_agent_pane_screen(
+                pane_id,
+                presentation.conversation_id,
+                presentation.baseline_screen.as_ref().clone(),
+            );
             return Ok(std::collections::BTreeSet::new());
         }
 

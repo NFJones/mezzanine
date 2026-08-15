@@ -289,6 +289,150 @@ fn runtime_streaming_say_promotes_rich_output_without_replay() {
     );
 }
 
+/// Verifies streamed rationale and command source use the existing prefixes,
+/// converge through the ordinary static renderers, and remain provisional.
+///
+/// The completed worker projection must equal direct static thinking and
+/// command-preview output at the same geometry. Validated completion then
+/// restores the shared baseline so normal response presentation and shell
+/// dispatch remain the only durable, executable authority.
+#[test]
+fn runtime_streaming_rationale_and_command_match_static_projection_and_restore() {
+    let mut streaming = test_runtime_service();
+    let mut static_render = test_runtime_service();
+    for service in [&mut streaming, &mut static_render] {
+        service
+            .attach_primary("primary", true, Size::new(48, 12).unwrap(), 120)
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        set_agent_pane_screen_for_test(
+            service,
+            "%1",
+            TerminalScreen::new(Size::new(48, 12).unwrap(), 120).unwrap(),
+        );
+        service
+            .append_agent_status_text_to_terminal_buffer("%1", "baseline")
+            .unwrap();
+    }
+    let baseline = streaming.agent_pane_screen("%1").unwrap().clone();
+    let rationale = "Inspect the current files";
+    let command = "printf 'alpha beta\\n'";
+
+    for event in [
+        mez_agent::StreamingSayEvent::RationaleStarted,
+        mez_agent::StreamingSayEvent::RationaleTextDelta {
+            text: rationale.to_string(),
+        },
+        mez_agent::StreamingSayEvent::RationaleTextComplete,
+        mez_agent::StreamingSayEvent::ShellCommandStarted { action_index: 0 },
+        mez_agent::StreamingSayEvent::ShellCommandTextDelta {
+            action_index: 0,
+            text: command.to_string(),
+        },
+        mez_agent::StreamingSayEvent::ShellCommandTextComplete { action_index: 0 },
+    ] {
+        streaming
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-1", &event)
+            .unwrap();
+    }
+    let literal = streaming
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        literal.contains("thinking: Inspect the current files"),
+        "{literal}"
+    );
+    assert!(literal.contains("$ printf 'alpha beta\\n'"), "{literal}");
+
+    let work = streaming
+        .take_agent_streaming_say_projection_work("%1", "turn-1")
+        .unwrap()
+        .expect("closed rationale and command source should project");
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(
+        streaming
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    static_render
+        .append_agent_thinking_text_to_terminal_buffer("%1", rationale)
+        .unwrap();
+    static_render
+        .append_agent_command_preview_to_terminal_buffer("%1", command)
+        .unwrap();
+    assert_eq!(
+        streaming
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines(),
+        static_render
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines(),
+        "completed provisional projection must match static display text"
+    );
+    assert_eq!(
+        streaming
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_styled_content_lines(),
+        static_render
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_styled_content_lines(),
+        "completed provisional projection must match static styling"
+    );
+
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-1"),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: rationale.to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "shell-streamed".to_string(),
+                    rationale: String::new(),
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
+                        summary: rationale.to_string(),
+                        command: command.to_string(),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: None,
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    assert!(
+        streaming
+            .reconcile_agent_streaming_say_completion("%1", "turn-1", &execution)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(streaming.agent_pane_screen("%1").unwrap(), &baseline);
+}
+
 /// Verifies a complete rich generation captured before newer source arrived
 /// cannot replace the pane or expose rows from two streaming generations.
 ///

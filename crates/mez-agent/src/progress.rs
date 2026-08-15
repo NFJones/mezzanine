@@ -18,7 +18,16 @@ const RATIONALE_ENTRY_CHAR_LIMIT: usize = 256;
 const PROGRESS_REDUNDANT_SHARED_TOKEN_FLOOR: usize = 5;
 /// One ordered presentation event extracted from an incomplete MAAP response.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StreamingSayEvent {
+pub enum StreamingPresentationEvent {
+    /// The direct batch-level `rationale` string is ready for display.
+    RationaleStarted,
+    /// Newly decoded batch-level rationale source.
+    RationaleTextDelta {
+        /// Ordered source suffix that has not been emitted previously.
+        text: String,
+    },
+    /// The batch-level `rationale` string has closed.
+    RationaleTextComplete,
     /// A structurally established supported `say` action is ready for display.
     Started {
         /// Zero-based position in the MAAP `actions` array.
@@ -40,40 +49,73 @@ pub enum StreamingSayEvent {
         /// Zero-based position in the MAAP `actions` array.
         action_index: usize,
     },
+    /// A direct `shell_command.command` string is ready for display.
+    ShellCommandStarted {
+        /// Zero-based position in the MAAP `actions` array.
+        action_index: usize,
+    },
+    /// Newly decoded shell command source.
+    ShellCommandTextDelta {
+        /// Zero-based position in the MAAP `actions` array.
+        action_index: usize,
+        /// Ordered source suffix that has not been emitted previously.
+        text: String,
+    },
+    /// The shell action's JSON `command` string has closed.
+    ShellCommandTextComplete {
+        /// Zero-based position in the MAAP `actions` array.
+        action_index: usize,
+    },
 }
 
-/// Per-action source state already exposed by [`StreamingSayExtractor`].
+/// Compatibility name for callers that consume only streamed `say` events.
+pub type StreamingSayEvent = StreamingPresentationEvent;
+
+/// Stable identity of one allowlisted provisional presentation source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum StreamingSourceId {
+    Rationale,
+    Say(usize),
+    ShellCommand(usize),
+}
+
+/// Source state already exposed by [`StreamingPresentationExtractor`].
 #[derive(Debug, Clone, Default)]
-struct EmittedStreamingSay {
+struct EmittedStreamingSource {
     started: bool,
     text: String,
     complete: bool,
 }
 
-/// Cursor into one established but incomplete direct `say.text` JSON string.
+/// Cursor into one established but incomplete direct JSON source string.
 #[derive(Debug, Clone)]
-struct ActiveStreamingSay {
-    action_index: usize,
+struct ActiveStreamingSource {
+    source: StreamingSourceId,
     raw_cursor: usize,
 }
 
 /// Fail-closed extractor for ordered source events from direct or fenced MAAP.
 ///
-/// The provider HTTP response limit remains the resource bound. This extractor
-/// deliberately has no presentation-specific input or visible-text limit.
+/// Only direct batch rationale, supported `say.text`, and
+/// `shell_command.command` fields are eligible. The provider HTTP response
+/// limit remains the resource bound; this extractor deliberately has no
+/// presentation-specific input or visible-text limit.
 #[derive(Debug, Default)]
-pub struct StreamingSayExtractor {
+pub struct StreamingPresentationExtractor {
     input: String,
-    emitted: Vec<EmittedStreamingSay>,
-    active: Option<ActiveStreamingSay>,
+    emitted: std::collections::BTreeMap<StreamingSourceId, EmittedStreamingSource>,
+    active: Option<ActiveStreamingSource>,
     disabled: bool,
     #[cfg(test)]
     structural_scans: usize,
 }
 
-impl StreamingSayExtractor {
+/// Compatibility name for the previously say-specific extractor.
+pub type StreamingSayExtractor = StreamingPresentationExtractor;
+
+impl StreamingPresentationExtractor {
     /// Appends one provider fragment and returns every newly established event.
-    pub fn push_delta(&mut self, delta: &str) -> Vec<StreamingSayEvent> {
+    pub fn push_delta(&mut self, delta: &str) -> Vec<StreamingPresentationEvent> {
         if self.disabled {
             return Vec::new();
         }
@@ -82,7 +124,7 @@ impl StreamingSayExtractor {
         if let Some(mut active) = self.active.take() {
             match decode_json_string_suffix(&self.input, active.raw_cursor) {
                 JsonStringSuffix::Incomplete { text, raw_cursor } => {
-                    if !self.append_active_text(&active, text, &mut events) {
+                    if !self.append_active_text(active.source, text, &mut events) {
                         self.disable();
                         return Vec::new();
                     }
@@ -91,18 +133,12 @@ impl StreamingSayExtractor {
                     return events;
                 }
                 JsonStringSuffix::Complete { text, .. } => {
-                    if !self.append_active_text(&active, text, &mut events) {
+                    if !self.append_active_text(active.source, text, &mut events)
+                        || !self.complete_source(active.source, &mut events)
+                    {
                         self.disable();
                         return Vec::new();
                     }
-                    let Some(state) = self.emitted.get_mut(active.action_index) else {
-                        self.disable();
-                        return Vec::new();
-                    };
-                    state.complete = true;
-                    events.push(StreamingSayEvent::TextComplete {
-                        action_index: active.action_index,
-                    });
                 }
                 JsonStringSuffix::Invalid => {
                     self.disable();
@@ -115,49 +151,37 @@ impl StreamingSayExtractor {
         {
             self.structural_scans = self.structural_scans.saturating_add(1);
         }
-        let Some(actions) = streaming_say_actions(&self.input) else {
+        let Some(sources) = streaming_presentation_sources(&self.input) else {
             return events;
         };
-        let required_states = actions
-            .last()
-            .map_or(0, |action| action.action_index.saturating_add(1));
-        if self.emitted.len() < required_states {
-            self.emitted
-                .resize_with(required_states, EmittedStreamingSay::default);
-        }
 
         let mut next_active = None;
-        for action in actions {
-            let state = &mut self.emitted[action.action_index];
+        for source in sources {
+            let state = self.emitted.entry(source.id).or_default();
             if !state.started {
                 state.started = true;
-                events.push(StreamingSayEvent::Started {
-                    action_index: action.action_index,
-                    status: action.status,
-                    content_type: action.content_type,
-                });
+                let Some(event) = source.started_event() else {
+                    self.disable();
+                    return Vec::new();
+                };
+                events.push(event);
             }
-            let Some(delta) = action.text.strip_prefix(&state.text) else {
+            let Some(delta) = source.text.strip_prefix(&state.text) else {
                 self.disable();
                 return Vec::new();
             };
             if !delta.is_empty() {
-                events.push(StreamingSayEvent::TextDelta {
-                    action_index: action.action_index,
-                    text: delta.to_string(),
-                });
-                state.text = action.text;
+                events.push(source.delta_event(delta.to_string()));
+                state.text = source.text.clone();
             }
-            if action.complete && !state.complete {
+            if source.complete && !state.complete {
                 state.complete = true;
-                events.push(StreamingSayEvent::TextComplete {
-                    action_index: action.action_index,
-                });
+                events.push(source.complete_event());
             }
-            if !action.complete {
-                next_active = Some(ActiveStreamingSay {
-                    action_index: action.action_index,
-                    raw_cursor: action.text_raw_cursor,
+            if !source.complete {
+                next_active = Some(ActiveStreamingSource {
+                    source: source.id,
+                    raw_cursor: source.raw_cursor,
                 });
             }
         }
@@ -165,14 +189,14 @@ impl StreamingSayExtractor {
         events
     }
 
-    /// Appends one incrementally decoded suffix to established action state.
+    /// Appends one incrementally decoded suffix to established source state.
     fn append_active_text(
         &mut self,
-        active: &ActiveStreamingSay,
+        source: StreamingSourceId,
         text: String,
-        events: &mut Vec<StreamingSayEvent>,
+        events: &mut Vec<StreamingPresentationEvent>,
     ) -> bool {
-        let Some(state) = self.emitted.get_mut(active.action_index) else {
+        let Some(state) = self.emitted.get_mut(&source) else {
             return false;
         };
         if !state.started || state.complete {
@@ -180,11 +204,25 @@ impl StreamingSayExtractor {
         }
         if !text.is_empty() {
             state.text.push_str(&text);
-            events.push(StreamingSayEvent::TextDelta {
-                action_index: active.action_index,
-                text,
-            });
+            events.push(StreamingPresentationSource::delta_event_for(source, text));
         }
+        true
+    }
+
+    /// Marks one active source complete and emits its lifecycle barrier.
+    fn complete_source(
+        &mut self,
+        source: StreamingSourceId,
+        events: &mut Vec<StreamingPresentationEvent>,
+    ) -> bool {
+        let Some(state) = self.emitted.get_mut(&source) else {
+            return false;
+        };
+        if !state.started || state.complete {
+            return false;
+        }
+        state.complete = true;
+        events.push(StreamingPresentationSource::complete_event_for(source));
         true
     }
 
@@ -197,47 +235,128 @@ impl StreamingSayExtractor {
     }
 }
 
-/// One currently classifiable streamed action and its cumulative source.
-struct StreamingSayAction {
-    action_index: usize,
-    status: SayStatus,
-    content_type: String,
+/// One currently classifiable source and its cumulative decoded text.
+struct StreamingPresentationSource {
+    id: StreamingSourceId,
+    status: Option<SayStatus>,
+    content_type: Option<String>,
     text: String,
     complete: bool,
-    text_raw_cursor: usize,
+    raw_cursor: usize,
 }
 
-/// Extracts all structurally established supported `say` actions.
-fn streaming_say_actions(input: &str) -> Option<Vec<StreamingSayAction>> {
+impl StreamingPresentationSource {
+    /// Builds the source-specific start event.
+    fn started_event(&self) -> Option<StreamingPresentationEvent> {
+        match self.id {
+            StreamingSourceId::Rationale => Some(StreamingPresentationEvent::RationaleStarted),
+            StreamingSourceId::Say(action_index) => Some(StreamingPresentationEvent::Started {
+                action_index,
+                status: self.status?,
+                content_type: self.content_type.clone()?,
+            }),
+            StreamingSourceId::ShellCommand(action_index) => {
+                Some(StreamingPresentationEvent::ShellCommandStarted { action_index })
+            }
+        }
+    }
+
+    /// Builds the source-specific text event.
+    fn delta_event(&self, text: String) -> StreamingPresentationEvent {
+        Self::delta_event_for(self.id, text)
+    }
+
+    /// Builds a source-specific text event without a full extracted source.
+    fn delta_event_for(id: StreamingSourceId, text: String) -> StreamingPresentationEvent {
+        match id {
+            StreamingSourceId::Rationale => StreamingPresentationEvent::RationaleTextDelta { text },
+            StreamingSourceId::Say(action_index) => {
+                StreamingPresentationEvent::TextDelta { action_index, text }
+            }
+            StreamingSourceId::ShellCommand(action_index) => {
+                StreamingPresentationEvent::ShellCommandTextDelta { action_index, text }
+            }
+        }
+    }
+
+    /// Builds the source-specific completion event.
+    fn complete_event(&self) -> StreamingPresentationEvent {
+        Self::complete_event_for(self.id)
+    }
+
+    /// Builds a source-specific completion event without a full extracted source.
+    fn complete_event_for(id: StreamingSourceId) -> StreamingPresentationEvent {
+        match id {
+            StreamingSourceId::Rationale => StreamingPresentationEvent::RationaleTextComplete,
+            StreamingSourceId::Say(action_index) => {
+                StreamingPresentationEvent::TextComplete { action_index }
+            }
+            StreamingSourceId::ShellCommand(action_index) => {
+                StreamingPresentationEvent::ShellCommandTextComplete { action_index }
+            }
+        }
+    }
+}
+
+/// Extracts every structurally established allowlisted presentation source.
+fn streaming_presentation_sources(input: &str) -> Option<Vec<StreamingPresentationSource>> {
     let object = provisional_maap_object(input)?;
-    let actions = direct_json_field_value_start(object, "actions")?
-        .trim_start()
-        .strip_prefix('[')?;
     let mut extracted = Vec::new();
-    for (action_index, action) in direct_json_array_objects(actions).into_iter().enumerate() {
-        if json_string_field(action, "type")?.as_str() != "say" {
-            continue;
-        }
-        let status = SayStatus::parse(&json_string_field(action, "status")?)?;
-        let content_type = json_string_field(action, "content_type")?;
-        let content_type = crate::normalize_agent_output_content_type(Some(&content_type));
-        if content_type != crate::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-            && !crate::agent_output_content_type_is_markdown(&content_type)
-            && !crate::agent_output_content_type_is_diff(&content_type)
-        {
-            continue;
-        }
-        let text_start = direct_json_field_value_start(action, "text")?.trim_start();
-        let (text, complete, raw_cursor) = decode_incomplete_json_string(text_start)?;
-        let text_raw_cursor = text_start.as_ptr() as usize - input.as_ptr() as usize + raw_cursor;
-        extracted.push(StreamingSayAction {
-            action_index,
-            status,
-            content_type,
+    if let Some(rationale_start) = direct_json_field_value_start(object, "rationale") {
+        let rationale_start = rationale_start.trim_start();
+        let (text, complete, raw_cursor) = decode_incomplete_json_string(rationale_start)?;
+        extracted.push(StreamingPresentationSource {
+            id: StreamingSourceId::Rationale,
+            status: None,
+            content_type: None,
             text,
             complete,
-            text_raw_cursor,
+            raw_cursor: rationale_start.as_ptr() as usize - input.as_ptr() as usize + raw_cursor,
         });
+    }
+    let Some(actions) = direct_json_field_value_start(object, "actions")
+        .and_then(|value| value.trim_start().strip_prefix('['))
+    else {
+        return Some(extracted);
+    };
+    for (action_index, action) in direct_json_array_objects(actions).into_iter().enumerate() {
+        match json_string_field(action, "type")?.as_str() {
+            "say" => {
+                let status = SayStatus::parse(&json_string_field(action, "status")?)?;
+                let content_type = json_string_field(action, "content_type")?;
+                let content_type = crate::normalize_agent_output_content_type(Some(&content_type));
+                if content_type != crate::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                    && !crate::agent_output_content_type_is_markdown(&content_type)
+                    && !crate::agent_output_content_type_is_diff(&content_type)
+                {
+                    continue;
+                }
+                let text_start = direct_json_field_value_start(action, "text")?.trim_start();
+                let (text, complete, raw_cursor) = decode_incomplete_json_string(text_start)?;
+                extracted.push(StreamingPresentationSource {
+                    id: StreamingSourceId::Say(action_index),
+                    status: Some(status),
+                    content_type: Some(content_type),
+                    text,
+                    complete,
+                    raw_cursor: text_start.as_ptr() as usize - input.as_ptr() as usize + raw_cursor,
+                });
+            }
+            "shell_command" => {
+                let command_start = direct_json_field_value_start(action, "command")?.trim_start();
+                let (text, complete, raw_cursor) = decode_incomplete_json_string(command_start)?;
+                extracted.push(StreamingPresentationSource {
+                    id: StreamingSourceId::ShellCommand(action_index),
+                    status: None,
+                    content_type: None,
+                    text,
+                    complete,
+                    raw_cursor: command_start.as_ptr() as usize - input.as_ptr() as usize
+                        + raw_cursor,
+                });
+            }
+            _ => {}
+        }
     }
     Some(extracted)
 }
@@ -831,6 +950,11 @@ mod tests {
                     r#"{"rationale":"stream","actions":[{"type":"say","status":"final","content_type":"text/markdown; charset=utf-8","text":"Hello "#,
                 ),
                 vec![
+                    StreamingSayEvent::RationaleStarted,
+                    StreamingSayEvent::RationaleTextDelta {
+                        text: "stream".to_string(),
+                    },
+                    StreamingSayEvent::RationaleTextComplete,
                     StreamingSayEvent::Started {
                         action_index: 0,
                         status: SayStatus::Final,
@@ -855,16 +979,75 @@ mod tests {
         }
     }
 
+    /// Verifies batch rationale and shell command source are decoded as
+    /// independent typed streams while preserving escapes and action indexes.
+    #[test]
+    fn streaming_presentation_extractor_emits_rationale_and_shell_command_source() {
+        let mut extractor = StreamingPresentationExtractor::default();
+        assert_eq!(
+            extractor.push_delta(r#"{"rationale":"Inspect \uD83D"#),
+            vec![
+                StreamingPresentationEvent::RationaleStarted,
+                StreamingPresentationEvent::RationaleTextDelta {
+                    text: "Inspect ".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            extractor.push_delta(
+                r#"\uDE00","actions":[{"type":"shell_command","summary":"Inspect","command":"printf 'a\n"#,
+            ),
+            vec![
+                StreamingPresentationEvent::RationaleTextDelta {
+                    text: "😀".to_string(),
+                },
+                StreamingPresentationEvent::RationaleTextComplete,
+                StreamingPresentationEvent::ShellCommandStarted { action_index: 0 },
+                StreamingPresentationEvent::ShellCommandTextDelta {
+                    action_index: 0,
+                    text: "printf 'a\n".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            extractor.push_delta(r#"b'"}] }"#),
+            vec![
+                StreamingPresentationEvent::ShellCommandTextDelta {
+                    action_index: 0,
+                    text: "b'".to_string(),
+                },
+                StreamingPresentationEvent::ShellCommandTextComplete { action_index: 0 },
+            ]
+        );
+    }
+
     /// Verifies unsupported fields fail closed without leaking nested text.
     #[test]
     fn streaming_say_extractor_rejects_unsafe_streams() {
         for raw in [
             r#"{"actions":[{"type":"shell_command","content_type":"text/plain","text":"secret"}]}"#,
-            r#"{"rationale":"{\"actions\":[{\"type\":\"say\",\"status\":\"final\",\"content_type\":\"text/plain\",\"text\":\"secret\"}]}","actions":[]}"#,
             r#"{"actions":[{"type":"say","status":"unknown","content_type":"text/plain","text":"secret"}]}"#,
         ] {
             assert!(StreamingSayExtractor::default().push_delta(raw).is_empty());
         }
+
+        let nested = StreamingSayExtractor::default().push_delta(
+            r#"{"rationale":"{\"actions\":[{\"type\":\"say\",\"status\":\"final\",\"content_type\":\"text/plain\",\"text\":\"secret\"}]}","actions":[]}"#,
+        );
+        assert!(matches!(
+            nested.as_slice(),
+            [
+                StreamingSayEvent::RationaleStarted,
+                StreamingSayEvent::RationaleTextDelta { .. },
+                StreamingSayEvent::RationaleTextComplete,
+            ]
+        ));
+        assert!(nested.iter().all(|event| !matches!(
+            event,
+            StreamingSayEvent::Started { .. }
+                | StreamingSayEvent::TextDelta { .. }
+                | StreamingSayEvent::TextComplete { .. }
+        )));
     }
 
     /// Verifies all supported media types, multiple actions, and long text are untruncated.

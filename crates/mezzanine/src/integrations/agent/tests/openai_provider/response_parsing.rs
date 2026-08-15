@@ -640,12 +640,16 @@ async fn openai_provider_stream_forwards_lossless_say_event_backlog() {
 
     assert!(matches!(
         events.first(),
-        Some(mez_agent::StreamingSayEvent::Started {
+        Some(mez_agent::StreamingSayEvent::RationaleStarted)
+    ));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        mez_agent::StreamingSayEvent::Started {
             action_index: 0,
             status: mez_agent::SayStatus::Final,
             content_type,
-        }) if content_type == mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-    ));
+        } if content_type == mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+    )));
     assert!(matches!(
         events.last(),
         Some(mez_agent::StreamingSayEvent::TextComplete { action_index: 0 })
@@ -658,6 +662,14 @@ async fn openai_provider_stream_forwards_lossless_say_event_backlog() {
         })
         .collect::<String>();
     assert_eq!(streamed_text, text);
+    let streamed_rationale = events
+        .iter()
+        .filter_map(|event| match event {
+            mez_agent::StreamingSayEvent::RationaleTextDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert_eq!(streamed_rationale, "stream the requested answer");
     assert!(events.len() > 32, "events={}", events.len());
     let batch = response.action_batch.unwrap();
     match &batch.actions[0].payload {

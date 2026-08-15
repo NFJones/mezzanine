@@ -99,8 +99,34 @@ fn bounded_streaming_say_events(
 ) -> Vec<mez_agent::StreamingSayEvent> {
     let mut bounded = Vec::new();
     for event in events {
-        let mez_agent::StreamingSayEvent::TextDelta { action_index, text } = event else {
-            bounded.push(event);
+        let (text, rebuild): (String, Box<dyn Fn(String) -> mez_agent::StreamingSayEvent>) =
+            match event {
+                mez_agent::StreamingSayEvent::RationaleTextDelta { text } => (
+                    text,
+                    Box::new(|text| mez_agent::StreamingSayEvent::RationaleTextDelta { text }),
+                ),
+                mez_agent::StreamingSayEvent::TextDelta { action_index, text } => (
+                    text,
+                    Box::new(move |text| mez_agent::StreamingSayEvent::TextDelta {
+                        action_index,
+                        text,
+                    }),
+                ),
+                mez_agent::StreamingSayEvent::ShellCommandTextDelta { action_index, text } => (
+                    text,
+                    Box::new(
+                        move |text| mez_agent::StreamingSayEvent::ShellCommandTextDelta {
+                            action_index,
+                            text,
+                        },
+                    ),
+                ),
+                event => {
+                    bounded.push(event);
+                    continue;
+                }
+            };
+        if text.is_empty() {
             continue;
         };
         let mut start = 0usize;
@@ -117,10 +143,7 @@ fn bounded_streaming_say_events(
                 };
                 end = start.saturating_add(character.len_utf8());
             }
-            bounded.push(mez_agent::StreamingSayEvent::TextDelta {
-                action_index,
-                text: text[start..end].to_string(),
-            });
+            bounded.push(rebuild(text[start..end].to_string()));
             start = end;
         }
     }
