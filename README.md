@@ -130,6 +130,10 @@ pane-local plan-only mode. The `plan` status pill shows that mode and can be
 clicked to toggle it. Its visibility and position are configurable through
 `frames.pane.visible_fields` using the `agent.planning` field.
 
+When entering agent mode from a managed Bash pane, Mezzanine preserves an
+unfinished command line while the agent child shell runs. The original draft
+returns when agent mode exits and runs only if it is later submitted normally.
+
 Use `mez --help` and the [CLI reference](docs/reference-manual/cli.md) for the
 current command contract. Use [Sessions and panes](docs/using-mezzanine/sessions-and-panes.md)
 and [Terminal input, copy, and history](docs/using-mezzanine/terminal-input-copy-and-history.md)

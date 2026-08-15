@@ -988,15 +988,15 @@ fn runtime_agent_markdown_lists_keep_content_on_marker_row() {
     );
 }
 
-/// Verifies that a managed Bash parent with an unsubmitted Readline draft is
-/// never claimed as an agent child shell when it rejects the private trigger.
+/// Verifies that a managed Bash parent preserves an unsubmitted Readline draft
+/// while entering and leaving an agent child shell.
 ///
-/// The receiver intentionally rejects admission while `READLINE_LINE` is
-/// nonempty. Hiding agent mode while that handoff is pending must cancel the
-/// bootstrap without sending EOF to the parent, leaving the original draft
-/// executable after the normal prompt resumes.
+/// The private receiver must clear the editor only while it consumes the
+/// authenticated handoff, then restore the exact draft when the child exits.
+/// The draft must execute only after the user explicitly submits it to the
+/// restored parent prompt.
 #[test]
-fn runtime_bash_dirty_prompt_rejects_agent_admission_without_parent_eof() {
+fn runtime_bash_dirty_prompt_survives_agent_subshell_admission() {
     let Some(bash_path) = bash_path_for_tests() else {
         eprintln!("skipping dirty Bash prompt regression because bash is unavailable");
         return;
@@ -1027,19 +1027,39 @@ fn runtime_bash_dirty_prompt_rejects_agent_admission_without_parent_eof() {
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     assert!(show.contains("visibility=visible"), "{show}");
+    let mut child_confirmed = false;
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if service.agent_subshell_is_active("%1")
+            && !service.pane_bootstrap_is_pending_for_tests("%1")
+        {
+            child_confirmed = true;
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
     assert!(
-        !service.agent_subshell_is_active("%1"),
-        "a rejected parent admission must not claim child ownership"
+        child_confirmed,
+        "dirty Bash admission did not confirm a child shell; authority={:?}",
+        service.pane_environment_authority("%1")
     );
 
     let hide = service
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     assert!(hide.contains("visibility=hidden"), "{hide}");
-    assert!(
-        !service.agent_subshell_is_active("%1"),
-        "pending admission cancellation must leave child ownership unset"
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if service.pane_foreground_certified_shell_state("%1") == Some(true) {
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert_eq!(
+        service.pane_foreground_certified_shell_state("%1"),
+        Some(true)
     );
+    assert!(!service.agent_subshell_is_active("%1"));
     service
         .write_input_to_pane(&primary, Some("%1"), b"\n")
         .unwrap();

@@ -3858,6 +3858,16 @@ certification rejection, clear the pane bootstrap gate, and resume or fail
 deferred provider work. A late exact observation after expiry MUST NOT publish
 the discarded environment or restore certification.
 
+For managed Bash panes, a private Readline callback MUST preserve any active
+`READLINE_LINE`, cursor, and mark state before admitting the authenticated
+agent-subshell handoff. It MUST clear the editor only for private transport,
+then restore the saved editor state when the callback returns after successful
+child exit, cancellation, malformed transport, or any receiver failure. The
+saved draft MUST NOT be submitted, written to history, or otherwise executed
+by admission or restoration; it may run only after the user later submits the
+restored parent prompt. If the callback cannot preserve its editor state, it
+MUST fail closed without entering an agent child shell.
+
 When agent-subshell certification proof is rejected, the runtime MUST retain a
 stable machine-readable rejection reason for the current pane shell-interaction
 epoch and use it to explain later shell-action preflight failures. That reason
