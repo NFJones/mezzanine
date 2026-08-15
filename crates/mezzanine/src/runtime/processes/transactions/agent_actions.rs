@@ -164,11 +164,13 @@ impl RuntimeSessionService {
         let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
             return Ok(0);
         };
-        if transaction.pane_id != output_pane_id
+        let receiver_token_matches = self
+            .bash_receiver_token_for_pane(output_pane_id)
+            .is_some_and(|expected| expected.as_str() == token)
             || self
-                .bash_receiver_token_for_pane(output_pane_id)
-                .is_none_or(|expected| expected.as_str() != token)
-        {
+                .fish_receiver_token_for_pane(output_pane_id)
+                .is_some_and(|expected| expected.as_str() == token);
+        if transaction.pane_id != output_pane_id || !receiver_token_matches {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,
@@ -224,7 +226,7 @@ impl RuntimeSessionService {
     }
 
     /// Releases a deferred agent-subshell bootstrap trigger after the managed
-    /// Bash child proves that its private receiver is installed and waiting.
+    /// child proves that its private receiver is installed and waiting.
     pub(crate) fn observe_shell_receiver_installed(
         &mut self,
         output_pane_id: &str,
@@ -234,22 +236,26 @@ impl RuntimeSessionService {
         let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
             return Ok(0);
         };
+        let fish_receiver_installed = self
+            .fish_receiver_token_for_pane(output_pane_id)
+            .is_some_and(|expected| expected.as_str() == token);
         let handoff_matches = self
             .process
             .pane_shell_handoffs
             .get(output_pane_id)
             .is_some_and(|handoff| handoff.bootstrap_marker.as_deref() == Some(marker));
-        if transaction.pane_id != output_pane_id
+        let receiver_token_matches = self
+            .bash_receiver_token_for_pane(output_pane_id)
+            .is_some_and(|expected| expected.as_str() == token)
             || self
-                .bash_receiver_token_for_pane(output_pane_id)
-                .is_none_or(|expected| expected.as_str() != token)
-            || !handoff_matches
-        {
+                .fish_receiver_token_for_pane(output_pane_id)
+                .is_some_and(|expected| expected.as_str() == token);
+        if transaction.pane_id != output_pane_id || !receiver_token_matches || !handoff_matches {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,
                 "receiver-installed-metadata-mismatch",
-                "Bash receiver-installed metadata does not match the pending subshell handoff",
+                "managed receiver-installed metadata does not match the pending subshell handoff",
             );
         }
         let wrapper = self
@@ -262,7 +268,7 @@ impl RuntimeSessionService {
                 marker,
                 transaction,
                 "unexpected-receiver-installed",
-                "Bash child reported receiver installation without a deferred bootstrap trigger",
+                "managed child reported receiver installation without a deferred bootstrap trigger",
             );
         };
         if let Err(error) = self.write_runtime_pane_shell_input(output_pane_id, wrapper.as_bytes())
@@ -271,7 +277,11 @@ impl RuntimeSessionService {
             return Err(error);
         }
         self.enter_agent_subshell(output_pane_id);
-        self.take_agent_subshell_command_exit(output_pane_id);
+        if fish_receiver_installed {
+            self.mark_agent_subshell_command_exit(output_pane_id.to_string());
+        } else {
+            self.take_agent_subshell_command_exit(output_pane_id);
+        }
         self.remember_hidden_shell_render_suppression(output_pane_id);
         self.record_bootstrap_sent(output_pane_id, marker)?;
         Ok(1)
@@ -288,10 +298,14 @@ impl RuntimeSessionService {
         let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
             return Ok(0);
         };
-        if transaction.pane_id != output_pane_id
+        let receiver_token_matches = self
+            .bash_receiver_token_for_pane(output_pane_id)
+            .is_some_and(|expected| expected.as_str() == token)
             || self
-                .bash_receiver_token_for_pane(output_pane_id)
-                .is_none_or(|expected| expected.as_str() != token)
+                .fish_receiver_token_for_pane(output_pane_id)
+                .is_some_and(|expected| expected.as_str() == token);
+        if transaction.pane_id != output_pane_id
+            || !receiver_token_matches
             || !self
                 .process
                 .shell_receiver_completion_required

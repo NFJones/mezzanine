@@ -1134,6 +1134,7 @@ impl RuntimeSessionService {
         let bash_receiver_rcfile = self
             .bash_receiver_rcfile_for_pane(pane_id)
             .map(std::path::Path::to_path_buf);
+        let fish_receiver_token = self.fish_receiver_token_for_pane(pane_id).cloned();
         self.begin_agent_subshell_shell_handoff(pane_id)?;
         let prepared_bootstrap = match self.prepare_bootstrap_to_pane(pane_id) {
             Ok(prepared_bootstrap) => prepared_bootstrap,
@@ -1152,6 +1153,11 @@ impl RuntimeSessionService {
             zsh_history_token.as_ref(),
             bash_receiver_rcfile.as_deref(),
             bash_receiver_install_marker,
+            fish_receiver_token.as_ref().zip(
+                prepared_bootstrap
+                    .as_ref()
+                    .map(|(marker, _)| marker.as_str()),
+            ),
             Some(&exit_marker),
         )?;
         if let Some((marker, wrapper)) = prepared_bootstrap.as_ref() {
@@ -1182,6 +1188,28 @@ impl RuntimeSessionService {
                 ),
             );
             private_input.wrapper
+        } else if classification == ShellClassification::Fish {
+            let (marker, _) = prepared_bootstrap.as_ref().ok_or_else(|| {
+                MezError::invalid_state(
+                    "managed Fish subshell handoff requires a registered bootstrap owner",
+                )
+            })?;
+            let token = fish_receiver_token.ok_or_else(|| {
+                MezError::invalid_state(
+                    "managed Fish receiver is unavailable for agent subshell handoff",
+                )
+            })?;
+            let private_input =
+                mez_agent::fish_private_source_input(&shell_command, &token, marker);
+            self.prepend_fish_shell_receiver_payload(
+                marker,
+                mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                    private_input.receiver_payload.into_bytes(),
+                    marker.clone(),
+                    true,
+                ),
+            );
+            private_input.wrapper
         } else {
             shell_command
         };
@@ -1191,7 +1219,10 @@ impl RuntimeSessionService {
                     pane_id,
                     agent_subshell_exit_marker_bytes(&exit_marker),
                 );
-                if classification != ShellClassification::Bash {
+                if !matches!(
+                    classification,
+                    ShellClassification::Bash | ShellClassification::Fish
+                ) {
                     self.enter_agent_subshell(pane_id);
                     self.take_agent_subshell_command_exit(pane_id);
                     self.remember_hidden_shell_render_suppression(pane_id);

@@ -782,6 +782,24 @@ impl RuntimeSessionService {
             .insert(marker.to_string());
     }
 
+    /// Prepends one persistent Fish handoff stage without awaiting parent return.
+    ///
+    /// The Fish private receiver sources the persistent child synchronously, so
+    /// receiver completion is an agent-subshell exit boundary rather than a
+    /// transaction-cleanup boundary. Child receiver installation authenticates
+    /// ownership before the deferred bootstrap is released.
+    pub(crate) fn prepend_fish_shell_receiver_payload(
+        &mut self,
+        marker: &str,
+        payload: mez_mux::process::ShellInputDelivery,
+    ) {
+        self.process
+            .shell_receiver_pending_payloads
+            .entry(marker.to_string())
+            .or_default()
+            .push_front(payload);
+    }
+
     /// Reports whether an agent action has a live shell transaction.
     pub(crate) fn agent_action_has_running_shell_transaction(
         &self,
@@ -1592,6 +1610,7 @@ impl RuntimeSessionService {
     pub(crate) fn pane_bootstrap_is_pending_for_tests(&self, pane_id: &str) -> bool {
         self.pane_bootstrap_is_pending(pane_id)
     }
+
     /// Returns the process manager for integration-test observation.
     pub(crate) fn pane_processes(&self) -> &PaneProcessManager {
         &self.process.pane_processes
@@ -1810,6 +1829,17 @@ impl RuntimeSessionService {
             .pane_bash_compatibility
             .get(pane_id)
             .map(bash_compat::ManagedBashCompatibility::token)
+    }
+
+    /// Returns the pane-scoped token authenticating private Fish receiver events.
+    pub(super) fn fish_receiver_token_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Option<&mez_agent::MarkerToken> {
+        self.process
+            .pane_fish_compatibility
+            .get(pane_id)
+            .map(fish_compat::ManagedFishCompatibility::token)
     }
 
     /// Runs the poll pane processes operation for this subsystem.

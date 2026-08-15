@@ -1656,6 +1656,7 @@ fn posix_agent_subshell_env_word_list_for_classification(
 fn fish_shell_interactive_invocation_words(
     shell_path: &str,
     classification: ShellClassification,
+    receiver_install: Option<(&MarkerToken, &str)>,
 ) -> String {
     let mut words = vec![fish_quote(shell_path)];
     let startup_args = startup_suppression_args(classification);
@@ -1663,7 +1664,15 @@ fn fish_shell_interactive_invocation_words(
     let mut exec_words = vec!["exec".to_string(), fish_quote(shell_path)];
     exec_words.extend(startup_args.iter().map(|arg| (*arg).to_string()));
     exec_words.push("--init-command".to_string());
-    exec_words.push(fish_quote(fish_wrapper_receiver_init_command()));
+    let mut init_command = fish_wrapper_receiver_init_command().to_string();
+    if let Some((token, marker)) = receiver_install {
+        init_command.push_str(&format!(
+            "\nfunction fish_prompt\n    functions --erase fish_prompt\n    builtin printf '\\e]133;R;mez_receiver=installed;mez_token=%s;mez_marker=%s\\e\\\\' {} {}\n    fish_default_prompt\nend",
+            fish_quote(token.as_str()),
+            fish_quote(marker)
+        ));
+    }
+    exec_words.push(fish_quote(&init_command));
     exec_words.push("-i".to_string());
     let readiness_source = format!(
         "command printf '\\e]133;B\\e\\\\'; {}",
@@ -1935,6 +1944,59 @@ pub fn fish_wrapper_receiver_init_command() -> &'static str {
     command rm -f -- "$source_file" "$encoded_file" >/dev/null 2>&1; or true
     return $source_status
 end"#
+}
+
+/// Renders a private Fish editor trigger and deferred source frame.
+///
+/// The trigger is consumed by the managed Fish binding before it can become
+/// user command-line input. The source frame remains separate until that
+/// binding has saved and cleared the active editor state.
+pub fn fish_private_source_input(
+    source: &str,
+    token: &MarkerToken,
+    marker: &str,
+) -> ShellTransactionInput {
+    let digest = Sha256::digest(source.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
+    let chunks = encoded.as_bytes().chunks(SHELL_WRAPPER_BASE64_LINE_BYTES);
+    let chunk_count = chunks.len();
+    let wrapper = format!(
+        "\x07MEZ_FISH_RX1_BEGIN {} {} {} {} {}\n",
+        token.as_str(),
+        marker,
+        source.len(),
+        digest,
+        chunk_count
+    );
+    let mut receiver_payload = String::new();
+    for (sequence, chunk) in chunks.enumerate() {
+        let chunk = std::str::from_utf8(chunk)
+            .expect("standard base64 output should always be valid UTF-8");
+        receiver_payload.push_str(&format!(
+            "MEZ_FISH_RX1_DATA {} {} {} {}\n",
+            token.as_str(),
+            marker,
+            sequence,
+            chunk
+        ));
+    }
+    receiver_payload.push_str(&format!(
+        "MEZ_FISH_RX1_END {} {} {} {} {}\n",
+        token.as_str(),
+        marker,
+        chunk_count,
+        source.len(),
+        digest
+    ));
+    ShellTransactionInput {
+        wrapper,
+        receiver_payload,
+        payload: String::new(),
+        payload_receiver_acknowledgements: true,
+    }
 }
 
 /// Encodes a generated Fish wrapper as receiver-consumed base64 records.
@@ -2477,6 +2539,7 @@ pub fn agent_subshell_enter_command_with_shell_compatibility(
         bash_receiver_rcfile,
         bash_receiver_install_marker,
         None,
+        None,
     )
 }
 
@@ -2508,6 +2571,7 @@ pub fn agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
     zsh_history_token: Option<&MarkerToken>,
     bash_receiver_rcfile: Option<&Path>,
     bash_receiver_install_marker: Option<&str>,
+    fish_receiver_install: Option<(&MarkerToken, &str)>,
     exit_marker: Option<&MarkerToken>,
 ) -> AgentShellValidationResult<String> {
     if !shell_path.is_absolute() {
@@ -2521,7 +2585,8 @@ pub fn agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
         .unwrap_or_default();
     let source = if classification == ShellClassification::Fish {
         let env_words = fish_agent_subshell_env_word_list().join(" \\\n  ");
-        let shell_invocation = fish_shell_interactive_invocation_words(&shell, classification);
+        let shell_invocation =
+            fish_shell_interactive_invocation_words(&shell, classification, fish_receiver_install);
         format!(
             "begin
 {history_start}

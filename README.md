@@ -130,9 +130,12 @@ pane-local plan-only mode. The `plan` status pill shows that mode and can be
 clicked to toggle it. Its visibility and position are configurable through
 `frames.pane.visible_fields` using the `agent.planning` field.
 
-When entering agent mode from a managed Bash pane, Mezzanine preserves an
-unfinished command line while the agent child shell runs. The original draft
-returns when agent mode exits and runs only if it is later submitted normally.
+When entering agent mode from a managed Bash or Fish pane, Mezzanine preserves
+an unfinished command line while the agent child shell runs. The original draft,
+cursor position, and supported editor bind mode return when agent mode exits,
+and the draft runs only if it is later submitted normally. Fish admission fails
+closed while history search, the completion pager, or a text selection is active
+because those transient editor states cannot be restored exactly.
 
 POSIX and unknown shells cannot portably preserve an editor draft. When Mez can
 identify unsubmitted process input in those shells, it interrupts the draft

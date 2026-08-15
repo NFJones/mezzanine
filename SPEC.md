@@ -1830,6 +1830,13 @@ directory before sending agent-owned shell commands. Agent command side effects
 such as prompt changes, aliases, shell options, and environment mutations MUST
 remain scoped to that child shell unless the user explicitly applies them
 outside agent mode.
+Managed Bash and Fish parents MUST preserve an unfinished editable command line
+while the agent child owns the pane. Managed Fish preservation MUST retain the
+complete multiline buffer including trailing newlines, its Unicode-correct
+cursor position, and the active supported bind mode; the restored draft MUST
+remain unexecuted until the user explicitly submits it. Fish admission MUST fail
+closed without clearing the draft while history search, the completion pager,
+or an active text selection prevents exact editor-state restoration.
 The agent-mode child shell and every Mezzanine-owned non-stateful action shell
 MUST inherit the pane environment except for variables that can trigger shell
 startup files, prompt hooks, editor/pager prompts, or other interactive

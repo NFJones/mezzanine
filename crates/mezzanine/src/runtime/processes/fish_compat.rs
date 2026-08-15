@@ -35,6 +35,11 @@ impl ManagedFishCompatibility {
         launch.with_interactive_arguments(["--init-command", self.init_command.as_str(), "-i"])
     }
 
+    /// Returns the pane-scoped token authenticating private Fish admission.
+    pub(super) fn token(&self) -> &MarkerToken {
+        &self._owner
+    }
+
     #[cfg(test)]
     /// Returns the process owner token for lifecycle tests.
     fn owner(&self) -> &MarkerToken {
@@ -71,6 +76,105 @@ end
 functions --erase __mez_fish_passive_command_is_internal __mez_fish_passive_prompt_start __mez_fish_passive_preexec __mez_fish_passive_postexec fish_prompt fish_right_prompt 2>/dev/null
 set -g __MEZ_FISH_INTEGRATION_OWNER {}
 set -e __MEZ_FISH_PASSIVE_COMMAND_ACTIVE __MEZ_FISH_PASSIVE_SKIP_POSTEXEC
+function __mez_fish_private_receiver
+    set -l unsupported_editor_state 0
+    if commandline --search-mode; or commandline --paging-mode; or commandline --selection-start >/dev/null 2>&1; or commandline --selection-end >/dev/null 2>&1
+        set unsupported_editor_state 1
+    end
+    set -l saved_line (commandline | string collect -N)
+    set -l saved_cursor (commandline --cursor)
+    set -l saved_bind_mode "$fish_bind_mode"
+    set -l begin_record
+    read -l begin_record
+    set -l begin_fields (string split ' ' -- "$begin_record")
+    if test (count $begin_fields) -ne 6; or test "$begin_fields[1]" != MEZ_FISH_RX1_BEGIN; or test "$begin_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or not string match -rq '^[0-9]+$' -- "$begin_fields[4]"; or not string match -rq '^[0-9a-f]{{64}}$' -- "$begin_fields[5]"; or not string match -rq '^[0-9]+$' -- "$begin_fields[6]"
+        commandline --replace -- "$saved_line"
+        commandline --cursor "$saved_cursor"
+        set fish_bind_mode "$saved_bind_mode"
+        commandline -f repaint-mode
+        return 1
+    end
+    if test "$unsupported_editor_state" -eq 1
+        set fish_bind_mode "$saved_bind_mode"
+        commandline -f repaint-mode
+        return 1
+    end
+    commandline --replace ''
+    set -l marker "$begin_fields[3]"
+    set -l expected_length "$begin_fields[4]"
+    set -l expected_digest "$begin_fields[5]"
+    set -l expected_chunks "$begin_fields[6]"
+    builtin printf '\033]133;R;mez_receiver=ready;mez_token=%s;mez_marker=%s\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$marker"
+    set -l source_status 1
+    set -l source_file (mktemp); or set source_file ''
+    set -l encoded_file "$source_file.b64"
+    set -l receive_status 0
+    set -l sequence 0
+    if test -z "$source_file"
+        set receive_status 1
+    else
+        command printf '' > "$encoded_file"; or set receive_status $status
+    end
+    while test "$receive_status" -eq 0; and test "$sequence" -lt "$expected_chunks"
+        set -l data_record
+        read -l data_record; or begin; set receive_status 1; break; end
+        set -l data_fields (string split -m 4 ' ' -- "$data_record")
+        if test (count $data_fields) -ne 5; or test "$data_fields[1]" != MEZ_FISH_RX1_DATA; or test "$data_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or test "$data_fields[3]" != "$marker"; or test "$data_fields[4]" != "$sequence"
+            set receive_status 1
+        else
+            printf '%s' "$data_fields[5]" >> "$encoded_file"; or set receive_status $status
+        end
+        set sequence (math "$sequence + 1")
+        printf '\036'
+    end
+    set -l end_record
+    if test "$receive_status" -eq 0
+        read end_record; or set receive_status 1
+    end
+    if test "$receive_status" -eq 0
+        set -l end_fields (string split ' ' -- "$end_record")
+        if test (count $end_fields) -ne 6; or test "$end_fields[1]" != MEZ_FISH_RX1_END; or test "$end_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or test "$end_fields[3]" != "$marker"; or test "$end_fields[4]" != "$expected_chunks"; or test "$end_fields[5]" != "$expected_length"; or test "$end_fields[6]" != "$expected_digest"
+            set receive_status 1
+        end
+        printf '\036'
+    end
+    if test "$receive_status" -eq 0
+        if printf '' | base64 -d >/dev/null 2>&1
+            base64 -d < "$encoded_file" > "$source_file" 2>/dev/null; or set receive_status $status
+        else
+            base64 -D < "$encoded_file" > "$source_file"; or set receive_status $status
+        end
+    end
+    if test "$receive_status" -eq 0
+        set -l actual_length (wc -c < "$source_file" | string trim)
+        set -l actual_digest ''
+        if command -q sha256sum
+            set actual_digest (sha256sum -- "$source_file" | string split -f 1 ' ')
+        else if command -q shasum
+            set actual_digest (shasum -a 256 -- "$source_file" | string split -f 1 ' ')
+        else
+            set receive_status 127
+        end
+        if test "$receive_status" -eq 0; and test "$actual_length" = "$expected_length"; and test "$actual_digest" = "$expected_digest"
+            source "$source_file"
+            set source_status $status
+        else
+            set source_status 1
+        end
+    end
+    if test -n "$source_file"
+        command rm -f -- "$source_file" "$encoded_file" >/dev/null 2>&1; or true
+    end
+    commandline --replace -- "$saved_line"
+    commandline --cursor "$saved_cursor"
+    set fish_bind_mode "$saved_bind_mode"
+    commandline -f repaint-mode
+    builtin printf '\033]133;R;mez_receiver=complete;mez_token=%s;mez_marker=%s;mez_status=%s\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$marker" "$source_status"
+    return $source_status
+end
+bind -M default \cg __mez_fish_private_receiver
+bind -M insert \cg __mez_fish_private_receiver
+bind -M visual \cg __mez_fish_private_receiver
 function __mez_fish_passive_command_is_internal --argument-names command_line
     if string match --quiet '*mez_marker=*' -- "$command_line"; and string match --quiet '*mez_turn=*' -- "$command_line"
         return 0
@@ -128,7 +232,8 @@ mod tests {
     use super::*;
     use mez_agent::shell::{
         PanePathResolutionRequest, ShellClassification, ShellTransaction,
-        pane_path_resolution_command, parse_pane_path_resolution_output,
+        agent_subshell_enter_command_with_shell_compatibility_and_exit_marker,
+        fish_private_source_input, pane_path_resolution_command, parse_pane_path_resolution_output,
         shell_identity_probe_command,
     };
     use mez_mux::process::{
@@ -367,6 +472,370 @@ mod tests {
                 .init_command()
                 .contains("--on-event fish_postexec")
         );
+    }
+
+    #[test]
+    /// Verifies the persistent Fish child announces its authenticated receiver
+    /// installation from the first interactive prompt under real PTY semantics.
+    ///
+    /// Bootstrap input remains deferred until this boundary, so the generated
+    /// child handoff must emit it before accepting any agent transaction.
+    fn managed_fish_agent_child_emits_receiver_installed_at_first_prompt() {
+        let Some(fish) = fish_path_for_tests() else {
+            eprintln!("skipping managed Fish child assertion because fish is unavailable");
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-fish-child-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let compatibility = ManagedFishCompatibility::new(
+            MarkerToken::new("77777777777777777777777777777777").unwrap(),
+        );
+        let mut process = spawn_managed_fish(&fish, &compatibility, &root);
+        settle_managed_fish_startup(&mut process);
+
+        let receiver_token = MarkerToken::new("88888888888888888888888888888888").unwrap();
+        let bootstrap_marker = "fish-child-bootstrap-marker";
+        let handoff = agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
+            &fish,
+            ShellClassification::Fish,
+            None,
+            None,
+            None,
+            Some((&receiver_token, bootstrap_marker)),
+            None,
+        )
+        .unwrap();
+        process.write_input(handoff.as_bytes()).unwrap();
+        let expected = format!(
+            "mez_receiver=installed;mez_token={};mez_marker={bootstrap_marker}",
+            receiver_token.as_str()
+        );
+        let output = read_fish_output_until(&mut process, |output| {
+            output
+                .windows(expected.len())
+                .any(|window| window == expected.as_bytes())
+        });
+        assert!(
+            output
+                .windows(expected.len())
+                .any(|window| window == expected.as_bytes()),
+            "{:?}",
+            String::from_utf8_lossy(&output)
+        );
+
+        let transaction_marker = MarkerToken::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        let input = ShellTransaction::new(
+            transaction_marker.clone(),
+            "fish-child-turn",
+            "fish-child-agent",
+            "p1",
+            &fish,
+            mez_agent::fish_bootstrap_script(),
+        )
+        .unwrap()
+        .with_payload_receiver_acknowledgements(cfg!(target_os = "macos"))
+        .render_for_classification_input(ShellClassification::Fish);
+        let mut transaction_output =
+            process.write_shell_delivery(&ShellInputDelivery::generated_source_for_transaction(
+                input.wrapper.as_bytes().to_vec(),
+                transaction_marker.as_str(),
+            ));
+        let start_marker = format!("\x1b]133;C;mez_marker={};", transaction_marker.as_str());
+        extend_fish_output_until(&mut process, &mut transaction_output, |output| {
+            output
+                .windows(start_marker.len())
+                .any(|window| window == start_marker.as_bytes())
+        });
+        transaction_output.extend(process.write_shell_delivery(
+            &ShellInputDelivery::receiver_acknowledged(
+                input.payload.as_bytes().to_vec(),
+                transaction_marker.as_str(),
+                input.payload_receiver_acknowledgements,
+            ),
+        ));
+        let end_marker = format!("\x1b]133;D;0;mez_marker={};", transaction_marker.as_str());
+        extend_fish_output_until(&mut process, &mut transaction_output, |output| {
+            output
+                .windows(end_marker.len())
+                .any(|window| window == end_marker.as_bytes())
+        });
+        assert!(
+            String::from_utf8_lossy(&transaction_output).contains("bootstrap\tcomplete\t"),
+            "{:?}",
+            String::from_utf8_lossy(&transaction_output)
+        );
+
+        process.write_input(b"exit\n").unwrap();
+        process.terminate(Duration::from_millis(100)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    /// Verifies bounded private Fish admission sources the authenticated child
+    /// handoff and reaches its first-prompt receiver-installed boundary.
+    ///
+    /// This covers the complete parent receiver path used to preserve an
+    /// unsubmitted editor draft before runtime transfers ownership to a child.
+    fn managed_fish_private_admission_starts_authenticated_child() {
+        let Some(fish) = fish_path_for_tests() else {
+            eprintln!(
+                "skipping managed Fish private admission assertion because fish is unavailable"
+            );
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-fish-private-child-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let owner = MarkerToken::new("99999999999999999999999999999999").unwrap();
+        let compatibility = ManagedFishCompatibility::new(owner.clone());
+        let mut process = spawn_managed_fish(&fish, &compatibility, &root);
+        settle_managed_fish_startup(&mut process);
+
+        let bootstrap_marker = "fish-private-child-bootstrap-marker";
+        let handoff = agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
+            &fish,
+            ShellClassification::Fish,
+            None,
+            None,
+            None,
+            Some((&owner, bootstrap_marker)),
+            None,
+        )
+        .unwrap();
+        let instrumented_handoff =
+            format!("builtin printf '__MEZ_PRIVATE_SOURCE_ENTERED__\\n'\n{handoff}");
+        let admission = fish_private_source_input(&instrumented_handoff, &owner, bootstrap_marker);
+        process.write_input(admission.wrapper.as_bytes()).unwrap();
+        let ready = format!(
+            "mez_receiver=ready;mez_token={};mez_marker={bootstrap_marker}",
+            owner.as_str()
+        );
+        let mut output = read_fish_output_until(&mut process, |output| {
+            output
+                .windows(ready.len())
+                .any(|window| window == ready.as_bytes())
+        });
+        output.extend(
+            process.write_shell_delivery(&ShellInputDelivery::receiver_acknowledged(
+                admission.receiver_payload.as_bytes().to_vec(),
+                bootstrap_marker,
+                admission.payload_receiver_acknowledgements,
+            )),
+        );
+        let installed = format!(
+            "mez_receiver=installed;mez_token={};mez_marker={bootstrap_marker}",
+            owner.as_str()
+        );
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(installed.len())
+                .any(|window| window == installed.as_bytes())
+        });
+        assert!(
+            output
+                .windows(b"__MEZ_PRIVATE_SOURCE_ENTERED__".len())
+                .any(|window| window == b"__MEZ_PRIVATE_SOURCE_ENTERED__"),
+            "{:?}",
+            String::from_utf8_lossy(&output)
+        );
+
+        process.write_input(b"exit\n").unwrap();
+        process.terminate(Duration::from_millis(100)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    /// Verifies bounded private Fish admission validates and executes a minimal
+    /// authenticated source payload before reporting receiver completion.
+    ///
+    /// This isolates frame decoding, length, and digest validation from the
+    /// persistent child-shell handoff exercised by the broader admission test.
+    fn managed_fish_private_admission_executes_minimal_source() {
+        let Some(fish) = fish_path_for_tests() else {
+            eprintln!("skipping managed Fish private source assertion because fish is unavailable");
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-fish-private-source-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let owner = MarkerToken::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let compatibility = ManagedFishCompatibility::new(owner.clone());
+        let mut process = spawn_managed_fish(&fish, &compatibility, &root);
+        settle_managed_fish_startup(&mut process);
+
+        let marker = "fish-private-minimal-marker";
+        let admission = fish_private_source_input(
+            "builtin printf '__MEZ_PRIVATE_MINIMAL_EXECUTED__\\n'\n",
+            &owner,
+            marker,
+        );
+        process.write_input(admission.wrapper.as_bytes()).unwrap();
+        let ready = format!(
+            "mez_receiver=ready;mez_token={};mez_marker={marker}",
+            owner.as_str()
+        );
+        let mut output = read_fish_output_until(&mut process, |output| {
+            output
+                .windows(ready.len())
+                .any(|window| window == ready.as_bytes())
+        });
+        output.extend(
+            process.write_shell_delivery(&ShellInputDelivery::receiver_acknowledged(
+                admission.receiver_payload.as_bytes().to_vec(),
+                marker,
+                admission.payload_receiver_acknowledgements,
+            )),
+        );
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(b"__MEZ_PRIVATE_MINIMAL_EXECUTED__".len())
+                .any(|window| window == b"__MEZ_PRIVATE_MINIMAL_EXECUTED__")
+        });
+
+        process.terminate(Duration::from_millis(100)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    /// Verifies private Fish admission fails closed while vi visual selection
+    /// is active and leaves the selected draft available for normal execution.
+    ///
+    /// The source-free BEGIN record must be consumed by the bound receiver, but
+    /// no receiver-ready event or deferred source may follow an unsupported
+    /// editor state because selection boundaries cannot be restored exactly.
+    fn managed_fish_private_admission_rejects_active_selection_without_clearing_draft() {
+        let Some(fish) = fish_path_for_tests() else {
+            eprintln!("skipping managed Fish selection assertion because fish is unavailable");
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-fish-private-selection-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let owner = MarkerToken::new("cccccccccccccccccccccccccccccccc").unwrap();
+        let compatibility = ManagedFishCompatibility::new(owner.clone());
+        let mut process = spawn_managed_fish(&fish, &compatibility, &root);
+        settle_managed_fish_startup(&mut process);
+
+        process
+            .write_input(
+                b"fish_vi_key_bindings; bind -M insert -m visual \\co begin-selection; printf '__MEZ_SELECTION_READY__\\n'\n",
+            )
+            .unwrap();
+        let _ = read_fish_output_until(&mut process, |output| {
+            output
+                .windows(b"__MEZ_SELECTION_READY__".len())
+                .any(|window| window == b"__MEZ_SELECTION_READY__")
+        });
+        process
+            .write_input(b"printf '__MEZ_SELECTION_DRAFT__\\n'\x0f")
+            .unwrap();
+        let marker = "fish-private-selection-marker";
+        let admission = fish_private_source_input(
+            "builtin printf '__MEZ_SELECTION_SOURCE_RAN__\\n'\n",
+            &owner,
+            marker,
+        );
+        process.write_input(admission.wrapper.as_bytes()).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let mut output = process.read_available_output(64 * 1024).unwrap();
+        assert!(
+            !String::from_utf8_lossy(&output).contains("mez_receiver=ready"),
+            "{:?}",
+            String::from_utf8_lossy(&output)
+        );
+        process.write_input(b"\x1b\n").unwrap();
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(b"__MEZ_SELECTION_DRAFT__".len())
+                .any(|window| window == b"__MEZ_SELECTION_DRAFT__")
+        });
+        assert!(
+            !String::from_utf8_lossy(&output).contains("__MEZ_SELECTION_SOURCE_RAN__"),
+            "{:?}",
+            String::from_utf8_lossy(&output)
+        );
+
+        process.terminate(Duration::from_millis(100)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    /// Verifies a sourced Fish admission failure restores the exact parent
+    /// draft and reports failure without executing or discarding that draft.
+    fn managed_fish_private_admission_source_failure_restores_draft() {
+        let Some(fish) = fish_path_for_tests() else {
+            eprintln!("skipping managed Fish source-failure assertion because fish is unavailable");
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-fish-private-failure-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let owner = MarkerToken::new("dddddddddddddddddddddddddddddddd").unwrap();
+        let compatibility = ManagedFishCompatibility::new(owner.clone());
+        let mut process = spawn_managed_fish(&fish, &compatibility, &root);
+        settle_managed_fish_startup(&mut process);
+
+        process
+            .write_input(b"printf '__MEZ_FAILURE_DRAFT_RESTORED__\\n'")
+            .unwrap();
+        let marker = "fish-private-source-failure-marker";
+        let admission = fish_private_source_input("false\n", &owner, marker);
+        process.write_input(admission.wrapper.as_bytes()).unwrap();
+        let ready = format!(
+            "mez_receiver=ready;mez_token={};mez_marker={marker}",
+            owner.as_str()
+        );
+        let mut output = read_fish_output_until(&mut process, |output| {
+            output
+                .windows(ready.len())
+                .any(|window| window == ready.as_bytes())
+        });
+        output.extend(
+            process.write_shell_delivery(&ShellInputDelivery::receiver_acknowledged(
+                admission.receiver_payload.as_bytes().to_vec(),
+                marker,
+                admission.payload_receiver_acknowledgements,
+            )),
+        );
+        let complete = format!(
+            "mez_receiver=complete;mez_token={};mez_marker={marker};mez_status=1",
+            owner.as_str()
+        );
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(complete.len())
+                .any(|window| window == complete.as_bytes())
+        });
+        process.write_input(b"\n").unwrap();
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(b"__MEZ_FAILURE_DRAFT_RESTORED__".len())
+                .any(|window| window == b"__MEZ_FAILURE_DRAFT_RESTORED__")
+        });
+
+        process.terminate(Duration::from_millis(100)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -130,6 +130,8 @@ fn agent_subshell_exit_boundary_follows_child_cleanup_for_every_shell() {
             (classification == ShellClassification::Zsh).then_some(&exit_marker),
             managed_bash.then_some(Path::new("/tmp/mez-managed-bashrc")),
             managed_bash.then_some("bootstrap-marker"),
+            (classification == ShellClassification::Fish)
+                .then_some((&exit_marker, "bootstrap-marker")),
             Some(&exit_marker),
         )
         .unwrap();
