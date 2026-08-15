@@ -55,7 +55,7 @@ while you inspect, edit, and validate work.
 
 ## Prerequisites
 
-- A Unix-like system with pseudoterminals and a POSIX-style shell.
+- Linux or macOS, with pseudoterminals and a POSIX-style shell.
 - A Rust toolchain that supports edition 2024 when building from this repository.
 - A usable `$SHELL`; Mez falls back to `/bin/sh` when it is executable.
 - A provider account and supported sign-in method for model-backed agent work.

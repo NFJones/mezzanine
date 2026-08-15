@@ -43,10 +43,11 @@ and managed-home cache operations remain under `mez sandbox`. `/plan on`
 keeps the conversation in plan-only mode and removes write scopes for later
 turns; use `/plan off` before asking the agent to edit files.
 
-`/new` starts a conversation without prior context, `/fork` starts a new
-thread from the current conversation, and `/resume` returns to a saved
-conversation. `/compact` summarizes older closed work and is intentionally
-lossy; `/show-context` can browse or delete entries in the current pane
+`/new` starts a conversation without prior context, `/fork` opens a new pane
+with a branch copied from the current or selected conversation, and `/resume`
+returns to a saved conversation. `/clear` clears the visible conversation and
+terminal view; `/compact` summarizes older closed work and is intentionally
+lossy. `/show-context` can browse or delete entries in the current pane
 conversation. Use `/copy-context` or `/copy-trace-log` only when the resulting
 diagnostic material can be handled safely. `/copy-patches` exports retained
 `apply_patch` payloads and statuses, while `/list-modified-files` reports files

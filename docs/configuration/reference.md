@@ -88,9 +88,11 @@ then return to the schema reference when customizing behavior in detail.
 The tables below list the supported fields, first-launch defaults where
 applicable, built-in provider catalog values, and concise descriptions.
 `omitted` means the field is valid but not written by the first-launch config.
-Provider connections, model profiles, and model presets are materialized only
-after successful authentication for that built-in provider. Dynamic maps are
-otherwise empty unless a default entry is shown.
+For a TOML primary configuration, provider connections, model profiles, and
+model presets are materialized only after successful authentication for that
+built-in provider. YAML and JSON primary configurations are not rewritten by
+authentication. Dynamic maps are otherwise empty unless a default entry is
+shown.
 
 ### Top-level fields
 
@@ -482,8 +484,8 @@ description.
 
 Before provider authentication, every model-profile selector defaults to
 `"default"`, which the runtime can resolve without a materialized provider
-catalog. The first successful built-in provider login replaces these selectors
-with that provider's catalog choices.
+catalog. In a TOML primary configuration, the first successful built-in
+provider login replaces these selectors with that provider's catalog choices.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
@@ -498,9 +500,10 @@ with that provider's catalog choices.
 ### `providers.<name>`
 
 The first-launch configuration contains no provider entries. The declarations
-below are built-in catalog values added for a provider after its authentication
-succeeds; later provider logins add their catalog without replacing an existing
-default selection.
+below are built-in catalog values added to a TOML primary configuration after a
+provider's authentication succeeds; later provider logins add their catalog
+without replacing an existing default selection. Authentication does not
+rewrite YAML or JSON primary configurations.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
@@ -759,10 +762,10 @@ preset's `default_model_profile`.
 | `model_presets.<name>.allowed_reasoning_efforts` | string array | `[]` when omitted | Allowed automatic-sizing reasoning efforts: `low`, `medium`, `high`, or `xhigh`. |
 
 The built-in catalog defines `openai`, `deepseek`, and `anthropic` presets.
-Each provider's preset and referenced profiles are materialized after successful
-authentication for that provider. Select a preset through the supported
-model-selection controls; edit the referenced profiles when changing provider,
-model, or provider options.
+For a TOML primary configuration, each provider's preset and referenced profiles
+are materialized after successful authentication for that provider. Select a
+preset through the supported model-selection controls; edit the referenced
+profiles when changing provider, model, or provider options.
 
 ### `permissions`
 

@@ -51,9 +51,12 @@ changing storage backends. Normal status output omits private account
 identifiers and credential-store references.
 
 After successful authentication, Mez adds the selected built-in provider's
-connection, model-profile, and preset defaults to `config.toml`. Providers are
-not added for failed or unattempted sign-ins; authenticating another provider
-later adds only that provider without changing an existing default selection.
+connection, model-profile, and preset defaults to the primary TOML
+configuration. Providers are not added for failed or unattempted sign-ins;
+authenticating another provider later adds only that provider without changing
+an existing default selection. Explicit YAML and JSON primary configurations
+are not rewritten during authentication, so add any required provider and model
+entries to those files yourself.
 
 Successful authentication does not guarantee a particular entitlement, quota,
 or model. Select a model with `/model` or configure a model profile.
