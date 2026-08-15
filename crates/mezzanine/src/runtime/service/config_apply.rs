@@ -382,6 +382,11 @@ impl RuntimeSessionService {
             let presentation_settings =
                 RuntimePresentationSettings::from_config(&structured, &effective)?;
             let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
+            let disable_streaming = self.presentation.effective_agent_streaming_output()
+                && !presentation_settings.effective_agent_streaming_output();
+            if disable_streaming {
+                self.discard_all_agent_streaming_say_presentations()?;
+            }
             self.presentation.apply_settings(presentation_settings);
             self.set_host_clipboard(host_clipboard);
         }

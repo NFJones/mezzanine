@@ -51,6 +51,8 @@ passthrough = false
 emoji_width = "wide"
 # Disable optional motion and animation when true.
 reduced_motion = false
+# Render provider output incrementally while a validated response is still arriving.
+streaming_output = true
 # Opt in to enhanced keyboard reporting only while a Mez readline prompt owns input.
 enhanced_keyboard_reporting = false
 # Whether completion-attention title pills alternate their attention color.

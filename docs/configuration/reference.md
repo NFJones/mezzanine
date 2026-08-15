@@ -160,6 +160,7 @@ Use the relevant task and reference pages to inspect those live facilities.
 | `terminal.passthrough` | boolean | `false` | Allow broader terminal passthrough behavior when configured. |
 | `terminal.emoji_width` | string | `"wide"` | Emoji status-glyph width policy: `wide` for explicit two-cell emoji-presentation sequences, `narrow` for one-cell text fallback terminals. |
 | `terminal.reduced_motion` | boolean | `false` | Disable optional frame/status animations. |
+| `terminal.streaming_output` | boolean | `true` | Render provisional provider output incrementally. Reduced-motion mode overrides this setting and suppresses provisional rendering; final validated output is still rendered normally. This does not control provider transport streaming. |
 | `terminal.enhanced_keyboard_reporting` | boolean | `false` | Opt in to enhanced keyboard reporting while a Mez-owned readline prompt owns input on the primary client. Ordinary process panes, observers, and modal display overlays do not activate it. |
 | `terminal.completion_attention_flashing` | boolean | `true` | Whether completion-attention title pills alternate their attention color. |
 | `terminal.resize_debounce_ms` | integer | `200` | Milliseconds to debounce resize redraws. |

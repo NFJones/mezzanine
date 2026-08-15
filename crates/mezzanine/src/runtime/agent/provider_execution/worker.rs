@@ -109,6 +109,9 @@ impl RuntimeSessionService {
         if !current || !self.agent_provider_task_is_claimed(turn_id) {
             return crate::runtime::RuntimeTransition::default();
         }
+        if !self.presentation.effective_agent_streaming_output() {
+            return crate::runtime::RuntimeTransition::default();
+        }
         let applied = self
             .apply_agent_streaming_say_event_to_terminal_buffer(pane_id, turn_id, event)
             .is_ok();

@@ -98,6 +98,8 @@ pub(crate) struct RuntimePresentationSettings {
     terminal_agent_wrap_column_cap: usize,
     /// Whether optional terminal animation is disabled.
     terminal_reduced_motion: bool,
+    /// Whether provisional provider output is rendered while it arrives.
+    terminal_streaming_output: bool,
     /// Whether Mez-owned readline prompts may request enhanced keyboard input.
     terminal_enhanced_keyboard_reporting: bool,
     /// Whether completion-attention title pills alternate their attention color.
@@ -141,6 +143,7 @@ impl Default for RuntimePresentationSettings {
             terminal_render_rate_limit_fps: 5,
             terminal_agent_wrap_column_cap: crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
             terminal_reduced_motion: false,
+            terminal_streaming_output: true,
             terminal_enhanced_keyboard_reporting: false,
             terminal_completion_attention_flashing: true,
             ui_theme: UiTheme::default(),
@@ -152,6 +155,11 @@ impl Default for RuntimePresentationSettings {
 }
 
 impl RuntimePresentationSettings {
+    /// Reports whether live provider output is enabled after motion policy is applied.
+    pub(crate) fn effective_agent_streaming_output(&self) -> bool {
+        self.terminal_streaming_output && !self.terminal_reduced_motion
+    }
+
     /// Parses one complete presentation settings replacement.
     pub(crate) fn from_config(
         root: &serde_json::Value,
@@ -187,6 +195,8 @@ impl RuntimePresentationSettings {
             terminal_reduced_motion: crate::runtime::runtime_terminal_reduced_motion_from_config(
                 root,
             )?,
+            terminal_streaming_output:
+                crate::runtime::runtime_terminal_streaming_output_from_config(root)?,
             terminal_enhanced_keyboard_reporting:
                 crate::runtime::runtime_terminal_enhanced_keyboard_reporting_from_config(root)?,
             terminal_completion_attention_flashing:
@@ -535,6 +545,11 @@ struct RuntimeRecordBrowserSaveCompletion {
 }
 
 impl RuntimePresentationComponent {
+    /// Reports whether provisional provider output may be rendered live.
+    pub(crate) fn effective_agent_streaming_output(&self) -> bool {
+        self.settings.effective_agent_streaming_output()
+    }
+
     /// Records a completion only when its pane is not currently focused.
     pub(crate) fn register_completion_attention(
         &mut self,

@@ -386,6 +386,19 @@ pub(crate) fn runtime_terminal_reduced_motion_from_config(root: &Value) -> Resul
         .ok_or_else(|| MezError::config("terminal.reduced_motion must be true or false"))
 }
 
+/// Returns whether provisional provider output should render while it arrives.
+pub(crate) fn runtime_terminal_streaming_output_from_config(root: &Value) -> Result<bool> {
+    let Some(terminal) = runtime_json_object(root, "terminal") else {
+        return Ok(true);
+    };
+    let Some(value) = terminal.get("streaming_output") else {
+        return Ok(true);
+    };
+    value
+        .as_bool()
+        .ok_or_else(|| MezError::config("terminal.streaming_output must be true or false"))
+}
+
 /// Returns whether Mez-owned readline prompts may request enhanced keyboard input.
 pub(crate) fn runtime_terminal_enhanced_keyboard_reporting_from_config(
     root: &Value,

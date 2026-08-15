@@ -762,6 +762,7 @@ pub(super) fn validate_terminal_value(path: &str, value: &str) -> Option<String>
         }
         "terminal.cursor_blink"
         | "terminal.reduced_motion"
+        | "terminal.streaming_output"
         | "terminal.enhanced_keyboard_reporting"
         | "terminal.completion_attention_flashing" => {
             if matches!(value, "true" | "false") {

@@ -439,6 +439,7 @@ pub(super) const TERMINAL_KEYS: &[&str] = &[
     "passthrough",
     "emoji_width",
     "reduced_motion",
+    "streaming_output",
     "enhanced_keyboard_reporting",
     "completion_attention_flashing",
     "resize_debounce_ms",

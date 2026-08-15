@@ -1,7 +1,7 @@
 //! Runtime tests for agent presentation terminal ui behavior.
 
 use super::*;
-use crate::runtime::RenderInvalidationReason;
+use crate::runtime::{RenderInvalidationReason, RuntimeTransition};
 
 /// Verifies that terminal cursor presentation settings are parsed from runtime
 /// configuration layers and applied to attached-terminal render configuration.
@@ -36,6 +36,247 @@ fn runtime_applies_cursor_presentation_options_from_config_layers() {
     assert!(config.frame_context.reduced_motion);
     assert!(config.frame_context.completion_attention_static);
     assert_eq!(config.frame_context.animation_tick_ms, 0);
+}
+
+/// Verifies explicit streaming opt-out and reduced-motion policy both suppress
+/// provisional provider presentation without preventing the provider turn
+/// from remaining active for authoritative completion.
+#[test]
+fn runtime_streaming_output_policy_suppresses_provider_deltas() {
+    for terminal_config in [
+        "streaming_output = false\nreduced_motion = false",
+        "streaming_output = true\nreduced_motion = true",
+    ] {
+        let mut service = test_runtime_service();
+        service
+            .replace_config_layers(vec![ConfigLayer {
+                name: "primary".to_string(),
+                path: None,
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: format!("[terminal]\n{terminal_config}\n"),
+            }])
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        set_agent_pane_screen_for_test(
+            &mut service,
+            "%1",
+            TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+        );
+        let started = service
+            .start_agent_prompt_turn("%1", "stream this response")
+            .unwrap();
+        let turn = service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == started.turn_id)
+            .cloned()
+            .unwrap();
+        let high_water_mark = service
+            .agent_turn_contexts()
+            .get(&turn.turn_id)
+            .unwrap()
+            .event_sequence_high_water_mark();
+        service
+            .record_claimed_agent_provider_context_for_tests(&turn.turn_id, high_water_mark)
+            .unwrap();
+        let baseline = service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines();
+
+        let transition = service.apply_agent_provider_streaming_say_transition(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            "%1",
+            &mez_agent::StreamingSayEvent::Started {
+                action_index: 0,
+                status: mez_agent::SayStatus::Progress,
+                content_type: "text/markdown; charset=utf-8".to_string(),
+            },
+        );
+
+        assert_eq!(transition, RuntimeTransition::default());
+        assert!(
+            service
+                .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            service
+                .agent_pane_screen("%1")
+                .unwrap()
+                .normal_content_lines(),
+            baseline
+        );
+        assert!(service.agent_provider_task_is_claimed(&turn.turn_id));
+    }
+}
+
+/// Verifies disabling streaming output during a provider response restores the
+/// pre-stream screen, suppresses subsequent deltas, and allows only newly
+/// started actions to render after streaming is enabled again.
+#[test]
+fn runtime_streaming_output_toggle_discards_and_restarts_provisional_rendering() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+    );
+    let started = service
+        .start_agent_prompt_turn("%1", "stream around a config reload")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let high_water_mark = service
+        .agent_turn_contexts()
+        .get(&turn.turn_id)
+        .unwrap()
+        .event_sequence_high_water_mark();
+    service
+        .record_claimed_agent_provider_context_for_tests(&turn.turn_id, high_water_mark)
+        .unwrap();
+    let agent_id = AgentId::opaque(turn.agent_id.clone()).unwrap();
+    let baseline = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+
+    service.apply_agent_provider_streaming_say_transition(
+        &agent_id,
+        &turn.turn_id,
+        "%1",
+        &mez_agent::StreamingSayEvent::Started {
+            action_index: 0,
+            status: mez_agent::SayStatus::Progress,
+            content_type: "text/plain; charset=utf-8".to_string(),
+        },
+    );
+    service.apply_agent_provider_streaming_say_transition(
+        &agent_id,
+        &turn.turn_id,
+        "%1",
+        &mez_agent::StreamingSayEvent::TextDelta {
+            action_index: 0,
+            text: "discarded prefix".to_string(),
+        },
+    );
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(
+        service
+            .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    assert!(
+        service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .contains("discarded prefix")
+    );
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nstreaming_output = false\n".to_string(),
+        }])
+        .unwrap();
+    assert_eq!(
+        service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines(),
+        baseline
+    );
+    assert_eq!(
+        service.apply_agent_provider_streaming_say_transition(
+            &agent_id,
+            &turn.turn_id,
+            "%1",
+            &mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 0,
+                text: "suppressed suffix".to_string(),
+            },
+        ),
+        RuntimeTransition::default()
+    );
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nstreaming_output = true\n".to_string(),
+        }])
+        .unwrap();
+    service.apply_agent_provider_streaming_say_transition(
+        &agent_id,
+        &turn.turn_id,
+        "%1",
+        &mez_agent::StreamingSayEvent::Started {
+            action_index: 1,
+            status: mez_agent::SayStatus::Progress,
+            content_type: "text/plain; charset=utf-8".to_string(),
+        },
+    );
+    service.apply_agent_provider_streaming_say_transition(
+        &agent_id,
+        &turn.turn_id,
+        "%1",
+        &mez_agent::StreamingSayEvent::TextDelta {
+            action_index: 1,
+            text: "new action only".to_string(),
+        },
+    );
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(
+        service
+            .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let rendered = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(rendered.contains("new action only"), "{rendered}");
+    assert!(!rendered.contains("discarded prefix"), "{rendered}");
+    assert!(!rendered.contains("suppressed suffix"), "{rendered}");
 }
 
 /// Verifies that pane split actions which cannot fit inside the active window

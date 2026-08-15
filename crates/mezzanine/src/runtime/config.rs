@@ -99,7 +99,8 @@ pub(super) use terminal_options::{
     runtime_terminal_reduced_motion_from_config,
     runtime_terminal_render_rate_limit_fps_from_config,
     runtime_terminal_resize_debounce_ms_from_config,
-    runtime_terminal_shell_output_preview_lines_from_config, runtime_terminal_term_from_config,
+    runtime_terminal_shell_output_preview_lines_from_config,
+    runtime_terminal_streaming_output_from_config, runtime_terminal_term_from_config,
 };
 pub use theme::runtime_ui_theme_from_config;
 pub(super) use trust::{
@@ -355,7 +356,7 @@ mod tests {
     use super::{
         ActiveTurnSleepInhibition, runtime_active_turn_sleep_inhibition_from_config,
         runtime_fit_status_line, runtime_terminal_agent_wrap_column_cap_from_config,
-        runtime_terminal_emoji_width_from_config,
+        runtime_terminal_emoji_width_from_config, runtime_terminal_streaming_output_from_config,
     };
 
     /// Verifies the active-turn sleep-inhibition reader defaults to disabled,
@@ -476,6 +477,25 @@ mod tests {
                 "terminal": {
                     "agent_wrap_column_cap": 0
                 }
+            }))
+            .is_err()
+        );
+    }
+
+    /// Verifies provisional provider rendering defaults to enabled, honors an
+    /// explicit opt-out, and rejects non-boolean configuration values.
+    #[test]
+    fn parses_terminal_streaming_output_from_config() {
+        assert!(runtime_terminal_streaming_output_from_config(&serde_json::json!({})).unwrap());
+        assert!(
+            !runtime_terminal_streaming_output_from_config(&serde_json::json!({
+                "terminal": { "streaming_output": false }
+            }))
+            .unwrap()
+        );
+        assert!(
+            runtime_terminal_streaming_output_from_config(&serde_json::json!({
+                "terminal": { "streaming_output": "sometimes" }
             }))
             .is_err()
         );

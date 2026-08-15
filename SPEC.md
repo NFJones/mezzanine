@@ -2741,7 +2741,7 @@ creation.
 The `terminal` table MUST support `profile`, `term`, `pane_spawn_directory`, `pane_spawn_view`, `true_color`, `mouse`,
 `bracketed_paste`, `clipboard`, `clipboard_copy_command`,
 `clipboard_paste_command`, `alternate_screen`, `focus_events`, `nested_multiplexer`,
-`passthrough`, `emoji_width`, `reduced_motion`, `completion_attention_flashing`, `resize_debounce_ms`,
+`passthrough`, `emoji_width`, `reduced_motion`, `streaming_output`, `completion_attention_flashing`, `resize_debounce_ms`,
 `render_rate_limit_fps`, `cursor_style`, `cursor_blink`, and
 `cursor_blink_interval_ms`.
 
@@ -2778,6 +2778,17 @@ frame/status animations MUST render as static UI while preserving the same
 semantic status text and color category.
 Completion-attention title pills MUST use their stable attention color instead
 of flashing while reduced motion is enabled.
+
+`terminal.streaming_output` MUST default to true. When true, Mezzanine MAY
+render provisional provider `say` output incrementally while a response is
+still arriving. When false, provider transport, validation, and completion
+processing MUST continue, but provisional output MUST NOT be projected into the
+pane. Reduced-motion mode MUST make streaming output ineffective regardless of
+the configured value. Disabling effective streaming during an active response
+MUST restore the pane state from before that provisional presentation. In all
+cases, the authoritative validated completion MUST render normally and exactly
+once. This setting controls only rendering and MUST NOT change provider
+transport streaming options.
 
 `terminal.completion_attention_flashing` MUST default to true. When false,
 completion-attention title pills MUST use their stable attention color without

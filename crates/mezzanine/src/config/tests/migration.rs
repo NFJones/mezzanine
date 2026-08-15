@@ -1996,6 +1996,40 @@ fn migrates_schema_62_with_agent_planning_visible_field() {
     }
 }
 
+/// Verifies schema v64 preserves established live provider-output rendering
+/// while retaining neighboring terminal policy in every supported format.
+#[test]
+fn migrates_schema_63_with_streaming_output_enabled() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 63\n[terminal]\nreduced_motion = false\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":63,"terminal":{"reduced_motion":false}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 63\nterminal:\n  reduced_motion: false\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let values = extract_config_values(format, &plan.text);
+
+        assert_eq!(plan.from_version, 63);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            values.get("terminal.streaming_output"),
+            Some(&"true".to_string())
+        );
+        assert_eq!(
+            values.get("terminal.reduced_motion"),
+            Some(&"false".to_string())
+        );
+    }
+}
+
 /// Verifies that config validation refuses documents written for a newer
 /// schema version than the running binary understands. This prevents older
 /// binaries from silently interpreting keys whose migration or meaning belongs

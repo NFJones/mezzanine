@@ -2026,6 +2026,23 @@ impl RuntimeSessionService {
         Ok(discarded)
     }
 
+    /// Discards every provisional provider-output presentation.
+    pub(crate) fn discard_all_agent_streaming_say_presentations(&mut self) -> Result<usize> {
+        let pane_ids = self
+            .presentation
+            .agent_streaming_say_presentations
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut discarded = 0usize;
+        for pane_id in pane_ids {
+            if self.discard_agent_streaming_say_presentation(&pane_id, None)? {
+                discarded = discarded.saturating_add(1);
+            }
+        }
+        Ok(discarded)
+    }
+
     /// Reports whether completion already promoted one streamed action in place.
     pub(crate) fn agent_streaming_say_action_is_promoted(
         &self,
