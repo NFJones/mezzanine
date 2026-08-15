@@ -171,6 +171,12 @@ pub(crate) struct RuntimeAgentComponent {
     agent_subshell_panes: BTreeSet<String>,
     /// Visible panes waiting for parent bootstrap before entering a child shell.
     deferred_agent_subshell_entry_panes: BTreeSet<String>,
+    /// Live panes with user input that has not reached a shell submission boundary.
+    panes_with_unsubmitted_process_input: BTreeSet<String>,
+    /// Live non-native shell panes awaiting an interrupt-confirmed prompt before entry.
+    pending_agent_subshell_input_clear_panes: BTreeSet<String>,
+    /// Panes whose child entry followed a live non-native input clear.
+    completed_agent_subshell_input_clear_panes: BTreeSet<String>,
     /// Interrupted subshells that must exit with a line-oriented command.
     agent_subshell_command_exit_panes: BTreeSet<String>,
     /// Bounded hidden diagnostic lines retained by pane.
@@ -2239,6 +2245,82 @@ impl RuntimeSessionService {
             .insert(pane_id.into());
     }
 
+    /// Records user-originated process input for safe non-native shell admission.
+    ///
+    /// A line terminator or terminal interrupt ends the current shell edit;
+    /// otherwise the pane is treated as having a potentially dirty prompt.
+    pub(crate) fn record_user_process_input(&mut self, pane_id: &str, input: &[u8]) {
+        if input
+            .iter()
+            .any(|byte| matches!(*byte, b'\r' | b'\n' | 0x03))
+        {
+            self.agent
+                .panes_with_unsubmitted_process_input
+                .remove(pane_id);
+        } else {
+            self.agent
+                .panes_with_unsubmitted_process_input
+                .insert(pane_id.to_string());
+        }
+    }
+
+    /// Reports whether user process input may still be an unsubmitted shell draft.
+    pub(crate) fn pane_has_unsubmitted_process_input(&self, pane_id: &str) -> bool {
+        self.agent
+            .panes_with_unsubmitted_process_input
+            .contains(pane_id)
+    }
+
+    /// Records that a live non-native shell must publish a fresh prompt after
+    /// an interrupt before the runtime may write an agent child-shell handoff.
+    pub(crate) fn begin_agent_subshell_input_clear(&mut self, pane_id: impl Into<String>) {
+        let pane_id = pane_id.into();
+        self.agent
+            .panes_with_unsubmitted_process_input
+            .remove(&pane_id);
+        self.agent
+            .pending_agent_subshell_input_clear_panes
+            .insert(pane_id);
+    }
+
+    /// Reports whether a live non-native shell is waiting for an
+    /// interrupt-confirmed parent prompt before child entry.
+    pub(crate) fn agent_subshell_input_clear_is_pending(&self, pane_id: &str) -> bool {
+        self.agent
+            .pending_agent_subshell_input_clear_panes
+            .contains(pane_id)
+    }
+
+    /// Consumes the live non-native shell input-clear boundary.
+    pub(crate) fn finish_agent_subshell_input_clear(&mut self, pane_id: &str) -> bool {
+        let cleared = self
+            .agent
+            .pending_agent_subshell_input_clear_panes
+            .remove(pane_id);
+        if cleared {
+            self.agent
+                .completed_agent_subshell_input_clear_panes
+                .insert(pane_id.to_string());
+        }
+        cleared
+    }
+
+    /// Reports whether child entry followed an interrupt that may still echo
+    /// after the child exits and must remain hidden from retained parent content.
+    pub(crate) fn agent_subshell_input_clear_was_completed(&self, pane_id: &str) -> bool {
+        self.agent
+            .completed_agent_subshell_input_clear_panes
+            .contains(pane_id)
+    }
+
+    /// Clears the completed non-native input-clear marker once ordinary process
+    /// input resumes and later output must be retained normally.
+    pub(crate) fn clear_completed_agent_subshell_input_clear(&mut self, pane_id: &str) -> bool {
+        self.agent
+            .completed_agent_subshell_input_clear_panes
+            .remove(pane_id)
+    }
+
     /// Reports whether one pane has an explicit deferred child-shell entry.
     pub(crate) fn agent_subshell_entry_is_deferred(&self, pane_id: &str) -> bool {
         self.agent
@@ -2275,6 +2357,15 @@ impl RuntimeSessionService {
         self.agent.agent_subshell_panes.remove(pane_id);
         self.agent
             .deferred_agent_subshell_entry_panes
+            .remove(pane_id);
+        self.agent
+            .panes_with_unsubmitted_process_input
+            .remove(pane_id);
+        self.agent
+            .pending_agent_subshell_input_clear_panes
+            .remove(pane_id);
+        self.agent
+            .completed_agent_subshell_input_clear_panes
             .remove(pane_id);
         self.agent.agent_subshell_command_exit_panes.remove(pane_id);
     }

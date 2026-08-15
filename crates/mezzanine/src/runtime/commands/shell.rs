@@ -1106,6 +1106,30 @@ impl RuntimeSessionService {
         }
         let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;
         let classification = shell_identity.classification();
+        let needs_non_native_input_clear =
+            matches!(
+                classification,
+                ShellClassification::PosixSh | ShellClassification::UnknownUnix
+            ) && self.adapter_owned_pane_process_instance(pane_id).is_none()
+                && self.pane_has_unsubmitted_process_input(pane_id);
+        if needs_non_native_input_clear && !self.agent_subshell_input_clear_is_pending(pane_id) {
+            self.defer_agent_subshell_entry(pane_id);
+            self.begin_agent_subshell_input_clear(pane_id);
+            self.set_pane_readiness(pane_id, PaneReadinessState::InteractiveBlocked);
+            self.remember_hidden_shell_render_suppression(pane_id);
+            match self.write_runtime_pane_input(pane_id, b"\x03") {
+                Ok(()) => return Ok(true),
+                Err(error) if error.kind() == MezErrorKind::NotFound => {
+                    self.clear_agent_subshell_state(pane_id);
+                    return Ok(false);
+                }
+                Err(error) => {
+                    self.clear_agent_subshell_state(pane_id);
+                    return Err(error);
+                }
+            }
+        }
+        self.finish_agent_subshell_input_clear(pane_id);
         let zsh_history_token = self.zsh_history_token_for_pane(pane_id).cloned();
         let bash_receiver_rcfile = self
             .bash_receiver_rcfile_for_pane(pane_id)
@@ -1213,6 +1237,11 @@ impl RuntimeSessionService {
                 self.clear_shell_output_filters_for_foreground_input(pane_id);
                 return Ok(true);
             }
+            if self.agent_subshell_input_clear_is_pending(pane_id) {
+                self.clear_agent_subshell_state(pane_id);
+                self.clear_shell_output_filters_for_foreground_input(pane_id);
+                return Ok(true);
+            }
             return Ok(false);
         }
         if self
@@ -1233,7 +1262,12 @@ impl RuntimeSessionService {
             self.clear_shell_output_filters_for_foreground_input(pane_id);
             return Ok(false);
         }
-        self.clear_shell_output_filters_for_foreground_input(pane_id);
+        let retain_input_clear_output = self.agent_subshell_input_clear_was_completed(pane_id);
+        if retain_input_clear_output {
+            self.remember_hidden_shell_render_suppression(pane_id);
+        } else {
+            self.clear_shell_output_filters_for_foreground_input(pane_id);
+        }
         self.clear_agent_subshell_shell_identity(pane_id);
         let command_exit = self.take_agent_subshell_command_exit(pane_id);
         self.remember_agent_subshell_exit_echo(pane_id);

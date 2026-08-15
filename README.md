@@ -134,6 +134,12 @@ When entering agent mode from a managed Bash pane, Mezzanine preserves an
 unfinished command line while the agent child shell runs. The original draft
 returns when agent mode exits and runs only if it is later submitted normally.
 
+POSIX and unknown shells cannot portably preserve an editor draft. When Mez can
+identify unsubmitted process input in those shells, it interrupts the draft
+instead of submitting or concatenating it with agent transport. Agent entry
+continues only after the parent shell is certified at a fresh prompt; otherwise
+it fails closed and leaves the parent shell available.
+
 Use `mez --help` and the [CLI reference](docs/reference-manual/cli.md) for the
 current command contract. Use [Sessions and panes](docs/using-mezzanine/sessions-and-panes.md)
 and [Terminal input, copy, and history](docs/using-mezzanine/terminal-input-copy-and-history.md)

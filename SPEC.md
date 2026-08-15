@@ -3868,6 +3868,17 @@ by admission or restoration; it may run only after the user later submits the
 restored parent prompt. If the callback cannot preserve its editor state, it
 MUST fail closed without entering an agent child shell.
 
+POSIX-compatible and unknown Unix shells MUST NOT receive generated agent
+handoff source while Mezzanine has tracked user process input without a
+submission boundary. Those shells expose no portable editor-state API, so the
+runtime MUST discard that possible draft with the terminal interrupt character,
+MUST NOT send newline, EOF, `exit`, or editor-clearing key sequences, and MUST
+wait for subsequent parent-shell output together with certified foreground
+ownership before it attempts child entry. If that prompt/ownership boundary
+cannot be certified, agent child-shell admission MUST fail closed while the
+parent process remains available. The fallback interrupt and its delayed echo
+are implementation traffic and MUST NOT alter retained parent-screen content.
+
 When agent-subshell certification proof is rejected, the runtime MUST retain a
 stable machine-readable rejection reason for the current pane shell-interaction
 epoch and use it to explain later shell-action preflight failures. That reason

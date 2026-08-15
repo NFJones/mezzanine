@@ -142,6 +142,7 @@ impl RuntimeSessionService {
             descriptor.pane_id.as_str(),
             crate::runtime::PaneSurfaceKind::Process,
         );
+        self.record_user_process_input(descriptor.pane_id.as_str(), input);
         self.write_runtime_pane_input(descriptor.pane_id.as_str(), input)?;
         Ok(PaneInputDispatch {
             session_id: self.session.id.to_string(),

@@ -194,10 +194,28 @@ impl RuntimeSessionService {
         }
         self.record_running_shell_transaction_output(output.pane_id.as_str(), &transaction_bytes);
         self.observe_agent_shell_transaction_events(output.pane_id.as_str(), &osc_events)?;
-        if self.pane_readiness_state(output.pane_id.as_str()) == PaneReadinessState::Ready
+        if self.agent_subshell_input_clear_is_pending(output.pane_id.as_str())
+            && transaction_bytes
+                .iter()
+                .any(|byte| matches!(*byte, b'\r' | b'\n'))
+            && self.pane_foreground_certified_shell_state(output.pane_id.as_str()) == Some(true)
+        {
+            let _ = self.observe_passive_shell_prompt_candidate(
+                output.pane_id.as_str(),
+                "non-native-input-clear-output",
+            )?;
+        }
+        let resumes_non_native_entry = self
+            .agent_subshell_input_clear_is_pending(output.pane_id.as_str())
+            && matches!(
+                self.pane_readiness_state(output.pane_id.as_str()),
+                PaneReadinessState::Ready | PaneReadinessState::PromptCandidate
+            );
+        if (self.pane_readiness_state(output.pane_id.as_str()) == PaneReadinessState::Ready
             && self
                 .bash_receiver_token_for_pane(output.pane_id.as_str())
                 .is_some()
+            || resumes_non_native_entry)
             && self.agent_subshell_entry_is_deferred(output.pane_id.as_str())
             && !self.agent_subshell_is_active(output.pane_id.as_str())
             && self
@@ -368,6 +386,11 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn pane_output_render_mode(&self, pane_id: &str) -> PaneOutputRenderMode {
         let shell_view_enabled = self.agent_shell_view_enabled(pane_id);
+        if self.agent_subshell_input_clear_is_pending(pane_id)
+            || self.agent_subshell_input_clear_was_completed(pane_id)
+        {
+            return PaneOutputRenderMode::HiddenLiveAgentShell;
+        }
         let mut has_agent_action = false;
         for transaction in self
             .process
@@ -579,7 +602,16 @@ impl RuntimeSessionService {
             self.process
                 .pane_agent_subshell_exit_markers
                 .remove(pane_id);
-            return pending[start + marker.len()..].to_vec();
+            let parent_bytes = &pending[start + marker.len()..];
+            if self.agent_subshell_input_clear_was_completed(pane_id) {
+                if let Some(parent_bytes) = parent_bytes.strip_prefix(b"^C\r\n") {
+                    return parent_bytes.to_vec();
+                }
+                if let Some(parent_bytes) = parent_bytes.strip_prefix(b"^C\n") {
+                    return parent_bytes.to_vec();
+                }
+            }
+            return parent_bytes.to_vec();
         }
         let suffix_length = (1..marker.len().min(pending.len() + 1))
             .rev()
@@ -609,6 +641,7 @@ impl RuntimeSessionService {
     /// interaction and must not be swallowed or reduced to cursor-control
     /// remnants by the previous agent turn's cleanup window.
     pub(crate) fn clear_shell_output_filters_for_foreground_input(&mut self, pane_id: &str) {
+        self.clear_completed_agent_subshell_input_clear(pane_id);
         self.process
             .pane_hidden_shell_render_recent_polls
             .remove(pane_id);

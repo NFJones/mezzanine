@@ -1085,6 +1085,121 @@ fn runtime_bash_dirty_prompt_survives_agent_subshell_admission() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies that a live POSIX shell discards an unsubmitted process draft
+/// before agent-shell admission instead of concatenating generated transport
+/// with the user's command.
+///
+/// POSIX shells do not provide a portable editor-state API, so the runtime
+/// sends an interrupt and waits for a fresh prompt boundary before entering the
+/// child shell. The interrupted draft must never execute, while the parent
+/// process remains available after agent mode exits.
+#[test]
+fn runtime_posix_dirty_prompt_is_interrupted_before_agent_admission() {
+    let shell_path = PathBuf::from("/bin/sh");
+    if !shell_path.is_file() {
+        eprintln!("skipping dirty POSIX prompt regression because /bin/sh is unavailable");
+        return;
+    }
+    let root = temp_root("posix-dirty-agent-admission");
+    let mut service = RuntimeSessionService::with_event_log(
+        Session::new_default(
+            ResolvedShell::new(shell_path, ShellSource::FallbackBinSh),
+            Size::new(80, 24).unwrap(),
+        ),
+        root.join("default.sock"),
+        100,
+        10,
+        1024,
+    )
+    .unwrap();
+    *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service.set_pane_readiness("%1", PaneReadinessState::PromptCandidate);
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if !service.pane_bootstrap_is_pending_for_tests("%1") {
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert!(
+        !service.pane_bootstrap_is_pending_for_tests("%1"),
+        "initial POSIX bootstrap did not settle before dirty admission"
+    );
+    service
+        .write_input_to_pane(&primary, Some("%1"), b"printf '__MEZ_POSIX_DRAFT_RAN__\\n'")
+        .unwrap();
+
+    let show = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert!(show.contains("visibility=visible"), "{show}");
+    assert!(
+        !service.agent_subshell_is_active("%1"),
+        "child ownership must wait for the parent prompt after the interrupt"
+    );
+
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if service.pane_readiness_state("%1") == PaneReadinessState::PromptCandidate {
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::PromptCandidate,
+        "the interrupted parent must prove a fresh prompt before child entry"
+    );
+
+    for _ in 0..50 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    let pane_text = service
+        .process_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        !pane_text.contains("__MEZ_POSIX_DRAFT_RAN__"),
+        "the dirty POSIX draft must not execute during admission: {pane_text}"
+    );
+
+    let hide = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert!(hide.contains("visibility=hidden"), "{hide}");
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if service.pane_foreground_certified_shell_state("%1") == Some(true) {
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert_eq!(
+        service.pane_foreground_certified_shell_state("%1"),
+        Some(true)
+    );
+    let pane_text = service
+        .process_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        !pane_text.contains("__MEZ_POSIX_DRAFT_RAN__"),
+        "{pane_text}"
+    );
+    assert!(service.poll_pane_processes().unwrap().is_empty());
+    assert!(service.pane_processes().contains_pane("%1"));
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that a bash-backed pane shell survives the first agent shell
 /// transaction after the command is displayed. The user-visible failure mode
 /// was the primary pane exiting immediately after an agent command preview, so
