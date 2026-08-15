@@ -32,8 +32,8 @@ one.
 | `mez serve` | Start a foreground session service; it does not attach a primary client unless `--attach-primary` is supplied from an interactive terminal. Alias: `daemon`. |
 | `mez list` | List resumable sessions. Alias: `list-sessions`. |
 | `mez attach [session-id] [--observer]` | Attach a primary client, or request read-only observer access. Alias: `attach-session`. |
-| `mez detach` | Detach the current or selected client. Alias: `detach-client`. |
-| `mez kill --force` | Terminate a live session through its control socket; `--force` confirms the destructive operation. Alias: `kill-session`. |
+| `mez detach [--client-id ID]` | Detach the current client, or the selected client when `--client-id` is supplied. Alias: `detach-client`. |
+| `mez kill [session-id] --force` | Terminate the selected live session through its control socket; the optional target accepts a registered session id or creation-order index. `--force` confirms the destructive operation. Alias: `kill-session`. |
 | `mez snapshot` | Manage persisted snapshots. With no subcommand it lists snapshots; see the snapshot forms below. |
 
 Creating or attaching a primary client needs an interactive terminal. `mez
