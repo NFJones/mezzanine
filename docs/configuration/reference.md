@@ -71,6 +71,10 @@ Configuration is conservative:
   are removed by the v15-to-v16 primary-config migration and rejected in a
   current-schema layer. Their behavior is runtime-owned; the pane shell is
   resolved from `$SHELL` or `/bin/sh`.
+- `history.search_mode`, the former memory storage-path and automatic-injection
+  settings, and `issues.storage` are also removed by that migration and
+  rejected in current-schema layers. Their storage and retrieval behavior is
+  runtime-owned.
 - `agents.implementation_pressure_after_shell_actions` is removed by the
   v19-to-v20 primary-config migration and rejected in current-schema layers;
   model-facing action-pressure prompts are no longer part of runtime policy.
@@ -416,20 +420,14 @@ and `high_contrast_light` are Mezzanine-native themes.
 | `history.rotate_lines` | integer | `1000` | Number of old lines to evict on overflow. |
 | `history.saved_sessions_limit` | integer | `100` | Maximum saved agent conversations listed by `/resume`; older saved sessions are deleted when new conversations are created. |
 | `history.persist` | boolean | `true` | Persist retained history across supported restarts. |
-| `history.search_mode` | string | `"literal"` | Default history search mode. |
 
 ### `memory`
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
 | `memory.enabled` | boolean | `true` | Enable persistent memory commands, durable memory loading, and gated on-demand memory MAAP actions. |
-| `memory.storage` | string | `"sqlite"` | Persistent memory storage backend. Current builds use SQLite with TSV import/export compatibility. |
-| `memory.database_path` | string | `""` | Optional database path override; empty uses `<config_root>/memory.sqlite`. |
 | `memory.max_records` | integer | `5000` | Retention cap for persistent records before archival or pruning. |
 | `memory.max_bytes` | integer | `10485760` | Persistent memory content-byte cap enforced by `mez memory prune`. |
-| `memory.max_injected_records` | integer | `12` | Maximum persistent memory records eligible for automatic context injection. |
-| `memory.max_injected_bytes` | integer | `24576` | Maximum bytes of persistent memory eligible for automatic context injection. |
-| `memory.candidate_limit` | integer | `100` | Maximum local candidates retrieved before memory injection or on-demand memory search selection. |
 | `memory.fts_enabled` | boolean | `true` | Enable SQLite FTS candidate search for memory queries. |
 | `memory.archive_before_prune` | boolean | `true` | Archive non-expired over-limit records before destructive pruning. |
 | `memory.default_ttl_days` | integer | `180` | Default retention horizon for model-generated memory records when the model does not provide `expires_in_days`. Records store this as an expiration duration so selected-and-used memories refresh their expiry from wall-clock time. |
@@ -439,7 +437,6 @@ and `high_contrast_light` are Mezzanine-native themes.
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
 | `issues.enabled` | boolean | `true` | Enable local SQLite project issue tracking through `mez issue`, `/issue`, and gated issue MAAP actions. |
-| `issues.storage` | string | `"sqlite"` | Local issue storage backend. Current builds support SQLite. |
 | `issues.database_path` | string | `""` | Optional database path override; empty uses `<config_root>/issues.sqlite`. Relative paths are created privately under `<config_root>`; absolute paths are opened as caller-owned locations without creating or chmodding the parent directory. |
 
 Issue records include a required single-line title, an `open`, `in-progress`,
