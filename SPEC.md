@@ -876,6 +876,9 @@ Pane frames MUST support the following fields:
 - `agent.reasoning`: Active reasoning profile or effort when visible by policy.
 - `agent.thinking`: Provider thinking-mode state when the active provider
   supports a native thinking toggle.
+- `agent.planning`: Pane-local plan-only mode enablement. This field reports
+  whether `/plan` is enabled, not whether the provider is actively composing a
+  plan.
 - `agent.routing`: Pane-local routing enablement state.
 - `agent.preset`: Active model preset name when the pane model and
   auto-sizing profile group match a configured preset, or an implementation
@@ -2644,7 +2647,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 62 is the current configuration schema version for this
+schema version 63 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -6297,6 +6300,8 @@ The baseline command capabilities are:
   user prompt without rewriting that prompt, and MUST derive the pane's
   effective sandbox authority with no write scopes. Disabling the mode MUST
   recompute normal pane authority rather than restore a cached scope snapshot.
+  The pane-frame `agent.planning` pill MUST indicate this enablement state; it
+  MUST NOT claim that the provider is actively composing a plan.
 - `/approve`: Approve a pending pane-local agent action. It MUST accept an
   approval id, `latest`, or the only pending approval for the active pane, and
   it MUST support `once`, `session`, `project`, and `global` approval scopes.
@@ -9328,6 +9333,14 @@ status controls MUST expose an `agent.thinking` pill immediately after
 `agent.reasoning`. The pill MUST display `thinking` and use distinct color
 treatment for enabled and disabled states. Activating the pill MUST apply the
 same pane-scoped mutation as `/thinking toggle` without opening a dropdown.
+
+Pane-frame agent status controls MUST expose an `agent.planning` pill after
+`agent.thinking` and before `agent.routing` for panes with an agent session.
+The pill MUST display the fixed label `plan`, use the reasoning color when
+enabled and the idle-status color when disabled, and be omitted for shell-only
+panes. Activating the pill MUST apply the same pane-scoped mutation as
+`/plan toggle`, including running-turn safety, without opening a dropdown.
+`frames.pane.visible_fields` MUST remain the visibility and ordering control.
 
 When `agents.routing` or the pane-local `/routing` preference is
 enabled, Mezzanine MUST run an auto-sizing decision before the normal provider

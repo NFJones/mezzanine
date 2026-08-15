@@ -122,7 +122,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 62
+version = 63
 
 # Process-wide runtime sizing. Changes require a restart.
 [runtime]
@@ -262,7 +262,7 @@ enabled = true
 position = "border"
 template = " #{pane.index} #{pane.title} "
 style = "default"
-visible_fields = ["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.thinking", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
+visible_fields = ["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.thinking", "agent.planning", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
 
 # Select the active built-in or custom theme.
 [theme]

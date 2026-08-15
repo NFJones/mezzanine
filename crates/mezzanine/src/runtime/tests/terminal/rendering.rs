@@ -974,6 +974,70 @@ fn runtime_pane_agent_status_thinking_pill_toggles_deepseek_profile() {
     assert_eq!(on_profile.thinking_enabled(), Some(true));
 }
 
+/// Verifies the plan status pill is an immediate pane-local toggle rather than
+/// a dropdown selector.
+///
+/// Clicking must reuse `/plan toggle` so the canonical planning state, command
+/// response, frame projection, and running-turn safety semantics stay aligned.
+#[test]
+fn runtime_pane_agent_status_planning_pill_toggles_plan_mode() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let initial = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert_eq!(
+        initial
+            .frame_context
+            .panes
+            .get("%1")
+            .and_then(|pane| pane.agent_planning.as_deref()),
+        Some("off")
+    );
+
+    for expected in ["on", "off"] {
+        let report = service
+            .apply_attached_terminal_step_plan(
+                &primary,
+                &AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::HandleMouse(
+                        MouseAction::OpenPaneAgentStatusSelector {
+                            pane_index: 0,
+                            field: PaneAgentStatusField::Planning,
+                        },
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .unwrap();
+        assert!(report.view_refresh_required);
+        assert!(service.pane_agent_status_selector().is_none());
+        assert_eq!(service.agent_planning_enabled("%1"), expected == "on");
+        let config = service
+            .terminal_client_loop_config(TerminalClientLoopConfig::default())
+            .unwrap();
+        assert_eq!(
+            config
+                .frame_context
+                .panes
+                .get("%1")
+                .and_then(|pane| pane.agent_planning.as_deref()),
+            Some(expected)
+        );
+    }
+}
+
 /// Verifies that pane-frame agent selectors remain modal until the user makes
 /// an explicit selection or cancels them. Escape must close the selector
 /// without leaking the escape byte into the active pane.

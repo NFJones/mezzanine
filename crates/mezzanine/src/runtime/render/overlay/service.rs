@@ -998,6 +998,7 @@ pub(crate) fn runtime_pane_agent_selector_rendition(
             PaneAgentStatusField::Model => ui_theme.colors.agent_model,
             PaneAgentStatusField::Reasoning => ui_theme.colors.agent_reasoning,
             PaneAgentStatusField::Thinking => ui_theme.colors.agent_reasoning,
+            PaneAgentStatusField::Planning => ui_theme.colors.agent_reasoning,
             PaneAgentStatusField::Routing => ui_theme.colors.agent_reasoning,
             PaneAgentStatusField::ApprovalPolicy if value == "host-access" => {
                 ui_theme.colors.agent_status_failed

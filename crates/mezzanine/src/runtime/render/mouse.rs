@@ -771,6 +771,21 @@ impl RuntimeSessionService {
             }
             return Ok(());
         }
+        if field == PaneAgentStatusField::Planning {
+            self.presentation.pane_agent_status_selector = None;
+            let outcome = self.execute_agent_shell_plan_command(&pane_id, "/plan toggle")?;
+            let response =
+                runtime_agent_shell_command_response_json(&pane_id, "/plan", Some(&outcome));
+            if let Ok(display_output) = runtime_agent_shell_display_output(
+                &response,
+                &self.presentation.settings.ui_theme,
+                usize::from(self.session.authoritative_size.columns),
+                self.presentation.settings.terminal_agent_wrap_column_cap,
+            ) {
+                self.set_agent_prompt_display_output(&pane_id, display_output)?;
+            }
+            return Ok(());
+        }
         let frame_context = self.terminal_frame_context();
         let cells = self.active_window_mouse_pane_agent_status_cells(&frame_context);
         let field_cells = cells
@@ -800,7 +815,7 @@ impl RuntimeSessionService {
                     self.active_model_profile_for_pane(&pane_id, &agent_id, None)?;
                 self.configured_reasoning_levels_for_pane_model(&pane_id, &active_profile.model)?
             }
-            PaneAgentStatusField::Thinking => Vec::new(),
+            PaneAgentStatusField::Thinking | PaneAgentStatusField::Planning => Vec::new(),
             PaneAgentStatusField::ApprovalPolicy => {
                 vec![
                     "ask".to_string(),
@@ -895,7 +910,7 @@ impl RuntimeSessionService {
             PaneAgentStatusField::Reasoning => {
                 self.apply_pane_reasoning_picker_selection(&selector.pane_id, &value)?
             }
-            PaneAgentStatusField::Thinking => return Ok(()),
+            PaneAgentStatusField::Thinking | PaneAgentStatusField::Planning => return Ok(()),
             PaneAgentStatusField::ApprovalPolicy => {
                 let outcome = self.execute_agent_shell_approval_command(
                     &selector.pane_id,
@@ -927,6 +942,7 @@ impl RuntimeSessionService {
                 PaneAgentStatusField::Model => "/model",
                 PaneAgentStatusField::Reasoning => "/model reasoning",
                 PaneAgentStatusField::Thinking => "/thinking",
+                PaneAgentStatusField::Planning => "/plan",
                 PaneAgentStatusField::Routing => "/routing",
                 PaneAgentStatusField::ApprovalPolicy => "/approval",
                 PaneAgentStatusField::Latency => "/latency",
@@ -978,6 +994,14 @@ impl RuntimeSessionService {
                     "auto:on"
                 } else {
                     "auto:off"
+                }
+                .to_string(),
+            ),
+            PaneAgentStatusField::Planning => Some(
+                if self.agent_planning_enabled(pane_id) {
+                    "on"
+                } else {
+                    "off"
                 }
                 .to_string(),
             ),

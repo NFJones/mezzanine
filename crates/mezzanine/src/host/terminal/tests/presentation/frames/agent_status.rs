@@ -8,8 +8,7 @@ use crate::host::terminal::{
 };
 use mez_core::ids::IdFactory;
 use mez_mux::layout::{Size, SplitDirection, Window};
-use mez_mux::presentation::ClientViewRole;
-use mez_mux::presentation::TerminalFramePosition;
+use mez_mux::presentation::{ClientViewRole, RenderedClientView, TerminalFramePosition};
 use mez_mux::theme::{BUILTIN_UI_THEME_NAMES, builtin_ui_theme_definition, resolve_ui_theme};
 use mez_terminal::{TerminalColor, TerminalStyleSpan};
 
@@ -799,4 +798,72 @@ fn render_default_pane_frame_scroll_position_has_background_without_box_drawing_
             && span.length == 4
             && span.rendition.background == Some(TerminalColor::Rgb(0xd7, 0xff, 0x5f))
     }));
+}
+
+/// Verifies the planning pill keeps a fixed label while its on/off state uses
+/// the existing reasoning and idle status color categories.
+///
+/// A stable label prevents pane-frame width changes when plan-only mode is
+/// toggled, while distinct styling makes the active state observable.
+#[test]
+fn render_agent_planning_pill_has_fixed_label_and_state_colors() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(48, 3).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+
+    let render = |value: Option<&str>| {
+        let mut frame_context = TerminalFrameContext::default();
+        frame_context.panes.insert(
+            pane_id.clone(),
+            TerminalPaneFrameContext {
+                mode: Some("agent".to_string()),
+                agent_planning: value.map(str::to_string),
+                ..TerminalPaneFrameContext::default()
+            },
+        );
+        let config = TerminalClientLoopConfig {
+            frame_context,
+            window_frames_enabled: false,
+            pane_frame_template: DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
+            ..TerminalClientLoopConfig::default()
+        };
+        render_attached_client_view(
+            ClientViewRole::Primary,
+            &window,
+            &BTreeMap::new(),
+            &config,
+            window.size,
+        )
+        .unwrap()
+        .unwrap()
+    };
+
+    let enabled = render(Some("on"));
+    let disabled = render(Some("off"));
+    let absent = render(None);
+    let enabled_start = display_column_for_fragment(&enabled.lines[0], "plan");
+    let disabled_start = display_column_for_fragment(&disabled.lines[0], "plan");
+    let background_at = |view: &RenderedClientView, column| {
+        view.line_style_spans[0]
+            .iter()
+            .rev()
+            .find(|span| span.start <= column && span.start.saturating_add(span.length) > column)
+            .and_then(|span| span.rendition.background)
+    };
+
+    assert!(enabled.lines[0].contains(" plan "), "{}", enabled.lines[0]);
+    assert!(
+        disabled.lines[0].contains(" plan "),
+        "{}",
+        disabled.lines[0]
+    );
+    assert!(!absent.lines[0].contains("plan"), "{}", absent.lines[0]);
+    assert_eq!(
+        background_at(&enabled, enabled_start),
+        Some(TerminalColor::Rgb(0xd7, 0xff, 0x5f))
+    );
+    assert_ne!(
+        background_at(&disabled, disabled_start),
+        background_at(&enabled, enabled_start)
+    );
 }

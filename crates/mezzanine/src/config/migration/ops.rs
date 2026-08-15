@@ -608,6 +608,59 @@ pub(super) fn ensure_json_agent_thinking_visible_field(
     Ok(())
 }
 
+/// Ensures the pane visible-field list exposes plan-only mode immediately
+/// after the provider thinking field.
+///
+/// # Parameters
+/// - `document`: The TOML document being migrated.
+pub(super) fn ensure_toml_agent_planning_visible_field(
+    document: &mut toml_edit::DocumentMut,
+) -> Result<()> {
+    copy_toml_default_if_absent(
+        document,
+        &DEFAULT_CONFIG_TOML
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|error| MezError::config(format!("invalid built-in TOML config: {error}")))?,
+        "frames.pane.visible_fields",
+    )?;
+    ensure_toml_string_array_value_after(
+        document,
+        "frames.pane.visible_fields",
+        "agent.planning",
+        "agent.thinking",
+    )
+}
+
+/// Ensures the pane visible-field list exposes plan-only mode immediately
+/// after the provider thinking field.
+///
+/// # Parameters
+/// - `document`: The JSON-compatible document being migrated.
+pub(super) fn ensure_json_agent_planning_visible_field(
+    document: &mut serde_json::Value,
+) -> Result<()> {
+    copy_json_default_if_absent(
+        document,
+        &{
+            let default_table =
+                toml::from_str::<toml::Table>(DEFAULT_CONFIG_TOML).map_err(|error| {
+                    MezError::config(format!("invalid built-in default config: {error}"))
+                })?;
+            serde_json::to_value(default_table).map_err(|error| {
+                MezError::config(format!("invalid built-in default config: {error}"))
+            })?
+        },
+        "frames.pane.visible_fields",
+    )?;
+    ensure_json_string_array_value_after(
+        document,
+        "frames.pane.visible_fields",
+        "agent.planning",
+        "agent.thinking",
+    );
+    Ok(())
+}
+
 /// Inserts one string value into a TOML array after an anchor string when it is
 /// not already present.
 ///

@@ -625,6 +625,8 @@ pub struct TerminalPaneFrameContext<Prompt = (), DisplayLines = Vec<String>> {
     pub agent_reasoning: Option<String>,
     /// Provider thinking-mode label shown by `agent.thinking`.
     pub agent_thinking: Option<String>,
+    /// Pane-local plan-only mode shown by `agent.planning`.
+    pub agent_planning: Option<String>,
     /// Pane-local routing label shown by `agent.routing`.
     pub agent_routing: Option<String>,
     /// Active latency label shown by `agent.latency`.
@@ -657,6 +659,7 @@ impl<Prompt, DisplayLines: Default> Default for TerminalPaneFrameContext<Prompt,
             agent_model: None,
             agent_reasoning: None,
             agent_thinking: None,
+            agent_planning: None,
             agent_routing: None,
             agent_latency: None,
             agent_preset: None,

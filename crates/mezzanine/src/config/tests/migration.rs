@@ -1943,6 +1943,59 @@ fn migrates_schema_61_with_agent_scheduler_queue_bounds() {
     }
 }
 
+/// Verifies schema v63 exposes the plan-only status pill exactly once in every
+/// supported format, including configurations that omitted or customized the
+/// pane visible-field list.
+#[test]
+fn migrates_schema_62_with_agent_planning_visible_field() {
+    for (format, absent, explicit, already_present) in [
+        (
+            ConfigFormat::Toml,
+            "version = 62\n",
+            "version = 62\n[frames.pane]\nvisible_fields = [\"agent.reasoning\", \"agent.thinking\", \"agent.routing\"]\n",
+            "version = 62\n[frames.pane]\nvisible_fields = [\"agent.thinking\", \"agent.planning\", \"agent.routing\"]\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":62}"#,
+            r#"{"version":62,"frames":{"pane":{"visible_fields":["agent.reasoning","agent.thinking","agent.routing"]}}}"#,
+            r#"{"version":62,"frames":{"pane":{"visible_fields":["agent.thinking","agent.planning","agent.routing"]}}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 62\n",
+            "version: 62\nframes:\n  pane:\n    visible_fields: [agent.reasoning, agent.thinking, agent.routing]\n",
+            "version: 62\nframes:\n  pane:\n    visible_fields: [agent.thinking, agent.planning, agent.routing]\n",
+        ),
+    ] {
+        for text in [absent, explicit, already_present] {
+            let plan = migrate_config_text(format, text).unwrap();
+            let migrated = parse_config_json_value(format, &plan.text).unwrap();
+            let fields = migrated
+                .pointer("/frames/pane/visible_fields")
+                .and_then(serde_json::Value::as_array)
+                .unwrap();
+            let planning_indices = fields
+                .iter()
+                .enumerate()
+                .filter_map(|(index, value)| {
+                    (value.as_str() == Some("agent.planning")).then_some(index)
+                })
+                .collect::<Vec<_>>();
+            let thinking_index = fields
+                .iter()
+                .position(|value| value.as_str() == Some("agent.thinking"))
+                .unwrap();
+
+            assert_eq!(plan.from_version, 62);
+            assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+            assert_eq!(planning_indices, vec![thinking_index + 1]);
+            let validation = validate_config_text(format, &plan.text, ConfigScope::Primary);
+            assert!(validation.valid, "{:?}", validation.diagnostics);
+        }
+    }
+}
+
 /// Verifies that config validation refuses documents written for a newer
 /// schema version than the running binary understands. This prevents older
 /// binaries from silently interpreting keys whose migration or meaning belongs

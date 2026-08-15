@@ -16,6 +16,7 @@ pub(in crate::host::terminal::render) fn pane_agent_status_field_from_frame_fiel
         "agent.model" => Some(PaneAgentStatusField::Model),
         "agent.reasoning" => Some(PaneAgentStatusField::Reasoning),
         "agent.thinking" => Some(PaneAgentStatusField::Thinking),
+        "agent.planning" => Some(PaneAgentStatusField::Planning),
         "agent.routing" => Some(PaneAgentStatusField::Routing),
         "agent.latency" => Some(PaneAgentStatusField::Latency),
         "agent.preset" => Some(PaneAgentStatusField::Preset),

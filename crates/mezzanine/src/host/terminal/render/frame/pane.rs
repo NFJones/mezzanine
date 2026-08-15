@@ -401,6 +401,7 @@ pub(in crate::host::terminal::render) fn pane_frame_right_aligned_display_value(
             | "agent.model"
             | "agent.reasoning"
             | "agent.thinking"
+            | "agent.planning"
             | "agent.routing"
             | "agent.latency"
             | "agent.preset"
@@ -429,6 +430,9 @@ pub(in crate::host::terminal::render) fn pane_frame_right_aligned_segment_value(
     }
     if field == "agent.thinking" && !value.trim().is_empty() {
         return "thinking".to_string();
+    }
+    if field == "agent.planning" && !value.trim().is_empty() {
+        return "plan".to_string();
     }
     value.to_string()
 }

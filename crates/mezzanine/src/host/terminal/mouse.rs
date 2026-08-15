@@ -169,6 +169,8 @@ pub enum PaneAgentStatusField {
     Reasoning,
     /// Provider thinking-mode state shown in the pane-frame status pills.
     Thinking,
+    /// Pane-local plan-only mode shown in the pane-frame status pills.
+    Planning,
     /// Pane-local routing state shown in the pane-frame status pills.
     Routing,
     /// Active approval mode shown in the pane-frame status pills.

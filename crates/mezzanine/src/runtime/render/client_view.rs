@@ -1477,6 +1477,13 @@ impl RuntimeSessionService {
                     self.model_profile_thinking_enabled(profile)
                         .map(|enabled| if enabled { "on" } else { "off" }.to_string())
                 });
+                let agent_planning = agent_session.map(|_| {
+                    if self.agent_planning_enabled(&pane_id) {
+                        "on".to_string()
+                    } else {
+                        "off".to_string()
+                    }
+                });
                 let agent_routing = agent_session.map(|_| {
                     if self
                         .agent_routing_override(&pane_id)
@@ -1545,6 +1552,7 @@ impl RuntimeSessionService {
                         agent_model,
                         agent_reasoning,
                         agent_thinking,
+                        agent_planning,
                         agent_routing,
                         agent_latency,
                         agent_preset: self.agent_preset_display_value_for_pane(pane_id.as_str()),

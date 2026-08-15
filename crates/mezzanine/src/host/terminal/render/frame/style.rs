@@ -347,6 +347,7 @@ pub(in crate::host::terminal::render) fn pane_frame_right_status_rendition(
         "agent.model" => ui_theme.colors.agent_model.rendition(),
         "agent.reasoning" => ui_theme.colors.agent_reasoning.rendition(),
         "agent.thinking" => pane_frame_agent_thinking_rendition(&segment.value, ui_theme),
+        "agent.planning" => pane_frame_agent_planning_rendition(&segment.value, ui_theme),
         "agent.routing" => pane_frame_agent_routing_rendition(&segment.value, ui_theme),
         "agent.latency" => pane_frame_latency_rendition(&segment.value, ui_theme),
         "agent.preset" => ui_theme.colors.agent_model.rendition(),
@@ -360,6 +361,18 @@ pub(in crate::host::terminal::render) fn pane_frame_right_status_rendition(
 
 /// Returns the thinking-mode pill rendition for a pane-local value.
 pub(in crate::host::terminal::render) fn pane_frame_agent_thinking_rendition(
+    value: &str,
+    ui_theme: &UiTheme,
+) -> GraphicRendition {
+    match value {
+        "on" => ui_theme.colors.agent_reasoning.rendition(),
+        "off" => ui_theme.colors.agent_status_idle.rendition(),
+        _ => ui_theme.colors.scroll_indicator.rendition(),
+    }
+}
+
+/// Returns the plan-only-mode pill rendition for a pane-local value.
+pub(in crate::host::terminal::render) fn pane_frame_agent_planning_rendition(
     value: &str,
     ui_theme: &UiTheme,
 ) -> GraphicRendition {

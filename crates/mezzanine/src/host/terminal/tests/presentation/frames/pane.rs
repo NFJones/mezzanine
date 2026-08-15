@@ -290,6 +290,7 @@ fn render_default_pane_frame_agent_model_and_reasoning_pills_are_clickable() {
             agent_model: Some("gpt-5.5".to_string()),
             agent_reasoning: Some("high".to_string()),
             agent_thinking: Some("on".to_string()),
+            agent_planning: Some("on".to_string()),
             agent_routing: Some("auto:on".to_string()),
             agent_context_usage: Some("42%".to_string()),
             policy_mode: Some("full-access".to_string()),
@@ -316,6 +317,7 @@ fn render_default_pane_frame_agent_model_and_reasoning_pills_are_clickable() {
         PaneAgentStatusField::Model,
         PaneAgentStatusField::Reasoning,
         PaneAgentStatusField::Thinking,
+        PaneAgentStatusField::Planning,
         PaneAgentStatusField::Routing,
         PaneAgentStatusField::ApprovalPolicy,
     ] {
@@ -327,6 +329,7 @@ fn render_default_pane_frame_agent_model_and_reasoning_pills_are_clickable() {
     let approval_columns = cells_for_field(&cells, PaneAgentStatusField::ApprovalPolicy);
     let reasoning_columns = cells_for_field(&cells, PaneAgentStatusField::Reasoning);
     let thinking_columns = cells_for_field(&cells, PaneAgentStatusField::Thinking);
+    let planning_columns = cells_for_field(&cells, PaneAgentStatusField::Planning);
     let routing_columns = cells_for_field(&cells, PaneAgentStatusField::Routing);
     assert!(
         approval_columns.iter().max() > routing_columns.iter().min(),
@@ -334,8 +337,9 @@ fn render_default_pane_frame_agent_model_and_reasoning_pills_are_clickable() {
     );
     assert!(
         reasoning_columns.iter().max() < thinking_columns.iter().min()
-            && thinking_columns.iter().max() < routing_columns.iter().min(),
-        "thinking should sit between reasoning and routing pills: {cells:?}"
+            && thinking_columns.iter().max() < planning_columns.iter().min()
+            && planning_columns.iter().max() < routing_columns.iter().min(),
+        "planning should sit between thinking and routing pills: {cells:?}"
     );
 }
 

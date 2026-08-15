@@ -125,6 +125,11 @@ and `mez attach` to return to one. In a running session, `Ctrl+A :` opens the
 Mezzanine command prompt, `Ctrl+A ?` shows effective key bindings, and
 `Ctrl+A a` toggles the agent shell.
 
+Within an agent pane, `/plan on`, `/plan off`, or `/plan toggle` controls
+pane-local plan-only mode. The `plan` status pill shows that mode and can be
+clicked to toggle it. Its visibility and position are configurable through
+`frames.pane.visible_fields` using the `agent.planning` field.
+
 Use `mez --help` and the [CLI reference](docs/reference-manual/cli.md) for the
 current command contract. Use [Sessions and panes](docs/using-mezzanine/sessions-and-panes.md)
 and [Terminal input, copy, and history](docs/using-mezzanine/terminal-input-copy-and-history.md)

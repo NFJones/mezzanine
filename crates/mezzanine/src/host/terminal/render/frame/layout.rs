@@ -85,6 +85,10 @@ pub(in crate::host::terminal::render) fn pane_frame_field_value(
                 optional_pane_context_value(pane_context, |ctx| &ctx.agent_thinking)
                     .unwrap_or_default()
             }
+            "agent.planning" => {
+                optional_pane_context_value(pane_context, |ctx| &ctx.agent_planning)
+                    .unwrap_or_default()
+            }
             "agent.routing" => optional_pane_context_value(pane_context, |ctx| &ctx.agent_routing)
                 .unwrap_or_default(),
             "agent.latency" => optional_pane_context_value(pane_context, |ctx| &ctx.agent_latency)
