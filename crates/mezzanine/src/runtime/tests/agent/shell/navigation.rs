@@ -197,6 +197,19 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     let mut process = service
         .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
+    service
+        .process_pane_screen_mut(&pane_id)
+        .unwrap()
+        .feed(b"parent$ ");
+    let parent_content_before_agent = service
+        .process_pane_screen(&pane_id)
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let parent_cursor_before_agent = service
+        .process_pane_screen(&pane_id)
+        .unwrap()
+        .cursor_state();
 
     let show = service
         .execute_terminal_command(&primary, "agent-shell")
@@ -248,29 +261,41 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
         .unwrap()
         .to_vec();
 
-    let dispatch = service
-        .write_input_to_pane(&primary, Some(&pane_id), b"echo parent\n")
-        .unwrap();
-    assert_eq!(dispatch.bytes_written, b"echo parent\n".len());
-    let user_input_effects = service.drain_pane_io_transition().side_effects;
-    let user_inputs = pane_input_effects(&user_input_effects);
-    assert_eq!(user_inputs.len(), 1);
-    assert_eq!(user_inputs[0].pane_input_parts().0, pane_id);
-    assert_eq!(user_inputs[0].pane_input_parts().1, b"echo parent\n");
-
     let marker_only = service.visible_pane_output_bytes(&pane_id, &exit_marker);
     assert!(
         marker_only.is_empty(),
         "a marker-only PTY fragment must not move the visible cursor"
     );
-    let parent_prompt_output = b"\r$ ";
-    let simple_prompt_repaint = service.visible_pane_output_bytes(&pane_id, parent_prompt_output);
-    assert_eq!(simple_prompt_repaint, b"\r\r$ ");
-    let prompt_repaint = service.renderable_pane_output_bytes(&pane_id, b"user@host ~/repo $ ");
-    assert_eq!(prompt_repaint, b"user@host ~/repo $ ");
     service
-        .apply_pane_output_bytes(pane_id.clone(), b"user@host ~/repo $ ".to_vec())
+        .apply_pane_output_bytes(
+            pane_id.clone(),
+            b"\x1b]133;R;mez_receiver=complete;mez_token=token;mez_marker=marker;mez_status=0\x1b\\parent$ "
+                .to_vec(),
+        )
         .unwrap();
+    for _ in 0..64 {
+        let _ = service.tick_hidden_shell_render_retention();
+    }
+    service
+        .apply_pane_output_bytes(pane_id.clone(), b"\r\x1b[K\r".to_vec())
+        .unwrap();
+    assert_eq!(
+        service
+            .process_pane_screen(&pane_id)
+            .unwrap()
+            .normal_content_lines()
+            .join("\n"),
+        parent_content_before_agent,
+        "parent prompt repaint and delayed Readline cleanup must not alter retained process content"
+    );
+    assert_eq!(
+        service
+            .process_pane_screen(&pane_id)
+            .unwrap()
+            .cursor_state(),
+        parent_cursor_before_agent,
+        "agent exit must restore the exact process cursor retained at entry"
+    );
     assert!(
         std::ptr::eq(
             service.pane_screen(&pane_id).unwrap(),
@@ -290,7 +315,18 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
         )
         .unwrap()
         .unwrap();
-    assert_eq!(view.cursor_column, "user@host ~/repo $ ".chars().count());
+    assert_eq!(view.cursor_column, parent_cursor_before_agent.column);
+
+    let dispatch = service
+        .write_input_to_pane(&primary, Some(&pane_id), b"echo parent\n")
+        .unwrap();
+    assert_eq!(dispatch.bytes_written, b"echo parent\n".len());
+    assert!(!service.hidden_shell_render_retention_timer_needed());
+    let user_input_effects = service.drain_pane_io_transition().side_effects;
+    let user_inputs = pane_input_effects(&user_input_effects);
+    assert_eq!(user_inputs.len(), 1);
+    assert_eq!(user_inputs[0].pane_input_parts().0, pane_id);
+    assert_eq!(user_inputs[0].pane_input_parts().1, b"echo parent\n");
     let _ = process.terminate(Duration::from_millis(10));
 }
 
@@ -746,15 +782,13 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_live_parent_cursor() {
     service
         .write_input_to_pane(&primary, Some("%1"), b"PS1='parent$ '; export PS1\n")
         .unwrap();
+    let prompt_column = "parent$ ".chars().count();
     let mut initial_screen = String::new();
     for _ in 0..200 {
         let _ = service.poll_pane_outputs(8192).unwrap();
-        initial_screen = service
-            .pane_screen("%1")
-            .unwrap()
-            .visible_lines()
-            .join("\n");
-        if initial_screen.contains("parent$") {
+        let screen = service.pane_screen("%1").unwrap();
+        initial_screen = screen.visible_lines().join("\n");
+        if initial_screen.contains("parent$") && screen.cursor_state().column == prompt_column {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
@@ -763,6 +797,12 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_live_parent_cursor() {
         initial_screen.contains("parent$"),
         "parent prompt did not arrive: {initial_screen:?}"
     );
+    let parent_content_before_agent = service
+        .process_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let parent_cursor_before_agent = service.process_pane_screen("%1").unwrap().cursor_state();
 
     let show = service
         .execute_terminal_command(&primary, "agent-shell")
@@ -788,31 +828,27 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_live_parent_cursor() {
     assert_eq!(report.agent_prompt_inputs_applied, 1);
     assert!(report.full_redraw_required);
 
-    let prompt_column = "parent$ ".chars().count();
-    let mut cursor_column = None;
-    let mut observed_cursor = None;
-    let mut observed_screen = String::new();
     for _ in 0..300 {
         let _ = service.poll_pane_outputs(8192).unwrap();
-        let cursor = service.pane_screen("%1").unwrap().cursor_state();
-        let screen_text = service
-            .pane_screen("%1")
-            .unwrap()
-            .visible_lines()
-            .join("\n");
-        observed_cursor = Some(cursor);
-        observed_screen = screen_text.clone();
-        if screen_text.contains("parent$") && cursor.column == prompt_column {
-            cursor_column = Some(cursor.column);
+        if service.pane_foreground_certified_shell_state("%1") == Some(true) {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
     }
 
     assert_eq!(
-        cursor_column,
-        Some(prompt_column),
-        "parent prompt cursor should land after the trailing prompt space; observed_cursor={observed_cursor:?}; observed_screen={observed_screen:?}"
+        service
+            .process_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n"),
+        parent_content_before_agent,
+        "agent exit must restore the exact process presentation retained at entry"
+    );
+    assert_eq!(
+        service.process_pane_screen("%1").unwrap().cursor_state(),
+        parent_cursor_before_agent,
+        "agent exit must restore the exact process cursor retained at entry"
     );
     service.terminate_all_pane_processes().unwrap();
 }

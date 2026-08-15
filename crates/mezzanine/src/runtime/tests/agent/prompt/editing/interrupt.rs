@@ -187,28 +187,17 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert!(
-        !pane_log_after_exit_echo
-            .lines()
-            .any(|line| line.trim() == "exit"),
-        "readline cleanup and the child-shell EOF echo must not enter the pane log: {pane_log_after_exit_echo:?}"
-    );
-    assert!(
-        pane_log_after_exit_echo.contains("parent$"),
-        "parent prompt bytes following the suppressed exit must remain visible: {pane_log_after_exit_echo:?}"
-    );
-    assert!(
-        !pane_log_after_exit_echo.contains("parent$ parent$ "),
-        "the restored parent prompt must overwrite the retained prompt instead of appending at its stale cursor: {pane_log_after_exit_echo:?}; cursor_before_exit={cursor_before_exit_echo:?}"
+    assert_eq!(
+        pane_log_after_exit_echo, pane_log_before_exit_echo,
+        "child teardown and parent prompt repaint must leave the retained process presentation unchanged"
     );
     assert_eq!(
         service
             .process_pane_screen(&pane_id)
             .unwrap()
-            .cursor_state()
-            .column,
-        "parent$ ".chars().count(),
-        "the restored prompt cursor must follow exactly one prompt"
+            .cursor_state(),
+        cursor_before_exit_echo,
+        "parent prompt repaint must leave the retained process cursor unchanged"
     );
     assert_eq!(
         service.visible_pane_output_bytes(&pane_id, b"ordinary parent output\r\n"),
@@ -244,7 +233,7 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
         )
         .unwrap()
         .unwrap();
-    assert_eq!(view.cursor_column, "parent$  ~/repo $ ".chars().count());
+    assert_eq!(view.cursor_column, cursor_before_exit_echo.column);
     let _ = process.terminate(Duration::from_millis(10));
 }
 

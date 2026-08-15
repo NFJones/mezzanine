@@ -628,8 +628,8 @@ pub(crate) struct RuntimeProcessComponent {
     pane_agent_subshell_exit_echo_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Parent-owned child-shell exit boundaries keyed by pane id.
     pane_agent_subshell_exit_markers: std::collections::BTreeMap<String, Vec<u8>>,
-    /// Panes whose first parent-owned bytes must repaint from column zero.
-    pane_agent_subshell_parent_reposition_pending: BTreeSet<String>,
+    /// Panes whose retained process presentation owns parent-shell return.
+    pane_agent_subshell_parent_return_pending: BTreeSet<String>,
     /// Precomputed bounded wrapper-filter commands keyed by pane id.
     pane_mez_wrapper_filter_recent_commands:
         std::collections::BTreeMap<String, std::sync::Arc<[String]>>,
@@ -3040,7 +3040,7 @@ impl RuntimeSessionService {
             .pane_agent_subshell_exit_markers
             .remove(pane_id);
         self.process
-            .pane_agent_subshell_parent_reposition_pending
+            .pane_agent_subshell_parent_return_pending
             .remove(pane_id);
         self.process
             .pane_mez_wrapper_filter_recent_commands

@@ -411,10 +411,14 @@ impl RuntimeSessionService {
         {
             PaneOutputRenderMode::HiddenLiveAgentShell
         } else if !shell_view_enabled
-            && self
+            && (self
                 .process
-                .pane_hidden_shell_render_recent_polls
-                .contains_key(pane_id)
+                .pane_agent_subshell_parent_return_pending
+                .contains(pane_id)
+                || self
+                    .process
+                    .pane_hidden_shell_render_recent_polls
+                    .contains_key(pane_id))
         {
             PaneOutputRenderMode::HiddenRetainedAgentShell
         } else {
@@ -528,43 +532,38 @@ impl RuntimeSessionService {
     /// Retains the parent-owned boundary emitted after one agent subshell exits.
     pub(crate) fn remember_agent_subshell_exit_marker(&mut self, pane_id: &str, marker: Vec<u8>) {
         self.process
-            .pane_agent_subshell_parent_reposition_pending
+            .pane_agent_subshell_parent_return_pending
             .remove(pane_id);
         self.process
             .pane_agent_subshell_exit_markers
             .insert(pane_id.to_string(), marker);
     }
 
-    /// Arms child-shell teardown suppression until the parent boundary arrives.
+    /// Arms child-shell teardown suppression and retains the pre-entry process
+    /// presentation until foreground input returns ownership to the parent.
     pub(crate) fn remember_agent_subshell_exit_echo(&mut self, pane_id: &str) {
         self.process
             .pane_agent_subshell_exit_echo_pending
             .insert(pane_id.to_string(), Vec::new());
+        self.process
+            .pane_agent_subshell_parent_return_pending
+            .insert(pane_id.to_string());
     }
 
     /// Filters all child-owned teardown before general wrapper filtering.
     ///
     /// The parent wrapper emits an opaque marker after the child exits and
     /// cleanup completes. PTY bytes before that marker are never pane content;
-    /// bytes after it are the restored parent shell and remain visible. The
-    /// restored prompt is returned to column zero because the suppressed child
-    /// teardown also contains the cursor movement that normally precedes it.
+    /// bytes after it belong to the restored parent shell. Exit handling keeps
+    /// those initial parent bytes in protocol-preserving hidden rendering so
+    /// prompt repaint and delayed Readline cleanup cannot replace the retained
+    /// pre-entry prompt cursor.
     fn visible_agent_subshell_exit_echo_bytes(&mut self, pane_id: &str, bytes: &[u8]) -> Vec<u8> {
         let Some(mut pending) = self
             .process
             .pane_agent_subshell_exit_echo_pending
             .remove(pane_id)
         else {
-            if self
-                .process
-                .pane_agent_subshell_parent_reposition_pending
-                .remove(pane_id)
-            {
-                let mut visible = Vec::with_capacity(bytes.len() + 1);
-                visible.push(b'\r');
-                visible.extend_from_slice(bytes);
-                return visible;
-            }
             return bytes.to_vec();
         };
         pending.extend_from_slice(bytes);
@@ -580,20 +579,7 @@ impl RuntimeSessionService {
             self.process
                 .pane_agent_subshell_exit_markers
                 .remove(pane_id);
-            self.process
-                .pane_hidden_shell_render_recent_polls
-                .remove(pane_id);
-            let parent_output = &pending[start + marker.len()..];
-            if parent_output.is_empty() {
-                self.process
-                    .pane_agent_subshell_parent_reposition_pending
-                    .insert(pane_id.to_string());
-                return Vec::new();
-            }
-            let mut visible = Vec::with_capacity(parent_output.len() + 1);
-            visible.push(b'\r');
-            visible.extend_from_slice(parent_output);
-            return visible;
+            return pending[start + marker.len()..].to_vec();
         }
         let suffix_length = (1..marker.len().min(pending.len() + 1))
             .rev()
@@ -627,7 +613,7 @@ impl RuntimeSessionService {
             .pane_hidden_shell_render_recent_polls
             .remove(pane_id);
         self.process
-            .pane_agent_subshell_parent_reposition_pending
+            .pane_agent_subshell_parent_return_pending
             .remove(pane_id);
         self.process.pane_mez_wrapper_filter_pending.remove(pane_id);
         self.process
