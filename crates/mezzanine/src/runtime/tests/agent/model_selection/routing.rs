@@ -1719,6 +1719,141 @@ fn runtime_routed_worker_provider_rejects_ownerless_bootstrap_gate() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Verifies routed provider dispatch stays behind the bounded managed-zsh
+/// startup admission during the real pre-prompt ordering window.
+///
+/// A fresh zsh worker can be `Unknown` with a pending bootstrap before it can
+/// safely accept hidden input. The internal provider task must remain live but
+/// absent from actor-visible dispatch until prompt readiness installs the
+/// strict timed bootstrap owner required by provider claim.
+#[test]
+fn runtime_routed_worker_provider_waits_for_zsh_startup_before_dispatch() {
+    let root = temp_root("runtime-routed-worker-provider-zsh-startup");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, _parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 wait for routed zsh startup");
+    configure_routed_path_resolution_bubblewrap(&mut service, &root);
+    let bootstrap_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.pane_id == worker_turn.pane_id
+                && transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| marker.clone())
+        })
+        .expect("fresh routed worker should begin with a bounded bootstrap");
+    service
+        .running_shell_transactions_mut_for_tests()
+        .remove(&bootstrap_marker);
+    service.clear_shell_transaction_protocol_state(&bootstrap_marker);
+    service.set_pane_readiness(&worker_turn.pane_id, PaneReadinessState::Unknown);
+    service.set_pending_managed_zsh_admission_for_tests(&worker_turn.pane_id);
+
+    assert!(service.pane_bootstrap_is_pending_for_tests(&worker_turn.pane_id));
+    assert!(!service.pane_bootstrap_has_bounded_progress_owner(&worker_turn.pane_id));
+    assert!(service.pane_has_bounded_managed_shell_startup(&worker_turn.pane_id));
+    assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Running)
+    );
+
+    service.set_pane_readiness(&worker_turn.pane_id, PaneReadinessState::PromptCandidate);
+    let pending_tasks = service.pending_agent_provider_tasks();
+    assert_eq!(pending_tasks.len(), 1);
+    assert_eq!(pending_tasks[0].turn_id, worker_turn.turn_id);
+    assert_eq!(pending_tasks[0].agent_id, worker_turn.agent_id);
+    assert_eq!(pending_tasks[0].pane_id, worker_turn.pane_id);
+    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(service.pane_bootstrap_has_bounded_progress_owner(&worker_turn.pane_id));
+    assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a timed managed-zsh startup admission cannot hide routed provider
+/// work after its bounded deadline expires.
+///
+/// Terminal startup settlement must re-expose the same internal provider task.
+/// With no strict bootstrap owner, the ordinary provider claim then fails the
+/// worker closed instead of treating the expired admission as authority.
+#[test]
+fn runtime_routed_worker_provider_fails_after_zsh_startup_timeout() {
+    let root = temp_root("runtime-routed-worker-provider-zsh-startup-timeout");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 bound routed zsh startup");
+    configure_routed_path_resolution_bubblewrap(&mut service, &root);
+    let bootstrap_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.pane_id == worker_turn.pane_id
+                && transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| marker.clone())
+        })
+        .expect("fresh routed worker should begin with a bounded bootstrap");
+    service
+        .running_shell_transactions_mut_for_tests()
+        .remove(&bootstrap_marker);
+    service.clear_shell_transaction_protocol_state(&bootstrap_marker);
+    service.set_pane_readiness(&worker_turn.pane_id, PaneReadinessState::Unknown);
+    service.set_expired_managed_zsh_admission_for_tests(&worker_turn.pane_id);
+
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert_eq!(
+        service
+            .recover_expired_managed_zsh_admissions_for_tests(u64::MAX)
+            .unwrap(),
+        1
+    );
+    assert!(service.managed_zsh_admission_unavailable_for_tests(
+        &worker_turn.pane_id,
+        "startup-admission-timeout"
+    ));
+    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+
+    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert_ne!(
+        service
+            .routed_workflow_for_tests(&parent_turn_id)
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult)
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies prompt-like readiness can replace an ownerless bootstrap flag with
 /// a fresh timed bootstrap before provider deferral.
 ///

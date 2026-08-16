@@ -1340,6 +1340,29 @@ impl RuntimeSessionService {
                 })
     }
 
+    /// Reports whether managed-shell startup has a live bounded admission
+    /// deadline for the pane's current primary process.
+    ///
+    /// This deadline owns only the pre-bootstrap startup interval. It must not
+    /// be treated as a bootstrap owner after provider dispatch because it does
+    /// not itself certify pane environment authority.
+    pub(crate) fn pane_has_bounded_managed_shell_startup(&self, pane_id: &str) -> bool {
+        let primary_process_id = self.primary_pid_for_live_pane_process(pane_id);
+        matches!(
+            self.process.pane_bash_admissions.get(pane_id),
+            Some(RuntimeManagedBashAdmission::Pending {
+                primary_process_id: admission_process_id,
+                started_at_unix_ms: Some(_),
+            }) if Some(*admission_process_id) == primary_process_id
+        ) || matches!(
+            self.process.pane_zsh_admissions.get(pane_id),
+            Some(RuntimeManagedZshAdmission::Pending {
+                primary_process_id: admission_process_id,
+                started_at_unix_ms: Some(_),
+            }) if Some(*admission_process_id) == primary_process_id
+        )
+    }
+
     /// Reports whether one pane is awaiting correlated foreground-process
     /// certification for parsed bootstrap evidence.
     pub(crate) fn pane_agent_subshell_certification_is_pending(&self, pane_id: &str) -> bool {
@@ -2141,6 +2164,21 @@ impl RuntimeSessionService {
             RuntimeManagedZshAdmission::Pending {
                 primary_process_id,
                 started_at_unix_ms: Some(0),
+            },
+        );
+    }
+
+    /// Installs a live bounded managed-zsh startup admission for ordering
+    /// regressions that exercise the interval before the first prompt.
+    pub(crate) fn set_pending_managed_zsh_admission_for_tests(&mut self, pane_id: &str) {
+        let primary_process_id = self
+            .primary_pid_for_live_pane_process(pane_id)
+            .expect("the test pane must have a primary process");
+        self.process.pane_zsh_admissions.insert(
+            pane_id.to_string(),
+            RuntimeManagedZshAdmission::Pending {
+                primary_process_id,
+                started_at_unix_ms: Some(current_unix_millis()),
             },
         );
     }

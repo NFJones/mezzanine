@@ -1443,7 +1443,51 @@ impl RuntimeSessionService {
             .iter()
             .filter_map(|turn_id| self.runtime_agent_provider_task(turn_id))
             .filter(|task| !self.agent_is_compacting(&task.pane_id))
+            .filter(|task| {
+                !self.routed_provider_task_waits_for_managed_shell_startup(&task.turn_id)
+            })
             .collect()
+    }
+
+    /// Reports whether a routed worker must remain internal to the runtime
+    /// while managed shell startup owns the interval before bootstrap can be
+    /// registered safely.
+    ///
+    /// The provider claim guard deliberately does not accept this admission as
+    /// pane environment authority. Suppressing actor dispatch here prevents a
+    /// worker from claiming the task until prompt readiness installs a timed
+    /// bootstrap transaction or managed startup settles terminally.
+    fn routed_provider_task_waits_for_managed_shell_startup(&self, turn_id: &str) -> bool {
+        if !self
+            .agent
+            .routed_workflow_by_child_turn
+            .contains_key(turn_id)
+        {
+            return false;
+        }
+        let Some(turn) = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+        else {
+            return false;
+        };
+        let primary_path_resolution_required = self
+            .primary_path_resolution_request(&turn.pane_id)
+            .is_ok_and(|request| request.is_some());
+        let subagent_path_resolution_required = self
+            .subagent_scope_declaration_for_turn(turn)
+            .as_ref()
+            .and_then(|scope| Self::subagent_path_resolution_request(scope).ok())
+            .flatten()
+            .is_some();
+        (primary_path_resolution_required || subagent_path_resolution_required)
+            && self.pane_environment_authority(&turn.pane_id)
+                == crate::runtime::processes::RuntimePaneEnvironmentAuthority::Pending
+            && self.pane_readiness_state(&turn.pane_id) == PaneReadinessState::Unknown
+            && !self.pane_bootstrap_has_bounded_progress_owner(&turn.pane_id)
+            && self.pane_has_bounded_managed_shell_startup(&turn.pane_id)
     }
 
     /// Records that an async provider worker owns a claimed task.

@@ -3333,10 +3333,15 @@ environment.
 A provider request that requires pane-resolved filesystem authority MUST remain
 pending while that pane's one-shot bootstrap is pending and no environment
 signature exists only while a bounded runtime progress owner can settle or
-expire that bootstrap. Prompt-like readiness MAY start the one-shot bootstrap
-before the request is deferred. A bare pending flag without a timed shell
-transaction or timed completion-certification phase MUST fail the request
-closed instead of being treated as progress. Parsed bootstrap evidence MUST
+expire that bootstrap. Before provider dispatch, a routed worker MAY remain in
+the runtime's internal pending queue while a timed managed-shell startup
+admission owns the pre-prompt interval; it MUST become dispatchable only after
+prompt readiness installs a timed bootstrap transaction or startup admission
+settles terminally. Managed-shell admission MUST NOT satisfy the provider
+claim's bootstrap-owner requirement. Prompt-like readiness MAY start the
+one-shot bootstrap before the request is deferred. A bare pending flag without
+a timed shell transaction or timed completion-certification phase MUST fail the
+request closed instead of being treated as progress. Parsed bootstrap evidence MUST
 allow canonical path resolution to resume before provider dispatch only after
 any required agent-subshell certification has settled. Bootstrap completion,
 certification rejection, timeout, protocol failure, or write failure without a
