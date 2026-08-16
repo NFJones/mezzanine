@@ -1896,11 +1896,12 @@ certification or callback unwind.
 Managed Zsh startup MUST preserve native startup-file ordering and RCS option
 semantics, including a user `unsetopt RCS`, while sourcing every startup file
 that native Zsh would read at most once. Before agent-shell admission, the
-parent MUST publish token-authenticated availability for a fixed runtime-known
-trigger. Installation MUST compose with existing ZLE line-init behavior and
-MUST NOT replace an occupied user binding; when no safe trigger or hook is
-available, admission MUST fail closed after a bounded wait without writing a
-handoff. A managed Zsh child MUST receive the runtime-owned startup directory
+parent MUST publish versioned, token-authenticated `AdapterAvailable` metadata
+for a fixed runtime-known trigger. Installation MUST compose with existing ZLE
+line-init behavior and MUST NOT replace an occupied user binding; when no safe
+trigger or hook is available, the adapter MUST publish a typed bounded failure
+and admission MUST fail closed after a bounded wait without writing a handoff.
+A managed Zsh child MUST receive the runtime-owned startup directory
 directly and execute as one non-login interactive Zsh process so `.zshenv` and
 `.zshrc` install its private receiver before bootstrap release without replaying
 the parent login environment through `.zprofile` and `.zlogin`. Initial pane
@@ -1908,11 +1909,13 @@ processes remain login-interactive. Managed startup artifacts MAY rely on
 successful owner-only writes and close-before-spawn ordering rather than
 filesystem durability synchronization. Its private source protocol MUST bound
 source bytes, chunks, and physical records. After the fixed trigger
-starts the private receiver, runtime MAY use a token-authenticated awaiting
-record only as transport readiness to release source-free HOLD metadata; that
-record MUST NOT advance lifecycle ownership. The receiver MUST authenticate
-HOLD and publish `EditorHeld` before runtime releases BEGIN, then authenticate
-BEGIN and publish `FrameAdmitted` before runtime releases DATA and END. After
+starts the private receiver, it MUST publish a versioned, token-authenticated
+`ReceiverAwaiting` event only as transport readiness to release source-free
+HOLD metadata. That event MUST resolve through the same generation-fenced
+managed-shell handoff owner and MUST NOT advance lifecycle ownership. The
+receiver MUST authenticate HOLD and publish `EditorHeld` before runtime
+releases BEGIN, then authenticate BEGIN and publish `FrameAdmitted` before
+runtime releases DATA and END. After
 an authenticated BEGIN it MUST acknowledge and drain every declared DATA
 record and END even after detecting malformed input, and MUST evaluate source
 only after complete length, digest, sequence, and canonical Base64 validation.

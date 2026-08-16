@@ -133,29 +133,6 @@ pub enum TerminalOscEvent {
         /// Semantic lifecycle event independent from shell-native syntax.
         event: ManagedShellProtocolEvent,
     },
-    /// A managed Zsh ZLE widget accepted its fixed private receiver command.
-    ShellReceiverAwaiting {
-        /// Pane-scoped receiver token installed at Zsh startup.
-        token: String,
-    },
-    /// A managed shell startup shim installed its non-destructive receiver.
-    ShellReceiverAvailable {
-        /// Pane-scoped token authenticating the startup shim.
-        token: String,
-        /// Managed shell that published availability.
-        shell: String,
-        /// Fixed trigger identifier selected without replacing user bindings.
-        trigger: String,
-    },
-    /// A managed shell startup shim could not install safely.
-    ShellReceiverUnavailable {
-        /// Pane-scoped token authenticating the startup shim.
-        token: String,
-        /// Managed shell that published the failure.
-        shell: String,
-        /// Bounded machine-readable failure reason.
-        reason: String,
-    },
     /// A managed Zsh parent restored its saved editor state after admission.
     ShellParentRestored {
         /// Pane-scoped receiver token installed at Zsh startup.
@@ -240,7 +217,17 @@ pub enum ManagedShellAdapter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManagedShellProtocolEvent {
     /// The startup adapter installed its private trigger safely.
-    AdapterAvailable,
+    AdapterAvailable {
+        /// Fixed trigger selected by adapters that require one.
+        trigger: Option<String>,
+    },
+    /// The startup adapter could not install its private trigger safely.
+    AdapterUnavailable {
+        /// Bounded machine-readable startup failure reason.
+        reason: String,
+    },
+    /// The adapter receiver is waiting for source-free hold metadata.
+    ReceiverAwaiting,
     /// A native editor queued its empty-line repaint and awaits another trigger.
     EditorClearRequested {
         /// Handoff marker when the adapter learned it before clearing.

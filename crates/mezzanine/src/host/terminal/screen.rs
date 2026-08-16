@@ -64,23 +64,6 @@ pub(crate) fn parse_mez_shell_transaction_osc(payload: &str) -> Option<TerminalO
                 return parse_managed_shell_protocol_event(&values);
             }
             let token = required_marker_field(&values, "mez_token")?;
-            if values.get("mez_receiver").copied() == Some("available") {
-                return Some(TerminalOscEvent::ShellReceiverAvailable {
-                    token,
-                    shell: required_bounded_field(&values, "mez_shell", 16)?,
-                    trigger: required_bounded_field(&values, "mez_trigger", 32)?,
-                });
-            }
-            if values.get("mez_receiver").copied() == Some("unavailable") {
-                return Some(TerminalOscEvent::ShellReceiverUnavailable {
-                    token,
-                    shell: required_bounded_field(&values, "mez_shell", 16)?,
-                    reason: required_bounded_field(&values, "mez_reason", 64)?,
-                });
-            }
-            if values.get("mez_receiver").copied() == Some("awaiting") {
-                return Some(TerminalOscEvent::ShellReceiverAwaiting { token });
-            }
             let marker = required_marker_field(&values, "mez_marker")?;
             if values.get("mez_parent").copied() == Some("restored") {
                 return Some(TerminalOscEvent::ShellParentRestored {
@@ -116,7 +99,16 @@ fn parse_managed_shell_protocol_event(values: &BTreeMap<&str, &str>) -> Option<T
     };
     let token = required_marker_field(values, "mez_token")?;
     let event = match values.get("mez_event").copied()? {
-        "adapter-available" => ManagedShellProtocolEvent::AdapterAvailable,
+        "adapter-available" => ManagedShellProtocolEvent::AdapterAvailable {
+            trigger: match values.get("mez_trigger") {
+                Some(_) => Some(required_bounded_field(values, "mez_trigger", 32)?),
+                None => None,
+            },
+        },
+        "adapter-unavailable" => ManagedShellProtocolEvent::AdapterUnavailable {
+            reason: required_bounded_field(values, "mez_reason", 64)?,
+        },
+        "receiver-awaiting" => ManagedShellProtocolEvent::ReceiverAwaiting,
         "editor-clear-requested" => ManagedShellProtocolEvent::EditorClearRequested {
             marker: values
                 .contains_key("mez_marker")
@@ -211,37 +203,54 @@ fn required_bounded_field(
 mod tests {
     use super::*;
 
-    /// Verifies managed zsh startup availability records retain only bounded,
-    /// authenticated trigger and failure metadata.
+    /// Verifies managed zsh startup records retain only bounded, authenticated
+    /// trigger and failure metadata in the typed protocol.
     #[test]
     fn zsh_receiver_availability_events_parse_bounded_metadata() {
         assert_eq!(
             parse_mez_shell_transaction_osc(
-                "133;R;mez_receiver=available;mez_shell=zsh;mez_token=pane-token;mez_trigger=escape-n"
+                "133;R;mez_protocol=2;mez_shell=zsh;mez_token=pane-token;mez_event=adapter-available;mez_trigger=escape-n"
             ),
-            Some(TerminalOscEvent::ShellReceiverAvailable {
+            Some(TerminalOscEvent::ManagedShell {
+                version: 2,
+                shell: ManagedShellAdapter::Zsh,
                 token: "pane-token".to_string(),
-                shell: "zsh".to_string(),
-                trigger: "escape-n".to_string(),
+                event: ManagedShellProtocolEvent::AdapterAvailable {
+                    trigger: Some("escape-n".to_string()),
+                },
             })
         );
         assert_eq!(
             parse_mez_shell_transaction_osc(
-                "133;R;mez_receiver=unavailable;mez_shell=zsh;mez_token=pane-token;mez_reason=no-free-trigger"
+                "133;R;mez_protocol=2;mez_shell=zsh;mez_token=pane-token;mez_event=adapter-unavailable;mez_reason=no-free-trigger"
             ),
-            Some(TerminalOscEvent::ShellReceiverUnavailable {
+            Some(TerminalOscEvent::ManagedShell {
+                version: 2,
+                shell: ManagedShellAdapter::Zsh,
                 token: "pane-token".to_string(),
-                shell: "zsh".to_string(),
-                reason: "no-free-trigger".to_string(),
+                event: ManagedShellProtocolEvent::AdapterUnavailable {
+                    reason: "no-free-trigger".to_string(),
+                },
+            })
+        );
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_protocol=2;mez_shell=zsh;mez_token=pane-token;mez_event=receiver-awaiting"
+            ),
+            Some(TerminalOscEvent::ManagedShell {
+                version: 2,
+                shell: ManagedShellAdapter::Zsh,
+                token: "pane-token".to_string(),
+                event: ManagedShellProtocolEvent::ReceiverAwaiting,
             })
         );
 
         for payload in [
-            "133;R;mez_receiver=available;mez_shell=zsh;mez_token=;mez_trigger=escape-m",
-            "133;R;mez_receiver=available;mez_shell=zsh;mez_token=pane-token;mez_trigger=",
-            "133;R;mez_receiver=unavailable;mez_shell=zsh;mez_token=pane-token;mez_reason=",
-            "133;R;mez_receiver=available;mez_shell=zshhhhhhhhhhhhhhhhh;mez_token=pane-token;mez_trigger=escape-m",
-            "133;R;mez_receiver=unavailable;mez_shell=zsh;mez_token=pane-token;mez_reason=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "133;R;mez_protocol=2;mez_shell=zsh;mez_token=;mez_event=adapter-available;mez_trigger=escape-m",
+            "133;R;mez_protocol=2;mez_shell=zsh;mez_token=pane-token;mez_event=adapter-available;mez_trigger=",
+            "133;R;mez_protocol=2;mez_shell=zsh;mez_token=pane-token;mez_event=adapter-unavailable;mez_reason=",
+            "133;R;mez_protocol=2;mez_shell=zshhhhhhhhhhhhhhhhh;mez_token=pane-token;mez_event=adapter-available;mez_trigger=escape-m",
+            "133;R;mez_protocol=2;mez_shell=zsh;mez_token=pane-token;mez_event=adapter-unavailable;mez_reason=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         ] {
             assert_eq!(parse_mez_shell_transaction_osc(payload), None, "{payload}");
         }
@@ -251,12 +260,6 @@ mod tests {
     /// their authenticated token, transaction marker, and final eval status.
     #[test]
     fn bash_receiver_events_parse_authenticated_protocol_fields() {
-        assert_eq!(
-            parse_mez_shell_transaction_osc("133;R;mez_receiver=awaiting;mez_token=pane-token"),
-            Some(TerminalOscEvent::ShellReceiverAwaiting {
-                token: "pane-token".to_string(),
-            })
-        );
         assert_eq!(
             parse_mez_shell_transaction_osc(
                 "133;R;mez_receiver=ready;mez_token=pane-token;mez_marker=transaction-marker"

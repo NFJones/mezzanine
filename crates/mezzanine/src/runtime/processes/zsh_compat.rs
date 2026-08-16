@@ -203,7 +203,7 @@ function __mez_zsh_private_receiver() {
   setopt localoptions extendedglob
   local hold_record begin_record source_file encoded_file receive_status=0 source_status=1 cancelled=0 frame_admitted=0
   local marker expected_length expected_digest expected_chunks sequence=0
-  command printf '\033]133;R;mez_receiver=awaiting;mez_token=%s\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
+  command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=receiver-awaiting\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
   IFS= read -r hold_record || receive_status=1
   local -a hold_fields
   hold_fields=(${=hold_record})
@@ -392,17 +392,17 @@ function __mez_zsh_install_integration() {
     fi
   fi
   if [[ -z ${__MEZ_ZSH_TRIGGER_ID} ]]; then
-    command printf '\033]133;R;mez_receiver=unavailable;mez_shell=zsh;mez_token=%s;mez_reason=no-free-trigger\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
+    command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=adapter-unavailable;mez_reason=no-free-trigger\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
     return 1
   fi
   autoload -Uz add-zle-hook-widget 2>/dev/null || {
-    command printf '\033]133;R;mez_receiver=unavailable;mez_shell=zsh;mez_token=%s;mez_reason=line-init-hook-unavailable\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
+    command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=adapter-unavailable;mez_reason=line-init-hook-unavailable\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
     return 1
   }
   zle -N __mez_zsh_private_widget || return 1
   add-zle-hook-widget line-init __mez_zsh_line_init 2>/dev/null || {
     zle -D __mez_zsh_private_widget 2>/dev/null || true
-    command printf '\033]133;R;mez_receiver=unavailable;mez_shell=zsh;mez_token=%s;mez_reason=line-init-hook-failed\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
+    command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=adapter-unavailable;mez_reason=line-init-hook-failed\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
     return 1
   }
   local bound=1
@@ -415,24 +415,22 @@ function __mez_zsh_install_integration() {
     done
     add-zle-hook-widget -d line-init __mez_zsh_line_init 2>/dev/null || true
     zle -D __mez_zsh_private_widget 2>/dev/null || true
-    command printf '\033]133;R;mez_receiver=unavailable;mez_shell=zsh;mez_token=%s;mez_reason=trigger-bind-failed\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
+    command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=adapter-unavailable;mez_reason=trigger-bind-failed\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
     return 1
   fi
   __MEZ_ZSH_ADMISSION_READY=1
-  command printf '\033]133;R;mez_receiver=available;mez_shell=zsh;mez_token=%s;mez_trigger=%s\033\\' \
+  command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=adapter-available;mez_trigger=%s\033\\' \
     "$MEZ_ZSH_HISTORY_TOKEN" "$__MEZ_ZSH_TRIGGER_ID"
-  command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=adapter-available\033\\' \
-    "$MEZ_ZSH_HISTORY_TOKEN"
 }
 function __mez_zsh_schedule_integration() {
   emulate -L zsh
   autoload -Uz add-zsh-hook 2>/dev/null || {
-    command printf '\033]133;R;mez_receiver=unavailable;mez_shell=zsh;mez_token=%s;mez_reason=precmd-hook-unavailable\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
+    command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=adapter-unavailable;mez_reason=precmd-hook-unavailable\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
     return 1
   }
   add-zsh-hook -d precmd __mez_zsh_install_integration 2>/dev/null || true
   add-zsh-hook precmd __mez_zsh_install_integration 2>/dev/null || {
-    command printf '\033]133;R;mez_receiver=unavailable;mez_shell=zsh;mez_token=%s;mez_reason=precmd-hook-failed\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
+    command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=adapter-unavailable;mez_reason=precmd-hook-failed\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
     return 1
   }
 }
@@ -713,7 +711,10 @@ mod tests {
                 .any(|window| window == editor_cleared.as_bytes())
         });
         process.write_input(admission.wrapper.as_bytes()).unwrap();
-        let awaiting = format!("mez_receiver=awaiting;mez_token={}", owner.as_str());
+        let awaiting = format!(
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=receiver-awaiting",
+            owner.as_str()
+        );
         extend_zsh_output_until(process, &mut output, |output| {
             output
                 .windows(awaiting.len())
@@ -1187,7 +1188,7 @@ function zshaddhistory() {{\n\
         let parent_pid = process.process.primary_pid();
         let parent_process_group = process.process.process_group_leader();
         let available = format!(
-            "mez_receiver=available;mez_shell=zsh;mez_token={};mez_trigger=escape-m",
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=adapter-available;mez_trigger=escape-m",
             token.as_str()
         );
         let _ = read_zsh_output_until(&mut process, |output| {
@@ -1325,7 +1326,7 @@ function zshaddhistory() {{\n\
                 .any(|window| window == b"__MEZ_ZSH_PROMPT__>")
         });
         let available = format!(
-            "mez_receiver=available;mez_shell=zsh;mez_token={};mez_trigger=escape-m",
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=adapter-available;mez_trigger=escape-m",
             owner.as_str()
         );
         assert!(
@@ -1566,7 +1567,7 @@ unsetopt RCS\n",
         let terminal = mez_terminal::TerminalScreen::new(size, 1_000).unwrap();
         let mut process = ManagedZshTestPane { process, terminal };
         let expected = format!(
-            "mez_receiver=available;mez_shell=zsh;mez_token={};mez_trigger=escape-n",
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=adapter-available;mez_trigger=escape-n",
             owner.as_str()
         );
         let output = read_zsh_output_until(&mut process, |output| {

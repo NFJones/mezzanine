@@ -1363,36 +1363,6 @@ impl RuntimeSessionService {
                             )?);
                     }
                 }
-                TerminalOscEvent::ShellReceiverAvailable {
-                    token,
-                    shell,
-                    trigger,
-                } => {
-                    observed = observed.saturating_add(self.observe_zsh_shell_receiver_available(
-                        output_pane_id,
-                        token,
-                        shell,
-                        trigger,
-                    )?);
-                }
-                TerminalOscEvent::ShellReceiverUnavailable {
-                    token,
-                    shell,
-                    reason,
-                } => {
-                    observed =
-                        observed.saturating_add(self.observe_zsh_shell_receiver_unavailable(
-                            output_pane_id,
-                            token,
-                            shell,
-                            reason,
-                        )?);
-                }
-                TerminalOscEvent::ShellReceiverAwaiting { token } => {
-                    observed = observed.saturating_add(
-                        self.observe_zsh_shell_receiver_awaiting(output_pane_id, token)?,
-                    );
-                }
                 TerminalOscEvent::ShellParentRestored {
                     token,
                     marker,

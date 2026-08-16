@@ -66,7 +66,17 @@ impl RuntimeSessionService {
             _ => return Ok(0),
         };
         match event {
-            mez_terminal::ManagedShellProtocolEvent::AdapterAvailable => {
+            mez_terminal::ManagedShellProtocolEvent::AdapterAvailable { trigger } => {
+                if managed_shell == ManagedShellKind::Zsh {
+                    let Some(trigger) = trigger.as_deref() else {
+                        return Ok(0);
+                    };
+                    return self.observe_zsh_shell_receiver_available(
+                        output_pane_id,
+                        token,
+                        trigger,
+                    );
+                }
                 if managed_shell != ManagedShellKind::Bash {
                     return Ok(1);
                 }
@@ -96,6 +106,22 @@ impl RuntimeSessionService {
                     let _ = self.enter_agent_subshell_if_needed(output_pane_id)?;
                 }
                 Ok(1)
+            }
+            mez_terminal::ManagedShellProtocolEvent::AdapterUnavailable { reason } => {
+                if managed_shell == ManagedShellKind::Zsh {
+                    return self.observe_zsh_shell_receiver_unavailable(
+                        output_pane_id,
+                        token,
+                        reason,
+                    );
+                }
+                Ok(0)
+            }
+            mez_terminal::ManagedShellProtocolEvent::ReceiverAwaiting => {
+                if managed_shell == ManagedShellKind::Zsh {
+                    return self.observe_zsh_shell_receiver_awaiting(output_pane_id, token);
+                }
+                Ok(0)
             }
             mez_terminal::ManagedShellProtocolEvent::EditorClearRequested { marker } => self
                 .observe_managed_shell_editor_clear_requested(
@@ -753,13 +779,11 @@ impl RuntimeSessionService {
         &mut self,
         output_pane_id: &str,
         token: &str,
-        shell: &str,
         trigger: &str,
     ) -> Result<usize> {
-        if shell != "zsh"
-            || self
-                .zsh_history_token_for_pane(output_pane_id)
-                .is_none_or(|expected| expected.as_str() != token)
+        if self
+            .zsh_history_token_for_pane(output_pane_id)
+            .is_none_or(|expected| expected.as_str() != token)
         {
             return Ok(0);
         }
@@ -795,13 +819,11 @@ impl RuntimeSessionService {
         &mut self,
         output_pane_id: &str,
         token: &str,
-        shell: &str,
         reason: &str,
     ) -> Result<usize> {
-        if shell != "zsh"
-            || self
-                .zsh_history_token_for_pane(output_pane_id)
-                .is_none_or(|expected| expected.as_str() != token)
+        if self
+            .zsh_history_token_for_pane(output_pane_id)
+            .is_none_or(|expected| expected.as_str() != token)
         {
             return Ok(0);
         }
@@ -834,9 +856,10 @@ impl RuntimeSessionService {
         }
         let Some(marker) = self
             .process
-            .pane_shell_handoffs
+            .pane_managed_shell_handoffs
             .get(output_pane_id)
-            .and_then(|handoff| handoff.bootstrap_marker.clone())
+            .filter(|handoff| handoff.shell() == ManagedShellKind::Zsh)
+            .map(|handoff| handoff.identity().marker.clone())
         else {
             return Ok(0);
         };
