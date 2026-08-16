@@ -195,6 +195,7 @@ typeset -g __MEZ_ZSH_RESTORE_MARKER=
 typeset -gi __MEZ_ZSH_RESTORE_STATUS=1
 typeset -g __MEZ_ZSH_RESTORE_OUTCOME=frame-rejected
 typeset -gi __MEZ_ZSH_ADMISSION_READY=0
+typeset -gi __MEZ_ZSH_EDITOR_CLEAR_PHASE=0
 typeset -g __MEZ_ZSH_TRIGGER_ID=
 typeset -g __MEZ_ZSH_TRIGGER_SEQUENCE=
 function __mez_zsh_private_receiver() {
@@ -335,6 +336,20 @@ function __mez_zsh_private_widget() {
   CURSOR=0
   MARK=0
   REGION_ACTIVE=0
+  if (( __MEZ_ZSH_EDITOR_CLEAR_PHASE == 0 )); then
+    __MEZ_ZSH_EDITOR_CLEAR_PHASE=1
+    zle redisplay
+    command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=editor-clear-requested\033\\' \
+      "$MEZ_ZSH_HISTORY_TOKEN"
+    return 0
+  fi
+  if (( __MEZ_ZSH_EDITOR_CLEAR_PHASE == 1 )); then
+    __MEZ_ZSH_EDITOR_CLEAR_PHASE=2
+    command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=editor-cleared\033\\' \
+      "$MEZ_ZSH_HISTORY_TOKEN"
+    return 0
+  fi
+  __MEZ_ZSH_EDITOR_CLEAR_PHASE=0
   BUFFER=__mez_zsh_private_receiver
   CURSOR=${#BUFFER}
   zle accept-line
@@ -702,8 +717,28 @@ mod tests {
         marker: &str,
     ) -> Vec<u8> {
         process.write_input(admission.wrapper.as_bytes()).unwrap();
-        let awaiting = format!("mez_receiver=awaiting;mez_token={}", owner.as_str());
+        let clear_requested = format!(
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=editor-clear-requested",
+            owner.as_str()
+        );
         let mut output = read_zsh_output_until(process, |output| {
+            output
+                .windows(clear_requested.len())
+                .any(|window| window == clear_requested.as_bytes())
+        });
+        process.write_input(admission.wrapper.as_bytes()).unwrap();
+        let editor_cleared = format!(
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=editor-cleared",
+            owner.as_str()
+        );
+        extend_zsh_output_until(process, &mut output, |output| {
+            output
+                .windows(editor_cleared.len())
+                .any(|window| window == editor_cleared.as_bytes())
+        });
+        process.write_input(admission.wrapper.as_bytes()).unwrap();
+        let awaiting = format!("mez_receiver=awaiting;mez_token={}", owner.as_str());
+        extend_zsh_output_until(process, &mut output, |output| {
             output
                 .windows(awaiting.len())
                 .any(|window| window == awaiting.as_bytes())

@@ -97,6 +97,18 @@ impl RuntimeSessionService {
                 }
                 Ok(1)
             }
+            mez_terminal::ManagedShellProtocolEvent::EditorClearRequested { marker } => self
+                .observe_managed_shell_editor_clear_requested(
+                    output_pane_id,
+                    managed_shell,
+                    marker.as_deref(),
+                ),
+            mez_terminal::ManagedShellProtocolEvent::EditorCleared { marker } => self
+                .observe_managed_shell_editor_cleared(
+                    output_pane_id,
+                    managed_shell,
+                    marker.as_deref(),
+                ),
             mez_terminal::ManagedShellProtocolEvent::FrameAdmitted { marker } => {
                 if matches!(
                     managed_shell,
@@ -214,6 +226,175 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Releases a trigger-only post-repaint confirmation stage.
+    fn observe_managed_shell_editor_clear_requested(
+        &mut self,
+        output_pane_id: &str,
+        shell: ManagedShellKind,
+        marker: Option<&str>,
+    ) -> Result<usize> {
+        if !matches!(shell, ManagedShellKind::Fish | ManagedShellKind::Zsh) {
+            return Ok(0);
+        }
+        let Some(handoff) = self.process.pane_managed_shell_handoffs.get(output_pane_id) else {
+            return Ok(0);
+        };
+        if handoff.shell() != shell || !handoff.editor_clear_is_pending() {
+            return Ok(0);
+        }
+        let expected_marker = handoff.identity().marker.clone();
+        if shell == ManagedShellKind::Fish && marker != Some(expected_marker.as_str()) {
+            return Ok(0);
+        }
+        if shell == ManagedShellKind::Zsh && marker.is_some() {
+            return Ok(0);
+        }
+        if shell == ManagedShellKind::Zsh {
+            let Some(trigger) = self
+                .process
+                .pane_zsh_admissions
+                .get(output_pane_id)
+                .and_then(|admission| match admission {
+                    crate::runtime::processes::RuntimeManagedZshAdmission::Ready {
+                        trigger,
+                        ..
+                    } => Some(*trigger),
+                    crate::runtime::processes::RuntimeManagedZshAdmission::Pending { .. }
+                    | crate::runtime::processes::RuntimeManagedZshAdmission::Unavailable {
+                        ..
+                    } => None,
+                })
+            else {
+                return Ok(0);
+            };
+            if let Err(error) =
+                self.write_runtime_pane_shell_input(output_pane_id, trigger.input().as_bytes())
+            {
+                self.fail_shell_transactions_for_pane_write_failure(
+                    output_pane_id,
+                    error.message(),
+                )?;
+                return Err(error);
+            }
+            return Ok(1);
+        }
+        let Some(transaction) = self
+            .process
+            .running_shell_transactions
+            .get(&expected_marker)
+            .cloned()
+        else {
+            return Ok(0);
+        };
+        let confirmation = self
+            .process
+            .shell_receiver_pending_payloads
+            .get_mut(&expected_marker)
+            .and_then(std::collections::VecDeque::pop_front);
+        let Some(confirmation) = confirmation else {
+            return self.fail_shell_transaction_protocol_violation(
+                &expected_marker,
+                transaction,
+                "managed-editor-clear-without-confirmation",
+                "managed Fish clear request has no pending trigger-only confirmation",
+            );
+        };
+        if self
+            .process
+            .shell_receiver_pending_payloads
+            .get(&expected_marker)
+            .is_none_or(|pending| pending.len() < 2)
+        {
+            return self.fail_shell_transaction_protocol_violation(
+                &expected_marker,
+                transaction,
+                "managed-editor-clear-without-staged-frame",
+                "managed Fish clear confirmation has no pending BEGIN and DATA/END stages",
+            );
+        }
+        let confirmation_len = confirmation.bytes.len();
+        if let Err(error) = self.write_runtime_pane_shell_delivery(output_pane_id, confirmation) {
+            self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
+            return Err(error);
+        }
+        self.append_agent_trace_turn_event(
+            output_pane_id,
+            &transaction.turn_id,
+            &format!(
+                "managed_shell editor_clear_requested shell=Fish marker={expected_marker} confirmation_bytes={confirmation_len}"
+            ),
+        )?;
+        Ok(1)
+    }
+
+    /// Exposes one authenticated native-editor clear before receiver traffic is hidden.
+    fn observe_managed_shell_editor_cleared(
+        &mut self,
+        output_pane_id: &str,
+        shell: ManagedShellKind,
+        marker: Option<&str>,
+    ) -> Result<usize> {
+        if !matches!(shell, ManagedShellKind::Fish | ManagedShellKind::Zsh) {
+            return Ok(0);
+        }
+        let Some(handoff) = self
+            .process
+            .pane_managed_shell_handoffs
+            .get_mut(output_pane_id)
+        else {
+            return Ok(0);
+        };
+        if handoff.shell() != shell {
+            return Ok(0);
+        }
+        let expected_marker = handoff.identity().marker.clone();
+        if shell == ManagedShellKind::Fish && marker != Some(expected_marker.as_str()) {
+            return Ok(0);
+        }
+        if shell == ManagedShellKind::Zsh && marker.is_some() {
+            return Ok(0);
+        }
+        let transition = reduce_managed_shell_handoff(
+            handoff,
+            ManagedShellHandoffEvent::EditorCleared {
+                marker: expected_marker,
+            },
+        );
+        if !transition.applied {
+            return Ok(0);
+        }
+        self.discard_unsubmitted_process_input(output_pane_id);
+        if shell == ManagedShellKind::Zsh {
+            let Some(trigger) = self
+                .process
+                .pane_zsh_admissions
+                .get(output_pane_id)
+                .and_then(|admission| match admission {
+                    crate::runtime::processes::RuntimeManagedZshAdmission::Ready {
+                        trigger,
+                        ..
+                    } => Some(*trigger),
+                    crate::runtime::processes::RuntimeManagedZshAdmission::Pending { .. }
+                    | crate::runtime::processes::RuntimeManagedZshAdmission::Unavailable {
+                        ..
+                    } => None,
+                })
+            else {
+                return Ok(0);
+            };
+            if let Err(error) =
+                self.write_runtime_pane_shell_input(output_pane_id, trigger.input().as_bytes())
+            {
+                self.fail_shell_transactions_for_pane_write_failure(
+                    output_pane_id,
+                    error.message(),
+                )?;
+                return Err(error);
+            }
+        }
+        Ok(1)
+    }
+
     /// Releases an authenticated BEGIN stage after native editor hold.
     fn observe_managed_shell_editor_held(
         &mut self,
@@ -263,7 +444,6 @@ impl RuntimeSessionService {
         if !transition.applied {
             return Ok(0);
         }
-        self.discard_unsubmitted_process_input(output_pane_id);
         let admission = self
             .process
             .shell_receiver_pending_payloads

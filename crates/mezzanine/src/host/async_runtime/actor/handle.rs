@@ -80,6 +80,22 @@ impl AsyncRuntimeSessionHandle {
             .await
     }
 
+    /// Returns the retained process presentation during a managed-shell handoff.
+    #[cfg(test)]
+    pub async fn managed_shell_process_screen_text(&self, pane_id: &str) -> Result<String> {
+        let pane_id = pane_id.to_string();
+        self.request(|reply| AsyncRuntimeRequest::ManagedShellProcessScreenText { pane_id, reply })
+            .await
+    }
+
+    /// Reports whether the current Zsh process installed its managed trigger.
+    #[cfg(test)]
+    pub async fn managed_zsh_admission_ready(&self, pane_id: &str) -> Result<bool> {
+        let pane_id = pane_id.to_string();
+        self.request(|reply| AsyncRuntimeRequest::ManagedZshAdmissionReady { pane_id, reply })
+            .await
+    }
+
     /// Runs the render client view operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

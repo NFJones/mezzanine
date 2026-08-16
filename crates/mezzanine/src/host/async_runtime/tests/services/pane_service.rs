@@ -1008,6 +1008,14 @@ async fn async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_respo
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        let retained_process_text = client_handle
+            .managed_shell_process_screen_text("%1")
+            .await
+            .unwrap();
+        assert!(
+            !retained_process_text.replace('\n', "").contains(&draft),
+            "managed Fish retained process screen still displayed the discarded draft: {retained_process_text:?}"
+        );
         let hidden = client_handle
             .apply_attached_terminal_step_plan(
                 primary.clone(),
@@ -1190,11 +1198,37 @@ async fn async_zsh_dirty_draft_no_prompt_exit_discards_draft_and_restores_respon
     };
 
     let client = async move {
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        let admission_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !client_handle
+            .managed_zsh_admission_ready("%1")
+            .await
+            .unwrap()
+        {
+            assert!(
+                tokio::time::Instant::now() < admission_deadline,
+                "managed Zsh adapter did not become ready before dirty-draft entry"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         client_handle
             .write_input_to_pane(primary.clone(), "%1", draft.as_bytes().to_vec())
             .await
             .unwrap();
+        let draft_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let retained_process_text = client_handle
+                .managed_shell_process_screen_text("%1")
+                .await
+                .unwrap();
+            if retained_process_text.replace('\n', "").contains(&draft) {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < draft_deadline,
+                "managed Zsh draft was not displayed before agent-shell entry: {retained_process_text:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         let shown = client_handle
             .apply_attached_terminal_step_plan(
                 primary.clone(),
@@ -1227,6 +1261,14 @@ async fn async_zsh_dirty_draft_no_prompt_exit_discards_draft_and_restores_respon
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        let retained_process_text = client_handle
+            .managed_shell_process_screen_text("%1")
+            .await
+            .unwrap();
+        assert!(
+            !retained_process_text.replace('\n', "").contains(&draft),
+            "managed Zsh retained process screen still displayed the discarded draft: {retained_process_text:?}"
+        );
         let hidden = client_handle
             .apply_attached_terminal_step_plan(
                 primary.clone(),

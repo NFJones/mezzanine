@@ -84,6 +84,24 @@ impl AsyncRuntimeSessionActor {
                 ));
                 false
             }
+            #[cfg(test)]
+            AsyncRuntimeRequest::ManagedShellProcessScreenText { pane_id, reply } => {
+                let text = self
+                    .service
+                    .process_pane_screen(&pane_id)
+                    .map(|screen| screen.normal_content_lines().join("\n"))
+                    .unwrap_or_default();
+                let _ = reply.send(text);
+                false
+            }
+            #[cfg(test)]
+            AsyncRuntimeRequest::ManagedZshAdmissionReady { pane_id, reply } => {
+                let _ = reply.send(
+                    self.service
+                        .managed_zsh_admission_is_ready_for_tests(&pane_id),
+                );
+                false
+            }
             AsyncRuntimeRequest::RenderClientView {
                 role,
                 client_size,

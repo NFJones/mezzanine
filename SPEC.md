@@ -1838,8 +1838,11 @@ outside agent mode.
 Managed Bash parents MUST preserve an unfinished editable command line while
 the agent child owns the pane. Managed Fish and Zsh parents MUST instead
 discard unfinished editable input with their native editor APIs before
-publishing `EditorHeld`. The discarded input MUST NOT execute or enter shell
-history. Fish admission MUST fail closed without clearing the draft while
+publishing `EditorHeld`. They MUST publish authenticated `EditorCleared` only
+after the native empty-line repaint has been emitted, and runtime MUST apply
+that repaint to the retained process screen before hiding receiver and
+bootstrap traffic. The discarded input MUST NOT execute or enter shell history.
+Fish admission MUST fail closed without clearing the draft while
 history search, the completion pager, or an active text selection prevents a
 safe native editor clear. Zsh admission MUST continue to fail closed for a
 continuation buffer rather than attempting to discard parsed continuation
@@ -1847,7 +1850,8 @@ state.
 Managed shell adapters MUST publish a versioned, pane-token-authenticated
 semantic lifecycle rather than requiring runtime to infer ownership from
 shell-specific control records. Protocol version 2 defines
-`AdapterAvailable`, `EditorHeld`, `FrameAdmitted`, `ChildInstalled`,
+`AdapterAvailable`, `EditorClearRequested`, `EditorCleared`, `EditorHeld`,
+`FrameAdmitted`, `ChildInstalled`,
 `ReceiverRejected`, `ChildExited`, and `ParentReady` events. Parent readiness
 MUST carry a typed outcome: completed, cancelled, frame rejected, source
 failed, or child launch failed. Runtime MUST reject an unsupported version or

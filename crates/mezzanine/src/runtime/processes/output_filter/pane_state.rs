@@ -22,6 +22,8 @@ pub(super) enum PaneOutputRenderMode {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     Normal,
+    /// Applies the shell-native empty-line repaint before hiding handoff traffic.
+    ManagedEditorClear,
     /// Represents the Hidden Live Agent Shell case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -119,7 +121,10 @@ impl RuntimeSessionService {
                 self.process.settings.terminal_history_rotate_lines,
             )?);
         process_screen.resize(process_presentation_size);
-        if render_mode == PaneOutputRenderMode::Normal {
+        if matches!(
+            render_mode,
+            PaneOutputRenderMode::Normal | PaneOutputRenderMode::ManagedEditorClear
+        ) {
             process_screen.feed(&protocol_bytes);
         } else {
             process_screen.feed_protocol_preserving_content(&protocol_bytes);
@@ -165,7 +170,8 @@ impl RuntimeSessionService {
                 )
             }
             PaneOutputRenderMode::HiddenLiveAgentShell
-            | PaneOutputRenderMode::HiddenRetainedAgentShell => (0, 0),
+            | PaneOutputRenderMode::HiddenRetainedAgentShell
+            | PaneOutputRenderMode::ManagedEditorClear => (0, 0),
         };
         if !terminal_response_bytes.is_empty() {
             self.write_runtime_pane_input_priority(
@@ -394,6 +400,14 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn pane_output_render_mode(&self, pane_id: &str) -> PaneOutputRenderMode {
         let shell_view_enabled = self.agent_shell_view_enabled(pane_id);
+        if self
+            .process
+            .pane_managed_shell_handoffs
+            .get(pane_id)
+            .is_some_and(ManagedShellHandoff::editor_clear_is_pending)
+        {
+            return PaneOutputRenderMode::ManagedEditorClear;
+        }
         if self.agent_subshell_input_clear_is_pending(pane_id)
             || self.agent_subshell_input_clear_was_completed(pane_id)
         {
@@ -591,6 +605,7 @@ impl RuntimeSessionService {
             PaneOutputRenderMode::Normal
             | PaneOutputRenderMode::VerboseAgentAction
             | PaneOutputRenderMode::Trace => decoded.to_vec(),
+            PaneOutputRenderMode::ManagedEditorClear => Vec::new(),
             PaneOutputRenderMode::HiddenLiveAgentShell => {
                 if !decoded.is_empty() {
                     self.remember_hidden_shell_render_suppression(pane_id);

@@ -33,6 +33,8 @@ pub(in crate::runtime) enum ManagedShellKind {
 pub(in crate::runtime) enum ManagedShellHandoffPhase {
     /// The private editor trigger was written, but payload delivery has not begun.
     TriggerQueued,
+    /// Pending input was discarded and its empty native-editor repaint was exposed.
+    EditorCleared,
     /// The native editor saved user state and admitted one correlated header.
     EditorHeld,
     /// The adapter admitted the private frame and payload delivery is in flight.
@@ -155,6 +157,12 @@ impl ManagedShellHandoff {
         self.exit_requested
     }
 
+    /// Reports whether presentation still needs to expose the native clear repaint.
+    pub(super) fn editor_clear_is_pending(&self) -> bool {
+        self.phase == ManagedShellHandoffPhase::TriggerQueued
+            && matches!(self.shell, ManagedShellKind::Fish | ManagedShellKind::Zsh)
+    }
+
     /// Returns queued foreground input without releasing ownership in tests.
     #[cfg(test)]
     pub(super) fn pending_input(&self) -> &[u8] {
@@ -170,6 +178,8 @@ impl ManagedShellHandoff {
 /// Correlated lifecycle input accepted by the pure handoff reducer.
 #[derive(Clone, Debug)]
 pub(super) enum ManagedShellHandoffEvent {
+    /// The native editor discarded its pending buffer and repainted it empty.
+    EditorCleared { marker: String },
     /// The native adapter saved and cleared its editor for this marker.
     EditorHeld { marker: String },
     /// The adapter admitted the private frame and runtime released its payload.
@@ -255,9 +265,19 @@ pub(super) fn reduce_managed_shell_handoff(
         effects: Vec::new(),
     };
     match event {
-        ManagedShellHandoffEvent::EditorHeld { marker }
+        ManagedShellHandoffEvent::EditorCleared { marker }
             if marker == handoff.identity.marker
                 && handoff.phase == ManagedShellHandoffPhase::TriggerQueued =>
+        {
+            handoff.phase = ManagedShellHandoffPhase::EditorCleared;
+        }
+        ManagedShellHandoffEvent::EditorHeld { marker }
+            if marker == handoff.identity.marker
+                && matches!(
+                    handoff.phase,
+                    ManagedShellHandoffPhase::TriggerQueued
+                        | ManagedShellHandoffPhase::EditorCleared
+                ) =>
         {
             handoff.phase = ManagedShellHandoffPhase::EditorHeld;
         }
@@ -265,7 +285,9 @@ pub(super) fn reduce_managed_shell_handoff(
             if marker == handoff.identity.marker
                 && matches!(
                     handoff.phase,
-                    ManagedShellHandoffPhase::TriggerQueued | ManagedShellHandoffPhase::EditorHeld
+                    ManagedShellHandoffPhase::TriggerQueued
+                        | ManagedShellHandoffPhase::EditorCleared
+                        | ManagedShellHandoffPhase::EditorHeld
                 ) =>
         {
             handoff.phase = ManagedShellHandoffPhase::PayloadInFlight;
@@ -291,11 +313,11 @@ pub(super) fn reduce_managed_shell_handoff(
         ManagedShellHandoffEvent::ExitRequested { now_unix_ms } => {
             handoff.exit_requested = true;
             match handoff.phase {
-                ManagedShellHandoffPhase::TriggerQueued | ManagedShellHandoffPhase::EditorHeld => {
-                    transition
-                        .effects
-                        .push(ManagedShellHandoffEffect::CancelBeforePayload)
-                }
+                ManagedShellHandoffPhase::TriggerQueued
+                | ManagedShellHandoffPhase::EditorCleared
+                | ManagedShellHandoffPhase::EditorHeld => transition
+                    .effects
+                    .push(ManagedShellHandoffEffect::CancelBeforePayload),
                 ManagedShellHandoffPhase::PayloadInFlight => transition
                     .effects
                     .push(ManagedShellHandoffEffect::WaitForChildInstallation),
@@ -319,7 +341,9 @@ pub(super) fn reduce_managed_shell_handoff(
         ManagedShellHandoffEvent::CancellationSent { now_unix_ms }
             if matches!(
                 handoff.phase,
-                ManagedShellHandoffPhase::TriggerQueued | ManagedShellHandoffPhase::EditorHeld
+                ManagedShellHandoffPhase::TriggerQueued
+                    | ManagedShellHandoffPhase::EditorCleared
+                    | ManagedShellHandoffPhase::EditorHeld
             ) && handoff.exit_requested =>
         {
             handoff.phase = ManagedShellHandoffPhase::Returning;
@@ -583,6 +607,18 @@ mod tests {
     fn exit_phase_matrix_cancels_before_data_and_exits_proven_child_once() {
         let mut editor_held =
             ManagedShellHandoff::new(ManagedShellKind::Fish, identity("marker-editor"));
+        assert!(editor_held.editor_clear_is_pending());
+        assert!(
+            reduce_managed_shell_handoff(
+                &mut editor_held,
+                ManagedShellHandoffEvent::EditorCleared {
+                    marker: "marker-editor".to_string(),
+                },
+            )
+            .applied
+        );
+        assert_eq!(editor_held.phase(), ManagedShellHandoffPhase::EditorCleared);
+        assert!(!editor_held.editor_clear_is_pending());
         assert!(
             reduce_managed_shell_handoff(
                 &mut editor_held,

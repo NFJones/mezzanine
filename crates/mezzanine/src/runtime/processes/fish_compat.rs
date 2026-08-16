@@ -75,7 +75,7 @@ if not functions --query __mez_fish_user_right_prompt
 end
 functions --erase __mez_fish_hold_editor __mez_fish_release_editor __mez_fish_restore_editor __mez_fish_private_trigger __mez_fish_private_receiver __mez_fish_publish_parent_restored __mez_fish_passive_command_is_internal __mez_fish_passive_prompt_start __mez_fish_passive_preexec __mez_fish_passive_postexec fish_prompt fish_right_prompt 2>/dev/null
 set -g __MEZ_FISH_INTEGRATION_OWNER {}
-set -e __MEZ_FISH_EDITOR_HELD __MEZ_FISH_HOLD_MARKER __MEZ_FISH_PARENT_RESTORE_MARKER __MEZ_FISH_PARENT_RESTORE_STATUS __MEZ_FISH_PARENT_RESTORE_OUTCOME __MEZ_FISH_PASSIVE_COMMAND_ACTIVE __MEZ_FISH_PASSIVE_SKIP_POSTEXEC
+set -e __MEZ_FISH_EDITOR_HELD __MEZ_FISH_EDITOR_CLEAR_PENDING __MEZ_FISH_HOLD_MARKER __MEZ_FISH_PARENT_RESTORE_MARKER __MEZ_FISH_PARENT_RESTORE_STATUS __MEZ_FISH_PARENT_RESTORE_OUTCOME __MEZ_FISH_PASSIVE_COMMAND_ACTIVE __MEZ_FISH_PASSIVE_SKIP_POSTEXEC
 function __mez_fish_hold_editor
     set -l hold_record
     read -l hold_record; or return 1
@@ -96,7 +96,7 @@ function __mez_fish_release_editor
     if not set -q __MEZ_FISH_EDITOR_HELD
         return 0
     end
-    set -e __MEZ_FISH_EDITOR_HELD __MEZ_FISH_HOLD_MARKER
+    set -e __MEZ_FISH_EDITOR_HELD __MEZ_FISH_EDITOR_CLEAR_PENDING __MEZ_FISH_HOLD_MARKER
 end
 function __mez_fish_private_receiver
     if not set -q __MEZ_FISH_EDITOR_HELD
@@ -246,6 +246,13 @@ function __mez_fish_private_trigger
     if not set -q __MEZ_FISH_EDITOR_HELD
         __mez_fish_hold_editor; or return $status
         commandline -f repaint
+        set -g __MEZ_FISH_EDITOR_CLEAR_PENDING 1
+        builtin printf '\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=editor-clear-requested;mez_marker=%s\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$__MEZ_FISH_HOLD_MARKER"
+        return 0
+    end
+    if set -q __MEZ_FISH_EDITOR_CLEAR_PENDING
+        set -e __MEZ_FISH_EDITOR_CLEAR_PENDING
+        builtin printf '\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=editor-cleared;mez_marker=%s\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$__MEZ_FISH_HOLD_MARKER"
         builtin printf '\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=editor-held;mez_marker=%s\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$__MEZ_FISH_HOLD_MARKER"
         return 0
     end
@@ -478,15 +485,28 @@ mod tests {
         marker: &str,
     ) -> Vec<u8> {
         process.write_input(admission.wrapper.as_bytes()).unwrap();
+        let clear_requested = format!(
+            "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=editor-clear-requested;mez_marker={marker}",
+            owner.as_str()
+        );
+        let mut output = read_fish_output_until(process, |output| {
+            output
+                .windows(clear_requested.len())
+                .any(|window| window == clear_requested.as_bytes())
+        });
+        process
+            .write_input(admission.editor_clear_confirmation.as_bytes())
+            .unwrap();
         let editor_held = format!(
             "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=editor-held;mez_marker={marker}",
             owner.as_str()
         );
-        read_fish_output_until(process, |output| {
+        extend_fish_output_until(process, &mut output, |output| {
             output
                 .windows(editor_held.len())
                 .any(|window| window == editor_held.as_bytes())
-        })
+        });
+        output
     }
 
     /// Releases Fish BEGIN after editor hold and waits for authenticated admission.

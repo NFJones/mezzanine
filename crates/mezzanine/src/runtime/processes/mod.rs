@@ -885,6 +885,7 @@ impl RuntimeSessionService {
     pub(crate) fn prepend_fish_shell_receiver_payloads(
         &mut self,
         marker: &str,
+        clear_confirmation: mez_mux::process::ShellInputDelivery,
         admission: mez_mux::process::ShellInputDelivery,
         payload: mez_mux::process::ShellInputDelivery,
     ) {
@@ -896,6 +897,7 @@ impl RuntimeSessionService {
             .or_default();
         pending.push_front(payload);
         pending.push_front(admission);
+        pending.push_front(clear_confirmation);
     }
 
     /// Registers one live editor handoff for the current process epoch.
@@ -2444,6 +2446,15 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Option<&RuntimeManagedZshAdmission> {
         self.process.pane_zsh_admissions.get(pane_id)
+    }
+
+    /// Reports whether the current Zsh process installed a usable managed trigger.
+    #[cfg(test)]
+    pub(crate) fn managed_zsh_admission_is_ready_for_tests(&self, pane_id: &str) -> bool {
+        matches!(
+            self.process.pane_zsh_admissions.get(pane_id),
+            Some(RuntimeManagedZshAdmission::Ready { .. })
+        )
     }
 
     /// Arms the bounded startup-admission deadline for one managed zsh pane.

@@ -1790,6 +1790,7 @@ fn runtime_fish_parent_restoration_timeout_requires_foreground_proof() {
         "fish-restoration-marker",
         mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
         mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
+        mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
     );
     service.bind_agent_subshell_bootstrap_marker(pane_id, "fish-restoration-marker");
     assert!(service.mark_managed_shell_payload_released(pane_id, "fish-restoration-marker"));

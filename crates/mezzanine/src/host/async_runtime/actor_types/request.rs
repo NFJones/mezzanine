@@ -104,6 +104,22 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Receives child-active, bootstrap-pending, and restoration-pending flags.
         reply: oneshot::Sender<(bool, bool, bool)>,
     },
+    /// Reads the retained process presentation during a managed-shell handoff.
+    #[cfg(test)]
+    ManagedShellProcessScreenText {
+        /// Pane whose retained process screen is observed.
+        pane_id: String,
+        /// Receives the current normal-screen content joined by newlines.
+        reply: oneshot::Sender<String>,
+    },
+    /// Reads whether the managed Zsh adapter completed startup admission.
+    #[cfg(test)]
+    ManagedZshAdmissionReady {
+        /// Pane whose managed Zsh adapter is observed.
+        pane_id: String,
+        /// Receives whether the current process installed a usable trigger.
+        reply: oneshot::Sender<bool>,
+    },
     /// Represents the Render Client View case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1032,9 +1048,10 @@ impl AsyncRuntimeRequest {
             | Self::AcknowledgeMessageFanout { .. }
             | Self::EventWakeups { .. } => Family::Message,
             #[cfg(test)]
-            Self::WriteInputToPane { .. } | Self::ManagedShellLifecycleState { .. } => {
-                Family::Terminal
-            }
+            Self::WriteInputToPane { .. }
+            | Self::ManagedShellLifecycleState { .. }
+            | Self::ManagedShellProcessScreenText { .. }
+            | Self::ManagedZshAdmissionReady { .. } => Family::Terminal,
             Self::ApplyAttachedTerminalStep { .. }
             | Self::ResizeAttachedPrimaryTerminal { .. }
             | Self::ExecuteTerminalCommand { .. }

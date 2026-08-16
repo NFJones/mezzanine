@@ -109,8 +109,9 @@ mode.
 
 On supported Bash prompts, Mezzanine preserves an unfinished command while
 agent mode is active and restores it afterward. Fish and Zsh instead discard
-unfinished editable input when agent mode opens, using their native editor APIs
-to provide the equivalent of clearing the line before admission. Unsupported
+unfinished editable input when agent mode opens. They use their native editor
+APIs to display the resulting empty prompt before private receiver traffic is
+hidden, providing the equivalent of clearing the line before admission. Unsupported
 or unsafe prompt states fail closed rather than submitting or combining input.
 Each adapter preserves native startup and history behavior rather than
 emulating a different shell. After a launched child exits, foreground input

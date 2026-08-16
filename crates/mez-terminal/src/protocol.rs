@@ -241,6 +241,24 @@ pub enum ManagedShellAdapter {
 pub enum ManagedShellProtocolEvent {
     /// The startup adapter installed its private trigger safely.
     AdapterAvailable,
+    /// A native editor queued its empty-line repaint and awaits another trigger.
+    EditorClearRequested {
+        /// Handoff marker when the adapter learned it before clearing.
+        ///
+        /// Zsh clears ZLE before starting its marker-bearing receiver, so its
+        /// request is correlated by the authenticated pane adapter and the
+        /// sole process-generation-scoped runtime handoff instead.
+        marker: Option<String>,
+    },
+    /// The native editor discarded pending input and repainted its empty line.
+    EditorCleared {
+        /// Handoff marker when the adapter learned it before clearing.
+        ///
+        /// Zsh clears ZLE before starting its marker-bearing receiver, so its
+        /// event is correlated by the authenticated pane adapter and the sole
+        /// process-generation-scoped runtime handoff instead.
+        marker: Option<String>,
+    },
     /// The native editor saved and cleared user-owned input.
     EditorHeld {
         /// Unpredictable handoff marker owned by the editor callback.

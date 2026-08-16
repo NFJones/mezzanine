@@ -2085,6 +2085,8 @@ end"#
 pub struct FishPrivateSourceInput {
     /// Source-free trigger and authenticated hold metadata.
     pub wrapper: String,
+    /// Trigger-only stage released after Fish queues its empty-line repaint.
+    pub editor_clear_confirmation: String,
     /// Second trigger and authenticated frame header released after editor hold.
     pub receiver_admission: String,
     /// Bounded DATA and END records released after frame admission.
@@ -2142,6 +2144,7 @@ pub fn fish_private_source_input(
     ));
     FishPrivateSourceInput {
         wrapper,
+        editor_clear_confirmation: "\x1b\x07".to_string(),
         receiver_admission,
         receiver_payload,
         payload_receiver_acknowledgements: true,

@@ -137,7 +137,13 @@ fn shell_transaction_control_osc_matches_marker(record: &[u8], marker: &str) -> 
     match event {
         TerminalOscEvent::ShellReceiverAwaiting { .. } => false,
         TerminalOscEvent::ManagedShell { event, .. } => match event {
-            mez_terminal::ManagedShellProtocolEvent::EditorHeld {
+            mez_terminal::ManagedShellProtocolEvent::EditorClearRequested {
+                marker: Some(event_marker),
+            }
+            | mez_terminal::ManagedShellProtocolEvent::EditorCleared {
+                marker: Some(event_marker),
+            }
+            | mez_terminal::ManagedShellProtocolEvent::EditorHeld {
                 marker: event_marker,
             }
             | mez_terminal::ManagedShellProtocolEvent::FrameAdmitted {
@@ -159,6 +165,8 @@ fn shell_transaction_control_osc_matches_marker(record: &[u8], marker: &str) -> 
                 ..
             } => event_marker == marker,
             mez_terminal::ManagedShellProtocolEvent::AdapterAvailable
+            | mez_terminal::ManagedShellProtocolEvent::EditorClearRequested { marker: None }
+            | mez_terminal::ManagedShellProtocolEvent::EditorCleared { marker: None }
             | mez_terminal::ManagedShellProtocolEvent::ReceiverRejected { marker: None, .. } => {
                 false
             }

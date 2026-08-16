@@ -117,6 +117,18 @@ fn parse_managed_shell_protocol_event(values: &BTreeMap<&str, &str>) -> Option<T
     let token = required_marker_field(values, "mez_token")?;
     let event = match values.get("mez_event").copied()? {
         "adapter-available" => ManagedShellProtocolEvent::AdapterAvailable,
+        "editor-clear-requested" => ManagedShellProtocolEvent::EditorClearRequested {
+            marker: values
+                .contains_key("mez_marker")
+                .then(|| required_marker_field(values, "mez_marker"))
+                .flatten(),
+        },
+        "editor-cleared" => ManagedShellProtocolEvent::EditorCleared {
+            marker: values
+                .contains_key("mez_marker")
+                .then(|| required_marker_field(values, "mez_marker"))
+                .flatten(),
+        },
         "editor-held" => ManagedShellProtocolEvent::EditorHeld {
             marker: required_marker_field(values, "mez_marker")?,
         },
@@ -305,6 +317,54 @@ mod tests {
                 event: ManagedShellProtocolEvent::EditorHeld {
                     marker: "handoff-marker".to_string(),
                 },
+            })
+        );
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_protocol=2;mez_shell=fish;mez_token=pane-token;mez_event=editor-clear-requested;mez_marker=handoff-marker"
+            ),
+            Some(TerminalOscEvent::ManagedShell {
+                version: 2,
+                shell: ManagedShellAdapter::Fish,
+                token: "pane-token".to_string(),
+                event: ManagedShellProtocolEvent::EditorClearRequested {
+                    marker: Some("handoff-marker".to_string()),
+                },
+            })
+        );
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_protocol=2;mez_shell=zsh;mez_token=pane-token;mez_event=editor-clear-requested"
+            ),
+            Some(TerminalOscEvent::ManagedShell {
+                version: 2,
+                shell: ManagedShellAdapter::Zsh,
+                token: "pane-token".to_string(),
+                event: ManagedShellProtocolEvent::EditorClearRequested { marker: None },
+            })
+        );
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_protocol=2;mez_shell=fish;mez_token=pane-token;mez_event=editor-cleared;mez_marker=handoff-marker"
+            ),
+            Some(TerminalOscEvent::ManagedShell {
+                version: 2,
+                shell: ManagedShellAdapter::Fish,
+                token: "pane-token".to_string(),
+                event: ManagedShellProtocolEvent::EditorCleared {
+                    marker: Some("handoff-marker".to_string()),
+                },
+            })
+        );
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_protocol=2;mez_shell=zsh;mez_token=pane-token;mez_event=editor-cleared"
+            ),
+            Some(TerminalOscEvent::ManagedShell {
+                version: 2,
+                shell: ManagedShellAdapter::Zsh,
+                token: "pane-token".to_string(),
+                event: ManagedShellProtocolEvent::EditorCleared { marker: None },
             })
         );
         assert_eq!(
