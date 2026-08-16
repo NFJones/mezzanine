@@ -1855,7 +1855,13 @@ availability announcement MUST fail closed after a bounded wait without
 writing a handoff. Stale, duplicate, wrong-shell, wrong-marker, and
 wrong-generation events MUST be inert. Runtime MUST settle one handoff exactly
 once and MUST release queued foreground input only after authenticated parent
-readiness or fresh exact foreground ownership proof.
+readiness or fresh exact foreground ownership proof. Exit requests MUST be
+interpreted by that shared lifecycle owner: before DATA they MUST select only
+authenticated cancellation, during payload or launch uncertainty they MUST
+retain intent without terminal text, and after authenticated `ChildInstalled`
+they MUST emit at most one generation-fenced child exit. A live agent-owned
+shell transaction MUST finish or fail before an active child exit request can
+advance the handoff.
 Managed Fish and Zsh MUST publish a pane-token-authenticated `ParentReady`
 event only after the private receiver has returned from sourcing the child
 handoff, restored the editor state, and queued its repaint. Child-exit rendering
@@ -1864,6 +1870,14 @@ input until `ParentReady` arrives and MUST use bounded timeout recovery if that
 event is lost. A restoration timeout MUST NOT replay queued input by
 itself; runtime MUST retain the bytes until an exact pane-process generation
 proves that the original parent process group owns the foreground PTY. The
+same proof-gated recovery MUST apply after bootstrap timeout, pane write
+failure, or malformed transport when parent ownership is uncertain. Generic
+child-exit output is only a rendering boundary and MUST NOT settle the
+handoff, release an input lease, clear child identity, or replay queued input.
+When the owning pane-process generation exits or the pane is removed, runtime
+MUST settle only that dead generation, discard queued input, and release its
+transaction leases, return filters, and encoded-output decoder state without
+mutating a replacement generation.
 private receiver MUST save the supported editor state,
 clear the editable buffer, queue a repaint, and publish `EditorHeld` before
 runtime releases frame admission or launches the child. If agent mode exits

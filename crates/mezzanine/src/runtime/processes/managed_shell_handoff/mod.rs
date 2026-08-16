@@ -134,7 +134,8 @@ impl ManagedShellHandoff {
         &self.identity
     }
 
-    /// Returns the current reducer-owned phase.
+    /// Returns the current reducer-owned phase in invariant tests.
+    #[cfg(test)]
     pub(super) fn phase(&self) -> ManagedShellHandoffPhase {
         self.phase
     }
@@ -179,6 +180,8 @@ pub(super) enum ManagedShellHandoffEvent {
     ExitRequested { now_unix_ms: u64 },
     /// Runtime sent authenticated pre-payload cancellation.
     CancellationSent { now_unix_ms: u64 },
+    /// Transaction transport failed before lifecycle completion was proven.
+    TransportFailed { marker: String, now_unix_ms: u64 },
     /// The generic child-exit rendering boundary was observed.
     ChildExitBoundary,
     /// Foreground input arrived while parent ownership was uncertain.
@@ -321,6 +324,17 @@ pub(super) fn reduce_managed_shell_handoff(
         {
             handoff.phase = ManagedShellHandoffPhase::Returning;
             handoff.started_at_unix_ms = Some(now_unix_ms);
+            transition
+                .effects
+                .push(ManagedShellHandoffEffect::ArmWatchdog);
+        }
+        ManagedShellHandoffEvent::TransportFailed {
+            marker,
+            now_unix_ms,
+        } if marker == handoff.identity.marker => {
+            handoff.phase = ManagedShellHandoffPhase::Returning;
+            handoff.started_at_unix_ms = Some(now_unix_ms);
+            handoff.recovery_observation = None;
             transition
                 .effects
                 .push(ManagedShellHandoffEffect::ArmWatchdog);
@@ -563,6 +577,65 @@ mod tests {
         assert_eq!(handoff.phase(), ManagedShellHandoffPhase::Returning);
     }
 
+    /// Verifies editor-held exit and proven-child exit select disjoint effects,
+    /// while a duplicate request during return cannot emit a second child exit.
+    #[test]
+    fn exit_phase_matrix_cancels_before_data_and_exits_proven_child_once() {
+        let mut editor_held =
+            ManagedShellHandoff::new(ManagedShellKind::Fish, identity("marker-editor"));
+        assert!(
+            reduce_managed_shell_handoff(
+                &mut editor_held,
+                ManagedShellHandoffEvent::EditorHeld {
+                    marker: "marker-editor".to_string(),
+                },
+            )
+            .applied
+        );
+        let cancelled = reduce_managed_shell_handoff(
+            &mut editor_held,
+            ManagedShellHandoffEvent::ExitRequested { now_unix_ms: 22 },
+        );
+        assert_eq!(
+            cancelled.effects,
+            vec![ManagedShellHandoffEffect::CancelBeforePayload]
+        );
+
+        let mut installed =
+            ManagedShellHandoff::new(ManagedShellKind::Zsh, identity("marker-child"));
+        let _ = reduce_managed_shell_handoff(
+            &mut installed,
+            ManagedShellHandoffEvent::PayloadReleased {
+                marker: "marker-child".to_string(),
+            },
+        );
+        let _ = reduce_managed_shell_handoff(
+            &mut installed,
+            ManagedShellHandoffEvent::ChildInstalled {
+                marker: "marker-child".to_string(),
+                now_unix_ms: 23,
+            },
+        );
+        let exited = reduce_managed_shell_handoff(
+            &mut installed,
+            ManagedShellHandoffEvent::ExitRequested { now_unix_ms: 24 },
+        );
+        assert_eq!(
+            exited.effects,
+            vec![
+                ManagedShellHandoffEffect::ExitChild,
+                ManagedShellHandoffEffect::ArmWatchdog,
+            ]
+        );
+        let duplicate = reduce_managed_shell_handoff(
+            &mut installed,
+            ManagedShellHandoffEvent::ExitRequested { now_unix_ms: 25 },
+        );
+        assert!(duplicate.applied);
+        assert!(duplicate.effects.is_empty());
+        assert_eq!(installed.phase(), ManagedShellHandoffPhase::Returning);
+    }
+
     /// Verifies stale markers and process generations cannot advance or settle
     /// the live handoff and therefore cannot release queued foreground input.
     #[test]
@@ -660,11 +733,45 @@ mod tests {
         );
     }
 
+    /// Verifies transport failure never injects exit or releases queued input,
+    /// and instead arms proof-gated parent recovery for the exact marker.
+    #[test]
+    fn transport_failure_enters_proof_gated_return_without_input_effects() {
+        let mut handoff = ManagedShellHandoff::new(ManagedShellKind::Fish, identity("marker-5"));
+        let _ = reduce_managed_shell_handoff(
+            &mut handoff,
+            ManagedShellHandoffEvent::QueueInput {
+                bytes: b"retained".to_vec(),
+            },
+        );
+
+        let stale = reduce_managed_shell_handoff(
+            &mut handoff,
+            ManagedShellHandoffEvent::TransportFailed {
+                marker: "stale".to_string(),
+                now_unix_ms: 60,
+            },
+        );
+        assert!(!stale.applied);
+        assert_eq!(handoff.phase(), ManagedShellHandoffPhase::TriggerQueued);
+
+        let failed = reduce_managed_shell_handoff(
+            &mut handoff,
+            ManagedShellHandoffEvent::TransportFailed {
+                marker: "marker-5".to_string(),
+                now_unix_ms: 61,
+            },
+        );
+        assert_eq!(failed.effects, vec![ManagedShellHandoffEffect::ArmWatchdog]);
+        assert_eq!(handoff.phase(), ManagedShellHandoffPhase::Returning);
+        assert_eq!(handoff.pending_input(), b"retained");
+    }
+
     /// Verifies settlement is exact once and pane removal discards unsafe input
     /// rather than replaying bytes to an unproven or replacement process.
     #[test]
     fn settlement_is_exact_once_and_pane_removal_discards_input() {
-        let expected = identity("marker-5");
+        let expected = identity("marker-6");
         let mut handoff = ManagedShellHandoff::new(ManagedShellKind::Zsh, expected.clone());
         let _ = reduce_managed_shell_handoff(
             &mut handoff,

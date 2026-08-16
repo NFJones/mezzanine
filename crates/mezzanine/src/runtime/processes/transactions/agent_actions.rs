@@ -315,21 +315,20 @@ impl RuntimeSessionService {
         let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
             return Ok(0);
         };
-        let receiver_token = match shell {
+        let token_matches = match shell {
             ManagedShellKind::Fish => self.fish_receiver_token_for_pane(output_pane_id),
             ManagedShellKind::Zsh => self.zsh_history_token_for_pane(output_pane_id),
             ManagedShellKind::Bash => None,
         }
-        .filter(|expected| expected.as_str() == token)
-        .cloned();
-        let Some(receiver_token) = receiver_token else {
+        .is_some_and(|expected| expected.as_str() == token);
+        if !token_matches {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,
                 "managed-frame-admitted-cancellation-metadata-mismatch",
                 "managed-shell frame admission does not match deferred cancellation ownership",
             );
-        };
+        }
         if transaction.pane_id != output_pane_id {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
@@ -338,28 +337,13 @@ impl RuntimeSessionService {
                 "managed-shell frame admission does not match deferred cancellation ownership",
             );
         }
-        if !self.remember_managed_shell_admission_cancellation(output_pane_id) {
+        if !self.complete_managed_shell_admission_cancellation(output_pane_id)? {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,
                 "managed-frame-admitted-cancellation-phase-mismatch",
                 "managed-shell cancellation reached frame admission outside pre-DATA ownership",
             );
-        }
-        let _ = self.cancel_agent_subshell_bootstrap_for_exit(output_pane_id);
-        self.process.shell_receiver_pending_payloads.remove(marker);
-        let cancellation = match shell {
-            ManagedShellKind::Fish => {
-                mez_agent::fish_private_source_cancel_input(&receiver_token, marker)
-            }
-            ManagedShellKind::Zsh => {
-                mez_agent::zsh_private_source_cancel_input(&receiver_token, marker)
-            }
-            ManagedShellKind::Bash => return Ok(0),
-        };
-        if let Err(error) = self.write_runtime_pane_input(output_pane_id, cancellation.as_bytes()) {
-            self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
-            return Ok(0);
         }
         self.append_agent_trace_turn_event(
             output_pane_id,
@@ -788,20 +772,22 @@ impl RuntimeSessionService {
             false
         };
         if managed_exit_requested {
-            let cancelled_bootstrap = self.cancel_agent_subshell_bootstrap_for_exit(output_pane_id);
-            if cancelled_bootstrap.is_none() {
+            let Some(mut cancelled_bootstrap) =
+                self.cancel_agent_subshell_bootstrap_for_exit(output_pane_id)
+            else {
                 return self.fail_shell_transaction_protocol_violation(
                     marker,
                     transaction,
                     "receiver-installed-exit-settlement-mismatch",
                     "managed child installation could not settle its deferred bootstrap on exit",
                 );
-            }
+            };
             self.enter_agent_subshell(output_pane_id);
             self.mark_agent_subshell_command_exit(output_pane_id.to_string());
             self.remember_hidden_shell_render_suppression(output_pane_id);
             self.remember_agent_subshell_exit_echo(output_pane_id);
-            self.write_runtime_pane_input(output_pane_id, b"exit\n")?;
+            cancelled_bootstrap.extend_from_slice(b"exit\n");
+            self.write_runtime_pane_input(output_pane_id, &cancelled_bootstrap)?;
             return Ok(1);
         }
         let wrapper = self
@@ -1005,13 +991,6 @@ impl RuntimeSessionService {
         else {
             return Ok(0);
         };
-        self.process
-            .pane_managed_shell_handoffs
-            .remove(output_pane_id);
-
-        self.process
-            .pane_agent_subshell_parent_return_pending
-            .remove(output_pane_id);
         let bootstrap_rejected = self
             .process
             .running_shell_transactions
@@ -1054,10 +1033,7 @@ impl RuntimeSessionService {
             self.set_pane_readiness(output_pane_id, PaneReadinessState::PromptCandidate);
         }
 
-        self.clear_shell_output_filters_for_foreground_input(output_pane_id);
-        if !pending_input.is_empty() {
-            self.write_runtime_pane_input(output_pane_id, &pending_input)?;
-        }
+        self.settle_managed_shell_runtime_ownership(output_pane_id, pending_input)?;
         if resume_deferred_entry {
             let _ = self.enter_agent_subshell_if_needed(output_pane_id)?;
         }

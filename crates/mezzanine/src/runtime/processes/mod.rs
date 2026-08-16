@@ -13,11 +13,11 @@ mod startup;
 mod transactions;
 mod zsh_compat;
 
+pub(super) use managed_shell_handoff::ManagedShellKind;
 use managed_shell_handoff::{
     ManagedShellHandoff, ManagedShellHandoffEffect, ManagedShellHandoffEvent,
     ManagedShellHandoffIdentity, ManagedShellRecoveryObservation, reduce_managed_shell_handoff,
 };
-pub(super) use managed_shell_handoff::{ManagedShellHandoffPhase, ManagedShellKind};
 
 use mez_mux::presentation::{pane_content_size_for_geometry, rendered_window_body_size};
 
@@ -545,8 +545,8 @@ pub(super) enum RuntimeManagedZshAdmission {
     },
 }
 
-/// Maximum wait for Fish to publish authenticated parent-editor restoration.
-const RUNTIME_FISH_PARENT_RESTORATION_TIMEOUT_MS: u64 = 5_000;
+/// Maximum wait for a managed shell to publish authenticated parent restoration.
+const RUNTIME_MANAGED_SHELL_PARENT_RESTORATION_TIMEOUT_MS: u64 = 5_000;
 /// Maximum wait for managed Bash to publish supported protocol availability.
 const RUNTIME_MANAGED_BASH_ADMISSION_TIMEOUT_MS: u64 = 5_000;
 /// Maximum wait for the managed zsh parent to publish startup admission.
@@ -974,23 +974,107 @@ impl RuntimeSessionService {
             .contains_key(pane_id)
     }
 
-    /// Returns the current managed-shell handoff phase for exit routing.
-    pub(super) fn managed_shell_handoff_phase(
-        &self,
+    /// Retains managed-shell ownership after one marker-scoped transport failure.
+    pub(super) fn observe_managed_shell_transport_failure(
+        &mut self,
         pane_id: &str,
-    ) -> Option<ManagedShellHandoffPhase> {
+        marker: &str,
+    ) -> bool {
+        let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) else {
+            return false;
+        };
+        let transition = reduce_managed_shell_handoff(
+            handoff,
+            ManagedShellHandoffEvent::TransportFailed {
+                marker: marker.to_string(),
+                now_unix_ms: current_unix_millis(),
+            },
+        );
+        if !transition.applied {
+            return false;
+        }
         self.process
-            .pane_managed_shell_handoffs
-            .get(pane_id)
-            .map(ManagedShellHandoff::phase)
+            .pane_agent_subshell_parent_return_pending
+            .insert(pane_id.to_string());
+        true
     }
 
-    /// Returns the marker owned by one pending managed-shell handoff.
-    pub(super) fn managed_shell_handoff_marker(&self, pane_id: &str) -> Option<String> {
+    /// Forwards the generic child-exit rendering boundary to the shared owner.
+    pub(super) fn observe_managed_shell_child_exit_boundary(&mut self, pane_id: &str) -> bool {
+        let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) else {
+            return false;
+        };
+        reduce_managed_shell_handoff(handoff, ManagedShellHandoffEvent::ChildExitBoundary).applied
+    }
+
+    /// Releases runtime-owned handoff state after one reducer settlement effect.
+    pub(super) fn settle_managed_shell_runtime_ownership(
+        &mut self,
+        pane_id: &str,
+        pending_input: Vec<u8>,
+    ) -> Result<()> {
+        self.process.pane_managed_shell_handoffs.remove(pane_id);
         self.process
-            .pane_managed_shell_handoffs
-            .get(pane_id)
-            .map(|handoff| handoff.identity().marker.clone())
+            .pane_agent_subshell_parent_return_pending
+            .remove(pane_id);
+        self.process
+            .pane_agent_subshell_exit_echo_pending
+            .remove(pane_id);
+        self.process
+            .pane_agent_subshell_exit_markers
+            .remove(pane_id);
+        self.clear_agent_subshell_shell_identity(pane_id);
+        self.clear_shell_output_filters_for_foreground_input(pane_id);
+        if !pending_input.is_empty() {
+            self.write_runtime_pane_input(pane_id, &pending_input)?;
+        }
+        Ok(())
+    }
+
+    /// Discards every managed-shell owner tied to one dead pane process.
+    ///
+    /// Process-exit callers have already fenced the event to the current pane
+    /// process. Queued input is therefore unsafe to replay, while transaction
+    /// leases, encoded-output state, and return filters must not survive the
+    /// dead generation.
+    fn settle_dead_pane_managed_shell_ownership(&mut self, pane_id: &str) {
+        let markers = self
+            .process
+            .running_shell_transactions
+            .iter()
+            .filter(|(_, transaction)| transaction.pane_id == pane_id)
+            .map(|(marker, _)| marker.clone())
+            .collect::<Vec<_>>();
+        for marker in markers {
+            self.remove_running_shell_transaction(&marker);
+            self.clear_shell_transaction_protocol_state(&marker);
+        }
+        self.process
+            .pane_shell_output_render_pending
+            .remove(pane_id);
+        self.process.pane_mez_wrapper_filter_pending.remove(pane_id);
+        self.process
+            .pane_agent_subshell_exit_echo_pending
+            .remove(pane_id);
+        self.process
+            .pane_agent_subshell_exit_markers
+            .remove(pane_id);
+        self.process
+            .pane_agent_subshell_parent_return_pending
+            .remove(pane_id);
+        if let Some(mut handoff) = self.process.pane_managed_shell_handoffs.remove(pane_id) {
+            let transition =
+                reduce_managed_shell_handoff(&mut handoff, ManagedShellHandoffEvent::PaneRemoved);
+            debug_assert!(transition.applied);
+            debug_assert!(transition.effects.iter().any(|effect| matches!(
+                effect,
+                ManagedShellHandoffEffect::Settle {
+                    pending_input,
+                    ..
+                } if pending_input.is_empty()
+            )));
+        }
+        self.clear_agent_subshell_shell_identity(pane_id);
     }
 
     /// Advances a marker-scoped managed-shell handoff after authenticated admission.
@@ -1036,79 +1120,124 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Retains exit intent until the managed child proves it owns terminal input.
-    pub(super) fn defer_managed_shell_exit_until_child_installed(&mut self, pane_id: &str) -> bool {
+    /// Routes one managed-shell exit request through reducer-selected effects.
+    pub(super) fn request_managed_shell_handoff_exit(&mut self, pane_id: &str) -> Result<bool> {
         let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) else {
-            return false;
+            return Ok(false);
         };
+        let shell = handoff.shell();
         let transition = reduce_managed_shell_handoff(
             handoff,
             ManagedShellHandoffEvent::ExitRequested {
                 now_unix_ms: current_unix_millis(),
             },
         );
-        transition.applied
-            && transition
-                .effects
-                .contains(&ManagedShellHandoffEffect::WaitForChildInstallation)
-    }
-
-    /// Records pre-payload exit intent without advancing into parent restoration.
-    pub(super) fn request_managed_shell_admission_cancellation(&mut self, pane_id: &str) -> bool {
-        self.process
-            .pane_agent_subshell_exit_echo_pending
-            .remove(pane_id);
-        self.process
-            .pane_agent_subshell_exit_markers
-            .remove(pane_id);
-        self.process
-            .pane_agent_subshell_parent_return_pending
-            .insert(pane_id.to_string());
-        let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) else {
-            return false;
-        };
-        let requested = reduce_managed_shell_handoff(
-            handoff,
-            ManagedShellHandoffEvent::ExitRequested {
-                now_unix_ms: current_unix_millis(),
-            },
-        );
-        requested.applied
-            && requested
-                .effects
-                .contains(&ManagedShellHandoffEffect::CancelBeforePayload)
-    }
-
-    /// Arms restoration ownership after authenticated pre-payload cancellation.
-    pub(super) fn remember_managed_shell_admission_cancellation(&mut self, pane_id: &str) -> bool {
-        self.process
-            .pane_agent_subshell_exit_echo_pending
-            .remove(pane_id);
-        self.process
-            .pane_agent_subshell_exit_markers
-            .remove(pane_id);
-        self.process
-            .pane_agent_subshell_parent_return_pending
-            .insert(pane_id.to_string());
-        let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) else {
-            return false;
-        };
-        let now_unix_ms = current_unix_millis();
-        let requested = reduce_managed_shell_handoff(
-            handoff,
-            ManagedShellHandoffEvent::ExitRequested { now_unix_ms },
-        );
-        if !requested
+        if !transition.applied {
+            return Ok(false);
+        }
+        if transition
             .effects
             .contains(&ManagedShellHandoffEffect::CancelBeforePayload)
         {
-            return false;
+            self.process
+                .pane_agent_subshell_exit_echo_pending
+                .remove(pane_id);
+            self.process
+                .pane_agent_subshell_exit_markers
+                .remove(pane_id);
+            self.process
+                .pane_agent_subshell_parent_return_pending
+                .insert(pane_id.to_string());
+            if shell == ManagedShellKind::Bash {
+                self.complete_managed_shell_admission_cancellation(pane_id)?;
+            }
+            return Ok(true);
         }
-        reduce_managed_shell_handoff(
+        if transition
+            .effects
+            .contains(&ManagedShellHandoffEffect::ExitChild)
+        {
+            self.process
+                .pane_agent_subshell_parent_return_pending
+                .insert(pane_id.to_string());
+            let cancelled_bootstrap = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
+            if cancelled_bootstrap.is_none() && self.pane_has_running_shell_transaction(pane_id) {
+                return Ok(false);
+            }
+            self.remember_hidden_shell_render_suppression(pane_id);
+            self.remember_agent_subshell_exit_echo(pane_id);
+            let mut input = cancelled_bootstrap.unwrap_or_default();
+            input.extend_from_slice(b"exit\n");
+            self.write_runtime_pane_input(pane_id, &input)?;
+            if self.agent_subshell_is_active(pane_id) {
+                self.leave_agent_subshell(pane_id);
+                self.invalidate_agent_subshell_environment_after_exit(pane_id);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Sends authenticated cancellation selected by a prior exit request.
+    pub(super) fn complete_managed_shell_admission_cancellation(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<bool> {
+        let Some(handoff) = self.process.pane_managed_shell_handoffs.get(pane_id) else {
+            return Ok(false);
+        };
+        let shell = handoff.shell();
+        let marker = handoff.identity().marker.clone();
+        let cancellation = match shell {
+            ManagedShellKind::Bash => {
+                let token = self
+                    .bash_receiver_token_for_pane(pane_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        MezError::invalid_state("managed Bash receiver token is unavailable")
+                    })?;
+                let proof = self
+                    .managed_shell_parent_proof(pane_id)
+                    .and_then(|proof| mez_agent::MarkerToken::new(proof).ok())
+                    .ok_or_else(|| {
+                        MezError::invalid_state("managed Bash parent-ready proof is unavailable")
+                    })?;
+                mez_agent::bash_private_handoff_cancel_input(&token, &marker, &proof)
+            }
+            ManagedShellKind::Fish => {
+                let token = self
+                    .fish_receiver_token_for_pane(pane_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        MezError::invalid_state("managed Fish receiver token is unavailable")
+                    })?;
+                mez_agent::fish_private_source_cancel_input(&token, &marker)
+            }
+            ManagedShellKind::Zsh => {
+                let token = self
+                    .zsh_history_token_for_pane(pane_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        MezError::invalid_state("managed Zsh receiver token is unavailable")
+                    })?;
+                mez_agent::zsh_private_source_cancel_input(&token, &marker)
+            }
+        };
+        let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) else {
+            return Ok(false);
+        };
+        let transition = reduce_managed_shell_handoff(
             handoff,
-            ManagedShellHandoffEvent::CancellationSent { now_unix_ms },
-        )
-        .applied
+            ManagedShellHandoffEvent::CancellationSent {
+                now_unix_ms: current_unix_millis(),
+            },
+        );
+        if !transition.applied {
+            return Ok(false);
+        }
+        let _ = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
+        self.process.shell_receiver_pending_payloads.remove(&marker);
+        self.write_runtime_pane_input(pane_id, cancellation.as_bytes())?;
+        Ok(true)
     }
 
     /// Prepends staged persistent Zsh handoff input released by semantic events.
@@ -1128,14 +1257,6 @@ impl RuntimeSessionService {
         pending.push_front(payload);
         pending.push_front(admission);
         pending.push_front(hold);
-    }
-
-    /// Returns the native adapter owning one live managed-shell handoff.
-    pub(super) fn managed_shell_handoff_kind(&self, pane_id: &str) -> Option<ManagedShellKind> {
-        self.process
-            .pane_managed_shell_handoffs
-            .get(pane_id)
-            .map(ManagedShellHandoff::shell)
     }
 
     /// Returns parent-only readiness proof for one live handoff when required.
@@ -1971,8 +2092,11 @@ impl RuntimeSessionService {
             .contains(marker)
     }
 
-    /// Reports whether Fish still owns post-child parent restoration.
-    pub(crate) fn fish_parent_restoration_is_pending_for_tests(&self, pane_id: &str) -> bool {
+    /// Reports whether a managed shell still owns parent restoration.
+    pub(crate) fn managed_shell_parent_restoration_is_pending_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> bool {
         self.process
             .pane_managed_shell_handoffs
             .contains_key(pane_id)
@@ -2848,6 +2972,7 @@ impl RuntimeSessionService {
             std::slice::from_ref(&process.pane_id),
             "pane primary process exited",
         )?;
+        self.settle_dead_pane_managed_shell_ownership(&process.pane_id);
         self.process.pane_exit_records.insert(
             process.pane_id.clone(),
             PaneExitRecord {
@@ -3627,17 +3752,7 @@ impl RuntimeSessionService {
         self.presentation.remove_completion_attention(pane_id);
         self.presentation.remove_agent_presentation_state(pane_id);
         self.discard_agent_loop_parent_projections_for_pane(pane_id);
-        let removed_transaction_markers = self
-            .process
-            .running_shell_transactions
-            .iter()
-            .filter(|(_, transaction)| transaction.pane_id == pane_id)
-            .map(|(marker, _)| marker.clone())
-            .collect::<Vec<_>>();
-        for marker in removed_transaction_markers {
-            self.remove_running_shell_transaction(&marker);
-            self.clear_shell_transaction_protocol_state(&marker);
-        }
+        self.settle_dead_pane_managed_shell_ownership(pane_id);
         self.agent_shell_store_mut().remove_session(pane_id);
         self.integration.remove_pane_permission_override(pane_id);
         self.clear_agent_subshell_state(pane_id);
@@ -3667,31 +3782,6 @@ impl RuntimeSessionService {
         self.process.process_pane_screens.remove(pane_id);
         self.process.agent_pane_screens.remove(pane_id);
         self.process.pane_transaction_osc_screens.remove(pane_id);
-        self.process
-            .pane_shell_output_render_pending
-            .remove(pane_id);
-        self.process.pane_mez_wrapper_filter_pending.remove(pane_id);
-        self.process
-            .pane_agent_subshell_exit_echo_pending
-            .remove(pane_id);
-        self.process
-            .pane_agent_subshell_exit_markers
-            .remove(pane_id);
-        self.process
-            .pane_agent_subshell_parent_return_pending
-            .remove(pane_id);
-        if let Some(mut handoff) = self.process.pane_managed_shell_handoffs.remove(pane_id) {
-            let transition =
-                reduce_managed_shell_handoff(&mut handoff, ManagedShellHandoffEvent::PaneRemoved);
-            debug_assert!(transition.applied);
-            debug_assert!(transition.effects.iter().any(|effect| matches!(
-                effect,
-                ManagedShellHandoffEffect::Settle {
-                    pending_input,
-                    ..
-                } if pending_input.is_empty()
-            )));
-        }
         self.process
             .pane_mez_wrapper_filter_recent_commands
             .remove(pane_id);

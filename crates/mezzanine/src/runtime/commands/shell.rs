@@ -18,8 +18,8 @@ use crate::runtime::{PaneReadinessState, runtime_random_marker_token};
 use crate::{error::MezErrorKind, runtime::commands::issues};
 use mez_agent::{
     ShellClassification, agent_subshell_enter_command_with_shell_compatibility_and_exit_marker,
-    agent_subshell_exit_marker_bytes, bash_private_handoff_cancel_input,
-    bash_private_handoff_source_input, parse_macro_prompt_invocation,
+    agent_subshell_exit_marker_bytes, bash_private_handoff_source_input,
+    parse_macro_prompt_invocation,
 };
 
 /// Authenticated provenance carried with one live agent-shell command.
@@ -1379,103 +1379,8 @@ impl RuntimeSessionService {
     /// the user's parent shell.
     pub(crate) fn exit_agent_subshell_if_active(&mut self, pane_id: &str) -> Result<bool> {
         if !self.agent_subshell_is_active(pane_id) {
-            if let Some(phase) = self.managed_shell_handoff_phase(pane_id) {
-                if matches!(
-                    phase,
-                    crate::runtime::processes::ManagedShellHandoffPhase::Returning
-                        | crate::runtime::processes::ManagedShellHandoffPhase::ParentRestoring
-                        | crate::runtime::processes::ManagedShellHandoffPhase::AwaitingParentProof
-                ) {
-                    return Ok(true);
-                }
-                let marker = self.managed_shell_handoff_marker(pane_id).ok_or_else(|| {
-                    MezError::invalid_state(
-                        "managed-shell parent restoration ownership disappeared",
-                    )
-                })?;
-                if matches!(
-                    phase,
-                    crate::runtime::processes::ManagedShellHandoffPhase::TriggerQueued
-                        | crate::runtime::processes::ManagedShellHandoffPhase::EditorHeld
-                ) {
-                    let shell = self.managed_shell_handoff_kind(pane_id).ok_or_else(|| {
-                        MezError::invalid_state("managed shell handoff kind is unavailable")
-                    })?;
-                    if matches!(
-                        shell,
-                        crate::runtime::processes::ManagedShellKind::Fish
-                            | crate::runtime::processes::ManagedShellKind::Zsh
-                    ) {
-                        if !self.request_managed_shell_admission_cancellation(pane_id) {
-                            return Err(MezError::invalid_state(
-                                "managed staged-shell admission cancellation ownership disappeared",
-                            ));
-                        }
-                        return Ok(true);
-                    }
-                    let _ = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
-                    if !self.remember_managed_shell_admission_cancellation(pane_id) {
-                        return Err(MezError::invalid_state(
-                            "managed-shell admission cancellation ownership disappeared",
-                        ));
-                    }
-                    let cancellation = match shell {
-                        crate::runtime::processes::ManagedShellKind::Bash => {
-                            let token = self
-                                .bash_receiver_token_for_pane(pane_id)
-                                .cloned()
-                                .ok_or_else(|| {
-                                    MezError::invalid_state(
-                                        "managed Bash receiver token is unavailable",
-                                    )
-                                })?;
-                            let proof = self
-                                .managed_shell_parent_proof(pane_id)
-                                .and_then(|proof| mez_agent::MarkerToken::new(proof).ok())
-                                .ok_or_else(|| {
-                                    MezError::invalid_state(
-                                        "managed Bash parent-ready proof is unavailable",
-                                    )
-                                })?;
-                            bash_private_handoff_cancel_input(&token, &marker, &proof)
-                        }
-                        crate::runtime::processes::ManagedShellKind::Fish => {
-                            let token = self
-                                .fish_receiver_token_for_pane(pane_id)
-                                .cloned()
-                                .ok_or_else(|| {
-                                    MezError::invalid_state(
-                                        "managed Fish receiver token is unavailable",
-                                    )
-                                })?;
-                            mez_agent::fish_private_source_cancel_input(&token, &marker)
-                        }
-                        crate::runtime::processes::ManagedShellKind::Zsh => {
-                            let token = self
-                                .zsh_history_token_for_pane(pane_id)
-                                .cloned()
-                                .ok_or_else(|| {
-                                    MezError::invalid_state(
-                                        "managed Zsh receiver token is unavailable",
-                                    )
-                                })?;
-                            mez_agent::zsh_private_source_cancel_input(&token, &marker)
-                        }
-                    };
-                    self.write_runtime_pane_input(pane_id, cancellation.as_bytes())?;
-                    return Ok(true);
-                }
-                if phase == crate::runtime::processes::ManagedShellHandoffPhase::PayloadInFlight {
-                    if !self.defer_managed_shell_exit_until_child_installed(pane_id) {
-                        return Err(MezError::invalid_state(
-                            "managed-shell source-delivery exit ownership disappeared",
-                        ));
-                    }
-                    return Ok(true);
-                }
-                self.remember_agent_subshell_exit_echo(pane_id);
-                self.write_runtime_pane_input(pane_id, b"exit\n")?;
-                return Ok(true);
+            if self.managed_shell_handoff_is_pending(pane_id) {
+                return self.request_managed_shell_handoff_exit(pane_id);
             }
             if self
                 .cancel_agent_subshell_bootstrap_for_exit(pane_id)
@@ -1500,6 +1405,12 @@ impl RuntimeSessionService {
             .is_some()
         {
             return Ok(false);
+        }
+        if self.managed_shell_handoff_is_pending(pane_id) {
+            if self.pane_has_running_shell_transaction(pane_id) {
+                return Ok(false);
+            }
+            return self.request_managed_shell_handoff_exit(pane_id);
         }
         let cancelled_bootstrap_payload = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
         if self.pane_has_running_shell_transaction(pane_id) {

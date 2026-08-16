@@ -80,7 +80,7 @@ impl AsyncRuntimeSessionActor {
                     self.service.agent_subshell_is_active(&pane_id),
                     self.service.pane_bootstrap_is_pending_for_tests(&pane_id),
                     self.service
-                        .fish_parent_restoration_is_pending_for_tests(&pane_id),
+                        .managed_shell_parent_restoration_is_pending_for_tests(&pane_id),
                 ));
                 false
             }

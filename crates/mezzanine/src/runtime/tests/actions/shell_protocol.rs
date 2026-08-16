@@ -1539,7 +1539,7 @@ fn runtime_fish_dirty_prompt_survives_agent_subshell_admission() {
         "Fish child-exit rendering boundary did not settle before draft submission"
     );
     assert!(
-        service.fish_parent_restoration_is_pending_for_tests("%1"),
+        service.managed_shell_parent_restoration_is_pending_for_tests("%1"),
         "Fish editor restoration must remain owned after the earlier child-exit marker"
     );
     assert!(!service.agent_subshell_is_active("%1"));
@@ -1554,7 +1554,7 @@ fn runtime_fish_dirty_prompt_survives_agent_subshell_admission() {
         .write_input_to_pane(&primary, Some("%1"), b"X\n")
         .unwrap();
     assert!(
-        service.fish_parent_restoration_is_pending_for_tests("%1"),
+        service.managed_shell_parent_restoration_is_pending_for_tests("%1"),
         "foreground input must not release Fish restoration ownership"
     );
 
@@ -1583,7 +1583,7 @@ fn runtime_fish_dirty_prompt_survives_agent_subshell_admission() {
             .join("\\n")
     );
     assert!(
-        !service.fish_parent_restoration_is_pending_for_tests("%1"),
+        !service.managed_shell_parent_restoration_is_pending_for_tests("%1"),
         "authenticated parent restoration should release queued foreground input"
     );
     assert!(service.poll_pane_processes().unwrap().is_empty());
@@ -1680,7 +1680,7 @@ fn runtime_fish_dirty_prompt_exit_before_receiver_installation_restores_draft() 
         .unwrap();
     assert!(show.contains("visibility=visible"), "{show}");
     assert!(
-        service.fish_parent_restoration_is_pending_for_tests("%1"),
+        service.managed_shell_parent_restoration_is_pending_for_tests("%1"),
         "Fish must own the saved draft as soon as admission is triggered"
     );
     assert!(
@@ -1692,16 +1692,16 @@ fn runtime_fish_dirty_prompt_exit_before_receiver_installation_restores_draft() 
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     assert!(hide.contains("visibility=hidden"), "{hide}");
-    assert!(service.fish_parent_restoration_is_pending_for_tests("%1"));
+    assert!(service.managed_shell_parent_restoration_is_pending_for_tests("%1"));
     for _ in 0..200 {
         let _ = service.poll_pane_outputs(8192).unwrap();
-        if !service.fish_parent_restoration_is_pending_for_tests("%1") {
+        if !service.managed_shell_parent_restoration_is_pending_for_tests("%1") {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
     }
     assert!(
-        !service.fish_parent_restoration_is_pending_for_tests("%1"),
+        !service.managed_shell_parent_restoration_is_pending_for_tests("%1"),
         "authenticated cancellation did not restore the Fish parent"
     );
     assert!(!service.agent_subshell_is_active("%1"));
@@ -1765,7 +1765,9 @@ fn runtime_fish_parent_restoration_timeout_requires_foreground_proof() {
             command: "bootstrap".to_string(),
             started_at_unix_ms: 0,
             timeout_ms: None,
-            pending_input_payload: None,
+            pending_input_payload: Some(mez_mux::process::ShellInputDelivery::generated_source(
+                Vec::new(),
+            )),
             observed_output_bytes: 0,
             observed_output_preview: String::new(),
             observed_output_truncated: false,
@@ -1776,25 +1778,34 @@ fn runtime_fish_parent_restoration_timeout_requires_foreground_proof() {
         mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
         mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
     );
+    service.bind_agent_subshell_bootstrap_marker(pane_id, "fish-restoration-marker");
     assert!(service.mark_managed_shell_payload_released(pane_id, "fish-restoration-marker"));
     assert_eq!(
         service.mark_managed_shell_child_installed(pane_id, "fish-restoration-marker"),
         Some(false)
     );
-    service.remember_agent_subshell_exit_echo(pane_id);
+    service.remove_running_shell_transaction("fish-restoration-marker");
+    service.clear_shell_transaction_protocol_state("fish-restoration-marker");
+    assert!(service.request_managed_shell_handoff_exit(pane_id).unwrap());
+    let exit_effects = service.drain_pane_io_transition().side_effects;
+    assert_eq!(pane_input_effects(&exit_effects).len(), 1);
+    assert_eq!(
+        pane_input_effects(&exit_effects)[0].pane_input_parts().1,
+        b"exit\n"
+    );
     service
         .write_input_to_pane(&primary, Some(pane_id), b"queued-after-fish-exit\n")
         .unwrap();
-    assert!(service.fish_parent_restoration_is_pending_for_tests(pane_id));
+    assert!(service.managed_shell_parent_restoration_is_pending_for_tests(pane_id));
     assert!(pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty());
 
     assert_eq!(
         service
-            .recover_expired_fish_parent_restorations_for_tests(u64::MAX)
+            .recover_expired_managed_shell_parent_restorations_for_tests(u64::MAX)
             .unwrap(),
         1
     );
-    assert!(service.fish_parent_restoration_is_pending_for_tests(pane_id));
+    assert!(service.managed_shell_parent_restoration_is_pending_for_tests(pane_id));
     assert_eq!(
         service.pane_readiness_state(pane_id),
         PaneReadinessState::Degraded
@@ -1827,7 +1838,7 @@ fn runtime_fish_parent_restoration_timeout_requires_foreground_proof() {
             },
         )
         .unwrap();
-    assert!(!service.fish_parent_restoration_is_pending_for_tests(pane_id));
+    assert!(!service.managed_shell_parent_restoration_is_pending_for_tests(pane_id));
     let released = service.drain_pane_io_transition().side_effects;
     let inputs = pane_input_effects(&released);
     assert_eq!(inputs.len(), 1);

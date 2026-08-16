@@ -567,19 +567,6 @@ impl RuntimeSessionService {
             else {
                 return Ok(RuntimeTransition::default());
             };
-            self.process
-                .pane_managed_shell_handoffs
-                .remove(&instance.pane_id);
-            self.process
-                .pane_agent_subshell_parent_return_pending
-                .remove(&instance.pane_id);
-            self.process
-                .pane_agent_subshell_exit_echo_pending
-                .remove(&instance.pane_id);
-            self.process
-                .pane_agent_subshell_exit_markers
-                .remove(&instance.pane_id);
-            self.clear_agent_subshell_shell_identity(&instance.pane_id);
             if self
                 .process
                 .pane_environment_authority_failures
@@ -589,10 +576,7 @@ impl RuntimeSessionService {
             } else {
                 self.set_pane_readiness(&instance.pane_id, PaneReadinessState::PromptCandidate);
             }
-            self.clear_shell_output_filters_for_foreground_input(&instance.pane_id);
-            if !pending_input.is_empty() {
-                self.write_runtime_pane_input(&instance.pane_id, &pending_input)?;
-            }
+            self.settle_managed_shell_runtime_ownership(&instance.pane_id, pending_input)?;
             self.append_lifecycle_event(
                 EventKind::Diagnostic,
                 format!(

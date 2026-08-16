@@ -646,14 +646,6 @@ impl RuntimeSessionService {
         self.process
             .pane_agent_subshell_parent_return_pending
             .insert(pane_id.to_string());
-        if let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) {
-            let _ = reduce_managed_shell_handoff(
-                handoff,
-                ManagedShellHandoffEvent::ExitRequested {
-                    now_unix_ms: current_unix_millis(),
-                },
-            );
-        }
     }
 
     /// Filters all child-owned teardown before general wrapper filtering.
@@ -685,12 +677,7 @@ impl RuntimeSessionService {
             self.process
                 .pane_agent_subshell_exit_markers
                 .remove(pane_id);
-            if let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) {
-                let _ = reduce_managed_shell_handoff(
-                    handoff,
-                    ManagedShellHandoffEvent::ChildExitBoundary,
-                );
-            }
+            let _ = self.observe_managed_shell_child_exit_boundary(pane_id);
             let parent_bytes = &pending[start + marker.len()..];
             if self.agent_subshell_input_clear_was_completed(pane_id) {
                 if let Some(parent_bytes) = parent_bytes.strip_prefix(b"^C\r\n") {
@@ -790,7 +777,10 @@ impl RuntimeSessionService {
     /// receiver, or child owns the PTY. Recovery therefore retains queued
     /// foreground bytes and restoration ownership until the exact pane worker
     /// proves that the original parent process group is foreground again.
-    fn recover_expired_fish_parent_restorations_at(&mut self, now_unix_ms: u64) -> Result<usize> {
+    fn recover_expired_managed_shell_parent_restorations_at(
+        &mut self,
+        now_unix_ms: u64,
+    ) -> Result<usize> {
         let expired = self
             .process
             .pane_managed_shell_handoffs
@@ -800,12 +790,12 @@ impl RuntimeSessionService {
                     || {
                         handoff.started_at_unix_ms().is_some_and(|started_at| {
                             now_unix_ms.saturating_sub(started_at)
-                                >= RUNTIME_FISH_PARENT_RESTORATION_TIMEOUT_MS
+                                >= RUNTIME_MANAGED_SHELL_PARENT_RESTORATION_TIMEOUT_MS
                         })
                     },
                     |pending| {
                         now_unix_ms.saturating_sub(pending.started_at_unix_ms)
-                            >= RUNTIME_FISH_PARENT_RESTORATION_TIMEOUT_MS
+                            >= RUNTIME_MANAGED_SHELL_PARENT_RESTORATION_TIMEOUT_MS
                     },
                 )
             })
@@ -976,12 +966,12 @@ impl RuntimeSessionService {
     }
 
     #[cfg(test)]
-    /// Expires Fish parent restoration at a supplied time for deterministic tests.
-    pub(crate) fn recover_expired_fish_parent_restorations_for_tests(
+    /// Expires managed-shell parent restoration at a supplied time for deterministic tests.
+    pub(crate) fn recover_expired_managed_shell_parent_restorations_for_tests(
         &mut self,
         now_unix_ms: u64,
     ) -> Result<usize> {
-        self.recover_expired_fish_parent_restorations_at(now_unix_ms)
+        self.recover_expired_managed_shell_parent_restorations_at(now_unix_ms)
     }
 
     #[cfg(test)]
@@ -1018,8 +1008,8 @@ impl RuntimeSessionService {
             | RuntimeLifecycleState::Detached
             | RuntimeLifecycleState::Stopping => {
                 let hidden_shell_retention_aged = self.tick_hidden_shell_render_retention();
-                let fish_parent_restorations_recovered =
-                    self.recover_expired_fish_parent_restorations_at(current_unix_millis())?;
+                let managed_shell_parent_restorations_recovered = self
+                    .recover_expired_managed_shell_parent_restorations_at(current_unix_millis())?;
                 let bash_admissions_recovered =
                     self.recover_expired_managed_bash_admissions_at(current_unix_millis())?;
                 let zsh_admissions_recovered =
@@ -1028,7 +1018,7 @@ impl RuntimeSessionService {
                     actor_progress_turn_ids,
                 )?;
                 Ok(hidden_shell_retention_aged
-                    .saturating_add(fish_parent_restorations_recovered)
+                    .saturating_add(managed_shell_parent_restorations_recovered)
                     .saturating_add(bash_admissions_recovered)
                     .saturating_add(zsh_admissions_recovered)
                     .saturating_add(reconciled))

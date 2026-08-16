@@ -187,6 +187,13 @@ impl RuntimeSessionService {
                 .contains(marker)
         });
         for (marker, transaction) in &failed_transactions {
+            if matches!(
+                transaction.kind,
+                RunningShellTransactionKind::Bootstrap
+                    | RunningShellTransactionKind::ShellIdentityProbe { .. }
+            ) {
+                let _ = self.observe_managed_shell_transport_failure(&transaction.pane_id, marker);
+            }
             self.cancel_runtime_pane_shell_delivery(&transaction.pane_id, marker);
         }
         if receiver_may_be_blocked {

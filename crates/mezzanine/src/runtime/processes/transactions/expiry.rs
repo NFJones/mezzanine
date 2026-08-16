@@ -28,6 +28,13 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         let mut expired_count = 0usize;
         for (marker, transaction, timeout_ms, elapsed_ms) in expired {
+            if matches!(
+                transaction.kind,
+                RunningShellTransactionKind::Bootstrap
+                    | RunningShellTransactionKind::ShellIdentityProbe { .. }
+            ) {
+                let _ = self.observe_managed_shell_transport_failure(&transaction.pane_id, &marker);
+            }
             self.cancel_runtime_pane_shell_delivery(&transaction.pane_id, &marker);
             if self.remove_running_shell_transaction(&marker).is_none() {
                 continue;
