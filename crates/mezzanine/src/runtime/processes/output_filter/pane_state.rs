@@ -475,6 +475,22 @@ impl RuntimeSessionService {
 
     /// Decodes private shell-output frames independently of display visibility.
     fn decoded_pane_output_bytes(&mut self, pane_id: &str, transaction_bytes: &[u8]) -> Vec<u8> {
+        let encoded_output_owned = self
+            .process
+            .shell_transaction_encoded_output_markers
+            .iter()
+            .any(|marker| {
+                self.process
+                    .running_shell_transactions
+                    .get(marker)
+                    .is_some_and(|transaction| transaction.pane_id == pane_id)
+            });
+        if !encoded_output_owned {
+            self.process
+                .pane_shell_output_render_pending
+                .remove(pane_id);
+            return transaction_bytes.to_vec();
+        }
         let begin = SHELL_OUTPUT_BASE64_BEGIN_MARKER.as_bytes();
         let end = SHELL_OUTPUT_BASE64_END_MARKER.as_bytes();
         let mut state = self
@@ -762,54 +778,102 @@ impl RuntimeSessionService {
         aged
     }
 
-    /// Releases Fish parent-restoration ownership after its bounded deadline.
+    /// Requests fresh parent-process proof after the restoration event deadline.
     ///
-    /// A missing authenticated event must not freeze ordinary pane input
-    /// indefinitely. Timeout recovery preserves queued foreground bytes,
-    /// clears stale teardown filtering, and degrades shell readiness so later
-    /// agent work obtains fresh authority before dispatch.
+    /// A deadline alone never proves whether the parent editor, private
+    /// receiver, or child owns the PTY. Recovery therefore retains queued
+    /// foreground bytes and restoration ownership until the exact pane worker
+    /// proves that the original parent process group is foreground again.
     fn recover_expired_fish_parent_restorations_at(&mut self, now_unix_ms: u64) -> Result<usize> {
         let expired = self
             .process
             .pane_fish_parent_restorations
             .iter()
             .filter(|(_, restoration)| {
-                restoration.started_at_unix_ms.is_some_and(|started_at| {
-                    now_unix_ms.saturating_sub(started_at)
-                        >= RUNTIME_FISH_PARENT_RESTORATION_TIMEOUT_MS
-                })
+                restoration.recovery_observation.as_ref().map_or_else(
+                    || {
+                        restoration.started_at_unix_ms.is_some_and(|started_at| {
+                            now_unix_ms.saturating_sub(started_at)
+                                >= RUNTIME_FISH_PARENT_RESTORATION_TIMEOUT_MS
+                        })
+                    },
+                    |pending| {
+                        now_unix_ms.saturating_sub(pending.started_at_unix_ms)
+                            >= RUNTIME_FISH_PARENT_RESTORATION_TIMEOUT_MS
+                    },
+                )
             })
             .map(|(pane_id, _)| pane_id.clone())
             .collect::<Vec<_>>();
+        let mut requested = 0usize;
         for pane_id in &expired {
-            let Some(restoration) = self.process.pane_fish_parent_restorations.remove(pane_id)
+            let Some(restoration) = self
+                .process
+                .pane_fish_parent_restorations
+                .get(pane_id)
+                .cloned()
             else {
                 continue;
             };
-            self.process
-                .pane_agent_subshell_parent_return_pending
-                .remove(pane_id);
-            self.process
-                .pane_agent_subshell_exit_echo_pending
-                .remove(pane_id);
-            self.process
-                .pane_agent_subshell_exit_markers
-                .remove(pane_id);
             self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+            let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) else {
+                if let Some(current) = self.process.pane_fish_parent_restorations.get_mut(pane_id) {
+                    current.started_at_unix_ms = None;
+                }
+                self.append_lifecycle_event(
+                    EventKind::Diagnostic,
+                    format!(
+                        r#"{{"pane_id":"{}","fish_parent_restoration":"proof_unavailable","marker":"{}"}}"#,
+                        json_escape(pane_id),
+                        json_escape(&restoration.marker)
+                    ),
+                )?;
+                continue;
+            };
+            let Some(primary_process_id) = restoration.primary_process_id else {
+                continue;
+            };
+            self.process.next_shell_dispatch_recovery_observation = self
+                .process
+                .next_shell_dispatch_recovery_observation
+                .saturating_add(1);
+            let observation_id = format!(
+                "fish-parent-restoration:{}:{}:{}",
+                instance.generation,
+                restoration.marker,
+                self.process.next_shell_dispatch_recovery_observation
+            );
+            let Some(current) = self.process.pane_fish_parent_restorations.get_mut(pane_id) else {
+                continue;
+            };
+            current.started_at_unix_ms = None;
+            current.recovery_observation = Some(
+                crate::runtime::processes::RuntimeFishRestorationRecoveryObservation {
+                    instance: instance.clone(),
+                    observation_id: observation_id.clone(),
+                    started_at_unix_ms: now_unix_ms,
+                },
+            );
+            self.persistence
+                .queue_pane_observation(RuntimeSideEffect::PaneProcessIo {
+                    instance,
+                    effect: PaneProcessIoEffect::ObserveForegroundProcess {
+                        observation_id: observation_id.clone(),
+                        expected_process_group_id: Some(primary_process_id),
+                    },
+                });
             self.append_lifecycle_event(
                 EventKind::Diagnostic,
                 format!(
-                    r#"{{"pane_id":"{}","fish_parent_restoration":"timed_out","marker":"{}"}}"#,
+                    r#"{{"pane_id":"{}","fish_parent_restoration":"proof_requested","marker":"{}","observation_id":"{}"}}"#,
                     json_escape(pane_id),
-                    json_escape(&restoration.marker)
+                    json_escape(&restoration.marker),
+                    json_escape(&observation_id)
                 ),
             )?;
-            if !restoration.pending_input.is_empty() {
-                self.clear_shell_output_filters_for_foreground_input(pane_id);
-                self.write_runtime_pane_input(pane_id, &restoration.pending_input)?;
-            }
+            requested = requested.saturating_add(1);
         }
-        Ok(expired.len())
+        Ok(requested)
     }
 
     /// Fails closed when managed zsh never publishes startup admission.

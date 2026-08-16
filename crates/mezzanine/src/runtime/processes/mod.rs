@@ -530,6 +530,8 @@ pub(super) enum RuntimeFishHandoffPhase {
     TriggerQueued,
     /// Fish authenticated editor ownership and runtime released the source.
     SourceDeliveryReleased,
+    /// Exit was requested while Fish was still sourcing the child handoff.
+    SourceDeliveryExitRequested,
     /// The persistent child authenticated its installed transaction receiver.
     ChildInstalled,
     /// Runtime requested cancellation or child exit and awaits parent return.
@@ -539,7 +541,7 @@ pub(super) enum RuntimeFishHandoffPhase {
 }
 
 /// Marker- and process-scoped ownership retained until the shell restores its parent editor.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct RuntimeFishParentRestoration {
     /// Managed shell that owns the synchronous callback.
     shell: RuntimeManagedShellKind,
@@ -553,8 +555,21 @@ struct RuntimeFishParentRestoration {
     phase: RuntimeFishHandoffPhase,
     /// Time when cancellation or child exit began returning ownership.
     started_at_unix_ms: Option<u64>,
+    /// Fresh pane-worker proof requested after an authenticated restore event is lost.
+    recovery_observation: Option<RuntimeFishRestorationRecoveryObservation>,
     /// Foreground bytes typed after child exit but before editor restoration.
     pending_input: Vec<u8>,
+}
+
+/// Exact worker observation that may prove the original parent regained the PTY.
+#[derive(Clone, Debug)]
+struct RuntimeFishRestorationRecoveryObservation {
+    /// Adapter-owned process generation that must answer.
+    instance: PaneProcessInstance,
+    /// Opaque correlation id required on the worker result.
+    observation_id: String,
+    /// Time when the exact worker observation was requested.
+    started_at_unix_ms: u64,
 }
 
 /// Maximum foreground input retained while Fish restores its parent editor.
@@ -629,6 +644,8 @@ pub(crate) struct RuntimeProcessComponent {
     running_shell_transactions: std::collections::BTreeMap<String, RunningShellTransactionRef>,
     /// Exact process instances holding each transaction's exclusive input lease.
     shell_transaction_input_leases: std::collections::BTreeMap<String, PaneProcessInstance>,
+    /// Agent-action markers whose isolated child output uses private Base64 framing.
+    shell_transaction_encoded_output_markers: BTreeSet<String>,
     /// Immutable bounded wrapper-filter commands keyed by transaction marker.
     ///
     /// Registration derives this descriptor once so steady-state PTY output
@@ -896,15 +913,27 @@ impl RuntimeSessionService {
             .map(|transaction| transaction.pane_id.clone())
         {
             let handoff = self.process.pane_shell_handoffs.get(&pane_id);
+            let primary_process_id = handoff
+                .map(|handoff| handoff.primary_process_id)
+                .or_else(|| self.primary_pid_for_live_pane_process(&pane_id));
+            let interaction_generation = handoff
+                .map(|handoff| handoff.interaction_generation)
+                .or_else(|| {
+                    self.process
+                        .pane_shell_interaction_generations
+                        .get(&pane_id)
+                        .copied()
+                });
             self.process.pane_fish_parent_restorations.insert(
                 pane_id,
                 RuntimeFishParentRestoration {
                     shell: RuntimeManagedShellKind::Fish,
                     marker: marker.to_string(),
-                    primary_process_id: handoff.map(|handoff| handoff.primary_process_id),
-                    interaction_generation: handoff.map(|handoff| handoff.interaction_generation),
+                    primary_process_id,
+                    interaction_generation,
                     phase: RuntimeFishHandoffPhase::TriggerQueued,
                     started_at_unix_ms: None,
+                    recovery_observation: None,
                     pending_input: Vec::new(),
                 },
             );
@@ -988,7 +1017,40 @@ impl RuntimeSessionService {
     }
 
     /// Advances a marker-scoped Fish handoff after child receiver installation.
-    pub(super) fn mark_fish_child_installed(&mut self, pane_id: &str, marker: &str) -> bool {
+    ///
+    /// Returns whether exit was requested while source delivery still owned
+    /// terminal input, allowing the authenticated child boundary to consume
+    /// that intent without ever writing exit text to the parent receiver.
+    pub(super) fn mark_fish_child_installed(
+        &mut self,
+        pane_id: &str,
+        marker: &str,
+    ) -> Option<bool> {
+        let restoration = self
+            .process
+            .pane_fish_parent_restorations
+            .get_mut(pane_id)?;
+        if restoration.marker != marker
+            || !matches!(
+                restoration.phase,
+                RuntimeFishHandoffPhase::SourceDeliveryReleased
+                    | RuntimeFishHandoffPhase::SourceDeliveryExitRequested
+            )
+        {
+            return None;
+        }
+        let exit_requested =
+            restoration.phase == RuntimeFishHandoffPhase::SourceDeliveryExitRequested;
+        restoration.phase = RuntimeFishHandoffPhase::ChildInstalled;
+        Some(exit_requested)
+    }
+
+    /// Retains exit intent until the managed child proves it owns terminal input.
+    pub(super) fn defer_fish_exit_until_child_installed(
+        &mut self,
+        pane_id: &str,
+        marker: &str,
+    ) -> bool {
         let Some(restoration) = self.process.pane_fish_parent_restorations.get_mut(pane_id) else {
             return false;
         };
@@ -997,7 +1059,7 @@ impl RuntimeSessionService {
         {
             return false;
         }
-        restoration.phase = RuntimeFishHandoffPhase::ChildInstalled;
+        restoration.phase = RuntimeFishHandoffPhase::SourceDeliveryExitRequested;
         true
     }
 
@@ -1031,15 +1093,27 @@ impl RuntimeSessionService {
             .map(|transaction| transaction.pane_id.clone())
         {
             let handoff = self.process.pane_shell_handoffs.get(&pane_id);
+            let primary_process_id = handoff
+                .map(|handoff| handoff.primary_process_id)
+                .or_else(|| self.primary_pid_for_live_pane_process(&pane_id));
+            let interaction_generation = handoff
+                .map(|handoff| handoff.interaction_generation)
+                .or_else(|| {
+                    self.process
+                        .pane_shell_interaction_generations
+                        .get(&pane_id)
+                        .copied()
+                });
             self.process.pane_fish_parent_restorations.insert(
                 pane_id,
                 RuntimeFishParentRestoration {
                     shell: RuntimeManagedShellKind::Zsh,
                     marker: marker.to_string(),
-                    primary_process_id: handoff.map(|handoff| handoff.primary_process_id),
-                    interaction_generation: handoff.map(|handoff| handoff.interaction_generation),
+                    primary_process_id,
+                    interaction_generation,
                     phase: RuntimeFishHandoffPhase::TriggerQueued,
                     started_at_unix_ms: None,
+                    recovery_observation: None,
                     pending_input: Vec::new(),
                 },
             );
@@ -1175,15 +1249,31 @@ impl RuntimeSessionService {
         &mut self,
         marker: &str,
     ) -> Option<RunningShellTransactionRef> {
+        let pane_id = self
+            .process
+            .running_shell_transactions
+            .get(marker)
+            .map(|transaction| transaction.pane_id.clone());
         self.process.managed_home_activity_locks.remove(marker);
-        if let Some(instance) = self.process.shell_transaction_input_leases.remove(marker) {
-            self.persistence
-                .queue_pane_input(RuntimeSideEffect::PaneProcessIo {
-                    instance,
-                    effect: PaneProcessIoEffect::ReleaseShellInputLease {
-                        owner_id: marker.to_string(),
-                    },
-                });
+        self.release_shell_transaction_input_lease(marker);
+        self.process
+            .shell_transaction_encoded_output_markers
+            .remove(marker);
+        if let Some(pane_id) = pane_id
+            && !self
+                .process
+                .shell_transaction_encoded_output_markers
+                .iter()
+                .any(|owner| {
+                    self.process
+                        .running_shell_transactions
+                        .get(owner)
+                        .is_some_and(|transaction| transaction.pane_id == pane_id)
+                })
+        {
+            self.process
+                .pane_shell_output_render_pending
+                .remove(&pane_id);
         }
         self.process
             .shell_transaction_wrapper_filter_commands
@@ -1206,9 +1296,33 @@ impl RuntimeSessionService {
         self.process.running_shell_transactions.remove(marker)
     }
 
+    /// Releases the exact pane-process input lease owned by one transaction.
+    fn release_shell_transaction_input_lease(&mut self, marker: &str) {
+        let Some(instance) = self.process.shell_transaction_input_leases.remove(marker) else {
+            return;
+        };
+        self.persistence
+            .queue_pane_input(RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect: PaneProcessIoEffect::ReleaseShellInputLease {
+                    owner_id: marker.to_string(),
+                },
+            });
+    }
+
     /// Clears all live shell transactions and marker protocol state.
     pub(crate) fn clear_all_shell_transaction_state(&mut self) {
-        self.process.running_shell_transactions.clear();
+        let markers = self
+            .process
+            .running_shell_transactions
+            .keys()
+            .chain(self.process.shell_transaction_input_leases.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        for marker in markers {
+            self.remove_running_shell_transaction(&marker);
+            self.release_shell_transaction_input_lease(&marker);
+        }
         self.process
             .shell_transaction_wrapper_filter_commands
             .clear();
@@ -1226,7 +1340,20 @@ impl RuntimeSessionService {
         self.process.shell_receiver_pending_payloads.clear();
         self.process.shell_receiver_completion_required.clear();
         self.process.shell_receiver_pending_ends.clear();
+        self.process
+            .shell_transaction_encoded_output_markers
+            .clear();
+        self.process.pane_shell_output_render_pending.clear();
         self.process.managed_home_activity_locks.clear();
+    }
+
+    /// Marks one registered action transaction as the owner of encoded output.
+    pub(crate) fn register_encoded_shell_output_transaction(&mut self, marker: &str) {
+        if self.process.running_shell_transactions.contains_key(marker) {
+            self.process
+                .shell_transaction_encoded_output_markers
+                .insert(marker.to_string());
+        }
     }
 
     /// Returns the active pane-screen history limit.

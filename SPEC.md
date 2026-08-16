@@ -1848,7 +1848,10 @@ boundary only after the private receiver has returned from sourcing the child
 handoff, restored the editor state, and queued its repaint. Child-exit rendering
 markers MUST NOT release foreground input. Mezzanine MUST retain bounded foreground
 input until parent-restored arrives and MUST use bounded timeout recovery if
-that event is lost. The private receiver MUST save the supported editor state,
+that event is lost. A restoration timeout MUST NOT replay queued input by
+itself; runtime MUST retain the bytes until an exact pane-process generation
+proves that the original parent process group owns the foreground PTY. The
+private receiver MUST save the supported editor state,
 clear the editable buffer, and queue a repaint before publishing receiver-ready
 or launching the child. If agent mode exits before source admission completes,
 runtime MUST send a pane-token- and bootstrap-marker-authenticated cancellation
@@ -4287,7 +4290,10 @@ the owner. A transaction end marker emitted by evaluated source MUST NOT by
 itself release that lease. Receiver-complete MUST be emitted only after eval
 returns and callback cleanup begins, and must carry the pane token, transaction
 marker, and receiver status. User input and unrelated runtime input MUST remain
-deferred for the full interval. Managed `zsh` panes MUST install a pane-scoped
+deferred for the full interval. Every terminal transaction settlement path,
+including timeout, pane write failure, protocol rejection, and pane teardown,
+MUST release the exact generation-fenced lease before recovery input is queued.
+Managed `zsh` panes MUST install a pane-scoped
 ZLE admission widget in the `emacs`, `viins`, and `vicmd` keymaps without
 replacing existing user bindings. Admission MUST begin with a source-free
 trigger, save `BUFFER`, Unicode-correct `CURSOR`, `MARK`, `REGION_ACTIVE`, and
@@ -4328,7 +4334,9 @@ to the ordinary line editor or strand acknowledgement-paced delivery. Before
 the first DATA record is released, Fish MAY instead accept one authenticated
 CANCEL record for the same pane token and bootstrap marker. Cancellation MUST
 acknowledge the record, evaluate no source, restore the saved editor state, and
-emit parent-restored with a cancellation status.
+emit parent-restored with a cancellation status. A CANCEL received after DATA
+has begun MUST be treated as malformed input and MUST NOT shorten the required
+drain through the declared DATA count and matching END record.
 
 For non-stateful POSIX-compatible actions, the default wrapper MUST execute the
 agent command in a child shell whose environment omits Mezzanine transaction

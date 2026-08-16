@@ -194,12 +194,7 @@ impl RuntimeSessionService {
         }
         let mut failed_count = 0usize;
         for (marker, transaction) in failed_transactions {
-            if self
-                .process
-                .running_shell_transactions
-                .remove(&marker)
-                .is_none()
-            {
+            if self.remove_running_shell_transaction(&marker).is_none() {
                 continue;
             }
             self.clear_shell_transaction_protocol_state(&marker);
@@ -208,7 +203,8 @@ impl RuntimeSessionService {
                 transaction.kind,
                 RunningShellTransactionKind::Bootstrap
                     | RunningShellTransactionKind::ShellIdentityProbe { .. }
-            ) {
+            ) && !self.fish_parent_restoration_is_pending(pane_id)
+            {
                 self.clear_agent_subshell_shell_identity(pane_id);
                 self.process.pane_probed_shell_identities.remove(pane_id);
             }

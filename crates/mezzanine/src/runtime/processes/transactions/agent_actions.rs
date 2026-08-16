@@ -422,6 +422,37 @@ impl RuntimeSessionService {
                 "managed receiver-installed metadata does not match the pending subshell handoff",
             );
         }
+        let managed_exit_requested = if fish_receiver_installed || zsh_receiver_installed {
+            let Some(exit_requested) = self.mark_fish_child_installed(output_pane_id, marker)
+            else {
+                return self.fail_shell_transaction_protocol_violation(
+                    marker,
+                    transaction,
+                    "receiver-installed-phase-mismatch",
+                    "managed receiver-installed event arrived outside source-delivery ownership",
+                );
+            };
+            exit_requested
+        } else {
+            false
+        };
+        if managed_exit_requested {
+            let cancelled_bootstrap = self.cancel_agent_subshell_bootstrap_for_exit(output_pane_id);
+            if cancelled_bootstrap.is_none() {
+                return self.fail_shell_transaction_protocol_violation(
+                    marker,
+                    transaction,
+                    "receiver-installed-exit-settlement-mismatch",
+                    "managed child installation could not settle its deferred bootstrap on exit",
+                );
+            }
+            self.enter_agent_subshell(output_pane_id);
+            self.mark_agent_subshell_command_exit(output_pane_id.to_string());
+            self.remember_hidden_shell_render_suppression(output_pane_id);
+            self.remember_agent_subshell_exit_echo(output_pane_id);
+            self.write_runtime_pane_input(output_pane_id, b"exit\n")?;
+            return Ok(1);
+        }
         let wrapper = self
             .process
             .pane_shell_handoffs
@@ -439,9 +470,6 @@ impl RuntimeSessionService {
         {
             self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
             return Err(error);
-        }
-        if fish_receiver_installed || zsh_receiver_installed {
-            self.mark_fish_child_installed(output_pane_id, marker);
         }
         self.enter_agent_subshell(output_pane_id);
         if fish_receiver_installed || zsh_receiver_installed {

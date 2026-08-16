@@ -479,6 +479,94 @@ impl RuntimeSessionService {
         instance: PaneProcessInstance,
         observation: PaneForegroundProcessObservation,
     ) -> Result<RuntimeTransition> {
+        if let Some(restoration) = self
+            .process
+            .pane_fish_parent_restorations
+            .get(&instance.pane_id)
+            .cloned()
+            && restoration
+                .recovery_observation
+                .as_ref()
+                .is_some_and(|pending| {
+                    pending.instance == instance
+                        && pending.observation_id == observation.observation_id
+                })
+        {
+            let current_primary_process_id =
+                self.primary_pid_for_live_pane_process(&instance.pane_id);
+            let current_interaction_generation = self
+                .process
+                .pane_shell_interaction_generations
+                .get(&instance.pane_id)
+                .copied();
+            let parent_foreground = restoration.primary_process_id.is_some()
+                && observation.error.is_none()
+                && observation.process_group_id == restoration.primary_process_id
+                && current_primary_process_id == restoration.primary_process_id
+                && current_interaction_generation == restoration.interaction_generation;
+            if !parent_foreground {
+                if let Some(current) = self
+                    .process
+                    .pane_fish_parent_restorations
+                    .get_mut(&instance.pane_id)
+                {
+                    current.recovery_observation = None;
+                    current.started_at_unix_ms = Some(current_unix_millis());
+                }
+                self.set_pane_readiness(&instance.pane_id, PaneReadinessState::Degraded);
+                self.append_lifecycle_event(
+                    EventKind::Diagnostic,
+                    format!(
+                        r#"{{"pane_id":"{}","fish_parent_restoration":"proof_rejected","marker":"{}","observation_id":"{}"}}"#,
+                        json_escape(&instance.pane_id),
+                        json_escape(&restoration.marker),
+                        json_escape(&observation.observation_id)
+                    ),
+                )?;
+                return Ok(self.runtime_transition_with_render(
+                    true,
+                    Some(RenderInvalidationReason::PaneOutput),
+                ));
+            }
+
+            self.process
+                .pane_fish_parent_restorations
+                .remove(&instance.pane_id);
+            self.process
+                .pane_agent_subshell_parent_return_pending
+                .remove(&instance.pane_id);
+            self.process
+                .pane_agent_subshell_exit_echo_pending
+                .remove(&instance.pane_id);
+            self.process
+                .pane_agent_subshell_exit_markers
+                .remove(&instance.pane_id);
+            self.clear_agent_subshell_shell_identity(&instance.pane_id);
+            if self
+                .process
+                .pane_environment_authority_failures
+                .contains_key(&instance.pane_id)
+            {
+                self.set_pane_readiness(&instance.pane_id, PaneReadinessState::Degraded);
+            } else {
+                self.set_pane_readiness(&instance.pane_id, PaneReadinessState::PromptCandidate);
+            }
+            self.clear_shell_output_filters_for_foreground_input(&instance.pane_id);
+            if !restoration.pending_input.is_empty() {
+                self.write_runtime_pane_input(&instance.pane_id, &restoration.pending_input)?;
+            }
+            self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                format!(
+                    r#"{{"pane_id":"{}","fish_parent_restoration":"proof_accepted","marker":"{}","observation_id":"{}"}}"#,
+                    json_escape(&instance.pane_id),
+                    json_escape(&restoration.marker),
+                    json_escape(&observation.observation_id)
+                ),
+            )?;
+            return Ok(self
+                .runtime_transition_with_render(true, Some(RenderInvalidationReason::FullRedraw)));
+        }
         if let Some(pending) = self
             .process
             .pending_shell_dispatch_recovery_observations

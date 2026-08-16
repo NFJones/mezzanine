@@ -507,6 +507,9 @@ impl RuntimeSessionService {
             },
             true,
         );
+        if !stateful {
+            self.register_encoded_shell_output_transaction(&marker_id);
+        }
         if shell_identity.classification() == ShellClassification::Fish && payload_len > 0 {
             self.require_shell_transaction_payload_receiver_ready(&marker_id);
         }

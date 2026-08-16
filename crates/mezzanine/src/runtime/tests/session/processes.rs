@@ -730,6 +730,7 @@ fn runtime_hidden_encoded_agent_action_updates_authoritative_process_protocol() 
             observed_output_truncated: false,
         },
     );
+    service.register_encoded_shell_output_transaction("encoded-action-marker");
     let framed = b"__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\nG1s/MTAwMGgbWz8xMDA2aBtbPzIwMDRoG1s/MTAwNGgbPRtbMzs1SBtbNm4bWz8xMDQ5aGhpZGRlbhtbPzEwNDls\n__MEZ_SHELL_OUTPUT_BASE64_END__\n";
     for fragment in [&framed[..23], &framed[23..79], &framed[79..]] {
         service

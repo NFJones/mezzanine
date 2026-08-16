@@ -105,15 +105,21 @@ function __mez_fish_private_receiver
     set -l begin_record
     read -l begin_record
     set -l begin_fields (string split ' ' -- "$begin_record")
-    if test (count $begin_fields) -ne 6; or test "$begin_fields[1]" != MEZ_FISH_RX1_BEGIN; or test "$begin_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or not string match -rq '^[0-9]+$' -- "$begin_fields[4]"; or not string match -rq '^[0-9a-f]{{64}}$' -- "$begin_fields[5]"; or not string match -rq '^[0-9]+$' -- "$begin_fields[6]"
+    if test (count $begin_fields) -ne 6; or test "$begin_fields[1]" != MEZ_FISH_RX1_BEGIN; or test "$begin_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"
         __mez_fish_restore_editor
         return 1
     end
     set -l marker "$begin_fields[3]"
+    if test -z "$marker"; or not string match -rq '^[0-9]+$' -- "$begin_fields[4]"; or not string match -rq '^[0-9a-f]{{64}}$' -- "$begin_fields[5]"; or not string match -rq '^[0-9]+$' -- "$begin_fields[6]"
+        set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$marker"
+        set -g __MEZ_FISH_PARENT_RESTORE_STATUS 125
+        __mez_fish_restore_editor
+        return 1
+    end
     set -l expected_length "$begin_fields[4]"
     set -l expected_digest "$begin_fields[5]"
     set -l expected_chunks "$begin_fields[6]"
-    if test "$expected_length" -gt 16777216; or test "$expected_chunks" -gt 349526
+    if test "$expected_length" -gt 16777216; or test "$expected_chunks" -gt 294338; or test "$expected_length" -eq 0 -a "$expected_chunks" -ne 0; or test "$expected_length" -gt 0 -a "$expected_chunks" -eq 0
         set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$marker"
         set -g __MEZ_FISH_PARENT_RESTORE_STATUS 125
         __mez_fish_restore_editor
@@ -131,6 +137,7 @@ function __mez_fish_private_receiver
     set -l encoded_file "$source_file.b64"
     set -l receive_status 0
     set -l sequence 0
+    set -l encoded_bytes 0
     if test -z "$source_file"
         set receive_status 1
     else
@@ -142,17 +149,28 @@ function __mez_fish_private_receiver
         read -l data_record; or begin; set receive_status 1; break; end
         set -l cancel_fields (string split ' ' -- "$data_record")
         if test (count $cancel_fields) -eq 3; and test "$cancel_fields[1]" = MEZ_FISH_RX1_CANCEL; and test "$cancel_fields[2]" = "$__MEZ_FISH_INTEGRATION_OWNER"; and test "$cancel_fields[3]" = "$marker"
-            set cancelled 1
-            set source_status 130
+            if test "$sequence" -eq 0
+                set cancelled 1
+                set source_status 130
+                builtin printf '\036'
+                break
+            end
+            set receive_status 1
+            set sequence (math "$sequence + 1")
             builtin printf '\036'
-            break
+            continue
         end
         set -l data_fields (string split -m 4 ' ' -- "$data_record")
         if test "$receive_status" -eq 0
             if test (count $data_fields) -ne 5; or test "$data_fields[1]" != MEZ_FISH_RX1_DATA; or test "$data_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or test "$data_fields[3]" != "$marker"; or test "$data_fields[4]" != "$sequence"; or test (string length -- "$data_fields[5]") -gt 640; or not string match -rq '^[A-Za-z0-9+/]*={{0,2}}$' -- "$data_fields[5]"
                 set receive_status 1
             else
-                command printf '%s' "$data_fields[5]" >> "$encoded_file"; or set receive_status $status
+                set encoded_bytes (math "$encoded_bytes + "(string length -- "$data_fields[5]"))
+                if test "$encoded_bytes" -gt 22369624
+                    set receive_status 1
+                else
+                    command printf '%s' "$data_fields[5]" >> "$encoded_file"; or set receive_status $status
+                end
             end
         end
         set sequence (math "$sequence + 1")
@@ -174,6 +192,13 @@ function __mez_fish_private_receiver
             command base64 -d < "$encoded_file" > "$source_file" 2>/dev/null; or set receive_status $status
         else
             command base64 -D < "$encoded_file" > "$source_file"; or set receive_status $status
+        end
+    end
+    if test "$cancelled" -eq 0; and test "$receive_status" -eq 0
+        set -l expected_encoded (command cat -- "$encoded_file" | string collect -N); or set receive_status $status
+        set -l actual_encoded (command base64 < "$source_file" | command tr -d '\r\n' | string collect -N); or set receive_status $status
+        if test "$receive_status" -eq 0; and test "$actual_encoded" != "$expected_encoded"
+            set receive_status 1
         end
     end
     if test "$cancelled" -eq 0; and test "$receive_status" -eq 0
@@ -217,6 +242,7 @@ function __mez_fish_private_trigger
     __mez_fish_private_receiver
     set -l receiver_status $status
     commandline -f repaint
+    __mez_fish_publish_parent_restored
     return $receiver_status
 end
 bind -M default \e\cg __mez_fish_private_trigger
@@ -240,7 +266,6 @@ function __mez_fish_passive_prompt_start --on-event fish_prompt
 end
 function fish_prompt
     __mez_fish_user_prompt
-    __mez_fish_publish_parent_restored
     builtin printf '\033]133;B\033\\'
 end
 function fish_right_prompt
@@ -964,6 +989,94 @@ mod tests {
         assert!(
             !String::from_utf8_lossy(&output).contains("__MEZ_CANCELLED_SOURCE_RAN__"),
             "cancelled private source must not launch the child handoff"
+        );
+
+        process.terminate(Duration::from_millis(100)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    /// Verifies cancellation received after DATA starts is rejected only after
+    /// Fish drains the remaining declared records and matching END boundary.
+    ///
+    /// A late cancellation occupies one DATA record slot but cannot shorten
+    /// the admitted frame. Counting it incorrectly strands acknowledgement-
+    /// paced delivery or leaves END waiting in the ordinary line editor.
+    fn managed_fish_private_admission_drains_late_cancellation_through_end() {
+        let Some(fish) = fish_path_for_tests() else {
+            eprintln!(
+                "skipping managed Fish late-cancellation assertion because fish is unavailable"
+            );
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-fish-private-late-cancel-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let owner = MarkerToken::new("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd").unwrap();
+        let compatibility = ManagedFishCompatibility::new(owner.clone());
+        let mut process = spawn_managed_fish(&fish, &compatibility, &root);
+        settle_managed_fish_startup(&mut process);
+
+        let marker = "fish-private-late-cancel-marker";
+        let source = format!(
+            "builtin printf '__MEZ_LATE_CANCEL_SOURCE_RAN__\\n'\n# {}\n",
+            "padding".repeat(256)
+        );
+        let admission = fish_private_source_input(&source, &owner, marker);
+        process.write_input(admission.wrapper.as_bytes()).unwrap();
+        let ready = format!(
+            "mez_receiver=ready;mez_token={};mez_marker={marker}",
+            owner.as_str()
+        );
+        let mut output = read_fish_output_until(&mut process, |output| {
+            output
+                .windows(ready.len())
+                .any(|window| window == ready.as_bytes())
+        });
+        let mut records = admission
+            .receiver_payload
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(
+            records.len() >= 4,
+            "fixture must contain multiple DATA records"
+        );
+        records[1] = fish_private_source_cancel_input(&owner, marker)
+            .trim_end()
+            .to_string();
+        let late_cancellation_payload = records.join("\n") + "\n";
+        output.extend(
+            process.write_shell_delivery(&ShellInputDelivery::receiver_acknowledged(
+                late_cancellation_payload.into_bytes(),
+                marker,
+                true,
+            )),
+        );
+        let restored = format!(
+            "mez_parent=restored;mez_token={};mez_marker={marker};mez_status=1",
+            owner.as_str()
+        );
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(restored.len())
+                .any(|window| window == restored.as_bytes())
+        });
+        process
+            .write_input(b"builtin printf '__MEZ_AFTER_LATE_CANCEL__\\n'\n")
+            .unwrap();
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(b"__MEZ_AFTER_LATE_CANCEL__".len())
+                .any(|window| window == b"__MEZ_AFTER_LATE_CANCEL__")
+        });
+        assert!(
+            !String::from_utf8_lossy(&output).contains("__MEZ_LATE_CANCEL_SOURCE_RAN__"),
+            "late-cancelled private source must not execute"
         );
 
         process.terminate(Duration::from_millis(100)).unwrap();

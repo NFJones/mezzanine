@@ -29,12 +29,7 @@ impl RuntimeSessionService {
         let mut expired_count = 0usize;
         for (marker, transaction, timeout_ms, elapsed_ms) in expired {
             self.cancel_runtime_pane_shell_delivery(&transaction.pane_id, &marker);
-            if self
-                .process
-                .running_shell_transactions
-                .remove(&marker)
-                .is_none()
-            {
+            if self.remove_running_shell_transaction(&marker).is_none() {
                 continue;
             }
             self.clear_shell_transaction_protocol_state(&marker);

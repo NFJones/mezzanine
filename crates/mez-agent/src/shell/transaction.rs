@@ -2030,43 +2030,43 @@ fn command_payload_lines(command: &str, end_marker: &str, input_sidecar: Option<
 /// the acknowledgement byte used by paced Darwin PTY delivery.
 pub fn fish_wrapper_receiver_init_command() -> &'static str {
     r#"function __mez_agent_wrapper_receive --argument-names sentinel
-    set -l source_file (mktemp); or return 1
+    set -l source_file (command mktemp); or return 1
     set -l encoded_file "$source_file.b64"
-    set -l receiver_stty (stty -g 2>/dev/null); or set receiver_stty ''
+    set -l receiver_stty (command stty -g 2>/dev/null); or set receiver_stty ''
     if test -n "$receiver_stty"
-        stty -echo 2>/dev/null; or true
+        command stty -echo 2>/dev/null; or true
     end
     set -l receive_status 0
     set -l seen_end 0
     command printf '' > "$encoded_file"; or set receive_status $status
     builtin history delete --exact --case-sensitive "__mez_agent_wrapper_receive '$sentinel'" >/dev/null 2>&1
-    printf '\036'
+    builtin printf '\036'
     while read -l record
         set -l payload (string split -m 1 ';' -- "$record")[1]
         if test "$payload" = "$sentinel"
             set seen_end 1
-            printf '\036'
+            builtin printf '\036'
             break
         end
         if test "$receive_status" -eq 0
-            printf '%s' "$payload" >> "$encoded_file"; or set receive_status $status
+            command printf '%s' "$payload" >> "$encoded_file"; or set receive_status $status
         end
-        printf '\036'
+        builtin printf '\036'
     end
     if test "$seen_end" != 1
         set receive_status 1
     end
     set -l decode_status 1
     if test "$receive_status" -eq 0
-        if base64 -d < "$encoded_file" > "$source_file" 2>/dev/null
+        if command base64 -d < "$encoded_file" > "$source_file" 2>/dev/null
             set decode_status 0
         else
-            base64 -D < "$encoded_file" > "$source_file"
+            command base64 -D < "$encoded_file" > "$source_file"
             set decode_status $status
         end
     end
     if test -n "$receiver_stty"
-        stty "$receiver_stty" 2>/dev/null; or true
+        command stty "$receiver_stty" 2>/dev/null; or true
     end
     set -l source_status $decode_status
     if test "$decode_status" -eq 0

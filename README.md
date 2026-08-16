@@ -113,9 +113,12 @@ unsafe prompt states fail closed rather than submitting or combining input.
 Fish saves and visibly clears its editable command before the agent child is
 launched. Hiding agent mode during admission cancels that handoff and restores
 the command; after a launched child exits, foreground input remains queued until
-the authenticated editor-restored boundary. Streamed shell output is decoded
-incrementally so private Base64 transport records are never shown as ordinary
-pane text.
+the authenticated editor-restored boundary. If that boundary is lost, queued
+input remains retained until the original parent process is freshly proven to
+own the foreground terminal. Streamed shell output is decoded incrementally
+only while a live encoded action transaction owns the pane, so private Base64
+transport records do not leak and marker-like ordinary shell output remains
+literal.
 
 Use `mez --help` and the [CLI reference](docs/reference-manual/cli.md) for the
 current command contract. Use [Sessions and panes](docs/using-mezzanine/sessions-and-panes.md)

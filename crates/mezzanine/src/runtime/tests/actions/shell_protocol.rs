@@ -250,6 +250,131 @@ fn register_required_start_capture(service: &mut RuntimeSessionService) {
     );
 }
 
+/// Verifies pane write-failure settlement releases the exact generation-fenced
+/// input lease acquired when a shell transaction was registered.
+///
+/// Adapter arbitration blocks every ordinary keystroke while this lease is
+/// retained, so removing only the transaction record would leave a responsive
+/// parent shell appearing permanently frozen.
+#[test]
+fn runtime_shell_write_failure_releases_transaction_input_lease() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = "%1";
+    let mut process = service
+        .take_running_pane_process_for_adapter(pane_id)
+        .unwrap();
+    let marker = "write-failure-lease-marker";
+    service.register_running_shell_transaction(
+        marker.to_string(),
+        RunningShellTransactionRef {
+            turn_id: "write-failure-lease-turn".to_string(),
+            kind: RunningShellTransactionKind::Bootstrap,
+            pane_id: pane_id.to_string(),
+            command: "bootstrap".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: Some(1),
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+        true,
+    );
+    let acquired = service.drain_pane_io_transition().side_effects;
+    assert!(acquired.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::PaneProcessIo {
+            effect: crate::runtime::PaneProcessIoEffect::AcquireShellInputLease { owner_id },
+            ..
+        } if owner_id == marker
+    )));
+
+    assert_eq!(
+        service
+            .fail_shell_transactions_for_pane_write_failure(pane_id, "injected write failure")
+            .unwrap(),
+        1
+    );
+    let settled = service.drain_pane_io_transition().side_effects;
+    assert!(settled.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::PaneProcessIo {
+            effect: crate::runtime::PaneProcessIoEffect::ReleaseShellInputLease { owner_id },
+            ..
+        } if owner_id == marker
+    )));
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    process.terminate(Duration::from_millis(100)).unwrap();
+}
+
+/// Verifies timeout settlement releases the exact transaction input lease
+/// before recovery writes an interrupt to the pane process.
+///
+/// This protects the timer-owned failure path, which historically removed the
+/// transaction directly and stranded the actor's exclusive input owner.
+#[test]
+fn runtime_shell_timeout_releases_transaction_input_lease() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = "%1";
+    let mut process = service
+        .take_running_pane_process_for_adapter(pane_id)
+        .unwrap();
+    let marker = "timeout-lease-marker";
+    service.register_running_shell_transaction(
+        marker.to_string(),
+        RunningShellTransactionRef {
+            turn_id: "timeout-lease-turn".to_string(),
+            kind: RunningShellTransactionKind::Bootstrap,
+            pane_id: pane_id.to_string(),
+            command: "bootstrap".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: Some(1),
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+        true,
+    );
+    let _ = service.drain_pane_io_transition();
+
+    assert_eq!(service.expire_timed_out_shell_transactions(1).unwrap(), 1);
+    let settled = service.drain_pane_io_transition().side_effects;
+    let release_index = settled
+        .iter()
+        .position(|effect| matches!(
+            effect,
+            RuntimeSideEffect::PaneProcessIo {
+                effect: crate::runtime::PaneProcessIoEffect::ReleaseShellInputLease { owner_id },
+                ..
+            } if owner_id == marker
+        ))
+        .expect("timeout settlement must release the transaction input lease");
+    let interrupt_index = settled
+        .iter()
+        .position(|effect| {
+            matches!(
+                effect,
+                RuntimeSideEffect::PaneProcessIo {
+                    effect: crate::runtime::PaneProcessIoEffect::WriteInput { bytes },
+                    ..
+                } if bytes == b"\x03"
+            )
+        })
+        .expect("bootstrap timeout should request a pane interrupt");
+    assert!(release_index < interrupt_index, "{settled:?}");
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    process.terminate(Duration::from_millis(100)).unwrap();
+}
+
 /// Verifies wrapper echo before a mandatory start marker is excluded while
 /// a newline-free capability sentinel is retained exactly until its matching
 /// end marker despite ordinary CRLF terminal traffic outside the transaction.
@@ -428,11 +553,53 @@ fn runtime_shell_transaction_capture_retains_contamination_before_end_only() {
     assert_eq!(transaction.observed_output_bytes, 19);
 }
 
+/// Registers one encoded agent-action owner for private rendering regressions.
+fn register_encoded_output_render_owner(service: &mut RuntimeSessionService) {
+    let marker = "encoded-render-marker";
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", AgentLogLevel::Verbose)
+        .unwrap();
+    service.running_shell_transactions_mut_for_tests().insert(
+        marker.to_string(),
+        RunningShellTransactionRef {
+            turn_id: "encoded-render-turn".to_string(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: "encoded-render-action".to_string(),
+            },
+            pane_id: "%1".to_string(),
+            command: "printf encoded-output".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+    service.register_encoded_shell_output_transaction(marker);
+}
+
+/// Verifies ordinary parent-shell output resembling a private marker remains
+/// literal when no encoded agent transaction owns the pane decoder.
+#[test]
+fn runtime_rendering_preserves_unowned_shell_output_transport_markers() {
+    let mut service = test_runtime_service();
+    let output = b"__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\nb2sK\n__MEZ_SHELL_OUTPUT_BASE64_END__\n";
+
+    assert_eq!(service.renderable_pane_output_bytes("%1", output), output);
+}
+
 /// Verifies visible transaction rendering retains a Base64 frame split across
 /// PTY reads and emits only its decoded payload after the matching end marker.
 #[test]
 fn runtime_rendering_preserves_split_shell_output_transport() {
     let mut service = test_runtime_service();
+    register_encoded_output_render_owner(&mut service);
     let first = service.renderable_pane_output_bytes("%1", b"__MEZ_SHELL_OUTPUT_BASE64_BEG");
     let second = service
         .renderable_pane_output_bytes("%1", b"IN__\n4oKsCg==\n__MEZ_SHELL_OUTPUT_BASE64_END__\n");
@@ -448,6 +615,7 @@ fn runtime_rendering_streams_large_shell_output_transport_without_base64_leakage
     use base64::Engine as _;
 
     let mut service = test_runtime_service();
+    register_encoded_output_render_owner(&mut service);
     let raw = vec![b'x'; 768 * 1024];
     let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
     let payload = encoded
@@ -476,6 +644,7 @@ fn runtime_rendering_streams_large_shell_output_transport_without_base64_leakage
 #[test]
 fn runtime_rendering_suppresses_malformed_shell_output_until_end_marker() {
     let mut service = test_runtime_service();
+    register_encoded_output_render_owner(&mut service);
     let rendered = service.renderable_pane_output_bytes(
         "%1",
         b"__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\nb2sK\nnot-base64!\nc2VjcmV0Cg==\n__MEZ_SHELL_OUTPUT_BASE64_END__\ntail\n",
@@ -1570,13 +1739,14 @@ fn runtime_fish_dirty_prompt_exit_before_receiver_installation_restores_draft() 
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies a lost Fish parent-restored event cannot retain foreground input
-/// indefinitely after the child-exit rendering boundary has already settled.
+/// Verifies a lost Fish parent-restored event requires fresh parent foreground
+/// proof before runtime releases queued input after the restoration deadline.
 ///
-/// Timeout recovery must release the exact queued bytes, clear restoration
-/// ownership, and degrade readiness so later agent work re-certifies the pane.
+/// A timer alone cannot distinguish the parent editor from a blocked receiver
+/// or child. Recovery must retain the exact bytes until the owning pane-process
+/// generation proves the original parent process group is foreground again.
 #[test]
-fn runtime_fish_parent_restoration_timeout_releases_queued_input() {
+fn runtime_fish_parent_restoration_timeout_requires_foreground_proof() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -1618,13 +1788,42 @@ fn runtime_fish_parent_restoration_timeout_releases_queued_input() {
             .unwrap(),
         1
     );
-    assert!(!service.fish_parent_restoration_is_pending_for_tests(pane_id));
+    assert!(service.fish_parent_restoration_is_pending_for_tests(pane_id));
     assert_eq!(
         service.pane_readiness_state(pane_id),
         PaneReadinessState::Degraded
     );
     let effects = service.drain_pane_io_transition().side_effects;
-    let inputs = pane_input_effects(&effects);
+    assert!(pane_input_effects(&effects).is_empty());
+    let (instance, observation_id, parent_process_group) = effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect:
+                    crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess {
+                        observation_id,
+                        expected_process_group_id: Some(parent_process_group),
+                    },
+            } => Some((instance, observation_id, parent_process_group)),
+            _ => None,
+        })
+        .expect("restoration timeout should request exact parent foreground proof");
+    service
+        .apply_pane_foreground_process_observation_transition(
+            instance,
+            crate::runtime::PaneForegroundProcessObservation {
+                observation_id,
+                process_name: Some("fish".to_string()),
+                process_group_id: Some(parent_process_group),
+                current_working_directory: None,
+                error: None,
+            },
+        )
+        .unwrap();
+    assert!(!service.fish_parent_restoration_is_pending_for_tests(pane_id));
+    let released = service.drain_pane_io_transition().side_effects;
+    let inputs = pane_input_effects(&released);
     assert_eq!(inputs.len(), 1);
     assert_eq!(inputs[0].pane_input_parts().1, b"queued-after-fish-exit\n");
     process.terminate(Duration::from_millis(100)).unwrap();

@@ -1334,6 +1334,7 @@ impl RuntimeSessionService {
                     phase,
                     crate::runtime::processes::RuntimeFishHandoffPhase::ExitRequested
                         | crate::runtime::processes::RuntimeFishHandoffPhase::ParentRestoring
+                        | crate::runtime::processes::RuntimeFishHandoffPhase::SourceDeliveryExitRequested
                 ) {
                     return Ok(true);
                 }
@@ -1344,8 +1345,8 @@ impl RuntimeSessionService {
                             "managed-shell parent restoration ownership disappeared",
                         )
                     })?;
-                let _ = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
                 if phase == crate::runtime::processes::RuntimeFishHandoffPhase::TriggerQueued {
+                    let _ = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
                     let zsh_restoration = self.managed_parent_restoration_is_zsh(pane_id);
                     let token = if zsh_restoration {
                         self.zsh_history_token_for_pane(pane_id).cloned()
@@ -1362,6 +1363,16 @@ impl RuntimeSessionService {
                         mez_agent::fish_private_source_cancel_input(&token, &marker)
                     };
                     self.write_runtime_pane_input(pane_id, cancellation.as_bytes())?;
+                    return Ok(true);
+                }
+                if phase
+                    == crate::runtime::processes::RuntimeFishHandoffPhase::SourceDeliveryReleased
+                {
+                    if !self.defer_fish_exit_until_child_installed(pane_id, &marker) {
+                        return Err(MezError::invalid_state(
+                            "managed-shell source-delivery exit ownership disappeared",
+                        ));
+                    }
                     return Ok(true);
                 }
                 self.remember_agent_subshell_exit_echo(pane_id);
