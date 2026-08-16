@@ -748,6 +748,83 @@ fn runtime_agent_shell_immediate_reentry_stays_closed_after_failed_identity_prob
     let _ = process.terminate(Duration::from_millis(10));
 }
 
+/// Verifies agent entry while an uncertified foreign process owns the PTY
+/// creates one shell-interaction epoch without sending generated input.
+///
+/// SSH and container clients can expose a shell that differs from the host
+/// pane shell, while password prompts and full-screen programs expose no shell
+/// at all. Repeated entry attempts must therefore remain idempotently deferred
+/// until the certified primary shell returns, at which point ordinary
+/// prompt-gated identity discovery may resume.
+#[test]
+fn runtime_agent_shell_entry_defers_at_uncertified_foreign_foreground() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    service
+        .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+
+    let show = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+
+    assert!(show.contains("visibility=visible"), "{show}");
+    assert!(service.pane_has_uncertified_foreign_shell_boundary(&pane_id));
+    assert!(service.agent_subshell_entry_is_deferred(&pane_id));
+    assert!(!service.agent_subshell_is_active(&pane_id));
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "foreign foreground ownership must block child-shell and discovery input"
+    );
+    let interaction_generation =
+        service.pane_foreground_process_diagnostic(&pane_id).json()["shell_interaction_generation"]
+            .as_u64()
+            .expect("foreign boundary should allocate an interaction generation");
+
+    assert!(!service.enter_agent_subshell_if_needed(&pane_id).unwrap());
+    assert_eq!(
+        service.pane_foreground_process_diagnostic(&pane_id).json()["shell_interaction_generation"]
+            .as_u64(),
+        Some(interaction_generation),
+        "repeated entry must not allocate another foreign interaction epoch"
+    );
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "a repeated entry attempt must remain input-free"
+    );
+
+    service
+        .apply_pane_foreground_process_event(&pane_id, "sh", primary_pid, None)
+        .unwrap();
+
+    assert!(!service.pane_has_uncertified_foreign_shell_boundary(&pane_id));
+    assert!(service.pane_bootstrap_is_pending_for_tests(&pane_id));
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
+    assert_eq!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).len(),
+        1,
+        "the restored primary shell prompt should dispatch one identity probe"
+    );
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
 /// Verifies that the live subshell EOF path also restores the parent prompt
 /// cursor after agent-authored text has already moved the pane screen. This
 /// covers the Ctrl+D path that exits the child agent shell, waits for the parent

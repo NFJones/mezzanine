@@ -5,10 +5,11 @@ use super::super::{
     PaneForegroundProcessObservation, PaneProcessInstance, PaneProcessIoEffect,
     RuntimeAgentSubshellCertificationOutcome, RuntimeAgentSubshellCertificationRejection,
     RuntimeBootstrapShellCertificationEvidence, RuntimeCertifiedShellSource,
-    RuntimePaneCertifiedShellIdentity, RuntimePaneProbedShellIdentity, RuntimePaneShellHandoff,
-    RuntimePendingAgentSubshellCertification, RuntimePendingAgentSubshellStartObservation,
-    RuntimePendingBootstrapEnvironment, RuntimePendingShellDispatchRecoveryObservation,
-    RuntimeSideEffect, RuntimeTransition, reduce_managed_shell_handoff,
+    RuntimeForeignShellBoundary, RuntimePaneCertifiedShellIdentity, RuntimePaneProbedShellIdentity,
+    RuntimePaneShellHandoff, RuntimePendingAgentSubshellCertification,
+    RuntimePendingAgentSubshellStartObservation, RuntimePendingBootstrapEnvironment,
+    RuntimePendingShellDispatchRecoveryObservation, RuntimeSideEffect, RuntimeTransition,
+    reduce_managed_shell_handoff,
 };
 use super::{
     AgentTurnState, EventKind, PaneReadinessState, RUNTIME_AGENT_SUBSHELL_CERTIFICATION_TIMEOUT_MS,
@@ -178,6 +179,114 @@ impl RuntimeSessionService {
     pub(crate) fn pane_foreground_certified_shell_state(&self, pane_id: &str) -> Option<bool> {
         let foreground_group = self.pane_foreground_process_group_observation(pane_id).0?;
         self.pane_process_group_is_certified_shell(pane_id, foreground_group)
+    }
+
+    /// Reports whether an uncertified non-primary process group owns the pane.
+    pub(crate) fn pane_has_uncertified_foreign_shell_boundary(&self, pane_id: &str) -> bool {
+        self.process
+            .pane_foreign_shell_boundaries
+            .contains_key(pane_id)
+    }
+
+    /// Starts a foreign boundary from the current worker or PTY foreground observation.
+    pub(crate) fn begin_uncertified_foreign_shell_boundary_for_current_foreground(
+        &mut self,
+        pane_id: &str,
+    ) -> bool {
+        let Some(primary_process_id) = self.primary_pid_for_live_pane_process(pane_id) else {
+            return false;
+        };
+        let Some(process_group_id) = self.pane_foreground_process_group_observation(pane_id).0
+        else {
+            return false;
+        };
+        if self.pane_process_group_is_certified_shell(pane_id, process_group_id) != Some(false) {
+            return false;
+        }
+        self.begin_uncertified_foreign_shell_boundary(pane_id, primary_process_id, process_group_id)
+    }
+
+    /// Starts a generation-fenced discovery boundary for foreign foreground ownership.
+    ///
+    /// The transition invalidates all authority derived from the previous pane
+    /// environment but intentionally retains host-managed adapter artifacts so
+    /// the original primary shell can recover after the foreign process exits.
+    /// Access to those artifacts remains blocked while this boundary is live.
+    pub(crate) fn begin_uncertified_foreign_shell_boundary(
+        &mut self,
+        pane_id: &str,
+        primary_process_id: u32,
+        process_group_id: u32,
+    ) -> bool {
+        if self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                boundary.primary_process_id == primary_process_id
+                    && boundary.process_group_id == process_group_id
+            })
+        {
+            return false;
+        }
+
+        self.process.next_shell_interaction_generation = self
+            .process
+            .next_shell_interaction_generation
+            .saturating_add(1);
+        let interaction_generation = self.process.next_shell_interaction_generation;
+        self.process
+            .pane_shell_interaction_generations
+            .insert(pane_id.to_string(), interaction_generation);
+        self.process.pane_certified_shell_identities.remove(pane_id);
+        self.process.pane_probed_shell_identities.remove(pane_id);
+        self.process.pane_shell_handoffs.remove(pane_id);
+        self.process
+            .pending_agent_subshell_start_observations
+            .remove(pane_id);
+        self.process
+            .pending_agent_subshell_certifications
+            .remove(pane_id);
+        self.process
+            .pending_shell_dispatch_recovery_observations
+            .remove(pane_id);
+        self.process
+            .bootstrap_shell_certification_evidence
+            .retain(|_, evidence| evidence.pane_id != pane_id);
+        self.process.pane_environment_signatures.remove(pane_id);
+        self.process
+            .pane_path_scopes
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_path_scope_failures
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_environment_evidence
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_bubblewrap_capabilities
+            .retain(|key, _| key.pane_id != pane_id);
+        self.clear_pane_agent_instruction_files(pane_id);
+        self.clear_pane_environment_authority_failure(pane_id);
+        self.process.pane_bootstrap_pending.remove(pane_id);
+        self.process.pane_foreign_shell_boundaries.insert(
+            pane_id.to_string(),
+            RuntimeForeignShellBoundary {
+                primary_process_id,
+                process_group_id,
+                interaction_generation,
+            },
+        );
+        self.set_pane_readiness(pane_id, super::PaneReadinessState::Unknown);
+        true
+    }
+
+    /// Clears a foreign boundary after the certified primary shell regains the PTY.
+    pub(crate) fn clear_uncertified_foreign_shell_boundary(&mut self, pane_id: &str) -> bool {
+        self.process
+            .pane_foreign_shell_boundaries
+            .remove(pane_id)
+            .is_some()
     }
 
     /// Starts a new runtime-owned agent-subshell handoff and invalidates state
@@ -1223,10 +1332,11 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> bool {
-        if !self
-            .process
-            .pane_shell_interaction_generations
-            .contains_key(pane_id)
+        if self.pane_has_uncertified_foreign_shell_boundary(pane_id)
+            || !self
+                .process
+                .pane_shell_interaction_generations
+                .contains_key(pane_id)
             || self
                 .process
                 .pane_certified_shell_identities

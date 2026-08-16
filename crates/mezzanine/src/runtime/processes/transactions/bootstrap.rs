@@ -553,6 +553,7 @@ impl RuntimeSessionService {
                             | mez_agent::ShellClassification::Zsh
                     );
                 self.process.pane_bootstrap_pending.contains(k.as_str())
+                    && !self.pane_has_uncertified_foreign_shell_boundary(k.as_str())
                     && !self.pane_agent_subshell_certification_is_pending(k.as_str())
                     && !awaits_managed_receiver
                     && (has_deferred_wrapper

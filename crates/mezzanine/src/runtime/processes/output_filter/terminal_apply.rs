@@ -187,14 +187,22 @@ impl RuntimeSessionService {
         self.process
             .pane_foreground_process_groups
             .insert(pane_id.clone(), process_group_id);
+        let current_foreground_certified_shell =
+            self.pane_process_group_is_certified_shell(&pane_id, process_group_id);
+        let primary_shell_returned = current_foreground_certified_shell == Some(true)
+            && self.clear_uncertified_foreign_shell_boundary(&pane_id);
+        if primary_shell_returned && self.agent_subshell_entry_is_deferred(&pane_id) {
+            self.schedule_parent_shell_discovery_for_agent_entry(&pane_id);
+        }
         let awaiting_initial_prompt = self
             .process
             .pane_bootstrap_pending
             .contains(pane_id.as_str())
             && self.pane_readiness_state(&pane_id) == PaneReadinessState::Unknown;
-        let certified_shell_regained_foreground = previous_foreground_process_group.is_some()
-            && previous_foreground_certified_shell == Some(false)
-            && self.pane_foreground_certified_shell_state(&pane_id) == Some(true);
+        let certified_shell_regained_foreground = primary_shell_returned
+            || previous_foreground_process_group.is_some()
+                && previous_foreground_certified_shell == Some(false)
+                && self.pane_foreground_certified_shell_state(&pane_id) == Some(true);
         if (!awaiting_initial_prompt || certified_shell_regained_foreground)
             && self.pane_foreground_certified_shell_state(&pane_id) == Some(true)
         {

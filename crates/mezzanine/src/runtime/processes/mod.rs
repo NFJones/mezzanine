@@ -311,6 +311,22 @@ struct RuntimePaneProbedShellIdentity {
     execution_identity: RuntimePaneShellExecutionIdentity,
 }
 
+/// Uncertified foreground boundary that may represent another shell environment.
+///
+/// Process names are deliberately absent: the boundary is fenced only by the
+/// live pane process, observed foreground process group, and interaction epoch.
+/// No generated input may cross this boundary until separate shell evidence
+/// certifies an executable and transport for the active environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeForeignShellBoundary {
+    /// Primary pane process that owns the PTY containing the foreign group.
+    primary_process_id: u32,
+    /// Uncertified foreground process group observed by the pane worker.
+    process_group_id: u32,
+    /// Fresh shell-interaction generation assigned to this boundary.
+    interaction_generation: u64,
+}
+
 /// Atomically validated shell identity used to render and execute one pane
 /// transaction.
 ///
@@ -671,6 +687,8 @@ pub(crate) struct RuntimeProcessComponent {
     next_detached_pane_generation: u64,
     /// Latest foreground process groups observed by pane workers.
     pane_foreground_process_groups: std::collections::BTreeMap<String, u32>,
+    /// Uncertified non-primary foreground boundaries keyed by pane id.
+    pane_foreign_shell_boundaries: std::collections::BTreeMap<String, RuntimeForeignShellBoundary>,
     /// Certified non-primary shell identities keyed by pane id.
     pane_certified_shell_identities:
         std::collections::BTreeMap<String, RuntimePaneCertifiedShellIdentity>,
@@ -2311,6 +2329,12 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Result<RuntimePaneShellExecutionIdentity> {
         let primary_process_id = self.primary_pid_for_live_pane_process(pane_id);
+        if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get(pane_id) {
+            return Err(MezError::invalid_state(format!(
+                "pane foreground process group {} is an uncertified foreign shell boundary for interaction generation {}",
+                boundary.process_group_id, boundary.interaction_generation
+            )));
+        }
         if let Some(certified) = self.process.pane_certified_shell_identities.get(pane_id) {
             let interaction_generation = self
                 .process
@@ -3826,6 +3850,7 @@ impl RuntimeSessionService {
         self.process.pane_zsh_compatibility.remove(pane_id);
         self.process.pane_zsh_admissions.remove(pane_id);
         self.process.pane_foreground_process_groups.remove(pane_id);
+        self.process.pane_foreign_shell_boundaries.remove(pane_id);
         self.process.program_owned_pane_titles.remove(pane_id);
         self.persistence.cleanup_pane_io(pane_id);
         self.process.process_pane_screens.remove(pane_id);

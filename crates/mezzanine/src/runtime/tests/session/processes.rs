@@ -1920,6 +1920,46 @@ fn runtime_foreground_shell_return_recovers_pending_bootstrap_owner() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies an uncertified foreign foreground process creates a fresh shell
+/// interaction epoch and prevents callers from falling back to host identity.
+///
+/// SSH, container clients, full-screen programs, and password prompts are all
+/// untrusted at this boundary. Their process names must not authorize input,
+/// while return to the primary shell must leave identity rediscovery pending
+/// instead of silently restoring stale environment authority.
+#[test]
+fn runtime_foreign_foreground_starts_fail_closed_shell_epoch() {
+    let mut service = test_runtime_service();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", None);
+
+    assert!(service.shell_execution_identity_for_pane("%1").is_ok());
+    service
+        .apply_pane_foreground_process_event("%1", "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+
+    assert!(service.begin_uncertified_foreign_shell_boundary_for_current_foreground("%1"));
+    assert!(service.pane_has_uncertified_foreign_shell_boundary("%1"));
+    let diagnostic = service.pane_foreground_process_diagnostic("%1").json();
+    assert!(diagnostic["shell_interaction_generation"].is_u64());
+    let error = service.shell_execution_identity_for_pane("%1").unwrap_err();
+    assert!(error.message().contains("uncertified foreign"), "{error}");
+
+    service
+        .apply_pane_foreground_process_event("%1", "sh", primary_pid, None)
+        .unwrap();
+
+    assert!(!service.pane_has_uncertified_foreign_shell_boundary("%1"));
+    let error = service.shell_execution_identity_for_pane("%1").unwrap_err();
+    assert!(error.message().contains("has not been probed"), "{error}");
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies stale readiness recovery can use async foreground metadata when
 /// synchronous PTY foreground queries are temporarily unavailable.
 ///
