@@ -3100,12 +3100,52 @@ fn runtime_fish_bootstrap_waits_for_payload_receiver_ready() {
 /// receiver-installed event is processed. Generic prompt bootstrap dispatch
 /// must leave the wrapper untouched for that event; otherwise Fish reports a
 /// protocol violation and Zsh can remain indefinitely in bootstrapping.
+///
+/// Resolves one test shell from `PATH` before checking supported absolute
+/// installation locations. Ordinary validation can therefore exercise every
+/// available shell without requiring one platform-specific package layout.
+fn find_test_shell(shell_name: &str, known_locations: &[&str]) -> Option<PathBuf> {
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .map(|directory| directory.join(shell_name))
+        .chain(known_locations.iter().map(|path| PathBuf::from(*path)))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Verifies managed Fish and Zsh retain ownership of deferred bootstrap work
+/// until their private receivers report installation.
+///
+/// Shells are resolved independently because ordinary cross-platform test
+/// environments may provide only one of them. The dedicated managed-shell
+/// reliability suite remains responsible for requiring both interpreters.
 #[test]
 fn runtime_managed_fish_and_zsh_bootstrap_wait_for_receiver_installation() {
-    for shell_path in ["/usr/bin/fish", "/usr/bin/zsh"] {
+    for (shell_name, executable, known_locations) in [
+        (
+            "Fish",
+            "fish",
+            &[
+                "/usr/bin/fish",
+                "/usr/local/bin/fish",
+                "/opt/homebrew/bin/fish",
+            ][..],
+        ),
+        (
+            "Zsh",
+            "zsh",
+            &["/bin/zsh", "/usr/bin/zsh", "/usr/local/bin/zsh"][..],
+        ),
+    ] {
+        let Some(shell_path) = find_test_shell(executable, known_locations) else {
+            eprintln!(
+                "skipping managed {shell_name} bootstrap regression because it is unavailable"
+            );
+            continue;
+        };
+        let shell_path_display = shell_path.display().to_string();
         let mut service = test_runtime_service();
-        service.session.shell =
-            ResolvedShell::new(PathBuf::from(shell_path), ShellSource::ShellEnv).into();
+        service.session.shell = ResolvedShell::new(shell_path, ShellSource::ShellEnv).into();
         service
             .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
             .unwrap();
@@ -3126,18 +3166,18 @@ fn runtime_managed_fish_and_zsh_bootstrap_wait_for_receiver_installation() {
         assert_eq!(
             service.maybe_bootstrap_ready_panes().unwrap(),
             0,
-            "{shell_path} prompt readiness must not consume receiver-owned bootstrap"
+            "{shell_path_display} prompt readiness must not consume receiver-owned bootstrap"
         );
         assert!(
             service.drain_pane_io_transition().side_effects.is_empty(),
-            "{shell_path} prompt readiness unexpectedly dispatched deferred bootstrap"
+            "{shell_path_display} prompt readiness unexpectedly dispatched deferred bootstrap"
         );
         assert!(service.pane_bootstrap_is_pending_for_tests(pane_id));
         assert!(
             service
                 .running_shell_transactions_for_tests()
                 .contains_key(&marker),
-            "{shell_path} bootstrap transaction should remain receiver-owned"
+            "{shell_path_display} bootstrap transaction should remain receiver-owned"
         );
         service.terminate_all_pane_processes().unwrap();
     }
