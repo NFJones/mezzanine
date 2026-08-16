@@ -1776,9 +1776,13 @@ fn managed_zsh_agent_subshell_env_word_list(managed_zsh: &ManagedZshShell) -> Ve
     words
 }
 
-/// Renders one direct login-interactive managed zsh child invocation.
+/// Renders one direct interactive managed zsh child invocation.
+///
+/// The parent pane already owns the login environment. Replaying `.zprofile`
+/// and `.zlogin` for every persistent child is both wasteful and observably
+/// different from an ordinary interactive subshell.
 fn managed_zsh_interactive_invocation_words(shell_path: &str) -> String {
-    format!("{} -l -i", shell_quote(shell_path))
+    format!("{} -i", shell_quote(shell_path))
 }
 
 /// Renders a Fish command word sequence that starts the persistent agent-mode

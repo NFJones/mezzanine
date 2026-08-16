@@ -1901,9 +1901,13 @@ trigger. Installation MUST compose with existing ZLE line-init behavior and
 MUST NOT replace an occupied user binding; when no safe trigger or hook is
 available, admission MUST fail closed after a bounded wait without writing a
 handoff. A managed Zsh child MUST receive the runtime-owned startup directory
-directly and execute as one login-interactive Zsh process so its private
-receiver is installed before bootstrap release. Its private source protocol
-MUST bound source bytes, chunks, and physical records. After the fixed trigger
+directly and execute as one non-login interactive Zsh process so `.zshenv` and
+`.zshrc` install its private receiver before bootstrap release without replaying
+the parent login environment through `.zprofile` and `.zlogin`. Initial pane
+processes remain login-interactive. Managed startup artifacts MAY rely on
+successful owner-only writes and close-before-spawn ordering rather than
+filesystem durability synchronization. Its private source protocol MUST bound
+source bytes, chunks, and physical records. After the fixed trigger
 starts the private receiver, runtime MAY use a token-authenticated awaiting
 record only as transport readiness to release source-free HOLD metadata; that
 record MUST NOT advance lifecycle ownership. The receiver MUST authenticate

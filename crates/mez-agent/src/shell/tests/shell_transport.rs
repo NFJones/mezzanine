@@ -120,13 +120,14 @@ fn managed_bash_handoff_rx2_keeps_parent_proof_out_of_payload() {
 
 #[test]
 /// Verifies a managed zsh child receives immutable startup state and starts as
-/// one direct login-interactive process.
+/// one direct interactive process without replaying login startup.
 ///
 /// The parent startup shim removes its temporary managed-directory variable
 /// before agent admission. The handoff must therefore embed the runtime-owned
-/// directory rather than expand that expired variable, and it must execute a
-/// login shell so the managed `.zlogin` installs the child receiver.
-fn managed_zsh_agent_subshell_uses_runtime_owned_login_startup() {
+/// directory rather than expand that expired variable. The managed `.zshenv`
+/// and `.zshrc` install the child receiver without re-running `.zprofile` or
+/// `.zlogin` from the already-established parent login environment.
+fn managed_zsh_agent_subshell_uses_runtime_owned_interactive_startup() {
     let token = marker();
     let managed = ManagedZshShell::new(
         token.clone(),
@@ -152,7 +153,8 @@ fn managed_zsh_agent_subshell_uses_runtime_owned_login_startup() {
         source.contains("ZDOTDIR='/tmp/mez-managed-zsh'"),
         "{source}"
     );
-    assert!(source.contains("'/bin/zsh' -l -i"), "{source}");
+    assert!(source.contains("'/bin/zsh' -i"), "{source}");
+    assert!(!source.contains("'/bin/zsh' -l -i"), "{source}");
     assert!(!source.contains("$MEZ_ZSH_MANAGED_ZDOTDIR"), "{source}");
     assert!(!source.contains("'/bin/zsh' -c"), "{source}");
 }
