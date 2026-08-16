@@ -62,6 +62,63 @@ fn agent_subshell_enter_command_suppresses_shell_startup_hooks() {
 }
 
 #[test]
+/// Verifies ordinary managed Bash work keeps the proofless RX1 wire format.
+///
+/// Actions and child bootstrap stages do not authenticate parent restoration,
+/// so adding the persistent handoff protocol must not change their framing or
+/// place a parent-only proof into evaluated source.
+fn managed_bash_private_source_remains_proofless_rx1() {
+    let token = MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap();
+    let input = bash_private_source_input("printf ordinary", &token, "ordinary-marker");
+
+    assert!(
+        input.wrapper.contains("MEZ_BASH_RX1_BEGIN"),
+        "{}",
+        input.wrapper
+    );
+    assert!(!input.wrapper.contains("MEZ_BASH_RX2"), "{}", input.wrapper);
+    assert!(input.receiver_payload.contains("MEZ_BASH_RX1_DATA"));
+    assert!(input.receiver_payload.contains("MEZ_BASH_RX1_END"));
+    assert!(!input.receiver_payload.contains("MEZ_BASH_RX2"));
+}
+
+#[test]
+/// Verifies persistent Bash handoff framing isolates its parent-ready proof.
+///
+/// RX2 carries the proof only in the parent callback's source-free admission
+/// header and authenticated cancellation record. The proof must never enter
+/// DATA, END, evaluated source, child arguments, or child environment.
+fn managed_bash_handoff_rx2_keeps_parent_proof_out_of_payload() {
+    let token = MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap();
+    let proof = MarkerToken::new("fedcba9876543210fedcba9876543210").unwrap();
+    let input = bash_private_handoff_source_input(
+        "printf persistent-child",
+        &token,
+        "handoff-marker",
+        &proof,
+    );
+
+    assert!(
+        input.wrapper.contains("MEZ_BASH_RX2_BEGIN"),
+        "{}",
+        input.wrapper
+    );
+    assert!(input.wrapper.contains(proof.as_str()), "{}", input.wrapper);
+    assert!(input.receiver_payload.contains("MEZ_BASH_RX2_DATA"));
+    assert!(input.receiver_payload.contains("MEZ_BASH_RX2_END"));
+    assert!(!input.receiver_payload.contains(proof.as_str()));
+    assert!(input.payload.is_empty());
+    assert_eq!(
+        bash_private_handoff_cancel_input(&token, "handoff-marker", &proof),
+        format!(
+            "MEZ_BASH_RX2_CANCEL {} handoff-marker {}\n",
+            token.as_str(),
+            proof.as_str()
+        )
+    );
+}
+
+#[test]
 /// Verifies a managed zsh child receives immutable startup state and starts as
 /// one direct login-interactive process.
 ///

@@ -19,7 +19,9 @@ const MANAGED_SHELL_HANDOFF_INPUT_LIMIT_BYTES: usize = 64 * 1024;
 
 /// Managed shell adapter that owns one interactive editor handoff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ManagedShellKind {
+pub(in crate::runtime) enum ManagedShellKind {
+    /// GNU Bash Readline callback ownership.
+    Bash,
     /// Fish command-line editor callback ownership.
     Fish,
     /// Zsh ZLE callback ownership.
@@ -31,6 +33,8 @@ pub(super) enum ManagedShellKind {
 pub(in crate::runtime) enum ManagedShellHandoffPhase {
     /// The private editor trigger was written, but payload delivery has not begun.
     TriggerQueued,
+    /// The native editor saved user state and admitted one correlated header.
+    EditorHeld,
     /// The adapter admitted the private frame and payload delivery is in flight.
     PayloadInFlight,
     /// The persistent child authenticated that it owns terminal input.
@@ -58,6 +62,8 @@ pub(super) struct ManagedShellHandoffIdentity {
     pub(super) primary_process_id: Option<u32>,
     /// Shell interaction epoch that launched the child handoff.
     pub(super) interaction_generation: Option<u64>,
+    /// Parent-only proof required when the adapter publishes readiness.
+    pub(super) parent_proof: Option<String>,
 }
 
 /// Exact foreground observation that may prove the original parent returned.
@@ -158,6 +164,8 @@ impl ManagedShellHandoff {
 /// Correlated lifecycle input accepted by the pure handoff reducer.
 #[derive(Clone, Debug)]
 pub(super) enum ManagedShellHandoffEvent {
+    /// The native adapter saved and cleared its editor for this marker.
+    EditorHeld { marker: String },
     /// The adapter admitted the private frame and runtime released its payload.
     PayloadReleased { marker: String },
     /// The persistent child authenticated terminal-input ownership.
@@ -239,9 +247,18 @@ pub(super) fn reduce_managed_shell_handoff(
         effects: Vec::new(),
     };
     match event {
-        ManagedShellHandoffEvent::PayloadReleased { marker }
+        ManagedShellHandoffEvent::EditorHeld { marker }
             if marker == handoff.identity.marker
                 && handoff.phase == ManagedShellHandoffPhase::TriggerQueued =>
+        {
+            handoff.phase = ManagedShellHandoffPhase::EditorHeld;
+        }
+        ManagedShellHandoffEvent::PayloadReleased { marker }
+            if marker == handoff.identity.marker
+                && matches!(
+                    handoff.phase,
+                    ManagedShellHandoffPhase::TriggerQueued | ManagedShellHandoffPhase::EditorHeld
+                ) =>
         {
             handoff.phase = ManagedShellHandoffPhase::PayloadInFlight;
         }
@@ -266,9 +283,11 @@ pub(super) fn reduce_managed_shell_handoff(
         ManagedShellHandoffEvent::ExitRequested { now_unix_ms } => {
             handoff.exit_requested = true;
             match handoff.phase {
-                ManagedShellHandoffPhase::TriggerQueued => transition
-                    .effects
-                    .push(ManagedShellHandoffEffect::CancelBeforePayload),
+                ManagedShellHandoffPhase::TriggerQueued | ManagedShellHandoffPhase::EditorHeld => {
+                    transition
+                        .effects
+                        .push(ManagedShellHandoffEffect::CancelBeforePayload)
+                }
                 ManagedShellHandoffPhase::PayloadInFlight => transition
                     .effects
                     .push(ManagedShellHandoffEffect::WaitForChildInstallation),
@@ -290,8 +309,10 @@ pub(super) fn reduce_managed_shell_handoff(
             }
         }
         ManagedShellHandoffEvent::CancellationSent { now_unix_ms }
-            if handoff.phase == ManagedShellHandoffPhase::TriggerQueued
-                && handoff.exit_requested =>
+            if matches!(
+                handoff.phase,
+                ManagedShellHandoffPhase::TriggerQueued | ManagedShellHandoffPhase::EditorHeld
+            ) && handoff.exit_requested =>
         {
             handoff.phase = ManagedShellHandoffPhase::Returning;
             handoff.started_at_unix_ms = Some(now_unix_ms);
@@ -358,6 +379,7 @@ pub(super) fn reduce_managed_shell_handoff(
                 && matches!(
                     handoff.phase,
                     ManagedShellHandoffPhase::TriggerQueued
+                        | ManagedShellHandoffPhase::EditorHeld
                         | ManagedShellHandoffPhase::PayloadInFlight
                         | ManagedShellHandoffPhase::ChildInstalled
                         | ManagedShellHandoffPhase::Returning
@@ -443,6 +465,7 @@ mod tests {
             }),
             primary_process_id: Some(41),
             interaction_generation: Some(11),
+            parent_proof: None,
         }
     }
 

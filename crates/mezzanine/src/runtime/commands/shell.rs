@@ -18,7 +18,8 @@ use crate::runtime::{PaneReadinessState, runtime_random_marker_token};
 use crate::{error::MezErrorKind, runtime::commands::issues};
 use mez_agent::{
     ShellClassification, agent_subshell_enter_command_with_shell_compatibility_and_exit_marker,
-    agent_subshell_exit_marker_bytes, bash_private_source_input, parse_macro_prompt_invocation,
+    agent_subshell_exit_marker_bytes, bash_private_handoff_cancel_input,
+    bash_private_handoff_source_input, parse_macro_prompt_invocation,
 };
 
 /// Authenticated provenance carried with one live agent-shell command.
@@ -1110,6 +1111,39 @@ impl RuntimeSessionService {
         }
         let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;
         let classification = shell_identity.classification();
+        if classification == ShellClassification::Bash {
+            match self.managed_bash_admission_for_pane(pane_id) {
+                Some(crate::runtime::processes::RuntimeManagedBashAdmission::Ready {
+                    version,
+                    ..
+                }) if *version == mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION => {}
+                Some(crate::runtime::processes::RuntimeManagedBashAdmission::Pending {
+                    ..
+                }) => {
+                    self.arm_managed_bash_admission_deadline(pane_id);
+                    self.defer_agent_subshell_entry(pane_id);
+                    return Ok(false);
+                }
+                Some(crate::runtime::processes::RuntimeManagedBashAdmission::Unavailable {
+                    reason,
+                }) => {
+                    let reason = reason.clone();
+                    self.clear_deferred_agent_subshell_entry(pane_id);
+                    self.append_agent_status_text_to_terminal_buffer(
+                        pane_id,
+                        &format!("agent: managed Bash integration unavailable ({reason})"),
+                    )?;
+                    return Ok(false);
+                }
+                _ => {
+                    self.append_agent_status_text_to_terminal_buffer(
+                        pane_id,
+                        "agent: managed Bash integration is unavailable",
+                    )?;
+                    return Ok(false);
+                }
+            }
+        }
         if classification == ShellClassification::Zsh {
             match self.managed_zsh_admission_for_pane(pane_id) {
                 Some(crate::runtime::processes::RuntimeManagedZshAdmission::Ready { .. }) => {}
@@ -1215,14 +1249,18 @@ impl RuntimeSessionService {
                         "managed Bash receiver is unavailable for agent subshell handoff",
                     )
                 })?;
-            let private_input = bash_private_source_input(&shell_command, &token, marker);
-            self.prepend_shell_receiver_payload(
+            let parent_proof =
+                runtime_random_marker_token(&format!("bash-parent-ready\0{pane_id}\0{marker}"))?;
+            let private_input =
+                bash_private_handoff_source_input(&shell_command, &token, marker, &parent_proof);
+            self.prepend_bash_shell_handoff_payload(
                 marker,
                 mez_mux::process::ShellInputDelivery::receiver_acknowledged(
                     private_input.receiver_payload.into_bytes(),
                     marker.clone(),
                     true,
                 ),
+                &parent_proof,
             );
             private_input.wrapper
         } else if classification == ShellClassification::Fish {
@@ -1343,26 +1381,62 @@ impl RuntimeSessionService {
                         "managed-shell parent restoration ownership disappeared",
                     )
                 })?;
-                if phase == crate::runtime::processes::ManagedShellHandoffPhase::TriggerQueued {
+                if matches!(
+                    phase,
+                    crate::runtime::processes::ManagedShellHandoffPhase::TriggerQueued
+                        | crate::runtime::processes::ManagedShellHandoffPhase::EditorHeld
+                ) {
                     let _ = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
-                    let zsh_restoration = self.managed_parent_restoration_is_zsh(pane_id);
-                    let token = if zsh_restoration {
-                        self.zsh_history_token_for_pane(pane_id).cloned()
-                    } else {
-                        self.fish_receiver_token_for_pane(pane_id).cloned()
-                    }
-                    .ok_or_else(|| {
-                        MezError::invalid_state("managed shell receiver token is unavailable")
+                    let shell = self.managed_shell_handoff_kind(pane_id).ok_or_else(|| {
+                        MezError::invalid_state("managed shell handoff kind is unavailable")
                     })?;
                     if !self.remember_managed_shell_admission_cancellation(pane_id) {
                         return Err(MezError::invalid_state(
                             "managed-shell admission cancellation ownership disappeared",
                         ));
                     }
-                    let cancellation = if zsh_restoration {
-                        mez_agent::zsh_private_source_cancel_input(&token, &marker)
-                    } else {
-                        mez_agent::fish_private_source_cancel_input(&token, &marker)
+                    let cancellation = match shell {
+                        crate::runtime::processes::ManagedShellKind::Bash => {
+                            let token = self
+                                .bash_receiver_token_for_pane(pane_id)
+                                .cloned()
+                                .ok_or_else(|| {
+                                    MezError::invalid_state(
+                                        "managed Bash receiver token is unavailable",
+                                    )
+                                })?;
+                            let proof = self
+                                .managed_shell_parent_proof(pane_id)
+                                .and_then(|proof| mez_agent::MarkerToken::new(proof).ok())
+                                .ok_or_else(|| {
+                                    MezError::invalid_state(
+                                        "managed Bash parent-ready proof is unavailable",
+                                    )
+                                })?;
+                            bash_private_handoff_cancel_input(&token, &marker, &proof)
+                        }
+                        crate::runtime::processes::ManagedShellKind::Fish => {
+                            let token = self
+                                .fish_receiver_token_for_pane(pane_id)
+                                .cloned()
+                                .ok_or_else(|| {
+                                    MezError::invalid_state(
+                                        "managed Fish receiver token is unavailable",
+                                    )
+                                })?;
+                            mez_agent::fish_private_source_cancel_input(&token, &marker)
+                        }
+                        crate::runtime::processes::ManagedShellKind::Zsh => {
+                            let token = self
+                                .zsh_history_token_for_pane(pane_id)
+                                .cloned()
+                                .ok_or_else(|| {
+                                    MezError::invalid_state(
+                                        "managed Zsh receiver token is unavailable",
+                                    )
+                                })?;
+                            mez_agent::zsh_private_source_cancel_input(&token, &marker)
+                        }
                     };
                     self.write_runtime_pane_input(pane_id, cancellation.as_bytes())?;
                     return Ok(true);

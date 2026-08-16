@@ -481,6 +481,7 @@ pub use shell::{
     agent_subshell_enter_command, agent_subshell_enter_command_with_shell_compatibility,
     agent_subshell_enter_command_with_shell_compatibility_and_exit_marker,
     agent_subshell_enter_command_with_zsh_history_token, agent_subshell_exit_marker_bytes,
+    bash_private_handoff_cancel_input, bash_private_handoff_source_input,
     bash_private_source_input, bootstrap_script, bootstrap_script_for_classification,
     fish_bootstrap_script, fish_private_source_cancel_input, fish_private_source_input, fish_quote,
     parse_bootstrap_env_output, parse_shell_identity_probe_output,

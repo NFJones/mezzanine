@@ -31,8 +31,9 @@ pub use mouse::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers, parse_s
 pub use geometry::{TerminalSize, TerminalSizeError};
 
 pub use protocol::{
-    MAX_OSC_STRING_BYTES, TerminalClipboardContent, TerminalClipboardRequest,
-    TerminalClipboardSelection, TerminalOscEvent,
+    MANAGED_SHELL_PROTOCOL_VERSION, MAX_OSC_STRING_BYTES, ManagedShellAdapter,
+    ManagedShellParentOutcome, ManagedShellProtocolEvent, TerminalClipboardContent,
+    TerminalClipboardRequest, TerminalClipboardSelection, TerminalOscEvent,
 };
 
 pub use screen::{AlternateScreenState, TerminalScreen};

@@ -1872,6 +1872,43 @@ fn runtime_managed_zsh_admission_timeout_creates_no_shell_work() {
     process.terminate(Duration::from_millis(100)).unwrap();
 }
 
+/// Verifies managed Bash protocol admission fails closed after its bounded
+/// deadline without acquiring editor ownership or writing a handoff.
+///
+/// A missing or incompatible availability announcement must leave the parent
+/// process responsive and create no bootstrap transaction or pane input.
+#[test]
+fn runtime_managed_bash_admission_timeout_creates_no_shell_work() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = "%1";
+    let mut process = service
+        .take_running_pane_process_for_adapter(pane_id)
+        .unwrap();
+    service.set_expired_managed_bash_admission_for_tests(pane_id);
+    let _ = service.drain_pane_io_transition();
+
+    assert_eq!(
+        service
+            .recover_expired_managed_bash_admissions_for_tests(u64::MAX)
+            .unwrap(),
+        1
+    );
+    assert!(
+        service.managed_bash_admission_unavailable_for_tests(pane_id, "startup-admission-timeout")
+    );
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "admission timeout must not write unauthenticated shell input"
+    );
+    assert!(service.primary_pid_for_live_pane_process(pane_id).is_some());
+    process.terminate(Duration::from_millis(100)).unwrap();
+}
+
 /// Verifies that a live POSIX shell discards an unsubmitted process draft
 /// before agent-shell admission instead of concatenating generated transport
 /// with the user's command.

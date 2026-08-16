@@ -6,7 +6,9 @@
 
 use std::collections::BTreeMap;
 
-use mez_terminal::TerminalOscEvent;
+use mez_terminal::{
+    ManagedShellAdapter, ManagedShellParentOutcome, ManagedShellProtocolEvent, TerminalOscEvent,
+};
 
 /// Decodes one OSC 133 payload into product shell-transaction semantics.
 pub(crate) fn parse_mez_shell_transaction_osc(payload: &str) -> Option<TerminalOscEvent> {
@@ -58,6 +60,9 @@ pub(crate) fn parse_mez_shell_transaction_osc(payload: &str) -> Option<TerminalO
                     pane_id: required_marker_field(&values, "mez_pane")?,
                 });
             }
+            if values.contains_key("mez_protocol") || values.contains_key("mez_event") {
+                return parse_managed_shell_protocol_event(&values);
+            }
             let token = required_marker_field(&values, "mez_token")?;
             if values.get("mez_receiver").copied() == Some("available") {
                 return Some(TerminalOscEvent::ShellReceiverAvailable {
@@ -97,6 +102,70 @@ pub(crate) fn parse_mez_shell_transaction_osc(payload: &str) -> Option<TerminalO
         }
         _ => None,
     }
+}
+
+/// Decodes one versioned shell-neutral managed-adapter event.
+fn parse_managed_shell_protocol_event(values: &BTreeMap<&str, &str>) -> Option<TerminalOscEvent> {
+    let version = required_marker_field(values, "mez_protocol")
+        .and_then(|version| version.parse::<u16>().ok())?;
+    let shell = match values.get("mez_shell").copied()? {
+        "bash" => ManagedShellAdapter::Bash,
+        "fish" => ManagedShellAdapter::Fish,
+        "zsh" => ManagedShellAdapter::Zsh,
+        _ => return None,
+    };
+    let token = required_marker_field(values, "mez_token")?;
+    let event = match values.get("mez_event").copied()? {
+        "adapter-available" => ManagedShellProtocolEvent::AdapterAvailable,
+        "editor-held" => ManagedShellProtocolEvent::EditorHeld {
+            marker: required_marker_field(values, "mez_marker")?,
+        },
+        "frame-admitted" => ManagedShellProtocolEvent::FrameAdmitted {
+            marker: required_marker_field(values, "mez_marker")?,
+        },
+        "child-installed" => ManagedShellProtocolEvent::ChildInstalled {
+            marker: required_marker_field(values, "mez_marker")?,
+        },
+        "receiver-rejected" => ManagedShellProtocolEvent::ReceiverRejected {
+            marker: values
+                .contains_key("mez_marker")
+                .then(|| required_marker_field(values, "mez_marker"))
+                .flatten(),
+            reason: required_bounded_field(values, "mez_reason", 64)?,
+        },
+        "child-exited" => ManagedShellProtocolEvent::ChildExited {
+            marker: required_marker_field(values, "mez_marker")?,
+            exit_code: required_marker_field(values, "mez_status")
+                .and_then(|status| status.parse::<i32>().ok())?,
+        },
+        "parent-ready" => {
+            let outcome = match values.get("mez_outcome").copied()? {
+                "completed" => ManagedShellParentOutcome::Completed,
+                "cancelled" => ManagedShellParentOutcome::Cancelled,
+                "frame-rejected" => ManagedShellParentOutcome::FrameRejected,
+                "source-failed" => ManagedShellParentOutcome::SourceFailed,
+                "child-launch-failed" => ManagedShellParentOutcome::ChildLaunchFailed,
+                _ => return None,
+            };
+            ManagedShellProtocolEvent::ParentReady {
+                marker: required_marker_field(values, "mez_marker")?,
+                outcome,
+                exit_code: required_marker_field(values, "mez_status")
+                    .and_then(|status| status.parse::<i32>().ok())?,
+                proof: match values.get("mez_proof") {
+                    Some(_) => Some(required_bounded_field(values, "mez_proof", 256)?),
+                    None => None,
+                },
+            }
+        }
+        _ => return None,
+    };
+    Some(TerminalOscEvent::ManagedShell {
+        version,
+        shell,
+        token,
+        event,
+    })
 }
 
 /// Parses semicolon-delimited key-value fields from a shell marker.
@@ -218,6 +287,59 @@ mod tests {
             "133;R;mez_receiver=complete;mez_token=pane-token;mez_marker=transaction-marker;mez_status=invalid",
         ] {
             assert_eq!(parse_mez_shell_transaction_osc(payload), None, "{payload}");
+        }
+    }
+
+    /// Verifies versioned managed-shell events retain semantic Bash lifecycle
+    /// fields, typed outcomes, and optional parent-only readiness proof.
+    #[test]
+    fn managed_shell_protocol_events_parse_typed_bash_lifecycle() {
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_protocol=2;mez_shell=bash;mez_token=pane-token;mez_event=editor-held;mez_marker=handoff-marker"
+            ),
+            Some(TerminalOscEvent::ManagedShell {
+                version: 2,
+                shell: ManagedShellAdapter::Bash,
+                token: "pane-token".to_string(),
+                event: ManagedShellProtocolEvent::EditorHeld {
+                    marker: "handoff-marker".to_string(),
+                },
+            })
+        );
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_protocol=2;mez_shell=bash;mez_token=pane-token;mez_event=parent-ready;mez_marker=handoff-marker;mez_outcome=source-failed;mez_status=7;mez_proof=fedcba9876543210fedcba9876543210"
+            ),
+            Some(TerminalOscEvent::ManagedShell {
+                version: 2,
+                shell: ManagedShellAdapter::Bash,
+                token: "pane-token".to_string(),
+                event: ManagedShellProtocolEvent::ParentReady {
+                    marker: "handoff-marker".to_string(),
+                    outcome: ManagedShellParentOutcome::SourceFailed,
+                    exit_code: 7,
+                    proof: Some("fedcba9876543210fedcba9876543210".to_string()),
+                },
+            })
+        );
+    }
+
+    /// Verifies malformed or unbounded semantic records are discarded before
+    /// they can acquire editor or transaction ownership.
+    #[test]
+    fn managed_shell_protocol_events_reject_invalid_fields() {
+        let oversized_reason = "a".repeat(65);
+        let oversized_proof = "b".repeat(257);
+        for payload in [
+            "133;R;mez_protocol=x;mez_shell=bash;mez_token=pane-token;mez_event=adapter-available".to_string(),
+            "133;R;mez_protocol=2;mez_shell=unknown;mez_token=pane-token;mez_event=adapter-available".to_string(),
+            "133;R;mez_protocol=2;mez_shell=bash;mez_token=;mez_event=adapter-available".to_string(),
+            "133;R;mez_protocol=2;mez_shell=bash;mez_token=pane-token;mez_event=editor-held;mez_marker=".to_string(),
+            format!("133;R;mez_protocol=2;mez_shell=bash;mez_token=pane-token;mez_event=receiver-rejected;mez_reason={oversized_reason}"),
+            format!("133;R;mez_protocol=2;mez_shell=bash;mez_token=pane-token;mez_event=parent-ready;mez_marker=handoff-marker;mez_outcome=completed;mez_status=0;mez_proof={oversized_proof}"),
+        ] {
+            assert_eq!(parse_mez_shell_transaction_osc(&payload), None, "{payload}");
         }
     }
 

@@ -136,6 +136,33 @@ fn shell_transaction_control_osc_matches_marker(record: &[u8], marker: &str) -> 
     };
     match event {
         TerminalOscEvent::ShellReceiverAwaiting { .. } => false,
+        TerminalOscEvent::ManagedShell { event, .. } => match event {
+            mez_terminal::ManagedShellProtocolEvent::EditorHeld {
+                marker: event_marker,
+            }
+            | mez_terminal::ManagedShellProtocolEvent::FrameAdmitted {
+                marker: event_marker,
+            }
+            | mez_terminal::ManagedShellProtocolEvent::ChildInstalled {
+                marker: event_marker,
+            }
+            | mez_terminal::ManagedShellProtocolEvent::ChildExited {
+                marker: event_marker,
+                ..
+            }
+            | mez_terminal::ManagedShellProtocolEvent::ParentReady {
+                marker: event_marker,
+                ..
+            } => event_marker == marker,
+            mez_terminal::ManagedShellProtocolEvent::ReceiverRejected {
+                marker: Some(event_marker),
+                ..
+            } => event_marker == marker,
+            mez_terminal::ManagedShellProtocolEvent::AdapterAvailable
+            | mez_terminal::ManagedShellProtocolEvent::ReceiverRejected { marker: None, .. } => {
+                false
+            }
+        },
         TerminalOscEvent::ShellParentRestored {
             marker: event_marker,
             ..

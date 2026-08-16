@@ -52,6 +52,7 @@ impl RuntimeSessionService {
                 }
                 TerminalOscEvent::TitleChanged { .. }
                 | TerminalOscEvent::ShellIntegration { .. }
+                | TerminalOscEvent::ManagedShell { .. }
                 | TerminalOscEvent::ShellPromptStart
                 | TerminalOscEvent::ShellPromptEnd
                 | TerminalOscEvent::ShellCommandOutputStart

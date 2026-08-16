@@ -1843,6 +1843,19 @@ restored draft MUST remain unexecuted until the user explicitly submits it.
 Fish admission MUST fail closed without clearing the draft while history
 search, the completion pager, or an active text selection prevents exact
 editor-state restoration.
+Managed shell adapters MUST publish a versioned, pane-token-authenticated
+semantic lifecycle rather than requiring runtime to infer ownership from
+shell-specific control records. Protocol version 2 defines
+`AdapterAvailable`, `EditorHeld`, `FrameAdmitted`, `ChildInstalled`,
+`ReceiverRejected`, `ChildExited`, and `ParentReady` events. Parent readiness
+MUST carry a typed outcome: completed, cancelled, frame rejected, source
+failed, or child launch failed. Runtime MUST reject an unsupported version or
+wrong adapter/token before editor ownership is acquired, and a missing
+availability announcement MUST fail closed after a bounded wait without
+writing a handoff. Stale, duplicate, wrong-shell, wrong-marker, and
+wrong-generation events MUST be inert. Runtime MUST settle one handoff exactly
+once and MUST release queued foreground input only after authenticated parent
+readiness or fresh exact foreground ownership proof.
 Managed Fish and Zsh MUST publish a pane-token-authenticated parent-restored
 boundary only after the private receiver has returned from sourcing the child
 handoff, restored the editor state, and queued its repaint. Child-exit rendering
@@ -4272,6 +4285,30 @@ pane-scoped token and correlated transaction marker. The receiver MUST validate
 the token, marker, sequence, declared byte length, SHA-256 digest, and explicit
 end record before evaluating source, and malformed or unavailable receiver
 support MUST fail closed without ordinary Readline command injection.
+
+Managed Bash is the reference adapter for the common managed-shell lifecycle.
+Ordinary generated actions and child bootstrap stages MUST use the proofless
+RX1 BEGIN/DATA/END transport and MUST retain transaction-only completion
+semantics. A persistent parent-to-child handoff MUST use RX2 framing and MUST
+generate a fresh parent-return proof known only to the original parent
+Readline callback and runtime. That proof MAY appear in the source-free RX2
+BEGIN record, an authenticated pre-DATA cancellation record, and the resulting
+`ParentReady` event, but MUST NOT appear in evaluated source, DATA or END
+records, child arguments, child environment, action payloads, or visible
+output. Runtime MUST accept proof-bearing `ParentReady` only when its proof,
+marker, adapter, pane-process generation, original parent PID, shell-interaction
+generation, and reducer phase all match the live handoff.
+
+After an authenticated Bash BEGIN is admitted, the receiver MUST acknowledge
+and drain every declared DATA record and the terminal END record even after it
+detects malformed framing. It MUST evaluate no rejected source and MUST restore
+the saved Readline state before publishing a typed terminal event. Before the
+first RX2 DATA record is consumed, the receiver MAY accept one token-, marker-,
+and parent-proof-authenticated CANCEL record; cancellation MUST acknowledge the
+record, evaluate no source, restore the exact editor state, and publish
+proof-bearing cancelled `ParentReady`. A cancellation received after DATA has
+begun MUST be treated as malformed framing and MUST NOT shorten the required
+drain.
 
 When a generated Bash transaction starts a managed child Bash and subsequent
 work targets that child, the child MUST emit a receiver-installed record only

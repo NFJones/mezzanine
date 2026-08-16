@@ -6,6 +6,9 @@
 
 use std::fmt;
 
+/// Current shell-neutral managed-adapter protocol version.
+pub const MANAGED_SHELL_PROTOCOL_VERSION: u16 = 2;
+
 /// Maximum bytes retained while parsing one operating-system-command payload.
 ///
 /// Parsers should continue consuming an oversized sequence through its
@@ -119,6 +122,17 @@ pub enum TerminalOscEvent {
         /// Parsed process exit code, when supplied by the terminal program.
         exit_code: Option<i32>,
     },
+    /// A versioned semantic event from a managed interactive shell adapter.
+    ManagedShell {
+        /// Managed-shell protocol version understood by the adapter.
+        version: u16,
+        /// Shell adapter that emitted the event.
+        shell: ManagedShellAdapter,
+        /// Pane-scoped token authenticating the adapter process.
+        token: String,
+        /// Semantic lifecycle event independent from shell-native syntax.
+        event: ManagedShellProtocolEvent,
+    },
     /// A managed Zsh ZLE widget accepted its fixed private receiver command.
     ShellReceiverAwaiting {
         /// Pane-scoped receiver token installed at Zsh startup.
@@ -209,4 +223,77 @@ pub enum TerminalOscEvent {
         /// Process exit code supplied by the shell wrapper.
         exit_code: i32,
     },
+}
+
+/// Managed interactive shell adapter named by the semantic handoff protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedShellAdapter {
+    /// GNU Bash Readline adapter.
+    Bash,
+    /// Fish command-line editor adapter.
+    Fish,
+    /// Zsh ZLE adapter.
+    Zsh,
+}
+
+/// Shell-neutral lifecycle event emitted by a managed shell adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManagedShellProtocolEvent {
+    /// The startup adapter installed its private trigger safely.
+    AdapterAvailable,
+    /// The native editor saved and cleared user-owned input.
+    EditorHeld {
+        /// Unpredictable handoff marker owned by the editor callback.
+        marker: String,
+    },
+    /// The adapter admitted a bounded private source frame.
+    FrameAdmitted {
+        /// Unpredictable handoff or transaction marker.
+        marker: String,
+    },
+    /// The persistent child installed its private receiver.
+    ChildInstalled {
+        /// Unpredictable handoff marker inherited by the child.
+        marker: String,
+    },
+    /// The adapter rejected admission without evaluating source.
+    ReceiverRejected {
+        /// Marker when the adapter parsed one safely, otherwise absent.
+        marker: Option<String>,
+        /// Bounded machine-readable rejection reason.
+        reason: String,
+    },
+    /// The persistent child process exited.
+    ChildExited {
+        /// Unpredictable handoff marker owned by the child.
+        marker: String,
+        /// Child process status observed by the adapter.
+        exit_code: i32,
+    },
+    /// The original parent editor is restored and ready for ordinary input.
+    ParentReady {
+        /// Unpredictable handoff or transaction marker.
+        marker: String,
+        /// Typed adapter outcome for the completed callback.
+        outcome: ManagedShellParentOutcome,
+        /// Source or child status retained for diagnostics.
+        exit_code: i32,
+        /// Optional parent-only provenance proof for persistent handoffs.
+        proof: Option<String>,
+    },
+}
+
+/// Typed terminal outcome for a managed-shell parent callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedShellParentOutcome {
+    /// The admitted source completed and the parent editor was restored.
+    Completed,
+    /// Runtime cancelled admission before source evaluation.
+    Cancelled,
+    /// The private frame failed bounded validation.
+    FrameRejected,
+    /// Fully admitted source failed during evaluation.
+    SourceFailed,
+    /// The persistent child could not be launched.
+    ChildLaunchFailed,
 }

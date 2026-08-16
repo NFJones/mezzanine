@@ -535,6 +535,7 @@ impl RuntimeSessionService {
                 process_instance: self.adapter_owned_pane_process_instance(&instance.pane_id),
                 primary_process_id: current_primary_process_id,
                 interaction_generation: current_interaction_generation,
+                parent_proof: handoff.identity().parent_proof.clone(),
             };
             let transition = {
                 let Some(current) = self
@@ -1343,6 +1344,20 @@ impl RuntimeSessionService {
             };
             match event {
                 TerminalOscEvent::ShellIntegration { .. } => {}
+                TerminalOscEvent::ManagedShell {
+                    version,
+                    shell,
+                    token,
+                    event,
+                } => {
+                    observed = observed.saturating_add(self.observe_managed_shell_protocol_event(
+                        output_pane_id,
+                        *version,
+                        *shell,
+                        token,
+                        event,
+                    )?);
+                }
                 TerminalOscEvent::TitleChanged { .. } | TerminalOscEvent::Clipboard(_) => {}
                 TerminalOscEvent::ShellPromptStart => {}
                 TerminalOscEvent::ShellPromptEnd => {

@@ -1173,6 +1173,7 @@ unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS; {errexit_restore}
             classification,
             self.bash_receiver_token.as_ref(),
             self.marker.as_str(),
+            None,
         );
         ShellTransactionInput {
             wrapper: bash_transport.as_ref().map_or_else(
@@ -1328,6 +1329,7 @@ unset -f {function_name} 2>/dev/null || :\n\
             classification,
             self.bash_receiver_token.as_ref(),
             self.marker.as_str(),
+            None,
         );
         ShellTransactionInput {
             wrapper: bash_transport
@@ -2289,6 +2291,7 @@ fn bash_private_receiver_transport(
     classification: ShellClassification,
     token: Option<&MarkerToken>,
     marker: &str,
+    parent_proof: Option<&MarkerToken>,
 ) -> Option<BashPrivateReceiverTransport> {
     if classification != ShellClassification::Bash {
         return None;
@@ -2302,20 +2305,36 @@ fn bash_private_receiver_transport(
     let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
     let chunks = encoded.as_bytes().chunks(SHELL_WRAPPER_BASE64_LINE_BYTES);
     let chunk_count = chunks.len();
-    let trigger = format!(
-        "\x07MEZ_BASH_RX1_BEGIN {} {} {} {} {}\n",
-        token.as_str(),
-        marker,
-        source.len(),
-        digest,
-        chunk_count
+    let record_version = if parent_proof.is_some() { "RX2" } else { "RX1" };
+    let trigger = parent_proof.map_or_else(
+        || {
+            format!(
+                "\x07MEZ_BASH_RX1_BEGIN {} {} {} {} {}\n",
+                token.as_str(),
+                marker,
+                source.len(),
+                digest,
+                chunk_count
+            )
+        },
+        |proof| {
+            format!(
+                "\x07MEZ_BASH_RX2_BEGIN {} {} {} {} {} {}\n",
+                token.as_str(),
+                marker,
+                source.len(),
+                digest,
+                chunk_count,
+                proof.as_str()
+            )
+        },
     );
     let mut payload = String::new();
     for (sequence, chunk) in chunks.enumerate() {
         let chunk = std::str::from_utf8(chunk)
             .expect("standard base64 output should always be valid UTF-8");
         payload.push_str(&format!(
-            "MEZ_BASH_RX1_DATA {} {} {} {}\n",
+            "MEZ_BASH_{record_version}_DATA {} {} {} {}\n",
             token.as_str(),
             marker,
             sequence,
@@ -2323,7 +2342,7 @@ fn bash_private_receiver_transport(
         ));
     }
     payload.push_str(&format!(
-        "MEZ_BASH_RX1_END {} {} {} {} {}\n",
+        "MEZ_BASH_{record_version}_END {} {} {} {} {}\n",
         token.as_str(),
         marker,
         chunk_count,
@@ -2343,15 +2362,64 @@ pub fn bash_private_source_input(
     token: &MarkerToken,
     marker: &str,
 ) -> ShellTransactionInput {
-    let transport =
-        bash_private_receiver_transport(source, ShellClassification::Bash, Some(token), marker)
-            .expect("explicit Bash private source rendering requires a receiver transport");
+    let transport = bash_private_receiver_transport(
+        source,
+        ShellClassification::Bash,
+        Some(token),
+        marker,
+        None,
+    )
+    .expect("explicit Bash private source rendering requires a receiver transport");
     ShellTransactionInput {
         wrapper: transport.trigger,
         receiver_payload: transport.payload,
         payload: String::new(),
         payload_receiver_acknowledgements: true,
     }
+}
+
+/// Renders one persistent Bash child handoff with parent-only return proof.
+///
+/// The proof is consumed only by the original parent Readline callback. It is
+/// not embedded in evaluated source, child arguments, or child environment, so
+/// only that callback can authenticate the later parent-ready event.
+pub fn bash_private_handoff_source_input(
+    source: &str,
+    token: &MarkerToken,
+    marker: &str,
+    parent_proof: &MarkerToken,
+) -> ShellTransactionInput {
+    let transport = bash_private_receiver_transport(
+        source,
+        ShellClassification::Bash,
+        Some(token),
+        marker,
+        Some(parent_proof),
+    )
+    .expect("persistent Bash handoff rendering requires a receiver transport");
+    ShellTransactionInput {
+        wrapper: transport.trigger,
+        receiver_payload: transport.payload,
+        payload: String::new(),
+        payload_receiver_acknowledgements: true,
+    }
+}
+
+/// Renders authenticated cancellation for one admitted Bash handoff.
+///
+/// Cancellation is accepted only as the first RX2 data record, before any
+/// generated source bytes have been consumed by the parent callback.
+pub fn bash_private_handoff_cancel_input(
+    token: &MarkerToken,
+    marker: &str,
+    parent_proof: &MarkerToken,
+) -> String {
+    format!(
+        "MEZ_BASH_RX2_CANCEL {} {} {}\n",
+        token.as_str(),
+        marker,
+        parent_proof.as_str()
+    )
 }
 
 /// Starts a zsh-private history frame before any generated transport record.

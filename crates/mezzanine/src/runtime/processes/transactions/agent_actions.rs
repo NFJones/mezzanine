@@ -29,6 +29,134 @@ struct ShellTransactionSettlement<'a> {
 }
 
 impl RuntimeSessionService {
+    /// Applies one versioned shell-neutral adapter event.
+    pub(crate) fn observe_managed_shell_protocol_event(
+        &mut self,
+        output_pane_id: &str,
+        version: u16,
+        shell: mez_terminal::ManagedShellAdapter,
+        token: &str,
+        event: &mez_terminal::ManagedShellProtocolEvent,
+    ) -> Result<usize> {
+        if version != mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION
+            || shell != mez_terminal::ManagedShellAdapter::Bash
+            || self
+                .bash_receiver_token_for_pane(output_pane_id)
+                .is_none_or(|expected| expected.as_str() != token)
+        {
+            return Ok(0);
+        }
+        match event {
+            mez_terminal::ManagedShellProtocolEvent::AdapterAvailable => {
+                let Some(primary_process_id) =
+                    self.primary_pid_for_live_pane_process(output_pane_id)
+                else {
+                    return Ok(0);
+                };
+                let admission_matches = matches!(
+                    self.process.pane_bash_admissions.get(output_pane_id),
+                    Some(crate::runtime::processes::RuntimeManagedBashAdmission::Pending {
+                        primary_process_id: expected,
+                        ..
+                    }) if *expected == primary_process_id
+                );
+                if !admission_matches {
+                    return Ok(0);
+                }
+                self.process.pane_bash_admissions.insert(
+                    output_pane_id.to_string(),
+                    crate::runtime::processes::RuntimeManagedBashAdmission::Ready {
+                        primary_process_id,
+                        version,
+                    },
+                );
+                if self.agent_subshell_entry_is_deferred(output_pane_id) {
+                    let _ = self.enter_agent_subshell_if_needed(output_pane_id)?;
+                }
+                Ok(1)
+            }
+            mez_terminal::ManagedShellProtocolEvent::FrameAdmitted { marker } => {
+                let observed = self.observe_shell_receiver_ready(output_pane_id, token, marker)?;
+                if self
+                    .process
+                    .pane_managed_shell_handoffs
+                    .get(output_pane_id)
+                    .is_some_and(|handoff| {
+                        handoff.shell() == ManagedShellKind::Bash
+                            && handoff.identity().marker == *marker
+                    })
+                {
+                    let _ = self.mark_managed_shell_payload_released(output_pane_id, marker);
+                }
+                Ok(observed)
+            }
+            mez_terminal::ManagedShellProtocolEvent::ChildInstalled { marker } => {
+                self.observe_shell_receiver_installed(output_pane_id, token, marker)
+            }
+            mez_terminal::ManagedShellProtocolEvent::ParentReady {
+                marker,
+                outcome,
+                exit_code,
+                proof,
+            } => {
+                if let Some(proof) = proof {
+                    self.observe_managed_shell_parent_ready(
+                        output_pane_id,
+                        ManagedShellKind::Bash,
+                        token,
+                        marker,
+                        Some(proof),
+                    )
+                } else if matches!(
+                    outcome,
+                    mez_terminal::ManagedShellParentOutcome::Completed
+                        | mez_terminal::ManagedShellParentOutcome::SourceFailed
+                ) {
+                    self.observe_shell_receiver_complete(output_pane_id, token, marker, *exit_code)
+                } else {
+                    Ok(0)
+                }
+            }
+            mez_terminal::ManagedShellProtocolEvent::ReceiverRejected {
+                marker: Some(marker),
+                reason,
+            } => {
+                let Some(transaction) =
+                    self.process.running_shell_transactions.get(marker).cloned()
+                else {
+                    return Ok(0);
+                };
+                self.fail_shell_transaction_protocol_violation(
+                    marker,
+                    transaction,
+                    "managed-receiver-rejected",
+                    format!("managed Bash receiver rejected admission ({reason})"),
+                )
+            }
+            mez_terminal::ManagedShellProtocolEvent::EditorHeld { marker } => {
+                let Some(handoff) = self
+                    .process
+                    .pane_managed_shell_handoffs
+                    .get_mut(output_pane_id)
+                else {
+                    return Ok(0);
+                };
+                if handoff.shell() != ManagedShellKind::Bash {
+                    return Ok(0);
+                }
+                let transition = reduce_managed_shell_handoff(
+                    handoff,
+                    ManagedShellHandoffEvent::EditorHeld {
+                        marker: marker.clone(),
+                    },
+                );
+                Ok(usize::from(transition.applied))
+            }
+            mez_terminal::ManagedShellProtocolEvent::ReceiverRejected { marker: None, .. }
+            | mez_terminal::ManagedShellProtocolEvent::ChildExited { .. } => Ok(0),
+        }
+    }
+
     /// Re-enters ordinary shell settlement after an internal sandbox-failure
     /// assessment declines or cannot safely request an approval.
     pub(crate) fn settle_sandbox_failure_assessment_as_command_failure(
@@ -426,7 +554,12 @@ impl RuntimeSessionService {
                 "managed receiver-installed metadata does not match the pending subshell handoff",
             );
         }
-        let managed_exit_requested = if fish_receiver_installed || zsh_receiver_installed {
+        let managed_handoff_installed = self
+            .process
+            .pane_managed_shell_handoffs
+            .get(output_pane_id)
+            .is_some_and(|handoff| handoff.identity().marker == marker);
+        let managed_exit_requested = if managed_handoff_installed {
             let Some(exit_requested) =
                 self.mark_managed_shell_child_installed(output_pane_id, marker)
             else {
@@ -575,6 +708,30 @@ impl RuntimeSessionService {
                 receiver_exit_code,
             );
         }
+        let shell = if fish_token_matches {
+            ManagedShellKind::Fish
+        } else if zsh_token_matches {
+            ManagedShellKind::Zsh
+        } else {
+            return self.observe_shell_receiver_complete(
+                output_pane_id,
+                token,
+                marker,
+                receiver_exit_code,
+            );
+        };
+        self.observe_managed_shell_parent_ready(output_pane_id, shell, token, marker, None)
+    }
+
+    /// Settles one identity-fenced managed-shell parent-ready event.
+    fn observe_managed_shell_parent_ready(
+        &mut self,
+        output_pane_id: &str,
+        shell: ManagedShellKind,
+        token: &str,
+        marker: &str,
+        parent_proof: Option<&str>,
+    ) -> Result<usize> {
         let Some(handoff) = self
             .process
             .pane_managed_shell_handoffs
@@ -590,10 +747,17 @@ impl RuntimeSessionService {
             .get(output_pane_id)
             .copied();
         let shell_token_matches = match handoff.shell() {
-            ManagedShellKind::Fish => fish_token_matches,
-            ManagedShellKind::Zsh => zsh_token_matches,
+            ManagedShellKind::Bash => self
+                .bash_receiver_token_for_pane(output_pane_id)
+                .is_some_and(|expected| expected.as_str() == token),
+            ManagedShellKind::Fish => self
+                .fish_receiver_token_for_pane(output_pane_id)
+                .is_some_and(|expected| expected.as_str() == token),
+            ManagedShellKind::Zsh => self
+                .zsh_history_token_for_pane(output_pane_id)
+                .is_some_and(|expected| expected.as_str() == token),
         };
-        if !shell_token_matches {
+        if handoff.shell() != shell || !shell_token_matches {
             return Ok(0);
         }
         let current_identity = ManagedShellHandoffIdentity {
@@ -601,6 +765,7 @@ impl RuntimeSessionService {
             process_instance: self.adapter_owned_pane_process_instance(output_pane_id),
             primary_process_id: current_primary_process_id,
             interaction_generation: current_interaction_generation,
+            parent_proof: parent_proof.map(ToOwned::to_owned),
         };
         let transition = {
             let Some(current) = self
