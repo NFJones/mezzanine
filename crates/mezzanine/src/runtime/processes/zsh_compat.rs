@@ -27,6 +27,7 @@ use crate::error::MezErrorKind;
 
 const MANAGED_ZSHENV: &str = r#"# Mezzanine-managed zsh startup compatibility.
 typeset -g MEZ_ZSH_MANAGED_ZDOTDIR=${ZDOTDIR}
+typeset -g MEZ_ZSH_PRIVATE_DIRECTORY=${ZDOTDIR}
 typeset -g MEZ_ZSH_USER_ZDOTDIR_WAS_SET=${MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET:-0}
 if [[ ${MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET:-0} == 1 ]]; then
   ZDOTDIR=${MEZ_ZSH_ORIGINAL_ZDOTDIR}
@@ -34,35 +35,18 @@ else
   unset ZDOTDIR
 fi
 typeset -g MEZ_ZSH_USER_ZDOTDIR=${ZDOTDIR:-$HOME}
+typeset -g MEZ_ZSH_INTEGRATION_ONLY=1
+builtin source -- ${MEZ_ZSH_MANAGED_ZDOTDIR}/.mez-integration
+unset MEZ_ZSH_INTEGRATION_ONLY
 if [[ -r ${MEZ_ZSH_USER_ZDOTDIR}/.zshenv ]]; then
   builtin source -- ${MEZ_ZSH_USER_ZDOTDIR}/.zshenv
 fi
 typeset -g MEZ_ZSH_USER_ZDOTDIR=${ZDOTDIR:-$HOME}
-typeset -g MEZ_ZSH_INTEGRATION_ONLY=1
-builtin source -- ${MEZ_ZSH_MANAGED_ZDOTDIR}/.zlogin
-unset MEZ_ZSH_INTEGRATION_ONLY
+__mez_zsh_refresh_history_guard
+[[ -o interactive ]] && __mez_zsh_schedule_integration
 if [[ -o RCS ]]; then
   ZDOTDIR=${MEZ_ZSH_MANAGED_ZDOTDIR}
 else
-  if (( ${+functions[zshaddhistory]} )); then
-    functions[__mez_user_zshaddhistory]=$functions[zshaddhistory]
-  fi
-  function zshaddhistory() {
-    emulate -L zsh
-    local mez_line=${1%$'\n'}
-    # ZLE passes parsed assignments without quote characters, while pipe input
-    # retains the original single-quoted assignment text.
-    local mez_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE=${MEZ_ZSH_HISTORY_TOKEN}; printf '\036'"
-    local mez_quoted_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE='${MEZ_ZSH_HISTORY_TOKEN}'; printf '\036'"
-    if [[ -n ${MEZ_ZSH_HISTORY_TOKEN-} && ( ${mez_line} == ${mez_expected} || ${mez_line} == ${mez_quoted_expected} ) ]]; then
-      return 1
-    fi
-    if (( ${+functions[__mez_user_zshaddhistory]} )); then
-      __mez_user_zshaddhistory "$@"
-      return $?
-    fi
-    return 0
-  }
   ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
 fi
 if [[ ${MEZ_ZSH_PRESERVE_STARTUP_CONTEXT:-0} == 1 ]]; then
@@ -80,37 +64,14 @@ if [[ -r ${ZDOTDIR}/.zshrc ]]; then
   builtin source -- ${ZDOTDIR}/.zshrc
 fi
 typeset -g MEZ_ZSH_USER_ZDOTDIR=${ZDOTDIR:-$HOME}
-typeset -g MEZ_ZSH_INTEGRATION_ONLY=1
-builtin source -- ${MEZ_ZSH_MANAGED_ZDOTDIR}/.zlogin
-unset MEZ_ZSH_INTEGRATION_ONLY
 if [[ ${MEZ_ZSH_SYSTEM_HISTFILE_WAS_SET} == 1 && \
       ${HISTFILE-} == ${MEZ_ZSH_SYSTEM_HISTFILE} && \
       ${HISTFILE} == "${MEZ_ZSH_MANAGED_ZDOTDIR}"/* ]]; then
   HISTFILE="${MEZ_ZSH_USER_ZDOTDIR}${HISTFILE:${#MEZ_ZSH_MANAGED_ZDOTDIR}}"
 fi
 unset MEZ_ZSH_SYSTEM_HISTFILE MEZ_ZSH_SYSTEM_HISTFILE_WAS_SET
-if (( ${+functions[zshaddhistory]} )); then
-  functions[__mez_user_zshaddhistory]=$functions[zshaddhistory]
-else
-  unfunction __mez_user_zshaddhistory 2>/dev/null || true
-fi
-function zshaddhistory() {
-  emulate -L zsh
-  local mez_line=${1%$'\n'}
-  # ZLE passes parsed assignments without quote characters, while pipe input
-  # retains the original single-quoted assignment text.
-  local mez_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE=${MEZ_ZSH_HISTORY_TOKEN}; printf '\036'"
-  local mez_quoted_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE='${MEZ_ZSH_HISTORY_TOKEN}'; printf '\036'"
-  if [[ -n ${MEZ_ZSH_HISTORY_TOKEN-} && ( ${mez_line} == ${mez_expected} || ${mez_line} == ${mez_quoted_expected} ) ]]; then
-    return 1
-  fi
-  if (( ${+functions[__mez_user_zshaddhistory]} )); then
-    __mez_user_zshaddhistory "$@"
-    return $?
-  fi
-  return 0
-}
-functions[__mez_zshaddhistory_guard]=$functions[zshaddhistory]
+__mez_zsh_refresh_history_guard
+[[ -o interactive ]] && __mez_zsh_schedule_integration
 if [[ -o RCS ]]; then
   ZDOTDIR=${MEZ_ZSH_MANAGED_ZDOTDIR}
 else
@@ -125,44 +86,32 @@ if [[ -r ${ZDOTDIR}/.zprofile ]]; then
   builtin source -- ${ZDOTDIR}/.zprofile
 fi
 typeset -g MEZ_ZSH_USER_ZDOTDIR=${ZDOTDIR:-$HOME}
-typeset -g MEZ_ZSH_INTEGRATION_ONLY=1
-builtin source -- ${MEZ_ZSH_MANAGED_ZDOTDIR}/.zlogin
-unset MEZ_ZSH_INTEGRATION_ONLY
+__mez_zsh_refresh_history_guard
+[[ -o interactive ]] && __mez_zsh_schedule_integration
 if [[ -o RCS ]]; then
   ZDOTDIR=${MEZ_ZSH_MANAGED_ZDOTDIR}
 else
-  if (( ${+functions[zshaddhistory]} )); then
-    functions[__mez_user_zshaddhistory]=$functions[zshaddhistory]
-  fi
-  function zshaddhistory() {
-    emulate -L zsh
-    local mez_line=${1%$'\n'}
-    local mez_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE=${MEZ_ZSH_HISTORY_TOKEN}; printf '\036'"
-    local mez_quoted_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE='${MEZ_ZSH_HISTORY_TOKEN}'; printf '\036'"
-    if [[ -n ${MEZ_ZSH_HISTORY_TOKEN-} && ( ${mez_line} == ${mez_expected} || ${mez_line} == ${mez_quoted_expected} || ${mez_line} == __mez_zsh_private_receiver ) ]]; then
-      return 1
-    fi
-    if (( ${+functions[__mez_user_zshaddhistory]} )); then
-      __mez_user_zshaddhistory "$@"
-      return $?
-    fi
-    return 0
-  }
-  functions[__mez_zshaddhistory_guard]=$functions[zshaddhistory]
   ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
   unset MEZ_ZSH_PRESERVE_STARTUP_CONTEXT MEZ_ZSH_MANAGED_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET
 fi
 "#;
 
 const MANAGED_ZLOGIN: &str = r#"# Mezzanine-managed zsh login completion compatibility.
-if [[ ${MEZ_ZSH_INTEGRATION_ONLY:-0} != 1 ]]; then
-  ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
-  if [[ -r ${ZDOTDIR}/.zlogin ]]; then
-    builtin source -- ${ZDOTDIR}/.zlogin
-  fi
-  typeset -g MEZ_ZSH_USER_ZDOTDIR=${ZDOTDIR:-$HOME}
+ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
+if [[ -r ${ZDOTDIR}/.zlogin ]]; then
+  builtin source -- ${ZDOTDIR}/.zlogin
 fi
-if [[ ${MEZ_ZSH_INTEGRATION_ONLY:-0} != 1 ]]; then
+typeset -g MEZ_ZSH_USER_ZDOTDIR=${ZDOTDIR:-$HOME}
+__mez_zsh_refresh_history_guard
+[[ -o interactive ]] && __mez_zsh_schedule_integration
+ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
+unset MEZ_ZSH_PRESERVE_STARTUP_CONTEXT MEZ_ZSH_MANAGED_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET
+"#;
+
+const MANAGED_ZSH_INTEGRATION: &str = r#"# Mezzanine-managed zsh integration implementation.
+typeset -gi __MEZ_ZSH_INTEGRATION_LOAD_COUNT=$(( ${__MEZ_ZSH_INTEGRATION_LOAD_COUNT:-0} + 1 ))
+function __mez_zsh_refresh_history_guard() {
+  emulate -L zsh
   if (( ${+functions[__mez_zshaddhistory_guard]} )) && \
      [[ ${functions[zshaddhistory]-} == ${functions[__mez_zshaddhistory_guard]} ]]; then
     :
@@ -190,7 +139,7 @@ if [[ ${MEZ_ZSH_INTEGRATION_ONLY:-0} != 1 ]]; then
     return 0
   }
   functions[__mez_zshaddhistory_guard]=$functions[zshaddhistory]
-fi
+}
 typeset -g __MEZ_ZSH_RESTORE_MARKER=
 typeset -gi __MEZ_ZSH_RESTORE_STATUS=1
 typeset -g __MEZ_ZSH_RESTORE_OUTCOME=frame-rejected
@@ -493,7 +442,7 @@ impl ManagedZshCompatibility {
                 ),
             )
         })?;
-        let managed_zlogin = MANAGED_ZLOGIN
+        let managed_zsh_integration = MANAGED_ZSH_INTEGRATION
             .replace(
                 "__MEZ_ZSH_MAX_SOURCE_BYTES__",
                 &mez_agent::ZSH_PRIVATE_SOURCE_MAX_BYTES.to_string(),
@@ -513,7 +462,13 @@ impl ManagedZshCompatibility {
         if let Err(error) = write_private_file(&directory.join(".zshenv"), MANAGED_ZSHENV)
             .and_then(|()| write_private_file(&directory.join(".zprofile"), MANAGED_ZPROFILE))
             .and_then(|()| write_private_file(&directory.join(".zshrc"), MANAGED_ZSHRC))
-            .and_then(|()| write_private_file(&directory.join(".zlogin"), &managed_zlogin))
+            .and_then(|()| write_private_file(&directory.join(".zlogin"), MANAGED_ZLOGIN))
+            .and_then(|()| {
+                write_private_file(
+                    &directory.join(".mez-integration"),
+                    &managed_zsh_integration,
+                )
+            })
         {
             let _ = fs::remove_dir_all(&directory);
             return Err(error);
@@ -783,6 +738,7 @@ mod tests {
             directory.join(".zprofile"),
             directory.join(".zshrc"),
             directory.join(".zlogin"),
+            directory.join(".mez-integration"),
         ] {
             assert_eq!(
                 fs::metadata(file).unwrap().permissions().mode() & 0o777,
@@ -853,6 +809,7 @@ function zshaddhistory() {{\n\
                 user_zdotdir.join(".zlogin"),
                 format!(
                     "print -r -- zlogin >> \"$HOME/startup.log\"\n\
+print -r -- ${{__MEZ_ZSH_INTEGRATION_LOAD_COUNT}} > \"$HOME/integration-load-count\"\n\
 function zshaddhistory() {{\n\
   print -r -- \"${{1%$'\\n'}}\" >> {}\n\
   return 0\n\
@@ -915,6 +872,11 @@ function zshaddhistory() {{\n\
             assert!(
                 output.status.success(),
                 "option={history_option} stdout={stdout:?} stderr={stderr:?}"
+            );
+            assert_eq!(
+                fs::read_to_string(home.join("integration-load-count")).unwrap(),
+                "1\n",
+                "the full managed adapter must be parsed exactly once per process"
             );
 
             let persisted = fs::read_to_string(&history).unwrap();

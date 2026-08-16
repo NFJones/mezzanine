@@ -1895,12 +1895,16 @@ independent from parent-editor return so discarded input cannot block child
 certification or callback unwind.
 Managed Zsh startup MUST preserve native startup-file ordering and RCS option
 semantics, including a user `unsetopt RCS`, while sourcing every startup file
-that native Zsh would read at most once. Before agent-shell admission, the
-parent MUST publish versioned, token-authenticated `AdapterAvailable` metadata
-for a fixed runtime-known trigger. Installation MUST compose with existing ZLE
-line-init behavior and MUST NOT replace an occupied user binding; when no safe
-trigger or hook is available, the adapter MUST publish a typed bounded failure
-and admission MUST fail closed after a bounded wait without writing a handoff.
+that native Zsh would read at most once. The generated startup wrappers MUST
+parse the full managed adapter implementation exactly once per shell process;
+later native startup stages MAY invoke small idempotent history-guard and
+installation-scheduling helpers without sourcing that implementation again.
+Before agent-shell admission, the parent MUST publish versioned,
+token-authenticated `AdapterAvailable` metadata for a fixed runtime-known
+trigger. Installation MUST compose with existing ZLE line-init behavior and
+MUST NOT replace an occupied user binding; when no safe trigger or hook is
+available, the adapter MUST publish a typed bounded failure and admission MUST
+fail closed after a bounded wait without writing a handoff.
 A managed Zsh child MUST receive the runtime-owned startup directory
 directly and execute as one non-login interactive Zsh process so `.zshenv` and
 `.zshrc` install its private receiver before bootstrap release without replaying
