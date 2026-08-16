@@ -646,9 +646,13 @@ impl RuntimeSessionService {
         self.process
             .pane_agent_subshell_parent_return_pending
             .insert(pane_id.to_string());
-        if let Some(restoration) = self.process.pane_fish_parent_restorations.get_mut(pane_id) {
-            restoration.phase = crate::runtime::processes::RuntimeFishHandoffPhase::ExitRequested;
-            restoration.started_at_unix_ms = Some(current_unix_millis());
+        if let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) {
+            let _ = reduce_managed_shell_handoff(
+                handoff,
+                ManagedShellHandoffEvent::ExitRequested {
+                    now_unix_ms: current_unix_millis(),
+                },
+            );
         }
     }
 
@@ -681,9 +685,11 @@ impl RuntimeSessionService {
             self.process
                 .pane_agent_subshell_exit_markers
                 .remove(pane_id);
-            if let Some(restoration) = self.process.pane_fish_parent_restorations.get_mut(pane_id) {
-                restoration.phase =
-                    crate::runtime::processes::RuntimeFishHandoffPhase::ParentRestoring;
+            if let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) {
+                let _ = reduce_managed_shell_handoff(
+                    handoff,
+                    ManagedShellHandoffEvent::ChildExitBoundary,
+                );
             }
             let parent_bytes = &pending[start + marker.len()..];
             if self.agent_subshell_input_clear_was_completed(pane_id) {
@@ -787,12 +793,12 @@ impl RuntimeSessionService {
     fn recover_expired_fish_parent_restorations_at(&mut self, now_unix_ms: u64) -> Result<usize> {
         let expired = self
             .process
-            .pane_fish_parent_restorations
+            .pane_managed_shell_handoffs
             .iter()
-            .filter(|(_, restoration)| {
-                restoration.recovery_observation.as_ref().map_or_else(
+            .filter(|(_, handoff)| {
+                handoff.recovery_observation().map_or_else(
                     || {
-                        restoration.started_at_unix_ms.is_some_and(|started_at| {
+                        handoff.started_at_unix_ms().is_some_and(|started_at| {
                             now_unix_ms.saturating_sub(started_at)
                                 >= RUNTIME_FISH_PARENT_RESTORATION_TIMEOUT_MS
                         })
@@ -807,9 +813,9 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         let mut requested = 0usize;
         for pane_id in &expired {
-            let Some(restoration) = self
+            let Some(handoff) = self
                 .process
-                .pane_fish_parent_restorations
+                .pane_managed_shell_handoffs
                 .get(pane_id)
                 .cloned()
             else {
@@ -817,20 +823,23 @@ impl RuntimeSessionService {
             };
             self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
             let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) else {
-                if let Some(current) = self.process.pane_fish_parent_restorations.get_mut(pane_id) {
-                    current.started_at_unix_ms = None;
+                if let Some(current) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) {
+                    let _ = reduce_managed_shell_handoff(
+                        current,
+                        ManagedShellHandoffEvent::RecoveryProofUnavailable,
+                    );
                 }
                 self.append_lifecycle_event(
                     EventKind::Diagnostic,
                     format!(
-                        r#"{{"pane_id":"{}","fish_parent_restoration":"proof_unavailable","marker":"{}"}}"#,
+                        r#"{{"pane_id":"{}","managed_shell_handoff":"proof_unavailable","marker":"{}"}}"#,
                         json_escape(pane_id),
-                        json_escape(&restoration.marker)
+                        json_escape(&handoff.identity().marker)
                     ),
                 )?;
                 continue;
             };
-            let Some(primary_process_id) = restoration.primary_process_id else {
+            let Some(primary_process_id) = handoff.identity().primary_process_id else {
                 continue;
             };
             self.process.next_shell_dispatch_recovery_observation = self
@@ -838,22 +847,30 @@ impl RuntimeSessionService {
                 .next_shell_dispatch_recovery_observation
                 .saturating_add(1);
             let observation_id = format!(
-                "fish-parent-restoration:{}:{}:{}",
+                "managed-shell-parent-restoration:{}:{}:{}",
                 instance.generation,
-                restoration.marker,
+                handoff.identity().marker,
                 self.process.next_shell_dispatch_recovery_observation
             );
-            let Some(current) = self.process.pane_fish_parent_restorations.get_mut(pane_id) else {
+            let Some(current) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) else {
                 continue;
             };
-            current.started_at_unix_ms = None;
-            current.recovery_observation = Some(
-                crate::runtime::processes::RuntimeFishRestorationRecoveryObservation {
-                    instance: instance.clone(),
-                    observation_id: observation_id.clone(),
-                    started_at_unix_ms: now_unix_ms,
+            let transition = reduce_managed_shell_handoff(
+                current,
+                ManagedShellHandoffEvent::RecoveryProofRequested {
+                    observation: ManagedShellRecoveryObservation {
+                        instance: instance.clone(),
+                        observation_id: observation_id.clone(),
+                        started_at_unix_ms: now_unix_ms,
+                    },
                 },
             );
+            if !transition
+                .effects
+                .contains(&ManagedShellHandoffEffect::RequestParentProof)
+            {
+                continue;
+            }
             self.persistence
                 .queue_pane_observation(RuntimeSideEffect::PaneProcessIo {
                     instance,
@@ -865,9 +882,9 @@ impl RuntimeSessionService {
             self.append_lifecycle_event(
                 EventKind::Diagnostic,
                 format!(
-                    r#"{{"pane_id":"{}","fish_parent_restoration":"proof_requested","marker":"{}","observation_id":"{}"}}"#,
+                    r#"{{"pane_id":"{}","managed_shell_handoff":"proof_requested","marker":"{}","observation_id":"{}"}}"#,
                     json_escape(pane_id),
-                    json_escape(&restoration.marker),
+                    json_escape(&handoff.identity().marker),
                     json_escape(&observation_id)
                 ),
             )?;
@@ -1047,9 +1064,9 @@ impl RuntimeSessionService {
             || self.managed_zsh_admission_timer_needed()
             || self
                 .process
-                .pane_fish_parent_restorations
+                .pane_managed_shell_handoffs
                 .values()
-                .any(|restoration| restoration.started_at_unix_ms.is_some())
+                .any(|handoff| handoff.started_at_unix_ms().is_some())
     }
 
     /// Reports whether any pending agent shell dispatch may need recovery.

@@ -137,7 +137,7 @@ impl RuntimeSessionService {
                     "pane process not found",
                 )
             })?;
-        if self.queue_fish_parent_restoration_input(descriptor.pane_id.as_str(), input)? {
+        if self.queue_managed_shell_parent_input(descriptor.pane_id.as_str(), input)? {
             self.clear_copy_state_for_surface(
                 descriptor.pane_id.as_str(),
                 crate::runtime::PaneSurfaceKind::Process,
@@ -490,7 +490,7 @@ impl RuntimeSessionService {
                                 {
                                     continue;
                                 }
-                                if self.queue_fish_parent_restoration_input(
+                                if self.queue_managed_shell_parent_input(
                                     descriptor.pane_id.as_str(),
                                     input,
                                 )? {
@@ -540,10 +540,9 @@ impl RuntimeSessionService {
                         continue;
                     };
                     if defer_pane_io {
-                        if self.queue_fish_parent_restoration_input(
-                            descriptor.pane_id.as_str(),
-                            input,
-                        )? {
+                        if self
+                            .queue_managed_shell_parent_input(descriptor.pane_id.as_str(), input)?
+                        {
                             self.clear_copy_state_for_surface(
                                 descriptor.pane_id.as_str(),
                                 crate::runtime::PaneSurfaceKind::Process,

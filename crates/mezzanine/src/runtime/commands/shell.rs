@@ -1093,7 +1093,7 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        if self.fish_parent_restoration_is_pending(pane_id) {
+        if self.managed_shell_handoff_is_pending(pane_id) {
             self.defer_agent_subshell_entry(pane_id);
             return Ok(false);
         }
@@ -1329,23 +1329,21 @@ impl RuntimeSessionService {
     /// the user's parent shell.
     pub(crate) fn exit_agent_subshell_if_active(&mut self, pane_id: &str) -> Result<bool> {
         if !self.agent_subshell_is_active(pane_id) {
-            if let Some(phase) = self.fish_parent_restoration_phase(pane_id) {
+            if let Some(phase) = self.managed_shell_handoff_phase(pane_id) {
                 if matches!(
                     phase,
-                    crate::runtime::processes::RuntimeFishHandoffPhase::ExitRequested
-                        | crate::runtime::processes::RuntimeFishHandoffPhase::ParentRestoring
-                        | crate::runtime::processes::RuntimeFishHandoffPhase::SourceDeliveryExitRequested
+                    crate::runtime::processes::ManagedShellHandoffPhase::Returning
+                        | crate::runtime::processes::ManagedShellHandoffPhase::ParentRestoring
+                        | crate::runtime::processes::ManagedShellHandoffPhase::AwaitingParentProof
                 ) {
                     return Ok(true);
                 }
-                let marker = self
-                    .fish_parent_restoration_marker(pane_id)
-                    .ok_or_else(|| {
-                        MezError::invalid_state(
-                            "managed-shell parent restoration ownership disappeared",
-                        )
-                    })?;
-                if phase == crate::runtime::processes::RuntimeFishHandoffPhase::TriggerQueued {
+                let marker = self.managed_shell_handoff_marker(pane_id).ok_or_else(|| {
+                    MezError::invalid_state(
+                        "managed-shell parent restoration ownership disappeared",
+                    )
+                })?;
+                if phase == crate::runtime::processes::ManagedShellHandoffPhase::TriggerQueued {
                     let _ = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
                     let zsh_restoration = self.managed_parent_restoration_is_zsh(pane_id);
                     let token = if zsh_restoration {
@@ -1356,7 +1354,11 @@ impl RuntimeSessionService {
                     .ok_or_else(|| {
                         MezError::invalid_state("managed shell receiver token is unavailable")
                     })?;
-                    self.remember_fish_admission_cancellation(pane_id);
+                    if !self.remember_managed_shell_admission_cancellation(pane_id) {
+                        return Err(MezError::invalid_state(
+                            "managed-shell admission cancellation ownership disappeared",
+                        ));
+                    }
                     let cancellation = if zsh_restoration {
                         mez_agent::zsh_private_source_cancel_input(&token, &marker)
                     } else {
@@ -1365,10 +1367,8 @@ impl RuntimeSessionService {
                     self.write_runtime_pane_input(pane_id, cancellation.as_bytes())?;
                     return Ok(true);
                 }
-                if phase
-                    == crate::runtime::processes::RuntimeFishHandoffPhase::SourceDeliveryReleased
-                {
-                    if !self.defer_fish_exit_until_child_installed(pane_id, &marker) {
+                if phase == crate::runtime::processes::ManagedShellHandoffPhase::PayloadInFlight {
+                    if !self.defer_managed_shell_exit_until_child_installed(pane_id) {
                         return Err(MezError::invalid_state(
                             "managed-shell source-delivery exit ownership disappeared",
                         ));
@@ -1419,8 +1419,8 @@ impl RuntimeSessionService {
         } else {
             self.clear_shell_output_filters_for_foreground_input(pane_id);
         }
-        let fish_parent_restoration_pending = self.fish_parent_restoration_is_pending(pane_id);
-        if !fish_parent_restoration_pending {
+        let managed_shell_handoff_pending = self.managed_shell_handoff_is_pending(pane_id);
+        if !managed_shell_handoff_pending {
             self.clear_agent_subshell_shell_identity(pane_id);
         }
         let command_exit = self.take_agent_subshell_command_exit(pane_id);

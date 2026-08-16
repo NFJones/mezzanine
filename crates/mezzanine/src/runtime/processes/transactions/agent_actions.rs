@@ -1,5 +1,9 @@
 //! Agent shell transaction start and completion.
 
+use super::super::{
+    ManagedShellHandoffEffect, ManagedShellHandoffEvent, ManagedShellHandoffIdentity,
+    ManagedShellKind, reduce_managed_shell_handoff,
+};
 use super::{
     ActionContentBlock, ActionResult, ActionStatus, AgentActionPayload, AgentTurnState,
     ApplyPatchTransactionPhase, EventKind, HookEvent, MezError, PaneReadinessState, Result,
@@ -222,7 +226,7 @@ impl RuntimeSessionService {
             .fish_receiver_token_for_pane(output_pane_id)
             .is_some_and(|expected| expected.as_str() == token)
         {
-            self.mark_fish_source_delivery_released(output_pane_id, marker);
+            self.mark_managed_shell_payload_released(output_pane_id, marker);
         }
         self.append_agent_trace_turn_event(
             output_pane_id,
@@ -376,7 +380,7 @@ impl RuntimeSessionService {
             self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
             return Err(error);
         }
-        self.mark_fish_source_delivery_released(output_pane_id, &marker);
+        self.mark_managed_shell_payload_released(output_pane_id, &marker);
         self.append_agent_trace_turn_event(
             output_pane_id,
             &transaction.turn_id,
@@ -423,7 +427,8 @@ impl RuntimeSessionService {
             );
         }
         let managed_exit_requested = if fish_receiver_installed || zsh_receiver_installed {
-            let Some(exit_requested) = self.mark_fish_child_installed(output_pane_id, marker)
+            let Some(exit_requested) =
+                self.mark_managed_shell_child_installed(output_pane_id, marker)
             else {
                 return self.fail_shell_transaction_protocol_violation(
                     marker,
@@ -570,10 +575,11 @@ impl RuntimeSessionService {
                 receiver_exit_code,
             );
         }
-        let Some(restoration) = self
+        let Some(handoff) = self
             .process
-            .pane_fish_parent_restorations
-            .remove(output_pane_id)
+            .pane_managed_shell_handoffs
+            .get(output_pane_id)
+            .cloned()
         else {
             return Ok(0);
         };
@@ -583,19 +589,47 @@ impl RuntimeSessionService {
             .pane_shell_interaction_generations
             .get(output_pane_id)
             .copied();
-        if restoration.marker != marker
-            || restoration.primary_process_id != current_primary_process_id
-            || restoration.interaction_generation != current_interaction_generation
-            || (restoration.shell == crate::runtime::processes::RuntimeManagedShellKind::Fish
-                && !fish_token_matches)
-            || (restoration.shell == crate::runtime::processes::RuntimeManagedShellKind::Zsh
-                && !zsh_token_matches)
-        {
-            self.process
-                .pane_fish_parent_restorations
-                .insert(output_pane_id.to_string(), restoration);
+        let shell_token_matches = match handoff.shell() {
+            ManagedShellKind::Fish => fish_token_matches,
+            ManagedShellKind::Zsh => zsh_token_matches,
+        };
+        if !shell_token_matches {
             return Ok(0);
         }
+        let current_identity = ManagedShellHandoffIdentity {
+            marker: marker.to_string(),
+            process_instance: self.adapter_owned_pane_process_instance(output_pane_id),
+            primary_process_id: current_primary_process_id,
+            interaction_generation: current_interaction_generation,
+        };
+        let transition = {
+            let Some(current) = self
+                .process
+                .pane_managed_shell_handoffs
+                .get_mut(output_pane_id)
+            else {
+                return Ok(0);
+            };
+            reduce_managed_shell_handoff(
+                current,
+                ManagedShellHandoffEvent::ParentReady {
+                    identity: current_identity,
+                },
+            )
+        };
+        let Some(pending_input) = transition
+            .effects
+            .into_iter()
+            .find_map(|effect| match effect {
+                ManagedShellHandoffEffect::Settle { pending_input, .. } => Some(pending_input),
+                _ => None,
+            })
+        else {
+            return Ok(0);
+        };
+        self.process
+            .pane_managed_shell_handoffs
+            .remove(output_pane_id);
 
         self.process
             .pane_agent_subshell_parent_return_pending
@@ -643,8 +677,8 @@ impl RuntimeSessionService {
         }
 
         self.clear_shell_output_filters_for_foreground_input(output_pane_id);
-        if !restoration.pending_input.is_empty() {
-            self.write_runtime_pane_input(output_pane_id, &restoration.pending_input)?;
+        if !pending_input.is_empty() {
+            self.write_runtime_pane_input(output_pane_id, &pending_input)?;
         }
         if resume_deferred_entry {
             let _ = self.enter_agent_subshell_if_needed(output_pane_id)?;

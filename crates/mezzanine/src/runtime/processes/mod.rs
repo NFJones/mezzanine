@@ -6,11 +6,19 @@
 mod bash_compat;
 mod fish_compat;
 mod layout;
+mod managed_shell_handoff;
 pub(crate) mod output_filter;
 mod pane_pipes;
 mod startup;
 mod transactions;
 mod zsh_compat;
+
+pub(super) use managed_shell_handoff::ManagedShellHandoffPhase;
+use managed_shell_handoff::{
+    ManagedShellHandoff, ManagedShellHandoffEffect, ManagedShellHandoffEvent,
+    ManagedShellHandoffIdentity, ManagedShellKind, ManagedShellRecoveryObservation,
+    reduce_managed_shell_handoff,
+};
 
 use mez_mux::presentation::{pane_content_size_for_geometry, rendered_window_body_size};
 
@@ -514,66 +522,6 @@ pub(super) enum RuntimeManagedZshAdmission {
     },
 }
 
-/// Managed shell whose synchronous editor callback owns parent restoration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RuntimeManagedShellKind {
-    /// Fish readline callback ownership.
-    Fish,
-    /// Zsh ZLE callback ownership.
-    Zsh,
-}
-
-/// Current phase of one synchronous managed-shell editor handoff.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RuntimeFishHandoffPhase {
-    /// The private editor trigger was written but its source remains retained.
-    TriggerQueued,
-    /// Fish authenticated editor ownership and runtime released the source.
-    SourceDeliveryReleased,
-    /// Exit was requested while Fish was still sourcing the child handoff.
-    SourceDeliveryExitRequested,
-    /// The persistent child authenticated its installed transaction receiver.
-    ChildInstalled,
-    /// Runtime requested cancellation or child exit and awaits parent return.
-    ExitRequested,
-    /// The child-exit boundary arrived while Fish restores its parent editor.
-    ParentRestoring,
-}
-
-/// Marker- and process-scoped ownership retained until the shell restores its parent editor.
-#[derive(Clone, Debug)]
-struct RuntimeFishParentRestoration {
-    /// Managed shell that owns the synchronous callback.
-    shell: RuntimeManagedShellKind,
-    /// Bootstrap marker carried by the authenticated private receiver event.
-    marker: String,
-    /// Primary process that owns the private callback and saved editor state.
-    primary_process_id: Option<u32>,
-    /// Shell-interaction generation that launched this exact handoff.
-    interaction_generation: Option<u64>,
-    /// Current ownership phase of the synchronous Fish callback.
-    phase: RuntimeFishHandoffPhase,
-    /// Time when cancellation or child exit began returning ownership.
-    started_at_unix_ms: Option<u64>,
-    /// Fresh pane-worker proof requested after an authenticated restore event is lost.
-    recovery_observation: Option<RuntimeFishRestorationRecoveryObservation>,
-    /// Foreground bytes typed after child exit but before editor restoration.
-    pending_input: Vec<u8>,
-}
-
-/// Exact worker observation that may prove the original parent regained the PTY.
-#[derive(Clone, Debug)]
-struct RuntimeFishRestorationRecoveryObservation {
-    /// Adapter-owned process generation that must answer.
-    instance: PaneProcessInstance,
-    /// Opaque correlation id required on the worker result.
-    observation_id: String,
-    /// Time when the exact worker observation was requested.
-    started_at_unix_ms: u64,
-}
-
-/// Maximum foreground input retained while Fish restores its parent editor.
-const RUNTIME_FISH_PARENT_RESTORATION_INPUT_LIMIT_BYTES: usize = 64 * 1024;
 /// Maximum wait for Fish to publish authenticated parent-editor restoration.
 const RUNTIME_FISH_PARENT_RESTORATION_TIMEOUT_MS: u64 = 5_000;
 /// Maximum wait for the managed zsh parent to publish startup admission.
@@ -741,8 +689,8 @@ pub(crate) struct RuntimeProcessComponent {
     pane_agent_subshell_exit_markers: std::collections::BTreeMap<String, Vec<u8>>,
     /// Panes whose retained process presentation owns parent-shell return.
     pane_agent_subshell_parent_return_pending: BTreeSet<String>,
-    /// Managed Fish handoffs awaiting authenticated parent-editor restoration.
-    pane_fish_parent_restorations: std::collections::BTreeMap<String, RuntimeFishParentRestoration>,
+    /// Live managed-shell handoffs awaiting authenticated parent readiness.
+    pane_managed_shell_handoffs: std::collections::BTreeMap<String, ManagedShellHandoff>,
     /// Precomputed bounded wrapper-filter commands keyed by pane id.
     pane_mez_wrapper_filter_recent_commands:
         std::collections::BTreeMap<String, std::sync::Arc<[String]>>,
@@ -906,38 +854,7 @@ impl RuntimeSessionService {
         marker: &str,
         payload: mez_mux::process::ShellInputDelivery,
     ) {
-        if let Some(pane_id) = self
-            .process
-            .running_shell_transactions
-            .get(marker)
-            .map(|transaction| transaction.pane_id.clone())
-        {
-            let handoff = self.process.pane_shell_handoffs.get(&pane_id);
-            let primary_process_id = handoff
-                .map(|handoff| handoff.primary_process_id)
-                .or_else(|| self.primary_pid_for_live_pane_process(&pane_id));
-            let interaction_generation = handoff
-                .map(|handoff| handoff.interaction_generation)
-                .or_else(|| {
-                    self.process
-                        .pane_shell_interaction_generations
-                        .get(&pane_id)
-                        .copied()
-                });
-            self.process.pane_fish_parent_restorations.insert(
-                pane_id,
-                RuntimeFishParentRestoration {
-                    shell: RuntimeManagedShellKind::Fish,
-                    marker: marker.to_string(),
-                    primary_process_id,
-                    interaction_generation,
-                    phase: RuntimeFishHandoffPhase::TriggerQueued,
-                    started_at_unix_ms: None,
-                    recovery_observation: None,
-                    pending_input: Vec::new(),
-                },
-            );
-        }
+        self.register_managed_shell_handoff(marker, ManagedShellKind::Fish);
         self.process
             .shell_receiver_pending_payloads
             .entry(marker.to_string())
@@ -945,8 +862,41 @@ impl RuntimeSessionService {
             .push_front(payload);
     }
 
-    /// Retains foreground input until Fish publishes parent-editor restoration.
-    pub(crate) fn queue_fish_parent_restoration_input(
+    /// Registers one live Fish or Zsh editor handoff for the current process epoch.
+    fn register_managed_shell_handoff(&mut self, marker: &str, shell: ManagedShellKind) {
+        let Some(pane_id) = self
+            .process
+            .running_shell_transactions
+            .get(marker)
+            .map(|transaction| transaction.pane_id.clone())
+        else {
+            return;
+        };
+        let handoff = self.process.pane_shell_handoffs.get(&pane_id);
+        let primary_process_id = handoff
+            .map(|handoff| handoff.primary_process_id)
+            .or_else(|| self.primary_pid_for_live_pane_process(&pane_id));
+        let interaction_generation = handoff
+            .map(|handoff| handoff.interaction_generation)
+            .or_else(|| {
+                self.process
+                    .pane_shell_interaction_generations
+                    .get(&pane_id)
+                    .copied()
+            });
+        let identity = ManagedShellHandoffIdentity {
+            marker: marker.to_string(),
+            process_instance: self.adapter_owned_pane_process_instance(&pane_id),
+            primary_process_id,
+            interaction_generation,
+        };
+        self.process
+            .pane_managed_shell_handoffs
+            .insert(pane_id, ManagedShellHandoff::new(shell, identity));
+    }
+
+    /// Retains foreground input until a managed shell publishes parent readiness.
+    pub(crate) fn queue_managed_shell_parent_input(
         &mut self,
         pane_id: &str,
         input: &[u8],
@@ -958,113 +908,111 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        let Some(restoration) = self.process.pane_fish_parent_restorations.get_mut(pane_id) else {
+        let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) else {
             return Ok(false);
         };
-        if restoration.pending_input.len().saturating_add(input.len())
-            > RUNTIME_FISH_PARENT_RESTORATION_INPUT_LIMIT_BYTES
-        {
+        let transition = reduce_managed_shell_handoff(
+            handoff,
+            ManagedShellHandoffEvent::QueueInput {
+                bytes: input.to_vec(),
+            },
+        );
+        if !transition.applied {
             return Err(MezError::invalid_state(
-                "foreground input exceeded the Fish parent restoration limit",
+                "foreground input exceeded the managed-shell parent restoration limit",
             ));
         }
-        restoration.pending_input.extend_from_slice(input);
         Ok(true)
     }
 
-    /// Reports whether Fish still owns post-child parent-editor restoration.
-    pub(crate) fn fish_parent_restoration_is_pending(&self, pane_id: &str) -> bool {
+    /// Reports whether a managed shell still owns parent-editor restoration.
+    pub(crate) fn managed_shell_handoff_is_pending(&self, pane_id: &str) -> bool {
         self.process
-            .pane_fish_parent_restorations
+            .pane_managed_shell_handoffs
             .contains_key(pane_id)
     }
 
-    /// Returns the current managed-Fish handoff phase for exit routing.
-    pub(super) fn fish_parent_restoration_phase(
+    /// Returns the current managed-shell handoff phase for exit routing.
+    pub(super) fn managed_shell_handoff_phase(
         &self,
         pane_id: &str,
-    ) -> Option<RuntimeFishHandoffPhase> {
+    ) -> Option<ManagedShellHandoffPhase> {
         self.process
-            .pane_fish_parent_restorations
+            .pane_managed_shell_handoffs
             .get(pane_id)
-            .map(|restoration| restoration.phase)
+            .map(ManagedShellHandoff::phase)
     }
 
-    /// Returns the marker owned by one pending managed-Fish handoff.
-    pub(super) fn fish_parent_restoration_marker(&self, pane_id: &str) -> Option<String> {
+    /// Returns the marker owned by one pending managed-shell handoff.
+    pub(super) fn managed_shell_handoff_marker(&self, pane_id: &str) -> Option<String> {
         self.process
-            .pane_fish_parent_restorations
+            .pane_managed_shell_handoffs
             .get(pane_id)
-            .map(|restoration| restoration.marker.clone())
+            .map(|handoff| handoff.identity().marker.clone())
     }
 
-    /// Advances a marker-scoped Fish handoff after authenticated admission.
-    pub(super) fn mark_fish_source_delivery_released(
+    /// Advances a marker-scoped managed-shell handoff after authenticated admission.
+    pub(super) fn mark_managed_shell_payload_released(
         &mut self,
         pane_id: &str,
         marker: &str,
     ) -> bool {
-        let Some(restoration) = self.process.pane_fish_parent_restorations.get_mut(pane_id) else {
+        let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) else {
             return false;
         };
-        if restoration.marker != marker
-            || restoration.phase != RuntimeFishHandoffPhase::TriggerQueued
-        {
-            return false;
-        }
-        restoration.phase = RuntimeFishHandoffPhase::SourceDeliveryReleased;
-        true
+        reduce_managed_shell_handoff(
+            handoff,
+            ManagedShellHandoffEvent::PayloadReleased {
+                marker: marker.to_string(),
+            },
+        )
+        .applied
     }
 
-    /// Advances a marker-scoped Fish handoff after child receiver installation.
+    /// Advances a marker-scoped managed-shell handoff after child installation.
     ///
     /// Returns whether exit was requested while source delivery still owned
     /// terminal input, allowing the authenticated child boundary to consume
     /// that intent without ever writing exit text to the parent receiver.
-    pub(super) fn mark_fish_child_installed(
+    pub(super) fn mark_managed_shell_child_installed(
         &mut self,
         pane_id: &str,
         marker: &str,
     ) -> Option<bool> {
-        let restoration = self
-            .process
-            .pane_fish_parent_restorations
-            .get_mut(pane_id)?;
-        if restoration.marker != marker
-            || !matches!(
-                restoration.phase,
-                RuntimeFishHandoffPhase::SourceDeliveryReleased
-                    | RuntimeFishHandoffPhase::SourceDeliveryExitRequested
-            )
-        {
-            return None;
-        }
-        let exit_requested =
-            restoration.phase == RuntimeFishHandoffPhase::SourceDeliveryExitRequested;
-        restoration.phase = RuntimeFishHandoffPhase::ChildInstalled;
-        Some(exit_requested)
+        let handoff = self.process.pane_managed_shell_handoffs.get_mut(pane_id)?;
+        let transition = reduce_managed_shell_handoff(
+            handoff,
+            ManagedShellHandoffEvent::ChildInstalled {
+                marker: marker.to_string(),
+                now_unix_ms: current_unix_millis(),
+            },
+        );
+        transition.applied.then(|| {
+            transition
+                .effects
+                .contains(&ManagedShellHandoffEffect::ExitChild)
+        })
     }
 
     /// Retains exit intent until the managed child proves it owns terminal input.
-    pub(super) fn defer_fish_exit_until_child_installed(
-        &mut self,
-        pane_id: &str,
-        marker: &str,
-    ) -> bool {
-        let Some(restoration) = self.process.pane_fish_parent_restorations.get_mut(pane_id) else {
+    pub(super) fn defer_managed_shell_exit_until_child_installed(&mut self, pane_id: &str) -> bool {
+        let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) else {
             return false;
         };
-        if restoration.marker != marker
-            || restoration.phase != RuntimeFishHandoffPhase::SourceDeliveryReleased
-        {
-            return false;
-        }
-        restoration.phase = RuntimeFishHandoffPhase::SourceDeliveryExitRequested;
-        true
+        let transition = reduce_managed_shell_handoff(
+            handoff,
+            ManagedShellHandoffEvent::ExitRequested {
+                now_unix_ms: current_unix_millis(),
+            },
+        );
+        transition.applied
+            && transition
+                .effects
+                .contains(&ManagedShellHandoffEffect::WaitForChildInstallation)
     }
 
-    /// Arms restoration ownership for a pre-child Fish admission cancellation.
-    pub(super) fn remember_fish_admission_cancellation(&mut self, pane_id: &str) {
+    /// Arms restoration ownership after authenticated pre-payload cancellation.
+    pub(super) fn remember_managed_shell_admission_cancellation(&mut self, pane_id: &str) -> bool {
         self.process
             .pane_agent_subshell_exit_echo_pending
             .remove(pane_id);
@@ -1074,10 +1022,25 @@ impl RuntimeSessionService {
         self.process
             .pane_agent_subshell_parent_return_pending
             .insert(pane_id.to_string());
-        if let Some(restoration) = self.process.pane_fish_parent_restorations.get_mut(pane_id) {
-            restoration.phase = RuntimeFishHandoffPhase::ExitRequested;
-            restoration.started_at_unix_ms = Some(current_unix_millis());
+        let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) else {
+            return false;
+        };
+        let now_unix_ms = current_unix_millis();
+        let requested = reduce_managed_shell_handoff(
+            handoff,
+            ManagedShellHandoffEvent::ExitRequested { now_unix_ms },
+        );
+        if !requested
+            .effects
+            .contains(&ManagedShellHandoffEffect::CancelBeforePayload)
+        {
+            return false;
         }
+        reduce_managed_shell_handoff(
+            handoff,
+            ManagedShellHandoffEvent::CancellationSent { now_unix_ms },
+        )
+        .applied
     }
 
     /// Prepends one persistent Zsh handoff stage released after ZLE admission.
@@ -1086,38 +1049,7 @@ impl RuntimeSessionService {
         marker: &str,
         payload: mez_mux::process::ShellInputDelivery,
     ) {
-        if let Some(pane_id) = self
-            .process
-            .running_shell_transactions
-            .get(marker)
-            .map(|transaction| transaction.pane_id.clone())
-        {
-            let handoff = self.process.pane_shell_handoffs.get(&pane_id);
-            let primary_process_id = handoff
-                .map(|handoff| handoff.primary_process_id)
-                .or_else(|| self.primary_pid_for_live_pane_process(&pane_id));
-            let interaction_generation = handoff
-                .map(|handoff| handoff.interaction_generation)
-                .or_else(|| {
-                    self.process
-                        .pane_shell_interaction_generations
-                        .get(&pane_id)
-                        .copied()
-                });
-            self.process.pane_fish_parent_restorations.insert(
-                pane_id,
-                RuntimeFishParentRestoration {
-                    shell: RuntimeManagedShellKind::Zsh,
-                    marker: marker.to_string(),
-                    primary_process_id,
-                    interaction_generation,
-                    phase: RuntimeFishHandoffPhase::TriggerQueued,
-                    started_at_unix_ms: None,
-                    recovery_observation: None,
-                    pending_input: Vec::new(),
-                },
-            );
-        }
+        self.register_managed_shell_handoff(marker, ManagedShellKind::Zsh);
         self.process
             .shell_receiver_pending_payloads
             .entry(marker.to_string())
@@ -1128,9 +1060,9 @@ impl RuntimeSessionService {
     /// Returns the managed shell that owns one pending parent restoration.
     pub(super) fn managed_parent_restoration_is_zsh(&self, pane_id: &str) -> bool {
         self.process
-            .pane_fish_parent_restorations
+            .pane_managed_shell_handoffs
             .get(pane_id)
-            .is_some_and(|restoration| restoration.shell == RuntimeManagedShellKind::Zsh)
+            .is_some_and(|handoff| handoff.shell() == ManagedShellKind::Zsh)
     }
 
     /// Reports whether an agent action has a live shell transaction.
@@ -1961,7 +1893,7 @@ impl RuntimeSessionService {
     /// Reports whether Fish still owns post-child parent restoration.
     pub(crate) fn fish_parent_restoration_is_pending_for_tests(&self, pane_id: &str) -> bool {
         self.process
-            .pane_fish_parent_restorations
+            .pane_managed_shell_handoffs
             .contains_key(pane_id)
     }
 
@@ -3587,7 +3519,18 @@ impl RuntimeSessionService {
         self.process
             .pane_agent_subshell_parent_return_pending
             .remove(pane_id);
-        self.process.pane_fish_parent_restorations.remove(pane_id);
+        if let Some(mut handoff) = self.process.pane_managed_shell_handoffs.remove(pane_id) {
+            let transition =
+                reduce_managed_shell_handoff(&mut handoff, ManagedShellHandoffEvent::PaneRemoved);
+            debug_assert!(transition.applied);
+            debug_assert!(transition.effects.iter().any(|effect| matches!(
+                effect,
+                ManagedShellHandoffEffect::Settle {
+                    pending_input,
+                    ..
+                } if pending_input.is_empty()
+            )));
+        }
         self.process
             .pane_mez_wrapper_filter_recent_commands
             .remove(pane_id);

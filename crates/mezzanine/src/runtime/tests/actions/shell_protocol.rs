@@ -1775,6 +1775,11 @@ fn runtime_fish_parent_restoration_timeout_requires_foreground_proof() {
         "fish-restoration-marker",
         mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
     );
+    assert!(service.mark_managed_shell_payload_released(pane_id, "fish-restoration-marker"));
+    assert_eq!(
+        service.mark_managed_shell_child_installed(pane_id, "fish-restoration-marker"),
+        Some(false)
+    );
     service.remember_agent_subshell_exit_echo(pane_id);
     service
         .write_input_to_pane(&primary, Some(pane_id), b"queued-after-fish-exit\n")

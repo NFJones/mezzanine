@@ -38,7 +38,7 @@ impl RuntimeSessionService {
                 transaction.kind,
                 RunningShellTransactionKind::Bootstrap
                     | RunningShellTransactionKind::ShellIdentityProbe { .. }
-            ) && !self.fish_parent_restoration_is_pending(&transaction.pane_id)
+            ) && !self.managed_shell_handoff_is_pending(&transaction.pane_id)
             {
                 self.clear_agent_subshell_shell_identity(&transaction.pane_id);
                 self.process
@@ -333,7 +333,7 @@ impl RuntimeSessionService {
         timeout_ms: u64,
         elapsed_ms: u64,
     ) -> Result<()> {
-        if self.fish_parent_restoration_is_pending(&transaction.pane_id) {
+        if self.managed_shell_handoff_is_pending(&transaction.pane_id) {
             let _ = self.exit_agent_subshell_if_active(&transaction.pane_id)?;
         } else {
             self.interrupt_shell_transaction_pane(&transaction.pane_id)?;

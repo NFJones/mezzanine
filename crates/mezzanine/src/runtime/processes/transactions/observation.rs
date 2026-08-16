@@ -1,13 +1,14 @@
 //! Shell transaction event observation and foreground-shell state.
 
 use super::super::{
+    ManagedShellHandoffEffect, ManagedShellHandoffEvent, ManagedShellHandoffIdentity,
     PaneForegroundProcessObservation, PaneProcessInstance, PaneProcessIoEffect,
     RuntimeAgentSubshellCertificationOutcome, RuntimeAgentSubshellCertificationRejection,
     RuntimeBootstrapShellCertificationEvidence, RuntimeCertifiedShellSource,
     RuntimePaneCertifiedShellIdentity, RuntimePaneProbedShellIdentity, RuntimePaneShellHandoff,
     RuntimePendingAgentSubshellCertification, RuntimePendingAgentSubshellStartObservation,
     RuntimePendingBootstrapEnvironment, RuntimePendingShellDispatchRecoveryObservation,
-    RuntimeSideEffect, RuntimeTransition,
+    RuntimeSideEffect, RuntimeTransition, reduce_managed_shell_handoff,
 };
 use super::{
     AgentTurnState, EventKind, PaneReadinessState, RUNTIME_AGENT_SUBSHELL_CERTIFICATION_TIMEOUT_MS,
@@ -479,18 +480,14 @@ impl RuntimeSessionService {
         instance: PaneProcessInstance,
         observation: PaneForegroundProcessObservation,
     ) -> Result<RuntimeTransition> {
-        if let Some(restoration) = self
+        if let Some(handoff) = self
             .process
-            .pane_fish_parent_restorations
+            .pane_managed_shell_handoffs
             .get(&instance.pane_id)
             .cloned()
-            && restoration
-                .recovery_observation
-                .as_ref()
-                .is_some_and(|pending| {
-                    pending.instance == instance
-                        && pending.observation_id == observation.observation_id
-                })
+            && handoff.recovery_observation().is_some_and(|pending| {
+                pending.instance == instance && pending.observation_id == observation.observation_id
+            })
         {
             let current_primary_process_id =
                 self.primary_pid_for_live_pane_process(&instance.pane_id);
@@ -499,27 +496,31 @@ impl RuntimeSessionService {
                 .pane_shell_interaction_generations
                 .get(&instance.pane_id)
                 .copied();
-            let parent_foreground = restoration.primary_process_id.is_some()
+            let parent_foreground = handoff.identity().primary_process_id.is_some()
                 && observation.error.is_none()
-                && observation.process_group_id == restoration.primary_process_id
-                && current_primary_process_id == restoration.primary_process_id
-                && current_interaction_generation == restoration.interaction_generation;
+                && observation.process_group_id == handoff.identity().primary_process_id
+                && current_primary_process_id == handoff.identity().primary_process_id
+                && current_interaction_generation == handoff.identity().interaction_generation;
             if !parent_foreground {
                 if let Some(current) = self
                     .process
-                    .pane_fish_parent_restorations
+                    .pane_managed_shell_handoffs
                     .get_mut(&instance.pane_id)
                 {
-                    current.recovery_observation = None;
-                    current.started_at_unix_ms = Some(current_unix_millis());
+                    let _ = reduce_managed_shell_handoff(
+                        current,
+                        ManagedShellHandoffEvent::RecoveryProofRejected {
+                            now_unix_ms: current_unix_millis(),
+                        },
+                    );
                 }
                 self.set_pane_readiness(&instance.pane_id, PaneReadinessState::Degraded);
                 self.append_lifecycle_event(
                     EventKind::Diagnostic,
                     format!(
-                        r#"{{"pane_id":"{}","fish_parent_restoration":"proof_rejected","marker":"{}","observation_id":"{}"}}"#,
+                        r#"{{"pane_id":"{}","managed_shell_handoff":"proof_rejected","marker":"{}","observation_id":"{}"}}"#,
                         json_escape(&instance.pane_id),
-                        json_escape(&restoration.marker),
+                        json_escape(&handoff.identity().marker),
                         json_escape(&observation.observation_id)
                     ),
                 )?;
@@ -529,8 +530,44 @@ impl RuntimeSessionService {
                 ));
             }
 
+            let current_identity = ManagedShellHandoffIdentity {
+                marker: handoff.identity().marker.clone(),
+                process_instance: self.adapter_owned_pane_process_instance(&instance.pane_id),
+                primary_process_id: current_primary_process_id,
+                interaction_generation: current_interaction_generation,
+            };
+            let transition = {
+                let Some(current) = self
+                    .process
+                    .pane_managed_shell_handoffs
+                    .get_mut(&instance.pane_id)
+                else {
+                    return Ok(RuntimeTransition::default());
+                };
+                reduce_managed_shell_handoff(
+                    current,
+                    ManagedShellHandoffEvent::RecoveryProofAccepted {
+                        identity: current_identity,
+                        instance: instance.clone(),
+                        observation_id: observation.observation_id.clone(),
+                    },
+                )
+            };
+            let Some(pending_input) =
+                transition
+                    .effects
+                    .into_iter()
+                    .find_map(|effect| match effect {
+                        ManagedShellHandoffEffect::Settle { pending_input, .. } => {
+                            Some(pending_input)
+                        }
+                        _ => None,
+                    })
+            else {
+                return Ok(RuntimeTransition::default());
+            };
             self.process
-                .pane_fish_parent_restorations
+                .pane_managed_shell_handoffs
                 .remove(&instance.pane_id);
             self.process
                 .pane_agent_subshell_parent_return_pending
@@ -552,15 +589,15 @@ impl RuntimeSessionService {
                 self.set_pane_readiness(&instance.pane_id, PaneReadinessState::PromptCandidate);
             }
             self.clear_shell_output_filters_for_foreground_input(&instance.pane_id);
-            if !restoration.pending_input.is_empty() {
-                self.write_runtime_pane_input(&instance.pane_id, &restoration.pending_input)?;
+            if !pending_input.is_empty() {
+                self.write_runtime_pane_input(&instance.pane_id, &pending_input)?;
             }
             self.append_lifecycle_event(
                 EventKind::Diagnostic,
                 format!(
-                    r#"{{"pane_id":"{}","fish_parent_restoration":"proof_accepted","marker":"{}","observation_id":"{}"}}"#,
+                    r#"{{"pane_id":"{}","managed_shell_handoff":"proof_accepted","marker":"{}","observation_id":"{}"}}"#,
                     json_escape(&instance.pane_id),
-                    json_escape(&restoration.marker),
+                    json_escape(&handoff.identity().marker),
                     json_escape(&observation.observation_id)
                 ),
             )?;

@@ -203,7 +203,7 @@ impl RuntimeSessionService {
                 transaction.kind,
                 RunningShellTransactionKind::Bootstrap
                     | RunningShellTransactionKind::ShellIdentityProbe { .. }
-            ) && !self.fish_parent_restoration_is_pending(pane_id)
+            ) && !self.managed_shell_handoff_is_pending(pane_id)
             {
                 self.clear_agent_subshell_shell_identity(pane_id);
                 self.process.pane_probed_shell_identities.remove(pane_id);
