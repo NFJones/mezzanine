@@ -47,7 +47,7 @@ subsystem modules rather than expanding `crates/mezzanine/src/main.rs`.
 - `target/`: generated Cargo build output; do not edit or commit files from it.
 
 ## Build, Test, and Development Commands
-- Always wrap tests in a 60 second `timeout` or greater to check for hangs.
+- Always wrap tests in a 120 second `timeout` or greater to check for hangs.
 - Always run `cargo test` qith the `--quiet` opt to reduce output volume.
 - `just`: build all targets and features in release mode.
 - `just build`: build all targets and features in debug mode.
@@ -82,8 +82,8 @@ subsystem modules rather than expanding `crates/mezzanine/src/main.rs`.
 - Unless specifically instructed, do not maintain backwards compatibility with prior versions of this software. Deprecated code and modules should be removed.
 - The config schema must be versioned and you must provide a migration for config items which are added, renamed/moved or deleted from the schema using conventions established in `SPEC.md`.
 - Commit changes at major sequence points with long form commit messages to describe what has changed.
-- When working on a research task, document your results in `docs/reference/`.
-- When working on very large multi-phase refactors, write a refactor progress document out to `docs/reference/` and keep it up to date throughout the refactor.
+- When working on a research or planning task, document your results as research memories using thee appropriate action. If such an action does not exist, save results to a doc in `docs/reference/`.
+- When working on very large multi-phase refactors, keep plans up to date with progress notes throughout the refactor.
 - Never stage or commit documents contained in `docs/reference/`. They are for local use only.
 - When decomposing a module into multiple compilation units, prefer to create a `mod.rs` in the module directory rather than leaving a `<mod_name>.rs` source in the parent directory.
 
