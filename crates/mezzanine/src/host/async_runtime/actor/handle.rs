@@ -72,11 +72,11 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
-    /// Returns managed Fish child and parent-restoration state for boundary tests.
+    /// Returns managed-shell child and parent-restoration state for boundary tests.
     #[cfg(test)]
-    pub async fn fish_lifecycle_state(&self, pane_id: &str) -> Result<(bool, bool, bool)> {
+    pub async fn managed_shell_lifecycle_state(&self, pane_id: &str) -> Result<(bool, bool, bool)> {
         let pane_id = pane_id.to_string();
-        self.request(|reply| AsyncRuntimeRequest::FishLifecycleState { pane_id, reply })
+        self.request(|reply| AsyncRuntimeRequest::ManagedShellLifecycleState { pane_id, reply })
             .await
     }
 

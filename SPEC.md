@@ -1884,10 +1884,15 @@ available, admission MUST fail closed after a bounded wait without writing a
 handoff. A managed Zsh child MUST receive the runtime-owned startup directory
 directly and execute as one login-interactive Zsh process so its private
 receiver is installed before bootstrap release. Its private source protocol
-MUST bound source bytes, chunks, and physical records; after an authenticated
-BEGIN it MUST acknowledge and drain every declared DATA record and END even
-after detecting malformed input, and MUST evaluate source only after complete
-length, digest, sequence, and canonical Base64 validation.
+MUST bound source bytes, chunks, and physical records. After the fixed trigger
+starts the private receiver, runtime MAY use a token-authenticated awaiting
+record only as transport readiness to release source-free HOLD metadata; that
+record MUST NOT advance lifecycle ownership. The receiver MUST authenticate
+HOLD and publish `EditorHeld` before runtime releases BEGIN, then authenticate
+BEGIN and publish `FrameAdmitted` before runtime releases DATA and END. After
+an authenticated BEGIN it MUST acknowledge and drain every declared DATA
+record and END even after detecting malformed input, and MUST evaluate source
+only after complete length, digest, sequence, and canonical Base64 validation.
 The agent-mode child shell and every Mezzanine-owned non-stateful action shell
 MUST inherit the pane environment except for variables that can trigger shell
 startup files, prompt hooks, editor/pager prompts, or other interactive
@@ -4336,14 +4341,18 @@ ZLE admission widget in the `emacs`, `viins`, and `vicmd` keymaps without
 replacing existing user bindings. Admission MUST begin with a source-free
 trigger, save `BUFFER`, Unicode-correct `CURSOR`, `MARK`, `REGION_ACTIVE`, and
 the active keymap, accept only the fixed private receiver command, and release
-authenticated bounded source records only after the receiver emits its
-pane-token-authenticated awaiting boundary. Admission MUST fail closed for a
-continuation buffer, queued typeahead, failed keymap installation, or a
-`zle-line-init` widget that cannot be composed safely. The parent MUST restore
-the exact saved editor state before emitting its authenticated parent-restored
-boundary, and the restored draft MUST execute only after explicit user
-submission. Child ownership MUST transfer only after the managed child emits
-the authenticated receiver-installed event for the owning bootstrap marker.
+authenticated HOLD metadata only after the receiver emits its
+pane-token-authenticated transport-ready boundary. Runtime MUST then gate BEGIN
+on `EditorHeld` and DATA/END on `FrameAdmitted`. Admission MUST fail closed for
+a continuation buffer, queued typeahead, failed keymap installation, or a
+`zle-line-init` widget that cannot be composed safely. Before the first DATA
+record, the receiver MAY accept one token- and marker-authenticated cancellation
+record; after DATA begins, cancellation MUST be treated as malformed framing
+without shortening the mandatory drain through END. The parent MUST restore
+the exact saved editor state before emitting typed `ParentReady`, and the
+restored draft MUST execute only after explicit user submission. Child
+ownership MUST transfer only after the managed child emits authenticated
+`ChildInstalled` for the owning bootstrap marker.
 
 Managed `zsh` panes MUST also install a pane-scoped `zshaddhistory` hook after
 user startup processing that rejects only the fixed private receiver command

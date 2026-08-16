@@ -75,7 +75,7 @@ impl AsyncRuntimeSessionActor {
                 false
             }
             #[cfg(test)]
-            AsyncRuntimeRequest::FishLifecycleState { pane_id, reply } => {
+            AsyncRuntimeRequest::ManagedShellLifecycleState { pane_id, reply } => {
                 let _ = reply.send((
                     self.service.agent_subshell_is_active(&pane_id),
                     self.service.pane_bootstrap_is_pending_for_tests(&pane_id),

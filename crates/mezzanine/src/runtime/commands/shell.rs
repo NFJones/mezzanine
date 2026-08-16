@@ -1311,12 +1311,20 @@ impl RuntimeSessionService {
             let private_input =
                 mez_agent::zsh_private_source_input(&shell_command, &token, marker, trigger)
                     .map_err(|error| MezError::invalid_state(error.to_string()))?;
-            self.prepend_zsh_shell_receiver_payload(
+            self.prepend_zsh_shell_receiver_payloads(
                 marker,
+                mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
+                    private_input.receiver_hold.into_bytes(),
+                    marker.clone(),
+                ),
+                mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
+                    private_input.receiver_admission.into_bytes(),
+                    marker.clone(),
+                ),
                 mez_mux::process::ShellInputDelivery::receiver_acknowledged(
                     private_input.receiver_payload.into_bytes(),
                     marker.clone(),
-                    true,
+                    private_input.payload_receiver_acknowledgements,
                 ),
             );
             private_input.wrapper
@@ -1393,10 +1401,14 @@ impl RuntimeSessionService {
                     let shell = self.managed_shell_handoff_kind(pane_id).ok_or_else(|| {
                         MezError::invalid_state("managed shell handoff kind is unavailable")
                     })?;
-                    if shell == crate::runtime::processes::ManagedShellKind::Fish {
+                    if matches!(
+                        shell,
+                        crate::runtime::processes::ManagedShellKind::Fish
+                            | crate::runtime::processes::ManagedShellKind::Zsh
+                    ) {
                         if !self.request_managed_shell_admission_cancellation(pane_id) {
                             return Err(MezError::invalid_state(
-                                "managed Fish admission cancellation ownership disappeared",
+                                "managed staged-shell admission cancellation ownership disappeared",
                             ));
                         }
                         return Ok(true);

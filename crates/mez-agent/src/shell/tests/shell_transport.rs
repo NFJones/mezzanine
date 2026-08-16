@@ -177,6 +177,17 @@ fn managed_zsh_trigger_and_cancellation_transport_are_bounded() {
 
     assert_eq!(input.wrapper, "\u{1b}[27;9;110~");
     assert_eq!(
+        input.receiver_hold,
+        format!("MEZ_ZSH_RX1_HOLD {} zsh-cancel-marker\n", token.as_str())
+    );
+    assert!(input.receiver_admission.starts_with(&format!(
+        "MEZ_ZSH_RX1_BEGIN {} zsh-cancel-marker ",
+        token.as_str()
+    )));
+    assert!(!input.receiver_admission.contains("SHOULD_NOT_BE_IN_CANCEL"));
+    assert!(input.receiver_payload.contains("MEZ_ZSH_RX1_DATA"));
+    assert!(input.receiver_payload.contains("MEZ_ZSH_RX1_END"));
+    assert_eq!(
         ManagedZshTrigger::from_protocol_str("escape-m"),
         Some(ManagedZshTrigger::EscapeM)
     );

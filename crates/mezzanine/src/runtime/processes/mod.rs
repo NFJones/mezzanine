@@ -1111,18 +1111,23 @@ impl RuntimeSessionService {
         .applied
     }
 
-    /// Prepends one persistent Zsh handoff stage released after ZLE admission.
-    pub(crate) fn prepend_zsh_shell_receiver_payload(
+    /// Prepends staged persistent Zsh handoff input released by semantic events.
+    pub(crate) fn prepend_zsh_shell_receiver_payloads(
         &mut self,
         marker: &str,
+        hold: mez_mux::process::ShellInputDelivery,
+        admission: mez_mux::process::ShellInputDelivery,
         payload: mez_mux::process::ShellInputDelivery,
     ) {
         self.register_managed_shell_handoff(marker, ManagedShellKind::Zsh, None);
-        self.process
+        let pending = self
+            .process
             .shell_receiver_pending_payloads
             .entry(marker.to_string())
-            .or_default()
-            .push_front(payload);
+            .or_default();
+        pending.push_front(payload);
+        pending.push_front(admission);
+        pending.push_front(hold);
     }
 
     /// Returns the native adapter owning one live managed-shell handoff.

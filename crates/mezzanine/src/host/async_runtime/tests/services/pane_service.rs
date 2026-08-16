@@ -989,8 +989,10 @@ async fn async_fish_dirty_draft_no_prompt_exit_restores_responsive_parent() {
         assert_eq!(shown.mux_actions_applied, 1);
         let child_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
-            let (child_active, bootstrap_pending, restoration_pending) =
-                client_handle.fish_lifecycle_state("%1").await.unwrap();
+            let (child_active, bootstrap_pending, restoration_pending) = client_handle
+                .managed_shell_lifecycle_state("%1")
+                .await
+                .unwrap();
             if child_active && bootstrap_pending && restoration_pending {
                 break;
             }
@@ -1019,8 +1021,10 @@ async fn async_fish_dirty_draft_no_prompt_exit_restores_responsive_parent() {
         assert_eq!(hidden.mux_actions_applied, 1);
         let restoration_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
-            let (child_active, bootstrap_pending, restoration_pending) =
-                client_handle.fish_lifecycle_state("%1").await.unwrap();
+            let (child_active, bootstrap_pending, restoration_pending) = client_handle
+                .managed_shell_lifecycle_state("%1")
+                .await
+                .unwrap();
             if !child_active && !bootstrap_pending && !restoration_pending {
                 break;
             }
@@ -1097,6 +1101,211 @@ async fn async_fish_dirty_draft_no_prompt_exit_restores_responsive_parent() {
     assert!(
         pane_text.contains("__MEZ_ASYNC_FISH_PARENT_RESPONSIVE__"),
         "restored Fish parent output remained hidden after no-prompt exit: {pane_text:?}"
+    );
+    actor_exit.service.terminate_all_pane_processes().unwrap();
+    std::fs::remove_file(executed_path).unwrap();
+}
+
+/// Verifies a managed Zsh pane remains responsive when agent mode is entered
+/// with an unsubmitted draft and exited before any agent prompt is submitted.
+///
+/// This exercises staged HOLD, BEGIN, and DATA delivery through the production
+/// actor and pane worker. The restored draft must remain editable until the
+/// ZLE line-init hook publishes authenticated parent readiness.
+#[tokio::test(flavor = "current_thread")]
+async fn async_zsh_dirty_draft_no_prompt_exit_restores_responsive_parent() {
+    let Some(zsh) = ["/bin/zsh", "/usr/bin/zsh", "/usr/local/bin/zsh"]
+        .into_iter()
+        .find(|path| Path::new(path).is_file())
+    else {
+        eprintln!("skipping async Zsh draft regression because zsh is unavailable");
+        return;
+    };
+
+    let executed_path = std::env::temp_dir().join(format!(
+        "mez-async-zsh-no-prompt-executed-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_file(&executed_path);
+    let draft = "print -r -- '__MEZ_ASYNC_ZSH_PARENT_RESPONSIVE__'; command stty -a > ";
+    let restored_input = format!(
+        "{}\n",
+        mez_agent::shell::shell_quote(executed_path.to_str().unwrap())
+    );
+    let mut service = test_service_with_shell(zsh);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let pane_worker_handle = handle.clone();
+    let client_handle = handle.clone();
+    let pane_worker_done = StdArc::new(AtomicBool::new(false));
+    let pane_worker_stop = StdArc::clone(&pane_worker_done);
+    let client_executed_path = executed_path.clone();
+
+    let pane_worker = async move {
+        run_async_pane_process_supervisor_service(
+            pane_worker_handle,
+            AsyncPaneProcessSupervisorServiceConfig {
+                max_polls: u64::MAX,
+                take_limit: 8,
+                idle_interval: Duration::from_millis(1),
+                pane_service: AsyncPaneProcessServiceConfig {
+                    max_polls: u64::MAX,
+                    output_drain_limit: 4,
+                    drain_limit: 8,
+                    idle_interval: Duration::from_millis(1),
+                    foreground_metadata_interval: Duration::from_millis(10),
+                },
+            },
+            move |_, state| {
+                pane_worker_stop.load(Ordering::SeqCst)
+                    || matches!(state, RuntimeLifecycleState::Stopping)
+            },
+        )
+        .await
+    };
+
+    let client = async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        client_handle
+            .write_input_to_pane(primary.clone(), "%1", draft.as_bytes().to_vec())
+            .await
+            .unwrap();
+        let shown = client_handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ExecuteMux(
+                        MuxAction::ToggleAgentShell,
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(shown.mux_actions_applied, 1);
+        let child_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let (child_active, bootstrap_pending, restoration_pending) = client_handle
+                .managed_shell_lifecycle_state("%1")
+                .await
+                .unwrap();
+            if child_active && bootstrap_pending && restoration_pending {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < child_deadline,
+                "managed Zsh child did not reach active bootstrap before exit: active={child_active} bootstrap_pending={bootstrap_pending} restoration_pending={restoration_pending}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let hidden = client_handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ExecuteMux(
+                        MuxAction::ToggleAgentShell,
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(hidden.mux_actions_applied, 1);
+        let restoration_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let (child_active, bootstrap_pending, restoration_pending) = client_handle
+                .managed_shell_lifecycle_state("%1")
+                .await
+                .unwrap();
+            if !child_active && !bootstrap_pending && !restoration_pending {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < restoration_deadline,
+                "managed Zsh parent did not finish restoration after no-prompt exit: active={child_active} bootstrap_pending={bootstrap_pending} restoration_pending={restoration_pending}"
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let input = client_handle
+            .apply_attached_terminal_step_plan(
+                primary,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(
+                        restored_input.into_bytes(),
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(input.forwarded_bytes > 1);
+        let execution_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !client_executed_path.is_file() {
+            assert!(
+                tokio::time::Instant::now() < execution_deadline,
+                "restored Zsh draft did not execute after no-prompt exit"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        pane_worker_done.store(true, Ordering::SeqCst);
+        client_handle.shutdown().await.unwrap()
+    };
+
+    let (lifecycle, supervisor, mut actor_exit) =
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let (client, worker, actor) = tokio::join!(client, pane_worker, actor.run());
+            (client, worker, actor)
+        })
+        .await
+        .expect("dirty Zsh no-prompt exit should not hang");
+    assert_eq!(lifecycle, RuntimeLifecycleState::Running);
+    if let Err(error) = supervisor {
+        assert!(
+            matches!(
+                error.message(),
+                "async runtime session actor is closed"
+                    | "async runtime session actor reply was dropped"
+            ),
+            "pane supervisor failed before actor shutdown: {error}"
+        );
+    }
+    let restored_terminal_state = std::fs::read_to_string(&executed_path).unwrap();
+    assert!(
+        !restored_terminal_state
+            .split(|character: char| character.is_whitespace() || character == ';')
+            .any(|field| field == "-echo"),
+        "Zsh parent terminal echo remained disabled after no-prompt exit: {restored_terminal_state}"
+    );
+    let pane_text = actor_exit
+        .service
+        .pane_screen("%1")
+        .map(|screen| screen.normal_content_lines().join("\n"))
+        .unwrap_or_default();
+    assert!(
+        pane_text.contains("__MEZ_ASYNC_ZSH_PARENT_RESPONSIVE__"),
+        "restored Zsh parent output remained hidden after no-prompt exit: {pane_text:?}"
     );
     actor_exit.service.terminate_all_pane_processes().unwrap();
     std::fs::remove_file(executed_path).unwrap();

@@ -56,11 +56,18 @@ impl RuntimeSessionService {
             {
                 ManagedShellKind::Fish
             }
+            mez_terminal::ManagedShellAdapter::Zsh
+                if self
+                    .zsh_history_token_for_pane(output_pane_id)
+                    .is_some_and(|expected| expected.as_str() == token) =>
+            {
+                ManagedShellKind::Zsh
+            }
             _ => return Ok(0),
         };
         match event {
             mez_terminal::ManagedShellProtocolEvent::AdapterAvailable => {
-                if managed_shell == ManagedShellKind::Fish {
+                if managed_shell != ManagedShellKind::Bash {
                     return Ok(1);
                 }
                 let Some(primary_process_id) =
@@ -91,19 +98,22 @@ impl RuntimeSessionService {
                 Ok(1)
             }
             mez_terminal::ManagedShellProtocolEvent::FrameAdmitted { marker } => {
-                if managed_shell == ManagedShellKind::Fish
-                    && self
-                        .process
-                        .pane_managed_shell_handoffs
-                        .get(output_pane_id)
-                        .is_some_and(|handoff| {
-                            handoff.shell() == ManagedShellKind::Fish
-                                && handoff.identity().marker == *marker
-                                && handoff.exit_requested()
-                        })
+                if matches!(
+                    managed_shell,
+                    ManagedShellKind::Fish | ManagedShellKind::Zsh
+                ) && self
+                    .process
+                    .pane_managed_shell_handoffs
+                    .get(output_pane_id)
+                    .is_some_and(|handoff| {
+                        handoff.shell() == managed_shell
+                            && handoff.identity().marker == *marker
+                            && handoff.exit_requested()
+                    })
                 {
-                    return self.observe_fish_frame_admitted_cancellation(
+                    return self.observe_managed_shell_frame_admitted_cancellation(
                         output_pane_id,
+                        managed_shell,
                         token,
                         marker,
                     );
@@ -119,10 +129,14 @@ impl RuntimeSessionService {
                 exit_code,
                 proof,
             } => {
-                if managed_shell == ManagedShellKind::Fish && proof.is_none() {
+                if matches!(
+                    managed_shell,
+                    ManagedShellKind::Fish | ManagedShellKind::Zsh
+                ) && proof.is_none()
+                {
                     self.observe_managed_shell_parent_ready(
                         output_pane_id,
-                        ManagedShellKind::Fish,
+                        managed_shell,
                         token,
                         marker,
                         None,
@@ -166,8 +180,16 @@ impl RuntimeSessionService {
                 )
             }
             mez_terminal::ManagedShellProtocolEvent::EditorHeld { marker } => {
-                if managed_shell == ManagedShellKind::Fish {
-                    return self.observe_fish_editor_held(output_pane_id, token, marker);
+                if matches!(
+                    managed_shell,
+                    ManagedShellKind::Fish | ManagedShellKind::Zsh
+                ) {
+                    return self.observe_managed_shell_editor_held(
+                        output_pane_id,
+                        managed_shell,
+                        token,
+                        marker,
+                    );
                 }
                 let Some(handoff) = self
                     .process
@@ -192,25 +214,32 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Releases the authenticated Fish BEGIN stage after native editor hold.
-    fn observe_fish_editor_held(
+    /// Releases an authenticated BEGIN stage after native editor hold.
+    fn observe_managed_shell_editor_held(
         &mut self,
         output_pane_id: &str,
+        shell: ManagedShellKind,
         token: &str,
         marker: &str,
     ) -> Result<usize> {
         let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
             return Ok(0);
         };
-        let token_matches = self
-            .fish_receiver_token_for_pane(output_pane_id)
-            .is_some_and(|expected| expected.as_str() == token);
+        let token_matches = match shell {
+            ManagedShellKind::Fish => self
+                .fish_receiver_token_for_pane(output_pane_id)
+                .is_some_and(|expected| expected.as_str() == token),
+            ManagedShellKind::Zsh => self
+                .zsh_history_token_for_pane(output_pane_id)
+                .is_some_and(|expected| expected.as_str() == token),
+            ManagedShellKind::Bash => false,
+        };
         if transaction.pane_id != output_pane_id || !token_matches {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,
-                "fish-editor-held-metadata-mismatch",
-                "managed Fish editor-held metadata does not match runtime dispatch state",
+                "managed-editor-held-metadata-mismatch",
+                "managed-shell editor-held metadata does not match runtime dispatch state",
             );
         }
         let transition = {
@@ -221,7 +250,7 @@ impl RuntimeSessionService {
             else {
                 return Ok(0);
             };
-            if handoff.shell() != ManagedShellKind::Fish {
+            if handoff.shell() != shell {
                 return Ok(0);
             }
             reduce_managed_shell_handoff(
@@ -243,8 +272,8 @@ impl RuntimeSessionService {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,
-                "fish-editor-held-before-admission",
-                "managed Fish editor held without a pending frame admission stage",
+                "managed-editor-held-before-admission",
+                "managed shell held its editor without a pending frame admission stage",
             );
         };
         if self
@@ -256,8 +285,8 @@ impl RuntimeSessionService {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,
-                "fish-editor-held-without-payload",
-                "managed Fish frame admission has no pending DATA and END payload",
+                "managed-editor-held-without-payload",
+                "managed-shell frame admission has no pending DATA and END payload",
             );
         }
         let admission_len = admission.bytes.len();
@@ -268,52 +297,66 @@ impl RuntimeSessionService {
         self.append_agent_trace_turn_event(
             output_pane_id,
             &transaction.turn_id,
-            &format!("fish_editor held marker={marker} admission_bytes={admission_len}"),
+            &format!(
+                "managed_shell editor_held shell={shell:?} marker={marker} admission_bytes={admission_len}"
+            ),
         )?;
         Ok(1)
     }
 
-    /// Cancels a Fish frame after BEGIN admission but before DATA delivery.
-    fn observe_fish_frame_admitted_cancellation(
+    /// Cancels a managed frame after BEGIN admission but before DATA delivery.
+    fn observe_managed_shell_frame_admitted_cancellation(
         &mut self,
         output_pane_id: &str,
+        shell: ManagedShellKind,
         token: &str,
         marker: &str,
     ) -> Result<usize> {
         let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
             return Ok(0);
         };
-        let Some(receiver_token) = self
-            .fish_receiver_token_for_pane(output_pane_id)
-            .filter(|expected| expected.as_str() == token)
-            .cloned()
-        else {
+        let receiver_token = match shell {
+            ManagedShellKind::Fish => self.fish_receiver_token_for_pane(output_pane_id),
+            ManagedShellKind::Zsh => self.zsh_history_token_for_pane(output_pane_id),
+            ManagedShellKind::Bash => None,
+        }
+        .filter(|expected| expected.as_str() == token)
+        .cloned();
+        let Some(receiver_token) = receiver_token else {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,
-                "fish-frame-admitted-cancellation-metadata-mismatch",
-                "managed Fish frame admission does not match deferred cancellation ownership",
+                "managed-frame-admitted-cancellation-metadata-mismatch",
+                "managed-shell frame admission does not match deferred cancellation ownership",
             );
         };
         if transaction.pane_id != output_pane_id {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,
-                "fish-frame-admitted-cancellation-metadata-mismatch",
-                "managed Fish frame admission does not match deferred cancellation ownership",
+                "managed-frame-admitted-cancellation-metadata-mismatch",
+                "managed-shell frame admission does not match deferred cancellation ownership",
             );
         }
         if !self.remember_managed_shell_admission_cancellation(output_pane_id) {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,
-                "fish-frame-admitted-cancellation-phase-mismatch",
-                "managed Fish cancellation reached frame admission outside pre-DATA ownership",
+                "managed-frame-admitted-cancellation-phase-mismatch",
+                "managed-shell cancellation reached frame admission outside pre-DATA ownership",
             );
         }
         let _ = self.cancel_agent_subshell_bootstrap_for_exit(output_pane_id);
         self.process.shell_receiver_pending_payloads.remove(marker);
-        let cancellation = mez_agent::fish_private_source_cancel_input(&receiver_token, marker);
+        let cancellation = match shell {
+            ManagedShellKind::Fish => {
+                mez_agent::fish_private_source_cancel_input(&receiver_token, marker)
+            }
+            ManagedShellKind::Zsh => {
+                mez_agent::zsh_private_source_cancel_input(&receiver_token, marker)
+            }
+            ManagedShellKind::Bash => return Ok(0),
+        };
         if let Err(error) = self.write_runtime_pane_input(output_pane_id, cancellation.as_bytes()) {
             self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
             return Ok(0);
@@ -321,7 +364,9 @@ impl RuntimeSessionService {
         self.append_agent_trace_turn_event(
             output_pane_id,
             &transaction.turn_id,
-            &format!("fish_receiver cancelled marker={marker} before_data=true"),
+            &format!(
+                "managed_shell receiver_cancelled shell={shell:?} marker={marker} before_data=true"
+            ),
         )?;
         Ok(1)
     }
@@ -471,13 +516,16 @@ impl RuntimeSessionService {
             .is_some_and(|expected| expected.as_str() == token)
             || self
                 .fish_receiver_token_for_pane(output_pane_id)
+                .is_some_and(|expected| expected.as_str() == token)
+            || self
+                .zsh_history_token_for_pane(output_pane_id)
                 .is_some_and(|expected| expected.as_str() == token);
         if transaction.pane_id != output_pane_id || !receiver_token_matches {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,
                 "receiver-ready-metadata-mismatch",
-                "Bash receiver-ready metadata does not match runtime dispatch state",
+                "managed-shell frame admission metadata does not match runtime dispatch state",
             );
         }
         let payload = self
@@ -490,7 +538,7 @@ impl RuntimeSessionService {
                 marker,
                 transaction,
                 "unexpected-receiver-ready",
-                "Bash receiver emitted ready without pending private source frames",
+                "managed shell admitted a frame without pending private source records",
             );
         };
         if self
@@ -607,7 +655,7 @@ impl RuntimeSessionService {
         Ok(1)
     }
 
-    /// Releases managed-Zsh private source records after ZLE accepts its fixed receiver.
+    /// Releases authenticated HOLD metadata after ZLE starts its fixed receiver.
     pub(crate) fn observe_zsh_shell_receiver_awaiting(
         &mut self,
         output_pane_id: &str,
@@ -653,37 +701,31 @@ impl RuntimeSessionService {
                 &marker,
                 transaction,
                 "unexpected-zsh-receiver-awaiting",
-                "Zsh receiver emitted awaiting without pending private source records",
+                "Zsh receiver emitted awaiting without pending HOLD metadata",
             );
         };
         if self
             .process
             .shell_receiver_pending_payloads
             .get(&marker)
-            .is_some_and(std::collections::VecDeque::is_empty)
+            .is_none_or(|pending| pending.len() < 2)
         {
-            self.process.shell_receiver_pending_payloads.remove(&marker);
+            return self.fail_shell_transaction_protocol_violation(
+                &marker,
+                transaction,
+                "zsh-receiver-awaiting-without-staged-frame",
+                "Zsh HOLD metadata has no pending BEGIN and DATA/END stages",
+            );
         }
         let payload_len = payload.bytes.len();
-        if payload.receiver_acknowledgements {
-            let acknowledgement_count = payload
-                .bytes
-                .split_inclusive(|byte| *byte == b'\n')
-                .filter(|record| mez_mux::process::receiver_input_record_requires_ack(record))
-                .count();
-            self.process
-                .shell_transaction_receiver_acknowledgements
-                .insert(marker.clone(), acknowledgement_count);
-        }
         if let Err(error) = self.write_runtime_pane_shell_delivery(output_pane_id, payload) {
             self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
             return Err(error);
         }
-        self.mark_managed_shell_payload_released(output_pane_id, &marker);
         self.append_agent_trace_turn_event(
             output_pane_id,
             &transaction.turn_id,
-            &format!("zsh_shell_receiver awaiting marker={marker} bytes={payload_len}"),
+            &format!("zsh_shell_receiver awaiting_hold marker={marker} bytes={payload_len}"),
         )?;
         Ok(1)
     }

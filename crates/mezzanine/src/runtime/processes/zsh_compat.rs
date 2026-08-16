@@ -199,38 +199,47 @@ typeset -g __MEZ_ZSH_SAVED_KEYMAP=
 typeset -gi __MEZ_ZSH_RESTORE_PENDING=0
 typeset -g __MEZ_ZSH_RESTORE_MARKER=
 typeset -gi __MEZ_ZSH_RESTORE_STATUS=1
+typeset -g __MEZ_ZSH_RESTORE_OUTCOME=frame-rejected
 typeset -gi __MEZ_ZSH_ADMISSION_READY=0
 typeset -g __MEZ_ZSH_TRIGGER_ID=
 typeset -g __MEZ_ZSH_TRIGGER_SEQUENCE=
 function __mez_zsh_private_receiver() {
   emulate -L zsh
   setopt localoptions extendedglob
-  local begin_record source_file encoded_file receive_status=0 source_status=1 cancelled=0 frame_admitted=0
+  local hold_record begin_record source_file encoded_file receive_status=0 source_status=1 cancelled=0 frame_admitted=0
   local marker expected_length expected_digest expected_chunks sequence=0
   command printf '\033]133;R;mez_receiver=awaiting;mez_token=%s\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
+  IFS= read -r hold_record || receive_status=1
+  local -a hold_fields
+  hold_fields=(${=hold_record})
+  if (( receive_status != 0 || ${#hold_fields} != 3 || ${#hold_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ )) || \
+     [[ ${hold_fields[1]-} != MEZ_ZSH_RX1_HOLD || ${hold_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || -z ${hold_fields[3]-} ]]; then
+    command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=receiver-rejected;mez_reason=invalid-hold\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
+    __MEZ_ZSH_RESTORE_STATUS=65
+    __MEZ_ZSH_RESTORE_OUTCOME=frame-rejected
+    return 65
+  fi
+  marker=${hold_fields[3]}
+  command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=editor-held;mez_marker=%s\033\\' \
+    "$MEZ_ZSH_HISTORY_TOKEN" "$marker"
   IFS= read -r begin_record || receive_status=1
   local -a begin_fields
   begin_fields=(${=begin_record})
-  if (( receive_status == 0 && ${#begin_fields} == 3 )) && \
-     [[ ${begin_fields[1]-} == MEZ_ZSH_RX1_CANCEL && \
-        ${begin_fields[2]-} == ${MEZ_ZSH_HISTORY_TOKEN-} && -n ${begin_fields[3]-} ]]; then
-    marker=${begin_fields[3]}
-    cancelled=1
-    source_status=130
-    command printf '\036'
-  elif (( receive_status != 0 || ${#begin_fields} != 6 || ${#begin_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ )) || \
+  if (( receive_status != 0 || ${#begin_fields} != 6 || ${#begin_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ )) || \
      [[ ${begin_fields[1]-} != MEZ_ZSH_RX1_BEGIN || ${begin_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || \
+        ${begin_fields[3]-} != ${marker} || \
         ${begin_fields[4]-} != <-> || ${begin_fields[5]-} != [0-9a-f]## || ${#begin_fields[5]} != 64 || \
         ${begin_fields[6]-} != <-> || ${begin_fields[4]-} -gt __MEZ_ZSH_MAX_SOURCE_BYTES__ || \
         ${begin_fields[6]-} -gt __MEZ_ZSH_MAX_SOURCE_CHUNKS__ ]]; then
     receive_status=1
   else
-    marker=${begin_fields[3]}
     expected_length=${begin_fields[4]}
     expected_digest=${begin_fields[5]}
     expected_chunks=${begin_fields[6]}
     frame_admitted=1
     command printf '\036'
+    command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=frame-admitted;mez_marker=%s\033\\' \
+      "$MEZ_ZSH_HISTORY_TOKEN" "$marker"
   fi
   if (( ! cancelled && frame_admitted )); then
     source_file=$(command mktemp) || receive_status=1
@@ -242,7 +251,17 @@ function __mez_zsh_private_receiver() {
     IFS= read -r data_record || { receive_status=1; break; }
     local -a data_fields
     data_fields=(${=data_record})
-    if (( receive_status == 0 )) && \
+    if (( ${#data_fields} == 3 )) && \
+       [[ ${data_fields[1]-} == MEZ_ZSH_RX1_CANCEL && \
+          ${data_fields[2]-} == ${MEZ_ZSH_HISTORY_TOKEN-} && ${data_fields[3]-} == ${marker} ]]; then
+      if (( sequence == 0 )); then
+        cancelled=1
+        source_status=130
+        command printf '\036'
+        break
+      fi
+      receive_status=1
+    elif (( receive_status == 0 )) && \
        { (( ${#data_fields} != 5 || ${#data_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ || ${#data_fields[5]-} > __MEZ_ZSH_MAX_DATA_BYTES__ )) || \
          [[ ${data_fields[1]-} != MEZ_ZSH_RX1_DATA || \
          ${data_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || ${data_fields[3]-} != ${marker} || \
@@ -300,6 +319,16 @@ function __mez_zsh_private_receiver() {
   [[ -n ${source_file} ]] && command rm -f -- "$source_file" "$encoded_file" >/dev/null 2>&1 || true
   __MEZ_ZSH_RESTORE_MARKER=${marker}
   __MEZ_ZSH_RESTORE_STATUS=${source_status}
+  if (( cancelled )); then
+    __MEZ_ZSH_RESTORE_OUTCOME=cancelled
+  elif (( receive_status != 0 )); then
+    __MEZ_ZSH_RESTORE_OUTCOME=frame-rejected
+    __MEZ_ZSH_RESTORE_STATUS=65
+  elif (( source_status == 0 )); then
+    __MEZ_ZSH_RESTORE_OUTCOME=completed
+  else
+    __MEZ_ZSH_RESTORE_OUTCOME=source-failed
+  fi
   return ${source_status}
 }
 function __mez_zsh_private_widget() {
@@ -328,13 +357,13 @@ function __mez_zsh_line_init() {
     [[ -n ${__MEZ_ZSH_SAVED_KEYMAP} ]] && zle -K "${__MEZ_ZSH_SAVED_KEYMAP}" 2>/dev/null || true
     __MEZ_ZSH_RESTORE_PENDING=0
     if [[ -n ${__MEZ_ZSH_RESTORE_MARKER} ]]; then
-      command printf '\033]133;R;mez_parent=restored;mez_token=%s;mez_marker=%s;mez_status=%s\033\\' \
-        "$MEZ_ZSH_HISTORY_TOKEN" "$__MEZ_ZSH_RESTORE_MARKER" "$__MEZ_ZSH_RESTORE_STATUS"
+      command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=parent-ready;mez_marker=%s;mez_outcome=%s;mez_status=%s\033\\' \
+        "$MEZ_ZSH_HISTORY_TOKEN" "$__MEZ_ZSH_RESTORE_MARKER" "$__MEZ_ZSH_RESTORE_OUTCOME" "$__MEZ_ZSH_RESTORE_STATUS"
     fi
     __MEZ_ZSH_RESTORE_MARKER=
   fi
   if [[ -n ${MEZ_ZSH_RECEIVER_INSTALL_MARKER-} ]]; then
-    command printf '\033]133;R;mez_receiver=installed;mez_token=%s;mez_marker=%s\033\\' \
+    command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=child-installed;mez_marker=%s\033\\' \
       "$MEZ_ZSH_HISTORY_TOKEN" "$MEZ_ZSH_RECEIVER_INSTALL_MARKER"
     unset MEZ_ZSH_RECEIVER_INSTALL_MARKER
   fi
@@ -399,6 +428,8 @@ function __mez_zsh_install_integration() {
   __MEZ_ZSH_ADMISSION_READY=1
   command printf '\033]133;R;mez_receiver=available;mez_shell=zsh;mez_token=%s;mez_trigger=%s\033\\' \
     "$MEZ_ZSH_HISTORY_TOKEN" "$__MEZ_ZSH_TRIGGER_ID"
+  command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=adapter-available\033\\' \
+    "$MEZ_ZSH_HISTORY_TOKEN"
 }
 function __mez_zsh_schedule_integration() {
   emulate -L zsh
@@ -676,6 +707,58 @@ mod tests {
     ) -> Vec<u8> {
         let mut output = Vec::new();
         extend_zsh_output_until(process, &mut output, predicate);
+        output
+    }
+
+    /// Drives the fixed ZLE trigger and waits for authenticated editor ownership.
+    fn hold_managed_zsh_editor(
+        process: &mut ManagedZshTestPane,
+        admission: &mez_agent::ZshPrivateSourceInput,
+        owner: &MarkerToken,
+        marker: &str,
+    ) -> Vec<u8> {
+        process.write_input(admission.wrapper.as_bytes()).unwrap();
+        let awaiting = format!("mez_receiver=awaiting;mez_token={}", owner.as_str());
+        let mut output = read_zsh_output_until(process, |output| {
+            output
+                .windows(awaiting.len())
+                .any(|window| window == awaiting.as_bytes())
+        });
+        process
+            .write_input(admission.receiver_hold.as_bytes())
+            .unwrap();
+        let editor_held = format!(
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=editor-held;mez_marker={marker}",
+            owner.as_str()
+        );
+        extend_zsh_output_until(process, &mut output, |output| {
+            output
+                .windows(editor_held.len())
+                .any(|window| window == editor_held.as_bytes())
+        });
+        output
+    }
+
+    /// Releases Zsh BEGIN after editor hold and waits for frame admission.
+    fn admit_managed_zsh_frame(
+        process: &mut ManagedZshTestPane,
+        admission: &mez_agent::ZshPrivateSourceInput,
+        owner: &MarkerToken,
+        marker: &str,
+    ) -> Vec<u8> {
+        let mut output = hold_managed_zsh_editor(process, admission, owner, marker);
+        process
+            .write_input(admission.receiver_admission.as_bytes())
+            .unwrap();
+        let frame_admitted = format!(
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=frame-admitted;mez_marker={marker}",
+            owner.as_str()
+        );
+        extend_zsh_output_until(process, &mut output, |output| {
+            output
+                .windows(frame_admitted.len())
+                .any(|window| window == frame_admitted.as_bytes())
+        });
         output
     }
 
@@ -1142,18 +1225,13 @@ function zshaddhistory() {{\n\
             mez_agent::ManagedZshTrigger::EscapeM,
         )
         .unwrap();
-        process.write_input(admission.wrapper.as_bytes()).unwrap();
-        let awaiting = format!("mez_receiver=awaiting;mez_token={}", token.as_str());
-        let mut output = read_zsh_output_until(&mut process, |output| {
-            output
-                .windows(awaiting.len())
-                .any(|window| window == awaiting.as_bytes())
-        });
+        let mut output =
+            admit_managed_zsh_frame(&mut process, &admission, &token, bootstrap_marker);
         process
             .write_input(admission.receiver_payload.as_bytes())
             .unwrap();
         let installed = format!(
-            "mez_receiver=installed;mez_token={};mez_marker={bootstrap_marker}",
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=child-installed;mez_marker={bootstrap_marker}",
             token.as_str()
         );
         extend_zsh_output_until(&mut process, &mut output, |output| {
@@ -1166,7 +1244,7 @@ function zshaddhistory() {{\n\
             .write_input(b"print -r -- USER_CHILD\nprint -r -- __HISTORY_BEGIN__\nfc -l -100\nprint -r -- __HISTORY_END__\nexit\n")
             .unwrap();
         let restored = format!(
-            "mez_parent=restored;mez_token={};mez_marker={bootstrap_marker};mez_status=0",
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=parent-ready;mez_marker={bootstrap_marker};mez_outcome=completed;mez_status=0",
             token.as_str()
         );
         extend_zsh_output_until(&mut process, &mut output, |output| {
@@ -1279,20 +1357,14 @@ function zshaddhistory() {{\n\
             mez_agent::ManagedZshTrigger::EscapeM,
         )
         .unwrap();
-        process.write_input(admission.wrapper.as_bytes()).unwrap();
-        let awaiting = format!("mez_receiver=awaiting;mez_token={}", owner.as_str());
-        let mut output = read_zsh_output_until(&mut process, |output| {
-            output
-                .windows(awaiting.len())
-                .any(|window| window == awaiting.as_bytes())
-        });
+        let mut output = admit_managed_zsh_frame(&mut process, &admission, &owner, marker);
         assert!(!String::from_utf8_lossy(&output).contains("__MEZ_ZSH_DRAFT_αβ_EXECUTED__\r\n"));
 
         process
             .write_input(admission.receiver_payload.as_bytes())
             .unwrap();
         let restored = format!(
-            "mez_parent=restored;mez_token={};mez_marker={marker};mez_status=0",
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=parent-ready;mez_marker={marker};mez_outcome=completed;mez_status=0",
             owner.as_str()
         );
         extend_zsh_output_until(&mut process, &mut output, |output| {
@@ -1402,13 +1474,7 @@ function zshaddhistory() {{\n\
             mez_agent::ManagedZshTrigger::EscapeM,
         )
         .unwrap();
-        process.write_input(admission.wrapper.as_bytes()).unwrap();
-        let awaiting = format!("mez_receiver=awaiting;mez_token={}", owner.as_str());
-        let mut output = read_zsh_output_until(&mut process, |output| {
-            output
-                .windows(awaiting.len())
-                .any(|window| window == awaiting.as_bytes())
-        });
+        let mut output = hold_managed_zsh_editor(&mut process, &admission, &owner, "bad");
         process
             .write_input(b"MEZ_ZSH_RX1_BEGIN wrong-token bad 1 0 1\n")
             .unwrap();
@@ -1435,7 +1501,7 @@ function zshaddhistory() {{\n\
         thread::sleep(Duration::from_millis(50));
         continuation.extend(process.read_available_output(64 * 1024).unwrap());
         assert!(
-            !String::from_utf8_lossy(&continuation).contains("mez_receiver=awaiting"),
+            !String::from_utf8_lossy(&continuation).contains("mez_event=editor-held"),
             "{:?}",
             String::from_utf8_lossy(&continuation)
         );
@@ -1593,17 +1659,11 @@ unsetopt RCS\n",
             mez_agent::ManagedZshTrigger::EscapeM,
         )
         .unwrap();
-        process.write_input(admission.wrapper.as_bytes()).unwrap();
-        let awaiting = format!("mez_receiver=awaiting;mez_token={}", owner.as_str());
-        let mut output = read_zsh_output_until(&mut process, |output| {
-            output
-                .windows(awaiting.len())
-                .any(|window| window == awaiting.as_bytes())
-        });
+        let mut output = admit_managed_zsh_frame(&mut process, &admission, &owner, marker);
         let cancellation = mez_agent::zsh_private_source_cancel_input(&owner, marker);
         process.write_input(cancellation.as_bytes()).unwrap();
         let restored = format!(
-            "mez_parent=restored;mez_token={};mez_marker={marker};mez_status=130",
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=parent-ready;mez_marker={marker};mez_outcome=cancelled;mez_status=130",
             owner.as_str()
         );
         extend_zsh_output_until(&mut process, &mut output, |output| {
@@ -1682,13 +1742,7 @@ unsetopt RCS\n",
             mez_agent::ManagedZshTrigger::EscapeM,
         )
         .unwrap();
-        process.write_input(admission.wrapper.as_bytes()).unwrap();
-        let awaiting = format!("mez_receiver=awaiting;mez_token={}", owner.as_str());
-        let mut output = read_zsh_output_until(&mut process, |output| {
-            output
-                .windows(awaiting.len())
-                .any(|window| window == awaiting.as_bytes())
-        });
+        let mut output = hold_managed_zsh_editor(&mut process, &admission, &owner, marker);
         let digest = "0".repeat(64);
         let frame = format!(
             "MEZ_ZSH_RX1_BEGIN {} {marker} 1 {digest} 2\n\
@@ -1702,7 +1756,7 @@ MEZ_ZSH_RX1_END {} {marker} 2 1 {digest}\n",
         );
         process.write_input(frame.as_bytes()).unwrap();
         let restored = format!(
-            "mez_parent=restored;mez_token={};mez_marker={marker};mez_status=1",
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=parent-ready;mez_marker={marker};mez_outcome=frame-rejected;mez_status=65",
             owner.as_str()
         );
         extend_zsh_output_until(&mut process, &mut output, |output| {

@@ -39,7 +39,7 @@ pub use transaction::{
     ShellChildArgument, ShellChildLaunch, ShellClassification, ShellTransaction,
     ShellTransactionInput, ShellTransactionOutputTransport, ZSH_PRIVATE_SOURCE_DATA_MAX_BYTES,
     ZSH_PRIVATE_SOURCE_MAX_BASE64_BYTES, ZSH_PRIVATE_SOURCE_MAX_BYTES,
-    ZSH_PRIVATE_SOURCE_MAX_CHUNKS, ZSH_PRIVATE_SOURCE_MAX_RECORD_BYTES,
+    ZSH_PRIVATE_SOURCE_MAX_CHUNKS, ZSH_PRIVATE_SOURCE_MAX_RECORD_BYTES, ZshPrivateSourceInput,
     agent_subshell_enter_command, agent_subshell_enter_command_with_shell_compatibility,
     agent_subshell_enter_command_with_shell_compatibility_and_exit_marker,
     agent_subshell_enter_command_with_zsh_history_token, agent_subshell_exit_marker_bytes,

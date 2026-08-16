@@ -96,10 +96,10 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Receives the queued pane-input dispatch metadata.
         reply: oneshot::Sender<Result<PaneInputDispatch>>,
     },
-    /// Reads the Fish child and restoration lifecycle for boundary tests.
+    /// Reads the managed-shell child and restoration lifecycle for boundary tests.
     #[cfg(test)]
-    FishLifecycleState {
-        /// Pane whose managed Fish handoff is observed.
+    ManagedShellLifecycleState {
+        /// Pane whose managed-shell handoff is observed.
         pane_id: String,
         /// Receives child-active, bootstrap-pending, and restoration-pending flags.
         reply: oneshot::Sender<(bool, bool, bool)>,
@@ -1032,7 +1032,9 @@ impl AsyncRuntimeRequest {
             | Self::AcknowledgeMessageFanout { .. }
             | Self::EventWakeups { .. } => Family::Message,
             #[cfg(test)]
-            Self::WriteInputToPane { .. } | Self::FishLifecycleState { .. } => Family::Terminal,
+            Self::WriteInputToPane { .. } | Self::ManagedShellLifecycleState { .. } => {
+                Family::Terminal
+            }
             Self::ApplyAttachedTerminalStep { .. }
             | Self::ResizeAttachedPrimaryTerminal { .. }
             | Self::ExecuteTerminalCommand { .. }

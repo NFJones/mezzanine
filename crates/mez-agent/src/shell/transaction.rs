@@ -2157,17 +2157,32 @@ pub fn fish_private_source_cancel_input(token: &MarkerToken, marker: &str) -> St
     format!("MEZ_FISH_RX1_CANCEL {} {}\n", token.as_str(), marker)
 }
 
-/// Renders a source-free ZLE trigger and deferred authenticated source frame.
+/// Staged private input for one managed Zsh editor handoff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZshPrivateSourceInput {
+    /// Fixed ZLE trigger accepted without queued metadata bytes.
+    pub wrapper: String,
+    /// Authenticated source-free HOLD metadata delivered after receiver startup.
+    pub receiver_hold: String,
+    /// Authenticated bounded BEGIN header released after editor hold.
+    pub receiver_admission: String,
+    /// Bounded DATA and END records released after frame admission.
+    pub receiver_payload: String,
+    /// Whether DATA and END records require receiver acknowledgements.
+    pub payload_receiver_acknowledgements: bool,
+}
+
+/// Renders a source-free ZLE trigger and staged authenticated source frame.
 ///
-/// Ctrl-G is consumed by the managed Zsh widget before it can become editable
-/// input. The widget saves the current editor state and accepts its fixed
-/// private receiver command before runtime releases the marker-bearing records.
+/// The fixed trigger is consumed by the managed Zsh widget before it can become
+/// editable input. HOLD lets the widget correlate and publish editor ownership;
+/// BEGIN and DATA/END remain independently gated by runtime semantic events.
 pub fn zsh_private_source_input(
     source: &str,
     token: &MarkerToken,
     marker: &str,
     trigger: ManagedZshTrigger,
-) -> AgentShellValidationResult<ShellTransactionInput> {
+) -> AgentShellValidationResult<ZshPrivateSourceInput> {
     if source.len() > ZSH_PRIVATE_SOURCE_MAX_BYTES {
         return Err(AgentShellValidationError::invalid_args(format!(
             "managed zsh private source exceeds {ZSH_PRIVATE_SOURCE_MAX_BYTES} bytes"
@@ -2180,7 +2195,7 @@ pub fn zsh_private_source_input(
     let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
     let chunks = encoded.as_bytes().chunks(SHELL_WRAPPER_BASE64_LINE_BYTES);
     let chunk_count = chunks.len();
-    let mut receiver_payload = format!(
+    let receiver_admission = format!(
         "MEZ_ZSH_RX1_BEGIN {} {} {} {} {}\n",
         token.as_str(),
         marker,
@@ -2188,6 +2203,7 @@ pub fn zsh_private_source_input(
         digest,
         chunk_count
     );
+    let mut receiver_payload = String::new();
     for (sequence, chunk) in chunks.enumerate() {
         let chunk = std::str::from_utf8(chunk)
             .expect("standard base64 output should always be valid UTF-8");
@@ -2207,10 +2223,11 @@ pub fn zsh_private_source_input(
         source.len(),
         digest
     ));
-    Ok(ShellTransactionInput {
+    Ok(ZshPrivateSourceInput {
         wrapper: trigger.input().to_string(),
+        receiver_hold: format!("MEZ_ZSH_RX1_HOLD {} {}\n", token.as_str(), marker),
+        receiver_admission,
         receiver_payload,
-        payload: String::new(),
         payload_receiver_acknowledgements: true,
     })
 }
