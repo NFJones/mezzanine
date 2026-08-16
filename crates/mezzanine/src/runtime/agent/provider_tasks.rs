@@ -512,6 +512,14 @@ impl RuntimeSessionService {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(None);
         }
+        if self.pane_has_uncertified_foreign_shell_boundary(&turn.pane_id) {
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                "provider_task deferred reason=uncertified_foreign_shell_boundary",
+            )?;
+            return Ok(None);
+        }
 
         let primary_path_resolution_request =
             self.primary_path_resolution_request(&turn.pane_id)?;

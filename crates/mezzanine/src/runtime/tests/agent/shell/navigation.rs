@@ -793,6 +793,28 @@ fn runtime_agent_shell_entry_defers_at_uncertified_foreign_foreground() {
         pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
         "foreign foreground ownership must block child-shell and discovery input"
     );
+    let started = service
+        .start_agent_prompt_turn(&pane_id, "list the current directory")
+        .unwrap();
+    let agent_id = AgentId::opaque(started.agent_id).unwrap();
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&agent_id, &started.turn_id)
+            .unwrap()
+            .is_none(),
+        "a foreign foreground boundary must defer provider dispatch"
+    );
+    assert!(service.agent_provider_task_is_pending(&started.turn_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == started.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Running),
+        "foreign-boundary deferral must not fail the submitted prompt"
+    );
     let interaction_generation =
         service.pane_foreground_process_diagnostic(&pane_id).json()["shell_interaction_generation"]
             .as_u64()
