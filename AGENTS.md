@@ -77,7 +77,7 @@ subsystem modules rather than expanding `crates/mezzanine/src/main.rs`.
 - Add context to propagated errors so failures are diagnosable in logs and tests.
 - New behavior should include tests for the happy path and at least one edge or failure case.
 - Bug fixes should include a regression test that fails before the fix and passes after.
-- Behavior/config changes must update related documentation and examples (`README.md`, `SPEC.md`, `docs/examples/config.toml`) in the same change.
+- Behavior/config changes must update related documentation and examples (`README.md` (only very high level changes are required here), `SPEC.md`, `docs/examples/config.toml`, manual documentatio in `docs/`) in the same change.
 - All tests should have a long form docstring to explain what is being tested and why.
 - Unless specifically instructed, do not maintain backwards compatibility with prior versions of this software. Deprecated code and modules should be removed.
 - The config schema must be versioned and you must provide a migration for config items which are added, renamed/moved or deleted from the schema using conventions established in `SPEC.md`.
