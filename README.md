@@ -107,17 +107,16 @@ Within an agent pane, use `/plan on`, `/plan off`, or `/plan toggle` to control
 pane-local plan-only mode. The clickable `plan` status pill shows the current
 mode.
 
-On supported Bash, Zsh, and Fish prompts, Mezzanine preserves an unfinished
-command while agent mode is active and restores it afterward. Unsupported or
-unsafe prompt states fail closed rather than submitting or combining input.
-Bash requires its Readline integration, Fish requires its supported
-`commandline` editor APIs, and Zsh requires its ZLE hook and keymap APIs. Each
-adapter preserves native startup and history behavior rather than emulating a
-different shell. Hiding agent mode during admission cancels the authenticated
-handoff and restores the command; after a launched child exits, foreground
-input remains queued until the authenticated editor-restored boundary. If that
-boundary is lost, queued input remains retained until the original parent
-process is freshly proven to own the foreground terminal. Streamed shell output
+On supported Bash prompts, Mezzanine preserves an unfinished command while
+agent mode is active and restores it afterward. Fish and Zsh instead discard
+unfinished editable input when agent mode opens, using their native editor APIs
+to provide the equivalent of clearing the line before admission. Unsupported
+or unsafe prompt states fail closed rather than submitting or combining input.
+Each adapter preserves native startup and history behavior rather than
+emulating a different shell. After a launched child exits, foreground input
+remains queued until the authenticated parent-ready boundary. If that boundary
+is lost, queued input remains retained until the original parent process is
+freshly proven to own the foreground terminal. Streamed shell output
 is decoded incrementally only while a live encoded action transaction owns the
 pane, so private Base64 transport records do not leak and marker-like ordinary
 shell output remains literal.

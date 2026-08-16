@@ -887,10 +887,11 @@ async fn async_agent_subshell_bootstrap_certifies_with_fresh_worker_observation(
 /// with an unsubmitted draft and exited before any agent prompt is submitted.
 ///
 /// This exercises the production actor and pane-worker ownership path rather
-/// than writing directly to the PTY. The restored draft must remain editable
-/// after the Fish callback publishes its authenticated parent-return event.
+/// than writing directly to the PTY. The original draft must remain discarded
+/// after Fish publishes its authenticated parent-return event, while a fresh
+/// command must execute immediately.
 #[tokio::test(flavor = "current_thread")]
-async fn async_fish_dirty_draft_no_prompt_exit_restores_responsive_parent() {
+async fn async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_responsive_parent() {
     let Some(fish) = [
         "/usr/bin/fish",
         "/usr/local/bin/fish",
@@ -910,10 +911,15 @@ async fn async_fish_dirty_draft_no_prompt_exit_restores_responsive_parent() {
             .unwrap()
             .as_nanos()
     ));
+    let discarded_path = executed_path.with_extension("discarded");
     let _ = std::fs::remove_file(&executed_path);
-    let draft = "builtin printf '__MEZ_ASYNC_FISH_PARENT_RESPONSIVE__\\n'; command stty -a > ";
-    let restored_input = format!(
-        "{}\n",
+    let _ = std::fs::remove_file(&discarded_path);
+    let draft = format!(
+        "command touch {}",
+        mez_agent::shell::fish_quote(discarded_path.to_str().unwrap())
+    );
+    let fresh_input = format!(
+        "builtin printf '__MEZ_ASYNC_FISH_PARENT_RESPONSIVE__\\n'; command stty -a > {}\n",
         mez_agent::shell::fish_quote(executed_path.to_str().unwrap())
     );
     let mut service = test_service_with_shell(fish);
@@ -1039,7 +1045,7 @@ async fn async_fish_dirty_draft_no_prompt_exit_restores_responsive_parent() {
                 primary,
                 AttachedTerminalClientStepPlan {
                     actions: vec![TerminalClientLoopAction::ForwardToPane(
-                        restored_input.into_bytes(),
+                        fresh_input.into_bytes(),
                     )],
                     output_lines: Vec::new(),
                     output_line_style_spans: Vec::new(),
@@ -1055,11 +1061,11 @@ async fn async_fish_dirty_draft_no_prompt_exit_restores_responsive_parent() {
         while !client_executed_path.is_file() {
             assert!(
                 tokio::time::Instant::now() < execution_deadline,
-                "restored Fish draft did not execute after no-prompt exit"
+                "fresh Fish command did not execute after no-prompt exit"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        // File creation proves Fish executed the restored command, but its
+        // File creation proves Fish executed the fresh command, but its
         // preceding terminal output can still be waiting in the PTY worker.
         // Keep the production reader alive long enough to ingest that output
         // before shutdown freezes the final pane snapshot used below.
@@ -1086,12 +1092,12 @@ async fn async_fish_dirty_draft_no_prompt_exit_restores_responsive_parent() {
             "pane supervisor failed before actor shutdown: {error}"
         );
     }
-    let restored_terminal_state = std::fs::read_to_string(&executed_path).unwrap();
+    let responsive_terminal_state = std::fs::read_to_string(&executed_path).unwrap();
     assert!(
-        !restored_terminal_state
+        !responsive_terminal_state
             .split(|character: char| character.is_whitespace() || character == ';')
             .any(|field| field == "-echo"),
-        "Fish parent terminal echo remained disabled after no-prompt exit: {restored_terminal_state}"
+        "Fish parent terminal echo remained disabled after no-prompt exit: {responsive_terminal_state}"
     );
     let pane_text = actor_exit
         .service
@@ -1100,7 +1106,11 @@ async fn async_fish_dirty_draft_no_prompt_exit_restores_responsive_parent() {
         .unwrap_or_default();
     assert!(
         pane_text.contains("__MEZ_ASYNC_FISH_PARENT_RESPONSIVE__"),
-        "restored Fish parent output remained hidden after no-prompt exit: {pane_text:?}"
+        "returned Fish parent output remained hidden after no-prompt exit: {pane_text:?}"
+    );
+    assert!(
+        !discarded_path.exists(),
+        "discarded Fish draft executed after no-prompt exit"
     );
     actor_exit.service.terminate_all_pane_processes().unwrap();
     std::fs::remove_file(executed_path).unwrap();
@@ -1110,10 +1120,11 @@ async fn async_fish_dirty_draft_no_prompt_exit_restores_responsive_parent() {
 /// with an unsubmitted draft and exited before any agent prompt is submitted.
 ///
 /// This exercises staged HOLD, BEGIN, and DATA delivery through the production
-/// actor and pane worker. The restored draft must remain editable until the
-/// ZLE line-init hook publishes authenticated parent readiness.
+/// actor and pane worker. The original draft must remain discarded after ZLE
+/// publishes authenticated parent readiness, while a fresh command must
+/// execute immediately.
 #[tokio::test(flavor = "current_thread")]
-async fn async_zsh_dirty_draft_no_prompt_exit_restores_responsive_parent() {
+async fn async_zsh_dirty_draft_no_prompt_exit_discards_draft_and_restores_responsive_parent() {
     let Some(zsh) = ["/bin/zsh", "/usr/bin/zsh", "/usr/local/bin/zsh"]
         .into_iter()
         .find(|path| Path::new(path).is_file())
@@ -1130,10 +1141,15 @@ async fn async_zsh_dirty_draft_no_prompt_exit_restores_responsive_parent() {
             .unwrap()
             .as_nanos()
     ));
+    let discarded_path = executed_path.with_extension("discarded");
     let _ = std::fs::remove_file(&executed_path);
-    let draft = "print -r -- '__MEZ_ASYNC_ZSH_PARENT_RESPONSIVE__'; command stty -a > ";
-    let restored_input = format!(
-        "{}\n",
+    let _ = std::fs::remove_file(&discarded_path);
+    let draft = format!(
+        "command touch {}",
+        mez_agent::shell::shell_quote(discarded_path.to_str().unwrap())
+    );
+    let fresh_input = format!(
+        "print -r -- __MEZ_ASYNC_ZSH_PARENT_RESPONSIVE__; command stty -a > {}\n",
         mez_agent::shell::shell_quote(executed_path.to_str().unwrap())
     );
     let mut service = test_service_with_shell(zsh);
@@ -1248,7 +1264,7 @@ async fn async_zsh_dirty_draft_no_prompt_exit_restores_responsive_parent() {
                 primary,
                 AttachedTerminalClientStepPlan {
                     actions: vec![TerminalClientLoopAction::ForwardToPane(
-                        restored_input.into_bytes(),
+                        fresh_input.into_bytes(),
                     )],
                     output_lines: Vec::new(),
                     output_line_style_spans: Vec::new(),
@@ -1264,7 +1280,7 @@ async fn async_zsh_dirty_draft_no_prompt_exit_restores_responsive_parent() {
         while !client_executed_path.is_file() {
             assert!(
                 tokio::time::Instant::now() < execution_deadline,
-                "restored Zsh draft did not execute after no-prompt exit"
+                "fresh Zsh command did not execute after no-prompt exit"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -1291,12 +1307,12 @@ async fn async_zsh_dirty_draft_no_prompt_exit_restores_responsive_parent() {
             "pane supervisor failed before actor shutdown: {error}"
         );
     }
-    let restored_terminal_state = std::fs::read_to_string(&executed_path).unwrap();
+    let responsive_terminal_state = std::fs::read_to_string(&executed_path).unwrap();
     assert!(
-        !restored_terminal_state
+        !responsive_terminal_state
             .split(|character: char| character.is_whitespace() || character == ';')
             .any(|field| field == "-echo"),
-        "Zsh parent terminal echo remained disabled after no-prompt exit: {restored_terminal_state}"
+        "Zsh parent terminal echo remained disabled after no-prompt exit: {responsive_terminal_state}"
     );
     let pane_text = actor_exit
         .service
@@ -1305,7 +1321,11 @@ async fn async_zsh_dirty_draft_no_prompt_exit_restores_responsive_parent() {
         .unwrap_or_default();
     assert!(
         pane_text.contains("__MEZ_ASYNC_ZSH_PARENT_RESPONSIVE__"),
-        "restored Zsh parent output remained hidden after no-prompt exit: {pane_text:?}"
+        "returned Zsh parent output remained hidden after no-prompt exit: {pane_text:?}"
+    );
+    assert!(
+        !discarded_path.exists(),
+        "discarded Zsh draft executed after no-prompt exit"
     );
     actor_exit.service.terminate_all_pane_processes().unwrap();
     std::fs::remove_file(executed_path).unwrap();

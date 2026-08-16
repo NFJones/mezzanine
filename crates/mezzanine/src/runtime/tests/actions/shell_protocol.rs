@@ -1364,14 +1364,13 @@ fn runtime_bash_dirty_prompt_survives_agent_subshell_admission() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies that a managed Fish parent preserves an unsubmitted command-line
+/// Verifies that a managed Fish parent discards an unsubmitted command-line
 /// draft while the private receiver admits and later exits an agent child.
 ///
 /// The receiver must consume its transport outside Fish's editable buffer,
-/// restore the original draft after the child exits, and leave that draft
-/// unexecuted until the user explicitly submits it to the parent prompt.
+/// leave the original draft unexecuted, and return an empty responsive editor.
 #[test]
-fn runtime_fish_dirty_prompt_survives_agent_subshell_admission() {
+fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
     let Some(fish_path) = [
         "/usr/bin/fish",
         "/usr/local/bin/fish",
@@ -1434,15 +1433,14 @@ fn runtime_fish_dirty_prompt_survives_agent_subshell_admission() {
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
     }
-    let draft = "begin\nprintf '__MEZ_FISH_DRAFT_αβ_SURVIVED__\\n'\nend\n";
-    let beta_byte = draft.find('β').unwrap();
-    let cursor_left = draft.chars().count() - draft[..beta_byte].chars().count();
+    let discarded_path = root.join("discarded-fish-draft");
+    let draft = format!(
+        "command touch {}",
+        mez_agent::fish_quote(&discarded_path.to_string_lossy())
+    );
     let mut draft_input = b"\x1bi\x1b[200~".to_vec();
     draft_input.extend_from_slice(draft.as_bytes());
     draft_input.extend_from_slice(b"\x1b[201~");
-    for _ in 0..cursor_left {
-        draft_input.extend_from_slice(b"\x1b[D");
-    }
     service
         .write_input_to_pane(&primary, Some("%1"), &draft_input)
         .unwrap();
@@ -1536,11 +1534,11 @@ fn runtime_fish_dirty_prompt_survives_agent_subshell_admission() {
     }
     assert!(
         service.agent_subshell_exit_marker_for_tests("%1").is_none(),
-        "Fish child-exit rendering boundary did not settle before draft submission"
+        "Fish child-exit rendering boundary did not settle before fresh input"
     );
     assert!(
         service.managed_shell_parent_restoration_is_pending_for_tests("%1"),
-        "Fish editor restoration must remain owned after the earlier child-exit marker"
+        "Fish parent return must remain owned after the earlier child-exit marker"
     );
     assert!(!service.agent_subshell_is_active("%1"));
     assert!(
@@ -1548,17 +1546,21 @@ fn runtime_fish_dirty_prompt_survives_agent_subshell_admission() {
             service.pane_readiness_state("%1"),
             PaneReadinessState::Unknown | PaneReadinessState::PromptCandidate
         ),
-        "restored Fish parent should remain user-owned while agent mode is hidden"
+        "returned Fish parent should remain user-owned while agent mode is hidden"
     );
     service
-        .write_input_to_pane(&primary, Some("%1"), b"X\n")
+        .write_input_to_pane(
+            &primary,
+            Some("%1"),
+            b"printf '__MEZ_FISH_PARENT_RESPONSIVE__\\n'\n",
+        )
         .unwrap();
     assert!(
         service.managed_shell_parent_restoration_is_pending_for_tests("%1"),
-        "foreground input must not release Fish restoration ownership"
+        "foreground input must not release Fish parent-return ownership"
     );
 
-    let mut draft_executed = false;
+    let mut parent_responsive = false;
     for _ in 0..200 {
         let _ = service.poll_pane_outputs(8192).unwrap();
         if service
@@ -1566,21 +1568,25 @@ fn runtime_fish_dirty_prompt_survives_agent_subshell_admission() {
             .unwrap()
             .normal_content_lines()
             .join("\n")
-            .contains("__MEZ_FISH_DRAFT_αXβ_SURVIVED__")
+            .contains("__MEZ_FISH_PARENT_RESPONSIVE__")
         {
-            draft_executed = true;
+            parent_responsive = true;
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
     }
     assert!(
-        draft_executed,
-        "dirty Fish parent draft was not preserved; screen={}",
+        parent_responsive,
+        "Fish parent did not accept fresh input after return; screen={}",
         service
             .process_pane_screen("%1")
             .unwrap()
             .normal_content_lines()
             .join("\\n")
+    );
+    assert!(
+        !discarded_path.exists(),
+        "discarded Fish draft executed after agent-shell return"
     );
     assert!(
         !service.managed_shell_parent_restoration_is_pending_for_tests("%1"),
@@ -1592,13 +1598,13 @@ fn runtime_fish_dirty_prompt_survives_agent_subshell_admission() {
 }
 
 /// Verifies hiding agent mode before Fish installs its child receiver cancels
-/// admission and restores the exact unsubmitted parent draft.
+/// admission, keeps the unsubmitted draft discarded, and returns responsively.
 ///
 /// Runtime must retain the synchronous Fish callback even though no agent
 /// child is active yet, send the authenticated cancellation record, and wait
-/// for parent-restored before allowing the draft to be submitted.
+/// for parent readiness before allowing fresh input to be submitted.
 #[test]
-fn runtime_fish_dirty_prompt_exit_before_receiver_installation_restores_draft() {
+fn runtime_fish_dirty_prompt_exit_before_receiver_installation_discards_draft() {
     let Some(fish_path) = [
         "/usr/bin/fish",
         "/usr/local/bin/fish",
@@ -1662,15 +1668,14 @@ fn runtime_fish_dirty_prompt_exit_before_receiver_installation_restores_draft() 
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
     }
 
-    let draft = "begin\nprintf '__MEZ_FISH_EARLY_αβ_SURVIVED__\\n'\nend\n";
-    let beta_byte = draft.find('β').unwrap();
-    let cursor_left = draft.chars().count() - draft[..beta_byte].chars().count();
+    let discarded_path = root.join("discarded-fish-early-exit-draft");
+    let draft = format!(
+        "command touch {}",
+        mez_agent::fish_quote(&discarded_path.to_string_lossy())
+    );
     let mut draft_input = b"\x1bi\x1b[200~".to_vec();
     draft_input.extend_from_slice(draft.as_bytes());
     draft_input.extend_from_slice(b"\x1b[201~");
-    for _ in 0..cursor_left {
-        draft_input.extend_from_slice(b"\x1b[D");
-    }
     service
         .write_input_to_pane(&primary, Some("%1"), &draft_input)
         .unwrap();
@@ -1681,7 +1686,7 @@ fn runtime_fish_dirty_prompt_exit_before_receiver_installation_restores_draft() 
     assert!(show.contains("visibility=visible"), "{show}");
     assert!(
         service.managed_shell_parent_restoration_is_pending_for_tests("%1"),
-        "Fish must own the saved draft as soon as admission is triggered"
+        "Fish must own parent return as soon as admission is triggered"
     );
     assert!(
         !service.agent_subshell_is_active("%1"),
@@ -1702,15 +1707,19 @@ fn runtime_fish_dirty_prompt_exit_before_receiver_installation_restores_draft() 
     }
     assert!(
         !service.managed_shell_parent_restoration_is_pending_for_tests("%1"),
-        "authenticated cancellation did not restore the Fish parent"
+        "authenticated cancellation did not return the Fish parent"
     );
     assert!(!service.agent_subshell_is_active("%1"));
     assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
 
     service
-        .write_input_to_pane(&primary, Some("%1"), b"X\n")
+        .write_input_to_pane(
+            &primary,
+            Some("%1"),
+            b"printf '__MEZ_FISH_EARLY_PARENT_RESPONSIVE__\\n'\n",
+        )
         .unwrap();
-    let mut draft_executed = false;
+    let mut parent_responsive = false;
     for _ in 0..200 {
         let _ = service.poll_pane_outputs(8192).unwrap();
         if service
@@ -1718,21 +1727,25 @@ fn runtime_fish_dirty_prompt_exit_before_receiver_installation_restores_draft() 
             .unwrap()
             .normal_content_lines()
             .join("\n")
-            .contains("__MEZ_FISH_EARLY_αXβ_SURVIVED__")
+            .contains("__MEZ_FISH_EARLY_PARENT_RESPONSIVE__")
         {
-            draft_executed = true;
+            parent_responsive = true;
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
     }
     assert!(
-        draft_executed,
-        "early-exit cancellation did not restore the exact Fish draft; screen={}",
+        parent_responsive,
+        "early-exit cancellation did not return a responsive Fish editor; screen={}",
         service
             .process_pane_screen("%1")
             .unwrap()
             .normal_content_lines()
             .join("\\n")
+    );
+    assert!(
+        !discarded_path.exists(),
+        "discarded Fish draft executed after early-exit cancellation"
     );
     assert!(service.poll_pane_processes().unwrap().is_empty());
     assert!(service.pane_processes().contains_pane("%1"));

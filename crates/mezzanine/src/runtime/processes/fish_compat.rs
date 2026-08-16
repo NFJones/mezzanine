@@ -73,9 +73,9 @@ if not functions --query __mez_fish_user_right_prompt
         end
     end
 end
-functions --erase __mez_fish_hold_editor __mez_fish_restore_editor __mez_fish_private_trigger __mez_fish_private_receiver __mez_fish_publish_parent_restored __mez_fish_passive_command_is_internal __mez_fish_passive_prompt_start __mez_fish_passive_preexec __mez_fish_passive_postexec fish_prompt fish_right_prompt 2>/dev/null
+functions --erase __mez_fish_hold_editor __mez_fish_release_editor __mez_fish_restore_editor __mez_fish_private_trigger __mez_fish_private_receiver __mez_fish_publish_parent_restored __mez_fish_passive_command_is_internal __mez_fish_passive_prompt_start __mez_fish_passive_preexec __mez_fish_passive_postexec fish_prompt fish_right_prompt 2>/dev/null
 set -g __MEZ_FISH_INTEGRATION_OWNER {}
-set -e __MEZ_FISH_EDITOR_HELD __MEZ_FISH_HOLD_MARKER __MEZ_FISH_UNSUPPORTED_EDITOR_STATE __MEZ_FISH_SAVED_LINE __MEZ_FISH_SAVED_CURSOR __MEZ_FISH_SAVED_BIND_MODE __MEZ_FISH_PARENT_RESTORE_MARKER __MEZ_FISH_PARENT_RESTORE_STATUS __MEZ_FISH_PARENT_RESTORE_OUTCOME __MEZ_FISH_PASSIVE_COMMAND_ACTIVE __MEZ_FISH_PASSIVE_SKIP_POSTEXEC
+set -e __MEZ_FISH_EDITOR_HELD __MEZ_FISH_HOLD_MARKER __MEZ_FISH_PARENT_RESTORE_MARKER __MEZ_FISH_PARENT_RESTORE_STATUS __MEZ_FISH_PARENT_RESTORE_OUTCOME __MEZ_FISH_PASSIVE_COMMAND_ACTIVE __MEZ_FISH_PASSIVE_SKIP_POSTEXEC
 function __mez_fish_hold_editor
     set -l hold_record
     read -l hold_record; or return 1
@@ -84,26 +84,19 @@ function __mez_fish_hold_editor
         return 1
     end
     set -g __MEZ_FISH_HOLD_MARKER "$hold_fields[3]"
-    set -g __MEZ_FISH_UNSUPPORTED_EDITOR_STATE 0
     if commandline --search-mode; or commandline --paging-mode; or commandline --selection-start >/dev/null 2>&1; or commandline --selection-end >/dev/null 2>&1
-        set -g __MEZ_FISH_UNSUPPORTED_EDITOR_STATE 1
+        builtin printf '\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=receiver-rejected;mez_marker=%s;mez_reason=unsupported-editor-state\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$__MEZ_FISH_HOLD_MARKER"
+        set -e __MEZ_FISH_HOLD_MARKER
+        return 1
     end
-    set -g __MEZ_FISH_SAVED_LINE (commandline | string collect -N)
-    set -g __MEZ_FISH_SAVED_CURSOR (commandline --cursor)
-    set -g __MEZ_FISH_SAVED_BIND_MODE "$fish_bind_mode"
     set -g __MEZ_FISH_EDITOR_HELD 1
-    if test "$__MEZ_FISH_UNSUPPORTED_EDITOR_STATE" -eq 0
-        commandline --replace ''
-    end
+    commandline --replace ''
 end
-function __mez_fish_restore_editor
+function __mez_fish_release_editor
     if not set -q __MEZ_FISH_EDITOR_HELD
         return 0
     end
-    commandline --replace -- "$__MEZ_FISH_SAVED_LINE"
-    commandline --cursor "$__MEZ_FISH_SAVED_CURSOR"
-    set fish_bind_mode "$__MEZ_FISH_SAVED_BIND_MODE"
-    set -e __MEZ_FISH_EDITOR_HELD __MEZ_FISH_HOLD_MARKER __MEZ_FISH_UNSUPPORTED_EDITOR_STATE __MEZ_FISH_SAVED_LINE __MEZ_FISH_SAVED_CURSOR __MEZ_FISH_SAVED_BIND_MODE
+    set -e __MEZ_FISH_EDITOR_HELD __MEZ_FISH_HOLD_MARKER
 end
 function __mez_fish_private_receiver
     if not set -q __MEZ_FISH_EDITOR_HELD
@@ -116,7 +109,7 @@ function __mez_fish_private_receiver
         set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$__MEZ_FISH_HOLD_MARKER"
         set -g __MEZ_FISH_PARENT_RESTORE_STATUS 65
         set -g __MEZ_FISH_PARENT_RESTORE_OUTCOME frame-rejected
-        __mez_fish_restore_editor
+        __mez_fish_release_editor
         return 1
     end
     set -l marker "$begin_fields[3]"
@@ -124,7 +117,7 @@ function __mez_fish_private_receiver
         set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$marker"
         set -g __MEZ_FISH_PARENT_RESTORE_STATUS 65
         set -g __MEZ_FISH_PARENT_RESTORE_OUTCOME frame-rejected
-        __mez_fish_restore_editor
+        __mez_fish_release_editor
         return 1
     end
     set -l expected_length "$begin_fields[4]"
@@ -134,14 +127,7 @@ function __mez_fish_private_receiver
         set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$marker"
         set -g __MEZ_FISH_PARENT_RESTORE_STATUS 65
         set -g __MEZ_FISH_PARENT_RESTORE_OUTCOME frame-rejected
-        __mez_fish_restore_editor
-        return 1
-    end
-    if test "$__MEZ_FISH_UNSUPPORTED_EDITOR_STATE" -eq 1
-        set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$marker"
-        set -g __MEZ_FISH_PARENT_RESTORE_STATUS 65
-        set -g __MEZ_FISH_PARENT_RESTORE_OUTCOME frame-rejected
-        __mez_fish_restore_editor
+        __mez_fish_release_editor
         return 1
     end
     builtin printf '\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=frame-admitted;mez_marker=%s\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$marker"
@@ -246,7 +232,7 @@ function __mez_fish_private_receiver
     else
         set -g __MEZ_FISH_PARENT_RESTORE_OUTCOME source-failed
     end
-    __mez_fish_restore_editor
+    __mez_fish_release_editor
     return $source_status
 end
 function __mez_fish_publish_parent_restored
@@ -905,9 +891,9 @@ mod tests {
     }
 
     #[test]
-    /// Verifies a sourced Fish admission failure restores the exact parent
-    /// draft and reports failure without executing or discarding that draft.
-    fn managed_fish_private_admission_source_failure_restores_draft() {
+    /// Verifies a sourced Fish admission failure discards the pending parent
+    /// draft and returns an empty editor that immediately accepts new input.
+    fn managed_fish_private_admission_source_failure_discards_draft() {
         let Some(fish) = fish_path_for_tests() else {
             eprintln!("skipping managed Fish source-failure assertion because fish is unavailable");
             return;
@@ -924,8 +910,15 @@ mod tests {
         let mut process = spawn_managed_fish(&fish, &compatibility, &root);
         settle_managed_fish_startup(&mut process);
 
+        let discarded_path = root.join("discarded-source-failure-draft");
         process
-            .write_input(b"printf '__MEZ_FAILURE_DRAFT_RESTORED__\\n'")
+            .write_input(
+                format!(
+                    "command touch {}",
+                    mez_agent::fish_quote(&discarded_path.to_string_lossy())
+                )
+                .as_bytes(),
+            )
             .unwrap();
         let marker = "fish-private-source-failure-marker";
         let admission = fish_private_source_input("false\n", &owner, marker);
@@ -947,11 +940,18 @@ mod tests {
                 .any(|window| window == restored.as_bytes())
         });
         process.write_input(b"\n").unwrap();
+        process
+            .write_input(b"printf '__MEZ_FISH_AFTER_FAILURE__\\n'\n")
+            .unwrap();
         extend_fish_output_until(&mut process, &mut output, |output| {
             output
-                .windows(b"__MEZ_FAILURE_DRAFT_RESTORED__".len())
-                .any(|window| window == b"__MEZ_FAILURE_DRAFT_RESTORED__")
+                .windows(b"__MEZ_FISH_AFTER_FAILURE__".len())
+                .any(|window| window == b"__MEZ_FISH_AFTER_FAILURE__")
         });
+        assert!(
+            !discarded_path.exists(),
+            "discarded Fish draft executed after source failure"
+        );
 
         process.terminate(Duration::from_millis(100)).unwrap();
         std::fs::remove_dir_all(root).unwrap();
@@ -959,11 +959,11 @@ mod tests {
 
     #[test]
     /// Verifies an authenticated cancellation received before the first DATA
-    /// record restores the exact Fish draft without evaluating handoff source.
+    /// record keeps the Fish draft discarded without evaluating handoff source.
     ///
     /// This is the early agent-exit boundary: Fish has already saved and
     /// cleared its editor, but runtime no longer wants to launch the child.
-    fn managed_fish_private_admission_cancellation_restores_draft_without_launching_child() {
+    fn managed_fish_private_admission_cancellation_discards_draft_without_launching_child() {
         let Some(fish) = fish_path_for_tests() else {
             eprintln!("skipping managed Fish cancellation assertion because fish is unavailable");
             return;
@@ -980,8 +980,15 @@ mod tests {
         let mut process = spawn_managed_fish(&fish, &compatibility, &root);
         settle_managed_fish_startup(&mut process);
 
+        let discarded_path = root.join("discarded-cancelled-draft");
         process
-            .write_input(b"printf '__MEZ_CANCELLED_DRAFT_RESTORED__\\n'")
+            .write_input(
+                format!(
+                    "command touch {}",
+                    mez_agent::fish_quote(&discarded_path.to_string_lossy())
+                )
+                .as_bytes(),
+            )
             .unwrap();
         let marker = "fish-private-cancel-marker";
         let admission = fish_private_source_input(
@@ -995,8 +1002,8 @@ mod tests {
                 .terminal
                 .visible_lines()
                 .join("\n")
-                .contains("__MEZ_CANCELLED_DRAFT_RESTORED__"),
-            "Fish must visibly clear the saved draft before frame admission; screen={:?}; output={:?}",
+                .contains("discarded-cancelled-draft"),
+            "Fish must visibly discard the draft before frame admission; screen={:?}; output={:?}",
             process.terminal.visible_lines(),
             String::from_utf8_lossy(&output)
         );
@@ -1013,11 +1020,18 @@ mod tests {
                 .any(|window| window == restored.as_bytes())
         });
         process.write_input(b"\n").unwrap();
+        process
+            .write_input(b"printf '__MEZ_FISH_AFTER_CANCEL__\\n'\n")
+            .unwrap();
         extend_fish_output_until(&mut process, &mut output, |output| {
             output
-                .windows(b"__MEZ_CANCELLED_DRAFT_RESTORED__".len())
-                .any(|window| window == b"__MEZ_CANCELLED_DRAFT_RESTORED__")
+                .windows(b"__MEZ_FISH_AFTER_CANCEL__".len())
+                .any(|window| window == b"__MEZ_FISH_AFTER_CANCEL__")
         });
+        assert!(
+            !discarded_path.exists(),
+            "discarded Fish draft executed after cancellation"
+        );
         assert!(
             !String::from_utf8_lossy(&output).contains("__MEZ_CANCELLED_SOURCE_RAN__"),
             "cancelled private source must not launch the child handoff"

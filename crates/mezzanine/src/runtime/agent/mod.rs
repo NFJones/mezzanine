@@ -2291,6 +2291,14 @@ impl RuntimeSessionService {
             .contains(pane_id)
     }
 
+    /// Forgets an unfinished editable command after a managed shell adapter
+    /// has authenticated that it discarded the native editor buffer.
+    pub(crate) fn discard_unsubmitted_process_input(&mut self, pane_id: &str) -> bool {
+        self.agent
+            .panes_with_unsubmitted_process_input
+            .remove(pane_id)
+    }
+
     /// Records that a live non-native shell must publish a fresh prompt after
     /// an interrupt before the runtime may write an agent child-shell handoff.
     pub(crate) fn begin_agent_subshell_input_clear(&mut self, pane_id: impl Into<String>) {

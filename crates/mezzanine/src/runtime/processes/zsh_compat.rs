@@ -191,12 +191,6 @@ if [[ ${MEZ_ZSH_INTEGRATION_ONLY:-0} != 1 ]]; then
   }
   functions[__mez_zshaddhistory_guard]=$functions[zshaddhistory]
 fi
-typeset -g __MEZ_ZSH_SAVED_BUFFER=
-typeset -gi __MEZ_ZSH_SAVED_CURSOR=0
-typeset -gi __MEZ_ZSH_SAVED_MARK=0
-typeset -gi __MEZ_ZSH_SAVED_REGION_ACTIVE=0
-typeset -g __MEZ_ZSH_SAVED_KEYMAP=
-typeset -gi __MEZ_ZSH_RESTORE_PENDING=0
 typeset -g __MEZ_ZSH_RESTORE_MARKER=
 typeset -gi __MEZ_ZSH_RESTORE_STATUS=1
 typeset -g __MEZ_ZSH_RESTORE_OUTCOME=frame-rejected
@@ -337,29 +331,19 @@ function __mez_zsh_private_widget() {
     zle beep
     return 1
   fi
-  __MEZ_ZSH_SAVED_BUFFER=${BUFFER}
-  __MEZ_ZSH_SAVED_CURSOR=${CURSOR}
-  __MEZ_ZSH_SAVED_MARK=${MARK:-0}
-  __MEZ_ZSH_SAVED_REGION_ACTIVE=${REGION_ACTIVE:-0}
-  __MEZ_ZSH_SAVED_KEYMAP=${KEYMAP:-main}
-  __MEZ_ZSH_RESTORE_PENDING=1
+  BUFFER=
+  CURSOR=0
+  MARK=0
+  REGION_ACTIVE=0
   BUFFER=__mez_zsh_private_receiver
   CURSOR=${#BUFFER}
   zle accept-line
 }
 function __mez_zsh_line_init() {
   emulate -L zsh
-  if (( __MEZ_ZSH_RESTORE_PENDING )); then
-    BUFFER=${__MEZ_ZSH_SAVED_BUFFER}
-    CURSOR=${__MEZ_ZSH_SAVED_CURSOR}
-    MARK=${__MEZ_ZSH_SAVED_MARK}
-    REGION_ACTIVE=${__MEZ_ZSH_SAVED_REGION_ACTIVE}
-    [[ -n ${__MEZ_ZSH_SAVED_KEYMAP} ]] && zle -K "${__MEZ_ZSH_SAVED_KEYMAP}" 2>/dev/null || true
-    __MEZ_ZSH_RESTORE_PENDING=0
-    if [[ -n ${__MEZ_ZSH_RESTORE_MARKER} ]]; then
-      command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=parent-ready;mez_marker=%s;mez_outcome=%s;mez_status=%s\033\\' \
-        "$MEZ_ZSH_HISTORY_TOKEN" "$__MEZ_ZSH_RESTORE_MARKER" "$__MEZ_ZSH_RESTORE_OUTCOME" "$__MEZ_ZSH_RESTORE_STATUS"
-    fi
+  if [[ -n ${__MEZ_ZSH_RESTORE_MARKER} ]]; then
+    command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=parent-ready;mez_marker=%s;mez_outcome=%s;mez_status=%s\033\\' \
+      "$MEZ_ZSH_HISTORY_TOKEN" "$__MEZ_ZSH_RESTORE_MARKER" "$__MEZ_ZSH_RESTORE_OUTCOME" "$__MEZ_ZSH_RESTORE_STATUS"
     __MEZ_ZSH_RESTORE_MARKER=
   fi
   if [[ -n ${MEZ_ZSH_RECEIVER_INSTALL_MARKER-} ]]; then
@@ -1274,14 +1258,14 @@ function zshaddhistory() {{\n\
         fs::remove_dir_all(root).unwrap();
     }
 
-    /// Verifies private Zsh admission executes managed source while preserving
-    /// a multiline Unicode editor draft, cursor, and Emacs keymap until the
-    /// user explicitly edits and submits it afterward.
+    /// Verifies private Zsh admission executes managed source while discarding
+    /// a multiline Unicode editor draft and returning a responsive empty ZLE
+    /// buffer without executing or recording the discarded command.
     ///
-    /// A second command must execute immediately after the restored draft so
-    /// this test proves parent responsiveness rather than visual restoration.
+    /// A fresh command must execute immediately after return so this test
+    /// proves parent responsiveness rather than only visual clearing.
     #[test]
-    fn managed_zsh_private_admission_preserves_dirty_draft() {
+    fn managed_zsh_private_admission_discards_dirty_draft() {
         let zsh = Path::new("/bin/zsh");
         if !zsh.exists() {
             return;
@@ -1379,12 +1363,6 @@ function zshaddhistory() {{\n\
         );
         assert!(!String::from_utf8_lossy(&output).contains("__MEZ_ZSH_DRAFT_αβ_EXECUTED__\r\n"));
 
-        process.write_input(b"X\n").unwrap();
-        extend_zsh_output_until(&mut process, &mut output, |output| {
-            output
-                .windows("__MEZ_ZSH_DRAFT_αXβ_EXECUTED__\r\n".len())
-                .any(|window| window == "__MEZ_ZSH_DRAFT_αXβ_EXECUTED__\r\n".as_bytes())
-        });
         process
             .write_input(b"print -r -- '__MEZ_ZSH_PARENT_RESPONSIVE__'\n")
             .unwrap();
@@ -1406,10 +1384,7 @@ function zshaddhistory() {{\n\
 
         process.terminate(Duration::from_millis(100)).unwrap();
         let persisted_history = fs::read_to_string(&history).unwrap();
-        assert!(
-            persisted_history.contains("__MEZ_ZSH_DRAFT_αXβ_EXECUTED__"),
-            "{persisted_history}"
-        );
+        assert!(!persisted_history.contains("__MEZ_ZSH_DRAFT_αβ_EXECUTED__"));
         assert!(
             !persisted_history.contains("__mez_zsh_private_receiver"),
             "{persisted_history}"
@@ -1418,7 +1393,7 @@ function zshaddhistory() {{\n\
         fs::remove_dir_all(root).unwrap();
     }
 
-    /// Verifies malformed private frames restore the pending draft, while a
+    /// Verifies malformed private frames discard the pending draft, while a
     /// continuation prompt rejects admission without executing managed input.
     #[test]
     fn managed_zsh_private_admission_fails_closed_for_malformed_and_continuation_state() {
@@ -1464,8 +1439,15 @@ function zshaddhistory() {{\n\
                 .any(|window| window == b"__MEZ_ZSH_PROMPT__>")
         });
 
+        let discarded_path = root.join("discarded-malformed-draft");
         process
-            .write_input(b"print -r -- '__MEZ_ZSH_MALFORMED_DRAFT__'")
+            .write_input(
+                format!(
+                    "command touch {}",
+                    mez_agent::shell::shell_quote(&discarded_path.to_string_lossy())
+                )
+                .as_bytes(),
+            )
             .unwrap();
         let admission = mez_agent::zsh_private_source_input(
             "print -r -- SHOULD_NOT_RUN\n",
@@ -1483,12 +1465,18 @@ function zshaddhistory() {{\n\
                 .windows(b"__MEZ_ZSH_PROMPT__>".len())
                 .any(|window| window == b"__MEZ_ZSH_PROMPT__>")
         });
-        process.write_input(b"\n").unwrap();
+        process
+            .write_input(b"print -r -- __MEZ_ZSH_AFTER_MALFORMED__\n")
+            .unwrap();
         extend_zsh_output_until(&mut process, &mut output, |output| {
             output
-                .windows(b"__MEZ_ZSH_MALFORMED_DRAFT__\r\n".len())
-                .any(|window| window == b"__MEZ_ZSH_MALFORMED_DRAFT__\r\n")
+                .windows(b"__MEZ_ZSH_AFTER_MALFORMED__\r\n".len())
+                .any(|window| window == b"__MEZ_ZSH_AFTER_MALFORMED__\r\n")
         });
+        assert!(
+            !discarded_path.exists(),
+            "discarded malformed-frame draft executed"
+        );
         assert!(!String::from_utf8_lossy(&output).contains("SHOULD_NOT_RUN"));
 
         process.write_input(b"print -r -- '\n").unwrap();
@@ -1599,13 +1587,13 @@ unsetopt RCS\n",
         fs::remove_dir_all(root).unwrap();
     }
 
-    /// Verifies authenticated pre-BEGIN cancellation restores the exact parent
-    /// draft without evaluating or launching the retained source.
+    /// Verifies authenticated pre-BEGIN cancellation keeps the parent draft
+    /// discarded without evaluating or launching the retained source.
     ///
     /// This is the early-hide boundary used by runtime after ZLE accepts the
     /// private trigger but before the deferred handoff frame is released.
     #[test]
-    fn managed_zsh_private_admission_cancellation_restores_parent_draft() {
+    fn managed_zsh_private_admission_cancellation_discards_parent_draft() {
         let zsh = Path::new("/bin/zsh");
         if !zsh.exists() {
             return;
@@ -1674,11 +1662,15 @@ unsetopt RCS\n",
         assert!(!String::from_utf8_lossy(&output).contains("SHOULD_NOT_RUN_AFTER_CANCEL"));
 
         process.write_input(b"\n").unwrap();
+        process
+            .write_input(b"print -r -- __MEZ_ZSH_AFTER_CANCEL__\n")
+            .unwrap();
         extend_zsh_output_until(&mut process, &mut output, |output| {
             output
-                .windows(b"__MEZ_ZSH_CANCELLED_DRAFT__\r\n".len())
-                .any(|window| window == b"__MEZ_ZSH_CANCELLED_DRAFT__\r\n")
+                .windows(b"__MEZ_ZSH_AFTER_CANCEL__\r\n".len())
+                .any(|window| window == b"__MEZ_ZSH_AFTER_CANCEL__\r\n")
         });
+        assert!(!String::from_utf8_lossy(&output).contains("__MEZ_ZSH_CANCELLED_DRAFT__\r\n"));
 
         process.terminate(Duration::from_millis(100)).unwrap();
         drop(compatibility);

@@ -1835,14 +1835,15 @@ directory before sending agent-owned shell commands. Agent command side effects
 such as prompt changes, aliases, shell options, and environment mutations MUST
 remain scoped to that child shell unless the user explicitly applies them
 outside agent mode.
-Managed Bash, Fish, and Zsh parents MUST preserve an unfinished editable
-command line while the agent child owns the pane. Managed Fish preservation
-MUST retain the complete multiline buffer including trailing newlines, its
-Unicode-correct cursor position, and the active supported bind mode; the
-restored draft MUST remain unexecuted until the user explicitly submits it.
-Fish admission MUST fail closed without clearing the draft while history
-search, the completion pager, or an active text selection prevents exact
-editor-state restoration.
+Managed Bash parents MUST preserve an unfinished editable command line while
+the agent child owns the pane. Managed Fish and Zsh parents MUST instead
+discard unfinished editable input with their native editor APIs before
+publishing `EditorHeld`. The discarded input MUST NOT execute or enter shell
+history. Fish admission MUST fail closed without clearing the draft while
+history search, the completion pager, or an active text selection prevents a
+safe native editor clear. Zsh admission MUST continue to fail closed for a
+continuation buffer rather than attempting to discard parsed continuation
+state.
 Managed shell adapters MUST publish a versioned, pane-token-authenticated
 semantic lifecycle rather than requiring runtime to infer ownership from
 shell-specific control records. Protocol version 2 defines
@@ -1864,8 +1865,9 @@ shell transaction MUST finish or fail before an active child exit request can
 advance the handoff.
 Managed Fish and Zsh MUST publish a pane-token-authenticated `ParentReady`
 event only after the private receiver has returned from sourcing the child
-handoff, restored the editor state, and queued its repaint. Child-exit rendering
-markers MUST NOT release foreground input. Mezzanine MUST retain bounded foreground
+handoff and the parent has returned to an empty responsive editor, with Fish
+having queued its repaint. Child-exit rendering markers MUST NOT release
+foreground input. Mezzanine MUST retain bounded foreground
 input until `ParentReady` arrives and MUST use bounded timeout recovery if that
 event is lost. A restoration timeout MUST NOT replay queued input by
 itself; runtime MUST retain the bytes until an exact pane-process generation
@@ -1878,16 +1880,15 @@ When the owning pane-process generation exits or the pane is removed, runtime
 MUST settle only that dead generation, discard queued input, and release its
 transaction leases, return filters, and encoded-output decoder state without
 mutating a replacement generation.
-private receiver MUST save the supported editor state,
-clear the editable buffer, queue a repaint, and publish `EditorHeld` before
-runtime releases frame admission or launches the child. If agent mode exits
-before source admission completes, runtime MUST send a pane-token- and
+The private receiver MUST clear the editable buffer with shell-native editor
+operations and publish `EditorHeld` before runtime releases frame admission or
+launches the child. Fish MUST queue a repaint after clearing. If agent mode
+exits before source admission completes, runtime MUST send a pane-token- and
 bootstrap-marker-authenticated cancellation record. Fish and Zsh MUST reject
-partial source, restore and repaint the exact saved editor state, and publish a
-cancelled `ParentReady` without launching a child. Bootstrap state MUST remain
-independent from parent-editor restoration so a
-saved draft cannot block child certification or be released before callback
-unwind.
+partial source, return to an empty responsive editor, and publish a cancelled
+`ParentReady` without launching a child. Bootstrap state MUST remain
+independent from parent-editor return so discarded input cannot block child
+certification or callback unwind.
 Managed Zsh startup MUST preserve native startup-file ordering and RCS option
 semantics, including a user `unsetopt RCS`, while sourcing every startup file
 that native Zsh would read at most once. Before agent-shell admission, the
@@ -4353,8 +4354,8 @@ MUST release the exact generation-fenced lease before recovery input is queued.
 Managed `zsh` panes MUST install a pane-scoped
 ZLE admission widget in the `emacs`, `viins`, and `vicmd` keymaps without
 replacing existing user bindings. Admission MUST begin with a source-free
-trigger, save `BUFFER`, Unicode-correct `CURSOR`, `MARK`, `REGION_ACTIVE`, and
-the active keymap, accept only the fixed private receiver command, and release
+trigger, clear `BUFFER`, `CURSOR`, `MARK`, and `REGION_ACTIVE` with ZLE-native
+state mutation, accept only the fixed private receiver command, and release
 authenticated HOLD metadata only after the receiver emits its
 pane-token-authenticated transport-ready boundary. Runtime MUST then gate BEGIN
 on `EditorHeld` and DATA/END on `FrameAdmitted`. Admission MUST fail closed for
@@ -4362,11 +4363,11 @@ a continuation buffer, queued typeahead, failed keymap installation, or a
 `zle-line-init` widget that cannot be composed safely. Before the first DATA
 record, the receiver MAY accept one token- and marker-authenticated cancellation
 record; after DATA begins, cancellation MUST be treated as malformed framing
-without shortening the mandatory drain through END. The parent MUST restore
-the exact saved editor state before emitting typed `ParentReady`, and the
-restored draft MUST execute only after explicit user submission. Child
-ownership MUST transfer only after the managed child emits authenticated
-`ChildInstalled` for the owning bootstrap marker.
+without shortening the mandatory drain through END. The parent MUST return to
+an empty responsive ZLE editor before emitting typed `ParentReady`; discarded
+input MUST NOT execute or enter history. Child ownership MUST transfer only
+after the managed child emits authenticated `ChildInstalled` for the owning
+bootstrap marker.
 
 Managed `zsh` panes MUST also install a pane-scoped `zshaddhistory` hook after
 user startup processing that rejects only the fixed private receiver command
@@ -4394,10 +4395,10 @@ It MUST reject the source after draining rather than expose remaining records
 to the ordinary line editor or strand acknowledgement-paced delivery. Before
 the first DATA record is released, Fish MAY instead accept one authenticated
 CANCEL record for the same pane token and bootstrap marker. Cancellation MUST
-acknowledge the record, evaluate no source, restore the saved editor state, and
-emit a cancelled `ParentReady` event. A CANCEL received after DATA has begun
-MUST be treated as malformed input and MUST NOT shorten the required drain
-through the declared DATA count and matching END record.
+acknowledge the record, evaluate no source, return to an empty responsive
+editor, and emit a cancelled `ParentReady` event. A CANCEL received after DATA
+has begun MUST be treated as malformed input and MUST NOT shorten the required
+drain through the declared DATA count and matching END record.
 
 For non-stateful POSIX-compatible actions, the default wrapper MUST execute the
 agent command in a child shell whose environment omits Mezzanine transaction

@@ -263,6 +263,7 @@ impl RuntimeSessionService {
         if !transition.applied {
             return Ok(0);
         }
+        self.discard_unsubmitted_process_input(output_pane_id);
         let admission = self
             .process
             .shell_receiver_pending_payloads
