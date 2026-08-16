@@ -3806,8 +3806,17 @@ exact user or message event arrives after dispatch and before a result settles,
 the owner MAY occur on both sides of that barrier; chronology MUST remain
 unchanged and compaction MUST NOT gather those fragments into one replacement
 range. Canonical context MUST retain both a provider-neutral projection and any
-typed provider-native replay events for the same owner. Request assembly for
-the owning provider MUST emit only the native assistant/tool-call projection;
+typed provider-native replay events for the same owner. Streaming presentation
+MUST observe the same provider-interaction boundary:
+response-local rationale and action ordinals from a later interaction MUST NOT
+reuse source state from an earlier interaction. A provisional whole-screen
+projection MAY replace only the exact pane screen generation from which its
+work was captured. Any unrelated pane write revokes that authority, and later
+projection publication, mismatch handling, cancellation, or rollback MUST NOT
+restore an older baseline over the unrelated write.
+
+Request assembly for the owning provider MUST emit only the native
+assistant/tool-call projection;
 assembly for every other provider MUST emit only the neutral assistant/action-
 result projection. Persistence and restoration MUST reconstruct the same
 complete owner before making that selection. For stateless OpenAI Responses

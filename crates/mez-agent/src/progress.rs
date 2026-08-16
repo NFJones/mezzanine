@@ -19,6 +19,15 @@ const PROGRESS_REDUNDANT_SHARED_TOKEN_FLOOR: usize = 5;
 /// One ordered presentation event extracted from an incomplete MAAP response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamingPresentationEvent {
+    /// A new provider interaction began within the current logical turn.
+    ///
+    /// Provider response parsers restart action ordinals for every interaction,
+    /// so consumers must use this ordered barrier to retire source state from
+    /// the preceding response before accepting new response-local ordinals.
+    ResponseStarted {
+        /// Zero-based provider interaction ordinal within the logical turn.
+        response_index: usize,
+    },
     /// The direct batch-level `rationale` string is ready for display.
     RationaleStarted,
     /// Newly decoded batch-level rationale source.

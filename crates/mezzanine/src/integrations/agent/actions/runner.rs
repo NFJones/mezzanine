@@ -370,6 +370,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
 struct ProductAgentTurnEnvironment<'runner, 'config, P> {
     runner: &'runner AgentTurnRunner<'config, P>,
     progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
+    provider_interaction_index: std::sync::atomic::AtomicUsize,
 }
 
 impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment<'_, '_, P> {
@@ -404,6 +405,14 @@ impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment
     }
 
     async fn send_request(&self, request: &ModelRequest) -> Result<super::super::ModelResponse> {
+        let response_index = self
+            .provider_interaction_index
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(progress) = &self.progress {
+            let _ = progress
+                .send(mez_agent::StreamingSayEvent::ResponseStarted { response_index })
+                .await;
+        }
         self.runner
             .provider
             .send_request_async_with_progress(request, self.progress.clone())
@@ -538,6 +547,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         let environment = ProductAgentTurnEnvironment {
             runner: self,
             progress,
+            provider_interaction_index: std::sync::atomic::AtomicUsize::new(0),
         };
         let limits = AgentTurnLimits::default();
         let turn_id = turn.turn_id.clone();

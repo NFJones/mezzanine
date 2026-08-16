@@ -363,10 +363,14 @@ pub(super) struct RuntimeAgentSelectorCandidateRefresh {
 pub(crate) struct RuntimeStreamingSayPresentation {
     /// Turn whose provider stream owns this presentation.
     turn_id: String,
+    /// Provider interaction whose response-local ordinals own this source.
+    response_index: usize,
     /// Conversation binding captured before the first streamed action.
     conversation_id: String,
     /// Exact pane state restored before each rich-source reprojection.
     baseline_screen: std::sync::Arc<TerminalScreen>,
+    /// Exact pane screen most recently installed by provisional streaming.
+    installed_screen: std::sync::Arc<TerminalScreen>,
     /// Direct batch rationale accumulated from the provider stream.
     rationale: Option<RuntimeStreamingTextSource>,
     /// Established streamed actions keyed by their MAAP array index.
@@ -482,6 +486,8 @@ pub(crate) struct RuntimeStreamingSayProjectionWork {
     pub(crate) pane_id: String,
     /// Provider turn that owns the streamed source.
     pub(crate) turn_id: String,
+    /// Provider interaction that owns response-local action ordinals.
+    pub(crate) response_index: usize,
     /// Conversation binding captured when streaming began.
     pub(crate) conversation_id: String,
     /// Exact source generation represented by this work item.
@@ -517,6 +523,8 @@ pub(crate) struct RuntimeStreamingSayProjectionResult {
     pub(crate) pane_id: String,
     /// Provider turn that owns the candidate screen.
     pub(crate) turn_id: String,
+    /// Provider interaction that owns response-local action ordinals.
+    pub(crate) response_index: usize,
     /// Conversation binding captured by the worker input.
     pub(crate) conversation_id: String,
     /// Exact source generation represented by the candidate.

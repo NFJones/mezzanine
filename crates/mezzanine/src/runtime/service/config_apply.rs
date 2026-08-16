@@ -352,6 +352,18 @@ impl RuntimeSessionService {
         structured: serde_json::Value,
         affected: RuntimeConfigAffectedSubsystems,
     ) -> Result<RuntimeConfigApplyReport> {
+        let prepared_presentation = if affected.presentation {
+            let settings = RuntimePresentationSettings::from_config(&structured, &effective)?;
+            let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
+            let disable_streaming = self.presentation.effective_agent_streaming_output()
+                && !settings.effective_agent_streaming_output();
+            if disable_streaming {
+                self.discard_all_agent_streaming_say_presentations()?;
+            }
+            Some((settings, host_clipboard))
+        } else {
+            None
+        };
         if affected.terminal {
             let terminal_history_limit = runtime_history_limit_from_config(&structured)?;
             let terminal_history_rotate_lines =
@@ -378,15 +390,7 @@ impl RuntimeSessionService {
                 terminal_shell_output_preview_lines,
             )?;
         }
-        if affected.presentation {
-            let presentation_settings =
-                RuntimePresentationSettings::from_config(&structured, &effective)?;
-            let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
-            let disable_streaming = self.presentation.effective_agent_streaming_output()
-                && !presentation_settings.effective_agent_streaming_output();
-            if disable_streaming {
-                self.discard_all_agent_streaming_say_presentations()?;
-            }
+        if let Some((presentation_settings, host_clipboard)) = prepared_presentation {
             self.presentation.apply_settings(presentation_settings);
             self.set_host_clipboard(host_clipboard);
         }
