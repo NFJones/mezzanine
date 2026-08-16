@@ -1276,12 +1276,16 @@ impl RuntimeSessionService {
             })?;
             let private_input =
                 mez_agent::fish_private_source_input(&shell_command, &token, marker);
-            self.prepend_fish_shell_receiver_payload(
+            self.prepend_fish_shell_receiver_payloads(
                 marker,
+                mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
+                    private_input.receiver_admission.into_bytes(),
+                    marker.clone(),
+                ),
                 mez_mux::process::ShellInputDelivery::receiver_acknowledged(
                     private_input.receiver_payload.into_bytes(),
                     marker.clone(),
-                    true,
+                    private_input.payload_receiver_acknowledgements,
                 ),
             );
             private_input.wrapper
@@ -1386,10 +1390,18 @@ impl RuntimeSessionService {
                     crate::runtime::processes::ManagedShellHandoffPhase::TriggerQueued
                         | crate::runtime::processes::ManagedShellHandoffPhase::EditorHeld
                 ) {
-                    let _ = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
                     let shell = self.managed_shell_handoff_kind(pane_id).ok_or_else(|| {
                         MezError::invalid_state("managed shell handoff kind is unavailable")
                     })?;
+                    if shell == crate::runtime::processes::ManagedShellKind::Fish {
+                        if !self.request_managed_shell_admission_cancellation(pane_id) {
+                            return Err(MezError::invalid_state(
+                                "managed Fish admission cancellation ownership disappeared",
+                            ));
+                        }
+                        return Ok(true);
+                    }
+                    let _ = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
                     if !self.remember_managed_shell_admission_cancellation(pane_id) {
                         return Err(MezError::invalid_state(
                             "managed-shell admission cancellation ownership disappeared",

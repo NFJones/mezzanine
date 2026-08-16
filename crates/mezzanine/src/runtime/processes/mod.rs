@@ -882,17 +882,20 @@ impl RuntimeSessionService {
     /// receiver completion is an agent-subshell exit boundary rather than a
     /// transaction-cleanup boundary. Child receiver installation authenticates
     /// ownership before the deferred bootstrap is released.
-    pub(crate) fn prepend_fish_shell_receiver_payload(
+    pub(crate) fn prepend_fish_shell_receiver_payloads(
         &mut self,
         marker: &str,
+        admission: mez_mux::process::ShellInputDelivery,
         payload: mez_mux::process::ShellInputDelivery,
     ) {
         self.register_managed_shell_handoff(marker, ManagedShellKind::Fish, None);
-        self.process
+        let pending = self
+            .process
             .shell_receiver_pending_payloads
             .entry(marker.to_string())
-            .or_default()
-            .push_front(payload);
+            .or_default();
+        pending.push_front(payload);
+        pending.push_front(admission);
     }
 
     /// Registers one live editor handoff for the current process epoch.
@@ -1048,6 +1051,32 @@ impl RuntimeSessionService {
             && transition
                 .effects
                 .contains(&ManagedShellHandoffEffect::WaitForChildInstallation)
+    }
+
+    /// Records pre-payload exit intent without advancing into parent restoration.
+    pub(super) fn request_managed_shell_admission_cancellation(&mut self, pane_id: &str) -> bool {
+        self.process
+            .pane_agent_subshell_exit_echo_pending
+            .remove(pane_id);
+        self.process
+            .pane_agent_subshell_exit_markers
+            .remove(pane_id);
+        self.process
+            .pane_agent_subshell_parent_return_pending
+            .insert(pane_id.to_string());
+        let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) else {
+            return false;
+        };
+        let requested = reduce_managed_shell_handoff(
+            handoff,
+            ManagedShellHandoffEvent::ExitRequested {
+                now_unix_ms: current_unix_millis(),
+            },
+        );
+        requested.applied
+            && requested
+                .effects
+                .contains(&ManagedShellHandoffEffect::CancelBeforePayload)
     }
 
     /// Arms restoration ownership after authenticated pre-payload cancellation.

@@ -75,8 +75,15 @@ if not functions --query __mez_fish_user_right_prompt
 end
 functions --erase __mez_fish_hold_editor __mez_fish_restore_editor __mez_fish_private_trigger __mez_fish_private_receiver __mez_fish_publish_parent_restored __mez_fish_passive_command_is_internal __mez_fish_passive_prompt_start __mez_fish_passive_preexec __mez_fish_passive_postexec fish_prompt fish_right_prompt 2>/dev/null
 set -g __MEZ_FISH_INTEGRATION_OWNER {}
-set -e __MEZ_FISH_EDITOR_HELD __MEZ_FISH_UNSUPPORTED_EDITOR_STATE __MEZ_FISH_SAVED_LINE __MEZ_FISH_SAVED_CURSOR __MEZ_FISH_SAVED_BIND_MODE __MEZ_FISH_PARENT_RESTORE_MARKER __MEZ_FISH_PARENT_RESTORE_STATUS __MEZ_FISH_PASSIVE_COMMAND_ACTIVE __MEZ_FISH_PASSIVE_SKIP_POSTEXEC
+set -e __MEZ_FISH_EDITOR_HELD __MEZ_FISH_HOLD_MARKER __MEZ_FISH_UNSUPPORTED_EDITOR_STATE __MEZ_FISH_SAVED_LINE __MEZ_FISH_SAVED_CURSOR __MEZ_FISH_SAVED_BIND_MODE __MEZ_FISH_PARENT_RESTORE_MARKER __MEZ_FISH_PARENT_RESTORE_STATUS __MEZ_FISH_PARENT_RESTORE_OUTCOME __MEZ_FISH_PASSIVE_COMMAND_ACTIVE __MEZ_FISH_PASSIVE_SKIP_POSTEXEC
 function __mez_fish_hold_editor
+    set -l hold_record
+    read -l hold_record; or return 1
+    set -l hold_fields (string split ' ' -- "$hold_record")
+    if test (count $hold_fields) -ne 3; or test "$hold_fields[1]" != MEZ_FISH_RX1_HOLD; or test "$hold_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or test -z "$hold_fields[3]"
+        return 1
+    end
+    set -g __MEZ_FISH_HOLD_MARKER "$hold_fields[3]"
     set -g __MEZ_FISH_UNSUPPORTED_EDITOR_STATE 0
     if commandline --search-mode; or commandline --paging-mode; or commandline --selection-start >/dev/null 2>&1; or commandline --selection-end >/dev/null 2>&1
         set -g __MEZ_FISH_UNSUPPORTED_EDITOR_STATE 1
@@ -96,7 +103,7 @@ function __mez_fish_restore_editor
     commandline --replace -- "$__MEZ_FISH_SAVED_LINE"
     commandline --cursor "$__MEZ_FISH_SAVED_CURSOR"
     set fish_bind_mode "$__MEZ_FISH_SAVED_BIND_MODE"
-    set -e __MEZ_FISH_EDITOR_HELD __MEZ_FISH_UNSUPPORTED_EDITOR_STATE __MEZ_FISH_SAVED_LINE __MEZ_FISH_SAVED_CURSOR __MEZ_FISH_SAVED_BIND_MODE
+    set -e __MEZ_FISH_EDITOR_HELD __MEZ_FISH_HOLD_MARKER __MEZ_FISH_UNSUPPORTED_EDITOR_STATE __MEZ_FISH_SAVED_LINE __MEZ_FISH_SAVED_CURSOR __MEZ_FISH_SAVED_BIND_MODE
 end
 function __mez_fish_private_receiver
     if not set -q __MEZ_FISH_EDITOR_HELD
@@ -105,14 +112,18 @@ function __mez_fish_private_receiver
     set -l begin_record
     read -l begin_record
     set -l begin_fields (string split ' ' -- "$begin_record")
-    if test (count $begin_fields) -ne 6; or test "$begin_fields[1]" != MEZ_FISH_RX1_BEGIN; or test "$begin_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"
+    if test (count $begin_fields) -ne 6; or test "$begin_fields[1]" != MEZ_FISH_RX1_BEGIN; or test "$begin_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or test "$begin_fields[3]" != "$__MEZ_FISH_HOLD_MARKER"
+        set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$__MEZ_FISH_HOLD_MARKER"
+        set -g __MEZ_FISH_PARENT_RESTORE_STATUS 65
+        set -g __MEZ_FISH_PARENT_RESTORE_OUTCOME frame-rejected
         __mez_fish_restore_editor
         return 1
     end
     set -l marker "$begin_fields[3]"
     if test -z "$marker"; or not string match -rq '^[0-9]+$' -- "$begin_fields[4]"; or not string match -rq '^[0-9a-f]{{64}}$' -- "$begin_fields[5]"; or not string match -rq '^[0-9]+$' -- "$begin_fields[6]"
         set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$marker"
-        set -g __MEZ_FISH_PARENT_RESTORE_STATUS 125
+        set -g __MEZ_FISH_PARENT_RESTORE_STATUS 65
+        set -g __MEZ_FISH_PARENT_RESTORE_OUTCOME frame-rejected
         __mez_fish_restore_editor
         return 1
     end
@@ -121,17 +132,19 @@ function __mez_fish_private_receiver
     set -l expected_chunks "$begin_fields[6]"
     if test "$expected_length" -gt 16777216; or test "$expected_chunks" -gt 294338; or test "$expected_length" -eq 0 -a "$expected_chunks" -ne 0; or test "$expected_length" -gt 0 -a "$expected_chunks" -eq 0
         set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$marker"
-        set -g __MEZ_FISH_PARENT_RESTORE_STATUS 125
+        set -g __MEZ_FISH_PARENT_RESTORE_STATUS 65
+        set -g __MEZ_FISH_PARENT_RESTORE_OUTCOME frame-rejected
         __mez_fish_restore_editor
         return 1
     end
     if test "$__MEZ_FISH_UNSUPPORTED_EDITOR_STATE" -eq 1
         set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$marker"
-        set -g __MEZ_FISH_PARENT_RESTORE_STATUS 125
+        set -g __MEZ_FISH_PARENT_RESTORE_STATUS 65
+        set -g __MEZ_FISH_PARENT_RESTORE_OUTCOME frame-rejected
         __mez_fish_restore_editor
         return 1
     end
-    builtin printf '\033]133;R;mez_receiver=ready;mez_token=%s;mez_marker=%s\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$marker"
+    builtin printf '\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=frame-admitted;mez_marker=%s\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$marker"
     set -l source_status 1
     set -l source_file (command mktemp); or set source_file ''
     set -l encoded_file "$source_file.b64"
@@ -223,6 +236,16 @@ function __mez_fish_private_receiver
     end
     set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$marker"
     set -g __MEZ_FISH_PARENT_RESTORE_STATUS "$source_status"
+    if test "$cancelled" -eq 1
+        set -g __MEZ_FISH_PARENT_RESTORE_OUTCOME cancelled
+    else if test "$receive_status" -ne 0
+        set -g __MEZ_FISH_PARENT_RESTORE_OUTCOME frame-rejected
+        set -g __MEZ_FISH_PARENT_RESTORE_STATUS 65
+    else if test "$source_status" -eq 0
+        set -g __MEZ_FISH_PARENT_RESTORE_OUTCOME completed
+    else
+        set -g __MEZ_FISH_PARENT_RESTORE_OUTCOME source-failed
+    end
     __mez_fish_restore_editor
     return $source_status
 end
@@ -230,13 +253,14 @@ function __mez_fish_publish_parent_restored
     if not set -q __MEZ_FISH_PARENT_RESTORE_MARKER
         return 0
     end
-    builtin printf '\033]133;R;mez_parent=restored;mez_token=%s;mez_marker=%s;mez_status=%s\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$__MEZ_FISH_PARENT_RESTORE_MARKER" "$__MEZ_FISH_PARENT_RESTORE_STATUS"
-    set -e __MEZ_FISH_PARENT_RESTORE_MARKER __MEZ_FISH_PARENT_RESTORE_STATUS
+    builtin printf '\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=parent-ready;mez_marker=%s;mez_outcome=%s;mez_status=%s\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$__MEZ_FISH_PARENT_RESTORE_MARKER" "$__MEZ_FISH_PARENT_RESTORE_OUTCOME" "$__MEZ_FISH_PARENT_RESTORE_STATUS"
+    set -e __MEZ_FISH_PARENT_RESTORE_MARKER __MEZ_FISH_PARENT_RESTORE_STATUS __MEZ_FISH_PARENT_RESTORE_OUTCOME
 end
 function __mez_fish_private_trigger
     if not set -q __MEZ_FISH_EDITOR_HELD
-        __mez_fish_hold_editor
+        __mez_fish_hold_editor; or return $status
         commandline -f repaint
+        builtin printf '\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=editor-held;mez_marker=%s\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$__MEZ_FISH_HOLD_MARKER"
         return 0
     end
     __mez_fish_private_receiver
@@ -295,6 +319,7 @@ function __mez_fish_passive_postexec --on-event fish_postexec
     set -e __MEZ_FISH_PASSIVE_COMMAND_ACTIVE
     builtin printf '\033]133;D;%s\033\\' "$command_status"
 end
+builtin printf '\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=adapter-available\033\\' "$__MEZ_FISH_INTEGRATION_OWNER"
 "#,
         fish_wrapper_receiver_init_command(),
         mez_agent::fish_quote(owner.as_str())
@@ -305,7 +330,7 @@ end
 mod tests {
     use super::*;
     use mez_agent::shell::{
-        PanePathResolutionRequest, ShellClassification, ShellTransaction,
+        FishPrivateSourceInput, PanePathResolutionRequest, ShellClassification, ShellTransaction,
         agent_subshell_enter_command_with_shell_compatibility_and_exit_marker,
         fish_private_source_cancel_input, fish_private_source_input, pane_path_resolution_command,
         parse_pane_path_resolution_output, shell_identity_probe_command,
@@ -459,6 +484,48 @@ mod tests {
         output
     }
 
+    /// Drives the source-free Fish hold stage and waits for native editor ownership.
+    fn hold_managed_fish_editor(
+        process: &mut ManagedFishTestPane,
+        admission: &FishPrivateSourceInput,
+        owner: &MarkerToken,
+        marker: &str,
+    ) -> Vec<u8> {
+        process.write_input(admission.wrapper.as_bytes()).unwrap();
+        let editor_held = format!(
+            "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=editor-held;mez_marker={marker}",
+            owner.as_str()
+        );
+        read_fish_output_until(process, |output| {
+            output
+                .windows(editor_held.len())
+                .any(|window| window == editor_held.as_bytes())
+        })
+    }
+
+    /// Releases Fish BEGIN after editor hold and waits for authenticated admission.
+    fn admit_managed_fish_frame(
+        process: &mut ManagedFishTestPane,
+        admission: &FishPrivateSourceInput,
+        owner: &MarkerToken,
+        marker: &str,
+    ) -> Vec<u8> {
+        let mut output = hold_managed_fish_editor(process, admission, owner, marker);
+        process
+            .write_input(admission.receiver_admission.as_bytes())
+            .unwrap();
+        let frame_admitted = format!(
+            "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=frame-admitted;mez_marker={marker}",
+            owner.as_str()
+        );
+        extend_fish_output_until(process, &mut output, |output| {
+            output
+                .windows(frame_admitted.len())
+                .any(|window| window == frame_admitted.as_bytes())
+        });
+        output
+    }
+
     /// Drives Fish startup through terminal capability negotiation and waits
     /// until both configured prompt functions have rendered completely.
     fn settle_managed_fish_startup(process: &mut ManagedFishTestPane) {
@@ -549,12 +616,12 @@ mod tests {
     }
 
     #[test]
-    /// Verifies the persistent Fish child announces its authenticated receiver
-    /// installation from the first interactive prompt under real PTY semantics.
+    /// Verifies the persistent Fish child announces its authenticated semantic
+    /// installation event from the first interactive prompt under real PTY semantics.
     ///
     /// Bootstrap input remains deferred until this boundary, so the generated
     /// child handoff must emit it before accepting any agent transaction.
-    fn managed_fish_agent_child_emits_receiver_installed_at_first_prompt() {
+    fn managed_fish_agent_child_emits_child_installed_at_first_prompt() {
         let Some(fish) = fish_path_for_tests() else {
             eprintln!("skipping managed Fish child assertion because fish is unavailable");
             return;
@@ -588,7 +655,7 @@ mod tests {
         .unwrap();
         process.write_input(handoff.as_bytes()).unwrap();
         let expected = format!(
-            "mez_receiver=installed;mez_token={};mez_marker={bootstrap_marker}",
+            "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=child-installed;mez_marker={bootstrap_marker}",
             receiver_token.as_str()
         );
         let output = read_fish_output_until(&mut process, |output| {
@@ -692,16 +759,8 @@ mod tests {
         let instrumented_handoff =
             format!("builtin printf '__MEZ_PRIVATE_SOURCE_ENTERED__\\n'\n{handoff}");
         let admission = fish_private_source_input(&instrumented_handoff, &owner, bootstrap_marker);
-        process.write_input(admission.wrapper.as_bytes()).unwrap();
-        let ready = format!(
-            "mez_receiver=ready;mez_token={};mez_marker={bootstrap_marker}",
-            owner.as_str()
-        );
-        let mut output = read_fish_output_until(&mut process, |output| {
-            output
-                .windows(ready.len())
-                .any(|window| window == ready.as_bytes())
-        });
+        let mut output =
+            admit_managed_fish_frame(&mut process, &admission, &owner, bootstrap_marker);
         output.extend(
             process.write_shell_delivery(&ShellInputDelivery::receiver_acknowledged(
                 admission.receiver_payload.as_bytes().to_vec(),
@@ -710,7 +769,7 @@ mod tests {
             )),
         );
         let installed = format!(
-            "mez_receiver=installed;mez_token={};mez_marker={bootstrap_marker}",
+            "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=child-installed;mez_marker={bootstrap_marker}",
             owner.as_str()
         );
         extend_fish_output_until(&mut process, &mut output, |output| {
@@ -760,16 +819,7 @@ mod tests {
             &owner,
             marker,
         );
-        process.write_input(admission.wrapper.as_bytes()).unwrap();
-        let ready = format!(
-            "mez_receiver=ready;mez_token={};mez_marker={marker}",
-            owner.as_str()
-        );
-        let mut output = read_fish_output_until(&mut process, |output| {
-            output
-                .windows(ready.len())
-                .any(|window| window == ready.as_bytes())
-        });
+        let mut output = admit_managed_fish_frame(&mut process, &admission, &owner, marker);
         output.extend(
             process.write_shell_delivery(&ShellInputDelivery::receiver_acknowledged(
                 admission.receiver_payload.as_bytes().to_vec(),
@@ -791,9 +841,8 @@ mod tests {
     /// Verifies private Fish admission fails closed while vi visual selection
     /// is active and leaves the selected draft available for normal execution.
     ///
-    /// The source-free BEGIN record must be consumed by the bound receiver, but
-    /// no receiver-ready event or deferred source may follow an unsupported
-    /// editor state because selection boundaries cannot be restored exactly.
+    /// The source-free HOLD trigger must not publish editor ownership or admit
+    /// deferred source while selection boundaries cannot be restored exactly.
     fn managed_fish_private_admission_rejects_active_selection_without_clearing_draft() {
         let Some(fish) = fish_path_for_tests() else {
             eprintln!("skipping managed Fish selection assertion because fish is unavailable");
@@ -834,7 +883,8 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         let mut output = process.read_available_output(64 * 1024).unwrap();
         assert!(
-            !String::from_utf8_lossy(&output).contains("mez_receiver=ready"),
+            !String::from_utf8_lossy(&output).contains("mez_event=editor-held")
+                && !String::from_utf8_lossy(&output).contains("mez_event=frame-admitted"),
             "{:?}",
             String::from_utf8_lossy(&output)
         );
@@ -879,16 +929,7 @@ mod tests {
             .unwrap();
         let marker = "fish-private-source-failure-marker";
         let admission = fish_private_source_input("false\n", &owner, marker);
-        process.write_input(admission.wrapper.as_bytes()).unwrap();
-        let ready = format!(
-            "mez_receiver=ready;mez_token={};mez_marker={marker}",
-            owner.as_str()
-        );
-        let mut output = read_fish_output_until(&mut process, |output| {
-            output
-                .windows(ready.len())
-                .any(|window| window == ready.as_bytes())
-        });
+        let mut output = admit_managed_fish_frame(&mut process, &admission, &owner, marker);
         output.extend(
             process.write_shell_delivery(&ShellInputDelivery::receiver_acknowledged(
                 admission.receiver_payload.as_bytes().to_vec(),
@@ -897,7 +938,7 @@ mod tests {
             )),
         );
         let restored = format!(
-            "mez_parent=restored;mez_token={};mez_marker={marker};mez_status=1",
+            "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=parent-ready;mez_marker={marker};mez_outcome=source-failed;mez_status=1",
             owner.as_str()
         );
         extend_fish_output_until(&mut process, &mut output, |output| {
@@ -948,23 +989,14 @@ mod tests {
             &owner,
             marker,
         );
-        process.write_input(admission.wrapper.as_bytes()).unwrap();
-        let ready = format!(
-            "mez_receiver=ready;mez_token={};mez_marker={marker}",
-            owner.as_str()
-        );
-        let mut output = read_fish_output_until(&mut process, |output| {
-            output
-                .windows(ready.len())
-                .any(|window| window == ready.as_bytes())
-        });
+        let mut output = admit_managed_fish_frame(&mut process, &admission, &owner, marker);
         assert!(
             !process
                 .terminal
                 .visible_lines()
                 .join("\n")
                 .contains("__MEZ_CANCELLED_DRAFT_RESTORED__"),
-            "Fish must visibly clear the saved draft before receiver-ready; screen={:?}; output={:?}",
+            "Fish must visibly clear the saved draft before frame admission; screen={:?}; output={:?}",
             process.terminal.visible_lines(),
             String::from_utf8_lossy(&output)
         );
@@ -972,7 +1004,7 @@ mod tests {
             .write_input(fish_private_source_cancel_input(&owner, marker).as_bytes())
             .unwrap();
         let restored = format!(
-            "mez_parent=restored;mez_token={};mez_marker={marker};mez_status=130",
+            "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=parent-ready;mez_marker={marker};mez_outcome=cancelled;mez_status=130",
             owner.as_str()
         );
         extend_fish_output_until(&mut process, &mut output, |output| {
@@ -1027,16 +1059,7 @@ mod tests {
             "padding".repeat(256)
         );
         let admission = fish_private_source_input(&source, &owner, marker);
-        process.write_input(admission.wrapper.as_bytes()).unwrap();
-        let ready = format!(
-            "mez_receiver=ready;mez_token={};mez_marker={marker}",
-            owner.as_str()
-        );
-        let mut output = read_fish_output_until(&mut process, |output| {
-            output
-                .windows(ready.len())
-                .any(|window| window == ready.as_bytes())
-        });
+        let mut output = admit_managed_fish_frame(&mut process, &admission, &owner, marker);
         let mut records = admission
             .receiver_payload
             .lines()
@@ -1058,7 +1081,7 @@ mod tests {
             )),
         );
         let restored = format!(
-            "mez_parent=restored;mez_token={};mez_marker={marker};mez_status=1",
+            "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=parent-ready;mez_marker={marker};mez_outcome=frame-rejected;mez_status=65",
             owner.as_str()
         );
         extend_fish_output_until(&mut process, &mut output, |output| {
@@ -1115,16 +1138,7 @@ mod tests {
             "padding".repeat(256)
         );
         let admission = fish_private_source_input(&source, &owner, marker);
-        process.write_input(admission.wrapper.as_bytes()).unwrap();
-        let ready = format!(
-            "mez_receiver=ready;mez_token={};mez_marker={marker}",
-            owner.as_str()
-        );
-        let mut output = read_fish_output_until(&mut process, |output| {
-            output
-                .windows(ready.len())
-                .any(|window| window == ready.as_bytes())
-        });
+        let mut output = admit_managed_fish_frame(&mut process, &admission, &owner, marker);
         let mut records = admission
             .receiver_payload
             .lines()
@@ -1149,7 +1163,7 @@ mod tests {
             )),
         );
         let restored = format!(
-            "mez_parent=restored;mez_token={};mez_marker={marker};mez_status=1",
+            "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=parent-ready;mez_marker={marker};mez_outcome=frame-rejected;mez_status=65",
             owner.as_str()
         );
         extend_fish_output_until(&mut process, &mut output, |output| {

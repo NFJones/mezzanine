@@ -1801,7 +1801,7 @@ fn fish_shell_interactive_invocation_words(
     let mut init_command = fish_wrapper_receiver_init_command().to_string();
     if let Some((token, marker)) = receiver_install {
         init_command.push_str(&format!(
-            "\nfunction fish_prompt\n    functions --erase fish_prompt\n    builtin printf '\\e]133;R;mez_receiver=installed;mez_token=%s;mez_marker=%s\\e\\\\' {} {}\n    fish_default_prompt\nend",
+            "\nfunction fish_prompt\n    functions --erase fish_prompt\n    builtin printf '\\e]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=child-installed;mez_marker=%s\\e\\\\' {} {}\n    fish_default_prompt\nend",
             fish_quote(token.as_str()),
             fish_quote(marker)
         ));
@@ -2080,16 +2080,30 @@ pub fn fish_wrapper_receiver_init_command() -> &'static str {
 end"#
 }
 
-/// Renders a private Fish editor trigger and deferred source frame.
+/// Staged private input for one managed Fish editor handoff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FishPrivateSourceInput {
+    /// Source-free trigger and authenticated hold metadata.
+    pub wrapper: String,
+    /// Second trigger and authenticated frame header released after editor hold.
+    pub receiver_admission: String,
+    /// Bounded DATA and END records released after frame admission.
+    pub receiver_payload: String,
+    /// Whether DATA and END records require receiver acknowledgements.
+    pub payload_receiver_acknowledgements: bool,
+}
+
+/// Renders a staged private Fish editor trigger and deferred source frame.
 ///
-/// The trigger is consumed by the managed Fish binding before it can become
-/// user command-line input. The source frame remains separate until that
-/// binding has saved and cleared the active editor state.
+/// The first trigger carries only token and marker metadata so the native
+/// binding can save, clear, and repaint the editor before runtime releases the
+/// second trigger and bounded BEGIN header. DATA and END remain withheld until
+/// the adapter publishes semantic frame admission.
 pub fn fish_private_source_input(
     source: &str,
     token: &MarkerToken,
     marker: &str,
-) -> ShellTransactionInput {
+) -> FishPrivateSourceInput {
     let digest = Sha256::digest(source.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -2097,8 +2111,9 @@ pub fn fish_private_source_input(
     let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
     let chunks = encoded.as_bytes().chunks(SHELL_WRAPPER_BASE64_LINE_BYTES);
     let chunk_count = chunks.len();
-    let wrapper = format!(
-        "\x1b\x07\x1b\x07MEZ_FISH_RX1_BEGIN {} {} {} {} {}\n",
+    let wrapper = format!("\x1b\x07MEZ_FISH_RX1_HOLD {} {}\n", token.as_str(), marker,);
+    let receiver_admission = format!(
+        "\x1b\x07MEZ_FISH_RX1_BEGIN {} {} {} {} {}\n",
         token.as_str(),
         marker,
         source.len(),
@@ -2125,10 +2140,10 @@ pub fn fish_private_source_input(
         source.len(),
         digest
     ));
-    ShellTransactionInput {
+    FishPrivateSourceInput {
         wrapper,
+        receiver_admission,
         receiver_payload,
-        payload: String::new(),
         payload_receiver_acknowledgements: true,
     }
 }

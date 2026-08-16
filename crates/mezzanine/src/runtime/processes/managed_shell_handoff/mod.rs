@@ -149,6 +149,11 @@ impl ManagedShellHandoff {
         self.recovery_observation.as_ref()
     }
 
+    /// Reports whether exit was requested before the handoff settled.
+    pub(super) fn exit_requested(&self) -> bool {
+        self.exit_requested
+    }
+
     /// Returns queued foreground input without releasing ownership in tests.
     #[cfg(test)]
     pub(super) fn pending_input(&self) -> &[u8] {

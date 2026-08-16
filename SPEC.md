@@ -1856,21 +1856,22 @@ writing a handoff. Stale, duplicate, wrong-shell, wrong-marker, and
 wrong-generation events MUST be inert. Runtime MUST settle one handoff exactly
 once and MUST release queued foreground input only after authenticated parent
 readiness or fresh exact foreground ownership proof.
-Managed Fish and Zsh MUST publish a pane-token-authenticated parent-restored
-boundary only after the private receiver has returned from sourcing the child
+Managed Fish and Zsh MUST publish a pane-token-authenticated `ParentReady`
+event only after the private receiver has returned from sourcing the child
 handoff, restored the editor state, and queued its repaint. Child-exit rendering
 markers MUST NOT release foreground input. Mezzanine MUST retain bounded foreground
-input until parent-restored arrives and MUST use bounded timeout recovery if
-that event is lost. A restoration timeout MUST NOT replay queued input by
+input until `ParentReady` arrives and MUST use bounded timeout recovery if that
+event is lost. A restoration timeout MUST NOT replay queued input by
 itself; runtime MUST retain the bytes until an exact pane-process generation
 proves that the original parent process group owns the foreground PTY. The
 private receiver MUST save the supported editor state,
-clear the editable buffer, and queue a repaint before publishing receiver-ready
-or launching the child. If agent mode exits before source admission completes,
-runtime MUST send a pane-token- and bootstrap-marker-authenticated cancellation
-record. Fish and Zsh MUST reject partial source, restore and repaint the exact
-saved editor state, and publish parent-restored without launching a child.
-Bootstrap state MUST remain independent from parent-editor restoration so a
+clear the editable buffer, queue a repaint, and publish `EditorHeld` before
+runtime releases frame admission or launches the child. If agent mode exits
+before source admission completes, runtime MUST send a pane-token- and
+bootstrap-marker-authenticated cancellation record. Fish and Zsh MUST reject
+partial source, restore and repaint the exact saved editor state, and publish a
+cancelled `ParentReady` without launching a child. Bootstrap state MUST remain
+independent from parent-editor restoration so a
 saved draft cannot block child certification or be released before callback
 unwind.
 Managed Zsh startup MUST preserve native startup-file ordering and RCS option
@@ -4371,9 +4372,9 @@ to the ordinary line editor or strand acknowledgement-paced delivery. Before
 the first DATA record is released, Fish MAY instead accept one authenticated
 CANCEL record for the same pane token and bootstrap marker. Cancellation MUST
 acknowledge the record, evaluate no source, restore the saved editor state, and
-emit parent-restored with a cancellation status. A CANCEL received after DATA
-has begun MUST be treated as malformed input and MUST NOT shorten the required
-drain through the declared DATA count and matching END record.
+emit a cancelled `ParentReady` event. A CANCEL received after DATA has begun
+MUST be treated as malformed input and MUST NOT shorten the required drain
+through the declared DATA count and matching END record.
 
 For non-stateful POSIX-compatible actions, the default wrapper MUST execute the
 agent command in a child shell whose environment omits Mezzanine transaction

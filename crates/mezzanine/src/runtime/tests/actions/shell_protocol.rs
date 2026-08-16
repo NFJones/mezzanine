@@ -1771,8 +1771,9 @@ fn runtime_fish_parent_restoration_timeout_requires_foreground_proof() {
             observed_output_truncated: false,
         },
     );
-    service.prepend_fish_shell_receiver_payload(
+    service.prepend_fish_shell_receiver_payloads(
         "fish-restoration-marker",
+        mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
         mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
     );
     assert!(service.mark_managed_shell_payload_released(pane_id, "fish-restoration-marker"));
