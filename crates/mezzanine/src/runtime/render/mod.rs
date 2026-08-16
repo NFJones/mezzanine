@@ -381,6 +381,10 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     projected_context: Option<RuntimeStreamingSayProjectionContext>,
     /// Worker-rendered action metadata retained for exact promotion.
     projected_actions: Option<Vec<RuntimeStreamingSayProjectedAction>>,
+    /// Worker-rendered batch rationale retained with the installed projection.
+    projected_rationale: Option<RuntimeStreamingSayProjectedRationale>,
+    /// Exact screen installed with the retained projection metadata.
+    projected_screen: Option<std::sync::Arc<TerminalScreen>>,
 }
 
 /// Non-source inputs that determine one streaming projection generation.
@@ -429,12 +433,46 @@ pub(crate) struct RuntimeStreamingTextSource {
 pub(crate) struct RuntimeStreamingSayProjectedAction {
     /// Original action position in the provider batch.
     pub(crate) action_index: usize,
+    /// Visible action kind represented by this installed projection.
+    pub(crate) kind: RuntimeStreamingSayProjectedActionKind,
     /// Stable presentation style name for every rendered line.
     pub(crate) style: String,
     /// Complete display lines published for this action.
     pub(crate) rendered_lines: Vec<String>,
     /// Complete raw-copy metadata associated with the rendered component.
     pub(crate) copy_lines: Vec<String>,
+}
+
+/// Persistable metadata for an atomically projected batch rationale.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeStreamingSayProjectedRationale {
+    /// Stable presentation style name for every rendered line.
+    pub(crate) style: String,
+    /// Complete display lines published for the rationale.
+    pub(crate) rendered_lines: Vec<String>,
+    /// Complete raw-copy metadata associated with the rationale.
+    pub(crate) copy_lines: Vec<String>,
+}
+
+/// Visible action kind retained with an installed streaming projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeStreamingSayProjectedActionKind {
+    /// Provider `say` output rendered through the ordinary content renderer.
+    Say,
+    /// Shell-command source rendered through the ordinary command preview.
+    ShellCommand {
+        /// Whether the bounded preview omitted source text.
+        truncated: bool,
+    },
+}
+
+/// Result of reconciling provisional output with one validated completion.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct RuntimeStreamingSayCompletionReconciliation {
+    /// Action indices whose installed rows now own durable presentation.
+    pub(crate) promoted_action_indices: std::collections::BTreeSet<usize>,
+    /// Whether reconciliation retained the exact installed terminal screen.
+    pub(crate) preserved_installed_screen: bool,
 }
 
 /// Immutable input for one cumulative streaming-say projection worker.
@@ -499,6 +537,8 @@ pub(crate) struct RuntimeStreamingSayProjectionResult {
     pub(crate) screen_size: Size,
     /// Complete per-action metadata built with the candidate screen.
     pub(crate) projected_actions: Vec<RuntimeStreamingSayProjectedAction>,
+    /// Batch-rationale metadata built with the candidate screen.
+    pub(crate) projected_rationale: Option<RuntimeStreamingSayProjectedRationale>,
     /// Fully rendered candidate published only as one state replacement.
     pub(crate) screen: TerminalScreen,
 }

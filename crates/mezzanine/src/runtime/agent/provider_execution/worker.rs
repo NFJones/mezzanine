@@ -136,13 +136,18 @@ impl RuntimeSessionService {
         if let Some(pane_id) = pane_id {
             self.clear_agent_shell_output_status_line(&pane_id)?;
         }
-        let applied = self
-            .apply_agent_provider_completed_event(agent_id, turn_id, execution)
+        let application = self
+            .apply_agent_provider_completed_event_with_render_intent(agent_id, turn_id, execution)
             .await?;
-        Ok(self.runtime_transition_with_render(
-            applied,
-            Some(crate::runtime::RenderInvalidationReason::FullRedraw),
-        ))
+        let render_reason =
+            application
+                .applied
+                .then_some(if application.preserved_installed_screen {
+                    crate::runtime::RenderInvalidationReason::PaneOutput
+                } else {
+                    crate::runtime::RenderInvalidationReason::FullRedraw
+                });
+        Ok(self.runtime_transition_with_render(application.applied, render_reason))
     }
 
     /// Applies worker-settled provider persistence through actor-owned state.

@@ -1228,6 +1228,8 @@ impl RuntimeSessionService {
                             projected_revision: None,
                             projected_context: None,
                             projected_actions: None,
+                            projected_rationale: None,
+                            projected_screen: None,
                         },
                     );
                 }
@@ -1475,6 +1477,8 @@ impl RuntimeSessionService {
                     projected_revision: None,
                     projected_context: None,
                     projected_actions: None,
+                    projected_rationale: None,
+                    projected_screen: None,
                 },
             );
         }
@@ -1795,21 +1799,55 @@ impl RuntimeSessionService {
         if has_projection_copy_lines {
             candidate.set_recent_normal_copy_texts(&projection_copy_lines, AGENT_COPY_SKIP_LINE);
         }
-        let projected_actions = say_projections
-            .into_iter()
+        let mut projected_actions = say_projections
+            .iter()
             .map(|(action_index, projection)| {
                 crate::runtime::render::RuntimeStreamingSayProjectedAction {
-                    action_index,
+                    action_index: *action_index,
+                    kind: crate::runtime::render::RuntimeStreamingSayProjectedActionKind::Say,
                     style: projection.style.persistence_name().to_string(),
                     rendered_lines: projection
                         .rendered_lines
-                        .into_iter()
-                        .map(|line| line.display)
+                        .iter()
+                        .map(|line| line.display.clone())
                         .collect(),
-                    copy_lines: projection.copy_lines,
+                    copy_lines: projection.copy_lines.clone(),
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+        projected_actions.extend(command_projections.iter().map(
+            |(action_index, projection)| {
+                let truncated = work
+                    .shell_commands
+                    .get(action_index)
+                    .is_some_and(|source| bounded_command_preview_source(&source.text).truncated);
+                crate::runtime::render::RuntimeStreamingSayProjectedAction {
+                    action_index: *action_index,
+                    kind: crate::runtime::render::RuntimeStreamingSayProjectedActionKind::ShellCommand {
+                        truncated,
+                    },
+                    style: projection.style.persistence_name().to_string(),
+                    rendered_lines: projection
+                        .rendered_lines
+                        .iter()
+                        .map(|line| line.display.clone())
+                        .collect(),
+                    copy_lines: projection.copy_lines.clone(),
+                }
+            },
+        ));
+        projected_actions.sort_by_key(|projection| projection.action_index);
+        let projected_rationale = rationale_projection.as_ref().map(|projection| {
+            crate::runtime::render::RuntimeStreamingSayProjectedRationale {
+                style: projection.style.persistence_name().to_string(),
+                rendered_lines: projection
+                    .rendered_lines
+                    .iter()
+                    .map(|line| line.display.clone())
+                    .collect(),
+                copy_lines: projection.copy_lines.clone(),
+            }
+        });
         Ok(crate::runtime::RuntimeStreamingSayProjectionResult {
             pane_id: work.pane_id,
             turn_id: work.turn_id,
@@ -1823,6 +1861,7 @@ impl RuntimeSessionService {
             ui_theme: work.ui_theme,
             screen_size: work.screen_size,
             projected_actions,
+            projected_rationale,
             screen: candidate,
         })
     }
@@ -1860,6 +1899,7 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
+        let projected_screen = std::sync::Arc::new(result.screen.clone());
         self.update_agent_streaming_screen(
             &result.pane_id,
             &result.conversation_id,
@@ -1881,6 +1921,8 @@ impl RuntimeSessionService {
             screen_size: result.screen_size,
         });
         presentation.projected_actions = Some(result.projected_actions);
+        presentation.projected_rationale = result.projected_rationale;
+        presentation.projected_screen = Some(projected_screen);
         Ok(true)
     }
 
@@ -2063,18 +2105,36 @@ impl RuntimeSessionService {
     /// restores the pre-stream pane and lets ordinary completion presentation
     /// append the authoritative batch. Exact matches retain the current rows,
     /// persist their semantic source once, and mark the indices as presented.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "compatibility entry point used by focused tests")
+    )]
     pub(crate) fn reconcile_agent_streaming_say_completion(
         &mut self,
         pane_id: &str,
         turn_id: &str,
         execution: &mez_agent::AgentTurnExecution,
     ) -> Result<std::collections::BTreeSet<usize>> {
+        Ok(self
+            .reconcile_agent_streaming_say_completion_with_render_intent(
+                pane_id, turn_id, execution,
+            )?
+            .promoted_action_indices)
+    }
+
+    /// Reconciles live source and reports whether the installed screen survived.
+    pub(crate) fn reconcile_agent_streaming_say_completion_with_render_intent(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        execution: &mez_agent::AgentTurnExecution,
+    ) -> Result<crate::runtime::render::RuntimeStreamingSayCompletionReconciliation> {
         let Some(presentation) = self
             .presentation
             .agent_streaming_say_presentations
             .remove(pane_id)
         else {
-            return Ok(std::collections::BTreeSet::new());
+            return Ok(Default::default());
         };
         let conversation_matches = self
             .agent_shell_store()
@@ -2133,17 +2193,67 @@ impl RuntimeSessionService {
                     presentation.baseline_screen.as_ref().clone(),
                 )?;
             }
-            return Ok(std::collections::BTreeSet::new());
+            return Ok(Default::default());
         }
 
-        // Thinking and command preview rows have additional authoritative
-        // completion-time ordering rules: rationale de-duplication, action
-        // rationale/summary presentation, approval, and dispatch. Restore the
-        // shared baseline and let that existing static pipeline produce the
-        // durable final rows after exact source validation. This preserves the
-        // streamed text while guaranteeing the settled pane is identical to a
-        // non-streamed response.
-        if presentation.rationale.is_some() || !presentation.shell_commands.is_empty() {
+        let projection_context_is_current = self
+            .agent_streaming_say_projection_context(pane_id)
+            .is_ok_and(|context| presentation.projected_context.as_ref() == Some(&context));
+        let current_projected_actions = presentation.projected_actions.as_ref().filter(|_| {
+            presentation.projected_revision == Some(presentation.revision)
+                && projection_context_is_current
+                && presentation.projected_screen.as_deref() == self.agent_pane_screen(pane_id)
+        });
+        let command_can_promote = batch.is_some_and(|batch| {
+            presentation.rationale.as_ref().is_some_and(|rationale| {
+                rationale.complete && rationale.text == batch.rationale
+            })
+                && presentation.actions.is_empty()
+                && presentation.shell_commands.len() == 1
+                && !self.agent_verbose_enabled(pane_id)
+                && self.pane_readiness_state(pane_id) == mez_agent::PaneReadinessState::Ready
+                && batch.actions.len() == 1
+                && execution.action_results.len() == 1
+                && presentation.shell_commands.iter().all(|(action_index, source)| {
+                    *action_index == 0
+                        && source.complete
+                        && !bounded_command_preview_source(&source.text).truncated
+                        && batch.actions.get(*action_index).is_some_and(|action| {
+                            action.rationale.trim().is_empty()
+                                && matches!(
+                                    &action.payload,
+                                    mez_agent::AgentActionPayload::ShellCommand { command, .. }
+                                        if command == &source.text
+                                )
+                        })
+                        && execution.action_results.first().is_some_and(|result| {
+                            result.action_id == batch.actions[*action_index].id
+                                && result.status == mez_agent::ActionStatus::Running
+                        })
+                })
+                && current_projected_actions.is_some_and(|projected| {
+                    projected.len() == 1
+                        && projected.first().is_some_and(|projection| {
+                            projection.action_index == 0
+                                && matches!(
+                                    projection.kind,
+                                    crate::runtime::render::RuntimeStreamingSayProjectedActionKind::ShellCommand {
+                                        truncated: false
+                                    }
+                                )
+                        })
+                })
+                && presentation.projected_context.as_ref().is_some_and(|context| {
+                    !context.thinking_enabled || presentation.projected_rationale.is_some()
+                })
+        });
+
+        // Thinking and non-promotable command rows have additional
+        // completion-time ordering rules. Restore the shared baseline and let
+        // the static pipeline settle every uncertain surface.
+        if (presentation.rationale.is_some() || !presentation.shell_commands.is_empty())
+            && !command_can_promote
+        {
             self.presentation
                 .agent_promoted_streaming_say_actions
                 .remove(&(pane_id.to_string(), turn_id.to_string()));
@@ -2152,27 +2262,58 @@ impl RuntimeSessionService {
                 &presentation.conversation_id,
                 presentation.baseline_screen.as_ref().clone(),
             )?;
-            return Ok(std::collections::BTreeSet::new());
+            return Ok(Default::default());
         }
 
-        let projection_context_is_current = self
-            .agent_streaming_say_projection_context(pane_id)
-            .is_ok_and(|context| presentation.projected_context.as_ref() == Some(&context));
-        let Some(projected_actions) = presentation.projected_actions.as_ref().filter(|_| {
-            presentation.projected_revision == Some(presentation.revision)
-                && projection_context_is_current
-        }) else {
+        let Some(projected_actions) = current_projected_actions else {
             self.update_agent_streaming_screen(
                 pane_id,
                 &presentation.conversation_id,
                 presentation.baseline_screen.as_ref().clone(),
             )?;
-            return Ok(std::collections::BTreeSet::new());
+            return Ok(Default::default());
         };
+        if let (Some(rationale), Some(projection)) = (
+            presentation.rationale.as_ref(),
+            presentation.projected_rationale.as_ref(),
+        ) {
+            self.persist_agent_presentation_entry(
+                pane_id,
+                vec![projection.style.clone(); projection.rendered_lines.len()],
+                projection.rendered_lines.clone(),
+                projection.copy_lines.clone(),
+                String::new(),
+                Some((
+                    rationale.text.as_str(),
+                    AGENT_PRESENTATION_THINKING_CONTENT_TYPE,
+                )),
+            );
+        }
         let mut promoted = std::collections::BTreeSet::new();
         for projection in projected_actions {
-            let Some(action) = presentation.actions.get(&projection.action_index) else {
-                continue;
+            let source = match projection.kind {
+                crate::runtime::render::RuntimeStreamingSayProjectedActionKind::Say => {
+                    let Some(action) = presentation.actions.get(&projection.action_index) else {
+                        continue;
+                    };
+                    Some((action.text.as_str(), action.content_type.as_str()))
+                }
+                crate::runtime::render::RuntimeStreamingSayProjectedActionKind::ShellCommand {
+                    truncated,
+                } => {
+                    let Some(source) = presentation.shell_commands.get(&projection.action_index)
+                    else {
+                        continue;
+                    };
+                    Some((
+                        source.text.as_str(),
+                        if truncated {
+                            AGENT_PRESENTATION_TRUNCATED_COMMAND_PREVIEW_CONTENT_TYPE
+                        } else {
+                            AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE
+                        },
+                    ))
+                }
             };
             self.persist_agent_presentation_entry(
                 pane_id,
@@ -2180,14 +2321,19 @@ impl RuntimeSessionService {
                 projection.rendered_lines.clone(),
                 projection.copy_lines.clone(),
                 String::new(),
-                Some((&action.text, &action.content_type)),
+                source,
             );
             promoted.insert(projection.action_index);
         }
         self.presentation
             .agent_promoted_streaming_say_actions
             .insert((pane_id.to_string(), turn_id.to_string()), promoted.clone());
-        Ok(promoted)
+        Ok(
+            crate::runtime::render::RuntimeStreamingSayCompletionReconciliation {
+                promoted_action_indices: promoted,
+                preserved_installed_screen: true,
+            },
+        )
     }
 
     /// Clears validated-promotion bookkeeping after deferred presentation settles.

@@ -68,6 +68,58 @@ fn attached_terminal_output_update_redraws_only_changed_rows() {
     assert!(!rendered.contains("\x1b[1;1Hone"), "{rendered:?}");
 }
 
+/// Verifies an authoritative style-only command-preview update preserves the
+/// existing wrapped text rows instead of clearing either the display or row.
+///
+/// Streamed command completion can retain identical glyphs and wrapping while
+/// applying final syntax styling. The differential encoder must update those
+/// styles in place so completion does not visibly erase and re-emit the command.
+#[test]
+fn attached_terminal_output_update_restyles_command_without_clear() {
+    let lines = vec!["$ printf 'alpha beta'".to_string()];
+    let previous_spans = vec![Vec::new()];
+    let command_rendition = GraphicRendition {
+        foreground: Some(TerminalColor::Rgb(122, 168, 159)),
+        bold: true,
+        ..GraphicRendition::default()
+    };
+    let current_spans = vec![vec![TerminalStyleSpan {
+        start: 2,
+        length: "printf".len(),
+        rendition: command_rendition,
+    }]];
+    let previous = AttachedTerminalOutputFrameState::new(&lines, &previous_spans);
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: false,
+        cursor_blink: false,
+        ..AttachedTerminalOutputModes::default()
+    };
+    let initial_frame =
+        encode_attached_terminal_output_frame_with_styles(&lines, &previous_spans, None, modes);
+    let update_frame = encode_attached_terminal_output_update_frame_with_styles(
+        &lines,
+        &current_spans,
+        None,
+        modes,
+        Some(&previous),
+    );
+    let encoded = String::from_utf8(update_frame.clone()).unwrap();
+
+    assert!(!encoded.contains("\x1b[2J"), "{encoded:?}");
+    assert!(!encoded.contains("\x1b[2K"), "{encoded:?}");
+
+    let mut screen = TerminalScreen::new(Size::new(40, 1).unwrap(), 10).unwrap();
+    screen.feed(&initial_frame);
+    screen.feed(&update_frame);
+    let line = &screen.visible_styled_lines()[0];
+    assert_eq!(line.text.trim_end(), lines[0]);
+    assert_eq!(
+        styled_line_rendition_at(line, 2),
+        command_rendition,
+        "style-only update did not settle on the retained command row: {line:?}"
+    );
+}
+
 /// Verifies that same-width printable ASCII row changes can update only the
 /// changed span instead of rewriting the whole row. This keeps frequent status
 /// or prompt edits small on slower terminal links while preserving the existing

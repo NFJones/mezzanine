@@ -905,6 +905,193 @@ fn runtime_streaming_rationale_and_command_match_static_projection_and_restore()
     assert_eq!(streaming.agent_pane_screen("%1").unwrap(), &baseline);
 }
 
+/// Verifies exact streamed rationale and command rows become the authoritative
+/// shell-action presentation without restoring or appending the preview again.
+///
+/// A current projection for one ready, running shell action already has final
+/// wrapping and styling. Completion must preserve that screen, persist both
+/// semantic sources once, dispatch the command, and request only incremental
+/// pane output so the attached client never performs a full-display clear.
+#[tokio::test]
+async fn runtime_streaming_command_completion_promotes_without_full_redraw() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("streaming-command-promotion"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(48, 12).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service.permission_policy_mut().set_approval_bypass(true);
+    mark_test_pane_ready(&mut service, "%1");
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "print alpha beta")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+
+    let rationale = "Run the requested print command";
+    let command = "printf 'alpha beta\\n'";
+    for event in [
+        mez_agent::StreamingSayEvent::RationaleStarted,
+        mez_agent::StreamingSayEvent::RationaleTextDelta {
+            text: rationale.to_string(),
+        },
+        mez_agent::StreamingSayEvent::RationaleTextComplete,
+        mez_agent::StreamingSayEvent::ShellCommandStarted { action_index: 0 },
+        mez_agent::StreamingSayEvent::ShellCommandTextDelta {
+            action_index: 0,
+            text: command.to_string(),
+        },
+        mez_agent::StreamingSayEvent::ShellCommandTextComplete { action_index: 0 },
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", &turn.turn_id, &event)
+            .unwrap();
+    }
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+        .unwrap()
+        .expect("complete rationale and command should project");
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let projected_screen = service.agent_pane_screen("%1").unwrap().clone();
+    let projected_command_rows = projected_screen
+        .normal_content_lines()
+        .into_iter()
+        .filter(|line| line.contains("printf") || line.contains("alpha beta"))
+        .count();
+
+    let action = mez_agent::AgentAction {
+        id: "shell-streamed".to_string(),
+        rationale: String::new(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: rationale.to_string(),
+            command: command.to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let mut request = runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id);
+    request.allowed_actions =
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::Shell);
+    let execution = mez_agent::AgentTurnExecution {
+        request,
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: rationale.to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![action.clone()],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &turn,
+            &action,
+            vec!["shell action accepted".to_string()],
+            None,
+        )],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    let transition = service
+        .apply_agent_provider_completed_transition(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+
+    assert!(transition.applied);
+    assert!(transition.side_effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::RenderClient {
+            reason: RenderInvalidationReason::PaneOutput,
+            ..
+        }
+    )));
+    assert!(transition.side_effects.iter().all(|effect| !matches!(
+        effect,
+        RuntimeSideEffect::RenderClient {
+            reason: RenderInvalidationReason::FullRedraw,
+            ..
+        }
+    )));
+    assert_eq!(service.agent_pane_screen("%1").unwrap(), &projected_screen);
+    let settled_command_rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .into_iter()
+        .filter(|line| line.contains("printf") || line.contains("alpha beta"))
+        .count();
+    assert_eq!(settled_command_rows, projected_command_rows);
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| {
+                matches!(
+                    &transaction.kind,
+                    RunningShellTransactionKind::AgentAction { action_id }
+                        if action_id == "shell-streamed"
+                )
+            })
+    );
+
+    let entries = transcript_store
+        .inspect_presentation(&conversation_id)
+        .unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.source_text.as_deref() == Some(rationale))
+            .count(),
+        1,
+        "{entries:?}"
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.source_text.as_deref() == Some(command))
+            .count(),
+        1,
+        "{entries:?}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+    drop(primary);
+}
+
 /// Verifies a rich generation captured before newer source arrived
 /// cannot replace the pane or expose rows from two streaming generations.
 ///

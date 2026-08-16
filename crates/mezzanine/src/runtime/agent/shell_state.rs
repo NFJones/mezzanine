@@ -107,6 +107,8 @@ fn bubblewrap_action_path_resolution_request(
 pub(super) struct ShellActionDispatch<'a> {
     /// Original command retained for execution, preview, and audit identity.
     pub(super) command: &'a str,
+    /// Whether validated streaming already installed this exact command preview.
+    pub(super) preview_already_presented: bool,
     /// Optional separately streamed data associated with the command plan.
     pub(super) input_sidecar: Option<&'a str>,
     /// Interpreter grammar required by the command source.
@@ -149,6 +151,7 @@ impl RuntimeSessionService {
     ) -> Result<ShellActionDispatchOutcome> {
         let ShellActionDispatch {
             command,
+            preview_already_presented,
             input_sidecar,
             program_dialect,
             stateful,
@@ -456,7 +459,8 @@ impl RuntimeSessionService {
                 )?;
             }
         }
-        if !is_internal_apply_patch_write_phase
+        if !preview_already_presented
+            && !is_internal_apply_patch_write_phase
             && (is_model_shell_command
                 || !emitted_action_log
                 || self.agent_verbose_enabled(&turn.pane_id))
@@ -571,6 +575,7 @@ impl RuntimeSessionService {
             action,
             ShellActionDispatch {
                 command,
+                preview_already_presented: false,
                 input_sidecar: None,
                 program_dialect: local_action_plan(action)?
                     .ok_or_else(|| {

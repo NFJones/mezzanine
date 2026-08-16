@@ -543,6 +543,13 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running shell result does not match an action")
                 })?;
+            let action_index = batch
+                .actions
+                .iter()
+                .position(|candidate| candidate.id == action.id)
+                .ok_or_else(|| {
+                    MezError::invalid_state("running shell result action has no batch position")
+                })?;
             let is_apply_patch = matches!(action.payload, AgentActionPayload::ApplyPatch { .. });
             let permission_evaluation = execution.action_results[index]
                 .permission_evaluation
@@ -1150,6 +1157,11 @@ impl RuntimeSessionService {
                 action,
                 super::shell_state::ShellActionDispatch {
                     command,
+                    preview_already_presented: self.agent_streaming_say_action_is_promoted(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        action_index,
+                    ),
                     input_sidecar: plan.input_sidecar.as_deref(),
                     program_dialect: plan.program_dialect,
                     stateful: plan.stateful,
