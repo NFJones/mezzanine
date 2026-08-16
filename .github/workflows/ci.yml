@@ -50,6 +50,34 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
         run: canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" cargo test --workspace --all-targets --all-features --no-fail-fast --quiet -- --test-threads=1
+  managed-shell-reliability:
+    name: "Managed shells: ${{ matrix.name }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+          - name: macOS
+            os: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install managed shells and timeout utility
+        run: |
+          if [ "${{ runner.os }}" = Linux ]; then
+            sudo apt-get update
+            sudo apt-get install --yes fish zsh
+          else
+            brew install fish coreutils
+          fi
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+      - name: Run managed-shell reliability suite
+        run: canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" sh scripts/test-managed-shell-reliability.sh
   release-load:
     name: "Release load: ${{ matrix.name }}"
     runs-on: ${{ matrix.os }}

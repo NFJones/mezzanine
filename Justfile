@@ -36,6 +36,12 @@ clippy:
 test:
     canonical_tmp="$(cd /tmp && pwd -P)"; if [ "$(uname -s)" = Darwin ]; then TMPDIR="$canonical_tmp" cargo test --workspace --all-targets --all-features --no-fail-fast --quiet -- --test-threads=1; else TMPDIR="$canonical_tmp" cargo test --workspace --all-targets --all-features --no-fail-fast --quiet; fi
 
+# Require real Bash, Fish, and Zsh and run the focused managed-shell acceptance
+# suite. macOS additionally exercises acknowledged PTY pacing and the large
+# semantic-patch path through its physical platform implementation.
+test-managed-shells:
+    canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" sh scripts/test-managed-shell-reliability.sh
+
 # Run the strict routed lifecycle acceptance with genuine Bubblewrap confinement
 test-real-bubblewrap:
     test "$(uname -s)" = Linux

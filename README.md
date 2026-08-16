@@ -110,15 +110,21 @@ mode.
 On supported Bash, Zsh, and Fish prompts, Mezzanine preserves an unfinished
 command while agent mode is active and restores it afterward. Unsupported or
 unsafe prompt states fail closed rather than submitting or combining input.
-Fish saves and visibly clears its editable command before the agent child is
-launched. Hiding agent mode during admission cancels that handoff and restores
-the command; after a launched child exits, foreground input remains queued until
-the authenticated editor-restored boundary. If that boundary is lost, queued
-input remains retained until the original parent process is freshly proven to
-own the foreground terminal. Streamed shell output is decoded incrementally
-only while a live encoded action transaction owns the pane, so private Base64
-transport records do not leak and marker-like ordinary shell output remains
-literal.
+Bash requires its Readline integration, Fish requires its supported
+`commandline` editor APIs, and Zsh requires its ZLE hook and keymap APIs. Each
+adapter preserves native startup and history behavior rather than emulating a
+different shell. Hiding agent mode during admission cancels the authenticated
+handoff and restores the command; after a launched child exits, foreground
+input remains queued until the authenticated editor-restored boundary. If that
+boundary is lost, queued input remains retained until the original parent
+process is freshly proven to own the foreground terminal. Streamed shell output
+is decoded incrementally only while a live encoded action transaction owns the
+pane, so private Base64 transport records do not leak and marker-like ordinary
+shell output remains literal.
+
+Managed-shell adapters are installed when a pane shell process starts. After
+upgrading Mezzanine, open a new pane or restart the session before relying on
+new adapter behavior in an already-running shell.
 
 Use `mez --help` and the [CLI reference](docs/reference-manual/cli.md) for the
 current command contract. Use [Sessions and panes](docs/using-mezzanine/sessions-and-panes.md)
