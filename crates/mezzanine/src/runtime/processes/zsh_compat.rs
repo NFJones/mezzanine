@@ -1197,7 +1197,11 @@ function zshaddhistory() {{\n\
     }
 
     /// Verifies private Zsh admission executes managed source while preserving
-    /// a dirty editor draft until the user explicitly submits it afterward.
+    /// a multiline Unicode editor draft, cursor, and Emacs keymap until the
+    /// user explicitly edits and submits it afterward.
+    ///
+    /// A second command must execute immediately after the restored draft so
+    /// this test proves parent responsiveness rather than visual restoration.
     #[test]
     fn managed_zsh_private_admission_preserves_dirty_draft() {
         let zsh = Path::new("/bin/zsh");
@@ -1219,7 +1223,7 @@ function zshaddhistory() {{\n\
         fs::write(
             user_zdotdir.join(".zshrc"),
             format!(
-                "PS1='__MEZ_ZSH_PROMPT__>'\nRPS1=\nHISTFILE={}\nHISTSIZE=100\nSAVEHIST=100\nsetopt INC_APPEND_HISTORY\nfunction __mez_test_user_line_init() {{ print -r -- line-init >> \"$HOME/line-init.log\" }}\nzle -N zle-line-init __mez_test_user_line_init\n",
+                "PS1='__MEZ_ZSH_PROMPT__>'\nRPS1=\nbindkey -e\nHISTFILE={}\nHISTSIZE=100\nSAVEHIST=100\nsetopt INC_APPEND_HISTORY\nfunction __mez_test_user_line_init() {{ print -r -- line-init >> \"$HOME/line-init.log\" }}\nzle -N zle-line-init __mez_test_user_line_init\n",
                 shell_single_quote_path(&history),
             ),
         )
@@ -1259,9 +1263,14 @@ function zshaddhistory() {{\n\
             String::from_utf8_lossy(&startup_output)
         );
 
-        process
-            .write_input(b"print -r -- '__MEZ_ZSH_DRAFT_EXECUTED__'")
-            .unwrap();
+        let draft = "if true; then\n  print -r -- '__MEZ_ZSH_DRAFT_αβ_EXECUTED__'\nfi";
+        let beta_byte = draft.find('β').unwrap();
+        let cursor_left = draft.chars().count() - draft[..beta_byte].chars().count();
+        let mut draft_input = b"\x1b[200~".to_vec();
+        draft_input.extend_from_slice(draft.as_bytes());
+        draft_input.extend_from_slice(b"\x1b[201~");
+        draft_input.extend(std::iter::repeat_n(b'\x02', cursor_left));
+        process.write_input(&draft_input).unwrap();
         let marker = "zsh-private-draft-marker";
         let admission = mez_agent::zsh_private_source_input(
             "print -r -- '__MEZ_ZSH_SOURCE_EXECUTED__'\n",
@@ -1277,7 +1286,7 @@ function zshaddhistory() {{\n\
                 .windows(awaiting.len())
                 .any(|window| window == awaiting.as_bytes())
         });
-        assert!(!String::from_utf8_lossy(&output).contains("__MEZ_ZSH_DRAFT_EXECUTED__\r\n"));
+        assert!(!String::from_utf8_lossy(&output).contains("__MEZ_ZSH_DRAFT_αβ_EXECUTED__\r\n"));
 
         process
             .write_input(admission.receiver_payload.as_bytes())
@@ -1296,13 +1305,21 @@ function zshaddhistory() {{\n\
             "{:?}",
             String::from_utf8_lossy(&output)
         );
-        assert!(!String::from_utf8_lossy(&output).contains("__MEZ_ZSH_DRAFT_EXECUTED__\r\n"));
+        assert!(!String::from_utf8_lossy(&output).contains("__MEZ_ZSH_DRAFT_αβ_EXECUTED__\r\n"));
 
-        process.write_input(b"\n").unwrap();
+        process.write_input(b"X\n").unwrap();
         extend_zsh_output_until(&mut process, &mut output, |output| {
             output
-                .windows(b"__MEZ_ZSH_DRAFT_EXECUTED__\r\n".len())
-                .any(|window| window == b"__MEZ_ZSH_DRAFT_EXECUTED__\r\n")
+                .windows("__MEZ_ZSH_DRAFT_αXβ_EXECUTED__\r\n".len())
+                .any(|window| window == "__MEZ_ZSH_DRAFT_αXβ_EXECUTED__\r\n".as_bytes())
+        });
+        process
+            .write_input(b"print -r -- '__MEZ_ZSH_PARENT_RESPONSIVE__'\n")
+            .unwrap();
+        extend_zsh_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(b"__MEZ_ZSH_PARENT_RESPONSIVE__\r\n".len())
+                .any(|window| window == b"__MEZ_ZSH_PARENT_RESPONSIVE__\r\n")
         });
         assert_eq!(process.process.primary_pid(), parent_pid);
         assert_eq!(process.process.process_group_leader(), parent_process_group);
@@ -1318,7 +1335,7 @@ function zshaddhistory() {{\n\
         process.terminate(Duration::from_millis(100)).unwrap();
         let persisted_history = fs::read_to_string(&history).unwrap();
         assert!(
-            persisted_history.contains("__MEZ_ZSH_DRAFT_EXECUTED__"),
+            persisted_history.contains("__MEZ_ZSH_DRAFT_αXβ_EXECUTED__"),
             "{persisted_history}"
         );
         assert!(
