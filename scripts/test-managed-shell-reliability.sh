@@ -47,11 +47,19 @@ run_exact() {
         "$test_name" -- --exact --nocapture --test-threads=1
 }
 
+run_agent_exact() {
+    test_name="$1"
+    "$timeout_command" 300s cargo test --quiet -p mez-agent --lib --all-features \
+        "$test_name" -- --exact --nocapture --test-threads=1
+}
+
 run_suite runtime::processes::bash_compat::tests
 run_suite runtime::processes::fish_compat::tests
 run_suite runtime::processes::zsh_compat::tests
 run_suite runtime::processes::managed_shell_handoff::tests
 run_suite runtime::tests::actions::shell_protocol
+run_agent_exact shell::tests::shell_transport::managed_zsh_maximum_source_uses_bounded_acknowledgement_frames
+run_exact host::async_runtime::pane_io::delivery::tests::managed_zsh_physical_records_wait_only_at_logical_frame_boundaries
 run_exact host::async_runtime::tests::services::pane_service::async_fish_dirty_draft_no_prompt_exit_restores_responsive_parent
 run_exact host::async_runtime::tests::services::pane_service::async_zsh_dirty_draft_no_prompt_exit_restores_responsive_parent
 run_exact host::async_runtime::tests::services::pane_service::async_pane_process_service_aggregates_receiver_delivery_progress

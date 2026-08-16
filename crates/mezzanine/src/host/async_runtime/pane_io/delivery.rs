@@ -335,6 +335,60 @@ mod tests {
         );
     }
 
+    /// Verifies managed-zsh physical DATA records stream within an RX2 frame.
+    ///
+    /// Only a validated frame end and the final authenticated source end may
+    /// arm strict acknowledgement waits, keeping Darwin delivery bounded
+    /// without allowing unrelated output to advance the payload.
+    #[test]
+    fn managed_zsh_physical_records_wait_only_at_logical_frame_boundaries() {
+        let delivery = ShellInputDelivery::receiver_acknowledged(
+            b"MEZ_ZSH_RX2_FRAME token marker 0 4 digest 1\nMEZ_ZSH_RX2_DATA token marker 0 0 eA==\nMEZ_ZSH_RX2_FRAME_END token marker 0 1\nMEZ_ZSH_RX2_END token marker 1 1 1 digest\n".to_vec(),
+            "delivery-1",
+            true,
+        );
+        assert_eq!(
+            record_wait(
+                &delivery,
+                b"MEZ_ZSH_RX2_FRAME token marker 0 4 digest 1\n",
+                true,
+                false,
+                true
+            ),
+            Ok(None)
+        );
+        assert_eq!(
+            record_wait(
+                &delivery,
+                b"MEZ_ZSH_RX2_DATA token marker 0 0 eA==\n",
+                true,
+                false,
+                true
+            ),
+            Ok(None)
+        );
+        assert_eq!(
+            record_wait(
+                &delivery,
+                b"MEZ_ZSH_RX2_FRAME_END token marker 0 1\n",
+                true,
+                false,
+                true
+            ),
+            Ok(Some(ShellInputProgressWait::Acknowledgement))
+        );
+        assert_eq!(
+            record_wait(
+                &delivery,
+                b"MEZ_ZSH_RX2_END token marker 1 1 1 digest\n",
+                true,
+                true,
+                true
+            ),
+            Ok(Some(ShellInputProgressWait::Acknowledgement))
+        );
+    }
+
     /// Verifies unrelated output cannot advance strict receiver delivery but a
     /// fresh acknowledgement advances exactly one complete record.
     #[cfg(target_os = "macos")]

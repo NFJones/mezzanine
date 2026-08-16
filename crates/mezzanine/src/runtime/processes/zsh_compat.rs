@@ -147,17 +147,30 @@ typeset -gi __MEZ_ZSH_ADMISSION_READY=0
 typeset -gi __MEZ_ZSH_EDITOR_CLEARED=0
 typeset -g __MEZ_ZSH_TRIGGER_ID=
 typeset -g __MEZ_ZSH_TRIGGER_SEQUENCE=
+typeset -g __MEZ_ZSH_BASE64_DECODE_FLAG=-d
+if ! command printf '' | command base64 -d >/dev/null 2>&1; then
+  __MEZ_ZSH_BASE64_DECODE_FLAG=-D
+fi
+typeset -g __MEZ_ZSH_SHA256_COMMAND=
+if (( ${+commands[sha256sum]} )); then
+  __MEZ_ZSH_SHA256_COMMAND=sha256sum
+elif (( ${+commands[shasum]} )); then
+  __MEZ_ZSH_SHA256_COMMAND=shasum
+fi
 function __mez_zsh_private_receiver() {
   emulate -L zsh
   setopt localoptions extendedglob
-  local hold_record begin_record source_file encoded_file receive_status=0 source_status=1 cancelled=0 frame_admitted=0
-  local marker expected_length expected_digest expected_chunks sequence=0
+  local hold_record begin_record source_file receive_status=0 source_status=1 cancelled=0 frame_admitted=0
+  local marker expected_length expected_digest expected_frames expected_chunks
+  local frame_sequence=0 total_chunks=0 frame_open=0 frame_encoded=
+  local frame_length frame_digest frame_chunks chunk_sequence=0 end_seen=0
+  local -a encoded_frames
   command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=receiver-awaiting\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
   IFS= read -r hold_record || receive_status=1
   local -a hold_fields
   hold_fields=(${=hold_record})
   if (( receive_status != 0 || ${#hold_fields} != 3 || ${#hold_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ )) || \
-     [[ ${hold_fields[1]-} != MEZ_ZSH_RX1_HOLD || ${hold_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || -z ${hold_fields[3]-} ]]; then
+     [[ ${hold_fields[1]-} != MEZ_ZSH_RX2_HOLD || ${hold_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || -z ${hold_fields[3]-} ]]; then
     command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=receiver-rejected;mez_reason=invalid-hold\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
     __MEZ_ZSH_RESTORE_STATUS=65
     __MEZ_ZSH_RESTORE_OUTCOME=frame-rejected
@@ -169,98 +182,162 @@ function __mez_zsh_private_receiver() {
   IFS= read -r begin_record || receive_status=1
   local -a begin_fields
   begin_fields=(${=begin_record})
-  if (( receive_status != 0 || ${#begin_fields} != 6 || ${#begin_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ )) || \
-     [[ ${begin_fields[1]-} != MEZ_ZSH_RX1_BEGIN || ${begin_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || \
+  if (( receive_status != 0 || ${#begin_fields} != 7 || ${#begin_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ )) || \
+     [[ ${begin_fields[1]-} != MEZ_ZSH_RX2_BEGIN || ${begin_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || \
         ${begin_fields[3]-} != ${marker} || \
         ${begin_fields[4]-} != <-> || ${begin_fields[5]-} != [0-9a-f]## || ${#begin_fields[5]} != 64 || \
-        ${begin_fields[6]-} != <-> || ${begin_fields[4]-} -gt __MEZ_ZSH_MAX_SOURCE_BYTES__ || \
-        ${begin_fields[6]-} -gt __MEZ_ZSH_MAX_SOURCE_CHUNKS__ ]]; then
+        ${begin_fields[6]-} != <-> || ${begin_fields[7]-} != <-> || \
+        ${begin_fields[4]-} -gt __MEZ_ZSH_MAX_SOURCE_BYTES__ || \
+        ${begin_fields[6]-} -gt __MEZ_ZSH_MAX_SOURCE_FRAMES__ || \
+        ${begin_fields[7]-} -gt __MEZ_ZSH_MAX_SOURCE_CHUNKS__ ]]; then
     receive_status=1
   else
     expected_length=${begin_fields[4]}
     expected_digest=${begin_fields[5]}
-    expected_chunks=${begin_fields[6]}
+    expected_frames=${begin_fields[6]}
+    expected_chunks=${begin_fields[7]}
     frame_admitted=1
     command printf '\036'
     command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=frame-admitted;mez_marker=%s\033\\' \
       "$MEZ_ZSH_HISTORY_TOKEN" "$marker"
   fi
   if (( ! cancelled && frame_admitted )); then
-    source_file=$(command mktemp) || receive_status=1
-    encoded_file=${source_file}.b64
-    (( receive_status == 0 )) && command printf '' >| "$encoded_file"
+    source_file=$(command mktemp "${MEZ_ZSH_PRIVATE_DIRECTORY}/rx.XXXXXXXX") || receive_status=1
   fi
-  while (( ! cancelled && frame_admitted && sequence < expected_chunks )); do
-    local data_record
-    IFS= read -r data_record || { receive_status=1; break; }
-    local -a data_fields
-    data_fields=(${=data_record})
-    if (( ${#data_fields} == 3 )) && \
-       [[ ${data_fields[1]-} == MEZ_ZSH_RX1_CANCEL && \
-          ${data_fields[2]-} == ${MEZ_ZSH_HISTORY_TOKEN-} && ${data_fields[3]-} == ${marker} ]]; then
-      if (( sequence == 0 )); then
-        cancelled=1
-        source_status=130
-        command printf '\036'
+  while (( ! cancelled && frame_admitted && frame_sequence < expected_frames )); do
+    local frame_record frame_valid=1 frame_end_seen=0
+    IFS= read -r frame_record || { receive_status=1; break; }
+    local -a frame_fields
+    frame_fields=(${=frame_record})
+    if (( frame_sequence == 0 && total_chunks == 0 && ${#frame_fields} == 3 )) && \
+       [[ ${frame_fields[1]-} == MEZ_ZSH_RX2_CANCEL && \
+          ${frame_fields[2]-} == ${MEZ_ZSH_HISTORY_TOKEN-} && ${frame_fields[3]-} == ${marker} ]]; then
+      cancelled=1
+      source_status=130
+      command printf '\036'
+      break
+    fi
+    if (( ${#frame_fields} != 7 || ${#frame_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ )) || \
+       [[ ${frame_fields[1]-} != MEZ_ZSH_RX2_FRAME || \
+          ${frame_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || ${frame_fields[3]-} != ${marker} || \
+          ${frame_fields[4]-} != ${frame_sequence} || ${frame_fields[5]-} != <-> || \
+          ${frame_fields[6]-} != [0-9a-f]## || ${#frame_fields[6]-} != 64 || \
+          ${frame_fields[7]-} != <-> ]]; then
+      frame_valid=0
+      receive_status=1
+    elif (( frame_fields[5] > __MEZ_ZSH_FRAME_BYTES__ || \
+            frame_fields[7] > expected_chunks - total_chunks )); then
+      frame_valid=0
+      receive_status=1
+    fi
+    frame_length=${frame_fields[5]:-0}
+    frame_digest=${frame_fields[6]-}
+    frame_chunks=${frame_fields[7]:-0}
+    chunk_sequence=0
+    frame_encoded=
+    while (( total_chunks < expected_chunks )); do
+      local data_record
+      IFS= read -r data_record || { receive_status=1; break; }
+      local -a data_fields
+      data_fields=(${=data_record})
+      if [[ ${data_fields[1]-} == MEZ_ZSH_RX2_FRAME_END ]]; then
+        frame_end_seen=1
+        if (( ${#data_fields} != 5 || ${#data_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ )) || \
+           [[ ${data_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || ${data_fields[3]-} != ${marker} || \
+              ${data_fields[4]-} != ${frame_sequence} || ${data_fields[5]-} != ${chunk_sequence} ]]; then
+          frame_valid=0
+          receive_status=1
+        fi
         break
       fi
-      receive_status=1
-    elif (( receive_status == 0 )) && \
-       { (( ${#data_fields} != 5 || ${#data_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ || ${#data_fields[5]-} > __MEZ_ZSH_MAX_DATA_BYTES__ )) || \
-         [[ ${data_fields[1]-} != MEZ_ZSH_RX1_DATA || \
-         ${data_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || ${data_fields[3]-} != ${marker} || \
-         ${data_fields[4]-} != ${sequence} || ${data_fields[5]-} != [A-Za-z0-9+/]##(|=|==) ]]; }; then
-      receive_status=1
-    elif (( receive_status == 0 )); then
-      command printf '%s' "${data_fields[5]}" >> "$encoded_file" || receive_status=1
+      if (( ${#data_fields} != 6 || ${#data_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ || \
+            ${#data_fields[6]-} > __MEZ_ZSH_MAX_DATA_BYTES__ )) || \
+         [[ ${data_fields[1]-} != MEZ_ZSH_RX2_DATA || \
+            ${data_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || ${data_fields[3]-} != ${marker} || \
+            ${data_fields[4]-} != ${frame_sequence} || ${data_fields[5]-} != ${chunk_sequence} || \
+            ${data_fields[6]-} != [A-Za-z0-9+/]##(|=|==) ]] || \
+         [[ ${data_fields[6]-} == *=* && $(( total_chunks + 1 )) != ${expected_chunks} ]]; then
+        frame_valid=0
+        receive_status=1
+      elif (( frame_valid )); then
+        frame_encoded+="${data_fields[6]}"
+      fi
+      (( chunk_sequence++ ))
+      (( total_chunks++ ))
+    done
+    if (( ! frame_end_seen )); then
+      local frame_end_record
+      IFS= read -r frame_end_record || receive_status=1
+      local -a frame_end_fields
+      frame_end_fields=(${=frame_end_record})
+      if (( ${#frame_end_fields} != 5 || ${#frame_end_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ )) || \
+         [[ ${frame_end_fields[1]-} != MEZ_ZSH_RX2_FRAME_END || \
+            ${frame_end_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || ${frame_end_fields[3]-} != ${marker} || \
+            ${frame_end_fields[4]-} != ${frame_sequence} || ${frame_end_fields[5]-} != ${chunk_sequence} ]]; then
+        frame_valid=0
+        receive_status=1
+      fi
     fi
-    (( sequence++ ))
+    if (( chunk_sequence != frame_chunks )); then
+      frame_valid=0
+      receive_status=1
+    fi
+    if (( frame_valid )); then
+      local actual_frame_digest
+      if [[ ${__MEZ_ZSH_SHA256_COMMAND} == sha256sum ]]; then
+        actual_frame_digest=$(command printf '%s' "$frame_encoded" | command sha256sum)
+      elif [[ ${__MEZ_ZSH_SHA256_COMMAND} == shasum ]]; then
+        actual_frame_digest=$(command printf '%s' "$frame_encoded" | command shasum -a 256)
+      else
+        receive_status=127
+      fi
+      actual_frame_digest=${actual_frame_digest%%[[:space:]]*}
+      if [[ ${#frame_encoded} != ${frame_length} || ${actual_frame_digest} != ${frame_digest} ]]; then
+        receive_status=1
+      else
+        encoded_frames+=("$frame_encoded")
+      fi
+    fi
     command printf '\036'
+    (( frame_sequence++ ))
   done
   local end_record
-  if (( ! cancelled && frame_admitted && sequence == expected_chunks )); then
+  if (( ! cancelled && frame_admitted )); then
     IFS= read -r end_record || receive_status=1
     local -a end_fields
     end_fields=(${=end_record})
-    if (( receive_status == 0 )) && \
-       { (( ${#end_fields} != 6 || ${#end_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ )) || \
-         [[ ${end_fields[1]-} != MEZ_ZSH_RX1_END || \
-         ${end_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || ${end_fields[3]-} != ${marker} || \
-         ${end_fields[4]-} != ${expected_chunks} || ${end_fields[5]-} != ${expected_length} || \
-         ${end_fields[6]-} != ${expected_digest} ]]; }; then
+    if (( ${#end_fields} != 7 || ${#end_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ )) || \
+       [[ ${end_fields[1]-} != MEZ_ZSH_RX2_END || \
+          ${end_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || ${end_fields[3]-} != ${marker} || \
+          ${end_fields[4]-} != ${expected_frames} || ${end_fields[5]-} != ${expected_chunks} || \
+          ${end_fields[6]-} != ${expected_length} || ${end_fields[7]-} != ${expected_digest} ]] || \
+       (( frame_sequence != expected_frames || total_chunks != expected_chunks )); then
       receive_status=1
     fi
+    end_seen=1
     command printf '\036'
   fi
-  if (( ! cancelled && receive_status == 0 )); then
-    if command printf '' | base64 -d >/dev/null 2>&1; then
-      command base64 -d < "$encoded_file" >| "$source_file" 2>/dev/null || receive_status=$?
-    else
-      command base64 -D < "$encoded_file" >| "$source_file" || receive_status=$?
-    fi
-  fi
-  if (( ! cancelled && receive_status == 0 )); then
-    local expected_encoded actual_encoded
-    expected_encoded=$(command cat -- "$encoded_file") || receive_status=$?
-    actual_encoded=$(command base64 < "$source_file" | command tr -d '\r\n') || receive_status=$?
-    [[ ${actual_encoded} == ${expected_encoded} ]] || receive_status=1
+  if (( ! cancelled && receive_status == 0 && end_seen )); then
+    command printf '%s' "${(j::)encoded_frames}" | \
+      command base64 "${__MEZ_ZSH_BASE64_DECODE_FLAG}" >| "$source_file" 2>/dev/null || receive_status=$?
   fi
   if (( ! cancelled && receive_status == 0 )); then
     local actual_length actual_digest
     actual_length=$(command wc -c < "$source_file" | command tr -d '[:space:]')
-    if (( ${+commands[sha256sum]} )); then
-      actual_digest=$(command sha256sum -- "$source_file" | command awk '{print $1}')
-    elif (( ${+commands[shasum]} )); then
-      actual_digest=$(command shasum -a 256 -- "$source_file" | command awk '{print $1}')
+    if [[ ${__MEZ_ZSH_SHA256_COMMAND} == sha256sum ]]; then
+      actual_digest=$(command sha256sum -- "$source_file")
+    elif [[ ${__MEZ_ZSH_SHA256_COMMAND} == shasum ]]; then
+      actual_digest=$(command shasum -a 256 -- "$source_file")
     else
       receive_status=127
     fi
+    actual_digest=${actual_digest%%[[:space:]]*}
     if (( receive_status == 0 )) && [[ ${actual_length} == ${expected_length} && ${actual_digest} == ${expected_digest} ]]; then
       builtin source "$source_file"
       source_status=$?
     fi
   fi
-  [[ -n ${source_file} ]] && command rm -f -- "$source_file" "$encoded_file" >/dev/null 2>&1 || true
+  [[ -n ${source_file} ]] && command rm -f -- "$source_file" >/dev/null 2>&1 || true
   __MEZ_ZSH_RESTORE_MARKER=${marker}
   __MEZ_ZSH_RESTORE_STATUS=${source_status}
   if (( cancelled )); then
@@ -448,8 +525,16 @@ impl ManagedZshCompatibility {
                 &mez_agent::ZSH_PRIVATE_SOURCE_MAX_BYTES.to_string(),
             )
             .replace(
+                "__MEZ_ZSH_MAX_SOURCE_FRAMES__",
+                &mez_agent::ZSH_PRIVATE_SOURCE_MAX_FRAMES.to_string(),
+            )
+            .replace(
                 "__MEZ_ZSH_MAX_SOURCE_CHUNKS__",
                 &mez_agent::ZSH_PRIVATE_SOURCE_MAX_CHUNKS.to_string(),
+            )
+            .replace(
+                "__MEZ_ZSH_FRAME_BYTES__",
+                &mez_agent::ZSH_PRIVATE_SOURCE_FRAME_BYTES.to_string(),
             )
             .replace(
                 "__MEZ_ZSH_MAX_RECORD_BYTES__",
@@ -1223,7 +1308,7 @@ function zshaddhistory() {{\n\
             .unwrap_or_default();
         for observed in [&persisted, in_memory] {
             assert!(observed.contains("USER_CHILD"), "{observed}");
-            assert!(!observed.contains("MEZ_ZSH_RX1"), "{observed}");
+            assert!(!observed.contains("MEZ_ZSH_RX2"), "{observed}");
             assert!(!observed.contains(token.as_str()), "{observed}");
             assert!(!observed.contains("fc -p"), "{observed}");
         }
@@ -1432,7 +1517,7 @@ function zshaddhistory() {{\n\
         .unwrap();
         let mut output = hold_managed_zsh_editor(&mut process, &admission, &owner, "bad");
         process
-            .write_input(b"MEZ_ZSH_RX1_BEGIN wrong-token bad 1 0 1\n")
+            .write_input(b"MEZ_ZSH_RX2_BEGIN wrong-token bad 1 0000000000000000000000000000000000000000000000000000000000000000 1 1\n")
             .unwrap();
         extend_zsh_output_until(&mut process, &mut output, |output| {
             output
@@ -1711,10 +1796,14 @@ unsetopt RCS\n",
         let mut output = hold_managed_zsh_editor(&mut process, &admission, &owner, marker);
         let digest = "0".repeat(64);
         let frame = format!(
-            "MEZ_ZSH_RX1_BEGIN {} {marker} 1 {digest} 2\n\
-MEZ_ZSH_RX1_DATA {} {marker} 0 !\n\
-MEZ_ZSH_RX1_DATA {} {marker} 1 QQ==\n\
-MEZ_ZSH_RX1_END {} {marker} 2 1 {digest}\n",
+            "MEZ_ZSH_RX2_BEGIN {} {marker} 1 {digest} 1 2\n\
+MEZ_ZSH_RX2_FRAME {} {marker} 0 5 {digest} 2\n\
+MEZ_ZSH_RX2_DATA {} {marker} 0 0 !\n\
+MEZ_ZSH_RX2_DATA {} {marker} 0 1 QQ==\n\
+MEZ_ZSH_RX2_FRAME_END {} {marker} 0 2\n\
+MEZ_ZSH_RX2_END {} {marker} 1 2 1 {digest}\n",
+            owner.as_str(),
+            owner.as_str(),
             owner.as_str(),
             owner.as_str(),
             owner.as_str(),

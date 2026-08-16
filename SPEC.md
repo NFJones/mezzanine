@@ -1911,18 +1911,26 @@ directly and execute as one non-login interactive Zsh process so `.zshenv` and
 the parent login environment through `.zprofile` and `.zlogin`. Initial pane
 processes remain login-interactive. Managed startup artifacts MAY rely on
 successful owner-only writes and close-before-spawn ordering rather than
-filesystem durability synchronization. Its private source protocol MUST bound
-source bytes, chunks, and physical records. After the fixed trigger
+filesystem durability synchronization. Its private source protocol MUST use
+versioned RX2 framing and MUST bound source bytes, logical frames, chunks, and
+physical records. Each logical frame MUST contain no more than 32 KiB of
+canonical Base64, carry a sequence, encoded byte length, SHA-256 digest, and
+physical chunk count, and end with an authenticated frame boundary. After the fixed trigger
 starts the private receiver, it MUST publish a versioned, token-authenticated
 `ReceiverAwaiting` event only as transport readiness to release source-free
 HOLD metadata. That event MUST resolve through the same generation-fenced
 managed-shell handoff owner and MUST NOT advance lifecycle ownership. The
 receiver MUST authenticate HOLD and publish `EditorHeld` before runtime
 releases BEGIN, then authenticate BEGIN and publish `FrameAdmitted` before
-runtime releases DATA and END. After
-an authenticated BEGIN it MUST acknowledge and drain every declared DATA
-record and END even after detecting malformed input, and MUST evaluate source
-only after complete length, digest, sequence, and canonical Base64 validation.
+runtime releases FRAME, DATA, FRAME_END, and END records. After an
+authenticated BEGIN it MUST drain every declared logical frame and the final
+END even after detecting malformed input. It MUST acknowledge physical DATA
+only through a validated FRAME_END, acknowledge the authenticated final END,
+and evaluate source only after frame sequence, frame length, frame digest,
+chunk sequence, canonical Base64, whole-source length, and whole-source digest
+validation. Portable Base64 decode and SHA-256 utility selection SHOULD be
+cached during adapter installation, and accepted source SHOULD be decoded once
+inside the pane-private startup directory before evaluation.
 The agent-mode child shell and every Mezzanine-owned non-stateful action shell
 MUST inherit the pane environment except for variables that can trigger shell
 startup files, prompt hooks, editor/pager prompts, or other interactive
@@ -4510,6 +4518,12 @@ canonical-safe physical lines. The receiver MUST validate each frame's sequence,
 declared byte count, and SHA-256 digest before acknowledging it, MUST reject
 duplicate, skipped, oversized, truncated, or digest-mismatched frames, and MUST
 restore the prior terminal mode and remove incomplete frame state on every exit.
+Managed Zsh private-source data MUST use the same bounded logical-frame pacing
+principle: physical RX2 FRAME and DATA records MUST stream without waits,
+validated FRAME_END records MUST require one fresh acknowledgement, and the
+authenticated source END MUST require the final acknowledgement. A maximum
+one-mebibyte source MUST require fewer than fifty acknowledgement waits while
+retaining the portable physical record bound.
 Unrelated pane output MUST NOT satisfy that wait. Missing negotiation, write
 failure, cancellation, process retirement, or a bounded per-record progress
 timeout MUST discard only the matching unsent delivery tail, fail the affected

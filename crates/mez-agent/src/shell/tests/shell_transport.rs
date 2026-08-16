@@ -180,15 +180,17 @@ fn managed_zsh_trigger_and_cancellation_transport_are_bounded() {
     assert_eq!(input.wrapper, "\u{1b}[27;9;110~");
     assert_eq!(
         input.receiver_hold,
-        format!("MEZ_ZSH_RX1_HOLD {} zsh-cancel-marker\n", token.as_str())
+        format!("MEZ_ZSH_RX2_HOLD {} zsh-cancel-marker\n", token.as_str())
     );
     assert!(input.receiver_admission.starts_with(&format!(
-        "MEZ_ZSH_RX1_BEGIN {} zsh-cancel-marker ",
+        "MEZ_ZSH_RX2_BEGIN {} zsh-cancel-marker ",
         token.as_str()
     )));
     assert!(!input.receiver_admission.contains("SHOULD_NOT_BE_IN_CANCEL"));
-    assert!(input.receiver_payload.contains("MEZ_ZSH_RX1_DATA"));
-    assert!(input.receiver_payload.contains("MEZ_ZSH_RX1_END"));
+    assert!(input.receiver_payload.contains("MEZ_ZSH_RX2_FRAME"));
+    assert!(input.receiver_payload.contains("MEZ_ZSH_RX2_DATA"));
+    assert!(input.receiver_payload.contains("MEZ_ZSH_RX2_FRAME_END"));
+    assert!(input.receiver_payload.contains("MEZ_ZSH_RX2_END"));
     assert_eq!(
         ManagedZshTrigger::from_protocol_str("escape-m"),
         Some(ManagedZshTrigger::EscapeM)
@@ -200,7 +202,7 @@ fn managed_zsh_trigger_and_cancellation_transport_are_bounded() {
     assert_eq!(ManagedZshTrigger::from_protocol_str("arbitrary"), None);
     assert_eq!(
         cancellation,
-        format!("MEZ_ZSH_RX1_CANCEL {} zsh-cancel-marker\n", token.as_str())
+        format!("MEZ_ZSH_RX2_CANCEL {} zsh-cancel-marker\n", token.as_str())
     );
     assert!(!cancellation.contains("SHOULD_NOT_BE_IN_CANCEL"));
     assert!(
@@ -211,6 +213,50 @@ fn managed_zsh_trigger_and_cancellation_transport_are_bounded() {
             ManagedZshTrigger::EscapeM,
         )
         .is_err()
+    );
+}
+
+#[test]
+/// Verifies maximum-size managed zsh source uses bounded logical frames.
+///
+/// Darwin keeps short physical DATA records, but strict delivery must wait
+/// only for validated frame ends and the final authenticated source end. A
+/// one-mebibyte source therefore remains below fifty acknowledgement waits
+/// instead of requiring one stop-and-wait round trip for every DATA record.
+fn managed_zsh_maximum_source_uses_bounded_acknowledgement_frames() {
+    let token = marker();
+    let input = zsh_private_source_input(
+        &"x".repeat(ZSH_PRIVATE_SOURCE_MAX_BYTES),
+        &token,
+        "zsh-maximum-source-marker",
+        ManagedZshTrigger::EscapeM,
+    )
+    .unwrap();
+    let frame_ends = input
+        .receiver_payload
+        .lines()
+        .filter(|line| line.starts_with("MEZ_ZSH_RX2_FRAME_END "))
+        .count();
+    let source_ends = input
+        .receiver_payload
+        .lines()
+        .filter(|line| line.starts_with("MEZ_ZSH_RX2_END "))
+        .count();
+    let physical_data_records = input
+        .receiver_payload
+        .lines()
+        .filter(|line| line.starts_with("MEZ_ZSH_RX2_DATA "))
+        .count();
+
+    assert_eq!(frame_ends, ZSH_PRIVATE_SOURCE_MAX_FRAMES);
+    assert_eq!(source_ends, 1);
+    assert!(frame_ends + source_ends < 50);
+    assert!(physical_data_records > 1_000);
+    assert!(
+        input
+            .receiver_payload
+            .lines()
+            .all(|line| line.len() <= ZSH_PRIVATE_SOURCE_MAX_RECORD_BYTES)
     );
 }
 
