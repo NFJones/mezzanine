@@ -753,11 +753,12 @@ fn runtime_agent_shell_immediate_reentry_stays_closed_after_failed_identity_prob
 ///
 /// SSH and container clients can expose a shell that differs from the host
 /// pane shell, while password prompts and full-screen programs expose no shell
-/// at all. Repeated entry attempts must therefore remain idempotently deferred
-/// until the certified primary shell returns, at which point ordinary
-/// prompt-gated identity discovery may resume.
+/// at all. Prompts submitted across this boundary must fail explicitly rather
+/// than remain in a permanent thinking state. Repeated entry attempts remain
+/// idempotently deferred until the certified primary shell returns, at which
+/// point ordinary prompt-gated identity discovery may resume.
 #[test]
-fn runtime_agent_shell_entry_defers_at_uncertified_foreign_foreground() {
+fn runtime_agent_shell_entry_rejects_prompt_at_uncertified_foreign_foreground() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -802,9 +803,8 @@ fn runtime_agent_shell_entry_defers_at_uncertified_foreign_foreground() {
             .claim_configured_agent_provider_task(&agent_id, &started.turn_id)
             .unwrap()
             .is_none(),
-        "a foreign foreground boundary must defer provider dispatch"
+        "a foreign foreground boundary must reject provider dispatch"
     );
-    assert!(service.agent_provider_task_is_pending(&started.turn_id));
     assert_eq!(
         service
             .agent_turn_ledger()
@@ -812,8 +812,12 @@ fn runtime_agent_shell_entry_defers_at_uncertified_foreign_foreground() {
             .iter()
             .find(|turn| turn.turn_id == started.turn_id)
             .map(|turn| turn.state),
-        Some(AgentTurnState::Running),
-        "foreign-boundary deferral must not fail the submitted prompt"
+        Some(AgentTurnState::Failed),
+        "foreign-boundary rejection must not leave the submitted prompt running"
+    );
+    assert!(
+        !service.agent_provider_task_is_pending(&started.turn_id),
+        "foreign-boundary rejection must remove the pending provider task"
     );
     let interaction_generation =
         service.pane_foreground_process_diagnostic(&pane_id).json()["shell_interaction_generation"]

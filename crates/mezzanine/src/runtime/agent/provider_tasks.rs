@@ -513,12 +513,9 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         if self.pane_has_uncertified_foreign_shell_boundary(&turn.pane_id) {
-            self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                &turn.turn_id,
-                "provider_task deferred reason=uncertified_foreign_shell_boundary",
-            )?;
-            return Ok(None);
+            return Err(MezError::invalid_state(
+                "agent dispatch is unavailable while an uncertified foreign process owns the pane; exit the SSH, container, or other foreground session before submitting a prompt",
+            ));
         }
 
         let primary_path_resolution_request =
