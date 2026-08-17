@@ -881,18 +881,37 @@ pub(super) fn shell_input_acknowledgement_count(bytes: &[u8]) -> usize {
         .count()
 }
 
-/// Runs the foreground process group id operation for this subsystem.
+/// Converts a host process-group value into a usable foreground-group id.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-#[cfg(unix)]
+/// POSIX reserves positive values for process-group ids. Zero means that a
+/// terminal temporarily has no foreground owner on some hosts, while negative
+/// values report failure and must not reach positive-only PID APIs.
+#[cfg(any(unix, test))]
+pub(super) fn foreground_process_group_id_from_raw(process_group: i32) -> Option<u32> {
+    (process_group > 0)
+        .then(|| u32::try_from(process_group).ok())
+        .flatten()
+}
+
+/// Returns the foreground process group without constructing a PID from an
+/// absent Darwin terminal owner.
+#[cfg(target_os = "macos")]
+fn foreground_process_group_id(fd: std::os::fd::RawFd) -> Option<u32> {
+    // SAFETY: `fd` comes from portable-pty's live master handle and is borrowed
+    // only for the duration of this immediate tcgetpgrp query.
+    let process_group = unsafe { libc::tcgetpgrp(fd) };
+    foreground_process_group_id_from_raw(process_group)
+}
+
+/// Returns the foreground process group through rustix on Unix hosts whose
+/// backend already rejects a terminal with no foreground owner.
+#[cfg(all(unix, not(target_os = "macos")))]
 fn foreground_process_group_id(fd: std::os::fd::RawFd) -> Option<u32> {
     // SAFETY: `fd` comes from portable-pty's live master handle and is borrowed
     // only for the duration of this immediate tcgetpgrp query.
     let fd = unsafe { BorrowedFd::borrow_raw(fd) };
     let process_group = rustix::termios::tcgetpgrp(fd).ok()?;
-    u32::try_from(process_group.as_raw_pid()).ok()
+    foreground_process_group_id_from_raw(process_group.as_raw_pid())
 }
 
 /// Runs the foreground process group id operation for this subsystem.
