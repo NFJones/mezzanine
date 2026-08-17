@@ -210,23 +210,6 @@ impl RuntimeSessionService {
                                 Some(proof),
                             )
                         }
-                    } else if self
-                        .process
-                        .pane_foreign_shell_boundaries
-                        .get(output_pane_id)
-                        .is_some_and(|boundary| {
-                            boundary.adapter.is_none()
-                                && boundary.child_shell
-                                    == Some(mez_terminal::ManagedShellAdapter::Bash)
-                        })
-                    {
-                        self.observe_managed_shell_parent_ready(
-                            output_pane_id,
-                            ManagedShellKind::Bash,
-                            token,
-                            marker,
-                            None,
-                        )
                     } else if matches!(
                         outcome,
                         mez_terminal::ManagedShellParentOutcome::Completed
