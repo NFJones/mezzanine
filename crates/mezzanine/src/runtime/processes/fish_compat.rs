@@ -639,13 +639,11 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        let compatibility = ManagedFishCompatibility::new(
-            MarkerToken::new("77777777777777777777777777777777").unwrap(),
-        );
+        let receiver_token = MarkerToken::new("88888888888888888888888888888888").unwrap();
+        let compatibility = ManagedFishCompatibility::new(receiver_token.clone());
         let mut process = spawn_managed_fish(&fish, &compatibility, &root);
         settle_managed_fish_startup(&mut process);
 
-        let receiver_token = MarkerToken::new("88888888888888888888888888888888").unwrap();
         let bootstrap_marker = "fish-child-bootstrap-marker";
         let handoff = agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
             &fish,
@@ -659,16 +657,30 @@ mod tests {
             None,
         )
         .unwrap();
-        process.write_input(handoff.as_bytes()).unwrap();
+        let admission = fish_private_source_input(&handoff, &receiver_token, bootstrap_marker);
+        let mut output =
+            admit_managed_fish_frame(&mut process, &admission, &receiver_token, bootstrap_marker);
+        output.extend(
+            process.write_shell_delivery(&ShellInputDelivery::receiver_acknowledged(
+                admission.receiver_payload.as_bytes().to_vec(),
+                bootstrap_marker,
+                admission.payload_receiver_acknowledgements,
+            )),
+        );
         let expected = format!(
             "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=child-installed;mez_marker={bootstrap_marker}",
             receiver_token.as_str()
         );
-        let output = read_fish_output_until(&mut process, |output| {
+        extend_fish_output_until(&mut process, &mut output, |output| {
             output
                 .windows(expected.len())
                 .any(|window| window == expected.as_bytes())
         });
+        assert!(
+            !String::from_utf8_lossy(&output).contains("set -l MEZ_SHELL_STTY_STATE"),
+            "the generated handoff source must not be typed through the parent Fish editor: {:?}",
+            String::from_utf8_lossy(&output)
+        );
         assert!(
             output
                 .windows(expected.len())
