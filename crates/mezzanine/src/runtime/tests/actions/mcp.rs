@@ -757,6 +757,157 @@ async fn runtime_mcp_tool_error_queues_continuation_without_disabling_server() {
     }));
 }
 
+/// Verifies an MCP tool error waits for sibling external actions before model
+/// recovery begins.
+///
+/// A continuation that races a still-queued sibling can replace the active
+/// execution before that sibling is claimed. The first result must therefore
+/// become model-visible evidence without queuing the provider until every
+/// sibling external action has settled.
+#[tokio::test]
+async fn runtime_mcp_tool_error_waits_for_sibling_actions_before_continuation() {
+    let mut service = test_runtime_service();
+    let script = runtime_mcp_fixture_script(false);
+    service
+        .replace_config_layers_async(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "[mcp_servers.fixture]\ncommand = \"/bin/sh\"\nargs = [\"-c\", {}]\napproval = \"allow\"\ntool_timeout_ms = 100\n",
+                toml_string(&script)
+            ),
+        }])
+        .await
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-mcp-siblings","input":"call @fixture twice"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let actions = ["mcp-first", "mcp-second"].map(|id| mez_agent::AgentAction {
+        id: id.to_string(),
+        rationale: "call fixture".to_string(),
+        payload: mez_agent::AgentActionPayload::McpCall {
+            server: "fixture".to_string(),
+            tool: "echo".to_string(),
+            arguments_json: r#"{"message":"hello"}"#.to_string(),
+        },
+    });
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "calling mcp siblings".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "call both tools".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: actions.to_vec(),
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: actions
+            .iter()
+            .map(|action| {
+                mez_agent::ActionResult::running(
+                    &turn,
+                    action,
+                    vec!["MCP action accepted for worker execution".to_string()],
+                    None,
+                )
+            })
+            .collect(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .apply_agent_provider_completed_event(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+
+    let tool_error = mez_agent::ActionResult::succeeded(
+        &turn,
+        &actions[0],
+        vec!["tool denied".to_string()],
+        Some(r#"{"is_error":true,"status":"denied"}"#.to_string()),
+    );
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: actions[0].id.clone(),
+                    result: Ok(tool_error),
+                    mcp_transport: None,
+                },
+            )
+            .unwrap()
+    );
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert_eq!(
+        service.agent_turn_executions()[&turn.turn_id].action_results[1].status,
+        ActionStatus::Running
+    );
+
+    let success = mez_agent::ActionResult::succeeded(
+        &turn,
+        &actions[1],
+        vec!["hello from mcp".to_string()],
+        Some(r#"{"is_error":false,"status":"ok"}"#.to_string()),
+    );
+    assert!(
+        service
+            .complete_approved_external_action(
+                crate::runtime::RuntimeApprovedExternalActionOutcome {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: actions[1].id.clone(),
+                    result: Ok(success),
+                    mcp_transport: None,
+                },
+            )
+            .unwrap()
+    );
+    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+    assert_eq!(
+        service.agent_turn_executions()[&turn.turn_id].terminal_state,
+        AgentTurnState::Running
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies full-access mode satisfies MCP tool prompt approval while still
 /// executing the call through the normal MCP registry and transport path.
 ///

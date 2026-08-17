@@ -262,17 +262,25 @@ impl RuntimeSessionService {
                 .remove(&(turn_id.to_string(), action_id.to_string()));
             return Ok(None);
         };
-        let execution = self
-            .agent_turn_executions()
-            .get(turn_id)
-            .ok_or_else(|| MezError::invalid_state("approved external execution is unavailable"))?;
+        let execution = self.agent_turn_executions().get(turn_id);
+        let Some(execution) = execution else {
+            self.agent
+                .pending_approved_external_actions
+                .remove(&(turn_id.to_string(), action_id.to_string()));
+            return Ok(None);
+        };
         let action = execution
             .response
             .action_batch
             .as_ref()
             .and_then(|batch| batch.actions.iter().find(|action| action.id == action_id))
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("approved external action is unavailable"))?;
+            .cloned();
+        let Some(action) = action else {
+            self.agent
+                .pending_approved_external_actions
+                .remove(&(turn_id.to_string(), action_id.to_string()));
+            return Ok(None);
+        };
         if !execution
             .action_results
             .iter()
@@ -435,11 +443,10 @@ impl RuntimeSessionService {
         else {
             return Ok(false);
         };
-        let mut execution = self
-            .agent_turn_executions()
-            .get(&outcome.turn_id)
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("approved external execution is unavailable"))?;
+        let Some(mut execution) = self.agent_turn_executions().get(&outcome.turn_id).cloned()
+        else {
+            return Ok(false);
+        };
         let action = execution
             .response
             .action_batch
@@ -450,13 +457,17 @@ impl RuntimeSessionService {
                     .iter()
                     .find(|action| action.id == outcome.action_id)
             })
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("approved external action is unavailable"))?;
+            .cloned();
+        let Some(action) = action else {
+            return Ok(false);
+        };
         let result_index = execution
             .action_results
             .iter()
-            .position(|result| result.action_id == outcome.action_id)
-            .ok_or_else(|| MezError::invalid_state("approved external result is unavailable"))?;
+            .position(|result| result.action_id == outcome.action_id);
+        let Some(result_index) = result_index else {
+            return Ok(false);
+        };
         let result = match outcome.result {
             Ok(result) => result,
             Err(error) => {
@@ -516,22 +527,25 @@ impl RuntimeSessionService {
                 runtime_action_status_name(result.status)
             ),
         )?;
-        let mcp_tool_error = matches!(&action.payload, AgentActionPayload::McpCall { .. })
-            && result
-                .structured_content_json
-                .as_deref()
-                .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
-                .and_then(|content| content.get("is_error").and_then(serde_json::Value::as_bool))
-                .unwrap_or(false);
         execution.action_results[result_index] = result;
-        execution.terminal_state = if mcp_tool_error {
-            AgentTurnState::Running
-        } else {
-            runtime_agent_turn_state_from_action_results(
-                &execution.action_results,
-                execution.final_turn,
-            )
-        };
+        let mcp_tool_error = execution.action_results.iter().any(|result| {
+            result.action_type == "mcp_call"
+                && result
+                    .structured_content_json
+                    .as_deref()
+                    .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+                    .and_then(|content| {
+                        content.get("is_error").and_then(serde_json::Value::as_bool)
+                    })
+                    .unwrap_or(false)
+        });
+        if mcp_tool_error {
+            execution.final_turn = false;
+        }
+        execution.terminal_state = runtime_agent_turn_state_from_action_results(
+            &execution.action_results,
+            execution.final_turn,
+        );
         let failure_feedback_queued = if execution.terminal_state == AgentTurnState::Failed
             && matches!(&action.payload, AgentActionPayload::McpCall { .. })
         {
@@ -548,11 +562,11 @@ impl RuntimeSessionService {
             self.agent_turn_executions_mut().remove(&turn.turn_id);
             return Ok(true);
         }
-        if execution.terminal_state == AgentTurnState::Running
-            && (mcp_tool_error || runtime_execution_ready_for_provider_continuation(&execution))
-        {
+        if matches!(&action.payload, AgentActionPayload::McpCall { .. }) {
             let observed_result = execution.action_results[result_index].clone();
             self.append_action_result_context_if_absent(&turn.turn_id, &observed_result)?;
+        }
+        if runtime_execution_ready_for_provider_continuation(&execution) {
             self.agent
                 .pending_agent_provider_tasks
                 .insert(turn.turn_id.clone());
