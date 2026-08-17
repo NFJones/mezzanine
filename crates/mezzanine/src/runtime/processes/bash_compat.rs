@@ -614,6 +614,87 @@ exit\n",
         assert_eq!(stdout.bytes().filter(|byte| *byte == 0x1e).count(), 2);
     }
 
+    /// Verifies the dependency-free loader, staged managed Bash child, and
+    /// private bootstrap receiver complete their real wire exchange without
+    /// requiring a preinstalled foreign adapter. This covers the generated
+    /// process sequence that synthetic runtime event tests cannot exercise.
+    #[test]
+    fn dependency_free_loader_completes_real_managed_bash_exchange() {
+        let bash = Path::new("/bin/bash");
+        if !bash.exists() {
+            return;
+        }
+        let marker = MarkerToken::new("00112233445566778899aabbccddeeff").unwrap();
+        let child_token = MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let loader_marker = "fedcba9876543210fedcba9876543210";
+        let staging_source =
+            managed_foreign_bash_child_staging_source(bash, marker.as_str(), &child_token);
+        let loader = mez_agent::dependency_free_foreign_shell_loader_input(
+            &staging_source,
+            bash,
+            mez_agent::ShellClassification::Bash,
+            Some(&child_token),
+            loader_marker,
+        )
+        .unwrap();
+        let bootstrap_script =
+            mez_agent::bootstrap_script_for_classification(mez_agent::ShellClassification::Bash);
+        let bootstrap = mez_agent::ShellTransaction::new(
+            marker.clone(),
+            "turn-1",
+            "agent-1",
+            "pane-1",
+            bash,
+            bootstrap_script,
+        )
+        .unwrap()
+        .with_bash_receiver_token(child_token.clone())
+        .render_for_classification_input(mez_agent::ShellClassification::Bash);
+        let input = format!(
+            "{}{}{}{}{}exit\n",
+            loader.command,
+            loader.payload,
+            bootstrap.wrapper,
+            bootstrap.receiver_payload,
+            bootstrap.payload
+        );
+
+        let mut command = Command::new("/bin/sh");
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        drop(child.stdin.take());
+        let output = child.wait_with_output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(
+            output.status.success(),
+            "stdout={stdout:?} stderr={stderr:?}"
+        );
+        for expected in [
+            "mez_foreign_loader=ready",
+            "mez_event=child-installed",
+            "mez_event=frame-admitted",
+            "bootstrap\tcomplete\t",
+            "mez_event=parent-ready",
+            "mez_foreign_loader=exited",
+        ] {
+            assert!(
+                stdout.contains(expected),
+                "missing {expected:?}: stdout={stdout:?} stderr={stderr:?}"
+            );
+        }
+    }
+
     /// Verifies foreign child staging reports a setup failure through the
     /// authenticated parent-ready event instead of returning from the receiver
     /// callback before its completion protocol can run.

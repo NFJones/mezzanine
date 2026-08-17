@@ -545,6 +545,35 @@ impl RuntimeSessionService {
         cleared
     }
 
+    /// Reports whether a dependency-free loader still owns the observed foreign group.
+    ///
+    /// SSH and similar transports expose only their local outer process group, so the
+    /// managed remote child and its unmanaged parent can share one host-side identity.
+    /// While the correlated loader marker remains live, only its protocol exit event can
+    /// prove that the managed child returned to the foreign parent.
+    pub(crate) fn dependency_free_foreign_loader_owns_process_group(
+        &self,
+        pane_id: &str,
+        process_group_id: u32,
+    ) -> bool {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                boundary.adapter.is_none()
+                    && boundary.loader_marker.is_some()
+                    && boundary.process_group_id == process_group_id
+                    && self.primary_pid_for_live_pane_process(pane_id)
+                        == Some(boundary.primary_process_id)
+                    && self
+                        .process
+                        .pane_shell_interaction_generations
+                        .get(pane_id)
+                        .copied()
+                        == Some(boundary.interaction_generation)
+            })
+    }
+
     /// Starts a new runtime-owned agent-subshell handoff and invalidates state
     /// derived from the previous pane environment before bootstrap dispatch.
     pub(crate) fn begin_agent_subshell_shell_handoff(&mut self, pane_id: &str) -> Result<()> {

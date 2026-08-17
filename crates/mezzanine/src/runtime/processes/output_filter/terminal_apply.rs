@@ -193,6 +193,7 @@ impl RuntimeSessionService {
         let current_foreground_certified_shell =
             self.pane_process_group_is_certified_shell(&pane_id, process_group_id);
         let primary_shell_returned = current_foreground_certified_shell == Some(true)
+            && !self.dependency_free_foreign_loader_owns_process_group(&pane_id, process_group_id)
             && self.clear_uncertified_foreign_shell_boundary(&pane_id);
         if primary_shell_returned {
             self.leave_agent_subshell(&pane_id);

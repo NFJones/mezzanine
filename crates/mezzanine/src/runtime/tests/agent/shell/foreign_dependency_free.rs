@@ -449,6 +449,21 @@ bootstrap\tcomplete\t1714500000\n";
         Some("certified")
     );
 
+    service
+        .apply_pane_foreground_process_event(
+            &pane_id,
+            "ssh",
+            primary_pid.saturating_add(1),
+            Some("/remote/project".to_string()),
+        )
+        .unwrap();
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("certified"),
+        "a routine outer-SSH foreground poll must not restore the remote parent while the managed child remains live"
+    );
+    assert!(service.agent_subshell_is_active(&pane_id));
+
     assert_eq!(
         service
             .observe_agent_shell_transaction_events(
