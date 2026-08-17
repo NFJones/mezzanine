@@ -91,15 +91,10 @@ Press `Ctrl+A a` to open the focused pane's agent shell. Begin with a bounded
 task that asks for inspection and focused validation. Press `Ctrl+A d` to detach
 without normally stopping the session.
 
-Agent entry also adopts an ordinary interactive shell reached through SSH or a
-container. The foreign environment does not need Mezzanine installed and its
-shell startup files are not modified; Mezzanine uses a temporary, bounded
-loader to start the managed child shell for the agent session.
-
-Optional configuration can inhibit idle sleep during active agent turns and
-enable enhanced keyboard reporting in supported terminals. See the
-[configuration reference](docs/configuration/reference.md) for platform support
-and behavior.
+Agent entry can also work with an interactive shell reached through SSH or a
+container, without requiring Mezzanine to be installed in that environment.
+See the [configuration reference](docs/configuration/reference.md) for
+platform-specific options.
 
 ## Everyday use
 
@@ -108,33 +103,21 @@ and `mez attach` to return to one. In a running session, `Ctrl+A :` opens the
 Mezzanine command prompt, `Ctrl+A ?` shows effective key bindings, and
 `Ctrl+A a` toggles the agent shell.
 
-Within an agent pane, use `/plan on`, `/plan off`, or `/plan toggle` to control
-pane-local plan-only mode. The clickable `plan` status pill shows the current
-mode.
+Within an agent pane, plan-only mode is available when you want to review an
+approach before allowing changes. See the [agent guide](docs/agent/README.md)
+for its controls and behavior.
 
-On supported Bash prompts, Mezzanine preserves an unfinished command while
-agent mode is active and restores it afterward. Fish and Zsh instead discard
-unfinished editable input when agent mode opens. They use their native editor
-APIs to display the resulting empty prompt before private receiver traffic is
-hidden, providing the equivalent of clearing the line before admission. Unsupported
-or unsafe prompt states fail closed rather than submitting or combining input.
-Each adapter preserves native startup and history behavior rather than
-emulating a different shell. After a launched child exits, foreground input
-remains queued until the authenticated parent-ready boundary. If that boundary
-is lost, queued input remains retained until the original parent process is
-freshly proven to own the foreground terminal. Streamed shell output
-is decoded incrementally only while a live encoded action transaction owns the
-pane, so private Base64 transport records do not leak and marker-like ordinary
-shell output remains literal.
+Mezzanine integrates with supported interactive shells while preserving their
+normal startup and history behavior. See the shell and terminal documentation
+for shell-specific behavior and nested-session setup.
 
 Agent work inside a nested Bash environment can use the opt-in integration
 printed by `mez shell-integration bash`; activate it explicitly inside that
 environment. Mezzanine does not reuse local startup files or silently modify
 remote shell configuration.
 
-Managed-shell adapters are installed when a pane shell process starts. After
-upgrading Mezzanine, open a new pane or restart the session before relying on
-new adapter behavior in an already-running shell.
+After upgrading Mezzanine, open a new pane or restart the session to use
+updated shell integration.
 
 Use `mez --help` and the [CLI reference](docs/reference-manual/cli.md) for the
 current command contract. Use [Sessions and panes](docs/using-mezzanine/sessions-and-panes.md)
@@ -159,12 +142,9 @@ The agent works from its pane's working directory, configured guidance, and
 explicit action results. It does not passively receive your terminal screen,
 scrollback, or other panes.
 
-Approval policy decides whether Mezzanine permits an action. OS confinement
-separately controls what an already-permitted local shell process can access,
-while web and integration actions have their own capability and approval gates.
-The current confinement backend is Bubblewrap in Linux pane environments.
-Other pane environments use the policy-only backend, which does not provide
-OS-level isolation.
+Approval policy controls whether Mezzanine permits an action. Optional OS-level
+confinement separately limits what permitted local shell processes can access,
+and web and integration actions have their own capability and approval gates.
 
 Review unfamiliar project overlays and applicable `AGENTS.md` files before
 trusting their guidance. Project instructions can shape workflow but cannot
