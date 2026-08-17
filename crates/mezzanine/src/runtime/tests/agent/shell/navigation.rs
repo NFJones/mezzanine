@@ -753,10 +753,10 @@ fn runtime_agent_shell_immediate_reentry_stays_closed_after_failed_identity_prob
 ///
 /// SSH and container clients can expose a shell that differs from the host
 /// pane shell, while password prompts and full-screen programs expose no shell
-/// at all. Advisory adapter candidates must therefore wait for a prompt
-/// boundary, and only a matching runtime challenge may advance discovery.
+/// at all. A prompt-scoped advisory candidate may arrive before agent mode is
+/// opened, but only a matching runtime challenge may advance discovery.
 /// Provider work remains pending only while that lifecycle has a finite owner;
-/// timeout fails it actionably without writing into the foreign foreground.
+/// timeout fails it actionably without writing unadmitted generated source.
 #[test]
 fn runtime_agent_shell_entry_bootstraps_foreign_adapter_with_bounded_admission() {
     let mut service = test_runtime_service();
@@ -782,6 +782,30 @@ fn runtime_agent_shell_entry_bootstraps_foreign_adapter_with_bounded_admission()
         .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
         .unwrap();
 
+    let candidate = TerminalOscEvent::ManagedShell {
+        version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+        shell: mez_terminal::ManagedShellAdapter::Bash,
+        token: "0123456789abcdef0123456789abcdef".to_string(),
+        event: mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate {
+            instance_id: "remote-bash-1".to_string(),
+            trigger: None,
+        },
+    };
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ShellPromptEnd, candidate],
+            )
+            .unwrap(),
+        2,
+        "the completed foreign prompt and its advisory candidate must be retained"
+    );
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "retaining advisory candidate metadata must not authorize pane input"
+    );
+
     let show = service
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
@@ -790,14 +814,26 @@ fn runtime_agent_shell_entry_bootstraps_foreign_adapter_with_bounded_admission()
     assert!(service.pane_has_uncertified_foreign_shell_boundary(&pane_id));
     assert_eq!(
         service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
-        Some("awaiting-adapter")
+        Some("challenging-adapter")
     );
     assert!(service.pane_bootstrap_has_bounded_progress_owner(&pane_id));
     assert!(service.agent_subshell_entry_is_deferred(&pane_id));
     assert!(!service.agent_subshell_is_active(&pane_id));
-    assert!(
-        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
-        "foreign foreground ownership must block child-shell and discovery input"
+    let challenge = service
+        .foreign_shell_bootstrap_challenge_for_tests(&pane_id)
+        .expect("an adopted candidate must receive a runtime challenge")
+        .to_string();
+    let challenge_effects = service.drain_pane_io_transition().side_effects;
+    let challenge_inputs = pane_input_effects(&challenge_effects);
+    assert_eq!(challenge_inputs.len(), 1);
+    assert_eq!(challenge_inputs[0].pane_input_parts().0, pane_id);
+    assert_eq!(
+        challenge_inputs[0].pane_input_parts().1,
+        format!(
+            "\u{7}MEZ_BASH_FOREIGN_CHALLENGE 0123456789abcdef0123456789abcdef remote-bash-1 {challenge}\n"
+        )
+        .as_bytes(),
+        "the first foreign input must contain only source-free challenge metadata"
     );
     let started = service
         .start_agent_prompt_turn(&pane_id, "list the current directory")
@@ -841,58 +877,6 @@ fn runtime_agent_shell_entry_bootstraps_foreign_adapter_with_bounded_admission()
         "a repeated entry attempt must remain input-free"
     );
 
-    let candidate = TerminalOscEvent::ManagedShell {
-        version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
-        shell: mez_terminal::ManagedShellAdapter::Bash,
-        token: "0123456789abcdef0123456789abcdef".to_string(),
-        event: mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate {
-            instance_id: "remote-bash-1".to_string(),
-            trigger: None,
-        },
-    };
-    assert_eq!(
-        service
-            .observe_agent_shell_transaction_events(&pane_id, std::slice::from_ref(&candidate))
-            .unwrap(),
-        0,
-        "a candidate before the foreign prompt boundary must remain advisory"
-    );
-    assert_eq!(
-        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
-        Some("awaiting-adapter")
-    );
-    assert_eq!(
-        service
-            .observe_agent_shell_transaction_events(&pane_id, &[TerminalOscEvent::ShellPromptEnd])
-            .unwrap(),
-        1
-    );
-    assert_eq!(
-        service
-            .observe_agent_shell_transaction_events(&pane_id, &[candidate])
-            .unwrap(),
-        1
-    );
-    assert_eq!(
-        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
-        Some("challenging-adapter")
-    );
-    let challenge = service
-        .foreign_shell_bootstrap_challenge_for_tests(&pane_id)
-        .expect("an admitted candidate must receive a runtime challenge")
-        .to_string();
-    let challenge_effects = service.drain_pane_io_transition().side_effects;
-    let challenge_inputs = pane_input_effects(&challenge_effects);
-    assert_eq!(challenge_inputs.len(), 1);
-    assert_eq!(challenge_inputs[0].pane_input_parts().0, pane_id);
-    assert_eq!(
-        challenge_inputs[0].pane_input_parts().1,
-        format!(
-            "\u{7}MEZ_BASH_FOREIGN_CHALLENGE 0123456789abcdef0123456789abcdef remote-bash-1 {challenge}\n"
-        )
-        .as_bytes(),
-        "the first foreign input must contain only source-free challenge metadata"
-    );
     let mismatched = TerminalOscEvent::ManagedShell {
         version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
         shell: mez_terminal::ManagedShellAdapter::Bash,
@@ -951,6 +935,89 @@ fn runtime_agent_shell_entry_bootstraps_foreign_adapter_with_bounded_admission()
         pane_input_effects(&service.drain_pane_io_transition().side_effects).len(),
         1,
         "the restored primary shell prompt should dispatch one identity probe"
+    );
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies an adapter candidate retained before agent entry cannot cross a
+/// later foreign-shell command boundary.
+///
+/// Candidate metadata is advisory evidence for one completed prompt only. A
+/// command-start event means the editor is no longer safely owned by that
+/// prompt, so opening agent mode afterward must await a fresh candidate and
+/// must not issue the native challenge associated with the stale token.
+#[test]
+fn runtime_foreign_adapter_candidate_is_discarded_when_command_starts() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    service
+        .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+
+    let candidate = TerminalOscEvent::ManagedShell {
+        version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+        shell: mez_terminal::ManagedShellAdapter::Bash,
+        token: "0123456789abcdef0123456789abcdef".to_string(),
+        event: mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate {
+            instance_id: "remote-bash-stale".to_string(),
+            trigger: None,
+        },
+    };
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ShellPromptEnd, candidate],
+            )
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ShellCommandOutputStart],
+            )
+            .unwrap(),
+        1,
+        "starting a command must invalidate the retained prompt candidate"
+    );
+    service.drain_pane_io_transition();
+
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("awaiting-adapter")
+    );
+    assert!(
+        service
+            .foreign_shell_bootstrap_challenge_for_tests(&pane_id)
+            .is_none(),
+        "a stale adapter token must not receive a challenge"
+    );
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "agent entry must remain input-free until the next integrated prompt"
     );
     let _ = process.terminate(Duration::from_millis(10));
 }

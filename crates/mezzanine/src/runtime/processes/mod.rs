@@ -419,6 +419,38 @@ struct RuntimeManagedShellAdapterDescriptor {
     trigger: Option<String>,
 }
 
+/// Completed foreign prompt boundary that may advertise an adapter candidate.
+///
+/// This record is advisory only. It allows agent entry to correlate a candidate
+/// emitted immediately before the foreign bootstrap boundary was allocated,
+/// but it never grants input or shell-dispatch authority by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeForeignShellPromptBoundary {
+    /// Pane process that owned the outer PTY at prompt completion.
+    primary_process_id: u32,
+    /// Outer foreground process group observed at prompt completion.
+    process_group_id: u32,
+    /// Monotonic prompt sequence used to reject replaced candidates.
+    sequence: u64,
+}
+
+/// Advisory adapter candidate retained for the currently completed prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeForeignShellAdapterCandidate {
+    /// Prompt boundary that emitted this candidate.
+    prompt: RuntimeForeignShellPromptBoundary,
+    /// Managed-shell protocol version published by the adapter.
+    version: u16,
+    /// Shell-native adapter implementation.
+    shell: mez_terminal::ManagedShellAdapter,
+    /// Adapter-private authentication token.
+    token: String,
+    /// Adapter instance identity for one foreign shell lifetime.
+    instance_id: String,
+    /// Fixed shell-native trigger when required by the adapter.
+    trigger: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeForeignShellBoundary {
     /// Primary pane process that owns the PTY containing the foreign group.
@@ -819,6 +851,14 @@ pub(crate) struct RuntimeProcessComponent {
     next_detached_pane_generation: u64,
     /// Latest foreground process groups observed by pane workers.
     pane_foreground_process_groups: std::collections::BTreeMap<String, u32>,
+    /// Next monotonic completed-prompt sequence across pane processes.
+    next_foreign_shell_prompt_sequence: u64,
+    /// Latest completed foreign prompt boundary keyed by pane id.
+    pane_foreign_shell_prompt_boundaries:
+        std::collections::BTreeMap<String, RuntimeForeignShellPromptBoundary>,
+    /// Latest advisory adapter candidate for a completed foreign prompt.
+    pane_foreign_shell_adapter_candidates:
+        std::collections::BTreeMap<String, RuntimeForeignShellAdapterCandidate>,
     /// Uncertified non-primary foreground boundaries keyed by pane id.
     pane_foreign_shell_boundaries: std::collections::BTreeMap<String, RuntimeForeignShellBoundary>,
     /// Certified non-primary shell identities keyed by pane id.
@@ -4298,6 +4338,12 @@ impl RuntimeSessionService {
         self.process.pane_zsh_compatibility.remove(pane_id);
         self.process.pane_zsh_admissions.remove(pane_id);
         self.process.pane_foreground_process_groups.remove(pane_id);
+        self.process
+            .pane_foreign_shell_prompt_boundaries
+            .remove(pane_id);
+        self.process
+            .pane_foreign_shell_adapter_candidates
+            .remove(pane_id);
         self.process.pane_foreign_shell_boundaries.remove(pane_id);
         self.process.program_owned_pane_titles.remove(pane_id);
         self.persistence.cleanup_pane_io(pane_id);

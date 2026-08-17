@@ -2,7 +2,8 @@
 
 use super::super::{
     ManagedShellHandoffEffect, ManagedShellHandoffEvent, ManagedShellHandoffIdentity,
-    ManagedShellKind, RuntimeForeignShellBootstrapPhase, RuntimeManagedShellAdapterDescriptor,
+    ManagedShellKind, RuntimeForeignShellAdapterCandidate, RuntimeForeignShellBootstrapPhase,
+    RuntimeForeignShellPromptBoundary, RuntimeManagedShellAdapterDescriptor,
     RuntimeManagedShellAdapterOrigin, reduce_managed_shell_handoff,
 };
 use super::{
@@ -224,10 +225,23 @@ impl RuntimeSessionService {
         }
         if matches!(
             event,
-            mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate { .. }
-                | mez_terminal::ManagedShellProtocolEvent::ForeignChallengeCompleted { .. }
+            mez_terminal::ManagedShellProtocolEvent::ForeignChallengeCompleted { .. }
         ) {
             return Ok(0);
+        }
+        if let mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate {
+            instance_id,
+            trigger,
+        } = event
+        {
+            return self.retain_foreign_shell_adapter_candidate(
+                output_pane_id,
+                version,
+                shell,
+                token,
+                instance_id,
+                trigger.as_deref(),
+            );
         }
         let managed_shell = match shell {
             mez_terminal::ManagedShellAdapter::Bash
@@ -442,14 +456,147 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Records a prompt boundary without treating it as adapter admission.
+    /// Records a completed foreign prompt without treating it as admission.
     pub(super) fn observe_foreign_shell_prompt_boundary(&mut self, pane_id: &str) {
-        let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) else {
+        let Some(primary_process_id) = self.primary_pid_for_live_pane_process(pane_id) else {
+            self.clear_foreign_shell_advisory_prompt(pane_id);
             return;
         };
-        if boundary.phase == RuntimeForeignShellBootstrapPhase::AwaitingAdapter {
+        let Some(process_group_id) = self.pane_foreground_process_group_observation(pane_id).0
+        else {
+            self.clear_foreign_shell_advisory_prompt(pane_id);
+            return;
+        };
+        if self.pane_process_group_is_certified_shell(pane_id, process_group_id) != Some(false)
+            || matches!(
+                self.pane_readiness_state(pane_id),
+                PaneReadinessState::FullScreen
+                    | PaneReadinessState::PasswordPrompt
+                    | PaneReadinessState::InteractiveBlocked
+            )
+        {
+            self.clear_foreign_shell_advisory_prompt(pane_id);
+            return;
+        }
+        self.process.next_foreign_shell_prompt_sequence = self
+            .process
+            .next_foreign_shell_prompt_sequence
+            .saturating_add(1);
+        let prompt = RuntimeForeignShellPromptBoundary {
+            primary_process_id,
+            process_group_id,
+            sequence: self.process.next_foreign_shell_prompt_sequence,
+        };
+        self.process
+            .pane_foreign_shell_prompt_boundaries
+            .insert(pane_id.to_string(), prompt);
+        self.process
+            .pane_foreign_shell_adapter_candidates
+            .remove(pane_id);
+        if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id)
+            && boundary.phase == RuntimeForeignShellBootstrapPhase::AwaitingAdapter
+            && boundary.primary_process_id == primary_process_id
+            && boundary.process_group_id == process_group_id
+        {
             boundary.prompt_observed = true;
         }
+    }
+
+    /// Invalidates advisory prompt and candidate metadata for one pane.
+    pub(crate) fn clear_foreign_shell_advisory_prompt(&mut self, pane_id: &str) {
+        self.process
+            .pane_foreign_shell_prompt_boundaries
+            .remove(pane_id);
+        self.process
+            .pane_foreign_shell_adapter_candidates
+            .remove(pane_id);
+    }
+
+    /// Retains a candidate emitted by the currently completed foreign prompt.
+    fn retain_foreign_shell_adapter_candidate(
+        &mut self,
+        pane_id: &str,
+        version: u16,
+        shell: mez_terminal::ManagedShellAdapter,
+        token: &str,
+        instance_id: &str,
+        trigger: Option<&str>,
+    ) -> Result<usize> {
+        let Some(prompt) = self
+            .process
+            .pane_foreign_shell_prompt_boundaries
+            .get(pane_id)
+            .copied()
+        else {
+            return Ok(0);
+        };
+        if self.primary_pid_for_live_pane_process(pane_id) != Some(prompt.primary_process_id)
+            || self.pane_foreground_process_group_observation(pane_id).0
+                != Some(prompt.process_group_id)
+            || self.pane_process_group_is_certified_shell(pane_id, prompt.process_group_id)
+                != Some(false)
+            || matches!(
+                self.pane_readiness_state(pane_id),
+                PaneReadinessState::FullScreen
+                    | PaneReadinessState::PasswordPrompt
+                    | PaneReadinessState::InteractiveBlocked
+            )
+        {
+            self.clear_foreign_shell_advisory_prompt(pane_id);
+            return Ok(0);
+        }
+        self.process.pane_foreign_shell_adapter_candidates.insert(
+            pane_id.to_string(),
+            RuntimeForeignShellAdapterCandidate {
+                prompt,
+                version,
+                shell,
+                token: token.to_string(),
+                instance_id: instance_id.to_string(),
+                trigger: trigger.map(ToOwned::to_owned),
+            },
+        );
+        Ok(1)
+    }
+
+    /// Adopts the retained candidate for a newly allocated foreign boundary.
+    pub(crate) fn adopt_retained_foreign_shell_adapter_candidate(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<usize> {
+        let Some(candidate) = self
+            .process
+            .pane_foreign_shell_adapter_candidates
+            .remove(pane_id)
+        else {
+            return Ok(0);
+        };
+        let prompt_matches = self
+            .process
+            .pane_foreign_shell_prompt_boundaries
+            .get(pane_id)
+            == Some(&candidate.prompt);
+        let boundary_matches = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                boundary.phase == RuntimeForeignShellBootstrapPhase::AwaitingAdapter
+                    && boundary.prompt_observed
+                    && boundary.primary_process_id == candidate.prompt.primary_process_id
+                    && boundary.process_group_id == candidate.prompt.process_group_id
+            });
+        if !prompt_matches || !boundary_matches {
+            return Ok(0);
+        }
+        self.observe_foreign_shell_adapter_candidate(
+            pane_id,
+            candidate.version,
+            candidate.shell,
+            &candidate.token,
+            &candidate.instance_id,
+            candidate.trigger.as_deref(),
+        )
     }
 
     /// Pins one foreign adapter candidate to the active process and generation.

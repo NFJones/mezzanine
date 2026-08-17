@@ -4014,14 +4014,20 @@ MUST classify `/bin/sh` as the shell identity for that environment.
 Re-bootstrap across an SSH, container, chroot, or other nested interactive
 boundary MUST use a Mezzanine shell adapter running inside that environment.
 The adapter MUST publish a versioned candidate only at a completed prompt
-boundary. Runtime MUST bind that candidate to the pane primary process, outer
-foreground process group, shell-interaction generation, shell kind, adapter
-instance, token, and trigger before issuing a shell-native editor-acquisition
-challenge. Candidate metadata or a matching token alone MUST NOT authorize
-generated input. Only a matching challenge completion for the active boundary
-MAY advance identity discovery. Primary-environment adapter tokens, startup
-paths, shell identities, and admission state MUST remain inaccessible while a
-foreign boundary is active.
+boundary. Runtime MUST retain the latest candidate as advisory evidence for
+that currently completed prompt when it arrives before agent mode allocates a
+foreign shell-interaction generation. Agent entry MAY adopt that candidate only
+when the pane primary process, outer foreground process group, and completed
+prompt boundary still match. Runtime MUST then bind the candidate to the new
+shell-interaction generation, shell kind, adapter instance, token, and trigger
+before issuing a shell-native editor-acquisition challenge. Candidate metadata
+or a matching token alone MUST NOT authorize generated input. Only a matching
+challenge completion for the active boundary MAY advance identity discovery.
+The retained candidate MUST be discarded on a new prompt start, command start,
+foreground-group change, alternate-screen entry, pane removal, or replacement
+by a newer prompt or adapter instance. Primary-environment adapter tokens,
+startup paths, shell identities, and admission state MUST remain inaccessible
+while a foreign boundary is active.
 
 Foreign bootstrap MUST have finite phase deadlines for adapter discovery,
 editor challenge, identity discovery, child bootstrap, and certification.

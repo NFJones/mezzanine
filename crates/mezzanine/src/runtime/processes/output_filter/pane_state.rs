@@ -192,6 +192,7 @@ impl RuntimeSessionService {
         }
         self.apply_terminal_osc_events(&osc_events)?;
         if alternate_active {
+            self.clear_foreign_shell_advisory_prompt(output.pane_id.as_str());
             self.process.pane_readiness_overrides.revoke(
                 output.pane_id.as_str(),
                 ReadinessOverrideRevocation::AlternateScreenEntry,

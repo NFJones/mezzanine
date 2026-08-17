@@ -271,6 +271,14 @@ impl RuntimeSessionService {
         self.clear_pane_environment_authority_failure(pane_id);
         self.process.pane_bootstrap_pending.remove(pane_id);
         let started_at_unix_ms = current_unix_millis();
+        let prompt_observed = self
+            .process
+            .pane_foreign_shell_prompt_boundaries
+            .get(pane_id)
+            .is_some_and(|prompt| {
+                prompt.primary_process_id == primary_process_id
+                    && prompt.process_group_id == process_group_id
+            });
         self.process.pane_foreign_shell_boundaries.insert(
             pane_id.to_string(),
             RuntimeForeignShellBoundary {
@@ -280,7 +288,7 @@ impl RuntimeSessionService {
                 phase: RuntimeForeignShellBootstrapPhase::AwaitingAdapter,
                 lifecycle_started_at_unix_ms: started_at_unix_ms,
                 phase_started_at_unix_ms: started_at_unix_ms,
-                prompt_observed: false,
+                prompt_observed,
                 adapter: None,
                 challenge: None,
                 child_token: None,
@@ -305,6 +313,7 @@ impl RuntimeSessionService {
         if cleared {
             self.process.pane_bootstrap_pending.remove(pane_id);
         }
+        self.clear_foreign_shell_advisory_prompt(pane_id);
         cleared
     }
 
@@ -1481,7 +1490,9 @@ impl RuntimeSessionService {
                     )?);
                 }
                 TerminalOscEvent::TitleChanged { .. } | TerminalOscEvent::Clipboard(_) => {}
-                TerminalOscEvent::ShellPromptStart => {}
+                TerminalOscEvent::ShellPromptStart => {
+                    self.clear_foreign_shell_advisory_prompt(output_pane_id);
+                }
                 TerminalOscEvent::ShellPromptEnd => {
                     self.observe_foreign_shell_prompt_boundary(output_pane_id);
                     if !observed_harness_transaction_end {
@@ -1494,6 +1505,7 @@ impl RuntimeSessionService {
                 }
                 TerminalOscEvent::ShellCommandFinished { .. } => {}
                 TerminalOscEvent::ShellCommandOutputStart => {
+                    self.clear_foreign_shell_advisory_prompt(output_pane_id);
                     if !observed_harness_transaction_end {
                         observed =
                             observed.saturating_add(self.observe_passive_shell_busy(

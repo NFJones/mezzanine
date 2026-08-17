@@ -59,6 +59,13 @@ unknown command line. After integration is admitted, shell-specific identity
 and child-launch support determines whether that adapter can complete the
 bootstrap.
 
+You may activate the integration before opening the agent prompt. Mezzanine
+retains the adapter announcement only for the currently completed nested-shell
+prompt, then performs the normal shell-native challenge when agent mode opens.
+Starting a command, entering an alternate-screen program, changing foreground
+ownership, or reaching another prompt invalidates that advisory announcement;
+the next completed integrated prompt publishes a fresh one.
+
 For Bash, install `mez` inside the nested environment and explicitly activate
 the current shell process:
 
