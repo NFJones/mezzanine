@@ -437,6 +437,11 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(crate) fn dispatch_bootstrap_to_pane(&mut self, pane_id: &str) -> Result<()> {
+        if self.process.pane_fish_compatibility.contains_key(pane_id)
+            && !self.managed_fish_adapter_is_ready_for_pane(pane_id)
+        {
+            return Ok(());
+        }
         if self.shell_execution_identity_for_pane(pane_id).is_err()
             && self
                 .process
@@ -1212,11 +1217,17 @@ impl RuntimeSessionService {
                             && boundary.adapter.is_none()
                             && boundary.child_shell.is_none()
                     });
+                let managed_fish_is_ready = !self
+                    .process
+                    .pane_fish_compatibility
+                    .contains_key(k.as_str())
+                    || self.managed_fish_adapter_is_ready_for_pane(k.as_str());
                 self.process.pane_bootstrap_pending.contains(k.as_str())
                     && (!self.pane_has_uncertified_foreign_shell_boundary(k.as_str())
                         || awaits_dependency_free_posix_child)
                     && !self.pane_agent_subshell_certification_is_pending(k.as_str())
                     && !awaits_managed_receiver
+                    && managed_fish_is_ready
                     && (has_deferred_wrapper
                         || !self
                             .process

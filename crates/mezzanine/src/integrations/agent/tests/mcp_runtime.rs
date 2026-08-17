@@ -6,12 +6,12 @@
 use super::*;
 
 #[test]
-/// Verifies mcp action executor maps tool errors to failed results.
+/// Verifies mcp action executor preserves tool errors as successful action evidence.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
-fn mcp_action_executor_maps_tool_errors_to_failed_results() {
+fn mcp_action_executor_preserves_tool_errors_as_successful_evidence() {
     let turn = turn();
     let action = mcp_action("mcp-1");
     let plan = mcp_plan();
@@ -26,10 +26,17 @@ fn mcp_action_executor_maps_tool_errors_to_failed_results() {
 
     let result = execute_mcp_action_through_runtime(&turn, &action, &plan, &mut executor).unwrap();
 
-    assert_eq!(result.status, ActionStatus::Failed);
-    assert!(result.is_error);
-    assert_eq!(result.error.as_ref().unwrap().code, "mcp_tool_error");
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    assert!(!result.is_error);
+    assert!(result.error.is_none());
     assert_eq!(result.content_texts(), vec!["denied"]);
+    assert!(
+        result
+            .structured_content_json
+            .as_deref()
+            .unwrap()
+            .contains("\"is_error\":true")
+    );
 }
 
 #[test]

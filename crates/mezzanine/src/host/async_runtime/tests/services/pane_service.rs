@@ -1211,6 +1211,32 @@ async fn async_zsh_dirty_draft_no_prompt_exit_discards_draft_and_restores_respon
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         client_handle
+            .write_input_to_pane(
+                primary.clone(),
+                "%1",
+                b"PS1='__MEZ_ASYNC_ZSH_READY__> '; print -r -- '__MEZ_ASYNC_ZSH_ROUND_TRIP__'\n"
+                    .to_vec(),
+            )
+            .await
+            .unwrap();
+        let editor_ready_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let retained_process_text = client_handle
+                .managed_shell_process_screen_text("%1")
+                .await
+                .unwrap();
+            if retained_process_text.contains("__MEZ_ASYNC_ZSH_ROUND_TRIP__")
+                && retained_process_text.contains("__MEZ_ASYNC_ZSH_READY__> ")
+            {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < editor_ready_deadline,
+                "managed Zsh editor did not complete its semantic readiness round trip: {retained_process_text:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        client_handle
             .write_input_to_pane(primary.clone(), "%1", draft.as_bytes().to_vec())
             .await
             .unwrap();
@@ -1261,14 +1287,21 @@ async fn async_zsh_dirty_draft_no_prompt_exit_discards_draft_and_restores_respon
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        let retained_process_text = client_handle
-            .managed_shell_process_screen_text("%1")
-            .await
-            .unwrap();
-        assert!(
-            !retained_process_text.replace('\n', "").contains(&draft),
-            "managed Zsh retained process screen still displayed the discarded draft: {retained_process_text:?}"
-        );
+        let editor_clear_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let retained_process_text = client_handle
+                .managed_shell_process_screen_text("%1")
+                .await
+                .unwrap();
+            if !retained_process_text.replace('\n', "").contains(&draft) {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < editor_clear_deadline,
+                "managed Zsh retained process screen still displayed the discarded draft after admission: {retained_process_text:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         let hidden = client_handle
             .apply_attached_terminal_step_plan(
                 primary.clone(),

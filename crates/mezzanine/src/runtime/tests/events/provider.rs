@@ -94,6 +94,21 @@ async fn runtime_provider_completion_queues_network_action_for_worker() {
         service.agent_turn_executions()[&turn.turn_id].action_results[0].status,
         ActionStatus::Running
     );
+    service
+        .agent_turn_executions_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .response
+        .action_batch
+        .as_mut()
+        .unwrap()
+        .actions
+        .clear();
+    let stale_dispatch = service
+        .claim_approved_external_action(&turn.turn_id, &action.id)
+        .unwrap();
+    assert!(stale_dispatch.is_none());
+    assert!(service.pending_approved_external_actions().is_empty());
     service.terminate_all_pane_processes().unwrap();
 }
 

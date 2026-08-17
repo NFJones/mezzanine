@@ -53,6 +53,8 @@ pub const SHELL_INPUT_RECORD_ACK_BYTE: u8 = 0x1e;
 #[doc(hidden)]
 pub fn shell_input_record_requires_ack(record: &[u8]) -> bool {
     record.ends_with(b"printf '\\036'\n")
+        || (record.starts_with(b"__mez_agent_wrapper_receive '__MEZ_WRAPPER_SOURCE_END_")
+            && record.ends_with(b"__'\n"))
 }
 
 /// Reports whether one deferred receiver record completes a logical frame.
@@ -100,6 +102,28 @@ mod tests {
     #[test]
     fn sync_pane_input_write_timeout_is_ten_seconds() {
         assert_eq!(PANE_INPUT_WRITE_STALL_TIMEOUT, Duration::from_secs(10));
+    }
+
+    /// Verifies only the canonical generated Fish receiver trigger waits for
+    /// the receiver's raw acknowledgement before subsequent source records.
+    ///
+    /// Startup and prompt output can already be buffered when the trigger is
+    /// written, so generic output activity must not release the first Base64
+    /// record. Similar user commands must retain ordinary output pacing.
+    #[test]
+    fn generated_fish_receiver_trigger_requires_explicit_acknowledgement() {
+        assert!(shell_input_record_requires_ack(
+            b"__mez_agent_wrapper_receive '__MEZ_WRAPPER_SOURCE_END_marker-1__'\n"
+        ));
+        assert!(!shell_input_record_requires_ack(
+            b"__mez_agent_wrapper_receive 'ordinary-user-argument'\n"
+        ));
+        assert!(!shell_input_record_requires_ack(
+            b"printf ordinary-output\n"
+        ));
+        assert!(shell_input_record_requires_ack(
+            b"encoded-wrapper-chunk; printf '\\036'\n"
+        ));
     }
 
     /// Verifies physical sidecar chunks advance without acknowledgements until
@@ -919,18 +943,37 @@ pub(super) fn shell_input_acknowledgement_count(bytes: &[u8]) -> usize {
         .count()
 }
 
-/// Runs the foreground process group id operation for this subsystem.
+/// Converts a host process-group value into a usable foreground-group id.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-#[cfg(unix)]
+/// POSIX reserves positive values for process-group ids. Zero means that a
+/// terminal temporarily has no foreground owner on some hosts, while negative
+/// values report failure and must not reach positive-only PID APIs.
+#[cfg(any(unix, test))]
+pub(super) fn foreground_process_group_id_from_raw(process_group: i32) -> Option<u32> {
+    (process_group > 0)
+        .then(|| u32::try_from(process_group).ok())
+        .flatten()
+}
+
+/// Returns the foreground process group without constructing a PID from an
+/// absent Darwin terminal owner.
+#[cfg(target_os = "macos")]
+fn foreground_process_group_id(fd: std::os::fd::RawFd) -> Option<u32> {
+    // SAFETY: `fd` comes from portable-pty's live master handle and is borrowed
+    // only for the duration of this immediate tcgetpgrp query.
+    let process_group = unsafe { libc::tcgetpgrp(fd) };
+    foreground_process_group_id_from_raw(process_group)
+}
+
+/// Returns the foreground process group through rustix on Unix hosts whose
+/// backend already rejects a terminal with no foreground owner.
+#[cfg(all(unix, not(target_os = "macos")))]
 fn foreground_process_group_id(fd: std::os::fd::RawFd) -> Option<u32> {
     // SAFETY: `fd` comes from portable-pty's live master handle and is borrowed
     // only for the duration of this immediate tcgetpgrp query.
     let fd = unsafe { BorrowedFd::borrow_raw(fd) };
     let process_group = rustix::termios::tcgetpgrp(fd).ok()?;
-    u32::try_from(process_group.as_raw_pid()).ok()
+    foreground_process_group_id_from_raw(process_group.as_raw_pid())
 }
 
 /// Runs the foreground process group id operation for this subsystem.

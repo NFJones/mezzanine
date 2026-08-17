@@ -279,7 +279,7 @@ impl RuntimeSessionService {
         let mcp_summary = self.mcp_registry().prompt_summary();
         let (prepared_context, available_mcp_tools) =
             self.prepare_agent_turn_model_context(&turn, durable, &mcp_summary, &model_profile)?;
-        let context = prepared_context.into_agent_context();
+        let mut context = prepared_context.into_agent_context();
         let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
         if let Some(auto_sizing) =
             self.runtime_auto_sizing_dispatch_for_turn(&turn, &model_profile)?
@@ -327,6 +327,17 @@ impl RuntimeSessionService {
             self.agent
                 .agent_turn_model_profiles
                 .insert(turn_id.to_string(), model_profile.clone());
+            let durable = self
+                .agent_turn_contexts()
+                .get(turn_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state("runtime agent turn context is unavailable")
+                })?;
+            context = self
+                .prepare_agent_turn_model_context(&turn, durable, &mcp_summary, &model_profile)?
+                .0
+                .into_agent_context();
         }
         if let Some(block) = self.run_configured_pre_action_hooks(
             HookEvent::AgentTurnStart,
@@ -635,7 +646,7 @@ impl RuntimeSessionService {
         let mcp_summary = self.mcp_registry().prompt_summary();
         let (prepared_context, available_mcp_tools) =
             self.prepare_agent_turn_model_context(&turn, durable, &mcp_summary, &model_profile)?;
-        let context = prepared_context.into_agent_context();
+        let mut context = prepared_context.into_agent_context();
         let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
         if let Some(auto_sizing) =
             self.runtime_auto_sizing_dispatch_for_turn(&turn, &model_profile)?
@@ -683,6 +694,17 @@ impl RuntimeSessionService {
             self.agent
                 .agent_turn_model_profiles
                 .insert(turn_id.to_string(), model_profile.clone());
+            let durable = self
+                .agent_turn_contexts()
+                .get(turn_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state("runtime agent turn context is unavailable")
+                })?;
+            context = self
+                .prepare_agent_turn_model_context(&turn, durable, &mcp_summary, &model_profile)?
+                .0
+                .into_agent_context();
         }
         if let Some(block) = self.run_configured_pre_action_hooks(
             HookEvent::AgentTurnStart,

@@ -791,6 +791,90 @@ mod tests {
         }
     }
 
+    /// Builds one hermetic managed-Zsh PTY launch for compatibility tests.
+    ///
+    /// Zsh's `-d` option disables global startup files while the managed and
+    /// explicit user `ZDOTDIR` chain remains active. This prevents host-level
+    /// completion configuration from presenting interactive questions before
+    /// the authenticated adapter becomes available.
+    fn hermetic_managed_zsh_launch(
+        compatibility: &ManagedZshCompatibility,
+        zsh: &Path,
+        home: &Path,
+    ) -> PaneProcessLaunch {
+        compatibility
+            .configure_launch(PaneProcessLaunch::new(zsh.to_path_buf()))
+            .with_interactive_arguments(["-d", "-l", "-i"])
+            .with_environment_variable("HOME", home.as_os_str())
+    }
+
+    /// Verifies the shared managed-Zsh PTY fixture disables host-global startup
+    /// files and still reaches authenticated adapter availability.
+    ///
+    /// A host `compinit` prompt must not intercept the isolated test startup,
+    /// while the managed shim and explicit user startup directory must remain
+    /// active so private-admission tests exercise their intended boundary.
+    #[test]
+    fn managed_zsh_pty_fixture_is_hermetic_and_reaches_adapter_availability() {
+        let zsh = Path::new("/bin/zsh");
+        if !zsh.exists() {
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-zsh-hermetic-fixture-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let user_zdotdir = root.join("user-zdotdir");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&user_zdotdir).unwrap();
+        fs::write(
+            user_zdotdir.join(".zshrc"),
+            "PS1='__MEZ_ZSH_HERMETIC__>'\nRPS1=\n",
+        )
+        .unwrap();
+
+        let owner = MarkerToken::new("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").unwrap();
+        let compatibility = ManagedZshCompatibility::create(
+            &root.join("control.sock"),
+            "%1",
+            owner.clone(),
+            Some(user_zdotdir.as_os_str().to_os_string()),
+        )
+        .unwrap();
+        let launch = hermetic_managed_zsh_launch(&compatibility, zsh, &home);
+        assert_eq!(
+            pane_command_plan(&launch, None).unwrap().args,
+            ["-d", "-l", "-i"]
+        );
+
+        let size = Size::new(80, 24).unwrap();
+        let process = spawn_pane_process(&launch, None, &test_environment(), size).unwrap();
+        let terminal = mez_terminal::TerminalScreen::new(size, 1_000).unwrap();
+        let mut process = ManagedZshTestPane { process, terminal };
+        let available = format!(
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=adapter-available",
+            owner.as_str()
+        );
+        let output = read_zsh_output_until(&mut process, |output| {
+            output
+                .windows(available.len())
+                .any(|window| window == available.as_bytes())
+        });
+
+        assert!(
+            !String::from_utf8_lossy(&output).contains("insecure directories"),
+            "host startup configuration intercepted managed-Zsh fixture startup: {:?}",
+            String::from_utf8_lossy(&output)
+        );
+        process.terminate(Duration::from_millis(100)).unwrap();
+        drop(compatibility);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     /// Reads managed Zsh output until one expected boundary appears.
     fn extend_zsh_output_until(
         process: &mut ManagedZshTestPane,
@@ -1320,9 +1404,7 @@ function zshaddhistory() {{\n\
             Some(user_zdotdir.as_os_str().to_os_string()),
         )
         .unwrap();
-        let launch = compatibility
-            .configure_launch(PaneProcessLaunch::new(zsh.to_path_buf()))
-            .with_environment_variable("HOME", home.as_os_str());
+        let launch = hermetic_managed_zsh_launch(&compatibility, zsh, &home);
         let size = Size::new(80, 24).unwrap();
         let process = spawn_pane_process(&launch, None, &test_environment(), size).unwrap();
         let terminal = mez_terminal::TerminalScreen::new(size, 1_000).unwrap();
@@ -1453,9 +1535,7 @@ function zshaddhistory() {{\n\
             Some(user_zdotdir.as_os_str().to_os_string()),
         )
         .unwrap();
-        let launch = compatibility
-            .configure_launch(PaneProcessLaunch::new(zsh.to_path_buf()))
-            .with_environment_variable("HOME", home.as_os_str());
+        let launch = hermetic_managed_zsh_launch(&compatibility, zsh, &home);
         let size = Size::new(80, 24).unwrap();
         let process = spawn_pane_process(&launch, None, &test_environment(), size).unwrap();
         let terminal = mez_terminal::TerminalScreen::new(size, 1_000).unwrap();
@@ -1580,9 +1660,7 @@ function zshaddhistory() {{\n\
             Some(user_zdotdir.as_os_str().to_os_string()),
         )
         .unwrap();
-        let launch = compatibility
-            .configure_launch(PaneProcessLaunch::new(zsh.to_path_buf()))
-            .with_environment_variable("HOME", home.as_os_str());
+        let launch = hermetic_managed_zsh_launch(&compatibility, zsh, &home);
         let size = Size::new(80, 24).unwrap();
         let process = spawn_pane_process(&launch, None, &test_environment(), size).unwrap();
         let terminal = mez_terminal::TerminalScreen::new(size, 1_000).unwrap();
@@ -1701,9 +1779,7 @@ unsetopt RCS\n",
             Some(user_zdotdir.as_os_str().to_os_string()),
         )
         .unwrap();
-        let launch = compatibility
-            .configure_launch(PaneProcessLaunch::new(zsh.to_path_buf()))
-            .with_environment_variable("HOME", home.as_os_str());
+        let launch = hermetic_managed_zsh_launch(&compatibility, zsh, &home);
         let size = Size::new(80, 24).unwrap();
         let process = spawn_pane_process(&launch, None, &test_environment(), size).unwrap();
         let terminal = mez_terminal::TerminalScreen::new(size, 1_000).unwrap();
@@ -1777,9 +1853,7 @@ unsetopt RCS\n",
             Some(user_zdotdir.as_os_str().to_os_string()),
         )
         .unwrap();
-        let launch = compatibility
-            .configure_launch(PaneProcessLaunch::new(zsh.to_path_buf()))
-            .with_environment_variable("HOME", home.as_os_str());
+        let launch = hermetic_managed_zsh_launch(&compatibility, zsh, &home);
         let size = Size::new(80, 24).unwrap();
         let process = spawn_pane_process(&launch, None, &test_environment(), size).unwrap();
         let terminal = mez_terminal::TerminalScreen::new(size, 1_000).unwrap();
@@ -1867,9 +1941,7 @@ unsetopt RCS\n",
             Some(user_zdotdir.as_os_str().to_os_string()),
         )
         .unwrap();
-        let launch = compatibility
-            .configure_launch(PaneProcessLaunch::new(zsh.to_path_buf()))
-            .with_environment_variable("HOME", home.as_os_str());
+        let launch = hermetic_managed_zsh_launch(&compatibility, zsh, &home);
         let size = Size::new(80, 24).unwrap();
         let process = spawn_pane_process(&launch, None, &test_environment(), size).unwrap();
         let terminal = mez_terminal::TerminalScreen::new(size, 1_000).unwrap();

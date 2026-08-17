@@ -1857,11 +1857,16 @@ MUST carry a typed outcome: completed, cancelled, frame rejected, source
 failed, or child launch failed. Runtime MUST reject an unsupported version or
 wrong adapter/token before editor ownership is acquired, and a missing
 availability announcement MUST fail closed after a bounded wait without
-writing a handoff. Stale, duplicate, wrong-shell, wrong-marker, and
-wrong-generation events MUST be inert. Runtime MUST settle one handoff exactly
-once and MUST release queued foreground input only after authenticated parent
-readiness or fresh exact foreground ownership proof. Exit requests MUST be
-interpreted by that shared lifecycle owner: before DATA they MUST select only
+writing a handoff. Managed Fish MUST NOT dispatch bootstrap source until the
+current parent process publishes authenticated `AdapterAvailable` after
+installing its private wrapper receiver. Prompt readiness before availability
+MUST leave the existing bootstrap owner pending, and the first matching event
+MUST release that owner at most once. Stale, duplicate, wrong-shell,
+wrong-marker, and wrong-generation events MUST be inert. Runtime MUST settle
+one handoff exactly once and MUST release queued foreground input only after
+authenticated parent readiness or fresh exact foreground ownership proof.
+Exit requests MUST be interpreted by that shared lifecycle owner: before DATA
+they MUST select only
 authenticated cancellation, during payload or launch uncertainty they MUST
 retain intent without terminal text, and after authenticated `ChildInstalled`
 they MUST emit at most one generation-fenced child exit. A live agent-owned
@@ -3806,8 +3811,17 @@ exact user or message event arrives after dispatch and before a result settles,
 the owner MAY occur on both sides of that barrier; chronology MUST remain
 unchanged and compaction MUST NOT gather those fragments into one replacement
 range. Canonical context MUST retain both a provider-neutral projection and any
-typed provider-native replay events for the same owner. Request assembly for
-the owning provider MUST emit only the native assistant/tool-call projection;
+typed provider-native replay events for the same owner. Streaming presentation
+MUST observe the same provider-interaction boundary:
+response-local rationale and action ordinals from a later interaction MUST NOT
+reuse source state from an earlier interaction. A provisional whole-screen
+projection MAY replace only the exact pane screen generation from which its
+work was captured. Any unrelated pane write revokes that authority, and later
+projection publication, mismatch handling, cancellation, or rollback MUST NOT
+restore an older baseline over the unrelated write.
+
+Request assembly for the owning provider MUST emit only the native
+assistant/tool-call projection;
 assembly for every other provider MUST emit only the neutral assistant/action-
 result projection. Persistence and restoration MUST reconstruct the same
 complete owner before making that selection. For stateless OpenAI Responses
@@ -4436,6 +4450,9 @@ evaluate no source, restore the exact editor state, and publish proof-bearing
 cancelled `ParentReady`. A cancellation received after framed source delivery
 has begun MUST be treated as malformed framing and MUST NOT shorten the
 required drain.
+The outer Readline callback MUST keep inherited `errexit` and `nounset`
+disabled through source status capture, receiver reset, and terminal-event
+publication, then restore both options only as its final operation.
 
 When a generated Bash transaction starts a managed child Bash and subsequent
 work targets that child, the child MUST emit a receiver-installed record only
@@ -4600,6 +4617,10 @@ Managed Bash RX2 and Zsh private-source data MUST use the same bounded logical-
 frame pacing principle: physical RX2 FRAME and DATA records MUST stream without
 waits, validated FRAME_END records MUST require one fresh acknowledgement, and
 the authenticated source END MUST require the final acknowledgement. A maximum
+The canonical managed-Fish wrapper-receiver trigger MUST require the receiver's
+explicit raw acknowledgement before the first encoded source record can be
+written. Buffered startup, prompt, or other unrelated pane output MUST NOT
+satisfy that first-trigger wait.
 one-mebibyte source MUST require fewer than fifty acknowledgement waits while
 retaining the portable physical record bound.
 Unrelated pane output MUST NOT satisfy that wait. Missing negotiation, write

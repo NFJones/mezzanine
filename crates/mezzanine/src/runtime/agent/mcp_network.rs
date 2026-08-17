@@ -13,9 +13,8 @@ use super::{
     McpToolCallRequest, MezError, ReqwestProviderHttpTransport, Result,
     RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
     RuntimeApprovedMcpActionDispatch, RuntimeMcpActionExecutor, RuntimeSessionService,
-    current_unix_seconds, execute_mcp_action_through_runtime_async,
-    execute_network_action_with_transport_async, json_escape, network_action_plan,
-    runtime_action_status_name, runtime_agent_action_summary,
+    execute_mcp_action_through_runtime_async, execute_network_action_with_transport_async,
+    json_escape, network_action_plan, runtime_action_status_name, runtime_agent_action_summary,
     runtime_agent_turn_state_from_action_results,
     runtime_execution_ready_for_provider_continuation, runtime_mcp_error_code,
     runtime_mezzanine_error_code, runtime_post_mcp_hook_payload, runtime_pre_mcp_hook_payload,
@@ -82,7 +81,20 @@ impl RuntimeSessionService {
                 timeout_ms: None,
                 approval_bypass: permission_policy.approval_bypass(),
             };
-            let plan = self.mcp_registry().plan_tool_call(&request)?;
+            let plan = match self.mcp_registry().plan_tool_call(&request) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    let error = MezError::from(error);
+                    execution.action_results[index] = ActionResult::failed(
+                        turn,
+                        &action,
+                        ActionStatus::Failed,
+                        runtime_mcp_error_code(&error),
+                        error.message().to_string(),
+                    )?;
+                    continue;
+                }
+            };
             if plan.approval_required
                 && !auto_allowed
                 && !policy_allowed
@@ -250,17 +262,25 @@ impl RuntimeSessionService {
                 .remove(&(turn_id.to_string(), action_id.to_string()));
             return Ok(None);
         };
-        let execution = self
-            .agent_turn_executions()
-            .get(turn_id)
-            .ok_or_else(|| MezError::invalid_state("approved external execution is unavailable"))?;
+        let execution = self.agent_turn_executions().get(turn_id);
+        let Some(execution) = execution else {
+            self.agent
+                .pending_approved_external_actions
+                .remove(&(turn_id.to_string(), action_id.to_string()));
+            return Ok(None);
+        };
         let action = execution
             .response
             .action_batch
             .as_ref()
             .and_then(|batch| batch.actions.iter().find(|action| action.id == action_id))
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("approved external action is unavailable"))?;
+            .cloned();
+        let Some(action) = action else {
+            self.agent
+                .pending_approved_external_actions
+                .remove(&(turn_id.to_string(), action_id.to_string()));
+            return Ok(None);
+        };
         if !execution
             .action_results
             .iter()
@@ -325,7 +345,28 @@ impl RuntimeSessionService {
                     timeout_ms: None,
                     approval_bypass: true,
                 };
-                let plan = self.mcp_registry().plan_tool_call(&request)?;
+                let plan = match self.mcp_registry().plan_tool_call(&request) {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        let error = MezError::from(error);
+                        let result = ActionResult::failed(
+                            &turn,
+                            &action,
+                            ActionStatus::Failed,
+                            runtime_mcp_error_code(&error),
+                            error.message().to_string(),
+                        )?;
+                        self.complete_approved_external_action(
+                            RuntimeApprovedExternalActionOutcome {
+                                turn_id: turn_id.to_string(),
+                                action_id: action_id.to_string(),
+                                result: Ok(result),
+                                mcp_transport: None,
+                            },
+                        )?;
+                        return Ok(None);
+                    }
+                };
                 let environment = std::env::vars().collect();
                 let auth_store = self.auth_store().cloned();
                 self.append_approved_mcp_action_audit(&turn, &action, "started")?;
@@ -402,11 +443,10 @@ impl RuntimeSessionService {
         else {
             return Ok(false);
         };
-        let mut execution = self
-            .agent_turn_executions()
-            .get(&outcome.turn_id)
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("approved external execution is unavailable"))?;
+        let Some(mut execution) = self.agent_turn_executions().get(&outcome.turn_id).cloned()
+        else {
+            return Ok(false);
+        };
         let action = execution
             .response
             .action_batch
@@ -417,23 +457,20 @@ impl RuntimeSessionService {
                     .iter()
                     .find(|action| action.id == outcome.action_id)
             })
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("approved external action is unavailable"))?;
+            .cloned();
+        let Some(action) = action else {
+            return Ok(false);
+        };
         let result_index = execution
             .action_results
             .iter()
-            .position(|result| result.action_id == outcome.action_id)
-            .ok_or_else(|| MezError::invalid_state("approved external result is unavailable"))?;
+            .position(|result| result.action_id == outcome.action_id);
+        let Some(result_index) = result_index else {
+            return Ok(false);
+        };
         let result = match outcome.result {
             Ok(result) => result,
             Err(error) => {
-                if let AgentActionPayload::McpCall { server, .. } = &action.payload {
-                    let _ = self.mcp_registry_mut().mark_unavailable(
-                        server,
-                        format!("runtime tool call failed: {}", error.message()),
-                        current_unix_seconds(),
-                    );
-                }
                 let error_code = if matches!(&action.payload, AgentActionPayload::McpCall { .. }) {
                     runtime_mcp_error_code(&error)
                 } else {
@@ -491,15 +528,45 @@ impl RuntimeSessionService {
             ),
         )?;
         execution.action_results[result_index] = result;
+        let mcp_tool_error = execution.action_results.iter().any(|result| {
+            result.action_type == "mcp_call"
+                && result
+                    .structured_content_json
+                    .as_deref()
+                    .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+                    .and_then(|content| {
+                        content.get("is_error").and_then(serde_json::Value::as_bool)
+                    })
+                    .unwrap_or(false)
+        });
+        if mcp_tool_error {
+            execution.final_turn = false;
+        }
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
             &execution.action_results,
             execution.final_turn,
         );
-        if execution.terminal_state == AgentTurnState::Running
-            && runtime_execution_ready_for_provider_continuation(&execution)
+        let failure_feedback_queued = if execution.terminal_state == AgentTurnState::Failed
+            && matches!(&action.payload, AgentActionPayload::McpCall { .. })
         {
+            self.append_runtime_agent_execution_failure_audit(&turn, &execution)?;
+            self.queue_agent_failure_feedback_for_correction(
+                &turn,
+                &mut execution,
+                "approved_mcp_action_failed",
+            )?
+        } else {
+            false
+        };
+        if failure_feedback_queued {
+            self.agent_turn_executions_mut().remove(&turn.turn_id);
+            return Ok(true);
+        }
+        if matches!(&action.payload, AgentActionPayload::McpCall { .. }) {
             let observed_result = execution.action_results[result_index].clone();
             self.append_action_result_context_if_absent(&turn.turn_id, &observed_result)?;
+        }
+        if runtime_execution_ready_for_provider_continuation(&execution) {
             self.agent
                 .pending_agent_provider_tasks
                 .insert(turn.turn_id.clone());
@@ -612,12 +679,30 @@ impl RuntimeSessionService {
                 self.execute_mcp_action_for_turn(turn, &action, auto_allowed || policy_allowed)?;
             executed = executed.saturating_add(1);
         }
-        execution.terminal_state = runtime_agent_turn_state_from_action_results(
-            &execution.action_results,
-            execution.final_turn,
-        );
+        let mcp_tool_error = execution.action_results.iter().any(|result| {
+            result.action_type == "mcp_call"
+                && result
+                    .structured_content_json
+                    .as_deref()
+                    .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+                    .and_then(|content| {
+                        content.get("is_error").and_then(serde_json::Value::as_bool)
+                    })
+                    .unwrap_or(false)
+        });
+        if mcp_tool_error {
+            execution.final_turn = false;
+        }
+        execution.terminal_state = if mcp_tool_error {
+            AgentTurnState::Running
+        } else {
+            runtime_agent_turn_state_from_action_results(
+                &execution.action_results,
+                execution.final_turn,
+            )
+        };
         if execution.terminal_state == AgentTurnState::Running
-            && runtime_execution_ready_for_provider_continuation(execution)
+            && (mcp_tool_error || runtime_execution_ready_for_provider_continuation(execution))
         {
             for result in execution
                 .action_results
@@ -690,12 +775,30 @@ impl RuntimeSessionService {
                 .await?;
             executed = executed.saturating_add(1);
         }
-        execution.terminal_state = runtime_agent_turn_state_from_action_results(
-            &execution.action_results,
-            execution.final_turn,
-        );
+        let mcp_tool_error = execution.action_results.iter().any(|result| {
+            result.action_type == "mcp_call"
+                && result
+                    .structured_content_json
+                    .as_deref()
+                    .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+                    .and_then(|content| {
+                        content.get("is_error").and_then(serde_json::Value::as_bool)
+                    })
+                    .unwrap_or(false)
+        });
+        if mcp_tool_error {
+            execution.final_turn = false;
+        }
+        execution.terminal_state = if mcp_tool_error {
+            AgentTurnState::Running
+        } else {
+            runtime_agent_turn_state_from_action_results(
+                &execution.action_results,
+                execution.final_turn,
+            )
+        };
         if execution.terminal_state == AgentTurnState::Running
-            && runtime_execution_ready_for_provider_continuation(execution)
+            && (mcp_tool_error || runtime_execution_ready_for_provider_continuation(execution))
         {
             for result in execution
                 .action_results
@@ -948,7 +1051,20 @@ impl RuntimeSessionService {
             timeout_ms: None,
             approval_bypass: permission_policy.approval_bypass(),
         };
-        let plan = self.mcp_registry().plan_tool_call(&request)?;
+        let plan = match self.mcp_registry().plan_tool_call(&request) {
+            Ok(plan) => plan,
+            Err(error) => {
+                let error = MezError::from(error);
+                return ActionResult::failed(
+                    turn,
+                    action,
+                    ActionStatus::Failed,
+                    runtime_mcp_error_code(&error),
+                    error.message().to_string(),
+                )
+                .map_err(Into::into);
+            }
+        };
         if plan.approval_required && !approved && !permission_policy.approval_bypass() {
             return Ok(ActionResult::blocked(
                 turn,
@@ -987,20 +1103,13 @@ impl RuntimeSessionService {
             &mut executor,
         ) {
             Ok(result) => result,
-            Err(error) => {
-                let _ = self.mcp_registry_mut().mark_unavailable(
-                    &plan.server_id,
-                    format!("runtime tool call failed: {}", error.message()),
-                    current_unix_seconds(),
-                );
-                ActionResult::failed(
-                    turn,
-                    action,
-                    ActionStatus::Failed,
-                    runtime_mcp_error_code(&error),
-                    error.message().to_string(),
-                )?
-            }
+            Err(error) => ActionResult::failed(
+                turn,
+                action,
+                ActionStatus::Failed,
+                runtime_mcp_error_code(&error),
+                error.message().to_string(),
+            )?,
         };
         self.run_configured_completed_hooks(
             HookEvent::PostMcpToolUse,
@@ -1056,7 +1165,20 @@ impl RuntimeSessionService {
             timeout_ms: None,
             approval_bypass: permission_policy.approval_bypass(),
         };
-        let plan = self.mcp_registry().plan_tool_call(&request)?;
+        let plan = match self.mcp_registry().plan_tool_call(&request) {
+            Ok(plan) => plan,
+            Err(error) => {
+                let error = MezError::from(error);
+                return ActionResult::failed(
+                    turn,
+                    action,
+                    ActionStatus::Failed,
+                    runtime_mcp_error_code(&error),
+                    error.message().to_string(),
+                )
+                .map_err(Into::into);
+            }
+        };
         if plan.approval_required && !approved && !permission_policy.approval_bypass() {
             return Ok(ActionResult::blocked(
                 turn,
@@ -1097,20 +1219,13 @@ impl RuntimeSessionService {
         .await
         {
             Ok(result) => result,
-            Err(error) => {
-                let _ = self.mcp_registry_mut().mark_unavailable(
-                    &plan.server_id,
-                    format!("runtime tool call failed: {}", error.message()),
-                    current_unix_seconds(),
-                );
-                ActionResult::failed(
-                    turn,
-                    action,
-                    ActionStatus::Failed,
-                    runtime_mcp_error_code(&error),
-                    error.message().to_string(),
-                )?
-            }
+            Err(error) => ActionResult::failed(
+                turn,
+                action,
+                ActionStatus::Failed,
+                runtime_mcp_error_code(&error),
+                error.message().to_string(),
+            )?,
         };
         self.run_configured_completed_hooks(
             HookEvent::PostMcpToolUse,

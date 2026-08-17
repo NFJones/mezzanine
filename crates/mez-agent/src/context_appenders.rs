@@ -9,8 +9,8 @@ use crate::instructions::DiscoveredInstructionFile;
 use crate::{
     AgentContext, AgentContextResult, ContextBlock, ContextRetention, ContextSemanticKind,
     ContextSourceKind, McpPromptServer, McpPromptSummary, McpPromptTool,
-    McpPromptUnavailableServer, MemoryContextRecord, StableContextBlock, StableContextSlotId,
-    StableContextSourceFingerprint, validate_context_required,
+    McpPromptUnavailableServer, MemoryContextRecord, ProviderApiCompatibility, StableContextBlock,
+    StableContextSlotId, StableContextSourceFingerprint, validate_context_required,
 };
 use sha2::{Digest, Sha256};
 
@@ -128,6 +128,26 @@ pub fn append_mcp_context_for_provider_with_configured(
     context.retain_blocks(|block| !is_mcp_context_block(block))?;
     let invocation = mcp_invocation_summary(&context, summary, configured_server_names);
     append_filtered_mcp_context(context, &invocation, provider == "openai")
+}
+
+/// Replaces MCP live state according to the resolved provider wire API.
+///
+/// OpenAI Responses uses one cache-stable generic MCP action, including when
+/// the configured provider has an arbitrary alias. Other APIs carry selected
+/// MCP definitions in their dynamic action schema.
+pub fn append_mcp_context_for_api_with_configured(
+    mut context: AgentContext,
+    summary: &McpPromptSummary,
+    api: ProviderApiCompatibility,
+    configured_server_names: &[String],
+) -> AgentContextResult<AgentContext> {
+    context.retain_blocks(|block| !is_mcp_context_block(block))?;
+    let invocation = mcp_invocation_summary(&context, summary, configured_server_names);
+    append_filtered_mcp_context(
+        context,
+        &invocation,
+        api == ProviderApiCompatibility::OpenAiResponses,
+    )
 }
 
 /// Returns the MCP tools that should be callable for this turn.

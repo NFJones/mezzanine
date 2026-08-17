@@ -220,7 +220,7 @@ __mez_bash_receiver_reset() {
     fi
     unset MEZ_BASH_RECEIVER_FRAME MEZ_BASH_RECEIVER_KIND MEZ_BASH_RECEIVER_FRAME_TOKEN MEZ_BASH_RECEIVER_FRAME_MARKER MEZ_BASH_RECEIVER_FRAME_MARKER_READ MEZ_BASH_RECEIVER_LENGTH MEZ_BASH_RECEIVER_LENGTH_READ MEZ_BASH_RECEIVER_DIGEST MEZ_BASH_RECEIVER_DIGEST_READ MEZ_BASH_RECEIVER_CHUNKS MEZ_BASH_RECEIVER_SEQUENCE MEZ_BASH_RECEIVER_SEQUENCE_READ MEZ_BASH_RECEIVER_B64 MEZ_BASH_RECEIVER_SOURCE MEZ_BASH_RECEIVER_ACTUAL_LENGTH MEZ_BASH_RECEIVER_ACTUAL_DIGEST MEZ_BASH_RECEIVER_STATUS MEZ_BASH_RECEIVER_VERSION MEZ_BASH_RECEIVER_PARENT_PROOF MEZ_BASH_RECEIVER_OUTCOME MEZ_BASH_RECEIVER_REASON MEZ_BASH_RECEIVER_FRAME_SEQUENCE MEZ_BASH_RECEIVER_FRAME_SEQUENCE_READ MEZ_BASH_RECEIVER_FRAME_LENGTH MEZ_BASH_RECEIVER_FRAME_DIGEST MEZ_BASH_RECEIVER_FRAME_CHUNKS MEZ_BASH_RECEIVER_FRAME_B64 MEZ_BASH_RECEIVER_FRAME_ACTUAL_DIGEST MEZ_BASH_RECEIVER_FRAME_VALID MEZ_BASH_RECEIVER_SAVED_LINE MEZ_BASH_RECEIVER_SAVED_LINE_SET MEZ_BASH_RECEIVER_SAVED_POINT MEZ_BASH_RECEIVER_SAVED_MARK MEZ_BASH_RECEIVER_SAVED_MARK_SET
 }
-__mez_bash_receiver() {
+__mez_bash_receiver_inner() {
     MEZ_BASH_RECEIVER_SAVED_LINE=$READLINE_LINE
     MEZ_BASH_RECEIVER_SAVED_LINE_SET=1
     MEZ_BASH_RECEIVER_SAVED_POINT=$READLINE_POINT
@@ -410,6 +410,15 @@ __mez_bash_receiver() {
     fi
     unset MEZ_BASH_RECEIVER_COMPLETE_MARKER MEZ_BASH_RECEIVER_COMPLETE_STATUS MEZ_BASH_RECEIVER_COMPLETE_VERSION MEZ_BASH_RECEIVER_COMPLETE_PROOF MEZ_BASH_RECEIVER_COMPLETE_OUTCOME
 }
+__mez_bash_receiver() {
+    local __mez_bash_callback_restore_errexit=0
+    local __mez_bash_callback_restore_nounset=0
+    case $- in *e*) __mez_bash_callback_restore_errexit=1; set +e;; esac
+    case $- in *u*) __mez_bash_callback_restore_nounset=1; set +u;; esac
+    __mez_bash_receiver_inner
+    case "$__mez_bash_callback_restore_nounset" in 1) set -u;; esac
+    case "$__mez_bash_callback_restore_errexit" in 1) set -e;; esac
+}
 bind -m emacs-standard -x '"\C-g":__mez_bash_receiver'
 bind -m vi-insert -x '"\C-g":__mez_bash_receiver'
 bind -m vi-command -x '"\C-g":__mez_bash_receiver'
@@ -476,6 +485,20 @@ mod tests {
     /// parent command, and `exit`. The helper keeps the startup artifact alive
     /// through shell exit and returns all control and command output.
     fn run_managed_bash_receiver_exchange(test_name: &str, input: &[u8]) -> std::process::Output {
+        run_managed_bash_receiver_exchange_after_events(test_name, input, &[])
+    }
+
+    /// Runs one exchange while withholding staged input until receiver events.
+    ///
+    /// Production releases command payload after the transaction start marker
+    /// and queues foreground input until authenticated callback completion.
+    /// This helper mirrors that ordering instead of placing later records in
+    /// Readline's input buffer while the callback owns it.
+    fn run_managed_bash_receiver_exchange_after_events(
+        test_name: &str,
+        input: &[u8],
+        stages: &[(&str, &[u8])],
+    ) -> std::process::Output {
         let bash = Path::new("/bin/bash");
         let root = std::env::temp_dir().join(format!(
             "mez-bash-{test_name}-{}-{}",
@@ -492,21 +515,59 @@ mod tests {
             ManagedBashCompatibility::create(&root.join("control.sock"), "%1", token).unwrap();
         let launch = compatibility.configure_launch(PaneProcessLaunch::new(bash.to_path_buf()));
         let plan = pane_command_plan(&launch, None).unwrap();
+        let stdout_path = root.join("stdout");
+        let stderr_path = root.join("stderr");
         let mut command = Command::new(plan.program);
         command
             .args(plan.args)
             .env("HOME", &home)
             .env("HISTFILE", "/dev/null")
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdout(Stdio::from(fs::File::create(&stdout_path).unwrap()))
+            .stderr(Stdio::from(fs::File::create(&stderr_path).unwrap()));
         for (key, value) in launch.environment() {
             command.env(key, value);
         }
         let mut child = command.spawn().unwrap();
         child.stdin.as_mut().unwrap().write_all(input).unwrap();
+        for (expected_event, staged_input) in stages {
+            let mut observed = false;
+            for _ in 0..300 {
+                let stdout = fs::read(&stdout_path).unwrap_or_default();
+                if String::from_utf8_lossy(&stdout).contains(expected_event) {
+                    observed = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            if !observed {
+                drop(child.stdin.take());
+                let _ = child.kill();
+                let status = child.wait().unwrap();
+                let stdout = fs::read(&stdout_path).unwrap_or_default();
+                let stderr = fs::read(&stderr_path).unwrap_or_default();
+                drop(compatibility);
+                let _ = fs::remove_dir_all(&root);
+                panic!(
+                    "managed Bash event was not observed: event={expected_event:?} status={status:?} stdout={:?} stderr={:?}",
+                    String::from_utf8_lossy(&stdout),
+                    String::from_utf8_lossy(&stderr),
+                );
+            }
+            child
+                .stdin
+                .as_mut()
+                .unwrap()
+                .write_all(staged_input)
+                .unwrap();
+        }
         drop(child.stdin.take());
-        let output = child.wait_with_output().unwrap();
+        let status = child.wait().unwrap();
+        let output = std::process::Output {
+            status,
+            stdout: fs::read(&stdout_path).unwrap_or_default(),
+            stderr: fs::read(&stderr_path).unwrap_or_default(),
+        };
         drop(compatibility);
         fs::remove_dir_all(root).unwrap();
         output
@@ -545,9 +606,9 @@ mod tests {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         let input = format!(
-            "\x07MEZ_BASH_RX2_BEGIN {token} {marker} {} {digest} 1 {proof}\n\
+            "set -eu\n\x07MEZ_BASH_RX2_BEGIN {token} {marker} {} {digest} 1 {proof}\n\
 MEZ_BASH_RX2_CANCEL {token} {marker} {proof}\n\
-printf '__MEZ_PARENT_AFTER_CANCEL__\\n'\n\
+printf '__MEZ_PARENT_AFTER_CANCEL__:%s\\n' \"$-\"\n\
 exit\n",
             source.len()
         );
@@ -564,7 +625,14 @@ exit\n",
             !stdout.contains("__MEZ_CANCELLED_SOURCE_RAN__"),
             "{stdout:?}"
         );
-        assert!(stdout.contains("__MEZ_PARENT_AFTER_CANCEL__"), "{stdout:?}");
+        assert!(
+            stdout
+                .split("__MEZ_PARENT_AFTER_CANCEL__:")
+                .nth(1)
+                .and_then(|suffix| suffix.lines().next())
+                .is_some_and(|flags| flags.contains('e') && flags.contains('u')),
+            "{stdout:?}"
+        );
         assert!(
             stdout.contains(&format!(
                 "mez_event=parent-ready;mez_marker={marker};mez_outcome=cancelled;mez_status=130;mez_proof={proof}"
@@ -599,13 +667,13 @@ exit\n",
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         let input = format!(
-            "\x07MEZ_BASH_RX2_BEGIN {token} {marker} {} {digest} 2 {proof}\n\
+            "set -eu\n\x07MEZ_BASH_RX2_BEGIN {token} {marker} {} {digest} 2 {proof}\n\
 MEZ_BASH_RX2_FRAME {token} {marker} 0 {} {frame_digest} 2\n\
 MEZ_BASH_RX2_DATA {token} {marker} 0 !\n\
 MEZ_BASH_RX2_DATA {token} {marker} 1 {encoded}\n\
 MEZ_BASH_RX2_FRAME_END {token} {marker} 0 2\n\
 MEZ_BASH_RX2_END {token} {marker} 2 {} {digest}\n\
-printf '__MEZ_PARENT_AFTER_REJECTION__\\n'\n\
+printf '__MEZ_PARENT_AFTER_REJECTION__:%s\\n' \"$-\"\n\
 exit\n",
             source.len(),
             malformed_frame.len(),
@@ -625,7 +693,11 @@ exit\n",
             "{stdout:?}"
         );
         assert!(
-            stdout.contains("__MEZ_PARENT_AFTER_REJECTION__"),
+            stdout
+                .split("__MEZ_PARENT_AFTER_REJECTION__:")
+                .nth(1)
+                .and_then(|suffix| suffix.lines().next())
+                .is_some_and(|flags| flags.contains('e') && flags.contains('u')),
             "{stdout:?}"
         );
         assert!(
@@ -774,6 +846,75 @@ exit\n",
                 "mez_event=parent-ready;mez_marker={marker};mez_outcome=source-failed;mez_status=70;mez_proof={}",
                 proof.as_str()
             )),
+            "{stdout:?}"
+        );
+    }
+
+    /// Verifies an exact managed-Bash transaction publishes completion before
+    /// restoring strict options inherited from the interactive parent.
+    ///
+    /// The evaluated transaction intentionally reports a failed child status.
+    /// Receiver cleanup must still emit its authenticated completion, leave the
+    /// parent responsive, and restore both `errexit` and `nounset` afterward.
+    #[test]
+    fn managed_bash_receiver_completes_transaction_before_restoring_strict_options() {
+        if !Path::new("/bin/bash").exists() {
+            return;
+        }
+        let token = MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let marker = MarkerToken::new("abcdef0123456789abcdef0123456789").unwrap();
+        let input = mez_agent::ShellTransaction::new(
+            marker.clone(),
+            "turn-strict",
+            "agent-%1",
+            "%1",
+            Path::new("/bin/bash"),
+            "printf '__MEZ_STRICT_ACTION_RAN__\\n'; false",
+        )
+        .unwrap()
+        .with_bash_receiver_token(token)
+        .render_for_classification_input(mez_agent::ShellClassification::Bash);
+        let exchange = format!(
+            "set -eu\nprintf '__MEZ_STRICT_PARENT_READY__\\n'\n{}{}",
+            input.wrapper, input.receiver_payload
+        );
+        let completion = format!(
+            "mez_event=parent-ready;mez_marker={};mez_outcome=completed;mez_status=0",
+            marker.as_str()
+        );
+        let start = format!("133;C;mez_marker={}", marker.as_str());
+        let parent_input = b"printf '__MEZ_STRICT_PARENT_AFTER__:%s\\n' \"$-\"\nexit\n";
+
+        let output = run_managed_bash_receiver_exchange_after_events(
+            "strict-options-completion",
+            exchange.as_bytes(),
+            &[
+                (&start, input.payload.as_bytes()),
+                (&completion, parent_input.as_slice()),
+            ],
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(
+            output.status.success(),
+            "stdout={stdout:?} stderr={stderr:?}"
+        );
+        assert!(
+            stdout.contains(&format!(
+                "133;D;1;mez_marker={};mez_turn=turn-strict;mez_agent=agent-%1;mez_pane=%1",
+                marker.as_str()
+            )),
+            "{stdout:?}"
+        );
+        assert!(stdout.contains(&completion), "{stdout:?}");
+        let strict_flags = stdout
+            .split("__MEZ_STRICT_PARENT_AFTER__:")
+            .nth(1)
+            .and_then(|suffix| suffix.lines().next())
+            .unwrap_or_default();
+        assert!(
+            strict_flags.contains('e') && strict_flags.contains('u'),
             "{stdout:?}"
         );
     }

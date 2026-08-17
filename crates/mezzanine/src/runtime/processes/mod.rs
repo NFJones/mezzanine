@@ -697,6 +697,23 @@ pub(super) enum RuntimeManagedBashAdmission {
     },
 }
 
+/// Authenticated parent-shell receiver readiness for one managed Fish pane.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum RuntimeManagedFishAdmission {
+    /// Startup initialization exists, but its receiver is not yet installed.
+    Pending {
+        /// Exact primary process whose startup source must publish availability.
+        primary_process_id: u32,
+    },
+    /// The parent installed its private wrapper receiver and announced support.
+    Ready {
+        /// Exact primary process that published this admission state.
+        primary_process_id: u32,
+        /// Negotiated semantic protocol version.
+        version: u16,
+    },
+}
+
 /// Authenticated parent-shell admission state for one managed zsh pane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum RuntimeManagedZshAdmission {
@@ -763,6 +780,8 @@ pub(crate) struct RuntimeProcessComponent {
     /// Managed passive Fish integration state keyed by pane process.
     pane_fish_compatibility:
         std::collections::BTreeMap<String, fish_compat::ManagedFishCompatibility>,
+    /// Authenticated managed-Fish receiver readiness keyed by pane id.
+    pane_fish_admissions: std::collections::BTreeMap<String, RuntimeManagedFishAdmission>,
     /// Managed Bash private receiver state keyed by pane id.
     pane_bash_compatibility:
         std::collections::BTreeMap<String, bash_compat::ManagedBashCompatibility>,
@@ -1213,6 +1232,16 @@ impl RuntimeSessionService {
         pane_id: &str,
         pending_input: Vec<u8>,
     ) -> Result<()> {
+        let retain_delayed_render_suppression = self
+            .process
+            .pane_managed_shell_handoffs
+            .get(pane_id)
+            .is_some_and(|handoff| handoff.shell() == ManagedShellKind::Bash)
+            && pending_input.is_empty()
+            && self
+                .process
+                .pane_hidden_shell_render_recent_polls
+                .contains_key(pane_id);
         self.process.pane_managed_shell_handoffs.remove(pane_id);
         self.process
             .pane_agent_subshell_parent_return_pending
@@ -1225,6 +1254,9 @@ impl RuntimeSessionService {
             .remove(pane_id);
         self.clear_agent_subshell_shell_identity(pane_id);
         self.clear_shell_output_filters_for_foreground_input(pane_id);
+        if retain_delayed_render_suppression {
+            self.remember_hidden_shell_render_suppression(pane_id);
+        }
         if !pending_input.is_empty() {
             self.write_runtime_pane_input(pane_id, &pending_input)?;
         }
@@ -1262,6 +1294,7 @@ impl RuntimeSessionService {
         self.process
             .pane_agent_subshell_parent_return_pending
             .remove(pane_id);
+        self.process.pane_fish_admissions.remove(pane_id);
         if let Some(mut handoff) = self.process.pane_managed_shell_handoffs.remove(pane_id) {
             let transition =
                 reduce_managed_shell_handoff(&mut handoff, ManagedShellHandoffEvent::PaneRemoved);
@@ -2516,6 +2549,32 @@ impl RuntimeSessionService {
             .contains(marker)
     }
 
+    /// Returns bounded marker-scoped protocol state for regression diagnostics.
+    pub(crate) fn shell_transaction_protocol_diagnostic_for_tests(&self, marker: &str) -> String {
+        format!(
+            "require_start={} started={} receiver_completion_required={} pending_receiver_end={} pending_receiver_payloads={} receiver_acknowledgements={:?}",
+            self.process
+                .shell_transaction_require_start_markers
+                .contains(marker),
+            self.process
+                .shell_transaction_started_markers
+                .contains(marker),
+            self.process
+                .shell_receiver_completion_required
+                .contains(marker),
+            self.process
+                .shell_receiver_pending_ends
+                .contains_key(marker),
+            self.process
+                .shell_receiver_pending_payloads
+                .get(marker)
+                .map_or(0, std::collections::VecDeque::len),
+            self.process
+                .shell_transaction_receiver_acknowledgements
+                .get(marker),
+        )
+    }
+
     /// Installs the remaining private-receiver acknowledgement count for a test transaction.
     pub(crate) fn set_shell_transaction_receiver_acknowledgements_for_tests(
         &mut self,
@@ -2555,6 +2614,11 @@ impl RuntimeSessionService {
     /// Reports whether bootstrap remains pending for a process fixture.
     pub(crate) fn pane_bootstrap_is_pending_for_tests(&self, pane_id: &str) -> bool {
         self.pane_bootstrap_is_pending(pane_id)
+    }
+
+    /// Reports authenticated managed-Fish receiver readiness to runtime tests.
+    pub(crate) fn managed_fish_adapter_is_ready_for_tests(&self, pane_id: &str) -> bool {
+        self.managed_fish_adapter_is_ready_for_pane(pane_id)
     }
 
     /// Returns the process manager for integration-test observation.
@@ -3087,6 +3151,18 @@ impl RuntimeSessionService {
             .pane_fish_compatibility
             .get(pane_id)
             .map(fish_compat::ManagedFishCompatibility::token)
+    }
+
+    /// Reports whether the current managed Fish parent installed its receiver.
+    pub(super) fn managed_fish_adapter_is_ready_for_pane(&self, pane_id: &str) -> bool {
+        let current_primary_process_id = self.primary_pid_for_live_pane_process(pane_id);
+        matches!(
+            self.process.pane_fish_admissions.get(pane_id),
+            Some(RuntimeManagedFishAdmission::Ready {
+                primary_process_id,
+                ..
+            }) if Some(*primary_process_id) == current_primary_process_id
+        )
     }
 
     /// Runs the poll pane processes operation for this subsystem.
@@ -3798,6 +3874,12 @@ impl RuntimeSessionService {
             self.process
                 .pane_fish_compatibility
                 .insert(descriptor.pane_id.to_string(), compatibility);
+            self.process.pane_fish_admissions.insert(
+                descriptor.pane_id.to_string(),
+                RuntimeManagedFishAdmission::Pending {
+                    primary_process_id: primary_pid,
+                },
+            );
         }
         if let Some(compatibility) = bash_compatibility {
             self.process
@@ -4363,6 +4445,7 @@ impl RuntimeSessionService {
             .pane_current_working_directories
             .remove(pane_id);
         self.process.pane_fish_compatibility.remove(pane_id);
+        self.process.pane_fish_admissions.remove(pane_id);
         self.process.pane_bash_compatibility.remove(pane_id);
         self.process.pane_bash_admissions.remove(pane_id);
         self.process.pane_zsh_compatibility.remove(pane_id);

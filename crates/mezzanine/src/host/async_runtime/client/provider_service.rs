@@ -33,7 +33,8 @@ fn streaming_say_event_changes_projection(event: &mez_agent::StreamingSayEvent) 
         mez_agent::StreamingSayEvent::RationaleTextDelta { text }
         | mez_agent::StreamingSayEvent::TextDelta { text, .. }
         | mez_agent::StreamingSayEvent::ShellCommandTextDelta { text, .. } => !text.is_empty(),
-        mez_agent::StreamingSayEvent::Started { .. }
+        mez_agent::StreamingSayEvent::ResponseStarted { .. }
+        | mez_agent::StreamingSayEvent::Started { .. }
         | mez_agent::StreamingSayEvent::RationaleStarted
         | mez_agent::StreamingSayEvent::ShellCommandStarted { .. }
         | mez_agent::StreamingSayEvent::TextComplete { .. }
@@ -48,6 +49,9 @@ fn push_coalesced_streaming_say_event(
     event: mez_agent::StreamingSayEvent,
 ) {
     match event {
+        mez_agent::StreamingSayEvent::ResponseStarted { response_index } => {
+            events.push(mez_agent::StreamingSayEvent::ResponseStarted { response_index });
+        }
         mez_agent::StreamingSayEvent::RationaleTextDelta { text } => {
             if let Some(mez_agent::StreamingSayEvent::RationaleTextDelta {
                 text: previous_text,
@@ -1361,6 +1365,10 @@ mod tests {
         let mut events = Vec::new();
         push_coalesced_streaming_say_event(
             &mut events,
+            mez_agent::StreamingSayEvent::ResponseStarted { response_index: 1 },
+        );
+        push_coalesced_streaming_say_event(
+            &mut events,
             mez_agent::StreamingSayEvent::TextDelta {
                 action_index: 0,
                 text: "alpha ".to_string(),
@@ -1388,6 +1396,7 @@ mod tests {
         assert_eq!(
             events,
             vec![
+                mez_agent::StreamingSayEvent::ResponseStarted { response_index: 1 },
                 mez_agent::StreamingSayEvent::TextDelta {
                     action_index: 0,
                     text: "alpha beta".to_string(),

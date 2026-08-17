@@ -56,17 +56,20 @@ pub async fn run_mcp_oauth_login_async(
         "{}",
         browser_login_launch_message(&auth_url, browser_opened)
     );
-    let code = wait_for_browser_authorization_code_async(listener, &state).await?;
+    let callback = wait_for_browser_authorization_code_async(listener, &state).await?;
     let mut credential = exchange_mcp_code_for_tokens_async(
         &metadata.token_endpoint,
         &client_id,
         &redirect_uri,
         &pkce.code_verifier,
-        &code,
+        &callback.code,
         scopes,
         Some(&resource),
     )
     .await?;
+    if credential.scopes.is_empty() {
+        credential.scopes = callback.scopes;
+    }
     credential.client_id = Some(client_id);
     credential.resource = Some(resource);
     credential.authorization_endpoint = Some(metadata.authorization_endpoint);
@@ -112,6 +115,13 @@ struct McpOAuthMetadata {
 struct PkceCodes {
     code_verifier: String,
     code_challenge: String,
+}
+
+/// Authorization response data accepted by the localhost callback listener.
+#[derive(Debug)]
+struct McpOAuthCallback {
+    code: String,
+    scopes: Vec<String>,
 }
 
 /// Resolves the OAuth resource indicator used throughout one login flow.
@@ -465,7 +475,7 @@ fn bind_browser_login_listener() -> Result<TcpListener> {
 async fn wait_for_browser_authorization_code_async(
     listener: TcpListener,
     expected_state: &str,
-) -> Result<String> {
+) -> Result<McpOAuthCallback> {
     listener.set_nonblocking(true)?;
     let listener = tokio::net::TcpListener::from_std(listener)?;
     let deadline = tokio::time::Instant::now() + LOGIN_TIMEOUT;
@@ -481,17 +491,17 @@ async fn wait_for_browser_authorization_code_async(
             MezError::invalid_state("MCP OAuth browser callback timed out while reading")
         })??;
     let request = String::from_utf8_lossy(&buffer[..bytes_read]);
-    let code = match parse_callback_request(&request, expected_state) {
-        Ok(code) => {
+    let callback = match parse_callback_request(&request, expected_state) {
+        Ok(callback) => {
             let _ = write_http_response_async(&mut stream, 200, "MCP login complete.").await;
-            code
+            callback
         }
         Err(error) => {
             let _ = write_http_response_async(&mut stream, 400, "MCP login failed.").await;
             return Err(error);
         }
     };
-    Ok(code)
+    Ok(callback)
 }
 
 async fn write_http_response_async(
@@ -513,7 +523,7 @@ async fn write_http_response_async(
     Ok(())
 }
 
-fn parse_callback_request(request: &str, expected_state: &str) -> Result<String> {
+fn parse_callback_request(request: &str, expected_state: &str) -> Result<McpOAuthCallback> {
     let request_line = request
         .lines()
         .next()
@@ -552,10 +562,14 @@ fn parse_callback_request(request: &str, expected_state: &str) -> Result<String>
             "MCP OAuth login failed: {error}"
         )));
     }
-    query
-        .get("code")
-        .cloned()
-        .ok_or_else(|| MezError::invalid_state("MCP OAuth browser callback did not include a code"))
+    let code = query.get("code").cloned().ok_or_else(|| {
+        MezError::invalid_state("MCP OAuth browser callback did not include a code")
+    })?;
+    let scopes = query
+        .get("scope")
+        .map(|scope| scope.split_whitespace().map(ToOwned::to_owned).collect())
+        .unwrap_or_default();
+    Ok(McpOAuthCallback { code, scopes })
 }
 
 fn build_authorize_url(
@@ -920,12 +934,14 @@ mod tests {
         );
     }
 
-    /// Verifies callback parsing rejects CSRF state mismatches while accepting
-    /// the callback path and authorization code used by the browser flow.
+    /// Verifies callback parsing retains granted scopes while rejecting CSRF
+    /// state mismatches from browser authorization responses.
     #[test]
     fn callback_parser_requires_matching_state() {
-        let request = "GET /callback?code=ok&state=good HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
-        assert_eq!(parse_callback_request(request, "good").unwrap(), "ok");
+        let request = "GET /callback?code=ok&state=good&scope=read%3Aall%3Atwg%20write%3Aall%3Atwg HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+        let callback = parse_callback_request(request, "good").unwrap();
+        assert_eq!(callback.code, "ok");
+        assert_eq!(callback.scopes, ["read:all:twg", "write:all:twg"]);
         let error = parse_callback_request(request, "bad").unwrap_err();
         assert!(error.message().contains("state did not match"));
     }

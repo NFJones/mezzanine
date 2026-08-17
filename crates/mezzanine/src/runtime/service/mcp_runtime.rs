@@ -351,6 +351,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn mcp_registry_mut(&mut self) -> &mut McpRegistry {
         self.integration.mcp_registry_mut()
     }

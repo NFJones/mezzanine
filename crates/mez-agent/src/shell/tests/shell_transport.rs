@@ -153,7 +153,7 @@ fn managed_zsh_agent_subshell_uses_runtime_owned_interactive_startup() {
         source.contains("ZDOTDIR='/tmp/mez-managed-zsh'"),
         "{source}"
     );
-    assert!(source.contains("'/bin/zsh' -i"), "{source}");
+    assert!(source.contains("'/bin/zsh' -d -i"), "{source}");
     assert!(!source.contains("'/bin/zsh' -l -i"), "{source}");
     assert!(!source.contains("$MEZ_ZSH_MANAGED_ZDOTDIR"), "{source}");
     assert!(!source.contains("'/bin/zsh' -c"), "{source}");

@@ -1,7 +1,8 @@
 //! Unit tests for pane process command planning and PTY lifecycle behavior.
 
 use super::pane::{
-    append_output_chunk_to_backlog, drain_output_backlog, shell_input_acknowledgement_count,
+    append_output_chunk_to_backlog, drain_output_backlog, foreground_process_group_id_from_raw,
+    shell_input_acknowledgement_count,
 };
 use super::{
     PaneProcessEnvironment, PaneProcessLaunch, PaneProcessManager, pane_command_plan,
@@ -35,6 +36,18 @@ fn test_environment() -> PaneProcessEnvironment {
         pane: "%1".to_string(),
         term: "mez-pane".to_string(),
     }
+}
+
+/// Verifies absent or invalid host foreground groups are not treated as PIDs.
+///
+/// Darwin can report zero from `tcgetpgrp` while a PTY temporarily has no
+/// foreground owner. The PTY adapter must represent that lifecycle state as
+/// unavailable instead of passing it to an API that requires a positive PID.
+#[test]
+fn foreground_process_group_conversion_rejects_non_positive_values() {
+    assert_eq!(foreground_process_group_id_from_raw(-1), None);
+    assert_eq!(foreground_process_group_id_from_raw(0), None);
+    assert_eq!(foreground_process_group_id_from_raw(42), Some(42));
 }
 
 /// Runs the wait for manager output activity operation for this subsystem.

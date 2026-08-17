@@ -405,7 +405,7 @@ impl RuntimeSessionService {
             .process
             .pane_managed_shell_handoffs
             .get(pane_id)
-            .is_some_and(ManagedShellHandoff::editor_clear_is_pending)
+            .is_some_and(ManagedShellHandoff::editor_clear_render_is_pending)
         {
             return PaneOutputRenderMode::ManagedEditorClear;
         }

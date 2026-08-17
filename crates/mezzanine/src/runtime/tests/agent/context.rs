@@ -325,6 +325,60 @@ fn runtime_status_separates_latest_and_cumulative_cache_reuse() {
     assert_eq!(latest.usage.cached_input_tokens, Some(90));
 }
 
+/// Verifies `/status` identifies configured input limits as a proactive
+/// compaction trigger while retaining the existing trigger list when a profile
+/// does not configure that limit.
+#[test]
+fn runtime_status_reports_configured_input_limit_compaction_policy() {
+    let mut without_limit = test_runtime_service();
+    without_limit
+        .replace_config_layers(vec![ConfigLayer {
+            name: "without-input-limit".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"work\"\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-work\"]\ndefault_model = \"gpt-work\"\n[model_profiles.work]\nprovider = \"openai\"\nmodel = \"gpt-work\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    without_limit
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let without_limit_status = without_limit.runtime_agent_status_display("%1").unwrap();
+    assert!(
+        without_limit_status.contains("compaction=provider-rejection/manual"),
+        "{without_limit_status}"
+    );
+    assert!(
+        !without_limit_status.contains("configured-input-limit"),
+        "{without_limit_status}"
+    );
+
+    let mut with_limit = test_runtime_service();
+    with_limit
+        .replace_config_layers(vec![ConfigLayer {
+            name: "with-input-limit".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"work\"\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-work\"]\ndefault_model = \"gpt-work\"\n[model_profiles.work]\nprovider = \"openai\"\nmodel = \"gpt-work\"\nmax_input_tokens = 4096\n"
+                .to_string(),
+        }])
+        .unwrap();
+    with_limit
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let with_limit_status = with_limit.runtime_agent_status_display("%1").unwrap();
+    assert!(
+        with_limit_status.contains("compaction=configured-input-limit/provider-rejection/manual"),
+        "{with_limit_status}"
+    );
+}
+
 /// Verifies a cold request after compaction can be followed by a warm latest
 /// request without erasing the cumulative cold-start cost.
 ///
