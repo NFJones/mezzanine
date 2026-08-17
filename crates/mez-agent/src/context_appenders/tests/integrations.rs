@@ -138,6 +138,30 @@ fn mcp_context_is_provider_aware_and_keeps_unavailability_diagnostics() {
 }
 
 #[test]
+/// Verifies wire API compatibility, rather than a configured provider alias,
+/// controls whether the cache-stable OpenAI Responses action gets its manifest.
+fn mcp_context_uses_resolved_openai_responses_api_for_aliased_providers() {
+    let context = AgentContext::new_durable(vec![ContextBlock::user_event(
+        "user prompt",
+        "use @GitHub_2 to inspect the issue",
+    )])
+    .unwrap();
+    let summary = mcp_summary_for_server_ids(&["GitHub_2"]);
+
+    let context = append_mcp_context_for_api_with_configured(
+        context,
+        &summary,
+        ProviderApiCompatibility::OpenAiResponses,
+        &[],
+    )
+    .expect("aliased OpenAI Responses providers should receive the late manifest");
+
+    let manifest = mcp_context_content(&context);
+    assert!(manifest.contains("available_tool=GitHub_2/lookup"));
+    assert!(manifest.contains("input_schema="));
+}
+
+#[test]
 /// Verifies explicit mentions preserve exact configured identifier casing and
 /// expose the matching server tools to both prompt context and action schemas.
 fn mcp_context_resolves_exact_mixed_case_configured_server_id() {

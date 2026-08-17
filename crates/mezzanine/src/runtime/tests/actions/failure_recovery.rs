@@ -96,6 +96,87 @@ fn runtime_shell_history_remains_outside_model_context() {
     );
 }
 
+/// Verifies an arbitrarily named provider using the OpenAI Responses wire API
+/// receives the selected MCP manifest required by its generic action schema.
+#[test]
+fn runtime_mcp_context_uses_resolved_api_for_aliased_openai_provider() {
+    let mut service = test_runtime_service();
+    service
+        .integration
+        .provider_registry_mut()
+        .providers
+        .insert(
+            "enterprise".to_string(),
+            crate::runtime::RuntimeProviderConfig {
+                provider_id: "enterprise".to_string(),
+                kind: "custom".to_string(),
+                api: Some(mez_agent::OPENAI_RESPONSES_API.to_string()),
+                auth_profile: "default".to_string(),
+                base_url: None,
+                models: vec!["test".to_string()],
+                default_model: Some("test".to_string()),
+                options: std::collections::BTreeMap::new(),
+            },
+        );
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"aliased-mcp-context","input":"use @fs to read the file"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let durable = service.agent_turn_contexts().get("turn-1").unwrap().clone();
+    let summary = mez_agent::McpPromptSummary {
+        available_servers: vec![mez_agent::McpPromptServer {
+            server_id: "fs".to_string(),
+            display_name: "Filesystem".to_string(),
+            purpose: "Read files".to_string(),
+            usage_instructions: "Use read_file".to_string(),
+            tool_count: 1,
+            approval_required_tool_count: 0,
+        }],
+        available_tools: vec![mez_agent::McpPromptTool {
+            server_id: "fs".to_string(),
+            tool_name: "read_file".to_string(),
+            description: "Read a file".to_string(),
+            approval_required: false,
+            input_schema_json: r#"{"type":"object"}"#.to_string(),
+        }],
+        unavailable_servers: Vec::new(),
+    };
+
+    let (prepared, tools) = service
+        .prepare_agent_turn_model_context(
+            &turn,
+            durable,
+            &summary,
+            &runtime_model_profile("enterprise", "test"),
+        )
+        .unwrap();
+    let context = prepared.to_agent_context();
+    let manifest = context
+        .blocks()
+        .iter()
+        .find(|block| block.label == "mcp integrations")
+        .expect("OpenAI Responses alias should receive MCP live context");
+
+    assert_eq!(tools.len(), 1);
+    assert!(manifest.content.contains("available_tool=fs/read_file"));
+    assert!(manifest.content.contains("input_schema="));
+}
+
 /// Verifies a stale running `spawn_agent` result without a live joined child is
 /// not treated as a runtime progress path.
 ///

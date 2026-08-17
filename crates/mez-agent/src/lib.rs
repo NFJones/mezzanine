@@ -241,11 +241,12 @@ pub use context::{
     validate_context_placement_order, validate_context_required, validate_context_semantics,
 };
 pub use context_appenders::{
-    append_mcp_context, append_mcp_context_for_provider,
-    append_mcp_context_for_provider_with_configured, append_mcp_context_with_configured,
-    append_memory_context, append_permission_policy_context, append_project_guidance_context,
-    invoked_mcp_tools_for_context, invoked_mcp_tools_for_context_with_configured,
-    memory_context_blocks, set_project_guidance_context,
+    append_mcp_context, append_mcp_context_for_api_with_configured,
+    append_mcp_context_for_provider, append_mcp_context_for_provider_with_configured,
+    append_mcp_context_with_configured, append_memory_context, append_permission_policy_context,
+    append_project_guidance_context, invoked_mcp_tools_for_context,
+    invoked_mcp_tools_for_context_with_configured, memory_context_blocks,
+    set_project_guidance_context,
 };
 pub use context_assembly::{
     ModelRequestIdentity, assemble_model_request_from_context, role_for_context_block,

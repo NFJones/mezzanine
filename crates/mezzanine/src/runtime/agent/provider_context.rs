@@ -10,9 +10,9 @@
 use super::{
     AgentId, AgentTurnRecord, AgentTurnState, ContextBlock, ContextSourceKind, MezError,
     ModelProfile, Result, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
-    RuntimeSessionService, append_mcp_context_for_provider_with_configured,
-    invoked_mcp_tools_for_context_with_configured, runtime_cooperation_mode_name,
-    runtime_mezzanine_error_code, set_project_guidance_context,
+    RuntimeSessionService, append_mcp_context_for_api_with_configured,
+    append_mcp_context_for_provider_with_configured, invoked_mcp_tools_for_context_with_configured,
+    runtime_cooperation_mode_name, runtime_mezzanine_error_code, set_project_guidance_context,
 };
 #[cfg(test)]
 use crate::runtime::RuntimeAutoSizingDecision;
@@ -95,12 +95,27 @@ impl RuntimeSessionService {
                 )
                 .map_err(|error| MezError::invalid_state(error.to_string()))?;
         }
-        request_context = append_mcp_context_for_provider_with_configured(
-            request_context,
-            mcp_summary,
-            &model_profile.provider,
-            self.integration.always_exposed_mcp_servers(),
-        )?;
+        request_context = if let Some(provider_config) =
+            self.provider_registry().provider(&model_profile.provider)
+        {
+            let provider_api = mez_agent::resolve_provider_api(
+                &provider_config.kind,
+                provider_config.api.as_deref(),
+            )?;
+            append_mcp_context_for_api_with_configured(
+                request_context,
+                mcp_summary,
+                provider_api,
+                self.integration.always_exposed_mcp_servers(),
+            )?
+        } else {
+            append_mcp_context_for_provider_with_configured(
+                request_context,
+                mcp_summary,
+                &model_profile.provider,
+                self.integration.always_exposed_mcp_servers(),
+            )?
+        };
         let available_mcp_tools = invoked_mcp_tools_for_context_with_configured(
             &durable,
             mcp_summary,
