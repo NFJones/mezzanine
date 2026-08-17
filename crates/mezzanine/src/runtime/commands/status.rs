@@ -284,8 +284,13 @@ impl RuntimeSessionService {
             vec![
                 "Context".to_string(),
                 format!(
-                    "{context_blocks} blocks, {request_messages} request messages, window={} tokens, compaction=provider-rejection/manual",
-                    model_profile.context_window_tokens()
+                    "{context_blocks} blocks, {request_messages} request messages, window={} tokens, compaction={}",
+                    model_profile.context_window_tokens(),
+                    if model_profile.max_input_tokens().is_some() {
+                        "configured-input-limit/provider-rejection/manual"
+                    } else {
+                        "provider-rejection/manual"
+                    }
                 ),
             ],
             vec![
