@@ -1,10 +1,10 @@
 //! Transaction timer planning and protocol-state maintenance.
 
 use super::{
-    RenderInvalidationReason, Result, RuntimeSessionService, RuntimeShellTransactionTimerKind,
-    RuntimeShellTransactionTimerRef, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind,
-    RuntimeTransition, runtime_shell_transaction_effective_timeout_ms,
-    runtime_shell_transaction_timer_kind,
+    AgentTurnState, EventKind, MezError, PaneReadinessState, RenderInvalidationReason, Result,
+    RuntimeSessionService, RuntimeShellTransactionTimerKind, RuntimeShellTransactionTimerRef,
+    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, json_escape,
+    runtime_shell_transaction_effective_timeout_ms, runtime_shell_transaction_timer_kind,
 };
 use std::collections::{BTreeMap, HashSet};
 
@@ -20,11 +20,77 @@ impl RuntimeSessionService {
         let certifications = self.expire_timed_out_agent_subshell_certifications(now_unix_ms)?;
         let recovery_observations =
             self.expire_timed_out_shell_dispatch_recovery_observations(now_unix_ms)?;
+        let foreign_bootstraps = self.expire_timed_out_foreign_shell_bootstraps(now_unix_ms)?;
         let focused = self.expire_timed_out_focused_shell_hooks(now_unix_ms)?;
         Ok(expired
             .saturating_add(certifications)
             .saturating_add(recovery_observations)
+            .saturating_add(foreign_bootstraps)
             .saturating_add(focused))
+    }
+
+    /// Settles foreign bootstrap phases whose bounded adapter owner expired.
+    fn expire_timed_out_foreign_shell_bootstraps(&mut self, now_unix_ms: u64) -> Result<usize> {
+        let expired = self
+            .process
+            .pane_foreign_shell_boundaries
+            .iter()
+            .filter(|(_, boundary)| {
+                boundary.phase.has_bounded_owner()
+                    && now_unix_ms.saturating_sub(boundary.phase_started_at_unix_ms)
+                        >= super::super::RUNTIME_FOREIGN_SHELL_BOOTSTRAP_PHASE_TIMEOUT_MS
+            })
+            .map(|(pane_id, boundary)| (pane_id.clone(), boundary.interaction_generation))
+            .collect::<Vec<_>>();
+        for (pane_id, interaction_generation) in &expired {
+            let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) else {
+                continue;
+            };
+            if boundary.interaction_generation != *interaction_generation
+                || !boundary.phase.has_bounded_owner()
+            {
+                continue;
+            }
+            boundary.phase = super::super::RuntimeForeignShellBootstrapPhase::Failed;
+            boundary.phase_started_at_unix_ms = now_unix_ms;
+            boundary.challenge = None;
+            self.process.pane_bootstrap_pending.remove(pane_id);
+            self.mark_pane_environment_authority_unavailable(
+                pane_id,
+                super::super::RuntimePaneEnvironmentAuthorityUnavailableReason::ForeignBootstrapTimedOut,
+            );
+            self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+            self.append_agent_error_text_to_terminal_buffer(
+                pane_id,
+                "agent: foreign shell bootstrap timed out; install or activate Mezzanine shell integration inside this environment and wait for its prompt",
+            )?;
+            self.append_lifecycle_event(
+                EventKind::AgentStatus,
+                format!(
+                    r#"{{"pane_id":"{}","foreign_bootstrap":"timed_out","generation":{},"state":"degraded"}}"#,
+                    json_escape(pane_id),
+                    interaction_generation
+                ),
+            )?;
+            let pending_turn_ids = self
+                .agent_turn_ledger()
+                .turns()
+                .iter()
+                .filter(|turn| {
+                    turn.pane_id == *pane_id
+                        && turn.state == AgentTurnState::Running
+                        && self.agent_provider_task_is_pending(&turn.turn_id)
+                })
+                .map(|turn| turn.turn_id.clone())
+                .collect::<Vec<_>>();
+            let error = MezError::invalid_state(
+                "foreign shell bootstrap timed out; install or activate Mezzanine shell integration inside the SSH or container environment and wait for its prompt",
+            );
+            for turn_id in pending_turn_ids {
+                self.fail_configured_agent_provider_task(&turn_id, &error)?;
+            }
+        }
+        Ok(expired.len())
     }
 
     /// Applies shell-transaction expiry through the transport-neutral transition contract.
@@ -76,6 +142,21 @@ impl RuntimeSessionService {
                     kind: RuntimeShellTransactionTimerKind::Bootstrap,
                     started_at_unix_ms: pending.started_at_unix_ms,
                     timeout_ms: super::RUNTIME_SHELL_DISPATCH_RECOVERY_OBSERVATION_TIMEOUT_MS,
+                }),
+        );
+        timers.extend(
+            self.process
+                .pane_foreign_shell_boundaries
+                .iter()
+                .filter(|(_, boundary)| boundary.phase.has_bounded_owner())
+                .map(|(pane_id, boundary)| RuntimeShellTransactionTimerRef {
+                    marker: format!(
+                        "foreign-shell-bootstrap:{pane_id}:{}",
+                        boundary.interaction_generation
+                    ),
+                    kind: RuntimeShellTransactionTimerKind::Bootstrap,
+                    started_at_unix_ms: boundary.phase_started_at_unix_ms,
+                    timeout_ms: super::super::RUNTIME_FOREIGN_SHELL_BOOTSTRAP_PHASE_TIMEOUT_MS,
                 }),
         );
         timers.extend(

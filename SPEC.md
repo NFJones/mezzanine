@@ -4011,6 +4011,27 @@ executable. If the active environment's `$SHELL` is unset, empty, relative,
 non-executable, or otherwise unusable but `/bin/sh` is executable, Mezzanine
 MUST classify `/bin/sh` as the shell identity for that environment.
 
+Re-bootstrap across an SSH, container, chroot, or other nested interactive
+boundary MUST use a Mezzanine shell adapter running inside that environment.
+The adapter MUST publish a versioned candidate only at a completed prompt
+boundary. Runtime MUST bind that candidate to the pane primary process, outer
+foreground process group, shell-interaction generation, shell kind, adapter
+instance, token, and trigger before issuing a shell-native editor-acquisition
+challenge. Candidate metadata or a matching token alone MUST NOT authorize
+generated input. Only a matching challenge completion for the active boundary
+MAY advance identity discovery. Primary-environment adapter tokens, startup
+paths, shell identities, and admission state MUST remain inaccessible while a
+foreign boundary is active.
+
+Foreign bootstrap MUST have finite phase deadlines for adapter discovery,
+editor challenge, identity discovery, child bootstrap, and certification.
+Provider work MAY remain pending only while one of those deadlines owns
+progress. Expiry MUST fail pending work with an actionable integration
+diagnostic and MUST NOT interrupt or inject input into the foreign foreground.
+Mezzanine MUST NOT silently install or modify startup files in the foreign
+environment. An unmanaged already-running foreign shell is unsupported until
+the user explicitly installs or activates compatible integration there.
+
 Host process metadata MUST authorize non-interactive shell dispatch only when
 the observed foreground process group is either the original pane shell PID or
 process group, or a non-primary shell boundary certified for the current pane

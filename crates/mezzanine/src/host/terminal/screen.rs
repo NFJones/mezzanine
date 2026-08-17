@@ -99,6 +99,17 @@ fn parse_managed_shell_protocol_event(values: &BTreeMap<&str, &str>) -> Option<T
     };
     let token = required_marker_field(values, "mez_token")?;
     let event = match values.get("mez_event").copied()? {
+        "foreign-adapter-candidate" => ManagedShellProtocolEvent::ForeignAdapterCandidate {
+            instance_id: required_bounded_field(values, "mez_instance", 128)?,
+            trigger: match values.get("mez_trigger") {
+                Some(_) => Some(required_bounded_field(values, "mez_trigger", 32)?),
+                None => None,
+            },
+        },
+        "foreign-challenge-completed" => ManagedShellProtocolEvent::ForeignChallengeCompleted {
+            instance_id: required_bounded_field(values, "mez_instance", 128)?,
+            challenge: required_bounded_field(values, "mez_challenge", 128)?,
+        },
         "adapter-available" => ManagedShellProtocolEvent::AdapterAvailable {
             trigger: match values.get("mez_trigger") {
                 Some(_) => Some(required_bounded_field(values, "mez_trigger", 32)?),
@@ -251,6 +262,65 @@ mod tests {
             "133;R;mez_protocol=2;mez_shell=zsh;mez_token=pane-token;mez_event=adapter-unavailable;mez_reason=",
             "133;R;mez_protocol=2;mez_shell=zshhhhhhhhhhhhhhhhh;mez_token=pane-token;mez_event=adapter-available;mez_trigger=escape-m",
             "133;R;mez_protocol=2;mez_shell=zsh;mez_token=pane-token;mez_event=adapter-unavailable;mez_reason=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            assert_eq!(parse_mez_shell_transaction_osc(payload), None, "{payload}");
+        }
+    }
+
+    /// Verifies foreign adapters publish bounded advisory identity separately
+    /// from the runtime nonce that proves shell-native editor acquisition.
+    ///
+    /// The candidate token is not sufficient to authorize generated input. A
+    /// later challenge completion must retain both the adapter instance and
+    /// the unpredictable runtime challenge for generation-scoped admission.
+    #[test]
+    fn foreign_adapter_events_parse_candidate_and_challenge_metadata() {
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_protocol=2;mez_shell=bash;mez_token=foreign-token;mez_event=foreign-adapter-candidate;mez_instance=remote-bash-1"
+            ),
+            Some(TerminalOscEvent::ManagedShell {
+                version: 2,
+                shell: ManagedShellAdapter::Bash,
+                token: "foreign-token".to_string(),
+                event: ManagedShellProtocolEvent::ForeignAdapterCandidate {
+                    instance_id: "remote-bash-1".to_string(),
+                    trigger: None,
+                },
+            })
+        );
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_protocol=2;mez_shell=zsh;mez_token=foreign-token;mez_event=foreign-adapter-candidate;mez_instance=remote-zsh-1;mez_trigger=escape-n"
+            ),
+            Some(TerminalOscEvent::ManagedShell {
+                version: 2,
+                shell: ManagedShellAdapter::Zsh,
+                token: "foreign-token".to_string(),
+                event: ManagedShellProtocolEvent::ForeignAdapterCandidate {
+                    instance_id: "remote-zsh-1".to_string(),
+                    trigger: Some("escape-n".to_string()),
+                },
+            })
+        );
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_protocol=2;mez_shell=bash;mez_token=foreign-token;mez_event=foreign-challenge-completed;mez_instance=remote-bash-1;mez_challenge=0123456789abcdef0123456789abcdef"
+            ),
+            Some(TerminalOscEvent::ManagedShell {
+                version: 2,
+                shell: ManagedShellAdapter::Bash,
+                token: "foreign-token".to_string(),
+                event: ManagedShellProtocolEvent::ForeignChallengeCompleted {
+                    instance_id: "remote-bash-1".to_string(),
+                    challenge: "0123456789abcdef0123456789abcdef".to_string(),
+                },
+            })
+        );
+
+        for payload in [
+            "133;R;mez_protocol=2;mez_shell=bash;mez_token=foreign-token;mez_event=foreign-adapter-candidate;mez_instance=",
+            "133;R;mez_protocol=2;mez_shell=bash;mez_token=foreign-token;mez_event=foreign-challenge-completed;mez_instance=remote-bash-1;mez_challenge=",
         ] {
             assert_eq!(parse_mez_shell_transaction_osc(payload), None, "{payload}");
         }

@@ -748,17 +748,17 @@ fn runtime_agent_shell_immediate_reentry_stays_closed_after_failed_identity_prob
     let _ = process.terminate(Duration::from_millis(10));
 }
 
-/// Verifies agent entry while an uncertified foreign process owns the PTY
-/// creates one shell-interaction epoch without sending generated input.
+/// Verifies agent entry while a foreign process owns the PTY creates one
+/// bounded, generation-scoped bootstrap lifecycle without unsafe input.
 ///
 /// SSH and container clients can expose a shell that differs from the host
 /// pane shell, while password prompts and full-screen programs expose no shell
-/// at all. Prompts submitted across this boundary must fail explicitly rather
-/// than remain in a permanent thinking state. Repeated entry attempts remain
-/// idempotently deferred until the certified primary shell returns, at which
-/// point ordinary prompt-gated identity discovery may resume.
+/// at all. Advisory adapter candidates must therefore wait for a prompt
+/// boundary, and only a matching runtime challenge may advance discovery.
+/// Provider work remains pending only while that lifecycle has a finite owner;
+/// timeout fails it actionably without writing into the foreign foreground.
 #[test]
-fn runtime_agent_shell_entry_rejects_prompt_at_uncertified_foreign_foreground() {
+fn runtime_agent_shell_entry_bootstraps_foreign_adapter_with_bounded_admission() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -788,6 +788,11 @@ fn runtime_agent_shell_entry_rejects_prompt_at_uncertified_foreign_foreground() 
 
     assert!(show.contains("visibility=visible"), "{show}");
     assert!(service.pane_has_uncertified_foreign_shell_boundary(&pane_id));
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("awaiting-adapter")
+    );
+    assert!(service.pane_bootstrap_has_bounded_progress_owner(&pane_id));
     assert!(service.agent_subshell_entry_is_deferred(&pane_id));
     assert!(!service.agent_subshell_is_active(&pane_id));
     assert!(
@@ -803,7 +808,7 @@ fn runtime_agent_shell_entry_rejects_prompt_at_uncertified_foreign_foreground() 
             .claim_configured_agent_provider_task(&agent_id, &started.turn_id)
             .unwrap()
             .is_none(),
-        "a foreign foreground boundary must reject provider dispatch"
+        "provider dispatch must defer while foreign bootstrap has a deadline"
     );
     assert_eq!(
         service
@@ -812,12 +817,12 @@ fn runtime_agent_shell_entry_rejects_prompt_at_uncertified_foreign_foreground() 
             .iter()
             .find(|turn| turn.turn_id == started.turn_id)
             .map(|turn| turn.state),
-        Some(AgentTurnState::Failed),
-        "foreign-boundary rejection must not leave the submitted prompt running"
+        Some(AgentTurnState::Running),
+        "bounded foreign bootstrap must retain the submitted prompt"
     );
     assert!(
-        !service.agent_provider_task_is_pending(&started.turn_id),
-        "foreign-boundary rejection must remove the pending provider task"
+        service.agent_provider_task_is_pending(&started.turn_id),
+        "bounded foreign bootstrap must retain the pending provider task"
     );
     let interaction_generation =
         service.pane_foreground_process_diagnostic(&pane_id).json()["shell_interaction_generation"]
@@ -834,6 +839,116 @@ fn runtime_agent_shell_entry_rejects_prompt_at_uncertified_foreign_foreground() 
     assert!(
         pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
         "a repeated entry attempt must remain input-free"
+    );
+
+    let candidate = TerminalOscEvent::ManagedShell {
+        version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+        shell: mez_terminal::ManagedShellAdapter::Bash,
+        token: "foreign-token".to_string(),
+        event: mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate {
+            instance_id: "remote-bash-1".to_string(),
+            trigger: None,
+        },
+    };
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(&pane_id, std::slice::from_ref(&candidate))
+            .unwrap(),
+        0,
+        "a candidate before the foreign prompt boundary must remain advisory"
+    );
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("awaiting-adapter")
+    );
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(&pane_id, &[TerminalOscEvent::ShellPromptEnd])
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(&pane_id, &[candidate])
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("challenging-adapter")
+    );
+    let challenge = service
+        .foreign_shell_bootstrap_challenge_for_tests(&pane_id)
+        .expect("an admitted candidate must receive a runtime challenge")
+        .to_string();
+    let mismatched = TerminalOscEvent::ManagedShell {
+        version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+        shell: mez_terminal::ManagedShellAdapter::Bash,
+        token: "host-or-stale-token".to_string(),
+        event: mez_terminal::ManagedShellProtocolEvent::ForeignChallengeCompleted {
+            instance_id: "remote-bash-1".to_string(),
+            challenge: challenge.clone(),
+        },
+    };
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(&pane_id, &[mismatched])
+            .unwrap(),
+        0,
+        "a stale or host adapter token must not cross the foreign boundary"
+    );
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("challenging-adapter")
+    );
+    let completed = TerminalOscEvent::ManagedShell {
+        version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+        shell: mez_terminal::ManagedShellAdapter::Bash,
+        token: "foreign-token".to_string(),
+        event: mez_terminal::ManagedShellProtocolEvent::ForeignChallengeCompleted {
+            instance_id: "remote-bash-1".to_string(),
+            challenge,
+        },
+    };
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(&pane_id, &[completed])
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("identity-probing")
+    );
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "the protocol foundation must remain input-free until a shell-specific transport owns delivery"
+    );
+
+    assert_eq!(
+        service
+            .apply_shell_transaction_timer_event(u64::MAX)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("failed")
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == started.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed),
+        "foreign bootstrap timeout must settle the submitted prompt"
+    );
+    assert!(!service.agent_provider_task_is_pending(&started.turn_id));
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "foreign bootstrap timeout must not interrupt or write to the foreign foreground"
     );
 
     service

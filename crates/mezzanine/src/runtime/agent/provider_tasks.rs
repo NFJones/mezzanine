@@ -513,8 +513,16 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         if self.pane_has_uncertified_foreign_shell_boundary(&turn.pane_id) {
+            if self.pane_foreign_shell_bootstrap_has_bounded_progress_owner(&turn.pane_id) {
+                self.append_agent_trace_turn_event(
+                    &turn.pane_id,
+                    &turn.turn_id,
+                    "provider_task deferred reason=foreign_shell_bootstrap_pending",
+                )?;
+                return Ok(None);
+            }
             return Err(MezError::invalid_state(
-                "agent dispatch is unavailable while an uncertified foreign process owns the pane; exit the SSH, container, or other foreground session before submitting a prompt",
+                "foreign shell bootstrap is unavailable; install or activate Mezzanine shell integration inside the SSH or container environment and wait for its prompt",
             ));
         }
 

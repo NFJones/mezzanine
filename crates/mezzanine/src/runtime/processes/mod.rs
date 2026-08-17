@@ -217,6 +217,8 @@ pub(crate) enum RuntimePaneEnvironmentAuthorityUnavailableReason {
     BootstrapProtocolViolation,
     /// Syntax-neutral shell identity discovery failed before bootstrap.
     ShellIdentityProbeFailed,
+    /// A foreign environment did not complete managed adapter admission.
+    ForeignBootstrapTimedOut,
     /// Agent-subshell certification rejected the discovered environment.
     AgentSubshellCertification(RuntimeAgentSubshellCertificationRejection),
 }
@@ -245,6 +247,10 @@ impl RuntimePaneEnvironmentAuthorityUnavailableReason {
             }
             Self::ShellIdentityProbeFailed => {
                 "pane shell identity probe failed before environment certification".to_string()
+            }
+            Self::ForeignBootstrapTimedOut => {
+                "foreign shell bootstrap timed out; install or activate Mezzanine shell integration inside the SSH or container environment and wait for its prompt"
+                    .to_string()
             }
             Self::AgentSubshellCertification(reason) => format!(
                 "pane agent-subshell bootstrap certification failed: {}",
@@ -318,6 +324,77 @@ struct RuntimePaneProbedShellIdentity {
 /// No generated input may cross this boundary until separate shell evidence
 /// certifies an executable and transport for the active environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeForeignShellBootstrapPhase {
+    /// A foreign process group was detected but no prompt-scoped adapter exists.
+    AwaitingAdapter,
+    /// A candidate is pinned while its native editor challenge is outstanding.
+    ChallengingAdapter,
+    /// The admitted adapter is ready for syntax-neutral identity discovery.
+    IdentityProbing,
+    /// The admitted adapter is staging and launching the managed child shell.
+    #[allow(dead_code)]
+    BootstrappingChild,
+    /// Bootstrap and correlated environment certification completed.
+    #[allow(dead_code)]
+    Certified,
+    /// The bounded foreign bootstrap lifecycle settled without authority.
+    Failed,
+}
+
+impl RuntimeForeignShellBootstrapPhase {
+    /// Returns the stable protocol name used by diagnostics and tests.
+    #[cfg(test)]
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::AwaitingAdapter => "awaiting-adapter",
+            Self::ChallengingAdapter => "challenging-adapter",
+            Self::IdentityProbing => "identity-probing",
+            Self::BootstrappingChild => "bootstrapping-child",
+            Self::Certified => "certified",
+            Self::Failed => "failed",
+        }
+    }
+
+    /// Reports whether this phase still has a finite runtime deadline.
+    fn has_bounded_owner(self) -> bool {
+        !matches!(self, Self::Certified | Self::Failed)
+    }
+}
+
+/// Origin of one managed-shell adapter descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeManagedShellAdapterOrigin {
+    /// Adapter belongs to the primary pane shell environment.
+    #[allow(dead_code)]
+    Primary,
+    /// Adapter belongs to the active SSH, container, or other foreign boundary.
+    Foreign,
+}
+
+/// Complete authority identity for one admitted managed-shell adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeManagedShellAdapterDescriptor {
+    /// Pane process that owns the outer PTY.
+    primary_process_id: u32,
+    /// Outer foreground process group that contains the foreign environment.
+    process_group_id: u32,
+    /// Shell-interaction epoch that fences stale adapter records.
+    interaction_generation: u64,
+    /// Whether this descriptor belongs to the primary or foreign environment.
+    origin: RuntimeManagedShellAdapterOrigin,
+    /// Managed-shell protocol version published by the adapter.
+    version: u16,
+    /// Shell-native adapter implementation.
+    shell: mez_terminal::ManagedShellAdapter,
+    /// Adapter-private authentication token.
+    token: String,
+    /// Adapter instance identity for one foreign shell lifetime.
+    instance_id: String,
+    /// Fixed shell-native trigger when required by the adapter.
+    trigger: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeForeignShellBoundary {
     /// Primary pane process that owns the PTY containing the foreign group.
     primary_process_id: u32,
@@ -325,6 +402,16 @@ struct RuntimeForeignShellBoundary {
     process_group_id: u32,
     /// Fresh shell-interaction generation assigned to this boundary.
     interaction_generation: u64,
+    /// Current bounded bootstrap phase.
+    phase: RuntimeForeignShellBootstrapPhase,
+    /// Start time of the current phase for runtime-owned expiry.
+    phase_started_at_unix_ms: u64,
+    /// Whether prompt completion was observed after this boundary began.
+    prompt_observed: bool,
+    /// Candidate descriptor pinned to this exact boundary and generation.
+    adapter: Option<RuntimeManagedShellAdapterDescriptor>,
+    /// Runtime nonce that must be echoed after shell-native editor acquisition.
+    challenge: Option<String>,
 }
 
 /// Atomically validated shell identity used to render and execute one pane
@@ -567,6 +654,8 @@ const RUNTIME_MANAGED_SHELL_PARENT_RESTORATION_TIMEOUT_MS: u64 = 5_000;
 const RUNTIME_MANAGED_BASH_ADMISSION_TIMEOUT_MS: u64 = 5_000;
 /// Maximum wait for the managed zsh parent to publish startup admission.
 const RUNTIME_MANAGED_ZSH_ADMISSION_TIMEOUT_MS: u64 = 5_000;
+/// Maximum wait for each managed foreign-shell bootstrap phase.
+const RUNTIME_FOREIGN_SHELL_BOOTSTRAP_PHASE_TIMEOUT_MS: u64 = 5_000;
 
 /// Owns live process metadata that is private to the pane process subsystem.
 ///
@@ -1345,8 +1434,13 @@ impl RuntimeSessionService {
     /// owner capable of settling or timing out.
     pub(crate) fn pane_bootstrap_has_bounded_progress_owner(&self, pane_id: &str) -> bool {
         self.process
-            .pending_agent_subshell_certifications
-            .contains_key(pane_id)
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| boundary.phase.has_bounded_owner())
+            || self
+                .process
+                .pending_agent_subshell_certifications
+                .contains_key(pane_id)
             || self
                 .process
                 .running_shell_transactions
@@ -1356,6 +1450,17 @@ impl RuntimeSessionService {
                         && transactions::runtime_shell_transaction_effective_timeout_ms(transaction)
                             .is_some()
                 })
+    }
+
+    /// Reports whether a foreign bootstrap lifecycle still owns finite progress.
+    pub(crate) fn pane_foreign_shell_bootstrap_has_bounded_progress_owner(
+        &self,
+        pane_id: &str,
+    ) -> bool {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| boundary.phase.has_bounded_owner())
     }
 
     /// Reports whether managed-shell startup has a live bounded admission
@@ -2112,6 +2217,28 @@ impl RuntimeSessionService {
             pane_id.to_string(),
             self.process.next_shell_interaction_generation,
         );
+    }
+
+    /// Returns the stable phase name for one foreign bootstrap regression.
+    pub(crate) fn foreign_shell_bootstrap_phase_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> Option<&'static str> {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .map(|boundary| boundary.phase.as_str())
+    }
+
+    /// Returns the active foreign adapter challenge for correlation tests.
+    pub(crate) fn foreign_shell_bootstrap_challenge_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> Option<&str> {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .and_then(|boundary| boundary.challenge.as_deref())
     }
 
     /// Returns live shell transactions for integration-test observation.

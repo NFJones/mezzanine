@@ -5,11 +5,11 @@ use super::super::{
     PaneForegroundProcessObservation, PaneProcessInstance, PaneProcessIoEffect,
     RuntimeAgentSubshellCertificationOutcome, RuntimeAgentSubshellCertificationRejection,
     RuntimeBootstrapShellCertificationEvidence, RuntimeCertifiedShellSource,
-    RuntimeForeignShellBoundary, RuntimePaneCertifiedShellIdentity, RuntimePaneProbedShellIdentity,
-    RuntimePaneShellHandoff, RuntimePendingAgentSubshellCertification,
-    RuntimePendingAgentSubshellStartObservation, RuntimePendingBootstrapEnvironment,
-    RuntimePendingShellDispatchRecoveryObservation, RuntimeSideEffect, RuntimeTransition,
-    reduce_managed_shell_handoff,
+    RuntimeForeignShellBootstrapPhase, RuntimeForeignShellBoundary,
+    RuntimePaneCertifiedShellIdentity, RuntimePaneProbedShellIdentity, RuntimePaneShellHandoff,
+    RuntimePendingAgentSubshellCertification, RuntimePendingAgentSubshellStartObservation,
+    RuntimePendingBootstrapEnvironment, RuntimePendingShellDispatchRecoveryObservation,
+    RuntimeSideEffect, RuntimeTransition, reduce_managed_shell_handoff,
 };
 use super::{
     AgentTurnState, EventKind, PaneReadinessState, RUNTIME_AGENT_SUBSHELL_CERTIFICATION_TIMEOUT_MS,
@@ -116,7 +116,7 @@ impl RuntimePaneForegroundDiagnostic {
 
 impl RuntimeSessionService {
     /// Returns the best foreground process-group observation and its source.
-    fn pane_foreground_process_group_observation(
+    pub(super) fn pane_foreground_process_group_observation(
         &self,
         pane_id: &str,
     ) -> (Option<u32>, &'static str) {
@@ -275,18 +275,31 @@ impl RuntimeSessionService {
                 primary_process_id,
                 process_group_id,
                 interaction_generation,
+                phase: RuntimeForeignShellBootstrapPhase::AwaitingAdapter,
+                phase_started_at_unix_ms: current_unix_millis(),
+                prompt_observed: false,
+                adapter: None,
+                challenge: None,
             },
         );
+        self.process
+            .pane_bootstrap_pending
+            .insert(pane_id.to_string());
         self.set_pane_readiness(pane_id, super::PaneReadinessState::Unknown);
         true
     }
 
     /// Clears a foreign boundary after the certified primary shell regains the PTY.
     pub(crate) fn clear_uncertified_foreign_shell_boundary(&mut self, pane_id: &str) -> bool {
-        self.process
+        let cleared = self
+            .process
             .pane_foreign_shell_boundaries
             .remove(pane_id)
-            .is_some()
+            .is_some();
+        if cleared {
+            self.process.pane_bootstrap_pending.remove(pane_id);
+        }
+        cleared
     }
 
     /// Starts a new runtime-owned agent-subshell handoff and invalidates state
@@ -1455,6 +1468,7 @@ impl RuntimeSessionService {
                 TerminalOscEvent::TitleChanged { .. } | TerminalOscEvent::Clipboard(_) => {}
                 TerminalOscEvent::ShellPromptStart => {}
                 TerminalOscEvent::ShellPromptEnd => {
+                    self.observe_foreign_shell_prompt_boundary(output_pane_id);
                     if !observed_harness_transaction_end {
                         observed =
                             observed.saturating_add(self.observe_passive_shell_prompt_candidate(

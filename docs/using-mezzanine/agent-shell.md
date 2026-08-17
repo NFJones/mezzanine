@@ -39,6 +39,26 @@ it applies to subsequent turns until `/plan off` (or `/plan toggle`) disables
 it. While enabled, the pane has no write sandbox scopes. Use `/plan status` to
 inspect the current mode.
 
+## Work inside SSH and container shells
+
+When the pane enters SSH, a container shell, a chroot, or another nested
+interactive environment, Mezzanine treats that environment as a separate shell
+authority. Agent work waits for compatible Mezzanine shell integration running
+inside the nested environment. The integration must announce itself at a
+completed prompt and pass a shell-native editor challenge before Mezzanine can
+discover that environment's shell or send generated input. Host-side Bash,
+Fish, or Zsh tokens and startup files are never reused across this boundary.
+
+Install or explicitly activate the matching integration inside each remote or
+container environment where agent commands should run. Mezzanine does not
+silently edit remote startup files. An already-running unmanaged nested shell
+cannot be identified safely from the local `ssh` or container-client process
+alone; bootstrap therefore times out with an installation/activation message
+instead of injecting a probe into a password prompt, full-screen program, or
+unknown command line. After integration is admitted, shell-specific identity
+and child-launch support determines whether that adapter can complete the
+bootstrap.
+
 ## Review actions and context
 
 The agent may request file reads, bounded commands, patches, configured MCP

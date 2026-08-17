@@ -216,6 +216,23 @@ pub enum ManagedShellAdapter {
 /// Shell-neutral lifecycle event emitted by a managed shell adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManagedShellProtocolEvent {
+    /// An adapter inside a foreign environment offers prompt-scoped admission.
+    ///
+    /// This event is advisory until the runtime observes a prompt boundary and
+    /// completes a separate shell-native editor-acquisition challenge.
+    ForeignAdapterCandidate {
+        /// Adapter instance identity, unique for one foreign shell lifetime.
+        instance_id: String,
+        /// Fixed shell-native trigger when the adapter requires one.
+        trigger: Option<String>,
+    },
+    /// A foreign adapter completed the runtime's editor-acquisition challenge.
+    ForeignChallengeCompleted {
+        /// Adapter instance identity that received the challenge.
+        instance_id: String,
+        /// Unpredictable runtime nonce bound to the active foreign generation.
+        challenge: String,
+    },
     /// The startup adapter installed its private trigger safely.
     AdapterAvailable {
         /// Fixed trigger selected by adapters that require one.
