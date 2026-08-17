@@ -13,6 +13,13 @@ pub enum ShellInputPacing {
     GeneratedSource,
     /// Deferred payload records acknowledged by the shell receiver.
     ReceiverAcknowledged,
+    /// Foreign-loader records acknowledged only when their terminating record arrives.
+    ///
+    /// The loader is already a non-interactive `/bin/sh` reader, so its bounded
+    /// base64 data lines may stream without a stop-and-wait acknowledgement.
+    /// Its marker-correlated terminating record remains the one flow-control
+    /// boundary before the staged source is decoded and executed.
+    LoaderAcknowledged,
 }
 
 /// Typed shell input retained across runtime and PTY ownership boundaries.
@@ -75,6 +82,17 @@ impl ShellInputDelivery {
             pacing: ShellInputPacing::ReceiverAcknowledged,
             delivery_id: Some(delivery_id.into()),
             receiver_acknowledgements,
+        }
+    }
+
+    /// Builds a priority dependency-free loader payload with one final acknowledgement.
+    pub fn loader_acknowledged(bytes: Vec<u8>, delivery_id: impl Into<String>) -> Self {
+        Self {
+            bytes,
+            priority: true,
+            pacing: ShellInputPacing::LoaderAcknowledged,
+            delivery_id: Some(delivery_id.into()),
+            receiver_acknowledgements: true,
         }
     }
 }

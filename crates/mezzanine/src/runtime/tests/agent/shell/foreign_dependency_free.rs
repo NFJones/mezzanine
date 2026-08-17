@@ -151,6 +151,27 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
         .expect("one released input should contain the loader payload");
     assert!(payload.contains(&format!("MEZ_LOADER_END_{loader_marker}")));
     assert!(payload.lines().all(|line| line.len() <= 700));
+    let loader_delivery = launch_inputs
+        .iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::PaneProcessIo {
+                effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
+                ..
+            } if delivery
+                .bytes
+                .windows(format!("MEZ_LOADER_END_{loader_marker}").len())
+                .any(|window| window == format!("MEZ_LOADER_END_{loader_marker}").as_bytes()) =>
+            {
+                Some(delivery)
+            }
+            _ => None,
+        })
+        .expect("loader payload must retain a typed shell delivery");
+    assert_eq!(
+        loader_delivery.pacing,
+        mez_mux::process::ShellInputPacing::LoaderAcknowledged,
+        "loader payload data must stream until its terminating acknowledgement"
+    );
     assert!(launch_inputs.iter().any(|effect| {
         let input = String::from_utf8_lossy(effect.pane_input_parts().1);
         input.starts_with('\u{7}') && input.contains("MEZ_BASH_RX1_BEGIN")

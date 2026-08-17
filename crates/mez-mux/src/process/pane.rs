@@ -76,6 +76,17 @@ pub fn receiver_input_record_requires_ack(record: &[u8]) -> bool {
             && !record.starts_with(b"MEZ_ZSH_RX2_DATA "))
 }
 
+/// Reports whether one dependency-free loader record requires acknowledgement.
+///
+/// Loader data records are bounded physical terminal lines but are consumed by
+/// an already-running POSIX reader rather than an interactive editor. Waiting
+/// for every raw base64 line serializes the transfer over SSH. The loader's
+/// marker-correlated terminator is the sole acknowledgement boundary.
+#[doc(hidden)]
+pub fn loader_input_record_requires_ack(record: &[u8]) -> bool {
+    record.starts_with(b"MEZ_LOADER_END_")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +136,16 @@ mod tests {
         assert!(receiver_input_record_requires_ack(b"C dHJ1ZQo=\n"));
         assert!(receiver_input_record_requires_ack(
             b"__MEZ_COMMAND_PAYLOAD_END_marker__\n"
+        ));
+    }
+
+    /// Verifies loader base64 records stream while its terminating marker
+    /// remains an explicit bounded acknowledgement point.
+    #[test]
+    fn loader_acknowledges_only_its_terminating_record() {
+        assert!(!loader_input_record_requires_ack(b"cGF5bG9hZA==\n"));
+        assert!(loader_input_record_requires_ack(
+            b"MEZ_LOADER_END_0123456789abcdef0123456789abcdef\n"
         ));
     }
 
@@ -377,8 +398,10 @@ impl PaneProcess {
 
         #[cfg(target_os = "macos")]
         {
-            let receiver_acknowledged =
-                matches!(delivery.pacing, ShellInputPacing::ReceiverAcknowledged);
+            let receiver_acknowledged = matches!(
+                delivery.pacing,
+                ShellInputPacing::ReceiverAcknowledged | ShellInputPacing::LoaderAcknowledged
+            );
             if receiver_acknowledged
                 && (!delivery.receiver_acknowledgements
                     || !self.supports_shell_input_acknowledgements())

@@ -693,6 +693,15 @@ exit\n",
                 "missing {expected:?}: stdout={stdout:?} stderr={stderr:?}"
             );
         }
+        let loader_output = stdout
+            .split("mez_event=child-installed")
+            .next()
+            .expect("loader ready output must precede child installation");
+        assert_eq!(
+            loader_output.bytes().filter(|byte| *byte == 0x1e).count(),
+            1,
+            "the loader must acknowledge only its terminating record: {loader_output:?}"
+        );
     }
 
     /// Verifies foreign child staging reports a setup failure through the

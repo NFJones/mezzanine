@@ -8,7 +8,8 @@
 use super::{Duration, Instant, PaneProcessInstance, RuntimeSideEffect};
 use mez_mux::process::{
     PTY_INPUT_WRITE_CHUNK_BYTES, SHELL_INPUT_RECORD_ACK_BYTE, ShellInputDelivery, ShellInputPacing,
-    receiver_input_record_requires_ack, shell_input_record_requires_ack,
+    loader_input_record_requires_ack, receiver_input_record_requires_ack,
+    shell_input_record_requires_ack,
 };
 
 /// Maximum time one shell-input record may make no transport progress.
@@ -167,7 +168,10 @@ impl PendingShellInputDelivery {
 
     /// Reports whether this delivery keeps successful progress worker-local.
     pub(super) fn aggregates_progress(&self) -> bool {
-        matches!(self.delivery.pacing, ShellInputPacing::ReceiverAcknowledged)
+        matches!(
+            self.delivery.pacing,
+            ShellInputPacing::ReceiverAcknowledged | ShellInputPacing::LoaderAcknowledged
+        )
     }
 
     /// Returns the remaining time before accumulated progress must publish.
@@ -245,6 +249,13 @@ fn record_wait(
                 return Err("receiver-acknowledged shell delivery was not negotiated");
             }
             Ok(receiver_input_record_requires_ack(record)
+                .then_some(ShellInputProgressWait::Acknowledgement))
+        }
+        ShellInputPacing::LoaderAcknowledged => {
+            if !delivery.receiver_acknowledgements || !supports_acknowledgements {
+                return Err("loader-acknowledged shell delivery was not negotiated");
+            }
+            Ok(loader_input_record_requires_ack(record)
                 .then_some(ShellInputProgressWait::Acknowledgement))
         }
         ShellInputPacing::GeneratedSource if final_record => Ok(None),

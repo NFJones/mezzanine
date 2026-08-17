@@ -706,10 +706,9 @@ impl RuntimeSessionService {
             current.child_staging_source = Some(staging_source);
             current.loader_marker = Some(loader_marker.clone());
             current.loader_payload =
-                Some(mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                Some(mez_mux::process::ShellInputDelivery::loader_acknowledged(
                     loader_input.payload.into_bytes(),
                     marker.clone(),
-                    true,
                 ));
             current.loader_ready = false;
         }

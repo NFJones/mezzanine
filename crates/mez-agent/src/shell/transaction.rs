@@ -2317,7 +2317,7 @@ pub fn dependency_free_foreign_shell_loader_command(
     marker: &str,
 ) -> AgentShellValidationResult<String> {
     validate_shell_marker_token(marker)?;
-    let loader_source = "umask 077;p=${TMPDIR:-/tmp}/.mez-$1;mkdir -m 700 \"$p\"||exit 70;trap 'r=$?;rm -rf \"$p\";exit $r' 0;f=$p/p;printf '\\033]133;R;mez_foreign_loader=ready;mez_marker=%s\\033\\\\' \"$1\";z=;while IFS= read -r x;do if [ \"$x\" = \"MEZ_LOADER_END_$1\" ];then z=1;printf '\\036';break;fi;printf %s \"$x\">>\"$f\"||exit 71;printf '\\036';done;[ \"$z\" ]||exit 72;q=-d;printf ''|base64 -d>/dev/null 2>&1||q=-D;base64 \"$q\"<\"$f\">\"$p/e\"||exit 73;chmod 600 \"$p/e\"||exit 74;MEZ_FOREIGN_LOADER_DIR=$p /bin/sh \"$p/e\";r=$?;printf '\\033]133;R;mez_foreign_loader=exited;mez_marker=%s;mez_status=%s\\033\\\\' \"$1\" \"$r\";exit \"$r\"";
+    let loader_source = "umask 077;p=${TMPDIR:-/tmp}/.mez-$1;mkdir -m 700 \"$p\"||exit 70;trap 'r=$?;rm -rf \"$p\";exit $r' 0;f=$p/p;printf '\\033]133;R;mez_foreign_loader=ready;mez_marker=%s\\033\\\\' \"$1\";z=;while IFS= read -r x;do if [ \"$x\" = \"MEZ_LOADER_END_$1\" ];then z=1;printf '\\036';break;fi;printf %s \"$x\">>\"$f\"||exit 71;done;[ \"$z\" ]||exit 72;q=-d;printf ''|base64 -d>/dev/null 2>&1||q=-D;base64 \"$q\"<\"$f\">\"$p/e\"||exit 73;chmod 600 \"$p/e\"||exit 74;MEZ_FOREIGN_LOADER_DIR=$p /bin/sh \"$p/e\";r=$?;printf '\\033]133;R;mez_foreign_loader=exited;mez_marker=%s;mez_status=%s\\033\\\\' \"$1\" \"$r\";exit \"$r\"";
     Ok(format!(
         "/bin/sh -c {} sh {}\n",
         shell_quote(loader_source),
