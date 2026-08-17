@@ -91,6 +91,11 @@ Press `Ctrl+A a` to open the focused pane's agent shell. Begin with a bounded
 task that asks for inspection and focused validation. Press `Ctrl+A d` to detach
 without normally stopping the session.
 
+Agent entry also adopts an ordinary interactive shell reached through SSH or a
+container. The foreign environment does not need Mezzanine installed and its
+shell startup files are not modified; Mezzanine uses a temporary, bounded
+loader to start the managed child shell for the agent session.
+
 Optional configuration can inhibit idle sleep during active agent turns and
 enable enhanced keyboard reporting in supported terminals. See the
 [configuration reference](docs/configuration/reference.md) for platform support

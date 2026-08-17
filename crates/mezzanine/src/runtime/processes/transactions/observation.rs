@@ -6,13 +6,15 @@ use super::super::{
     RuntimeAgentSubshellCertificationOutcome, RuntimeAgentSubshellCertificationRejection,
     RuntimeBootstrapShellCertificationEvidence, RuntimeCertifiedShellSource,
     RuntimeForeignShellBootstrapPhase, RuntimeForeignShellBoundary,
-    RuntimePaneCertifiedShellIdentity, RuntimePaneProbedShellIdentity, RuntimePaneShellHandoff,
+    RuntimePaneCertifiedShellIdentity, RuntimePaneEnvironmentAuthorityUnavailableReason,
+    RuntimePaneProbedShellIdentity, RuntimePaneShellHandoff,
     RuntimePendingAgentSubshellCertification, RuntimePendingAgentSubshellStartObservation,
     RuntimePendingBootstrapEnvironment, RuntimePendingShellDispatchRecoveryObservation,
     RuntimeSideEffect, RuntimeTransition, reduce_managed_shell_handoff,
 };
 use super::{
-    AgentTurnState, EventKind, PaneReadinessState, RUNTIME_AGENT_SUBSHELL_CERTIFICATION_TIMEOUT_MS,
+    AgentTurnState, EventKind, MezError, PaneReadinessState,
+    RUNTIME_AGENT_SUBSHELL_CERTIFICATION_TIMEOUT_MS,
     RUNTIME_SHELL_DISPATCH_RECOVERY_OBSERVATION_TIMEOUT_MS, RenderInvalidationReason, Result,
     RuntimeSessionService, TerminalOscEvent, current_unix_millis, json_escape,
     runtime_execution_ready_for_provider_continuation,
@@ -115,6 +117,228 @@ impl RuntimePaneForegroundDiagnostic {
 }
 
 impl RuntimeSessionService {
+    /// Releases dependency-free staging records after the correlated loader is ready.
+    fn observe_foreign_shell_loader_ready(&mut self, pane_id: &str, marker: &str) -> Result<usize> {
+        let Some(boundary) = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .cloned()
+        else {
+            return Ok(0);
+        };
+        if boundary.phase != RuntimeForeignShellBootstrapPhase::BootstrappingChild
+            || boundary.adapter.is_some()
+            || boundary.loader_marker.as_deref() != Some(marker)
+            || boundary.loader_ready
+            || self.primary_pid_for_live_pane_process(pane_id) != Some(boundary.primary_process_id)
+            || self.pane_foreground_process_group_observation(pane_id).0
+                != Some(boundary.process_group_id)
+            || self
+                .process
+                .pane_shell_interaction_generations
+                .get(pane_id)
+                .copied()
+                != Some(boundary.interaction_generation)
+        {
+            return Ok(0);
+        }
+        let payload = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get_mut(pane_id)
+            .and_then(|current| {
+                current.loader_ready = true;
+                current.phase_started_at_unix_ms = current_unix_millis();
+                current.loader_payload.take()
+            });
+        let Some(payload) = payload else {
+            return Ok(0);
+        };
+        let payload_len = payload.bytes.len();
+        let delivery_id = payload.delivery_id.clone();
+        if let Err(error) = self.write_runtime_pane_shell_delivery(pane_id, payload) {
+            self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
+            return Ok(0);
+        }
+        if let Some(delivery_id) = delivery_id.as_deref() {
+            self.mark_managed_shell_payload_released(pane_id, delivery_id);
+        }
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","foreign_bootstrap":"loader_ready","marker":"{}","payload_bytes":{}}}"#,
+                json_escape(pane_id),
+                json_escape(marker),
+                payload_len
+            ),
+        )?;
+        Ok(1)
+    }
+
+    /// Settles the correlated dependency-free loader after its child returns.
+    fn observe_foreign_shell_loader_exited(
+        &mut self,
+        pane_id: &str,
+        marker: &str,
+        exit_code: i32,
+    ) -> Result<usize> {
+        let Some(boundary) = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .cloned()
+        else {
+            return Ok(0);
+        };
+        if boundary.adapter.is_some() || boundary.loader_marker.as_deref() != Some(marker) {
+            return Ok(0);
+        }
+        if self.primary_pid_for_live_pane_process(pane_id) != Some(boundary.primary_process_id)
+            || self.pane_foreground_process_group_observation(pane_id).0
+                != Some(boundary.process_group_id)
+            || self
+                .process
+                .pane_shell_interaction_generations
+                .get(pane_id)
+                .copied()
+                != Some(boundary.interaction_generation)
+        {
+            return Ok(0);
+        }
+        let bootstrap_marker = self
+            .process
+            .pane_managed_shell_handoffs
+            .get(pane_id)
+            .map(|handoff| handoff.identity().marker.clone())
+            .or_else(|| {
+                self.process
+                    .running_shell_transactions
+                    .iter()
+                    .find(|(_, transaction)| {
+                        transaction.pane_id == pane_id
+                            && transaction.kind == super::RunningShellTransactionKind::Bootstrap
+                    })
+                    .map(|(marker, _)| marker.clone())
+            });
+        if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+            current.loader_marker = None;
+            current.loader_payload = None;
+            current.loader_ready = false;
+        }
+        if boundary.phase == RuntimeForeignShellBootstrapPhase::Certified {
+            let pending_input = if let Some(identity) = self
+                .process
+                .pane_managed_shell_handoffs
+                .get(pane_id)
+                .map(|handoff| handoff.identity().clone())
+            {
+                let transition = self
+                    .process
+                    .pane_managed_shell_handoffs
+                    .get_mut(pane_id)
+                    .map(|handoff| {
+                        reduce_managed_shell_handoff(
+                            handoff,
+                            ManagedShellHandoffEvent::ParentReady { identity },
+                        )
+                    });
+                transition.and_then(|transition| {
+                    transition
+                        .effects
+                        .into_iter()
+                        .find_map(|effect| match effect {
+                            ManagedShellHandoffEffect::Settle { pending_input, .. } => {
+                                Some(pending_input)
+                            }
+                            _ => None,
+                        })
+                })
+            } else {
+                Some(Vec::new())
+            };
+            let Some(pending_input) = pending_input else {
+                return Ok(0);
+            };
+            self.clear_uncertified_foreign_shell_boundary(pane_id);
+            self.leave_agent_subshell(pane_id);
+            self.invalidate_agent_subshell_environment_after_exit(pane_id);
+            self.settle_managed_shell_runtime_ownership(pane_id, pending_input)?;
+            self.append_lifecycle_event(
+                EventKind::AgentStatus,
+                format!(
+                    r#"{{"pane_id":"{}","foreign_bootstrap":"loader_exited","marker":"{}","exit_code":{}}}"#,
+                    json_escape(pane_id),
+                    json_escape(marker),
+                    exit_code
+                ),
+            )?;
+            return Ok(1);
+        }
+        if boundary.phase != RuntimeForeignShellBootstrapPhase::BootstrappingChild {
+            return Ok(0);
+        }
+        if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+            current.phase = RuntimeForeignShellBootstrapPhase::Failed;
+            current.phase_started_at_unix_ms = current_unix_millis();
+            current.child_token = None;
+            current.child_shell = None;
+            current.child_staging_source = None;
+            current.identity_marker = None;
+        }
+        if let Some(bootstrap_marker) = bootstrap_marker.as_deref() {
+            self.cancel_runtime_pane_shell_delivery(pane_id, bootstrap_marker);
+            self.process
+                .bootstrap_shell_certification_evidence
+                .remove(bootstrap_marker);
+            self.remove_running_shell_transaction(bootstrap_marker);
+            self.clear_shell_transaction_protocol_state(bootstrap_marker);
+        }
+        self.process.pane_managed_shell_handoffs.remove(pane_id);
+        self.process.pane_shell_handoffs.remove(pane_id);
+        self.process
+            .pending_agent_subshell_start_observations
+            .remove(pane_id);
+        self.process
+            .pending_agent_subshell_certifications
+            .remove(pane_id);
+        self.process.pane_bootstrap_pending.remove(pane_id);
+        self.clear_agent_subshell_shell_identity(pane_id);
+        self.mark_pane_environment_authority_unavailable(
+            pane_id,
+            RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapTransactionFailed,
+        );
+        self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+        let message = format!(
+            "dependency-free foreign shell loader exited before child certification (status {exit_code})"
+        );
+        self.append_agent_error_text_to_terminal_buffer(pane_id, &format!("agent: {message}"))?;
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","foreign_bootstrap":"failed","phase":"bootstrapping-child","transport":"dependency-free","exit_code":{},"state":"degraded"}}"#,
+                json_escape(pane_id),
+                exit_code
+            ),
+        )?;
+        let pending_turn_ids = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .filter(|turn| {
+                turn.pane_id == pane_id
+                    && turn.state == AgentTurnState::Running
+                    && self.agent_provider_task_is_pending(&turn.turn_id)
+            })
+            .map(|turn| turn.turn_id.clone())
+            .collect::<Vec<_>>();
+        let error = MezError::invalid_state(message);
+        for turn_id in pending_turn_ids {
+            self.fail_configured_agent_provider_task(&turn_id, &error)?;
+        }
+        Ok(1)
+    }
+
     /// Returns the best foreground process-group observation and its source.
     pub(super) fn pane_foreground_process_group_observation(
         &self,
@@ -292,6 +516,10 @@ impl RuntimeSessionService {
                 adapter: None,
                 challenge: None,
                 child_token: None,
+                child_shell: None,
+                loader_marker: None,
+                loader_payload: None,
+                loader_ready: false,
                 child_staging_source: None,
                 identity_marker: None,
             },
@@ -1548,6 +1776,18 @@ impl RuntimeSessionService {
                     observed = observed.saturating_add(self.observe_shell_receiver_complete(
                         output_pane_id,
                         token,
+                        marker,
+                        *exit_code,
+                    )?);
+                }
+                TerminalOscEvent::ForeignShellLoaderReady { marker } => {
+                    observed = observed.saturating_add(
+                        self.observe_foreign_shell_loader_ready(output_pane_id, marker)?,
+                    );
+                }
+                TerminalOscEvent::ForeignShellLoaderExited { marker, exit_code } => {
+                    observed = observed.saturating_add(self.observe_foreign_shell_loader_exited(
+                        output_pane_id,
                         marker,
                         *exit_code,
                     )?);

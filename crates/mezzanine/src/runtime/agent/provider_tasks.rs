@@ -522,7 +522,7 @@ impl RuntimeSessionService {
                 return Ok(None);
             }
             return Err(MezError::invalid_state(
-                "foreign shell bootstrap is unavailable; install or activate Mezzanine shell integration inside the SSH or container environment and wait for its prompt",
+                "foreign shell bootstrap is unavailable; return to an empty prompt in the foreign environment and retry",
             ));
         }
 

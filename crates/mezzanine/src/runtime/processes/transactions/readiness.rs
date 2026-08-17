@@ -61,6 +61,8 @@ impl RuntimeSessionService {
                 | TerminalOscEvent::ShellParentRestored { .. }
                 | TerminalOscEvent::ShellReceiverInstalled { .. }
                 | TerminalOscEvent::ShellReceiverComplete { .. }
+                | TerminalOscEvent::ForeignShellLoaderReady { .. }
+                | TerminalOscEvent::ForeignShellLoaderExited { .. }
                 | TerminalOscEvent::ShellTransactionPayloadReceiverReady { .. }
                 | TerminalOscEvent::ShellTransactionStart { .. }
                 | TerminalOscEvent::ShellTransactionEnd { .. } => {}

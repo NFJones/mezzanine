@@ -2297,6 +2297,88 @@ pub fn zsh_private_source_cancel_input(token: &MarkerToken, marker: &str) -> Str
     format!("MEZ_ZSH_RX2_CANCEL {} {}\n", token.as_str(), marker)
 }
 
+/// Syntax-neutral rendezvous command and deferred source for one foreign loader.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignShellLoaderInput {
+    /// One bounded `/bin/sh` command that takes ownership of terminal input.
+    pub command: String,
+    /// Base64 records released only after the correlated loader-ready event.
+    pub payload: String,
+}
+
+/// Renders a dependency-free loader for generated source inside a foreign shell.
+///
+/// The syntax-neutral `/bin/sh` command publishes a marker-correlated ready
+/// event before reading any payload. Runtime withholds the bounded base64
+/// records until that event, so an interactive parent editor cannot consume
+/// staged source as typeahead. The loader materializes a shell-specific script
+/// in an owner-only temporary directory, executes it with startup files
+/// suppressed, publishes its final status, and removes every loader artifact
+/// after the synchronous managed child returns.
+pub fn dependency_free_foreign_shell_loader_input(
+    source: &str,
+    shell_path: &Path,
+    classification: ShellClassification,
+    child_token: Option<&MarkerToken>,
+    marker: &str,
+) -> AgentShellValidationResult<ForeignShellLoaderInput> {
+    validate_resolved_shell_path(shell_path)?;
+    validate_shell_marker_token(marker)?;
+    if matches!(
+        classification,
+        ShellClassification::Bash | ShellClassification::Fish | ShellClassification::Zsh
+    ) && child_token.is_none()
+    {
+        return Err(AgentShellValidationError::invalid_args(
+            "managed foreign child loader requires a child token",
+        ));
+    }
+
+    let shell = shell_quote(&shell_path.to_string_lossy());
+    let invocation = match classification {
+        ShellClassification::Bash => format!("{shell} --noprofile --norc \"$MEZ_FOREIGN_STAGE\""),
+        ShellClassification::Fish => format!("{shell} --no-config \"$MEZ_FOREIGN_STAGE\""),
+        ShellClassification::Zsh => format!("{shell} -f \"$MEZ_FOREIGN_STAGE\""),
+        ShellClassification::PosixSh | ShellClassification::UnknownUnix => {
+            format!("{shell} \"$MEZ_FOREIGN_STAGE\"")
+        }
+    };
+    let encoded_source = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
+    let entry_source = format!(
+        "umask 077\n\
+MEZ_FOREIGN_STAGE=$MEZ_FOREIGN_LOADER_DIR/stage\n\
+MEZ_FOREIGN_BASE64_FLAG=-d\n\
+printf '' | base64 -d >/dev/null 2>&1 || MEZ_FOREIGN_BASE64_FLAG=-D\n\
+printf '%s' {} | base64 \"$MEZ_FOREIGN_BASE64_FLAG\" >\"$MEZ_FOREIGN_STAGE\" || exit 71\n\
+chmod 600 \"$MEZ_FOREIGN_STAGE\" || exit 72\n\
+{invocation}\n\
+MEZ_FOREIGN_STATUS=$?\n\
+exit \"$MEZ_FOREIGN_STATUS\"\n",
+        shell_quote(&encoded_source),
+    );
+    let encoded_entry = base64::engine::general_purpose::STANDARD.encode(entry_source.as_bytes());
+    let nonce = marker;
+    let loader_source = "umask 077;p=${TMPDIR:-/tmp}/.mez-$1;mkdir -m 700 \"$p\"||exit 70;trap 'r=$?;rm -rf \"$p\";exit $r' 0;f=$p/p;printf '\\033]133;R;mez_foreign_loader=ready;mez_marker=%s\\033\\\\' \"$1\";z=;while IFS= read -r x;do if [ \"$x\" = \"MEZ_LOADER_END_$1\" ];then z=1;printf '\\036';break;fi;printf %s \"$x\">>\"$f\"||exit 71;printf '\\036';done;[ \"$z\" ]||exit 72;q=-d;printf ''|base64 -d>/dev/null 2>&1||q=-D;base64 \"$q\"<\"$f\">\"$p/e\"||exit 73;chmod 600 \"$p/e\"||exit 74;MEZ_FOREIGN_LOADER_DIR=$p /bin/sh \"$p/e\";r=$?;printf '\\033]133;R;mez_foreign_loader=exited;mez_marker=%s;mez_status=%s\\033\\\\' \"$1\" \"$r\";exit \"$r\"";
+    let command = format!(
+        "/bin/sh -c {} sh {}\n",
+        shell_quote(loader_source),
+        shell_quote(nonce)
+    );
+    let mut payload = String::new();
+    for chunk in encoded_entry
+        .as_bytes()
+        .chunks(SHELL_WRAPPER_BASE64_LINE_BYTES)
+    {
+        payload.push_str(
+            std::str::from_utf8(chunk)
+                .expect("standard base64 output should always be valid UTF-8"),
+        );
+        payload.push('\n');
+    }
+    payload.push_str(&format!("MEZ_LOADER_END_{nonce}\n"));
+    Ok(ForeignShellLoaderInput { command, payload })
+}
+
 /// Encodes a generated Fish wrapper as receiver-consumed base64 records.
 fn fish_shell_wrapper_transport(source: &str, marker: &str) -> String {
     let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());

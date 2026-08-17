@@ -944,8 +944,8 @@ fn runtime_agent_shell_entry_bootstraps_foreign_adapter_with_bounded_admission()
 ///
 /// Candidate metadata is advisory evidence for one completed prompt only. A
 /// command-start event means the editor is no longer safely owned by that
-/// prompt, so opening agent mode afterward must await a fresh candidate and
-/// must not issue the native challenge associated with the stale token.
+/// prompt, so opening agent mode afterward must ignore that token and use the
+/// dependency-free identity probe instead of issuing a native challenge.
 #[test]
 fn runtime_foreign_adapter_candidate_is_discarded_when_command_starts() {
     let mut service = test_runtime_service();
@@ -1007,7 +1007,7 @@ fn runtime_foreign_adapter_candidate_is_discarded_when_command_starts() {
 
     assert_eq!(
         service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
-        Some("awaiting-adapter")
+        Some("identity-probing")
     );
     assert!(
         service
@@ -1016,8 +1016,8 @@ fn runtime_foreign_adapter_candidate_is_discarded_when_command_starts() {
         "a stale adapter token must not receive a challenge"
     );
     assert!(
-        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
-        "agent entry must remain input-free until the next integrated prompt"
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).len() == 1,
+        "agent entry must start one dependency-free identity probe"
     );
     let _ = process.terminate(Duration::from_millis(10));
 }
@@ -1052,25 +1052,24 @@ fn runtime_foreign_bash_challenge_dispatches_private_identity_probe() {
         .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
         .unwrap();
     service
-        .execute_terminal_command(&primary, "agent-shell")
-        .unwrap();
-    service.drain_pane_io_transition();
-    service
-        .observe_agent_shell_transaction_events(&pane_id, &[TerminalOscEvent::ShellPromptEnd])
-        .unwrap();
-    service
         .observe_agent_shell_transaction_events(
             &pane_id,
-            &[TerminalOscEvent::ManagedShell {
-                version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
-                shell: mez_terminal::ManagedShellAdapter::Bash,
-                token: "0123456789abcdef0123456789abcdef".to_string(),
-                event: mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate {
-                    instance_id: "remote-bash-1".to_string(),
-                    trigger: None,
+            &[
+                TerminalOscEvent::ShellPromptEnd,
+                TerminalOscEvent::ManagedShell {
+                    version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                    shell: mez_terminal::ManagedShellAdapter::Bash,
+                    token: "0123456789abcdef0123456789abcdef".to_string(),
+                    event: mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate {
+                        instance_id: "remote-bash-1".to_string(),
+                        trigger: None,
+                    },
                 },
-            }],
+            ],
         )
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     let challenge = service
         .foreign_shell_bootstrap_challenge_for_tests(&pane_id)
@@ -1445,23 +1444,6 @@ fn runtime_foreign_bash_staging_failure_settles_bootstrap_and_pending_turn() {
         .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
         .unwrap();
     service
-        .execute_terminal_command(&primary, "agent-shell")
-        .unwrap();
-    service.drain_pane_io_transition();
-
-    let started = service
-        .start_agent_prompt_turn(&pane_id, "list the current directory")
-        .unwrap();
-    let agent_id = AgentId::opaque(started.agent_id).unwrap();
-    assert!(
-        service
-            .claim_configured_agent_provider_task(&agent_id, &started.turn_id)
-            .unwrap()
-            .is_none(),
-        "provider dispatch must wait for the bounded foreign bootstrap"
-    );
-
-    service
         .observe_agent_shell_transaction_events(&pane_id, &[TerminalOscEvent::ShellPromptEnd])
         .unwrap();
     service
@@ -1478,6 +1460,22 @@ fn runtime_foreign_bash_staging_failure_settles_bootstrap_and_pending_turn() {
             }],
         )
         .unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service.drain_pane_io_transition();
+
+    let started = service
+        .start_agent_prompt_turn(&pane_id, "list the current directory")
+        .unwrap();
+    let agent_id = AgentId::opaque(started.agent_id).unwrap();
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&agent_id, &started.turn_id)
+            .unwrap()
+            .is_none(),
+        "provider dispatch must wait for the bounded foreign bootstrap"
+    );
     let challenge = service
         .foreign_shell_bootstrap_challenge_for_tests(&pane_id)
         .unwrap()
@@ -1740,10 +1738,6 @@ fn runtime_foreign_fish_and_zsh_candidates_receive_native_challenges() {
             )
             .unwrap();
         service
-            .execute_terminal_command(&primary, "agent-shell")
-            .unwrap();
-        service.drain_pane_io_transition();
-        service
             .observe_agent_shell_transaction_events(&pane_id, &[TerminalOscEvent::ShellPromptEnd])
             .unwrap();
 
@@ -1764,6 +1758,9 @@ fn runtime_foreign_fish_and_zsh_candidates_receive_native_challenges() {
                 .unwrap(),
             1
         );
+        service
+            .execute_terminal_command(&primary, "agent-shell")
+            .unwrap();
         assert_eq!(
             service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
             Some("challenging-adapter")

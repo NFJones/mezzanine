@@ -66,6 +66,7 @@ impl RuntimeSessionService {
             boundary.phase_started_at_unix_ms = now_unix_ms;
             boundary.challenge = None;
             boundary.child_token = None;
+            boundary.child_shell = None;
             boundary.child_staging_source = None;
             boundary.identity_marker = None;
 
@@ -126,7 +127,7 @@ impl RuntimeSessionService {
             self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
             self.append_agent_error_text_to_terminal_buffer(
                 pane_id,
-                "agent: foreign shell bootstrap timed out; install or activate Mezzanine shell integration inside this environment and wait for its prompt",
+                "agent: foreign shell bootstrap timed out; return to an empty prompt in the foreign environment and retry",
             )?;
             self.append_lifecycle_event(
                 EventKind::AgentStatus,
@@ -149,7 +150,7 @@ impl RuntimeSessionService {
                 .map(|turn| turn.turn_id.clone())
                 .collect::<Vec<_>>();
             let error = MezError::invalid_state(
-                "foreign shell bootstrap timed out; install or activate Mezzanine shell integration inside the SSH or container environment and wait for its prompt",
+                "foreign shell bootstrap timed out; return to an empty prompt in the foreign environment and retry",
             );
             for turn_id in pending_turn_ids {
                 self.fail_configured_agent_provider_task(&turn_id, &error)?;

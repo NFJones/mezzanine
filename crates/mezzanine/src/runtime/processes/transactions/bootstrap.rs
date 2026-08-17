@@ -62,6 +62,14 @@ impl RuntimeSessionService {
             .get(pane_id)
             .filter(|boundary| boundary.phase == RuntimeForeignShellBootstrapPhase::IdentityProbing)
             .and_then(|boundary| boundary.adapter.clone());
+        let dependency_free_foreign_probe = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                boundary.phase == RuntimeForeignShellBootstrapPhase::IdentityProbing
+                    && boundary.adapter.is_none()
+            });
         let classification = foreign_adapter.as_ref().map_or_else(
             || self.shell_classification_for_pane(pane_id),
             |adapter| match adapter.shell {
@@ -148,7 +156,7 @@ impl RuntimeSessionService {
                     completion_required = true;
                 }
             }
-        } else if classification == ShellClassification::Bash {
+        } else if classification == ShellClassification::Bash && !dependency_free_foreign_probe {
             let token = self.bash_receiver_token_for_pane(pane_id).ok_or_else(|| {
                 MezError::invalid_state(
                     "managed Bash receiver is unavailable for shell identity probe",
@@ -207,6 +215,51 @@ impl RuntimeSessionService {
             boundary.identity_marker = Some(marker_id.clone());
         }
         Ok(Some((marker_id, input)))
+    }
+
+    /// Starts identity discovery directly at a user-authorized foreign prompt.
+    ///
+    /// Agent entry is the prompt-authority assertion. No remote Mezzanine
+    /// binary or process-local adapter is required before this bounded probe.
+    pub(crate) fn begin_dependency_free_foreign_shell_bootstrap(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<()> {
+        let boundary = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("foreign shell boundary is unavailable"))?;
+        if boundary.phase != RuntimeForeignShellBootstrapPhase::AwaitingAdapter
+            || self.primary_pid_for_live_pane_process(pane_id) != Some(boundary.primary_process_id)
+            || self.pane_foreground_process_group_observation(pane_id).0
+                != Some(boundary.process_group_id)
+            || self
+                .process
+                .pane_shell_interaction_generations
+                .get(pane_id)
+                .copied()
+                != Some(boundary.interaction_generation)
+        {
+            return Err(MezError::invalid_state(
+                "foreign shell changed before dependency-free bootstrap",
+            ));
+        }
+        if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+            current.phase = RuntimeForeignShellBootstrapPhase::IdentityProbing;
+            current.phase_started_at_unix_ms = current_unix_millis();
+        }
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","foreign_bootstrap":"identity_probing","transport":"dependency-free","generation":{},"process_group_id":{}}}"#,
+                json_escape(pane_id),
+                boundary.interaction_generation,
+                boundary.process_group_id
+            ),
+        )?;
+        self.dispatch_shell_identity_probe_to_pane(pane_id)
     }
 
     /// Sends one registered syntax-neutral identity probe to the pane.
@@ -485,8 +538,167 @@ impl RuntimeSessionService {
             }
             return Ok(1);
         }
+        if self
+            .process
+            .pane_foreign_shell_boundaries
+            .contains_key(pane_id)
+        {
+            self.begin_dependency_free_foreign_child_bootstrap(pane_id)?;
+            return Ok(1);
+        }
         self.dispatch_bootstrap_to_pane(pane_id)?;
         Ok(1)
+    }
+
+    /// Launches an ephemeral managed child through a dependency-free `/bin/sh` loader.
+    fn begin_dependency_free_foreign_child_bootstrap(&mut self, pane_id: &str) -> Result<()> {
+        let boundary = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("foreign shell boundary is unavailable"))?;
+        if boundary.phase != RuntimeForeignShellBootstrapPhase::IdentityProbing
+            || boundary.adapter.is_some()
+        {
+            return Err(MezError::invalid_state(
+                "dependency-free child launch does not own foreign identity discovery",
+            ));
+        }
+        let execution_identity = self
+            .process
+            .pane_probed_shell_identities
+            .get(pane_id)
+            .filter(|identity| {
+                identity.primary_process_id == boundary.primary_process_id
+                    && identity.interaction_generation == boundary.interaction_generation
+            })
+            .map(|identity| identity.execution_identity.clone())
+            .ok_or_else(|| MezError::invalid_state("foreign shell identity is unavailable"))?;
+        let child_shell = match execution_identity.classification() {
+            ShellClassification::Bash => Some(mez_terminal::ManagedShellAdapter::Bash),
+            ShellClassification::Fish => Some(mez_terminal::ManagedShellAdapter::Fish),
+            ShellClassification::Zsh => Some(mez_terminal::ManagedShellAdapter::Zsh),
+            ShellClassification::PosixSh | ShellClassification::UnknownUnix => None,
+        };
+        let child_token = runtime_random_marker_token(&format!(
+            "dependency-free-foreign-child\0{pane_id}\0{}",
+            boundary.interaction_generation
+        ))?;
+        if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+            current.phase = RuntimeForeignShellBootstrapPhase::BootstrappingChild;
+            current.phase_started_at_unix_ms = current_unix_millis();
+            current.child_token = Some(child_token.as_str().to_string());
+            current.child_shell = child_shell;
+        }
+        self.process.pane_shell_handoffs.insert(
+            pane_id.to_string(),
+            RuntimePaneShellHandoff {
+                primary_process_id: boundary.primary_process_id,
+                interaction_generation: boundary.interaction_generation,
+                bootstrap_marker: None,
+                deferred_bootstrap_wrapper: None,
+            },
+        );
+        let (marker, wrapper) = self
+            .prepare_bootstrap_to_pane(pane_id)?
+            .ok_or_else(|| MezError::invalid_state("foreign bootstrap is already running"))?;
+        self.bind_agent_subshell_bootstrap_marker(pane_id, &marker);
+        self.defer_agent_subshell_bootstrap_wrapper(pane_id, &marker, wrapper);
+        let exit_marker = runtime_random_marker_token(&format!(
+            "dependency-free-foreign-child-exit\0{pane_id}\0{marker}"
+        ))?;
+        let staging_source = match execution_identity.classification() {
+            ShellClassification::Bash => {
+                super::super::bash_compat::managed_foreign_bash_child_staging_source(
+                    execution_identity.shell_path(),
+                    &marker,
+                    &child_token,
+                )
+            }
+            ShellClassification::Zsh => {
+                super::super::zsh_compat::managed_foreign_zsh_child_staging_source(
+                    execution_identity.shell_path(),
+                    &marker,
+                    &child_token,
+                    mez_agent::ManagedZshTrigger::EscapeM,
+                    &exit_marker,
+                )?
+            }
+            classification => {
+                agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
+                    execution_identity.shell_path(),
+                    classification,
+                    None,
+                    None,
+                    None,
+                    None,
+                    (classification == ShellClassification::Fish)
+                        .then_some((&child_token, marker.as_str())),
+                    None,
+                    Some(&exit_marker),
+                )
+                .map_err(|error| MezError::invalid_state(error.to_string()))?
+            }
+        };
+        if let Some(shell) = child_shell {
+            let managed_shell = match shell {
+                mez_terminal::ManagedShellAdapter::Bash => super::super::ManagedShellKind::Bash,
+                mez_terminal::ManagedShellAdapter::Fish => super::super::ManagedShellKind::Fish,
+                mez_terminal::ManagedShellAdapter::Zsh => super::super::ManagedShellKind::Zsh,
+            };
+            self.register_managed_shell_handoff(&marker, managed_shell, None);
+        }
+        let loader_token = runtime_random_marker_token(&format!(
+            "dependency-free-foreign-loader\0{pane_id}\0{marker}"
+        ))?;
+        let loader_marker = loader_token
+            .as_str()
+            .get(..32)
+            .ok_or_else(|| MezError::invalid_state("foreign loader nonce is too short"))?;
+        let loader_input = mez_agent::dependency_free_foreign_shell_loader_input(
+            &staging_source,
+            execution_identity.shell_path(),
+            execution_identity.classification(),
+            child_shell.map(|_| &child_token),
+            loader_marker,
+        )
+        .map_err(|error| MezError::invalid_state(error.to_string()))?;
+        if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+            current.child_staging_source = Some(staging_source);
+            current.loader_marker = Some(loader_marker.to_string());
+            current.loader_payload =
+                Some(mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                    loader_input.payload.into_bytes(),
+                    marker.clone(),
+                    true,
+                ));
+            current.loader_ready = false;
+        }
+        self.remember_agent_subshell_exit_marker(
+            pane_id,
+            agent_subshell_exit_marker_bytes(&exit_marker),
+        );
+        if let Err(error) =
+            self.write_runtime_pane_shell_input(pane_id, loader_input.command.as_bytes())
+        {
+            self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
+            return Err(error);
+        }
+        if child_shell.is_none() {
+            self.enter_agent_subshell(pane_id);
+            self.take_agent_subshell_command_exit(pane_id);
+            self.remember_hidden_shell_render_suppression(pane_id);
+        }
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","foreign_bootstrap":"loading_child","transport":"dependency-free","marker":"{}"}}"#,
+                json_escape(pane_id),
+                json_escape(&marker)
+            ),
+        )?;
+        Ok(())
     }
 
     /// Stages a managed Fish or Zsh child through its authenticated foreign parent.
@@ -952,8 +1164,18 @@ impl RuntimeSessionService {
                             | mez_agent::ShellClassification::Fish
                             | mez_agent::ShellClassification::Zsh
                     );
+                let awaits_dependency_free_posix_child = self
+                    .process
+                    .pane_foreign_shell_boundaries
+                    .get(k.as_str())
+                    .is_some_and(|boundary| {
+                        boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
+                            && boundary.adapter.is_none()
+                            && boundary.child_shell.is_none()
+                    });
                 self.process.pane_bootstrap_pending.contains(k.as_str())
-                    && !self.pane_has_uncertified_foreign_shell_boundary(k.as_str())
+                    && (!self.pane_has_uncertified_foreign_shell_boundary(k.as_str())
+                        || awaits_dependency_free_posix_child)
                     && !self.pane_agent_subshell_certification_is_pending(k.as_str())
                     && !awaits_managed_receiver
                     && (has_deferred_wrapper

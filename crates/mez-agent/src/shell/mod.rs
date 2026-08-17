@@ -34,19 +34,21 @@ pub use path_resolution::{
 };
 pub use transaction::{
     DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, FishPrivateSourceInput,
-    ManagedZshShell, ManagedZshTrigger, MarkerToken, SHELL_OUTPUT_BASE64_MAX_RAW_BYTES,
-    SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES, SHELL_TRANSACTION_SIDECAR_FRAME_BYTES,
-    ShellChildArgument, ShellChildLaunch, ShellClassification, ShellTransaction,
-    ShellTransactionInput, ShellTransactionOutputTransport, ZSH_PRIVATE_SOURCE_DATA_MAX_BYTES,
-    ZSH_PRIVATE_SOURCE_FRAME_BYTES, ZSH_PRIVATE_SOURCE_MAX_BASE64_BYTES,
-    ZSH_PRIVATE_SOURCE_MAX_BYTES, ZSH_PRIVATE_SOURCE_MAX_CHUNKS, ZSH_PRIVATE_SOURCE_MAX_FRAMES,
+    ForeignShellLoaderInput, ManagedZshShell, ManagedZshTrigger, MarkerToken,
+    SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES,
+    SHELL_TRANSACTION_SIDECAR_FRAME_BYTES, ShellChildArgument, ShellChildLaunch,
+    ShellClassification, ShellTransaction, ShellTransactionInput, ShellTransactionOutputTransport,
+    ZSH_PRIVATE_SOURCE_DATA_MAX_BYTES, ZSH_PRIVATE_SOURCE_FRAME_BYTES,
+    ZSH_PRIVATE_SOURCE_MAX_BASE64_BYTES, ZSH_PRIVATE_SOURCE_MAX_BYTES,
+    ZSH_PRIVATE_SOURCE_MAX_CHUNKS, ZSH_PRIVATE_SOURCE_MAX_FRAMES,
     ZSH_PRIVATE_SOURCE_MAX_RECORD_BYTES, ZshPrivateSourceInput, agent_subshell_enter_command,
     agent_subshell_enter_command_with_shell_compatibility,
     agent_subshell_enter_command_with_shell_compatibility_and_exit_marker,
     agent_subshell_enter_command_with_zsh_history_token, agent_subshell_exit_marker_bytes,
     bash_private_handoff_cancel_input, bash_private_handoff_source_input,
-    bash_private_source_input, fish_private_source_cancel_input, fish_private_source_input,
-    fish_quote, fish_wrapper_receiver_init_command, posix_shell_history_suppression_finish,
+    bash_private_source_input, dependency_free_foreign_shell_loader_input,
+    fish_private_source_cancel_input, fish_private_source_input, fish_quote,
+    fish_wrapper_receiver_init_command, posix_shell_history_suppression_finish,
     posix_shell_history_suppression_start, shell_command_contains_unquoted_heredoc,
     validate_agent_authored_shell_command, zsh_private_source_cancel_input,
     zsh_private_source_input,
@@ -570,6 +572,38 @@ mod tests {
         assert_eq!(shell_quote(""), "''");
         assert_eq!(shell_quote("plain value"), "'plain value'");
         assert_eq!(shell_quote("a'b"), "'a'\"'\"'b'");
+    }
+
+    /// Verifies dependency-free foreign bootstrap uses one portable rendezvous
+    /// line, waits for deferred source, executes it, and reports both lifecycle
+    /// records without requiring a Mezzanine executable in the target shell.
+    #[test]
+    fn dependency_free_foreign_loader_is_portable_and_executes_deferred_source() {
+        let marker = marker();
+        let input = dependency_free_foreign_shell_loader_input(
+            "printf 'dependency-free-loader-ok\\n'",
+            Path::new("/bin/sh"),
+            ShellClassification::PosixSh,
+            None,
+            marker.as_str(),
+        )
+        .expect("the dependency-free loader should render");
+
+        assert_eq!(input.command.lines().count(), 1);
+        assert!(
+            input.command.trim_end().len() <= 700,
+            "rendezvous command exceeded portable PTY input: {} bytes",
+            input.command.trim_end().len()
+        );
+        assert!(!input.command.contains("dependency-free-loader-ok"));
+        assert!(input.payload.lines().all(|line| line.len() <= 700));
+
+        let output = run_sh_stdin(&(input.command + &input.payload));
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("mez_foreign_loader=ready"), "{stdout:?}");
+        assert!(stdout.contains("dependency-free-loader-ok"), "{stdout:?}");
+        assert!(stdout.contains("mez_foreign_loader=exited"), "{stdout:?}");
     }
 
     /// Shell transaction validation accepts strong markers and absolute

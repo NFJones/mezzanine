@@ -52,6 +52,17 @@ pub(crate) fn parse_mez_shell_transaction_osc(payload: &str) -> Option<TerminalO
         }
         "R" => {
             let values = parse_semicolon_key_values(fields);
+            if values.get("mez_foreign_loader").copied() == Some("ready") {
+                return Some(TerminalOscEvent::ForeignShellLoaderReady {
+                    marker: required_marker_field(&values, "mez_marker")?,
+                });
+            }
+            if values.get("mez_foreign_loader").copied() == Some("exited") {
+                return Some(TerminalOscEvent::ForeignShellLoaderExited {
+                    marker: required_marker_field(&values, "mez_marker")?,
+                    exit_code: required_marker_field(&values, "mez_status")?.parse().ok()?,
+                });
+            }
             if values.get("mez_payload_receiver").copied() == Some("ready") {
                 return Some(TerminalOscEvent::ShellTransactionPayloadReceiverReady {
                     marker: required_marker_field(&values, "mez_marker")?,

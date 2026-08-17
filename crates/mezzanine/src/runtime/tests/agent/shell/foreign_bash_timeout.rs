@@ -33,22 +33,6 @@ fn runtime_foreign_bash_progress_and_partial_timeout_are_bounded() {
         .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
         .unwrap();
     service
-        .execute_terminal_command(&primary, "agent-shell")
-        .unwrap();
-    service.drain_pane_io_transition();
-
-    let started = service
-        .start_agent_prompt_turn(&pane_id, "list the current directory")
-        .unwrap();
-    let agent_id = AgentId::opaque(started.agent_id).unwrap();
-    assert!(
-        service
-            .claim_configured_agent_provider_task(&agent_id, &started.turn_id)
-            .unwrap()
-            .is_none(),
-        "provider dispatch must wait for foreign bootstrap certification"
-    );
-    service
         .observe_agent_shell_transaction_events(&pane_id, &[TerminalOscEvent::ShellPromptEnd])
         .unwrap();
     service
@@ -65,6 +49,22 @@ fn runtime_foreign_bash_progress_and_partial_timeout_are_bounded() {
             }],
         )
         .unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service.drain_pane_io_transition();
+
+    let started = service
+        .start_agent_prompt_turn(&pane_id, "list the current directory")
+        .unwrap();
+    let agent_id = AgentId::opaque(started.agent_id).unwrap();
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&agent_id, &started.turn_id)
+            .unwrap()
+            .is_none(),
+        "provider dispatch must wait for foreign bootstrap certification"
+    );
     let challenge = service
         .foreign_shell_bootstrap_challenge_for_tests(&pane_id)
         .unwrap()

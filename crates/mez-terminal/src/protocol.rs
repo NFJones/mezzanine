@@ -176,6 +176,18 @@ pub enum TerminalOscEvent {
         /// Pane identifier associated with the transaction.
         pane_id: String,
     },
+    /// A dependency-free foreign loader has taken ownership of terminal input.
+    ForeignShellLoaderReady {
+        /// Unpredictable bootstrap marker naming the owning loader.
+        marker: String,
+    },
+    /// A dependency-free foreign loader returned after its managed child exited.
+    ForeignShellLoaderExited {
+        /// Unpredictable bootstrap marker naming the owning loader.
+        marker: String,
+        /// Final status returned by the staged source or managed child.
+        exit_code: i32,
+    },
     /// A Mezzanine-owned OSC 133 marker started a shell transaction.
     ShellTransactionStart {
         /// Unpredictable transaction marker used to correlate boundaries.

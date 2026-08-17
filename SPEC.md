@@ -4012,33 +4012,47 @@ non-executable, or otherwise unusable but `/bin/sh` is executable, Mezzanine
 MUST classify `/bin/sh` as the shell identity for that environment.
 
 Re-bootstrap across an SSH, container, chroot, or other nested interactive
-boundary MUST use a Mezzanine shell adapter running inside that environment.
-The adapter MUST publish a versioned candidate only at a completed prompt
-boundary. Runtime MUST retain the latest candidate as advisory evidence for
-that currently completed prompt when it arrives before agent mode allocates a
-foreign shell-interaction generation. Agent entry MAY adopt that candidate only
-when the pane primary process, outer foreground process group, and completed
-prompt boundary still match. Runtime MUST then bind the candidate to the new
-shell-interaction generation, shell kind, adapter instance, token, and trigger
-before issuing a shell-native editor-acquisition challenge. Candidate metadata
-or a matching token alone MUST NOT authorize generated input. Only a matching
-challenge completion for the active boundary MAY advance identity discovery.
-The retained candidate MUST be discarded on a new prompt start, command start,
-foreground-group change, alternate-screen entry, pane removal, or replacement
-by a newer prompt or adapter instance. Primary-environment adapter tokens,
-startup paths, shell identities, and admission state MUST remain inaccessible
-while a foreign boundary is active.
+boundary MUST NOT require a Mezzanine executable, startup-file modification, or
+preinstalled compatibility shim inside that environment. Explicit agent entry
+MUST be treated as the user's assertion that the foreign shell is at an empty,
+interactive prompt fit for command input. Runtime MUST immediately issue a
+bounded syntax-neutral identity probe and, after resolving the foreign shell,
+MUST launch an ephemeral managed child through a one-command `/bin/sh` loader.
+The loader command and every payload record MUST remain within portable PTY
+canonical-line limits. Generated child source MUST remain withheld until the
+loader publishes a matching fresh nonce, and mismatched, stale, or duplicate
+loader records MUST NOT release input. Temporary loader and child-startup
+artifacts MUST be owner-only and MUST be removed when the synchronous child
+returns.
 
-Foreign bootstrap MUST have finite phase deadlines for adapter discovery,
-editor challenge, identity discovery, child bootstrap, and certification.
+A process-local Mezzanine shell adapter inside the foreign environment MAY be
+used as an optional fast path. Such an adapter MUST publish a versioned
+candidate only at a completed prompt boundary. Runtime MUST retain the latest
+candidate as advisory evidence for that currently completed prompt when it
+arrives before agent mode allocates a foreign shell-interaction generation.
+Agent entry MAY adopt that candidate only when the pane primary process, outer
+foreground process group, and completed prompt boundary still match. Runtime
+MUST then bind the candidate to the new shell-interaction generation, shell
+kind, adapter instance, token, and trigger before issuing a shell-native
+editor-acquisition challenge. Candidate metadata or a matching token alone
+MUST NOT authorize generated input. Only a matching challenge completion for
+the active boundary MAY advance identity discovery. The retained candidate
+MUST be discarded on a new prompt start, command start, foreground-group
+change, alternate-screen entry, pane removal, or replacement by a newer prompt
+or adapter instance. Primary-environment adapter tokens, startup paths, shell
+identities, and admission state MUST remain inaccessible while a foreign
+boundary is active.
+
+Foreign bootstrap MUST have finite phase deadlines for optional adapter
+admission, identity discovery, loader readiness, child bootstrap, and
+certification.
 Provider work MAY remain pending only while one of those deadlines owns
 progress. Expiry MUST fail pending work with an actionable integration
-diagnostic and MUST NOT interrupt or inject input into the foreign foreground.
-Mezzanine MUST NOT silently install or modify startup files in the foreign
-environment. An unmanaged already-running foreign shell is unsupported until
-the user explicitly installs or activates compatible integration there.
+diagnostic. Before a correlated loader or child has proven ownership, expiry
+MUST NOT interrupt the foreign foreground. Mezzanine MUST NOT install software
+or modify startup files in the foreign environment.
 
-The opt-in foreign Bash adapter MUST be generated with `mez shell-integration
+The optional foreign Bash adapter MUST be generated with `mez shell-integration
 bash` and MAY be evaluated only by an explicit user action inside the nested
 Bash environment. It MUST generate a fresh adapter token and instance, preserve
 the visible prompt, install a private Readline receiver in the current process,
@@ -4052,7 +4066,7 @@ released, and remove its temporary startup directory when the synchronous child
 handoff returns. Neither the host adapter token nor a host startup path MAY
 appear in foreign delivery.
 
-The opt-in foreign Fish and Zsh adapters MUST be generated with `mez
+The optional foreign Fish and Zsh adapters MUST be generated with `mez
 shell-integration fish` and `mez shell-integration zsh`, respectively, and MAY
 be evaluated only by an explicit user action inside the matching nested shell.
 Each adapter MUST generate a fresh token and instance, preserve the visible

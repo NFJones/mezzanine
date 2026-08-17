@@ -1102,7 +1102,10 @@ impl RuntimeSessionService {
             if !self.pane_has_running_shell_transaction(pane_id)
                 && self.begin_uncertified_foreign_shell_boundary_for_current_foreground(pane_id)
             {
-                let _ = self.adopt_retained_foreign_shell_adapter_candidate(pane_id)?;
+                let adopted = self.adopt_retained_foreign_shell_adapter_candidate(pane_id)?;
+                if adopted == 0 {
+                    self.begin_dependency_free_foreign_shell_bootstrap(pane_id)?;
+                }
             }
             self.defer_agent_subshell_entry(pane_id);
             return Ok(false);

@@ -275,7 +275,7 @@ impl RuntimePaneEnvironmentAuthorityUnavailableReason {
                 "pane shell identity probe failed before environment certification".to_string()
             }
             Self::ForeignBootstrapTimedOut => {
-                "foreign shell bootstrap timed out; install or activate Mezzanine shell integration inside the SSH or container environment and wait for its prompt"
+                "foreign shell bootstrap timed out; return to an empty prompt in the foreign environment and retry"
                     .to_string()
             }
             Self::AgentSubshellCertification(reason) => format!(
@@ -473,6 +473,14 @@ struct RuntimeForeignShellBoundary {
     challenge: Option<String>,
     /// Fresh private receiver token installed only in the managed foreign child.
     child_token: Option<String>,
+    /// Managed adapter implemented by the ephemeral child, when supported.
+    child_shell: Option<mez_terminal::ManagedShellAdapter>,
+    /// Bootstrap marker naming the active dependency-free loader.
+    loader_marker: Option<String>,
+    /// Source records withheld until the dependency-free loader publishes ready.
+    loader_payload: Option<mez_mux::process::ShellInputDelivery>,
+    /// Whether the correlated loader has proven terminal-input ownership.
+    loader_ready: bool,
     /// Authenticated RX2 source that stages, launches, and cleans up the child.
     child_staging_source: Option<String>,
     /// Identity transaction currently owned by the admitted foreign adapter.
@@ -2337,6 +2345,14 @@ impl RuntimeSessionService {
             .and_then(|boundary| boundary.challenge.as_deref())
     }
 
+    /// Returns the bounded dependency-free loader nonce for correlation tests.
+    pub(crate) fn foreign_shell_loader_marker_for_tests(&self, pane_id: &str) -> Option<&str> {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .and_then(|boundary| boundary.loader_marker.as_deref())
+    }
+
     /// Returns the fresh foreign Bash child token for staging regressions.
     pub(crate) fn foreign_bash_child_token_for_tests(&self, pane_id: &str) -> Option<&str> {
         self.process
@@ -2718,8 +2734,11 @@ impl RuntimeSessionService {
                 self.process
                     .pane_foreign_shell_boundaries
                     .get(pane_id)
-                    .and_then(|boundary| boundary.adapter.as_ref())
-                    .map(|adapter| adapter.shell),
+                    .and_then(|boundary| {
+                        boundary
+                            .child_shell
+                            .or_else(|| boundary.adapter.as_ref().map(|adapter| adapter.shell))
+                    }),
                 self.foreign_child_token_for_pane(pane_id),
             ) {
                 (Some(mez_terminal::ManagedShellAdapter::Bash), Some(token)) => {
@@ -2930,8 +2949,12 @@ impl RuntimeSessionService {
                 .process
                 .pane_foreign_shell_boundaries
                 .get(pane_id)
-                .and_then(|boundary| boundary.adapter.as_ref())
-                .is_some_and(|adapter| adapter.shell == shell)
+                .is_some_and(|boundary| {
+                    boundary
+                        .child_shell
+                        .or_else(|| boundary.adapter.as_ref().map(|adapter| adapter.shell))
+                        == Some(shell)
+                })
                 && self
                     .foreign_child_token_for_pane(pane_id)
                     .is_some_and(|expected| expected.as_str() == token);
@@ -2959,6 +2982,11 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Option<mez_agent::ManagedZshTrigger> {
         if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get(pane_id) {
+            if boundary.adapter.is_none()
+                && boundary.child_shell == Some(mez_terminal::ManagedShellAdapter::Zsh)
+            {
+                return Some(mez_agent::ManagedZshTrigger::EscapeM);
+            }
             let adapter = boundary.adapter.as_ref()?;
             return (adapter.shell == mez_terminal::ManagedShellAdapter::Zsh)
                 .then_some(adapter.trigger.as_deref())
@@ -2997,8 +3025,10 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Option<mez_agent::MarkerToken> {
         let boundary = self.process.pane_foreign_shell_boundaries.get(pane_id)?;
-        let adapter = boundary.adapter.as_ref()?;
-        (adapter.shell == mez_terminal::ManagedShellAdapter::Bash)
+        let shell = boundary
+            .child_shell
+            .or_else(|| boundary.adapter.as_ref().map(|adapter| adapter.shell));
+        (shell == Some(mez_terminal::ManagedShellAdapter::Bash))
             .then(|| self.foreign_child_token_for_pane(pane_id))
             .flatten()
     }

@@ -131,8 +131,13 @@ impl RuntimeSessionService {
                         .process
                         .pane_foreign_shell_boundaries
                         .get(output_pane_id)
-                        .and_then(|boundary| boundary.adapter.as_ref())
-                        .is_some_and(|adapter| adapter.shell == shell)
+                        .is_some_and(|boundary| {
+                            boundary.child_shell == Some(shell)
+                                || boundary
+                                    .adapter
+                                    .as_ref()
+                                    .is_some_and(|adapter| adapter.shell == shell)
+                        })
                         && self
                             .foreign_child_token_for_pane(output_pane_id)
                             .is_some_and(|expected| expected.as_str() == token) =>
@@ -205,6 +210,23 @@ impl RuntimeSessionService {
                                 Some(proof),
                             )
                         }
+                    } else if self
+                        .process
+                        .pane_foreign_shell_boundaries
+                        .get(output_pane_id)
+                        .is_some_and(|boundary| {
+                            boundary.adapter.is_none()
+                                && boundary.child_shell
+                                    == Some(mez_terminal::ManagedShellAdapter::Bash)
+                        })
+                    {
+                        self.observe_managed_shell_parent_ready(
+                            output_pane_id,
+                            ManagedShellKind::Bash,
+                            token,
+                            marker,
+                            None,
+                        )
                     } else if matches!(
                         outcome,
                         mez_terminal::ManagedShellParentOutcome::Completed
@@ -870,6 +892,7 @@ impl RuntimeSessionService {
             boundary.phase_started_at_unix_ms = current_unix_millis();
             boundary.challenge = None;
             boundary.child_token = None;
+            boundary.child_shell = None;
             boundary.child_staging_source = None;
             boundary.identity_marker = None;
         }
