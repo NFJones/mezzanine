@@ -3840,6 +3840,61 @@ fn runtime_deferred_foreground_input_clears_agent_shell_output_filters() {
     assert_eq!(prompt_repaint, b"\r$ ");
 }
 
+/// Verifies managed-shell parent settlement without queued foreground input
+/// preserves the bounded delayed-render window until real user input arrives.
+///
+/// Bash can emit its authenticated parent-ready event before a final prompt
+/// repaint reaches the PTY. Releasing render suppression at settlement would
+/// append that repaint to the retained prompt and leave the cursor one prompt
+/// width too far to the right.
+#[test]
+fn runtime_managed_shell_settlement_retains_delayed_parent_prompt_suppression() {
+    let mut service = test_runtime_service();
+    let marker = "bash-parent-settlement";
+    service.running_shell_transactions_mut_for_tests().insert(
+        marker.to_string(),
+        RunningShellTransactionRef {
+            turn_id: "bash-parent-settlement-turn".to_string(),
+            kind: RunningShellTransactionKind::Bootstrap,
+            pane_id: "%1".to_string(),
+            command: "bootstrap".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+    service.prepend_bash_shell_handoff_payload(
+        marker,
+        mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
+        &mez_agent::MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap(),
+    );
+    service.remember_hidden_shell_render_suppression("%1");
+
+    service
+        .settle_managed_shell_runtime_ownership("%1", Vec::new())
+        .unwrap();
+
+    assert!(service.hidden_shell_render_retention_timer_needed());
+    assert!(
+        service
+            .renderable_pane_output_bytes("%1", b"\rparent$ ")
+            .is_empty(),
+        "delayed parent repaint must remain hidden after no-input settlement"
+    );
+
+    service
+        .running_shell_transactions_mut_for_tests()
+        .remove(marker);
+    service.clear_shell_output_filters_for_foreground_input("%1");
+    assert_eq!(
+        service.renderable_pane_output_bytes("%1", b"ordinary parent output\r\n"),
+        b"ordinary parent output\r\n"
+    );
+}
+
 /// Verifies a visible agent surface hides retained process mouse modes from
 /// input classification and rejects stale direct mouse-forward actions.
 #[test]

@@ -1015,6 +1015,16 @@ impl RuntimeSessionService {
         pane_id: &str,
         pending_input: Vec<u8>,
     ) -> Result<()> {
+        let retain_delayed_render_suppression = self
+            .process
+            .pane_managed_shell_handoffs
+            .get(pane_id)
+            .is_some_and(|handoff| handoff.shell() == ManagedShellKind::Bash)
+            && pending_input.is_empty()
+            && self
+                .process
+                .pane_hidden_shell_render_recent_polls
+                .contains_key(pane_id);
         self.process.pane_managed_shell_handoffs.remove(pane_id);
         self.process
             .pane_agent_subshell_parent_return_pending
@@ -1027,6 +1037,9 @@ impl RuntimeSessionService {
             .remove(pane_id);
         self.clear_agent_subshell_shell_identity(pane_id);
         self.clear_shell_output_filters_for_foreground_input(pane_id);
+        if retain_delayed_render_suppression {
+            self.remember_hidden_shell_render_suppression(pane_id);
+        }
         if !pending_input.is_empty() {
             self.write_runtime_pane_input(pane_id, &pending_input)?;
         }
