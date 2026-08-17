@@ -163,6 +163,20 @@ impl ManagedShellHandoff {
             && matches!(self.shell, ManagedShellKind::Fish | ManagedShellKind::Zsh)
     }
 
+    /// Reports whether retained presentation still needs native clear repaint bytes.
+    ///
+    /// Zsh publishes its authenticated `editor-cleared` event from inside the
+    /// ZLE widget before the redisplay requested by that widget necessarily
+    /// reaches the PTY. Presentation therefore remains clear-owned through the
+    /// `EditorCleared` phase, while protocol validation continues to use the
+    /// narrower [`Self::editor_clear_is_pending`] trigger-phase predicate.
+    pub(super) fn editor_clear_render_is_pending(&self) -> bool {
+        matches!(
+            self.phase,
+            ManagedShellHandoffPhase::TriggerQueued | ManagedShellHandoffPhase::EditorCleared
+        ) && matches!(self.shell, ManagedShellKind::Fish | ManagedShellKind::Zsh)
+    }
+
     /// Returns queued foreground input without releasing ownership in tests.
     #[cfg(test)]
     pub(super) fn pending_input(&self) -> &[u8] {
@@ -619,6 +633,7 @@ mod tests {
         );
         assert_eq!(editor_held.phase(), ManagedShellHandoffPhase::EditorCleared);
         assert!(!editor_held.editor_clear_is_pending());
+        assert!(editor_held.editor_clear_render_is_pending());
         assert!(
             reduce_managed_shell_handoff(
                 &mut editor_held,
@@ -628,6 +643,7 @@ mod tests {
             )
             .applied
         );
+        assert!(!editor_held.editor_clear_render_is_pending());
         let cancelled = reduce_managed_shell_handoff(
             &mut editor_held,
             ManagedShellHandoffEvent::ExitRequested { now_unix_ms: 22 },
