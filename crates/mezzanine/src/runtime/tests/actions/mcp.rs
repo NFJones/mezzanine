@@ -649,18 +649,17 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
     let _ = fs::remove_dir_all(audit_root);
 }
 
-/// Verifies a protocol-level MCP call failure remains an ordinary action
-/// failure that the model can inspect and recover from.
+/// Verifies a tool-declared MCP error remains an ordinary successful action
+/// result that the model can inspect and recover from.
 ///
 /// A malformed response to one tool call does not prove that every tool on
 /// the discovered server is unavailable. The runtime must therefore preserve
 /// the server catalog, retain the failed result as continuation context, and
-/// queue the same bounded model-recovery path used for failed shell commands.
+/// queue the same direct continuation path used for a nonzero shell command.
 #[tokio::test]
-async fn runtime_mcp_call_failure_queues_recovery_without_disabling_server() {
+async fn runtime_mcp_tool_error_queues_continuation_without_disabling_server() {
     let mut service = test_runtime_service();
-    let valid_response = r#"{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"hello from mcp"}],"structuredContent":{"status":"ok"},"isError":false}}"#;
-    let script = runtime_mcp_fixture_script(false).replace(valid_response, "not-json");
+    let script = runtime_mcp_fixture_script(true);
     service
         .replace_config_layers_async(vec![ConfigLayer {
             name: "primary".to_string(),
@@ -737,7 +736,8 @@ async fn runtime_mcp_call_failure_queues_recovery_without_disabling_server() {
         .unwrap();
 
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+    assert!(!execution.action_results[0].is_error);
     assert_eq!(
         service.mcp_registry().list_servers()[0].status,
         mez_agent::mcp::McpServerStatus::Available
@@ -750,7 +750,10 @@ async fn runtime_mcp_call_failure_queues_recovery_without_disabling_server() {
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
-            && block.content.contains("[action_result m1 mcp_call failed]")
+            && block
+                .content
+                .contains("[action_result m1 mcp_call succeeded]")
+            && block.content.contains("denied")
     }));
 }
 

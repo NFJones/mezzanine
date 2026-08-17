@@ -364,7 +364,9 @@ pub fn mcp_response_to_action_result(
     request: &McpExecutionRequest,
     response: McpExecutionResponse,
 ) -> ActionResultContractResult<ActionResult> {
-    let content_json = response.content_json.clone();
+    let content_json = serde_json::from_str::<serde_json::Value>(&response.content_json)
+        .unwrap_or_else(|_| serde_json::Value::String(response.content_json.clone()))
+        .to_string();
     let server_json = serde_json::Value::String(request.server_id.clone()).to_string();
     let tool_json = serde_json::Value::String(request.tool_name.clone()).to_string();
     let structured_payload = format!(
@@ -376,23 +378,9 @@ pub fn mcp_response_to_action_result(
         response.is_error
     );
     let content = action_content_blocks_from_json_or_text(&response.content_json);
-    if response.is_error {
-        let mut result = ActionResult::failed(
-            turn,
-            action,
-            ActionStatus::Failed,
-            "mcp_tool_error",
-            "MCP tool returned an error",
-        )?;
-        result.content = content;
-        result.structured_content_json = Some(structured_payload);
-        Ok(result)
-    } else {
-        let mut result =
-            ActionResult::succeeded(turn, action, Vec::new(), Some(structured_payload));
-        result.content = content;
-        Ok(result)
-    }
+    let mut result = ActionResult::succeeded(turn, action, Vec::new(), Some(structured_payload));
+    result.content = content;
+    Ok(result)
 }
 
 /// One request to execute a rendered shell transaction through a pane adapter.
@@ -705,7 +693,8 @@ mod tests {
         assert_eq!(structured["structured_content"]["count"], 1);
     }
 
-    /// Verifies error MCP responses become failed results while malformed
+    /// Verifies an MCP tool-declared error remains model-visible successful
+    /// execution evidence, matching a nonzero shell command, while malformed
     /// content remains visible as a fallback text block.
     #[test]
     fn mcp_response_projection_preserves_error_fallback_text() {
@@ -726,9 +715,13 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.status, ActionStatus::Failed);
+        assert_eq!(result.status, ActionStatus::Succeeded);
         assert_eq!(result.content_text(), "not-json");
-        assert_eq!(result.error.unwrap().code, "mcp_tool_error");
+        assert!(!result.is_error);
+        assert!(result.error.is_none());
+        let structured: serde_json::Value =
+            serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
+        assert_eq!(structured["is_error"], true);
     }
 
     /// Verifies retained MCP execution requests must preserve the exact action

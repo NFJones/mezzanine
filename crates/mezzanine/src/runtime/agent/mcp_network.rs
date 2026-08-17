@@ -516,11 +516,22 @@ impl RuntimeSessionService {
                 runtime_action_status_name(result.status)
             ),
         )?;
+        let mcp_tool_error = matches!(&action.payload, AgentActionPayload::McpCall { .. })
+            && result
+                .structured_content_json
+                .as_deref()
+                .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+                .and_then(|content| content.get("is_error").and_then(serde_json::Value::as_bool))
+                .unwrap_or(false);
         execution.action_results[result_index] = result;
-        execution.terminal_state = runtime_agent_turn_state_from_action_results(
-            &execution.action_results,
-            execution.final_turn,
-        );
+        execution.terminal_state = if mcp_tool_error {
+            AgentTurnState::Running
+        } else {
+            runtime_agent_turn_state_from_action_results(
+                &execution.action_results,
+                execution.final_turn,
+            )
+        };
         let failure_feedback_queued = if execution.terminal_state == AgentTurnState::Failed
             && matches!(&action.payload, AgentActionPayload::McpCall { .. })
         {
@@ -538,7 +549,7 @@ impl RuntimeSessionService {
             return Ok(true);
         }
         if execution.terminal_state == AgentTurnState::Running
-            && runtime_execution_ready_for_provider_continuation(&execution)
+            && (mcp_tool_error || runtime_execution_ready_for_provider_continuation(&execution))
         {
             let observed_result = execution.action_results[result_index].clone();
             self.append_action_result_context_if_absent(&turn.turn_id, &observed_result)?;
@@ -654,12 +665,30 @@ impl RuntimeSessionService {
                 self.execute_mcp_action_for_turn(turn, &action, auto_allowed || policy_allowed)?;
             executed = executed.saturating_add(1);
         }
-        execution.terminal_state = runtime_agent_turn_state_from_action_results(
-            &execution.action_results,
-            execution.final_turn,
-        );
+        let mcp_tool_error = execution.action_results.iter().any(|result| {
+            result.action_type == "mcp_call"
+                && result
+                    .structured_content_json
+                    .as_deref()
+                    .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+                    .and_then(|content| {
+                        content.get("is_error").and_then(serde_json::Value::as_bool)
+                    })
+                    .unwrap_or(false)
+        });
+        if mcp_tool_error {
+            execution.final_turn = false;
+        }
+        execution.terminal_state = if mcp_tool_error {
+            AgentTurnState::Running
+        } else {
+            runtime_agent_turn_state_from_action_results(
+                &execution.action_results,
+                execution.final_turn,
+            )
+        };
         if execution.terminal_state == AgentTurnState::Running
-            && runtime_execution_ready_for_provider_continuation(execution)
+            && (mcp_tool_error || runtime_execution_ready_for_provider_continuation(execution))
         {
             for result in execution
                 .action_results
@@ -732,12 +761,30 @@ impl RuntimeSessionService {
                 .await?;
             executed = executed.saturating_add(1);
         }
-        execution.terminal_state = runtime_agent_turn_state_from_action_results(
-            &execution.action_results,
-            execution.final_turn,
-        );
+        let mcp_tool_error = execution.action_results.iter().any(|result| {
+            result.action_type == "mcp_call"
+                && result
+                    .structured_content_json
+                    .as_deref()
+                    .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+                    .and_then(|content| {
+                        content.get("is_error").and_then(serde_json::Value::as_bool)
+                    })
+                    .unwrap_or(false)
+        });
+        if mcp_tool_error {
+            execution.final_turn = false;
+        }
+        execution.terminal_state = if mcp_tool_error {
+            AgentTurnState::Running
+        } else {
+            runtime_agent_turn_state_from_action_results(
+                &execution.action_results,
+                execution.final_turn,
+            )
+        };
         if execution.terminal_state == AgentTurnState::Running
-            && runtime_execution_ready_for_provider_continuation(execution)
+            && (mcp_tool_error || runtime_execution_ready_for_provider_continuation(execution))
         {
             for result in execution
                 .action_results
