@@ -176,6 +176,29 @@ unset -f __mez_foreign_bash_stage_child\n\
     )
 }
 
+/// Renders dependency-free Bash staging with the runtime's parent-return boundary.
+///
+/// The loader owns the unmanaged foreign parent rather than a preinstalled
+/// adapter, so it must publish this boundary before its correlated exit event.
+pub(super) fn managed_dependency_free_foreign_bash_child_staging_source(
+    shell_path: &Path,
+    bootstrap_marker: &str,
+    child_token: &MarkerToken,
+    exit_marker: &MarkerToken,
+) -> String {
+    let staging =
+        managed_foreign_bash_child_staging_source(shell_path, bootstrap_marker, child_token);
+    let boundary = format!(
+        "command printf '\\033]133;mez_agent_subshell_exit={}\\033\\\\'\n",
+        exit_marker.as_str()
+    );
+    staging.replacen(
+        "\n(exit \"$MEZ_FOREIGN_BASH_STATUS\")",
+        &format!("\n{boundary}(exit \"$MEZ_FOREIGN_BASH_STATUS\")"),
+        1,
+    )
+}
+
 /// Renders the common authenticated Bash receiver with caller-owned startup
 /// and readiness behavior.
 fn managed_bash_receiver_source_with_prelude(
@@ -626,9 +649,14 @@ exit\n",
         }
         let marker = MarkerToken::new("00112233445566778899aabbccddeeff").unwrap();
         let child_token = MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let exit_marker = MarkerToken::new("abcdefabcdefabcdefabcdefabcdefab").unwrap();
         let loader_marker = "fedcba9876543210fedcba9876543210";
-        let staging_source =
-            managed_foreign_bash_child_staging_source(bash, marker.as_str(), &child_token);
+        let staging_source = managed_dependency_free_foreign_bash_child_staging_source(
+            bash,
+            marker.as_str(),
+            &child_token,
+            &exit_marker,
+        );
         let loader = mez_agent::dependency_free_foreign_shell_loader_input(
             &staging_source,
             bash,
@@ -686,6 +714,7 @@ exit\n",
             "mez_event=frame-admitted",
             "bootstrap\tcomplete\t",
             "mez_event=parent-ready",
+            "mez_agent_subshell_exit=abcdefabcdefabcdefabcdefabcdefab",
             "mez_foreign_loader=exited",
         ] {
             assert!(

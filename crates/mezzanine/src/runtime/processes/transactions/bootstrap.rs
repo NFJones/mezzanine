@@ -643,10 +643,11 @@ impl RuntimeSessionService {
         ))?;
         let staging_source = match execution_identity.classification() {
             ShellClassification::Bash => {
-                super::super::bash_compat::managed_foreign_bash_child_staging_source(
+                super::super::bash_compat::managed_dependency_free_foreign_bash_child_staging_source(
                     execution_identity.shell_path(),
                     &marker,
                     &child_token,
+                    &exit_marker,
                 )
             }
             ShellClassification::Zsh => {
