@@ -9,10 +9,10 @@ use clap::CommandFactory;
 use super::env::CliArgv;
 use super::{
     CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, MezError, OsString,
-    PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, ensure_private_socket_directory, io,
-    json_escape, prune_stale_socket_files_in_directory, run_attach, run_auth, run_config,
-    run_control_request, run_issue, run_list, run_mcp, run_memory, run_new, run_sandbox, run_serve,
-    run_snapshot,
+    PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, ensure_private_socket_directory,
+    generate_managed_foreign_bash_adapter_source, io, json_escape,
+    prune_stale_socket_files_in_directory, run_attach, run_auth, run_config, run_control_request,
+    run_issue, run_list, run_mcp, run_memory, run_new, run_sandbox, run_serve, run_snapshot,
 };
 
 // Top-level CLI run and command dispatch.
@@ -156,6 +156,18 @@ pub async fn run_with<W: Write, E: Write>(
             let mut command = CliArgv::command();
             clap_complete::generate(args.shell, &mut command, "mez", stdout);
         }
+        Some(CliCommand::ShellIntegration(args)) => match args.shell.as_str() {
+            "bash" => write!(
+                stdout,
+                "{}",
+                generate_managed_foreign_bash_adapter_source()?
+            )?,
+            _ => {
+                return Err(MezError::invalid_args(
+                    "shell-integration supports only bash",
+                ));
+            }
+        },
         Some(CliCommand::Config(args)) => run_config(args, env, output_format, stdout)?,
         Some(CliCommand::New(args)) => {
             run_new(

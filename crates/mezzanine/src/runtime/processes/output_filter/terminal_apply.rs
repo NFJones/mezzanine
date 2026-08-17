@@ -191,8 +191,19 @@ impl RuntimeSessionService {
             self.pane_process_group_is_certified_shell(&pane_id, process_group_id);
         let primary_shell_returned = current_foreground_certified_shell == Some(true)
             && self.clear_uncertified_foreign_shell_boundary(&pane_id);
-        if primary_shell_returned && self.agent_subshell_entry_is_deferred(&pane_id) {
-            self.schedule_parent_shell_discovery_for_agent_entry(&pane_id);
+        if primary_shell_returned {
+            self.leave_agent_subshell(&pane_id);
+            self.clear_agent_subshell_shell_identity(&pane_id);
+            self.invalidate_agent_subshell_environment_after_exit(&pane_id);
+            if self
+                .agent_shell_store()
+                .get(&pane_id)
+                .is_some_and(|session| {
+                    session.visibility == mez_agent::AgentShellVisibility::Visible
+                })
+            {
+                self.schedule_parent_shell_discovery_for_agent_entry(&pane_id);
+            }
         }
         let awaiting_initial_prompt = self
             .process

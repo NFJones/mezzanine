@@ -185,7 +185,8 @@ impl RuntimeSessionService {
     pub(crate) fn pane_has_uncertified_foreign_shell_boundary(&self, pane_id: &str) -> bool {
         self.process
             .pane_foreign_shell_boundaries
-            .contains_key(pane_id)
+            .get(pane_id)
+            .is_some_and(|boundary| boundary.phase != RuntimeForeignShellBootstrapPhase::Certified)
     }
 
     /// Starts a foreign boundary from the current worker or PTY foreground observation.
@@ -280,6 +281,8 @@ impl RuntimeSessionService {
                 prompt_observed: false,
                 adapter: None,
                 challenge: None,
+                child_token: None,
+                child_staging_source: None,
             },
         );
         self.process
@@ -1193,6 +1196,15 @@ impl RuntimeSessionService {
         self.process
             .pane_agent_subshell_certification_rejections
             .remove(pane_id);
+        if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id)
+            && boundary.primary_process_id == evidence.primary_process_id
+            && boundary.interaction_generation == evidence.interaction_generation
+            && boundary.process_group_id == process_group_id
+        {
+            boundary.phase = RuntimeForeignShellBootstrapPhase::Certified;
+            boundary.phase_started_at_unix_ms = current_unix_millis();
+            boundary.child_staging_source = None;
+        }
     }
 
     /// Removes untrusted context and records one stable certification rejection.

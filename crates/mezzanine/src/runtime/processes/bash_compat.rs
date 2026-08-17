@@ -10,6 +10,7 @@ use std::io::Write as _;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
+use base64::Engine as _;
 use mez_agent::MarkerToken;
 use mez_mux::process::PaneProcessLaunch;
 
@@ -108,7 +109,75 @@ impl ManagedBashCompatibility {
 /// an empty Readline edit buffer, emits an authenticated ready event, then
 /// validates bounded sequence, length, digest, and end framing before eval.
 fn managed_bash_receiver_source(token: &MarkerToken) -> String {
-    const TEMPLATE: &str = r#"if [[ -r ${MEZ_BASH_USER_RCFILE:-$HOME/.bashrc} ]]; then builtin source -- "${MEZ_BASH_USER_RCFILE:-$HOME/.bashrc}"; fi
+    managed_bash_receiver_source_with_prelude(
+        token,
+        r#"if [[ -r ${MEZ_BASH_USER_RCFILE:-$HOME/.bashrc} ]]; then builtin source -- "${MEZ_BASH_USER_RCFILE:-$HOME/.bashrc}"; fi"#,
+        r#"command printf '\033]133;R;mez_protocol=2;mez_shell=bash;mez_token=%s;mez_event=adapter-available\033\\' "$MEZ_BASH_RECEIVER_TOKEN""#,
+    )
+}
+
+/// Generates opt-in managed Bash integration for a nested shell environment.
+///
+/// The source changes only the current Bash process. It retains the visible
+/// prompt, publishes a candidate after that prompt, and never edits startup
+/// files or embeds host-side paths.
+pub(crate) fn managed_foreign_bash_adapter_source(
+    token: &MarkerToken,
+    instance: &MarkerToken,
+) -> String {
+    let prelude = format!(
+        "MEZ_BASH_FOREIGN_INSTANCE={}\nMEZ_BASH_FOREIGN_ORIGINAL_PS1=${{PS1-}}",
+        instance.as_str()
+    );
+    let ready = format!(
+        "PS1=$'\\[\\033]133;A\\033\\\\\\]'\"${{MEZ_BASH_FOREIGN_ORIGINAL_PS1}}\"$'\\[\\033]133;B\\033\\\\\\]\\[\\033]133;R;mez_protocol=2;mez_shell=bash;mez_token={};mez_event=foreign-adapter-candidate;mez_instance={}\\033\\\\\\]'",
+        token.as_str(),
+        instance.as_str()
+    );
+    managed_bash_receiver_source_with_prelude(token, &prelude, &ready)
+}
+
+/// Renders private parent-receiver source that stages and runs one managed
+/// Bash child entirely inside the active foreign filesystem.
+///
+/// The owner-only directory and rcfile are removed after the synchronous child
+/// returns. The source itself is delivered only inside authenticated RX2 DATA
+/// records; the trigger contains no child token, rcfile contents, or path.
+pub(super) fn managed_foreign_bash_child_staging_source(
+    shell_path: &Path,
+    bootstrap_marker: &str,
+    child_token: &MarkerToken,
+) -> String {
+    let rcfile_source = managed_bash_receiver_source(child_token);
+    let encoded_rcfile = base64::engine::general_purpose::STANDARD.encode(rcfile_source.as_bytes());
+    let directory_name = format!(".mez-bash-{}", &child_token.as_str()[..16]);
+    let shell = mez_agent::shell_quote(&shell_path.to_string_lossy());
+    let marker = mez_agent::shell_quote(bootstrap_marker);
+    let encoded = mez_agent::shell_quote(&encoded_rcfile);
+    format!(
+        "umask 077\n\
+MEZ_FOREIGN_BASH_DIR=${{TMPDIR:-/tmp}}/{directory_name}\n\
+command mkdir -m 700 -- \"$MEZ_FOREIGN_BASH_DIR\" || return 70\n\
+MEZ_FOREIGN_BASH_RCFILE=$MEZ_FOREIGN_BASH_DIR/bashrc\n\
+command printf '%s' {encoded} | command base64 -d > \"$MEZ_FOREIGN_BASH_RCFILE\" 2>/dev/null || command printf '%s' {encoded} | command base64 -D > \"$MEZ_FOREIGN_BASH_RCFILE\" 2>/dev/null || {{ command rm -rf -- \"$MEZ_FOREIGN_BASH_DIR\"; return 71; }}\n\
+command chmod 600 -- \"$MEZ_FOREIGN_BASH_RCFILE\" || {{ command rm -rf -- \"$MEZ_FOREIGN_BASH_DIR\"; return 72; }}\n\
+# child-token:{}\n\
+MEZ_BASH_RECEIVER_INSTALL_MARKER={marker} {shell} --noprofile --rcfile \"$MEZ_FOREIGN_BASH_RCFILE\" -i\n\
+MEZ_FOREIGN_BASH_STATUS=$?\n\
+command rm -rf -- \"$MEZ_FOREIGN_BASH_DIR\"\n\
+return \"$MEZ_FOREIGN_BASH_STATUS\"",
+        child_token.as_str()
+    )
+}
+
+/// Renders the common authenticated Bash receiver with caller-owned startup
+/// and readiness behavior.
+fn managed_bash_receiver_source_with_prelude(
+    token: &MarkerToken,
+    prelude: &str,
+    ready: &str,
+) -> String {
+    const TEMPLATE: &str = r#"__MEZ_BASH_RECEIVER_PRELUDE__
 MEZ_BASH_RECEIVER_TOKEN=__MEZ_BASH_RECEIVER_TOKEN__
 __mez_bash_receiver_reset() {
     if [[ ${MEZ_BASH_RECEIVER_SAVED_LINE_SET-} == 1 ]]; then
@@ -137,6 +206,14 @@ __mez_bash_receiver() {
     READLINE_MARK=0
     IFS=' ' builtin read -r MEZ_BASH_RECEIVER_KIND MEZ_BASH_RECEIVER_FRAME_TOKEN MEZ_BASH_RECEIVER_FRAME_MARKER MEZ_BASH_RECEIVER_LENGTH MEZ_BASH_RECEIVER_DIGEST MEZ_BASH_RECEIVER_CHUNKS MEZ_BASH_RECEIVER_PARENT_PROOF || { __mez_bash_receiver_reset; return 1; }
     MEZ_BASH_RECEIVER_KIND=${MEZ_BASH_RECEIVER_KIND#$'\a'}
+    if [[ $MEZ_BASH_RECEIVER_KIND == MEZ_BASH_FOREIGN_CHALLENGE && $MEZ_BASH_RECEIVER_FRAME_TOKEN == "$MEZ_BASH_RECEIVER_TOKEN" && $MEZ_BASH_RECEIVER_FRAME_MARKER == "${MEZ_BASH_FOREIGN_INSTANCE-}" && $MEZ_BASH_RECEIVER_LENGTH =~ ^[0-9a-f]{32,}$ && -z $MEZ_BASH_RECEIVER_DIGEST && -z $MEZ_BASH_RECEIVER_CHUNKS && -z $MEZ_BASH_RECEIVER_PARENT_PROOF ]]; then
+        MEZ_BASH_FOREIGN_COMPLETED_INSTANCE=$MEZ_BASH_RECEIVER_FRAME_MARKER
+        MEZ_BASH_FOREIGN_COMPLETED_CHALLENGE=$MEZ_BASH_RECEIVER_LENGTH
+        __mez_bash_receiver_reset
+        command printf '\033]133;R;mez_protocol=2;mez_shell=bash;mez_token=%s;mez_event=foreign-challenge-completed;mez_instance=%s;mez_challenge=%s\033\\' "$MEZ_BASH_RECEIVER_TOKEN" "$MEZ_BASH_FOREIGN_COMPLETED_INSTANCE" "$MEZ_BASH_FOREIGN_COMPLETED_CHALLENGE"
+        unset MEZ_BASH_FOREIGN_COMPLETED_INSTANCE MEZ_BASH_FOREIGN_COMPLETED_CHALLENGE
+        return 0
+    fi
     if [[ $MEZ_BASH_RECEIVER_KIND == MEZ_BASH_RX1_BEGIN && -z $MEZ_BASH_RECEIVER_PARENT_PROOF ]]; then
         MEZ_BASH_RECEIVER_VERSION=RX1
     elif [[ $MEZ_BASH_RECEIVER_KIND == MEZ_BASH_RX2_BEGIN && $MEZ_BASH_RECEIVER_PARENT_PROOF =~ ^[0-9a-f]{32,}$ ]]; then
@@ -258,9 +335,12 @@ if [[ -n ${MEZ_BASH_RECEIVER_INSTALL_MARKER-} ]]; then
     unset MEZ_BASH_RECEIVER_INSTALLED_MARKER
     __mez_bash_receiver
 fi
-command printf '\033]133;R;mez_protocol=2;mez_shell=bash;mez_token=%s;mez_event=adapter-available\033\\' "$MEZ_BASH_RECEIVER_TOKEN"
+__MEZ_BASH_RECEIVER_READY__
 "#;
-    TEMPLATE.replace("__MEZ_BASH_RECEIVER_TOKEN__", token.as_str())
+    TEMPLATE
+        .replace("__MEZ_BASH_RECEIVER_PRELUDE__", prelude)
+        .replace("__MEZ_BASH_RECEIVER_TOKEN__", token.as_str())
+        .replace("__MEZ_BASH_RECEIVER_READY__", ready)
 }
 
 impl Drop for ManagedBashCompatibility {
@@ -301,7 +381,6 @@ fn write_private_file(path: &Path, contents: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine as _;
     use mez_mux::process::pane_command_plan;
     use sha2::{Digest as _, Sha256};
     use std::process::{Command, Stdio};

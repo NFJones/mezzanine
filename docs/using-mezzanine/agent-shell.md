@@ -59,6 +59,21 @@ unknown command line. After integration is admitted, shell-specific identity
 and child-launch support determines whether that adapter can complete the
 bootstrap.
 
+For Bash, install `mez` inside the nested environment and explicitly activate
+the current shell process:
+
+```bash
+eval "$(mez shell-integration bash)"
+```
+
+Run this only at an ordinary empty Bash prompt. Activation preserves the visible
+prompt and installs the private receiver only in that Bash process; it does not
+edit `.bashrc`. Mezzanine then challenges the adapter, discovers the nested
+shell through its authenticated receiver, creates a temporary owner-only child
+rcfile with a fresh token, and removes that temporary directory when the child
+returns. Exit the nested environment to restore normal discovery of the local
+pane shell.
+
 ## Review actions and context
 
 The agent may request file reads, bounded commands, patches, configured MCP

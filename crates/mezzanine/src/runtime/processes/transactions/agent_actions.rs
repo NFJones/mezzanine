@@ -42,7 +42,11 @@ impl RuntimeSessionService {
         if version != mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION {
             return Ok(0);
         }
-        if self.pane_has_uncertified_foreign_shell_boundary(output_pane_id) {
+        if self
+            .process
+            .pane_foreign_shell_boundaries
+            .contains_key(output_pane_id)
+        {
             return match event {
                 mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate {
                     instance_id,
@@ -66,6 +70,67 @@ impl RuntimeSessionService {
                     instance_id,
                     challenge,
                 ),
+                mez_terminal::ManagedShellProtocolEvent::FrameAdmitted { marker }
+                    if shell == mez_terminal::ManagedShellAdapter::Bash
+                        && self.active_bash_receiver_token_matches(output_pane_id, token) =>
+                {
+                    self.observe_shell_receiver_ready(output_pane_id, token, marker)
+                }
+                mez_terminal::ManagedShellProtocolEvent::ChildInstalled { marker }
+                    if shell == mez_terminal::ManagedShellAdapter::Bash
+                        && self.active_bash_receiver_token_matches(output_pane_id, token) =>
+                {
+                    self.observe_shell_receiver_installed(output_pane_id, token, marker)
+                }
+                mez_terminal::ManagedShellProtocolEvent::ReceiverRejected {
+                    marker: Some(marker),
+                    reason,
+                } if shell == mez_terminal::ManagedShellAdapter::Bash
+                    && self.active_bash_receiver_token_matches(output_pane_id, token) =>
+                {
+                    let Some(transaction) =
+                        self.process.running_shell_transactions.get(marker).cloned()
+                    else {
+                        return Ok(0);
+                    };
+                    self.fail_shell_transaction_protocol_violation(
+                        marker,
+                        transaction,
+                        "foreign-bash-receiver-rejected",
+                        format!("managed foreign Bash receiver rejected admission ({reason})"),
+                    )
+                }
+                mez_terminal::ManagedShellProtocolEvent::ParentReady {
+                    marker,
+                    outcome,
+                    exit_code,
+                    proof,
+                } if shell == mez_terminal::ManagedShellAdapter::Bash
+                    && self.active_bash_receiver_token_matches(output_pane_id, token) =>
+                {
+                    if let Some(proof) = proof {
+                        self.observe_managed_shell_parent_ready(
+                            output_pane_id,
+                            ManagedShellKind::Bash,
+                            token,
+                            marker,
+                            Some(proof),
+                        )
+                    } else if matches!(
+                        outcome,
+                        mez_terminal::ManagedShellParentOutcome::Completed
+                            | mez_terminal::ManagedShellParentOutcome::SourceFailed
+                    ) {
+                        self.observe_shell_receiver_complete(
+                            output_pane_id,
+                            token,
+                            marker,
+                            *exit_code,
+                        )
+                    } else {
+                        Ok(0)
+                    }
+                }
                 _ => Ok(0),
             };
         }
@@ -361,7 +426,10 @@ impl RuntimeSessionService {
         current.phase = RuntimeForeignShellBootstrapPhase::ChallengingAdapter;
         current.phase_started_at_unix_ms = current_unix_millis();
         current.adapter = Some(descriptor);
-        current.challenge = Some(challenge);
+        current.challenge = Some(challenge.clone());
+        let challenge_input =
+            format!("\u{7}MEZ_BASH_FOREIGN_CHALLENGE {token} {instance_id} {challenge}\n");
+        self.write_runtime_pane_input(pane_id, challenge_input.as_bytes())?;
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
@@ -437,6 +505,7 @@ impl RuntimeSessionService {
                 boundary.process_group_id
             ),
         )?;
+        self.dispatch_shell_identity_probe_to_pane(pane_id)?;
         Ok(1)
     }
 
@@ -890,9 +959,7 @@ impl RuntimeSessionService {
         let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
             return Ok(0);
         };
-        let receiver_token_matches = self
-            .bash_receiver_token_for_pane(output_pane_id)
-            .is_some_and(|expected| expected.as_str() == token)
+        let receiver_token_matches = self.active_bash_receiver_token_matches(output_pane_id, token)
             || self
                 .fish_receiver_token_for_pane(output_pane_id)
                 .is_some_and(|expected| expected.as_str() == token)
@@ -1128,9 +1195,7 @@ impl RuntimeSessionService {
             .pane_shell_handoffs
             .get(output_pane_id)
             .is_some_and(|handoff| handoff.bootstrap_marker.as_deref() == Some(marker));
-        let receiver_token_matches = self
-            .bash_receiver_token_for_pane(output_pane_id)
-            .is_some_and(|expected| expected.as_str() == token)
+        let receiver_token_matches = self.active_bash_receiver_token_matches(output_pane_id, token)
             || self
                 .fish_receiver_token_for_pane(output_pane_id)
                 .is_some_and(|expected| expected.as_str() == token)
@@ -1222,9 +1287,7 @@ impl RuntimeSessionService {
         let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
             return Ok(0);
         };
-        let receiver_token_matches = self
-            .bash_receiver_token_for_pane(output_pane_id)
-            .is_some_and(|expected| expected.as_str() == token)
+        let receiver_token_matches = self.active_bash_receiver_token_matches(output_pane_id, token)
             || self
                 .fish_receiver_token_for_pane(output_pane_id)
                 .is_some_and(|expected| expected.as_str() == token)
@@ -1338,9 +1401,9 @@ impl RuntimeSessionService {
             .get(output_pane_id)
             .copied();
         let shell_token_matches = match handoff.shell() {
-            ManagedShellKind::Bash => self
-                .bash_receiver_token_for_pane(output_pane_id)
-                .is_some_and(|expected| expected.as_str() == token),
+            ManagedShellKind::Bash => {
+                self.active_bash_receiver_token_matches(output_pane_id, token)
+            }
             ManagedShellKind::Fish => self
                 .fish_receiver_token_for_pane(output_pane_id)
                 .is_some_and(|expected| expected.as_str() == token),

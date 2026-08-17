@@ -221,6 +221,44 @@ fn completion_command_generates_zsh_definition_from_cli_tree() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Verifies the explicit foreign Bash integration command emits source that
+/// installs only the authenticated receiver and prompt-scoped admission hook.
+///
+/// Users opt into this output inside an SSH or container shell. It must create
+/// fresh adapter identity at invocation time, preserve visible prompt text,
+/// and never reference host-side startup paths or silently edit startup files.
+#[test]
+fn shell_integration_bash_generates_foreign_adapter_source() {
+    let (env, home) = test_env("shell-integration-bash");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    run_with_plain(
+        vec![
+            "mez".to_string(),
+            "shell-integration".to_string(),
+            "bash".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+
+    let output = String::from_utf8(stdout).unwrap();
+    assert!(output.contains("foreign-adapter-candidate"), "{output}");
+    assert!(output.contains("foreign-challenge-completed"), "{output}");
+    assert!(output.contains("MEZ_BASH_FOREIGN_CHALLENGE"), "{output}");
+    assert!(output.contains("MEZ_BASH_RX1_BEGIN"), "{output}");
+    assert!(output.contains("bind -m emacs-standard"), "{output}");
+    assert!(!output.contains("MEZ_BASH_USER_RCFILE"), "{output}");
+    assert!(!output.contains("MEZ_BASH_RECEIVER_RCFILE"), "{output}");
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies clap renders command-local help while preserving the legacy
 /// no-subcommand config usage path.
 ///

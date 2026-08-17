@@ -321,6 +321,7 @@ mod processes;
 pub(crate) use processes::{
     BubblewrapEnvironmentProfile, PaneSurfaceKind,
     RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, RuntimeProcessComponent,
+    generate_managed_foreign_bash_adapter_source,
 };
 /// Exposes the render module boundary.
 ///

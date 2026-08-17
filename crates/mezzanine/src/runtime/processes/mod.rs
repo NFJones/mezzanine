@@ -13,11 +13,19 @@ mod startup;
 mod transactions;
 mod zsh_compat;
 
+pub(crate) use bash_compat::managed_foreign_bash_adapter_source;
 pub(super) use managed_shell_handoff::ManagedShellKind;
 use managed_shell_handoff::{
     ManagedShellHandoff, ManagedShellHandoffEffect, ManagedShellHandoffEvent,
     ManagedShellHandoffIdentity, ManagedShellRecoveryObservation, reduce_managed_shell_handoff,
 };
+
+/// Generates fresh opt-in Bash integration for one nested shell invocation.
+pub(crate) fn generate_managed_foreign_bash_adapter_source() -> Result<String> {
+    let token = runtime_random_marker_token("foreign-bash-adapter-token")?;
+    let instance = runtime_random_marker_token("foreign-bash-adapter-instance")?;
+    Ok(managed_foreign_bash_adapter_source(&token, &instance))
+}
 
 use mez_mux::presentation::{pane_content_size_for_geometry, rendered_window_body_size};
 
@@ -412,6 +420,10 @@ struct RuntimeForeignShellBoundary {
     adapter: Option<RuntimeManagedShellAdapterDescriptor>,
     /// Runtime nonce that must be echoed after shell-native editor acquisition.
     challenge: Option<String>,
+    /// Fresh private receiver token installed only in the managed foreign child.
+    child_token: Option<String>,
+    /// Authenticated RX2 source that stages, launches, and cleans up the child.
+    child_staging_source: Option<String>,
 }
 
 /// Atomically validated shell identity used to render and execute one pane
@@ -2241,6 +2253,25 @@ impl RuntimeSessionService {
             .and_then(|boundary| boundary.challenge.as_deref())
     }
 
+    /// Returns the fresh foreign Bash child token for staging regressions.
+    pub(crate) fn foreign_bash_child_token_for_tests(&self, pane_id: &str) -> Option<&str> {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .and_then(|boundary| boundary.child_token.as_deref())
+    }
+
+    /// Returns retained foreign Bash staging source for isolation regressions.
+    pub(crate) fn foreign_bash_child_staging_source_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> Option<&str> {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .and_then(|boundary| boundary.child_staging_source.as_deref())
+    }
+
     /// Returns live shell transactions for integration-test observation.
     pub(crate) fn running_shell_transactions_for_tests(
         &self,
@@ -2456,7 +2487,9 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Result<RuntimePaneShellExecutionIdentity> {
         let primary_process_id = self.primary_pid_for_live_pane_process(pane_id);
-        if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get(pane_id) {
+        if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get(pane_id)
+            && boundary.phase != RuntimeForeignShellBootstrapPhase::Certified
+        {
             return Err(MezError::invalid_state(format!(
                 "pane foreground process group {} is an uncertified foreign shell boundary for interaction generation {}",
                 boundary.process_group_id, boundary.interaction_generation
@@ -2567,6 +2600,18 @@ impl RuntimeSessionService {
         pane_id: &str,
         transaction: ShellTransaction,
     ) -> ShellTransaction {
+        if self
+            .process
+            .pane_foreign_shell_boundaries
+            .contains_key(pane_id)
+        {
+            let transaction = if let Some(token) = self.foreign_bash_child_token_for_pane(pane_id) {
+                transaction.with_bash_receiver_token(token)
+            } else {
+                transaction
+            };
+            return transaction.with_payload_receiver_acknowledgements(cfg!(target_os = "macos"));
+        }
         let transaction = self
             .process
             .pane_zsh_compatibility
@@ -2704,6 +2749,65 @@ impl RuntimeSessionService {
             .pane_bash_compatibility
             .get(pane_id)
             .map(bash_compat::ManagedBashCompatibility::token)
+    }
+
+    /// Returns the authenticated Bash token pinned to the active foreign epoch.
+    pub(super) fn foreign_bash_receiver_token_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Option<mez_agent::MarkerToken> {
+        let boundary = self.process.pane_foreign_shell_boundaries.get(pane_id)?;
+        let adapter = boundary.adapter.as_ref()?;
+        (matches!(
+            boundary.phase,
+            RuntimeForeignShellBootstrapPhase::IdentityProbing
+                | RuntimeForeignShellBootstrapPhase::BootstrappingChild
+                | RuntimeForeignShellBootstrapPhase::Certified
+        ) && adapter.origin == RuntimeManagedShellAdapterOrigin::Foreign
+            && adapter.shell == mez_terminal::ManagedShellAdapter::Bash
+            && adapter.primary_process_id == boundary.primary_process_id
+            && adapter.process_group_id == boundary.process_group_id
+            && adapter.interaction_generation == boundary.interaction_generation)
+            .then(|| mez_agent::MarkerToken::new(adapter.token.clone()).ok())
+            .flatten()
+    }
+
+    /// Returns the child-only Bash token for bootstrap and later shell actions.
+    pub(super) fn foreign_bash_child_token_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Option<mez_agent::MarkerToken> {
+        let boundary = self.process.pane_foreign_shell_boundaries.get(pane_id)?;
+        matches!(
+            boundary.phase,
+            RuntimeForeignShellBootstrapPhase::BootstrappingChild
+                | RuntimeForeignShellBootstrapPhase::Certified
+        )
+        .then(|| boundary.child_token.clone())
+        .flatten()
+        .and_then(|token| mez_agent::MarkerToken::new(token).ok())
+    }
+
+    /// Authenticates one Bash event against only the active pane environment.
+    ///
+    /// A live foreign boundary makes host startup tokens inaccessible. The
+    /// admitted parent token remains valid through child staging, while the
+    /// fresh child token owns installation and bootstrap events.
+    pub(super) fn active_bash_receiver_token_matches(&self, pane_id: &str, token: &str) -> bool {
+        if self
+            .process
+            .pane_foreign_shell_boundaries
+            .contains_key(pane_id)
+        {
+            return self
+                .foreign_bash_receiver_token_for_pane(pane_id)
+                .is_some_and(|expected| expected.as_str() == token)
+                || self
+                    .foreign_bash_child_token_for_pane(pane_id)
+                    .is_some_and(|expected| expected.as_str() == token);
+        }
+        self.bash_receiver_token_for_pane(pane_id)
+            .is_some_and(|expected| expected.as_str() == token)
     }
 
     /// Returns the current managed-Bash protocol admission state.

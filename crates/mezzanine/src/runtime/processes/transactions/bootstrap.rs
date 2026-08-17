@@ -6,8 +6,9 @@ use mez_agent::{
 };
 
 use super::super::{
-    RuntimeAgentSubshellCertificationOutcome, RuntimePaneProbedShellIdentity,
-    RuntimePaneShellExecutionIdentity, RuntimePendingBootstrapEnvironment,
+    RuntimeAgentSubshellCertificationOutcome, RuntimeForeignShellBootstrapPhase,
+    RuntimePaneProbedShellIdentity, RuntimePaneShellExecutionIdentity, RuntimePaneShellHandoff,
+    RuntimePendingBootstrapEnvironment,
 };
 use super::{
     AgentTurnState, DEFAULT_BOOTSTRAP_TIMEOUT_MS, EventKind, MezError, PaneReadinessState, Result,
@@ -53,13 +54,21 @@ impl RuntimeSessionService {
         ))?;
         let marker_id = marker.as_str().to_string();
         let command = shell_identity_probe_command(&marker_id, &turn_id, &agent_id, pane_id)?;
-        let classification = self.shell_classification_for_pane(pane_id);
+        let foreign_bash_token = self.foreign_bash_receiver_token_for_pane(pane_id);
+        let classification = if foreign_bash_token.is_some() {
+            ShellClassification::Bash
+        } else {
+            self.shell_classification_for_pane(pane_id)
+        };
         let private_input = if classification == ShellClassification::Bash {
-            let token = self.bash_receiver_token_for_pane(pane_id).ok_or_else(|| {
-                MezError::invalid_state(
-                    "managed Bash receiver is unavailable for shell identity probe",
-                )
-            })?;
+            let token = foreign_bash_token
+                .as_ref()
+                .or_else(|| self.bash_receiver_token_for_pane(pane_id))
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "managed Bash receiver is unavailable for shell identity probe",
+                    )
+                })?;
             Some(bash_private_source_input(&command, token, &marker_id))
         } else {
             None
@@ -105,7 +114,7 @@ impl RuntimeSessionService {
     }
 
     /// Sends one registered syntax-neutral identity probe to the pane.
-    fn dispatch_shell_identity_probe_to_pane(&mut self, pane_id: &str) -> Result<()> {
+    pub(super) fn dispatch_shell_identity_probe_to_pane(&mut self, pane_id: &str) -> Result<()> {
         let Some((marker, input)) = self.prepare_shell_identity_probe_to_pane(pane_id)? else {
             return Ok(());
         };
@@ -146,7 +155,25 @@ impl RuntimeSessionService {
         let turn_id = format!("bootstrap-{pane_id}-{}", current_unix_seconds());
         let marker = runtime_random_marker_token(&format!("bootstrap\0{pane_id}\0{turn_id}"))?;
         let marker_id = marker.as_str().to_string();
-        let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;
+        let shell_identity = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .filter(|boundary| {
+                boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
+            })
+            .and_then(|boundary| {
+                self.process
+                    .pane_probed_shell_identities
+                    .get(pane_id)
+                    .filter(|identity| {
+                        identity.primary_process_id == boundary.primary_process_id
+                            && identity.interaction_generation == boundary.interaction_generation
+                    })
+                    .map(|identity| identity.execution_identity.clone())
+            })
+            .map(Ok)
+            .unwrap_or_else(|| self.shell_execution_identity_for_pane(pane_id))?;
         let classification = shell_identity.classification();
         let bootstrap_script = bootstrap_script_for_classification(classification);
         self.clear_pane_environment_authority_failure(pane_id);
@@ -344,8 +371,96 @@ impl RuntimeSessionService {
                 json_escape(marker)
             ),
         )?;
+        if self.foreign_bash_receiver_token_for_pane(pane_id).is_some() {
+            self.begin_foreign_bash_child_bootstrap(pane_id)?;
+            return Ok(1);
+        }
         self.dispatch_bootstrap_to_pane(pane_id)?;
         Ok(1)
+    }
+
+    /// Stages a managed Bash child through the authenticated foreign parent.
+    fn begin_foreign_bash_child_bootstrap(&mut self, pane_id: &str) -> Result<()> {
+        let boundary = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("foreign Bash boundary is unavailable"))?;
+        if boundary.phase != RuntimeForeignShellBootstrapPhase::IdentityProbing {
+            return Err(MezError::invalid_state(
+                "foreign Bash identity completed outside identity-probing ownership",
+            ));
+        }
+        let execution_identity = self
+            .process
+            .pane_probed_shell_identities
+            .get(pane_id)
+            .filter(|identity| {
+                identity.primary_process_id == boundary.primary_process_id
+                    && identity.interaction_generation == boundary.interaction_generation
+            })
+            .map(|identity| identity.execution_identity.clone())
+            .ok_or_else(|| MezError::invalid_state("foreign Bash identity is unavailable"))?;
+        if execution_identity.classification() != ShellClassification::Bash {
+            return Err(MezError::invalid_state(
+                "foreign Bash adapter discovered a non-Bash child shell",
+            ));
+        }
+        let child_token = runtime_random_marker_token(&format!(
+            "foreign-bash-child\0{pane_id}\0{}",
+            boundary.interaction_generation
+        ))?;
+        let parent_token = self
+            .foreign_bash_receiver_token_for_pane(pane_id)
+            .ok_or_else(|| MezError::invalid_state("foreign Bash parent token is unavailable"))?;
+        if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+            current.phase = RuntimeForeignShellBootstrapPhase::BootstrappingChild;
+            current.phase_started_at_unix_ms = current_unix_millis();
+            current.child_token = Some(child_token.as_str().to_string());
+        }
+        self.process.pane_shell_handoffs.insert(
+            pane_id.to_string(),
+            RuntimePaneShellHandoff {
+                primary_process_id: boundary.primary_process_id,
+                interaction_generation: boundary.interaction_generation,
+                bootstrap_marker: None,
+                deferred_bootstrap_wrapper: None,
+            },
+        );
+        let (marker, wrapper) = self
+            .prepare_bootstrap_to_pane(pane_id)?
+            .ok_or_else(|| MezError::invalid_state("foreign Bash bootstrap is already running"))?;
+        self.bind_agent_subshell_bootstrap_marker(pane_id, &marker);
+        self.defer_agent_subshell_bootstrap_wrapper(pane_id, &marker, wrapper);
+        let staging_source = super::super::bash_compat::managed_foreign_bash_child_staging_source(
+            execution_identity.shell_path(),
+            &marker,
+            &child_token,
+        );
+        let parent_proof = runtime_random_marker_token(&format!(
+            "foreign-bash-parent-ready\0{pane_id}\0{marker}"
+        ))?;
+        let private_input = mez_agent::bash_private_handoff_source_input(
+            &staging_source,
+            &parent_token,
+            &marker,
+            &parent_proof,
+        );
+        self.prepend_bash_shell_handoff_payload(
+            &marker,
+            mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                private_input.receiver_payload.into_bytes(),
+                marker.clone(),
+                true,
+            ),
+            &parent_proof,
+        );
+        if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+            current.child_staging_source = Some(staging_source);
+        }
+        self.write_runtime_pane_shell_input(pane_id, private_input.wrapper.as_bytes())?;
+        Ok(())
     }
 
     /// Runs the observe bootstrap transaction end operation for this subsystem.
@@ -380,9 +495,28 @@ impl RuntimeSessionService {
             };
 
             let resolved_shell_path = self
-                .shell_execution_identity_for_pane(pane_id)?
-                .shell_path()
-                .to_path_buf();
+                .process
+                .pane_foreign_shell_boundaries
+                .get(pane_id)
+                .filter(|boundary| {
+                    boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
+                })
+                .and_then(|boundary| {
+                    self.process
+                        .pane_probed_shell_identities
+                        .get(pane_id)
+                        .filter(|identity| {
+                            identity.primary_process_id == boundary.primary_process_id
+                                && identity.interaction_generation
+                                    == boundary.interaction_generation
+                        })
+                        .map(|identity| identity.execution_identity.shell_path().to_path_buf())
+                })
+                .map(Ok)
+                .unwrap_or_else(|| {
+                    self.shell_execution_identity_for_pane(pane_id)
+                        .map(|identity| identity.shell_path().to_path_buf())
+                })?;
             let (signature, inventory, instruction_files) =
                 parse_bootstrap_env_output(&all_output, &resolved_shell_path);
 

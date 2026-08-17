@@ -122,6 +122,11 @@ is decoded incrementally only while a live encoded action transaction owns the
 pane, so private Base64 transport records do not leak and marker-like ordinary
 shell output remains literal.
 
+Agent work inside a nested Bash environment can use the opt-in integration
+printed by `mez shell-integration bash`; activate it explicitly inside that
+environment. Mezzanine does not reuse local startup files or silently modify
+remote shell configuration.
+
 Managed-shell adapters are installed when a pane shell process starts. After
 upgrading Mezzanine, open a new pane or restart the session before relying on
 new adapter behavior in an already-running shell.

@@ -4032,6 +4032,20 @@ Mezzanine MUST NOT silently install or modify startup files in the foreign
 environment. An unmanaged already-running foreign shell is unsupported until
 the user explicitly installs or activates compatible integration there.
 
+The opt-in foreign Bash adapter MUST be generated with `mez shell-integration
+bash` and MAY be evaluated only by an explicit user action inside the nested
+Bash environment. It MUST generate a fresh adapter token and instance, preserve
+the visible prompt, install a private Readline receiver in the current process,
+and publish candidates at completed prompts. The first runtime input after a
+candidate MUST contain only the fixed Readline trigger and bounded token,
+instance, and challenge metadata. Identity discovery MUST use authenticated RX1
+delivery through that foreign token. A managed Bash child MUST receive a fresh
+child token, stage its owner-only rcfile in the foreign filesystem through an
+authenticated RX2 parent handoff, publish `ChildInstalled` before bootstrap is
+released, and remove its temporary startup directory when the synchronous child
+handoff returns. Neither the host adapter token nor a host startup path MAY
+appear in foreign delivery.
+
 Host process metadata MUST authorize non-interactive shell dispatch only when
 the observed foreground process group is either the original pane shell PID or
 process group, or a non-primary shell boundary certified for the current pane
