@@ -158,10 +158,10 @@ pub(super) fn managed_foreign_bash_child_staging_source(
         "__mez_foreign_bash_stage_child() {{\n\
     umask 077\n\
     MEZ_FOREIGN_BASH_DIR=${{TMPDIR:-/tmp}}/{directory_name}\n\
-    command mkdir -m 700 -- \"$MEZ_FOREIGN_BASH_DIR\" || return 70\n\
+    command mkdir -m 700 \"$MEZ_FOREIGN_BASH_DIR\" || return 70\n\
     MEZ_FOREIGN_BASH_RCFILE=$MEZ_FOREIGN_BASH_DIR/bashrc\n\
     command printf '%s' {encoded} | command base64 -d > \"$MEZ_FOREIGN_BASH_RCFILE\" 2>/dev/null || command printf '%s' {encoded} | command base64 -D > \"$MEZ_FOREIGN_BASH_RCFILE\" 2>/dev/null || {{ command rm -rf -- \"$MEZ_FOREIGN_BASH_DIR\"; return 71; }}\n\
-    command chmod 600 -- \"$MEZ_FOREIGN_BASH_RCFILE\" || {{ command rm -rf -- \"$MEZ_FOREIGN_BASH_DIR\"; return 72; }}\n\
+    command chmod 600 \"$MEZ_FOREIGN_BASH_RCFILE\" || {{ command rm -rf -- \"$MEZ_FOREIGN_BASH_DIR\"; return 72; }}\n\
     # child-token:{}\n\
     MEZ_BASH_RECEIVER_INSTALL_MARKER={marker} {shell} --noprofile --rcfile \"$MEZ_FOREIGN_BASH_RCFILE\" -i\n\
     MEZ_FOREIGN_BASH_STATUS=$?\n\
@@ -195,7 +195,7 @@ __mez_bash_receiver_reset() {
             unset READLINE_MARK
         fi
     fi
-    unset MEZ_BASH_RECEIVER_FRAME MEZ_BASH_RECEIVER_KIND MEZ_BASH_RECEIVER_FRAME_TOKEN MEZ_BASH_RECEIVER_FRAME_MARKER MEZ_BASH_RECEIVER_FRAME_MARKER_READ MEZ_BASH_RECEIVER_LENGTH MEZ_BASH_RECEIVER_LENGTH_READ MEZ_BASH_RECEIVER_DIGEST MEZ_BASH_RECEIVER_DIGEST_READ MEZ_BASH_RECEIVER_CHUNKS MEZ_BASH_RECEIVER_SEQUENCE MEZ_BASH_RECEIVER_SEQUENCE_READ MEZ_BASH_RECEIVER_B64 MEZ_BASH_RECEIVER_SOURCE MEZ_BASH_RECEIVER_ACTUAL_LENGTH MEZ_BASH_RECEIVER_ACTUAL_DIGEST MEZ_BASH_RECEIVER_STATUS MEZ_BASH_RECEIVER_VERSION MEZ_BASH_RECEIVER_PARENT_PROOF MEZ_BASH_RECEIVER_OUTCOME MEZ_BASH_RECEIVER_REASON MEZ_BASH_RECEIVER_SAVED_LINE MEZ_BASH_RECEIVER_SAVED_LINE_SET MEZ_BASH_RECEIVER_SAVED_POINT MEZ_BASH_RECEIVER_SAVED_MARK MEZ_BASH_RECEIVER_SAVED_MARK_SET
+    unset MEZ_BASH_RECEIVER_FRAME MEZ_BASH_RECEIVER_KIND MEZ_BASH_RECEIVER_FRAME_TOKEN MEZ_BASH_RECEIVER_FRAME_MARKER MEZ_BASH_RECEIVER_FRAME_MARKER_READ MEZ_BASH_RECEIVER_LENGTH MEZ_BASH_RECEIVER_LENGTH_READ MEZ_BASH_RECEIVER_DIGEST MEZ_BASH_RECEIVER_DIGEST_READ MEZ_BASH_RECEIVER_CHUNKS MEZ_BASH_RECEIVER_SEQUENCE MEZ_BASH_RECEIVER_SEQUENCE_READ MEZ_BASH_RECEIVER_B64 MEZ_BASH_RECEIVER_SOURCE MEZ_BASH_RECEIVER_ACTUAL_LENGTH MEZ_BASH_RECEIVER_ACTUAL_DIGEST MEZ_BASH_RECEIVER_STATUS MEZ_BASH_RECEIVER_VERSION MEZ_BASH_RECEIVER_PARENT_PROOF MEZ_BASH_RECEIVER_OUTCOME MEZ_BASH_RECEIVER_REASON MEZ_BASH_RECEIVER_FRAME_SEQUENCE MEZ_BASH_RECEIVER_FRAME_SEQUENCE_READ MEZ_BASH_RECEIVER_FRAME_LENGTH MEZ_BASH_RECEIVER_FRAME_DIGEST MEZ_BASH_RECEIVER_FRAME_CHUNKS MEZ_BASH_RECEIVER_FRAME_B64 MEZ_BASH_RECEIVER_FRAME_ACTUAL_DIGEST MEZ_BASH_RECEIVER_FRAME_VALID MEZ_BASH_RECEIVER_SAVED_LINE MEZ_BASH_RECEIVER_SAVED_LINE_SET MEZ_BASH_RECEIVER_SAVED_POINT MEZ_BASH_RECEIVER_SAVED_MARK MEZ_BASH_RECEIVER_SAVED_MARK_SET
 }
 __mez_bash_receiver() {
     MEZ_BASH_RECEIVER_SAVED_LINE=$READLINE_LINE
@@ -235,25 +235,81 @@ __mez_bash_receiver() {
     MEZ_BASH_RECEIVER_SEQUENCE=0
     MEZ_BASH_RECEIVER_B64=
     MEZ_BASH_RECEIVER_OUTCOME=
-    while (( MEZ_BASH_RECEIVER_SEQUENCE < MEZ_BASH_RECEIVER_CHUNKS )); do
-        IFS=' ' builtin read -r MEZ_BASH_RECEIVER_KIND MEZ_BASH_RECEIVER_FRAME_TOKEN MEZ_BASH_RECEIVER_FRAME_MARKER_READ MEZ_BASH_RECEIVER_SEQUENCE_READ MEZ_BASH_RECEIVER_FRAME || { __mez_bash_receiver_reset; return 1; }
-        if [[ $MEZ_BASH_RECEIVER_VERSION == RX2 && $MEZ_BASH_RECEIVER_SEQUENCE == 0 && $MEZ_BASH_RECEIVER_KIND == MEZ_BASH_RX2_CANCEL && $MEZ_BASH_RECEIVER_FRAME_TOKEN == "$MEZ_BASH_RECEIVER_TOKEN" && $MEZ_BASH_RECEIVER_FRAME_MARKER_READ == "$MEZ_BASH_RECEIVER_FRAME_MARKER" && $MEZ_BASH_RECEIVER_SEQUENCE_READ == "$MEZ_BASH_RECEIVER_PARENT_PROOF" && -z $MEZ_BASH_RECEIVER_FRAME ]]; then
-            MEZ_BASH_RECEIVER_STATUS=130
-            MEZ_BASH_RECEIVER_OUTCOME=cancelled
-            command printf '\036'
-            break
-        fi
-        if [[ $MEZ_BASH_RECEIVER_KIND == MEZ_BASH_${MEZ_BASH_RECEIVER_VERSION}_DATA && $MEZ_BASH_RECEIVER_FRAME_TOKEN == "$MEZ_BASH_RECEIVER_TOKEN" && $MEZ_BASH_RECEIVER_FRAME_MARKER_READ == "$MEZ_BASH_RECEIVER_FRAME_MARKER" && $MEZ_BASH_RECEIVER_SEQUENCE_READ == "$MEZ_BASH_RECEIVER_SEQUENCE" && $MEZ_BASH_RECEIVER_FRAME =~ ^[A-Za-z0-9+/]*={0,2}$ ]]; then
-            if [[ -z $MEZ_BASH_RECEIVER_OUTCOME ]]; then
-                MEZ_BASH_RECEIVER_B64+=$MEZ_BASH_RECEIVER_FRAME
+    if [[ $MEZ_BASH_RECEIVER_VERSION == RX1 ]]; then
+        while (( MEZ_BASH_RECEIVER_SEQUENCE < MEZ_BASH_RECEIVER_CHUNKS )); do
+            IFS=' ' builtin read -r MEZ_BASH_RECEIVER_KIND MEZ_BASH_RECEIVER_FRAME_TOKEN MEZ_BASH_RECEIVER_FRAME_MARKER_READ MEZ_BASH_RECEIVER_SEQUENCE_READ MEZ_BASH_RECEIVER_FRAME || { __mez_bash_receiver_reset; return 1; }
+            if [[ $MEZ_BASH_RECEIVER_KIND == MEZ_BASH_RX1_DATA && $MEZ_BASH_RECEIVER_FRAME_TOKEN == "$MEZ_BASH_RECEIVER_TOKEN" && $MEZ_BASH_RECEIVER_FRAME_MARKER_READ == "$MEZ_BASH_RECEIVER_FRAME_MARKER" && $MEZ_BASH_RECEIVER_SEQUENCE_READ == "$MEZ_BASH_RECEIVER_SEQUENCE" && $MEZ_BASH_RECEIVER_FRAME =~ ^[A-Za-z0-9+/]*={0,2}$ ]]; then
+                if [[ -z $MEZ_BASH_RECEIVER_OUTCOME ]]; then
+                    MEZ_BASH_RECEIVER_B64+=$MEZ_BASH_RECEIVER_FRAME
+                fi
+            elif [[ -z $MEZ_BASH_RECEIVER_OUTCOME ]]; then
+                MEZ_BASH_RECEIVER_OUTCOME=frame-rejected
+                MEZ_BASH_RECEIVER_REASON=malformed-data
             fi
-        elif [[ -z $MEZ_BASH_RECEIVER_OUTCOME ]]; then
-            MEZ_BASH_RECEIVER_OUTCOME=frame-rejected
-            MEZ_BASH_RECEIVER_REASON=malformed-data
-        fi
-        (( MEZ_BASH_RECEIVER_SEQUENCE += 1 ))
-        command printf '\036'
-    done
+            (( MEZ_BASH_RECEIVER_SEQUENCE += 1 ))
+            command printf '\036'
+        done
+    else
+        MEZ_BASH_RECEIVER_FRAME_SEQUENCE=0
+        while (( MEZ_BASH_RECEIVER_SEQUENCE < MEZ_BASH_RECEIVER_CHUNKS )); do
+            IFS=' ' builtin read -r MEZ_BASH_RECEIVER_KIND MEZ_BASH_RECEIVER_FRAME_TOKEN MEZ_BASH_RECEIVER_FRAME_MARKER_READ MEZ_BASH_RECEIVER_FRAME_SEQUENCE_READ MEZ_BASH_RECEIVER_FRAME_LENGTH MEZ_BASH_RECEIVER_FRAME_DIGEST MEZ_BASH_RECEIVER_FRAME_CHUNKS || { __mez_bash_receiver_reset; return 1; }
+            if [[ $MEZ_BASH_RECEIVER_SEQUENCE == 0 && $MEZ_BASH_RECEIVER_KIND == MEZ_BASH_RX2_CANCEL && $MEZ_BASH_RECEIVER_FRAME_TOKEN == "$MEZ_BASH_RECEIVER_TOKEN" && $MEZ_BASH_RECEIVER_FRAME_MARKER_READ == "$MEZ_BASH_RECEIVER_FRAME_MARKER" && $MEZ_BASH_RECEIVER_FRAME_SEQUENCE_READ == "$MEZ_BASH_RECEIVER_PARENT_PROOF" && -z $MEZ_BASH_RECEIVER_FRAME_LENGTH && -z $MEZ_BASH_RECEIVER_FRAME_DIGEST && -z $MEZ_BASH_RECEIVER_FRAME_CHUNKS ]]; then
+                MEZ_BASH_RECEIVER_STATUS=130
+                MEZ_BASH_RECEIVER_OUTCOME=cancelled
+                command printf '\036'
+                break
+            fi
+            MEZ_BASH_RECEIVER_FRAME_VALID=1
+            if [[ $MEZ_BASH_RECEIVER_KIND != MEZ_BASH_RX2_FRAME || $MEZ_BASH_RECEIVER_FRAME_TOKEN != "$MEZ_BASH_RECEIVER_TOKEN" || $MEZ_BASH_RECEIVER_FRAME_MARKER_READ != "$MEZ_BASH_RECEIVER_FRAME_MARKER" || $MEZ_BASH_RECEIVER_FRAME_SEQUENCE_READ != "$MEZ_BASH_RECEIVER_FRAME_SEQUENCE" || ! $MEZ_BASH_RECEIVER_FRAME_LENGTH =~ ^[0-9]+$ || $MEZ_BASH_RECEIVER_FRAME_LENGTH -gt 32768 || ! $MEZ_BASH_RECEIVER_FRAME_DIGEST =~ ^[0-9a-f]{64}$ || ! $MEZ_BASH_RECEIVER_FRAME_CHUNKS =~ ^[0-9]+$ || $MEZ_BASH_RECEIVER_FRAME_CHUNKS -gt 512 || $((MEZ_BASH_RECEIVER_SEQUENCE + MEZ_BASH_RECEIVER_FRAME_CHUNKS)) -gt MEZ_BASH_RECEIVER_CHUNKS ]]; then
+                MEZ_BASH_RECEIVER_FRAME_VALID=0
+                MEZ_BASH_RECEIVER_OUTCOME=frame-rejected
+                MEZ_BASH_RECEIVER_REASON=malformed-frame
+            fi
+            MEZ_BASH_RECEIVER_FRAME_B64=
+            while (( MEZ_BASH_RECEIVER_FRAME_CHUNKS > 0 )); do
+                IFS=' ' builtin read -r MEZ_BASH_RECEIVER_KIND MEZ_BASH_RECEIVER_FRAME_TOKEN MEZ_BASH_RECEIVER_FRAME_MARKER_READ MEZ_BASH_RECEIVER_SEQUENCE_READ MEZ_BASH_RECEIVER_FRAME || { __mez_bash_receiver_reset; return 1; }
+                if [[ $MEZ_BASH_RECEIVER_KIND == MEZ_BASH_RX2_DATA && $MEZ_BASH_RECEIVER_FRAME_TOKEN == "$MEZ_BASH_RECEIVER_TOKEN" && $MEZ_BASH_RECEIVER_FRAME_MARKER_READ == "$MEZ_BASH_RECEIVER_FRAME_MARKER" && $MEZ_BASH_RECEIVER_SEQUENCE_READ == "$MEZ_BASH_RECEIVER_SEQUENCE" && $MEZ_BASH_RECEIVER_FRAME =~ ^[A-Za-z0-9+/]*={0,2}$ ]]; then
+                    if [[ $MEZ_BASH_RECEIVER_FRAME_VALID == 1 ]]; then
+                        MEZ_BASH_RECEIVER_FRAME_B64+=$MEZ_BASH_RECEIVER_FRAME
+                    fi
+                else
+                    MEZ_BASH_RECEIVER_FRAME_VALID=0
+                    MEZ_BASH_RECEIVER_OUTCOME=frame-rejected
+                    MEZ_BASH_RECEIVER_REASON=malformed-data
+                fi
+                (( MEZ_BASH_RECEIVER_SEQUENCE += 1 ))
+                (( MEZ_BASH_RECEIVER_FRAME_CHUNKS -= 1 ))
+            done
+            IFS=' ' builtin read -r MEZ_BASH_RECEIVER_KIND MEZ_BASH_RECEIVER_FRAME_TOKEN MEZ_BASH_RECEIVER_FRAME_MARKER_READ MEZ_BASH_RECEIVER_FRAME_SEQUENCE_READ MEZ_BASH_RECEIVER_SEQUENCE_READ MEZ_BASH_RECEIVER_FRAME || { __mez_bash_receiver_reset; return 1; }
+            if [[ $MEZ_BASH_RECEIVER_KIND != MEZ_BASH_RX2_FRAME_END || $MEZ_BASH_RECEIVER_FRAME_TOKEN != "$MEZ_BASH_RECEIVER_TOKEN" || $MEZ_BASH_RECEIVER_FRAME_MARKER_READ != "$MEZ_BASH_RECEIVER_FRAME_MARKER" || $MEZ_BASH_RECEIVER_FRAME_SEQUENCE_READ != "$MEZ_BASH_RECEIVER_FRAME_SEQUENCE" || $MEZ_BASH_RECEIVER_SEQUENCE_READ != "$MEZ_BASH_RECEIVER_SEQUENCE" || -n $MEZ_BASH_RECEIVER_FRAME ]]; then
+                MEZ_BASH_RECEIVER_FRAME_VALID=0
+                MEZ_BASH_RECEIVER_OUTCOME=frame-rejected
+                MEZ_BASH_RECEIVER_REASON=malformed-frame-end
+            fi
+            if [[ $MEZ_BASH_RECEIVER_FRAME_VALID == 1 ]]; then
+                if command -v sha256sum >/dev/null 2>&1; then
+                    MEZ_BASH_RECEIVER_FRAME_ACTUAL_DIGEST=$(command printf '%s' "$MEZ_BASH_RECEIVER_FRAME_B64" | sha256sum)
+                elif command -v shasum >/dev/null 2>&1; then
+                    MEZ_BASH_RECEIVER_FRAME_ACTUAL_DIGEST=$(command printf '%s' "$MEZ_BASH_RECEIVER_FRAME_B64" | shasum -a 256)
+                else
+                    MEZ_BASH_RECEIVER_FRAME_VALID=0
+                    MEZ_BASH_RECEIVER_OUTCOME=frame-rejected
+                    MEZ_BASH_RECEIVER_REASON=digest-unavailable
+                fi
+                MEZ_BASH_RECEIVER_FRAME_ACTUAL_DIGEST=${MEZ_BASH_RECEIVER_FRAME_ACTUAL_DIGEST%%[[:space:]]*}
+                if [[ ${#MEZ_BASH_RECEIVER_FRAME_B64} != "$MEZ_BASH_RECEIVER_FRAME_LENGTH" || $MEZ_BASH_RECEIVER_FRAME_ACTUAL_DIGEST != "$MEZ_BASH_RECEIVER_FRAME_DIGEST" ]]; then
+                    MEZ_BASH_RECEIVER_FRAME_VALID=0
+                    MEZ_BASH_RECEIVER_OUTCOME=frame-rejected
+                    MEZ_BASH_RECEIVER_REASON=frame-integrity-mismatch
+                fi
+            fi
+            if [[ $MEZ_BASH_RECEIVER_FRAME_VALID == 1 ]]; then
+                MEZ_BASH_RECEIVER_B64+=$MEZ_BASH_RECEIVER_FRAME_B64
+            fi
+            (( MEZ_BASH_RECEIVER_FRAME_SEQUENCE += 1 ))
+            command printf '\036'
+        done
+    fi
     if [[ $MEZ_BASH_RECEIVER_OUTCOME != cancelled ]]; then
         IFS=' ' builtin read -r MEZ_BASH_RECEIVER_KIND MEZ_BASH_RECEIVER_FRAME_TOKEN MEZ_BASH_RECEIVER_FRAME_MARKER_READ MEZ_BASH_RECEIVER_SEQUENCE_READ MEZ_BASH_RECEIVER_LENGTH_READ MEZ_BASH_RECEIVER_DIGEST_READ || { __mez_bash_receiver_reset; return 1; }
         if [[ $MEZ_BASH_RECEIVER_KIND != MEZ_BASH_${MEZ_BASH_RECEIVER_VERSION}_END || $MEZ_BASH_RECEIVER_FRAME_TOKEN != "$MEZ_BASH_RECEIVER_TOKEN" || $MEZ_BASH_RECEIVER_FRAME_MARKER_READ != "$MEZ_BASH_RECEIVER_FRAME_MARKER" || $MEZ_BASH_RECEIVER_SEQUENCE_READ != "$MEZ_BASH_RECEIVER_CHUNKS" || $MEZ_BASH_RECEIVER_LENGTH_READ != "$MEZ_BASH_RECEIVER_LENGTH" || $MEZ_BASH_RECEIVER_DIGEST_READ != "$MEZ_BASH_RECEIVER_DIGEST" ]]; then
@@ -496,7 +552,7 @@ exit\n",
     }
 
     /// Verifies an admitted malformed RX2 frame is drained through its END
-    /// record, acknowledged record-by-record, and never evaluated.
+    /// record, acknowledged at bounded frame boundaries, and never evaluated.
     ///
     /// Typed rejection must retain the parent-only proof and callback cleanup
     /// must leave the original parent responsive to an immediate command.
@@ -514,14 +570,22 @@ exit\n",
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         let encoded = base64::engine::general_purpose::STANDARD.encode(source);
+        let malformed_frame = format!("!{encoded}");
+        let frame_digest = Sha256::digest(malformed_frame.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         let input = format!(
             "\x07MEZ_BASH_RX2_BEGIN {token} {marker} {} {digest} 2 {proof}\n\
+MEZ_BASH_RX2_FRAME {token} {marker} 0 {} {frame_digest} 2\n\
 MEZ_BASH_RX2_DATA {token} {marker} 0 !\n\
 MEZ_BASH_RX2_DATA {token} {marker} 1 {encoded}\n\
+MEZ_BASH_RX2_FRAME_END {token} {marker} 0 2\n\
 MEZ_BASH_RX2_END {token} {marker} 2 {} {digest}\n\
 printf '__MEZ_PARENT_AFTER_REJECTION__\\n'\n\
 exit\n",
             source.len(),
+            malformed_frame.len(),
             source.len()
         );
 
@@ -547,7 +611,7 @@ exit\n",
             )),
             "{stdout:?}"
         );
-        assert_eq!(stdout.bytes().filter(|byte| *byte == 0x1e).count(), 3);
+        assert_eq!(stdout.bytes().filter(|byte| *byte == 0x1e).count(), 2);
     }
 
     /// Verifies foreign child staging reports a setup failure through the
@@ -558,27 +622,19 @@ exit\n",
         if !Path::new("/bin/bash").exists() {
             return;
         }
-        let token = "0123456789abcdef0123456789abcdef";
+        let token = MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap();
         let child_token = MarkerToken::new("fedcba9876543210fedcba9876543210").unwrap();
-        let proof = "00112233445566778899aabbccddeeff";
+        let proof = MarkerToken::new("00112233445566778899aabbccddeeff").unwrap();
         let marker = "foreign-staging-failure-marker";
         let source = format!(
             "TMPDIR=/dev/null\n{}",
             managed_foreign_bash_child_staging_source(Path::new("/bin/bash"), marker, &child_token,)
         );
-        let digest = Sha256::digest(source.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&source);
+        let transport =
+            mez_agent::bash_private_handoff_source_input(&source, &token, marker, &proof);
         let input = format!(
-            "\x07MEZ_BASH_RX2_BEGIN {token} {marker} {} {digest} 1 {proof}\n\
-MEZ_BASH_RX2_DATA {token} {marker} 0 {encoded}\n\
-MEZ_BASH_RX2_END {token} {marker} 1 {} {digest}\n\
-printf '__MEZ_PARENT_AFTER_STAGING_FAILURE__\\n'\n\
-exit\n",
-            source.len(),
-            source.len(),
+            "{}{}printf '__MEZ_PARENT_AFTER_STAGING_FAILURE__\\n'\nexit\n",
+            transport.wrapper, transport.receiver_payload
         );
 
         let output =
@@ -596,7 +652,8 @@ exit\n",
         );
         assert!(
             stdout.contains(&format!(
-                "mez_event=parent-ready;mez_marker={marker};mez_outcome=source-failed;mez_status=70;mez_proof={proof}"
+                "mez_event=parent-ready;mez_marker={marker};mez_outcome=source-failed;mez_status=70;mez_proof={}",
+                proof.as_str()
             )),
             "{stdout:?}"
         );

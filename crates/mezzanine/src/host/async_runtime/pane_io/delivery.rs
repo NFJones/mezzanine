@@ -389,6 +389,59 @@ mod tests {
         );
     }
 
+    /// Verifies managed Bash RX2 source streams physical FRAME and DATA
+    /// records while waiting only at validated frame ends and the source END.
+    /// This keeps large foreign-child staging bounded without one SSH round
+    /// trip per portable DATA line.
+    #[test]
+    fn managed_bash_rx2_waits_only_at_logical_frame_boundaries() {
+        let delivery = ShellInputDelivery::receiver_acknowledged(
+            b"MEZ_BASH_RX2_FRAME token marker 0 4 digest 1\nMEZ_BASH_RX2_DATA token marker 0 eA==\nMEZ_BASH_RX2_FRAME_END token marker 0 1\nMEZ_BASH_RX2_END token marker 1 1 digest\n".to_vec(),
+            "delivery-1",
+            true,
+        );
+        assert_eq!(
+            record_wait(
+                &delivery,
+                b"MEZ_BASH_RX2_FRAME token marker 0 4 digest 1\n",
+                true,
+                false,
+                true
+            ),
+            Ok(None)
+        );
+        assert_eq!(
+            record_wait(
+                &delivery,
+                b"MEZ_BASH_RX2_DATA token marker 0 eA==\n",
+                true,
+                false,
+                true
+            ),
+            Ok(None)
+        );
+        assert_eq!(
+            record_wait(
+                &delivery,
+                b"MEZ_BASH_RX2_FRAME_END token marker 0 1\n",
+                true,
+                false,
+                true
+            ),
+            Ok(Some(ShellInputProgressWait::Acknowledgement))
+        );
+        assert_eq!(
+            record_wait(
+                &delivery,
+                b"MEZ_BASH_RX2_END token marker 1 1 digest\n",
+                true,
+                true,
+                true
+            ),
+            Ok(Some(ShellInputProgressWait::Acknowledgement))
+        );
+    }
+
     /// Verifies unrelated output cannot advance strict receiver delivery but a
     /// fresh acknowledgement advances exactly one complete record.
     #[cfg(target_os = "macos")]

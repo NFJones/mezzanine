@@ -270,6 +270,7 @@ impl RuntimeSessionService {
         self.clear_pane_agent_instruction_files(pane_id);
         self.clear_pane_environment_authority_failure(pane_id);
         self.process.pane_bootstrap_pending.remove(pane_id);
+        let started_at_unix_ms = current_unix_millis();
         self.process.pane_foreign_shell_boundaries.insert(
             pane_id.to_string(),
             RuntimeForeignShellBoundary {
@@ -277,7 +278,8 @@ impl RuntimeSessionService {
                 process_group_id,
                 interaction_generation,
                 phase: RuntimeForeignShellBootstrapPhase::AwaitingAdapter,
-                phase_started_at_unix_ms: current_unix_millis(),
+                lifecycle_started_at_unix_ms: started_at_unix_ms,
+                phase_started_at_unix_ms: started_at_unix_ms,
                 prompt_observed: false,
                 adapter: None,
                 challenge: None,

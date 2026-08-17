@@ -71,8 +71,11 @@ prompt and installs the private receiver only in that Bash process; it does not
 edit `.bashrc`. Mezzanine then challenges the adapter, discovers the nested
 shell through its authenticated receiver, creates a temporary owner-only child
 rcfile with a fresh token, and removes that temporary directory when the child
-returns. Exit the nested environment to restore normal discovery of the local
-pane shell.
+returns. Large child bootstrap source streams through validated 32 KiB logical
+frames rather than one SSH acknowledgement round trip per physical line.
+Correlated delivery progress refreshes a bounded idle deadline, while an
+absolute lifecycle deadline still prevents an indefinite slow trickle. Exit the
+nested environment to restore normal discovery of the local pane shell.
 
 For Fish, explicitly activate the current process at an empty prompt:
 

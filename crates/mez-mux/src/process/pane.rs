@@ -57,7 +57,7 @@ pub fn shell_input_record_requires_ack(record: &[u8]) -> bool {
 
 /// Reports whether one deferred receiver record completes a logical frame.
 ///
-/// Version-one sidecar and managed-zsh RX2 begin/data records are physical
+/// Version-one sidecar and managed Bash/Zsh RX2 data records are physical
 /// transport chunks inside a larger logical frame. Their frame-end record is
 /// acknowledged only after the shell receiver validates accumulated sequence,
 /// length, and digest. Command records, authenticated sentinels, and legacy
@@ -65,10 +65,13 @@ pub fn shell_input_record_requires_ack(record: &[u8]) -> bool {
 #[doc(hidden)]
 pub fn receiver_input_record_requires_ack(record: &[u8]) -> bool {
     record.starts_with(b"S1E ")
+        || record.starts_with(b"MEZ_BASH_RX2_FRAME_END ")
         || record.starts_with(b"MEZ_ZSH_RX2_FRAME_END ")
         || record.starts_with(b"MEZ_ZSH_RX2_END ")
         || (!record.starts_with(b"S1B ")
             && !record.starts_with(b"S1D ")
+            && !record.starts_with(b"MEZ_BASH_RX2_FRAME ")
+            && !record.starts_with(b"MEZ_BASH_RX2_DATA ")
             && !record.starts_with(b"MEZ_ZSH_RX2_FRAME ")
             && !record.starts_with(b"MEZ_ZSH_RX2_DATA "))
 }
@@ -106,6 +109,18 @@ mod tests {
         ));
         assert!(receiver_input_record_requires_ack(
             b"MEZ_ZSH_RX2_END token marker 1 1 7 digest\n"
+        ));
+        assert!(!receiver_input_record_requires_ack(
+            b"MEZ_BASH_RX2_FRAME token marker 0 12 digest 1\n"
+        ));
+        assert!(!receiver_input_record_requires_ack(
+            b"MEZ_BASH_RX2_DATA token marker 0 cGF5bG9hZA==\n"
+        ));
+        assert!(receiver_input_record_requires_ack(
+            b"MEZ_BASH_RX2_FRAME_END token marker 0 1 12 digest\n"
+        ));
+        assert!(receiver_input_record_requires_ack(
+            b"MEZ_BASH_RX2_END token marker 1 7 digest\n"
         ));
         assert!(receiver_input_record_requires_ack(b"C dHJ1ZQo=\n"));
         assert!(receiver_input_record_requires_ack(

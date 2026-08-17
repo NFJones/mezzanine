@@ -4400,16 +4400,22 @@ output. Runtime MUST accept proof-bearing `ParentReady` only when its proof,
 marker, adapter, pane-process generation, original parent PID, shell-interaction
 generation, and reducer phase all match the live handoff.
 
-After an authenticated Bash BEGIN is admitted, the receiver MUST acknowledge
+After an authenticated Bash BEGIN is admitted, an RX1 receiver MUST acknowledge
 and drain every declared DATA record and the terminal END record even after it
-detects malformed framing. It MUST evaluate no rejected source and MUST restore
-the saved Readline state before publishing a typed terminal event. Before the
-first RX2 DATA record is consumed, the receiver MAY accept one token-, marker-,
-and parent-proof-authenticated CANCEL record; cancellation MUST acknowledge the
-record, evaluate no source, restore the exact editor state, and publish
-proof-bearing cancelled `ParentReady`. A cancellation received after DATA has
-begun MUST be treated as malformed framing and MUST NOT shorten the required
-drain.
+detects malformed framing. RX2 MUST group canonical-safe physical DATA records
+into authenticated logical frames no larger than 32 KiB of encoded source.
+Physical RX2 FRAME and DATA records MUST stream without waits; the receiver MUST
+validate each frame's sequence, encoded byte count, chunk count, and SHA-256
+digest before acknowledging FRAME_END, and MUST acknowledge the terminal END.
+It MUST drain the complete declared frame and source record sequence after a
+framing defect, evaluate no rejected source, and restore the saved Readline
+state before publishing a typed terminal event. Before the first RX2 FRAME is
+consumed, the receiver MAY accept one token-, marker-, and parent-proof-
+authenticated CANCEL record; cancellation MUST acknowledge the record,
+evaluate no source, restore the exact editor state, and publish proof-bearing
+cancelled `ParentReady`. A cancellation received after framed source delivery
+has begun MUST be treated as malformed framing and MUST NOT shorten the
+required drain.
 
 When a generated Bash transaction starts a managed child Bash and subsequent
 work targets that child, the child MUST emit a receiver-installed record only
@@ -4570,10 +4576,10 @@ canonical-safe physical lines. The receiver MUST validate each frame's sequence,
 declared byte count, and SHA-256 digest before acknowledging it, MUST reject
 duplicate, skipped, oversized, truncated, or digest-mismatched frames, and MUST
 restore the prior terminal mode and remove incomplete frame state on every exit.
-Managed Zsh private-source data MUST use the same bounded logical-frame pacing
-principle: physical RX2 FRAME and DATA records MUST stream without waits,
-validated FRAME_END records MUST require one fresh acknowledgement, and the
-authenticated source END MUST require the final acknowledgement. A maximum
+Managed Bash RX2 and Zsh private-source data MUST use the same bounded logical-
+frame pacing principle: physical RX2 FRAME and DATA records MUST stream without
+waits, validated FRAME_END records MUST require one fresh acknowledgement, and
+the authenticated source END MUST require the final acknowledgement. A maximum
 one-mebibyte source MUST require fewer than fifty acknowledgement waits while
 retaining the portable physical record bound.
 Unrelated pane output MUST NOT satisfy that wait. Missing negotiation, write

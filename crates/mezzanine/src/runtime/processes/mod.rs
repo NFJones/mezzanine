@@ -369,7 +369,6 @@ enum RuntimeForeignShellBootstrapPhase {
 
 impl RuntimeForeignShellBootstrapPhase {
     /// Returns the stable protocol name used by diagnostics and tests.
-    #[cfg(test)]
     fn as_str(self) -> &'static str {
         match self {
             Self::AwaitingAdapter => "awaiting-adapter",
@@ -430,6 +429,8 @@ struct RuntimeForeignShellBoundary {
     interaction_generation: u64,
     /// Current bounded bootstrap phase.
     phase: RuntimeForeignShellBootstrapPhase,
+    /// Start time of this foreign-environment bootstrap lifecycle.
+    lifecycle_started_at_unix_ms: u64,
     /// Start time of the current phase for runtime-owned expiry.
     phase_started_at_unix_ms: u64,
     /// Whether prompt completion was observed after this boundary began.
@@ -686,8 +687,18 @@ const RUNTIME_MANAGED_SHELL_PARENT_RESTORATION_TIMEOUT_MS: u64 = 5_000;
 const RUNTIME_MANAGED_BASH_ADMISSION_TIMEOUT_MS: u64 = 5_000;
 /// Maximum wait for the managed zsh parent to publish startup admission.
 const RUNTIME_MANAGED_ZSH_ADMISSION_TIMEOUT_MS: u64 = 5_000;
-/// Maximum wait for each managed foreign-shell bootstrap phase.
-const RUNTIME_FOREIGN_SHELL_BOOTSTRAP_PHASE_TIMEOUT_MS: u64 = 5_000;
+/// Maximum idle wait for each managed foreign-shell bootstrap phase.
+///
+/// Receiver delivery has its own ten-second per-record progress bound. The
+/// foreign owner allows one additional bounded interval for the correlated
+/// adapter event to reach the runtime actor without expiring healthy SSH
+/// transport that is still making progress.
+const RUNTIME_FOREIGN_SHELL_BOOTSTRAP_PHASE_TIMEOUT_MS: u64 = 15_000;
+/// Absolute maximum for one foreign-shell bootstrap lifecycle.
+///
+/// Correlated PTY delivery progress refreshes the short phase-idle deadline,
+/// but cannot retain authority indefinitely through a slow-trickle transport.
+const RUNTIME_FOREIGN_SHELL_BOOTSTRAP_ABSOLUTE_TIMEOUT_MS: u64 = 120_000;
 
 /// Owns live process metadata that is private to the pane process subsystem.
 ///
@@ -2262,6 +2273,19 @@ impl RuntimeSessionService {
             .map(|boundary| boundary.phase.as_str())
     }
 
+    /// Sets foreign lifecycle clocks for deterministic idle and absolute timeout tests.
+    pub(crate) fn set_foreign_shell_bootstrap_times_for_tests(
+        &mut self,
+        pane_id: &str,
+        lifecycle_started_at_unix_ms: u64,
+        phase_started_at_unix_ms: u64,
+    ) {
+        if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+            boundary.lifecycle_started_at_unix_ms = lifecycle_started_at_unix_ms;
+            boundary.phase_started_at_unix_ms = phase_started_at_unix_ms;
+        }
+    }
+
     /// Returns the active foreign adapter challenge for correlation tests.
     pub(crate) fn foreign_shell_bootstrap_challenge_for_tests(
         &self,
@@ -3314,6 +3338,48 @@ impl RuntimeSessionService {
         let pane_id = pane_id.into();
         if self.find_pane_descriptor(&pane_id).is_none() {
             return Ok(false);
+        }
+        let progress_marker = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(&pane_id)
+            .and_then(|boundary| match boundary.phase {
+                RuntimeForeignShellBootstrapPhase::IdentityProbing => {
+                    boundary.identity_marker.clone()
+                }
+                RuntimeForeignShellBootstrapPhase::BootstrappingChild => self
+                    .process
+                    .pane_managed_shell_handoffs
+                    .get(&pane_id)
+                    .map(|handoff| handoff.identity().marker.clone()),
+                RuntimeForeignShellBootstrapPhase::AwaitingAdapter
+                | RuntimeForeignShellBootstrapPhase::ChallengingAdapter
+                | RuntimeForeignShellBootstrapPhase::Certified
+                | RuntimeForeignShellBootstrapPhase::Failed => None,
+            })
+            .filter(|marker| {
+                bytes > 0
+                    && self
+                        .process
+                        .running_shell_transactions
+                        .get(marker)
+                        .is_some_and(|transaction| {
+                            transaction.pane_id == pane_id
+                                && matches!(
+                                    transaction.kind,
+                                    RunningShellTransactionKind::Bootstrap
+                                        | RunningShellTransactionKind::ShellIdentityProbe { .. }
+                                )
+                        })
+            });
+        if let Some(marker) = progress_marker {
+            let now_unix_ms = current_unix_millis();
+            if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(&pane_id) {
+                boundary.phase_started_at_unix_ms = now_unix_ms;
+            }
+            if let Some(transaction) = self.process.running_shell_transactions.get_mut(&marker) {
+                transaction.started_at_unix_ms = now_unix_ms;
+            }
         }
         let active_transactions = self
             .process

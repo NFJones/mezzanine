@@ -16,11 +16,14 @@ impl RuntimeSessionService {
     /// that were expired. A zero return means the timer was accepted but no
     /// live work had reached its deadline.
     pub fn apply_shell_transaction_timer_event(&mut self, now_unix_ms: u64) -> Result<usize> {
+        // A foreign boundary owns its bootstrap transaction and must settle it
+        // before generic transaction expiry discards the marker needed to
+        // cancel an in-flight private-receiver delivery.
+        let foreign_bootstraps = self.expire_timed_out_foreign_shell_bootstraps(now_unix_ms)?;
         let expired = self.expire_timed_out_shell_transactions(now_unix_ms)?;
         let certifications = self.expire_timed_out_agent_subshell_certifications(now_unix_ms)?;
         let recovery_observations =
             self.expire_timed_out_shell_dispatch_recovery_observations(now_unix_ms)?;
-        let foreign_bootstraps = self.expire_timed_out_foreign_shell_bootstraps(now_unix_ms)?;
         let focused = self.expire_timed_out_focused_shell_hooks(now_unix_ms)?;
         Ok(expired
             .saturating_add(certifications)
@@ -37,12 +40,20 @@ impl RuntimeSessionService {
             .iter()
             .filter(|(_, boundary)| {
                 boundary.phase.has_bounded_owner()
-                    && now_unix_ms.saturating_sub(boundary.phase_started_at_unix_ms)
+                    && (now_unix_ms.saturating_sub(boundary.phase_started_at_unix_ms)
                         >= super::super::RUNTIME_FOREIGN_SHELL_BOOTSTRAP_PHASE_TIMEOUT_MS
+                        || now_unix_ms.saturating_sub(boundary.lifecycle_started_at_unix_ms)
+                            >= super::super::RUNTIME_FOREIGN_SHELL_BOOTSTRAP_ABSOLUTE_TIMEOUT_MS)
             })
-            .map(|(pane_id, boundary)| (pane_id.clone(), boundary.interaction_generation))
+            .map(|(pane_id, boundary)| {
+                (
+                    pane_id.clone(),
+                    boundary.interaction_generation,
+                    boundary.phase,
+                )
+            })
             .collect::<Vec<_>>();
-        for (pane_id, interaction_generation) in &expired {
+        for (pane_id, interaction_generation, expired_phase) in &expired {
             let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) else {
                 continue;
             };
@@ -54,7 +65,60 @@ impl RuntimeSessionService {
             boundary.phase = super::super::RuntimeForeignShellBootstrapPhase::Failed;
             boundary.phase_started_at_unix_ms = now_unix_ms;
             boundary.challenge = None;
+            boundary.child_token = None;
+            boundary.child_staging_source = None;
+            boundary.identity_marker = None;
+
+            let owned_marker = self
+                .process
+                .pane_managed_shell_handoffs
+                .get(pane_id)
+                .map(|handoff| handoff.identity().marker.clone())
+                .or_else(|| {
+                    self.process
+                        .running_shell_transactions
+                        .iter()
+                        .find(|(_, transaction)| {
+                            transaction.pane_id == *pane_id
+                                && matches!(
+                                    transaction.kind,
+                                    super::RunningShellTransactionKind::Bootstrap
+                                        | super::RunningShellTransactionKind::ShellIdentityProbe {
+                                            ..
+                                        }
+                                )
+                        })
+                        .map(|(marker, _)| marker.clone())
+                });
+            if let Some(marker) = owned_marker.as_deref() {
+                self.cancel_runtime_pane_shell_delivery(pane_id, marker);
+                self.process
+                    .bootstrap_shell_certification_evidence
+                    .remove(marker);
+                self.remove_running_shell_transaction(marker);
+                self.clear_shell_transaction_protocol_state(marker);
+            }
+            if self
+                .process
+                .pane_managed_shell_handoffs
+                .get(pane_id)
+                .is_some_and(|handoff| !handoff.child_is_installed())
+            {
+                self.interrupt_shell_transaction_pane_if_live(pane_id)?;
+            }
+            self.process.pane_managed_shell_handoffs.remove(pane_id);
+            self.process.pane_shell_handoffs.remove(pane_id);
+            self.process
+                .pane_agent_subshell_parent_return_pending
+                .remove(pane_id);
+            self.process
+                .pending_agent_subshell_start_observations
+                .remove(pane_id);
+            self.process
+                .pending_agent_subshell_certifications
+                .remove(pane_id);
             self.process.pane_bootstrap_pending.remove(pane_id);
+            self.clear_agent_subshell_shell_identity(pane_id);
             self.mark_pane_environment_authority_unavailable(
                 pane_id,
                 super::super::RuntimePaneEnvironmentAuthorityUnavailableReason::ForeignBootstrapTimedOut,
@@ -67,9 +131,10 @@ impl RuntimeSessionService {
             self.append_lifecycle_event(
                 EventKind::AgentStatus,
                 format!(
-                    r#"{{"pane_id":"{}","foreign_bootstrap":"timed_out","generation":{},"state":"degraded"}}"#,
+                    r#"{{"pane_id":"{}","foreign_bootstrap":"timed_out","generation":{},"phase":"{}","state":"degraded"}}"#,
                     json_escape(pane_id),
-                    interaction_generation
+                    interaction_generation,
+                    expired_phase.as_str()
                 ),
             )?;
             let pending_turn_ids = self
@@ -149,14 +214,33 @@ impl RuntimeSessionService {
                 .pane_foreign_shell_boundaries
                 .iter()
                 .filter(|(_, boundary)| boundary.phase.has_bounded_owner())
-                .map(|(pane_id, boundary)| RuntimeShellTransactionTimerRef {
-                    marker: format!(
-                        "foreign-shell-bootstrap:{pane_id}:{}",
-                        boundary.interaction_generation
-                    ),
-                    kind: RuntimeShellTransactionTimerKind::Bootstrap,
-                    started_at_unix_ms: boundary.phase_started_at_unix_ms,
-                    timeout_ms: super::super::RUNTIME_FOREIGN_SHELL_BOOTSTRAP_PHASE_TIMEOUT_MS,
+                .map(|(pane_id, boundary)| {
+                    let idle_deadline = boundary.phase_started_at_unix_ms.saturating_add(
+                        super::super::RUNTIME_FOREIGN_SHELL_BOOTSTRAP_PHASE_TIMEOUT_MS,
+                    );
+                    let absolute_deadline = boundary.lifecycle_started_at_unix_ms.saturating_add(
+                        super::super::RUNTIME_FOREIGN_SHELL_BOOTSTRAP_ABSOLUTE_TIMEOUT_MS,
+                    );
+                    let (started_at_unix_ms, timeout_ms) = if idle_deadline <= absolute_deadline {
+                        (
+                            boundary.phase_started_at_unix_ms,
+                            super::super::RUNTIME_FOREIGN_SHELL_BOOTSTRAP_PHASE_TIMEOUT_MS,
+                        )
+                    } else {
+                        (
+                            boundary.lifecycle_started_at_unix_ms,
+                            super::super::RUNTIME_FOREIGN_SHELL_BOOTSTRAP_ABSOLUTE_TIMEOUT_MS,
+                        )
+                    };
+                    RuntimeShellTransactionTimerRef {
+                        marker: format!(
+                            "foreign-shell-bootstrap:{pane_id}:{}",
+                            boundary.interaction_generation
+                        ),
+                        kind: RuntimeShellTransactionTimerKind::Bootstrap,
+                        started_at_unix_ms,
+                        timeout_ms,
+                    }
                 }),
         );
         timers.extend(

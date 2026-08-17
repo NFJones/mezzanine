@@ -551,6 +551,12 @@ pub const SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES: usize = 768;
 /// acknowledging the frame, which preserves bounded flow control while
 /// avoiding one stop-and-wait round trip per physical line.
 pub const SHELL_TRANSACTION_SIDECAR_FRAME_BYTES: usize = 32 * 1024;
+/// Maximum encoded Bash RX2 bytes protected by one logical acknowledgement.
+///
+/// Physical DATA records remain portable terminal lines. The receiver validates
+/// one frame's sequence, encoded length, and SHA-256 digest before acknowledging
+/// its FRAME_END record, avoiding one SSH round trip per physical DATA record.
+pub const BASH_PRIVATE_SOURCE_FRAME_BYTES: usize = 32 * 1024;
 /// Maximum raw source bytes accepted by one managed zsh private admission.
 pub const ZSH_PRIVATE_SOURCE_MAX_BYTES: usize = 1024 * 1024;
 /// Maximum base64 bytes representing one bounded managed zsh source.
@@ -2385,8 +2391,7 @@ fn bash_private_receiver_transport(
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
-    let chunks = encoded.as_bytes().chunks(SHELL_WRAPPER_BASE64_LINE_BYTES);
-    let chunk_count = chunks.len();
+    let chunk_count = encoded.len().div_ceil(SHELL_WRAPPER_BASE64_LINE_BYTES);
     let record_version = if parent_proof.is_some() { "RX2" } else { "RX1" };
     let trigger = parent_proof.map_or_else(
         || {
@@ -2412,16 +2417,63 @@ fn bash_private_receiver_transport(
         },
     );
     let mut payload = String::new();
-    for (sequence, chunk) in chunks.enumerate() {
-        let chunk = std::str::from_utf8(chunk)
-            .expect("standard base64 output should always be valid UTF-8");
-        payload.push_str(&format!(
-            "MEZ_BASH_{record_version}_DATA {} {} {} {}\n",
-            token.as_str(),
-            marker,
-            sequence,
-            chunk
-        ));
+    if parent_proof.is_some() {
+        let mut sequence = 0usize;
+        for (frame_sequence, frame) in encoded
+            .as_bytes()
+            .chunks(BASH_PRIVATE_SOURCE_FRAME_BYTES)
+            .enumerate()
+        {
+            let frame_digest = Sha256::digest(frame)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let frame_chunks = frame.len().div_ceil(SHELL_WRAPPER_BASE64_LINE_BYTES);
+            payload.push_str(&format!(
+                "MEZ_BASH_RX2_FRAME {} {} {} {} {} {}\n",
+                token.as_str(),
+                marker,
+                frame_sequence,
+                frame.len(),
+                frame_digest,
+                frame_chunks
+            ));
+            for chunk in frame.chunks(SHELL_WRAPPER_BASE64_LINE_BYTES) {
+                let chunk = std::str::from_utf8(chunk)
+                    .expect("standard base64 output should always be valid UTF-8");
+                payload.push_str(&format!(
+                    "MEZ_BASH_RX2_DATA {} {} {} {}\n",
+                    token.as_str(),
+                    marker,
+                    sequence,
+                    chunk
+                ));
+                sequence = sequence.saturating_add(1);
+            }
+            payload.push_str(&format!(
+                "MEZ_BASH_RX2_FRAME_END {} {} {} {}\n",
+                token.as_str(),
+                marker,
+                frame_sequence,
+                sequence
+            ));
+        }
+    } else {
+        for (sequence, chunk) in encoded
+            .as_bytes()
+            .chunks(SHELL_WRAPPER_BASE64_LINE_BYTES)
+            .enumerate()
+        {
+            let chunk = std::str::from_utf8(chunk)
+                .expect("standard base64 output should always be valid UTF-8");
+            payload.push_str(&format!(
+                "MEZ_BASH_{record_version}_DATA {} {} {} {}\n",
+                token.as_str(),
+                marker,
+                sequence,
+                chunk
+            ));
+        }
     }
     payload.push_str(&format!(
         "MEZ_BASH_{record_version}_END {} {} {} {} {}\n",
