@@ -1788,9 +1788,11 @@ fn managed_zsh_agent_subshell_env_word_list(managed_zsh: &ManagedZshShell) -> Ve
 ///
 /// The parent pane already owns the login environment. Replaying `.zprofile`
 /// and `.zlogin` for every persistent child is both wasteful and observably
-/// different from an ordinary interactive subshell.
+/// different from an ordinary interactive subshell. Global startup files are
+/// also suppressed because they can present interactive prompts before the
+/// managed receiver installs, while the managed `ZDOTDIR` chain remains active.
 fn managed_zsh_interactive_invocation_words(shell_path: &str) -> String {
-    format!("{} -i", shell_quote(shell_path))
+    format!("{} -d -i", shell_quote(shell_path))
 }
 
 /// Renders a Fish command word sequence that starts the persistent agent-mode
