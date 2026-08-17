@@ -157,6 +157,19 @@ impl ManagedShellHandoff {
         self.exit_requested
     }
 
+    /// Reports whether the authenticated managed child has taken ownership.
+    pub(super) fn child_is_installed(&self) -> bool {
+        matches!(
+            self.phase,
+            ManagedShellHandoffPhase::ChildInstalled
+                | ManagedShellHandoffPhase::Returning
+                | ManagedShellHandoffPhase::ParentRestoring
+                | ManagedShellHandoffPhase::AwaitingParentProof
+                | ManagedShellHandoffPhase::ParentReady
+                | ManagedShellHandoffPhase::Settled
+        )
+    }
+
     /// Reports whether presentation still needs to expose the native clear repaint.
     pub(super) fn editor_clear_is_pending(&self) -> bool {
         self.phase == ManagedShellHandoffPhase::TriggerQueued

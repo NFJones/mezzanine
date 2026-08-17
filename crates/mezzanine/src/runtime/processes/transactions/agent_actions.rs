@@ -185,13 +185,25 @@ impl RuntimeSessionService {
                     && self.active_bash_receiver_token_matches(output_pane_id, token) =>
                 {
                     if let Some(proof) = proof {
-                        self.observe_managed_shell_parent_ready(
+                        let failed = self.fail_foreign_bash_child_staging(
                             output_pane_id,
-                            ManagedShellKind::Bash,
                             token,
                             marker,
-                            Some(proof),
-                        )
+                            proof,
+                            *outcome,
+                            *exit_code,
+                        )?;
+                        if failed > 0 {
+                            Ok(failed)
+                        } else {
+                            self.observe_managed_shell_parent_ready(
+                                output_pane_id,
+                                ManagedShellKind::Bash,
+                                token,
+                                marker,
+                                Some(proof),
+                            )
+                        }
                     } else if matches!(
                         outcome,
                         mez_terminal::ManagedShellParentOutcome::Completed
@@ -639,6 +651,115 @@ impl RuntimeSessionService {
             mez_terminal::ManagedShellAdapter::Bash => return Ok(0),
         };
         self.observe_managed_shell_parent_ready(pane_id, shell, token, marker, None)
+    }
+
+    /// Fails an authenticated foreign Bash child handoff that restored its
+    /// parent editor before the fresh managed child installed its receiver.
+    fn fail_foreign_bash_child_staging(
+        &mut self,
+        pane_id: &str,
+        token: &str,
+        marker: &str,
+        parent_proof: &str,
+        outcome: mez_terminal::ManagedShellParentOutcome,
+        exit_code: i32,
+    ) -> Result<usize> {
+        let boundary_matches = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
+                    && boundary.adapter.as_ref().is_some_and(|adapter| {
+                        adapter.shell == mez_terminal::ManagedShellAdapter::Bash
+                            && adapter.token == token
+                    })
+            });
+        let handoff_matches = self
+            .process
+            .pane_managed_shell_handoffs
+            .get(pane_id)
+            .is_some_and(|handoff| {
+                handoff.shell() == ManagedShellKind::Bash
+                    && handoff.identity().marker == marker
+                    && handoff.identity().parent_proof.as_deref() == Some(parent_proof)
+                    && !handoff.child_is_installed()
+            });
+        let transaction_matches = self
+            .process
+            .running_shell_transactions
+            .get(marker)
+            .is_some_and(|transaction| {
+                transaction.pane_id == pane_id
+                    && transaction.kind == RunningShellTransactionKind::Bootstrap
+            });
+        if !boundary_matches || !handoff_matches || !transaction_matches {
+            return Ok(0);
+        }
+
+        let outcome_name = match outcome {
+            mez_terminal::ManagedShellParentOutcome::Completed => "completed",
+            mez_terminal::ManagedShellParentOutcome::Cancelled => "cancelled",
+            mez_terminal::ManagedShellParentOutcome::FrameRejected => "frame-rejected",
+            mez_terminal::ManagedShellParentOutcome::SourceFailed => "source-failed",
+            mez_terminal::ManagedShellParentOutcome::ChildLaunchFailed => "child-launch-failed",
+        };
+        self.process.pane_managed_shell_handoffs.remove(pane_id);
+        self.process.pane_shell_handoffs.remove(pane_id);
+        self.process
+            .pending_agent_subshell_start_observations
+            .remove(pane_id);
+        self.process
+            .pending_agent_subshell_certifications
+            .remove(pane_id);
+        self.process
+            .bootstrap_shell_certification_evidence
+            .remove(marker);
+        self.remove_running_shell_transaction(marker);
+        self.clear_shell_transaction_protocol_state(marker);
+        self.process.pane_bootstrap_pending.remove(pane_id);
+        if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+            boundary.phase = RuntimeForeignShellBootstrapPhase::Failed;
+            boundary.phase_started_at_unix_ms = current_unix_millis();
+            boundary.challenge = None;
+            boundary.child_token = None;
+            boundary.child_staging_source = None;
+            boundary.identity_marker = None;
+        }
+        self.clear_agent_subshell_shell_identity(pane_id);
+        self.mark_pane_environment_authority_unavailable(
+            pane_id,
+            RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapTransactionFailed,
+        );
+        self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+        let message =
+            format!("foreign Bash child staging failed ({outcome_name}, exit status {exit_code})");
+        self.append_agent_error_text_to_terminal_buffer(pane_id, &format!("agent: {message}"))?;
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","foreign_bootstrap":"failed","phase":"bootstrapping-child","outcome":"{}","exit_code":{},"state":"degraded"}}"#,
+                json_escape(pane_id),
+                outcome_name,
+                exit_code
+            ),
+        )?;
+        let pending_turn_ids = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .filter(|turn| {
+                turn.pane_id == pane_id
+                    && turn.state == AgentTurnState::Running
+                    && self.agent_provider_task_is_pending(&turn.turn_id)
+            })
+            .map(|turn| turn.turn_id.clone())
+            .collect::<Vec<_>>();
+        let error = MezError::invalid_state(message);
+        for turn_id in pending_turn_ids {
+            self.fail_configured_agent_provider_task(&turn_id, &error)?;
+        }
+        Ok(1)
     }
 
     /// Settles one Fish or Zsh identity transaction after native editor restoration.

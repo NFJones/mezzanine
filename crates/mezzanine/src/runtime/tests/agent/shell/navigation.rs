@@ -1348,6 +1348,279 @@ bootstrap\tcomplete\t1714500000\n";
     let _ = process.terminate(Duration::from_millis(10));
 }
 
+/// Verifies an authenticated foreign Bash parent failure terminates child
+/// bootstrap immediately instead of leaving the pane in its bounded waiting
+/// phase. The failure must settle a deferred provider turn, discard every
+/// child-owned payload and token, release the transaction input lease, and
+/// reject a stale child-installed event without reviving the boundary.
+#[test]
+fn runtime_foreign_bash_staging_failure_settles_bootstrap_and_pending_turn() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    service
+        .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service.drain_pane_io_transition();
+
+    let started = service
+        .start_agent_prompt_turn(&pane_id, "list the current directory")
+        .unwrap();
+    let agent_id = AgentId::opaque(started.agent_id).unwrap();
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&agent_id, &started.turn_id)
+            .unwrap()
+            .is_none(),
+        "provider dispatch must wait for the bounded foreign bootstrap"
+    );
+
+    service
+        .observe_agent_shell_transaction_events(&pane_id, &[TerminalOscEvent::ShellPromptEnd])
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_events(
+            &pane_id,
+            &[TerminalOscEvent::ManagedShell {
+                version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                shell: mez_terminal::ManagedShellAdapter::Bash,
+                token: "0123456789abcdef0123456789abcdef".to_string(),
+                event: mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate {
+                    instance_id: "remote-bash-failure".to_string(),
+                    trigger: None,
+                },
+            }],
+        )
+        .unwrap();
+    let challenge = service
+        .foreign_shell_bootstrap_challenge_for_tests(&pane_id)
+        .unwrap()
+        .to_string();
+    service.drain_pane_io_transition();
+    service
+        .observe_agent_shell_transaction_events(
+            &pane_id,
+            &[TerminalOscEvent::ManagedShell {
+                version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                shell: mez_terminal::ManagedShellAdapter::Bash,
+                token: "0123456789abcdef0123456789abcdef".to_string(),
+                event: mez_terminal::ManagedShellProtocolEvent::ForeignChallengeCompleted {
+                    instance_id: "remote-bash-failure".to_string(),
+                    challenge,
+                },
+            }],
+        )
+        .unwrap();
+    service.drain_pane_io_transition();
+
+    let (identity_marker, identity_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )
+            .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("foreign identity probe should be registered");
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+        )
+        .unwrap();
+    let identity_output = format!(
+        "\u{1e}mez_shell_identity_begin={identity_marker}\n\
+         \u{1e}mez_shell_path=/bin/bash\n\
+         \u{1e}mez_shell_version=GNU bash, version 5.2\n\
+         \u{1e}mez_shell_identity_end={identity_marker}\n"
+    );
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&identity_marker)
+        .unwrap();
+    transaction.observed_output_bytes = identity_output.len();
+    transaction.observed_output_preview = identity_output;
+    service
+        .observe_agent_shell_transaction_end(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+            0,
+        )
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_events(
+            &pane_id,
+            &[TerminalOscEvent::ManagedShell {
+                version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                shell: mez_terminal::ManagedShellAdapter::Bash,
+                token: "0123456789abcdef0123456789abcdef".to_string(),
+                event: mez_terminal::ManagedShellProtocolEvent::ParentReady {
+                    marker: identity_marker,
+                    outcome: mez_terminal::ManagedShellParentOutcome::Completed,
+                    exit_code: 0,
+                    proof: None,
+                },
+            }],
+        )
+        .unwrap();
+
+    let bootstrap_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.kind == RunningShellTransactionKind::Bootstrap).then(|| marker.clone())
+        })
+        .expect("foreign Bash child staging must register bootstrap");
+    let child_token = service
+        .foreign_bash_child_token_for_tests(&pane_id)
+        .expect("foreign Bash child staging must allocate a fresh token")
+        .to_string();
+    let parent_proof = service
+        .foreign_bash_parent_proof_for_tests(&pane_id)
+        .expect("foreign Bash child staging must retain its parent proof")
+        .to_string();
+    service.drain_pane_io_transition();
+
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ManagedShell {
+                    version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                    shell: mez_terminal::ManagedShellAdapter::Bash,
+                    token: "0123456789abcdef0123456789abcdef".to_string(),
+                    event: mez_terminal::ManagedShellProtocolEvent::FrameAdmitted {
+                        marker: bootstrap_marker.clone(),
+                    },
+                }],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).len(),
+        1,
+        "frame admission must release the staged RX2 source before it can fail"
+    );
+
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ManagedShell {
+                    version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                    shell: mez_terminal::ManagedShellAdapter::Bash,
+                    token: "0123456789abcdef0123456789abcdef".to_string(),
+                    event: mez_terminal::ManagedShellProtocolEvent::ParentReady {
+                        marker: bootstrap_marker.clone(),
+                        outcome: mez_terminal::ManagedShellParentOutcome::SourceFailed,
+                        exit_code: 23,
+                        proof: Some(parent_proof),
+                    },
+                }],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("failed")
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == started.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert!(!service.agent_provider_task_is_pending(&started.turn_id));
+    assert!(
+        !service
+            .running_shell_transactions_for_tests()
+            .contains_key(&bootstrap_marker),
+        "failed staging must remove the bootstrap transaction"
+    );
+    assert!(
+        service
+            .foreign_bash_child_token_for_tests(&pane_id)
+            .is_none()
+    );
+    assert!(
+        service
+            .foreign_bash_child_staging_source_for_tests(&pane_id)
+            .is_none()
+    );
+    let failure_effects = service.drain_pane_io_transition().side_effects;
+    assert!(failure_effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::PaneProcessIo {
+            effect: crate::runtime::PaneProcessIoEffect::ReleaseShellInputLease { owner_id },
+            ..
+        } if owner_id == &bootstrap_marker
+    )));
+    assert!(
+        pane_input_effects(&failure_effects).is_empty(),
+        "known staging failure must not dispatch a deferred bootstrap wrapper"
+    );
+
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ManagedShell {
+                    version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                    shell: mez_terminal::ManagedShellAdapter::Bash,
+                    token: child_token,
+                    event: mez_terminal::ManagedShellProtocolEvent::ChildInstalled {
+                        marker: bootstrap_marker,
+                    },
+                }],
+            )
+            .unwrap(),
+        0,
+        "a stale child-installed event must not revive failed bootstrap"
+    );
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("failed")
+    );
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "stale child installation must not write to the pane"
+    );
+
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
 /// Verifies foreign Fish and Zsh candidates receive only their shell-native,
 /// source-free editor challenge before adapter admission.
 ///

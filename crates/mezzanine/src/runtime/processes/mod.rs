@@ -2281,6 +2281,15 @@ impl RuntimeSessionService {
             .and_then(|boundary| boundary.child_token.as_deref())
     }
 
+    /// Returns the parent-only proof for one foreign Bash staging regression.
+    pub(crate) fn foreign_bash_parent_proof_for_tests(&self, pane_id: &str) -> Option<&str> {
+        self.process
+            .pane_managed_shell_handoffs
+            .get(pane_id)
+            .filter(|handoff| handoff.shell() == ManagedShellKind::Bash)
+            .and_then(|handoff| handoff.identity().parent_proof.as_deref())
+    }
+
     /// Returns the fresh child token for one foreign-shell staging regression.
     pub(crate) fn foreign_child_token_for_tests(&self, pane_id: &str) -> Option<&str> {
         self.process
