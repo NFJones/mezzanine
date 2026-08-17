@@ -993,10 +993,10 @@ pub struct AsyncRuntimeDaemonConfig {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub event_audience: EventAudience,
-    /// Stores the timer base now ms value for this data structure.
+    /// Unix-millisecond clock captured when the daemon timer worker starts.
     ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+    /// Timer events add monotonic elapsed time to this base before comparing
+    /// against runtime transaction timestamps, which use the same Unix epoch.
     pub timer_base_now_ms: u64,
 }
 
@@ -1019,7 +1019,7 @@ impl Default for AsyncRuntimeDaemonConfig {
             max_event_connections: u64::MAX,
             max_event_batches_per_connection: u64::MAX,
             event_audience: EventAudience::Primary,
-            timer_base_now_ms: 0,
+            timer_base_now_ms: crate::runtime::current_unix_millis(),
         }
     }
 }

@@ -517,10 +517,11 @@ use hook_support::{
     focused_shell_pre_action_failed_result, focused_shell_pre_action_timeout_result,
     runtime_hook_event_for_lifecycle, runtime_hook_event_name,
 };
+pub(crate) use json::current_unix_millis;
 use json::{
-    agent_shell_visibility_json_name, agent_state_control_method, current_unix_millis,
-    current_unix_seconds, mouse_action_name, mux_action_command_prompt_prefill, mux_action_name,
-    optional_path_json, optional_string_json, pane_navigation_direction, rendered_client_view_json,
+    agent_shell_visibility_json_name, agent_state_control_method, current_unix_seconds,
+    mouse_action_name, mux_action_command_prompt_prefill, mux_action_name, optional_path_json,
+    optional_string_json, pane_navigation_direction, rendered_client_view_json,
     runtime_agent_shell_command_response_json, runtime_agent_shell_prompt_turn_response_json,
     runtime_agent_shell_stop_response_json, runtime_agent_turn_duration_display,
     runtime_agent_turn_state_json, runtime_agent_turn_state_name, runtime_command_outcomes_json,

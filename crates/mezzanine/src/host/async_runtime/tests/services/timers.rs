@@ -2,6 +2,23 @@
 
 use super::super::*;
 
+/// Verifies the production daemon timer clock uses the Unix-millisecond epoch
+/// shared by shell transaction and foreign-bootstrap timestamps. A zero-based
+/// clock makes timeout subtraction saturate at zero, so an SSH bootstrap can
+/// remain pending forever while its already-due timer is repeatedly rearmed.
+#[test]
+fn async_runtime_daemon_default_timer_clock_matches_runtime_deadlines() {
+    let before = crate::runtime::current_unix_millis();
+    let config = AsyncRuntimeDaemonConfig::default();
+    let after = crate::runtime::current_unix_millis();
+
+    assert!(
+        (before..=after).contains(&config.timer_base_now_ms),
+        "default timer base must be a current Unix-millisecond timestamp: before={before} base={} after={after}",
+        config.timer_base_now_ms
+    );
+}
+
 /// Verifies that timer side effects are consumed by the timer worker rather
 /// than remaining as inert actor queue entries. The scheduled provider-poll
 /// timer must re-enter the actor as a typed `TimerEvent`, which then produces a
