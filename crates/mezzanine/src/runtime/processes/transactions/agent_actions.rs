@@ -2,9 +2,10 @@
 
 use super::super::{
     ManagedShellHandoffEffect, ManagedShellHandoffEvent, ManagedShellHandoffIdentity,
-    ManagedShellKind, RuntimeForeignShellAdapterCandidate, RuntimeForeignShellBootstrapPhase,
-    RuntimeForeignShellPromptBoundary, RuntimeManagedShellAdapterDescriptor,
-    RuntimeManagedShellAdapterOrigin, reduce_managed_shell_handoff,
+    ManagedShellKind, ManagedShellSettlementRenderPolicy, RuntimeForeignShellAdapterCandidate,
+    RuntimeForeignShellBootstrapPhase, RuntimeForeignShellPromptBoundary,
+    RuntimeManagedShellAdapterDescriptor, RuntimeManagedShellAdapterOrigin,
+    reduce_managed_shell_handoff,
 };
 use super::{
     ActionContentBlock, ActionResult, ActionStatus, AgentActionPayload, AgentTurnState,
@@ -1970,7 +1971,11 @@ impl RuntimeSessionService {
             self.set_pane_readiness(output_pane_id, PaneReadinessState::PromptCandidate);
         }
 
-        self.settle_managed_shell_runtime_ownership(output_pane_id, pending_input)?;
+        self.settle_managed_shell_runtime_ownership(
+            output_pane_id,
+            pending_input,
+            ManagedShellSettlementRenderPolicy::RetainManagedBashRepaintSuppression,
+        )?;
         if resume_deferred_entry {
             let _ = self.enter_agent_subshell_if_needed(output_pane_id)?;
         }

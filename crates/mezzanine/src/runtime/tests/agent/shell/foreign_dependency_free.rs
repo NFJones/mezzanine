@@ -452,21 +452,47 @@ bootstrap\tcomplete\t1714500000\n";
         "a routine outer-SSH foreground poll must not restore the remote parent while the managed child remains live"
     );
     assert!(service.agent_subshell_is_active(&pane_id));
-
-    assert_eq!(
-        service
-            .observe_agent_shell_transaction_events(
-                &pane_id,
-                &[TerminalOscEvent::ForeignShellLoaderExited {
-                    marker: loader_marker,
-                    exit_code: 0,
-                }],
-            )
-            .unwrap(),
-        1
+    service.remember_hidden_shell_render_suppression(&pane_id);
+    let mut restored_prompt_batch = service
+        .agent_subshell_exit_marker_for_tests(&pane_id)
+        .expect("dependency-free Bash should retain its child-exit boundary")
+        .to_vec();
+    restored_prompt_batch.extend_from_slice(
+        format!(
+            "\u{1b}]133;R;mez_foreign_loader=exited;mez_marker={loader_marker};mez_status=0\u{1b}\\"
+        )
+        .as_bytes(),
     );
+    restored_prompt_batch.extend_from_slice(b"\rforeign$ ");
+
+    service
+        .apply_pane_process_output(
+            mez_mux::process::PaneProcessOutput {
+                pane_id: pane_id.clone(),
+                primary_pid,
+                bytes: restored_prompt_batch,
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+
     assert!(!service.agent_subshell_is_active(&pane_id));
     assert!(!service.pane_has_uncertified_foreign_shell_boundary(&pane_id));
+    assert!(!service.hidden_shell_render_retention_timer_needed());
+    let process_content = service
+        .process_pane_screen(&pane_id)
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        process_content.contains("foreign$"),
+        "the restored foreign prompt in the loader-exit batch must be visible: {process_content:?}"
+    );
+    assert_eq!(
+        service.renderable_pane_output_bytes(&pane_id, b"foreign output\r\n"),
+        b"foreign output\r\n",
+        "foreign-parent output must remain visible immediately after loader settlement"
+    );
 
     let _ = process.terminate(Duration::from_millis(10));
 }

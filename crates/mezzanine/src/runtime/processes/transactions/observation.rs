@@ -2,10 +2,10 @@
 
 use super::super::{
     ManagedShellHandoffEffect, ManagedShellHandoffEvent, ManagedShellHandoffIdentity,
-    PaneForegroundProcessObservation, PaneProcessInstance, PaneProcessIoEffect,
-    RuntimeAgentSubshellCertificationOutcome, RuntimeAgentSubshellCertificationRejection,
-    RuntimeBootstrapShellCertificationEvidence, RuntimeCertifiedShellSource,
-    RuntimeForeignShellBootstrapPhase, RuntimeForeignShellBoundary,
+    ManagedShellSettlementRenderPolicy, PaneForegroundProcessObservation, PaneProcessInstance,
+    PaneProcessIoEffect, RuntimeAgentSubshellCertificationOutcome,
+    RuntimeAgentSubshellCertificationRejection, RuntimeBootstrapShellCertificationEvidence,
+    RuntimeCertifiedShellSource, RuntimeForeignShellBootstrapPhase, RuntimeForeignShellBoundary,
     RuntimePaneCertifiedShellIdentity, RuntimePaneEnvironmentAuthorityUnavailableReason,
     RuntimePaneProbedShellIdentity, RuntimePaneShellHandoff,
     RuntimePendingAgentSubshellCertification, RuntimePendingAgentSubshellStartObservation,
@@ -289,7 +289,11 @@ impl RuntimeSessionService {
             self.clear_uncertified_foreign_shell_boundary(pane_id);
             self.leave_agent_subshell(pane_id);
             self.invalidate_agent_subshell_environment_after_exit(pane_id);
-            self.settle_managed_shell_runtime_ownership(pane_id, pending_input)?;
+            self.settle_managed_shell_runtime_ownership(
+                pane_id,
+                pending_input,
+                ManagedShellSettlementRenderPolicy::ReleaseForeignParent,
+            )?;
             self.append_lifecycle_event(
                 EventKind::AgentStatus,
                 format!(
@@ -1069,7 +1073,11 @@ impl RuntimeSessionService {
             } else {
                 self.set_pane_readiness(&instance.pane_id, PaneReadinessState::PromptCandidate);
             }
-            self.settle_managed_shell_runtime_ownership(&instance.pane_id, pending_input)?;
+            self.settle_managed_shell_runtime_ownership(
+                &instance.pane_id,
+                pending_input,
+                ManagedShellSettlementRenderPolicy::RetainManagedBashRepaintSuppression,
+            )?;
             self.append_lifecycle_event(
                 EventKind::Diagnostic,
                 format!(

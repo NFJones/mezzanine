@@ -714,6 +714,15 @@ pub(super) enum RuntimeManagedFishAdmission {
     },
 }
 
+/// Selects presentation cleanup when a managed-shell handoff settles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ManagedShellSettlementRenderPolicy {
+    /// Retains Bash's bounded late parent-prompt repaint suppression.
+    RetainManagedBashRepaintSuppression,
+    /// Releases all suppression before an uninstrumented foreign parent repaints.
+    ReleaseForeignParent,
+}
+
 /// Authenticated parent-shell admission state for one managed zsh pane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum RuntimeManagedZshAdmission {
@@ -1227,12 +1236,21 @@ impl RuntimeSessionService {
     }
 
     /// Releases runtime-owned handoff state after one reducer settlement effect.
+    ///
+    /// Managed Bash parents can repaint after publishing authenticated readiness,
+    /// so their ordinary settlement retains the bounded suppression window. A
+    /// dependency-free foreign parent is uninstrumented: its next prompt is the
+    /// authoritative restoration output and must never inherit that suppression.
     pub(super) fn settle_managed_shell_runtime_ownership(
         &mut self,
         pane_id: &str,
         pending_input: Vec<u8>,
+        render_policy: ManagedShellSettlementRenderPolicy,
     ) -> Result<()> {
-        let retain_delayed_render_suppression = self
+        let retain_delayed_render_suppression = matches!(
+            render_policy,
+            ManagedShellSettlementRenderPolicy::RetainManagedBashRepaintSuppression
+        ) && self
             .process
             .pane_managed_shell_handoffs
             .get(pane_id)

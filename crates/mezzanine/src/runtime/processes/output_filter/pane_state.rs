@@ -81,16 +81,44 @@ impl RuntimeSessionService {
         let render_mode = self.pane_output_render_mode(output.pane_id.as_str());
         let protocol_bytes =
             self.decoded_pane_output_bytes(output.pane_id.as_str(), &transaction_bytes);
-        let render_bytes = self.renderable_decoded_pane_output_bytes(
-            output.pane_id.as_str(),
-            render_mode,
-            &protocol_bytes,
-        );
         let (mut osc_events, _, _, _) = self.terminal_protocol_observation_for_pane_bytes(
             output.pane_id.as_str(),
             descriptor_size,
             &transaction_bytes,
         )?;
+        let mut restored_foreign_parent = None;
+        for event in &osc_events {
+            let TerminalOscEvent::ForeignShellLoaderExited { marker, exit_code } = event else {
+                continue;
+            };
+            if self.observe_agent_shell_transaction_events(
+                output.pane_id.as_str(),
+                std::slice::from_ref(event),
+            )? > 0
+            {
+                restored_foreign_parent = Some((marker.as_str(), *exit_code));
+                break;
+            }
+        }
+        let restored_prompt_offset = restored_foreign_parent.and_then(|(marker, exit_code)| {
+            Self::foreign_shell_loader_exit_end_offset(&protocol_bytes, marker, exit_code)
+        });
+        let settled_render_mode = restored_prompt_offset
+            .map(|_| self.pane_output_render_mode(output.pane_id.as_str()))
+            .unwrap_or(render_mode);
+        let render_bytes = if let Some(offset) = restored_prompt_offset {
+            self.renderable_decoded_pane_output_bytes(
+                output.pane_id.as_str(),
+                settled_render_mode,
+                &protocol_bytes[offset..],
+            )
+        } else {
+            self.renderable_decoded_pane_output_bytes(
+                output.pane_id.as_str(),
+                render_mode,
+                &protocol_bytes,
+            )
+        };
         let previous_process_alternate_active = self
             .process
             .process_pane_screens
@@ -121,7 +149,17 @@ impl RuntimeSessionService {
                 self.process.settings.terminal_history_rotate_lines,
             )?);
         process_screen.resize(process_presentation_size);
-        if matches!(
+        if let Some(offset) = restored_prompt_offset {
+            process_screen.feed_protocol_preserving_content(&protocol_bytes[..offset]);
+            if matches!(
+                settled_render_mode,
+                PaneOutputRenderMode::Normal | PaneOutputRenderMode::ManagedEditorClear
+            ) {
+                process_screen.feed(&protocol_bytes[offset..]);
+            } else {
+                process_screen.feed_protocol_preserving_content(&protocol_bytes[offset..]);
+            }
+        } else if matches!(
             render_mode,
             PaneOutputRenderMode::Normal | PaneOutputRenderMode::ManagedEditorClear
         ) {
@@ -486,6 +524,23 @@ impl RuntimeSessionService {
         let render_mode = self.pane_output_render_mode(pane_id);
         let decoded = self.decoded_pane_output_bytes(pane_id, transaction_bytes);
         self.renderable_decoded_pane_output_bytes(pane_id, render_mode, &decoded)
+    }
+
+    /// Locates the first prompt byte after one generated foreign-loader exit record.
+    ///
+    /// The dependency-free loader owns every byte through its correlated OSC
+    /// record. Bytes after the record belong to the restored uninstrumented
+    /// parent and may be presented under the post-settlement render policy.
+    fn foreign_shell_loader_exit_end_offset(
+        bytes: &[u8],
+        marker: &str,
+        exit_code: i32,
+    ) -> Option<usize> {
+        let record = format!(
+            "\u{1b}]133;R;mez_foreign_loader=exited;mez_marker={marker};mez_status={exit_code}\u{1b}\\"
+        );
+        find_byte_subsequence(bytes, record.as_bytes())
+            .map(|offset| offset.saturating_add(record.len()))
     }
 
     /// Decodes private shell-output frames independently of display visibility.

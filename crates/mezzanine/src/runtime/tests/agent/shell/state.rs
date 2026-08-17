@@ -1,6 +1,8 @@
 //! Agent shell state tests.
 
-use crate::runtime::processes::RuntimeAgentSubshellCertificationRejection;
+use crate::runtime::processes::{
+    ManagedShellSettlementRenderPolicy, RuntimeAgentSubshellCertificationRejection,
+};
 
 use super::*;
 
@@ -3874,7 +3876,11 @@ fn runtime_managed_shell_settlement_retains_delayed_parent_prompt_suppression() 
     service.remember_hidden_shell_render_suppression("%1");
 
     service
-        .settle_managed_shell_runtime_ownership("%1", Vec::new())
+        .settle_managed_shell_runtime_ownership(
+            "%1",
+            Vec::new(),
+            ManagedShellSettlementRenderPolicy::RetainManagedBashRepaintSuppression,
+        )
         .unwrap();
 
     assert!(service.hidden_shell_render_retention_timer_needed());
