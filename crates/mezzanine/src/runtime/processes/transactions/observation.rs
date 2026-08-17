@@ -283,6 +283,7 @@ impl RuntimeSessionService {
                 challenge: None,
                 child_token: None,
                 child_staging_source: None,
+                identity_marker: None,
             },
         );
         self.process

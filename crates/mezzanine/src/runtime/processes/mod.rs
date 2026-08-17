@@ -27,6 +27,24 @@ pub(crate) fn generate_managed_foreign_bash_adapter_source() -> Result<String> {
     Ok(managed_foreign_bash_adapter_source(&token, &instance))
 }
 
+/// Generates fresh opt-in Fish integration for one nested shell invocation.
+pub(crate) fn generate_managed_foreign_fish_adapter_source() -> Result<String> {
+    let token = runtime_random_marker_token("foreign-fish-adapter-token")?;
+    let instance = runtime_random_marker_token("foreign-fish-adapter-instance")?;
+    Ok(fish_compat::managed_foreign_fish_adapter_source(
+        &token, &instance,
+    ))
+}
+
+/// Generates fresh opt-in Zsh integration for one nested shell invocation.
+pub(crate) fn generate_managed_foreign_zsh_adapter_source() -> Result<String> {
+    let token = runtime_random_marker_token("foreign-zsh-adapter-token")?;
+    let instance = runtime_random_marker_token("foreign-zsh-adapter-instance")?;
+    Ok(zsh_compat::managed_foreign_zsh_adapter_source(
+        &token, &instance,
+    ))
+}
+
 use mez_mux::presentation::{pane_content_size_for_geometry, rendered_window_body_size};
 
 use super::{
@@ -424,6 +442,8 @@ struct RuntimeForeignShellBoundary {
     child_token: Option<String>,
     /// Authenticated RX2 source that stages, launches, and cleans up the child.
     child_staging_source: Option<String>,
+    /// Identity transaction currently owned by the admitted foreign adapter.
+    identity_marker: Option<String>,
 }
 
 /// Atomically validated shell identity used to render and execute one pane
@@ -2261,11 +2281,27 @@ impl RuntimeSessionService {
             .and_then(|boundary| boundary.child_token.as_deref())
     }
 
+    /// Returns the fresh child token for one foreign-shell staging regression.
+    pub(crate) fn foreign_child_token_for_tests(&self, pane_id: &str) -> Option<&str> {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .and_then(|boundary| boundary.child_token.as_deref())
+    }
+
     /// Returns retained foreign Bash staging source for isolation regressions.
     pub(crate) fn foreign_bash_child_staging_source_for_tests(
         &self,
         pane_id: &str,
     ) -> Option<&str> {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .and_then(|boundary| boundary.child_staging_source.as_deref())
+    }
+
+    /// Returns retained foreign child staging source for isolation regressions.
+    pub(crate) fn foreign_child_staging_source_for_tests(&self, pane_id: &str) -> Option<&str> {
         self.process
             .pane_foreign_shell_boundaries
             .get(pane_id)
@@ -2605,10 +2641,21 @@ impl RuntimeSessionService {
             .pane_foreign_shell_boundaries
             .contains_key(pane_id)
         {
-            let transaction = if let Some(token) = self.foreign_bash_child_token_for_pane(pane_id) {
-                transaction.with_bash_receiver_token(token)
-            } else {
-                transaction
+            let transaction = match (
+                self.process
+                    .pane_foreign_shell_boundaries
+                    .get(pane_id)
+                    .and_then(|boundary| boundary.adapter.as_ref())
+                    .map(|adapter| adapter.shell),
+                self.foreign_child_token_for_pane(pane_id),
+            ) {
+                (Some(mez_terminal::ManagedShellAdapter::Bash), Some(token)) => {
+                    transaction.with_bash_receiver_token(token)
+                }
+                (Some(mez_terminal::ManagedShellAdapter::Zsh), Some(token)) => {
+                    transaction.with_zsh_history_token(token)
+                }
+                _ => transaction,
             };
             return transaction.with_payload_receiver_acknowledgements(cfg!(target_os = "macos"));
         }
@@ -2772,8 +2819,91 @@ impl RuntimeSessionService {
             .flatten()
     }
 
-    /// Returns the child-only Bash token for bootstrap and later shell actions.
-    pub(super) fn foreign_bash_child_token_for_pane(
+    /// Returns the parent-adapter token for one generation-scoped foreign shell.
+    pub(super) fn foreign_adapter_token_for_pane(
+        &self,
+        pane_id: &str,
+        shell: mez_terminal::ManagedShellAdapter,
+    ) -> Option<mez_agent::MarkerToken> {
+        let boundary = self.process.pane_foreign_shell_boundaries.get(pane_id)?;
+        let adapter = boundary.adapter.as_ref()?;
+        (matches!(
+            boundary.phase,
+            RuntimeForeignShellBootstrapPhase::IdentityProbing
+                | RuntimeForeignShellBootstrapPhase::BootstrappingChild
+                | RuntimeForeignShellBootstrapPhase::Certified
+        ) && adapter.origin == RuntimeManagedShellAdapterOrigin::Foreign
+            && adapter.shell == shell
+            && adapter.primary_process_id == boundary.primary_process_id
+            && adapter.process_group_id == boundary.process_group_id
+            && adapter.interaction_generation == boundary.interaction_generation)
+            .then(|| mez_agent::MarkerToken::new(adapter.token.clone()).ok())
+            .flatten()
+    }
+
+    /// Authenticates one managed-shell event against only the active environment.
+    pub(super) fn active_managed_shell_token_matches(
+        &self,
+        pane_id: &str,
+        shell: mez_terminal::ManagedShellAdapter,
+        token: &str,
+    ) -> bool {
+        if self
+            .process
+            .pane_foreign_shell_boundaries
+            .contains_key(pane_id)
+        {
+            let child_matches = self
+                .process
+                .pane_foreign_shell_boundaries
+                .get(pane_id)
+                .and_then(|boundary| boundary.adapter.as_ref())
+                .is_some_and(|adapter| adapter.shell == shell)
+                && self
+                    .foreign_child_token_for_pane(pane_id)
+                    .is_some_and(|expected| expected.as_str() == token);
+            return self
+                .foreign_adapter_token_for_pane(pane_id, shell)
+                .is_some_and(|expected| expected.as_str() == token)
+                || child_matches;
+        }
+        match shell {
+            mez_terminal::ManagedShellAdapter::Bash => self
+                .bash_receiver_token_for_pane(pane_id)
+                .is_some_and(|expected| expected.as_str() == token),
+            mez_terminal::ManagedShellAdapter::Fish => self
+                .fish_receiver_token_for_pane(pane_id)
+                .is_some_and(|expected| expected.as_str() == token),
+            mez_terminal::ManagedShellAdapter::Zsh => self
+                .zsh_history_token_for_pane(pane_id)
+                .is_some_and(|expected| expected.as_str() == token),
+        }
+    }
+
+    /// Returns the ZLE trigger authenticated for the active pane environment.
+    pub(super) fn active_zsh_trigger_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Option<mez_agent::ManagedZshTrigger> {
+        if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get(pane_id) {
+            let adapter = boundary.adapter.as_ref()?;
+            return (adapter.shell == mez_terminal::ManagedShellAdapter::Zsh)
+                .then_some(adapter.trigger.as_deref())
+                .flatten()
+                .and_then(mez_agent::ManagedZshTrigger::from_protocol_str);
+        }
+        self.process
+            .pane_zsh_admissions
+            .get(pane_id)
+            .and_then(|admission| match admission {
+                RuntimeManagedZshAdmission::Ready { trigger, .. } => Some(*trigger),
+                RuntimeManagedZshAdmission::Pending { .. }
+                | RuntimeManagedZshAdmission::Unavailable { .. } => None,
+            })
+    }
+
+    /// Returns the child-only token for bootstrap and later shell actions.
+    pub(super) fn foreign_child_token_for_pane(
         &self,
         pane_id: &str,
     ) -> Option<mez_agent::MarkerToken> {
@@ -2786,6 +2916,18 @@ impl RuntimeSessionService {
         .then(|| boundary.child_token.clone())
         .flatten()
         .and_then(|token| mez_agent::MarkerToken::new(token).ok())
+    }
+
+    /// Returns the child-only Bash token for bootstrap and later shell actions.
+    pub(super) fn foreign_bash_child_token_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Option<mez_agent::MarkerToken> {
+        let boundary = self.process.pane_foreign_shell_boundaries.get(pane_id)?;
+        let adapter = boundary.adapter.as_ref()?;
+        (adapter.shell == mez_terminal::ManagedShellAdapter::Bash)
+            .then(|| self.foreign_child_token_for_pane(pane_id))
+            .flatten()
     }
 
     /// Authenticates one Bash event against only the active pane environment.

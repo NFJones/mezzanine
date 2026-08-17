@@ -1348,6 +1348,559 @@ bootstrap\tcomplete\t1714500000\n";
     let _ = process.terminate(Duration::from_millis(10));
 }
 
+/// Verifies foreign Fish and Zsh candidates receive only their shell-native,
+/// source-free editor challenge before adapter admission.
+///
+/// Fish uses its bound command-line callback with bounded metadata. Zsh uses
+/// the candidate-selected ZLE trigger twice (clear, then receiver) followed by
+/// bounded challenge metadata. Neither path may contain generated source.
+#[test]
+fn runtime_foreign_fish_and_zsh_candidates_receive_native_challenges() {
+    for (shell, token, instance_id, trigger, expected_prefix) in [
+        (
+            mez_terminal::ManagedShellAdapter::Fish,
+            "11111111111111111111111111111111",
+            "remote-fish-1",
+            None,
+            "\u{1b}\u{7}MEZ_FISH_FOREIGN_CHALLENGE ",
+        ),
+        (
+            mez_terminal::ManagedShellAdapter::Zsh,
+            "22222222222222222222222222222222",
+            "remote-zsh-1",
+            Some("escape-m".to_string()),
+            "\u{1b}[27;9;109~\u{1b}[27;9;109~MEZ_ZSH_FOREIGN_CHALLENGE ",
+        ),
+    ] {
+        let mut service = test_runtime_service();
+        let primary = service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        service.start_initial_pane_process(Some("cat")).unwrap();
+        let pane_id = service
+            .session()
+            .active_window()
+            .unwrap()
+            .active_pane()
+            .id
+            .to_string();
+        let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+        service
+            .pane_processes_mut()
+            .set_foreground_process_group_id_for_test(&pane_id, None);
+        let mut process = service
+            .take_running_pane_process_for_adapter(&pane_id)
+            .unwrap();
+        service
+            .apply_pane_foreground_process_event(
+                &pane_id,
+                "ssh",
+                primary_pid.saturating_add(1),
+                None,
+            )
+            .unwrap();
+        service
+            .execute_terminal_command(&primary, "agent-shell")
+            .unwrap();
+        service.drain_pane_io_transition();
+        service
+            .observe_agent_shell_transaction_events(&pane_id, &[TerminalOscEvent::ShellPromptEnd])
+            .unwrap();
+
+        assert_eq!(
+            service
+                .observe_agent_shell_transaction_events(
+                    &pane_id,
+                    &[TerminalOscEvent::ManagedShell {
+                        version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                        shell,
+                        token: token.to_string(),
+                        event: mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate {
+                            instance_id: instance_id.to_string(),
+                            trigger,
+                        },
+                    }],
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+            Some("challenging-adapter")
+        );
+        let challenge = service
+            .foreign_shell_bootstrap_challenge_for_tests(&pane_id)
+            .unwrap()
+            .to_string();
+        let effects = service.drain_pane_io_transition().side_effects;
+        let inputs = pane_input_effects(&effects);
+        assert_eq!(inputs.len(), 1);
+        let input = String::from_utf8_lossy(inputs[0].pane_input_parts().1);
+        assert!(input.starts_with(expected_prefix), "{shell:?}: {input:?}");
+        assert!(input.contains(token), "{shell:?}: {input:?}");
+        assert!(input.contains(instance_id), "{shell:?}: {input:?}");
+        assert!(input.contains(&challenge), "{shell:?}: {input:?}");
+        assert!(
+            !input.contains("mez_shell_identity_begin="),
+            "{shell:?}: {input:?}"
+        );
+
+        assert_eq!(
+            service
+                .observe_agent_shell_transaction_events(
+                    &pane_id,
+                    &[TerminalOscEvent::ManagedShell {
+                        version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                        shell,
+                        token: token.to_string(),
+                        event: mez_terminal::ManagedShellProtocolEvent::ForeignChallengeCompleted {
+                            instance_id: instance_id.to_string(),
+                            challenge,
+                        },
+                    }],
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+            Some("identity-probing")
+        );
+        assert_eq!(
+            service
+                .running_shell_transactions_for_tests()
+                .values()
+                .filter(|transaction| matches!(
+                    transaction.kind,
+                    RunningShellTransactionKind::ShellIdentityProbe { .. }
+                ))
+                .count(),
+            1
+        );
+        let identity_effects = service.drain_pane_io_transition().side_effects;
+        let identity_inputs = pane_input_effects(&identity_effects);
+        assert_eq!(identity_inputs.len(), 1);
+        let identity_input = String::from_utf8_lossy(identity_inputs[0].pane_input_parts().1);
+        match shell {
+            mez_terminal::ManagedShellAdapter::Fish => assert!(
+                identity_input.starts_with(&format!("\u{1b}\u{7}MEZ_FISH_RX1_HOLD {token} ")),
+                "{identity_input:?}"
+            ),
+            mez_terminal::ManagedShellAdapter::Zsh => assert_eq!(
+                identity_input, "\u{1b}[27;9;109~",
+                "Zsh identity discovery must start with only the admitted ZLE trigger"
+            ),
+            mez_terminal::ManagedShellAdapter::Bash => unreachable!(),
+        }
+        assert!(
+            !identity_input.contains("mez_shell_identity_begin="),
+            "{identity_input:?}"
+        );
+
+        let (identity_marker, identity_turn_id) = service
+            .running_shell_transactions_for_tests()
+            .iter()
+            .find_map(|(marker, transaction)| {
+                matches!(
+                    transaction.kind,
+                    RunningShellTransactionKind::ShellIdentityProbe { .. }
+                )
+                .then(|| (marker.clone(), transaction.turn_id.clone()))
+            })
+            .expect("foreign Fish/Zsh identity probe should be registered");
+        match shell {
+            mez_terminal::ManagedShellAdapter::Fish => {
+                for event in [
+                    mez_terminal::ManagedShellProtocolEvent::EditorClearRequested {
+                        marker: Some(identity_marker.clone()),
+                    },
+                    mez_terminal::ManagedShellProtocolEvent::EditorCleared {
+                        marker: Some(identity_marker.clone()),
+                    },
+                    mez_terminal::ManagedShellProtocolEvent::EditorHeld {
+                        marker: identity_marker.clone(),
+                    },
+                    mez_terminal::ManagedShellProtocolEvent::FrameAdmitted {
+                        marker: identity_marker.clone(),
+                    },
+                ] {
+                    assert_eq!(
+                        service
+                            .observe_agent_shell_transaction_events(
+                                &pane_id,
+                                &[TerminalOscEvent::ManagedShell {
+                                    version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                                    shell,
+                                    token: token.to_string(),
+                                    event,
+                                }],
+                            )
+                            .unwrap(),
+                        1
+                    );
+                    service.drain_pane_io_transition();
+                }
+            }
+            mez_terminal::ManagedShellAdapter::Zsh => {
+                for event in [
+                    mez_terminal::ManagedShellProtocolEvent::EditorCleared { marker: None },
+                    mez_terminal::ManagedShellProtocolEvent::ReceiverAwaiting,
+                    mez_terminal::ManagedShellProtocolEvent::EditorHeld {
+                        marker: identity_marker.clone(),
+                    },
+                    mez_terminal::ManagedShellProtocolEvent::FrameAdmitted {
+                        marker: identity_marker.clone(),
+                    },
+                ] {
+                    assert_eq!(
+                        service
+                            .observe_agent_shell_transaction_events(
+                                &pane_id,
+                                &[TerminalOscEvent::ManagedShell {
+                                    version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                                    shell,
+                                    token: token.to_string(),
+                                    event,
+                                }],
+                            )
+                            .unwrap(),
+                        1
+                    );
+                    service.drain_pane_io_transition();
+                }
+            }
+            mez_terminal::ManagedShellAdapter::Bash => unreachable!(),
+        }
+        service
+            .observe_agent_shell_transaction_start(
+                &pane_id,
+                &identity_marker,
+                &identity_turn_id,
+                &format!("agent-{pane_id}"),
+                &pane_id,
+            )
+            .unwrap();
+        let (shell_path, shell_version) = match shell {
+            mez_terminal::ManagedShellAdapter::Fish => ("/usr/bin/fish", "fish, version 3.7"),
+            mez_terminal::ManagedShellAdapter::Zsh => ("/bin/zsh", "zsh 5.9"),
+            mez_terminal::ManagedShellAdapter::Bash => unreachable!(),
+        };
+        let identity_output = format!(
+            "\u{1e}mez_shell_identity_begin={identity_marker}\n\
+             \u{1e}mez_shell_path={shell_path}\n\
+             \u{1e}mez_shell_version={shell_version}\n\
+             \u{1e}mez_shell_identity_end={identity_marker}\n"
+        );
+        let transaction = service
+            .running_shell_transactions_mut_for_tests()
+            .get_mut(&identity_marker)
+            .unwrap();
+        transaction.observed_output_bytes = identity_output.len();
+        transaction.observed_output_preview = identity_output;
+        service
+            .observe_agent_shell_transaction_end(
+                &pane_id,
+                &identity_marker,
+                &identity_turn_id,
+                &format!("agent-{pane_id}"),
+                &pane_id,
+                0,
+            )
+            .unwrap();
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ManagedShell {
+                    version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                    shell,
+                    token: token.to_string(),
+                    event: mez_terminal::ManagedShellProtocolEvent::ParentReady {
+                        marker: identity_marker,
+                        outcome: mez_terminal::ManagedShellParentOutcome::Completed,
+                        exit_code: 0,
+                        proof: None,
+                    },
+                }],
+            )
+            .unwrap();
+
+        assert_eq!(
+            service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+            Some("bootstrapping-child")
+        );
+        let child_token = service
+            .foreign_child_token_for_tests(&pane_id)
+            .expect("foreign Fish/Zsh child staging must allocate a fresh token")
+            .to_string();
+        assert_ne!(child_token, token);
+        let staging_source = service
+            .foreign_child_staging_source_for_tests(&pane_id)
+            .expect("foreign Fish/Zsh child staging source should be retained");
+        assert!(staging_source.contains(&child_token), "{staging_source}");
+        assert!(
+            !staging_source.contains("host-or-stale-token"),
+            "{staging_source}"
+        );
+        match shell {
+            mez_terminal::ManagedShellAdapter::Fish => {
+                assert!(
+                    staging_source.contains("--init-command"),
+                    "{staging_source}"
+                );
+            }
+            mez_terminal::ManagedShellAdapter::Zsh => {
+                assert!(
+                    staging_source.contains("MEZ_FOREIGN_ZSH_DIR='/tmp/.mez-zsh-"),
+                    "{staging_source}"
+                );
+                assert!(
+                    staging_source.contains("command rm -rf --"),
+                    "{staging_source}"
+                );
+            }
+            mez_terminal::ManagedShellAdapter::Bash => unreachable!(),
+        }
+
+        let bootstrap_marker = service
+            .running_shell_transactions_for_tests()
+            .iter()
+            .find_map(|(marker, transaction)| {
+                (transaction.kind == RunningShellTransactionKind::Bootstrap).then(|| marker.clone())
+            })
+            .expect("foreign Fish/Zsh child staging must register bootstrap");
+        let parent_events = match shell {
+            mez_terminal::ManagedShellAdapter::Fish => vec![
+                mez_terminal::ManagedShellProtocolEvent::EditorClearRequested {
+                    marker: Some(bootstrap_marker.clone()),
+                },
+                mez_terminal::ManagedShellProtocolEvent::EditorCleared {
+                    marker: Some(bootstrap_marker.clone()),
+                },
+                mez_terminal::ManagedShellProtocolEvent::EditorHeld {
+                    marker: bootstrap_marker.clone(),
+                },
+                mez_terminal::ManagedShellProtocolEvent::FrameAdmitted {
+                    marker: bootstrap_marker.clone(),
+                },
+            ],
+            mez_terminal::ManagedShellAdapter::Zsh => vec![
+                mez_terminal::ManagedShellProtocolEvent::EditorCleared { marker: None },
+                mez_terminal::ManagedShellProtocolEvent::ReceiverAwaiting,
+                mez_terminal::ManagedShellProtocolEvent::EditorHeld {
+                    marker: bootstrap_marker.clone(),
+                },
+                mez_terminal::ManagedShellProtocolEvent::FrameAdmitted {
+                    marker: bootstrap_marker.clone(),
+                },
+            ],
+            mez_terminal::ManagedShellAdapter::Bash => unreachable!(),
+        };
+        for event in parent_events {
+            assert_eq!(
+                service
+                    .observe_agent_shell_transaction_events(
+                        &pane_id,
+                        &[TerminalOscEvent::ManagedShell {
+                            version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                            shell,
+                            token: token.to_string(),
+                            event,
+                        }],
+                    )
+                    .unwrap(),
+                1
+            );
+            service.drain_pane_io_transition();
+        }
+        assert_eq!(
+            service
+                .observe_agent_shell_transaction_events(
+                    &pane_id,
+                    &[TerminalOscEvent::ManagedShell {
+                        version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                        shell,
+                        token: token.to_string(),
+                        event: mez_terminal::ManagedShellProtocolEvent::ChildInstalled {
+                            marker: bootstrap_marker.clone(),
+                        },
+                    }],
+                )
+                .unwrap(),
+            0,
+            "the admitted parent token must not authenticate child installation"
+        );
+        assert!(
+            pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+            "a forged child installation must not release the bootstrap wrapper"
+        );
+        assert_eq!(
+            service
+                .observe_agent_shell_transaction_events(
+                    &pane_id,
+                    &[TerminalOscEvent::ManagedShell {
+                        version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                        shell,
+                        token: child_token.clone(),
+                        event: mez_terminal::ManagedShellProtocolEvent::ChildInstalled {
+                            marker: bootstrap_marker.clone(),
+                        },
+                    }],
+                )
+                .unwrap(),
+            1
+        );
+        assert!(service.agent_subshell_is_active(&pane_id));
+        assert_eq!(
+            pane_input_effects(&service.drain_pane_io_transition().side_effects).len(),
+            1,
+            "child installation must release exactly one deferred bootstrap wrapper"
+        );
+
+        let bootstrap_turn_id = service
+            .running_shell_transactions_for_tests()
+            .get(&bootstrap_marker)
+            .expect("foreign Fish/Zsh bootstrap should remain registered")
+            .turn_id
+            .clone();
+        service
+            .observe_agent_shell_transaction_start(
+                &pane_id,
+                &bootstrap_marker,
+                &bootstrap_turn_id,
+                &format!("agent-{pane_id}"),
+                &pane_id,
+            )
+            .unwrap();
+        let (start_instance, start_observation_id) = service
+            .drain_pane_io_transition()
+            .side_effects
+            .into_iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::PaneProcessIo {
+                    instance,
+                    effect:
+                        crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess {
+                            observation_id,
+                            expected_process_group_id: None,
+                        },
+                } => Some((instance, observation_id)),
+                _ => None,
+            })
+            .expect("foreign Fish/Zsh bootstrap start must request foreground proof");
+        service
+            .apply_pane_foreground_process_observation_transition(
+                start_instance,
+                crate::runtime::PaneForegroundProcessObservation {
+                    observation_id: start_observation_id,
+                    process_name: Some("ssh".to_string()),
+                    process_group_id: Some(primary_pid.saturating_add(1)),
+                    current_working_directory: Some("/remote/project".to_string()),
+                    error: None,
+                },
+            )
+            .unwrap();
+        service.drain_pane_io_transition();
+        if shell == mez_terminal::ManagedShellAdapter::Fish {
+            service
+                .observe_shell_transaction_payload_receiver_ready(
+                    &pane_id,
+                    &bootstrap_marker,
+                    &bootstrap_turn_id,
+                    &format!("agent-{pane_id}"),
+                    &pane_id,
+                )
+                .unwrap();
+            service.drain_pane_io_transition();
+        }
+        let shell_class = match shell {
+            mez_terminal::ManagedShellAdapter::Fish => "fish",
+            mez_terminal::ManagedShellAdapter::Zsh => "zsh",
+            mez_terminal::ManagedShellAdapter::Bash => unreachable!(),
+        };
+        let bootstrap_output = format!(
+            "env\tos\tLinux\n\
+             env\tarch\tx86_64\n\
+             env\thost\tforeign-host\n\
+             env\tuser\tforeign-user\n\
+             env\tshell_path\t{shell_path}\n\
+             env\tshell_class\t{shell_class}\n\
+             env\tpath\t/usr/bin:/bin\n\
+             env\tcwd\t/remote/project\n\
+             env\tgit_repo\t0\n\
+             bootstrap\tcomplete\t1714500000\n"
+        );
+        let transaction = service
+            .running_shell_transactions_mut_for_tests()
+            .get_mut(&bootstrap_marker)
+            .unwrap();
+        transaction.observed_output_bytes = bootstrap_output.len();
+        transaction.observed_output_preview = bootstrap_output;
+        service
+            .observe_agent_shell_transaction_end(
+                &pane_id,
+                &bootstrap_marker,
+                &bootstrap_turn_id,
+                &format!("agent-{pane_id}"),
+                &pane_id,
+                0,
+            )
+            .unwrap();
+        let (completion_instance, completion_observation_id, expected_process_group_id) = service
+            .drain_pane_io_transition()
+            .side_effects
+            .into_iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::PaneProcessIo {
+                    instance,
+                    effect:
+                        crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess {
+                            observation_id,
+                            expected_process_group_id,
+                        },
+                } => Some((instance, observation_id, expected_process_group_id)),
+                _ => None,
+            })
+            .expect("foreign Fish/Zsh bootstrap completion must request foreground proof");
+        assert_eq!(
+            expected_process_group_id,
+            Some(primary_pid.saturating_add(1))
+        );
+        service
+            .apply_pane_foreground_process_observation_transition(
+                completion_instance,
+                crate::runtime::PaneForegroundProcessObservation {
+                    observation_id: completion_observation_id,
+                    process_name: Some("ssh".to_string()),
+                    process_group_id: Some(primary_pid.saturating_add(1)),
+                    current_working_directory: Some("/remote/project".to_string()),
+                    error: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+            Some("certified")
+        );
+        assert!(!service.pane_has_uncertified_foreign_shell_boundary(&pane_id));
+        assert!(service.pane_environment_signature(&pane_id).is_some());
+        assert!(service.shell_execution_identity_for_pane(&pane_id).is_ok());
+        assert!(
+            service
+                .foreign_child_staging_source_for_tests(&pane_id)
+                .is_none(),
+            "certification should discard retained staging source"
+        );
+
+        service
+            .apply_pane_foreground_process_event(&pane_id, "sh", primary_pid, None)
+            .unwrap();
+        assert!(!service.pane_has_uncertified_foreign_shell_boundary(&pane_id));
+        assert!(service.pane_bootstrap_is_pending_for_tests(&pane_id));
+
+        let _ = process.terminate(Duration::from_millis(10));
+    }
+}
+
 /// Verifies that the live subshell EOF path also restores the parent prompt
 /// cursor after agent-authored text has already moved the pane screen. This
 /// covers the Ctrl+D path that exits the child agent shell, waits for the parent

@@ -74,6 +74,37 @@ rcfile with a fresh token, and removes that temporary directory when the child
 returns. Exit the nested environment to restore normal discovery of the local
 pane shell.
 
+For Fish, explicitly activate the current process at an empty prompt:
+
+```fish
+mez shell-integration fish | source
+```
+
+The Fish adapter uses a native command-line callback for its source-free
+challenge and authenticated receiver stages. After identity discovery,
+Mezzanine starts a startup-suppressed Fish child with a fresh receiver token in
+its `--init-command`. The parent adapter does not reuse local Fish launch state.
+
+For Zsh, explicitly activate the current process at an empty prompt:
+
+```zsh
+eval "$(mez shell-integration zsh)"
+```
+
+The Zsh adapter selects an unused managed ZLE trigger, uses that widget for the
+challenge and authenticated receiver, and stages an owner-only temporary
+`ZDOTDIR` for the fresh-token child. The temporary startup directory is created
+inside the nested environment and removed when the child returns. Local
+`ZDOTDIR`, startup files, tokens, and trigger admission are not consulted while
+the foreign boundary is active.
+
+For all three shells, bootstrap remains bounded and fail-closed. Mezzanine
+releases the environment bootstrap only after the fresh child publishes an
+authenticated installation event, then certifies the child process group with
+fresh foreground observations. Exiting the nested environment clears that
+authority and re-arms discovery for the original pane shell when agent mode is
+visible.
+
 ## Review actions and context
 
 The agent may request file reads, bounded commands, patches, configured MCP

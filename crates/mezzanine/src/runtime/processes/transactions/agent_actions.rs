@@ -70,15 +70,71 @@ impl RuntimeSessionService {
                     instance_id,
                     challenge,
                 ),
+                mez_terminal::ManagedShellProtocolEvent::EditorClearRequested { marker }
+                    if self.active_managed_shell_token_matches(output_pane_id, shell, token) =>
+                {
+                    self.observe_managed_shell_editor_clear_requested(
+                        output_pane_id,
+                        match shell {
+                            mez_terminal::ManagedShellAdapter::Fish => ManagedShellKind::Fish,
+                            mez_terminal::ManagedShellAdapter::Zsh => ManagedShellKind::Zsh,
+                            mez_terminal::ManagedShellAdapter::Bash => return Ok(0),
+                        },
+                        marker.as_deref(),
+                    )
+                }
+                mez_terminal::ManagedShellProtocolEvent::EditorCleared { marker }
+                    if self.active_managed_shell_token_matches(output_pane_id, shell, token) =>
+                {
+                    self.observe_managed_shell_editor_cleared(
+                        output_pane_id,
+                        match shell {
+                            mez_terminal::ManagedShellAdapter::Fish => ManagedShellKind::Fish,
+                            mez_terminal::ManagedShellAdapter::Zsh => ManagedShellKind::Zsh,
+                            mez_terminal::ManagedShellAdapter::Bash => return Ok(0),
+                        },
+                        marker.as_deref(),
+                    )
+                }
+                mez_terminal::ManagedShellProtocolEvent::EditorHeld { marker }
+                    if self.active_managed_shell_token_matches(output_pane_id, shell, token) =>
+                {
+                    self.observe_managed_shell_editor_held(
+                        output_pane_id,
+                        match shell {
+                            mez_terminal::ManagedShellAdapter::Fish => ManagedShellKind::Fish,
+                            mez_terminal::ManagedShellAdapter::Zsh => ManagedShellKind::Zsh,
+                            mez_terminal::ManagedShellAdapter::Bash => return Ok(0),
+                        },
+                        token,
+                        marker,
+                    )
+                }
+                mez_terminal::ManagedShellProtocolEvent::ReceiverAwaiting
+                    if shell == mez_terminal::ManagedShellAdapter::Zsh
+                        && self.active_managed_shell_token_matches(
+                            output_pane_id,
+                            shell,
+                            token,
+                        ) =>
+                {
+                    self.observe_zsh_shell_receiver_awaiting(output_pane_id, token)
+                }
                 mez_terminal::ManagedShellProtocolEvent::FrameAdmitted { marker }
-                    if shell == mez_terminal::ManagedShellAdapter::Bash
-                        && self.active_bash_receiver_token_matches(output_pane_id, token) =>
+                    if self.active_managed_shell_token_matches(output_pane_id, shell, token) =>
                 {
                     self.observe_shell_receiver_ready(output_pane_id, token, marker)
                 }
                 mez_terminal::ManagedShellProtocolEvent::ChildInstalled { marker }
-                    if shell == mez_terminal::ManagedShellAdapter::Bash
-                        && self.active_bash_receiver_token_matches(output_pane_id, token) =>
+                    if self
+                        .process
+                        .pane_foreign_shell_boundaries
+                        .get(output_pane_id)
+                        .and_then(|boundary| boundary.adapter.as_ref())
+                        .is_some_and(|adapter| adapter.shell == shell)
+                        && self
+                            .foreign_child_token_for_pane(output_pane_id)
+                            .is_some_and(|expected| expected.as_str() == token) =>
                 {
                     self.observe_shell_receiver_installed(output_pane_id, token, marker)
                 }
@@ -98,6 +154,26 @@ impl RuntimeSessionService {
                         transaction,
                         "foreign-bash-receiver-rejected",
                         format!("managed foreign Bash receiver rejected admission ({reason})"),
+                    )
+                }
+                mez_terminal::ManagedShellProtocolEvent::ParentReady {
+                    marker,
+                    outcome,
+                    exit_code,
+                    proof: None,
+                } if matches!(
+                    shell,
+                    mez_terminal::ManagedShellAdapter::Fish
+                        | mez_terminal::ManagedShellAdapter::Zsh
+                ) && self.active_managed_shell_token_matches(output_pane_id, shell, token) =>
+                {
+                    self.observe_foreign_fish_or_zsh_parent_ready(
+                        output_pane_id,
+                        shell,
+                        token,
+                        marker,
+                        *outcome,
+                        *exit_code,
                     )
                 }
                 mez_terminal::ManagedShellProtocolEvent::ParentReady {
@@ -427,8 +503,26 @@ impl RuntimeSessionService {
         current.phase_started_at_unix_ms = current_unix_millis();
         current.adapter = Some(descriptor);
         current.challenge = Some(challenge.clone());
-        let challenge_input =
-            format!("\u{7}MEZ_BASH_FOREIGN_CHALLENGE {token} {instance_id} {challenge}\n");
+        let challenge_input = match shell {
+            mez_terminal::ManagedShellAdapter::Bash => {
+                format!("\u{7}MEZ_BASH_FOREIGN_CHALLENGE {token} {instance_id} {challenge}\n")
+            }
+            mez_terminal::ManagedShellAdapter::Fish => {
+                format!("\u{1b}\u{7}MEZ_FISH_FOREIGN_CHALLENGE {token} {instance_id} {challenge}\n")
+            }
+            mez_terminal::ManagedShellAdapter::Zsh => {
+                let Some(trigger) =
+                    trigger.and_then(mez_agent::ManagedZshTrigger::from_protocol_str)
+                else {
+                    return Ok(0);
+                };
+                format!(
+                    "{}{}MEZ_ZSH_FOREIGN_CHALLENGE {token} {instance_id} {challenge}\n",
+                    trigger.input(),
+                    trigger.input()
+                )
+            }
+        };
         self.write_runtime_pane_input(pane_id, challenge_input.as_bytes())?;
         self.append_lifecycle_event(
             EventKind::AgentStatus,
@@ -509,6 +603,87 @@ impl RuntimeSessionService {
         Ok(1)
     }
 
+    /// Routes foreign Fish/Zsh restoration to its identity or child-handoff owner.
+    fn observe_foreign_fish_or_zsh_parent_ready(
+        &mut self,
+        pane_id: &str,
+        shell: mez_terminal::ManagedShellAdapter,
+        token: &str,
+        marker: &str,
+        outcome: mez_terminal::ManagedShellParentOutcome,
+        exit_code: i32,
+    ) -> Result<usize> {
+        let identity_owned = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                boundary.phase == RuntimeForeignShellBootstrapPhase::IdentityProbing
+                    && boundary.identity_marker.as_deref() == Some(marker)
+            });
+        if identity_owned {
+            return self.observe_foreign_identity_parent_ready(
+                pane_id, shell, token, marker, outcome, exit_code,
+            );
+        }
+        if !matches!(
+            outcome,
+            mez_terminal::ManagedShellParentOutcome::Completed
+                | mez_terminal::ManagedShellParentOutcome::SourceFailed
+        ) {
+            return Ok(0);
+        }
+        let shell = match shell {
+            mez_terminal::ManagedShellAdapter::Fish => ManagedShellKind::Fish,
+            mez_terminal::ManagedShellAdapter::Zsh => ManagedShellKind::Zsh,
+            mez_terminal::ManagedShellAdapter::Bash => return Ok(0),
+        };
+        self.observe_managed_shell_parent_ready(pane_id, shell, token, marker, None)
+    }
+
+    /// Settles one Fish or Zsh identity transaction after native editor restoration.
+    fn observe_foreign_identity_parent_ready(
+        &mut self,
+        pane_id: &str,
+        shell: mez_terminal::ManagedShellAdapter,
+        token: &str,
+        marker: &str,
+        outcome: mez_terminal::ManagedShellParentOutcome,
+        exit_code: i32,
+    ) -> Result<usize> {
+        if !matches!(
+            outcome,
+            mez_terminal::ManagedShellParentOutcome::Completed
+                | mez_terminal::ManagedShellParentOutcome::SourceFailed
+        ) {
+            return Ok(0);
+        }
+        let matches_identity = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                boundary.phase == RuntimeForeignShellBootstrapPhase::IdentityProbing
+                    && boundary.identity_marker.as_deref() == Some(marker)
+            });
+        if !matches_identity || !self.active_managed_shell_token_matches(pane_id, shell, token) {
+            return Ok(0);
+        }
+        if self
+            .process
+            .pane_managed_shell_handoffs
+            .get(pane_id)
+            .is_none_or(|handoff| handoff.identity().marker != marker)
+        {
+            return Ok(0);
+        }
+        self.process.pane_managed_shell_handoffs.remove(pane_id);
+        if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+            boundary.identity_marker = None;
+        }
+        self.observe_shell_receiver_complete(pane_id, token, marker, exit_code)
+    }
+
     /// Releases a trigger-only post-repaint confirmation stage.
     fn observe_managed_shell_editor_clear_requested(
         &mut self,
@@ -533,21 +708,7 @@ impl RuntimeSessionService {
             return Ok(0);
         }
         if shell == ManagedShellKind::Zsh {
-            let Some(trigger) = self
-                .process
-                .pane_zsh_admissions
-                .get(output_pane_id)
-                .and_then(|admission| match admission {
-                    crate::runtime::processes::RuntimeManagedZshAdmission::Ready {
-                        trigger,
-                        ..
-                    } => Some(*trigger),
-                    crate::runtime::processes::RuntimeManagedZshAdmission::Pending { .. }
-                    | crate::runtime::processes::RuntimeManagedZshAdmission::Unavailable {
-                        ..
-                    } => None,
-                })
-            else {
+            let Some(trigger) = self.active_zsh_trigger_for_pane(output_pane_id) else {
                 return Ok(0);
             };
             if let Err(error) =
@@ -648,21 +809,7 @@ impl RuntimeSessionService {
         }
         self.discard_unsubmitted_process_input(output_pane_id);
         if shell == ManagedShellKind::Zsh {
-            let Some(trigger) = self
-                .process
-                .pane_zsh_admissions
-                .get(output_pane_id)
-                .and_then(|admission| match admission {
-                    crate::runtime::processes::RuntimeManagedZshAdmission::Ready {
-                        trigger,
-                        ..
-                    } => Some(*trigger),
-                    crate::runtime::processes::RuntimeManagedZshAdmission::Pending { .. }
-                    | crate::runtime::processes::RuntimeManagedZshAdmission::Unavailable {
-                        ..
-                    } => None,
-                })
-            else {
+            let Some(trigger) = self.active_zsh_trigger_for_pane(output_pane_id) else {
                 return Ok(0);
             };
             if let Err(error) =
@@ -690,12 +837,16 @@ impl RuntimeSessionService {
             return Ok(0);
         };
         let token_matches = match shell {
-            ManagedShellKind::Fish => self
-                .fish_receiver_token_for_pane(output_pane_id)
-                .is_some_and(|expected| expected.as_str() == token),
-            ManagedShellKind::Zsh => self
-                .zsh_history_token_for_pane(output_pane_id)
-                .is_some_and(|expected| expected.as_str() == token),
+            ManagedShellKind::Fish => self.active_managed_shell_token_matches(
+                output_pane_id,
+                mez_terminal::ManagedShellAdapter::Fish,
+                token,
+            ),
+            ManagedShellKind::Zsh => self.active_managed_shell_token_matches(
+                output_pane_id,
+                mez_terminal::ManagedShellAdapter::Zsh,
+                token,
+            ),
             ManagedShellKind::Bash => false,
         };
         if transaction.pane_id != output_pane_id || !token_matches {
@@ -959,13 +1110,13 @@ impl RuntimeSessionService {
         let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
             return Ok(0);
         };
-        let receiver_token_matches = self.active_bash_receiver_token_matches(output_pane_id, token)
-            || self
-                .fish_receiver_token_for_pane(output_pane_id)
-                .is_some_and(|expected| expected.as_str() == token)
-            || self
-                .zsh_history_token_for_pane(output_pane_id)
-                .is_some_and(|expected| expected.as_str() == token);
+        let receiver_token_matches = [
+            mez_terminal::ManagedShellAdapter::Bash,
+            mez_terminal::ManagedShellAdapter::Fish,
+            mez_terminal::ManagedShellAdapter::Zsh,
+        ]
+        .into_iter()
+        .any(|shell| self.active_managed_shell_token_matches(output_pane_id, shell, token));
         if transaction.pane_id != output_pane_id || !receiver_token_matches {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
@@ -1103,10 +1254,11 @@ impl RuntimeSessionService {
         output_pane_id: &str,
         token: &str,
     ) -> Result<usize> {
-        if self
-            .zsh_history_token_for_pane(output_pane_id)
-            .is_none_or(|expected| expected.as_str() != token)
-        {
+        if !self.active_managed_shell_token_matches(
+            output_pane_id,
+            mez_terminal::ManagedShellAdapter::Zsh,
+            token,
+        ) {
             return Ok(0);
         }
         let Some(marker) = self
@@ -1184,22 +1336,28 @@ impl RuntimeSessionService {
         let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
             return Ok(0);
         };
-        let fish_receiver_installed = self
-            .fish_receiver_token_for_pane(output_pane_id)
-            .is_some_and(|expected| expected.as_str() == token);
-        let zsh_receiver_installed = self
-            .zsh_history_token_for_pane(output_pane_id)
-            .is_some_and(|expected| expected.as_str() == token);
+        let fish_receiver_installed = self.active_managed_shell_token_matches(
+            output_pane_id,
+            mez_terminal::ManagedShellAdapter::Fish,
+            token,
+        );
+        let zsh_receiver_installed = self.active_managed_shell_token_matches(
+            output_pane_id,
+            mez_terminal::ManagedShellAdapter::Zsh,
+            token,
+        );
         let handoff_matches = self
             .process
             .pane_shell_handoffs
             .get(output_pane_id)
             .is_some_and(|handoff| handoff.bootstrap_marker.as_deref() == Some(marker));
-        let receiver_token_matches = self.active_bash_receiver_token_matches(output_pane_id, token)
-            || self
-                .fish_receiver_token_for_pane(output_pane_id)
-                .is_some_and(|expected| expected.as_str() == token)
-            || zsh_receiver_installed;
+        let receiver_token_matches = [
+            mez_terminal::ManagedShellAdapter::Bash,
+            mez_terminal::ManagedShellAdapter::Fish,
+            mez_terminal::ManagedShellAdapter::Zsh,
+        ]
+        .into_iter()
+        .any(|shell| self.active_managed_shell_token_matches(output_pane_id, shell, token));
         if transaction.pane_id != output_pane_id || !receiver_token_matches || !handoff_matches {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
@@ -1287,13 +1445,13 @@ impl RuntimeSessionService {
         let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
             return Ok(0);
         };
-        let receiver_token_matches = self.active_bash_receiver_token_matches(output_pane_id, token)
-            || self
-                .fish_receiver_token_for_pane(output_pane_id)
-                .is_some_and(|expected| expected.as_str() == token)
-            || self
-                .zsh_history_token_for_pane(output_pane_id)
-                .is_some_and(|expected| expected.as_str() == token);
+        let receiver_token_matches = [
+            mez_terminal::ManagedShellAdapter::Bash,
+            mez_terminal::ManagedShellAdapter::Fish,
+            mez_terminal::ManagedShellAdapter::Zsh,
+        ]
+        .into_iter()
+        .any(|shell| self.active_managed_shell_token_matches(output_pane_id, shell, token));
         if transaction.pane_id != output_pane_id
             || !receiver_token_matches
             || !self
@@ -1348,12 +1506,16 @@ impl RuntimeSessionService {
         marker: &str,
         receiver_exit_code: i32,
     ) -> Result<usize> {
-        let fish_token_matches = self
-            .fish_receiver_token_for_pane(output_pane_id)
-            .is_some_and(|expected| expected.as_str() == token);
-        let zsh_token_matches = self
-            .zsh_history_token_for_pane(output_pane_id)
-            .is_some_and(|expected| expected.as_str() == token);
+        let fish_token_matches = self.active_managed_shell_token_matches(
+            output_pane_id,
+            mez_terminal::ManagedShellAdapter::Fish,
+            token,
+        );
+        let zsh_token_matches = self.active_managed_shell_token_matches(
+            output_pane_id,
+            mez_terminal::ManagedShellAdapter::Zsh,
+            token,
+        );
         if !fish_token_matches && !zsh_token_matches {
             return self.observe_shell_receiver_complete(
                 output_pane_id,
@@ -1400,17 +1562,15 @@ impl RuntimeSessionService {
             .pane_shell_interaction_generations
             .get(output_pane_id)
             .copied();
-        let shell_token_matches = match handoff.shell() {
-            ManagedShellKind::Bash => {
-                self.active_bash_receiver_token_matches(output_pane_id, token)
-            }
-            ManagedShellKind::Fish => self
-                .fish_receiver_token_for_pane(output_pane_id)
-                .is_some_and(|expected| expected.as_str() == token),
-            ManagedShellKind::Zsh => self
-                .zsh_history_token_for_pane(output_pane_id)
-                .is_some_and(|expected| expected.as_str() == token),
-        };
+        let shell_token_matches = self.active_managed_shell_token_matches(
+            output_pane_id,
+            match handoff.shell() {
+                ManagedShellKind::Bash => mez_terminal::ManagedShellAdapter::Bash,
+                ManagedShellKind::Fish => mez_terminal::ManagedShellAdapter::Fish,
+                ManagedShellKind::Zsh => mez_terminal::ManagedShellAdapter::Zsh,
+            },
+            token,
+        );
         if handoff.shell() != shell || !shell_token_matches {
             return Ok(0);
         }

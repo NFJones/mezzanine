@@ -259,6 +259,62 @@ fn shell_integration_bash_generates_foreign_adapter_source() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Verifies explicit Fish and Zsh integration commands emit only process-local
+/// adapter source for their native interactive editors.
+///
+/// Both definitions must publish prompt-scoped candidates and understand the
+/// source-free challenge record without referring to host startup artifacts or
+/// editing user configuration files.
+#[test]
+fn shell_integration_fish_and_zsh_generate_foreign_adapter_source() {
+    for shell in ["fish", "zsh"] {
+        let (env, home) = test_env(&format!("shell-integration-{shell}"));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        run_with_plain(
+            vec![
+                "mez".to_string(),
+                "shell-integration".to_string(),
+                shell.to_string(),
+            ],
+            env,
+            false,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let output = String::from_utf8(stdout).unwrap();
+        assert!(
+            output.contains("foreign-adapter-candidate"),
+            "{shell}: {output}"
+        );
+        assert!(
+            output.contains("foreign-challenge-completed"),
+            "{shell}: {output}"
+        );
+        match shell {
+            "fish" => {
+                assert!(output.contains("MEZ_FISH_FOREIGN_CHALLENGE"), "{output}");
+                assert!(output.contains("commandline --replace"), "{output}");
+                assert!(!output.contains("--init-command"), "{output}");
+            }
+            "zsh" => {
+                assert!(output.contains("MEZ_ZSH_FOREIGN_CHALLENGE"), "{output}");
+                assert!(
+                    output.contains("zle -N __mez_zsh_private_widget"),
+                    "{output}"
+                );
+                assert!(!output.contains("MEZ_ZSH_MANAGED_ZDOTDIR"), "{output}");
+            }
+            _ => unreachable!(),
+        }
+        assert!(stderr.is_empty());
+        let _ = fs::remove_dir_all(home);
+    }
+}
+
 /// Verifies clap renders command-local help while preserving the legacy
 /// no-subcommand config usage path.
 ///

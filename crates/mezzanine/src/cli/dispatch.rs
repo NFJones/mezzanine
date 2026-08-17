@@ -10,7 +10,8 @@ use super::env::CliArgv;
 use super::{
     CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, MezError, OsString,
     PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, ensure_private_socket_directory,
-    generate_managed_foreign_bash_adapter_source, io, json_escape,
+    generate_managed_foreign_bash_adapter_source, generate_managed_foreign_fish_adapter_source,
+    generate_managed_foreign_zsh_adapter_source, io, json_escape,
     prune_stale_socket_files_in_directory, run_attach, run_auth, run_config, run_control_request,
     run_issue, run_list, run_mcp, run_memory, run_new, run_sandbox, run_serve, run_snapshot,
 };
@@ -162,9 +163,15 @@ pub async fn run_with<W: Write, E: Write>(
                 "{}",
                 generate_managed_foreign_bash_adapter_source()?
             )?,
+            "fish" => write!(
+                stdout,
+                "{}",
+                generate_managed_foreign_fish_adapter_source()?
+            )?,
+            "zsh" => write!(stdout, "{}", generate_managed_foreign_zsh_adapter_source()?)?,
             _ => {
                 return Err(MezError::invalid_args(
-                    "shell-integration supports only bash",
+                    "shell-integration supports bash, fish, or zsh",
                 ));
             }
         },

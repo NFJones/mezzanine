@@ -4046,6 +4046,23 @@ released, and remove its temporary startup directory when the synchronous child
 handoff returns. Neither the host adapter token nor a host startup path MAY
 appear in foreign delivery.
 
+The opt-in foreign Fish and Zsh adapters MUST be generated with `mez
+shell-integration fish` and `mez shell-integration zsh`, respectively, and MAY
+be evaluated only by an explicit user action inside the matching nested shell.
+Each adapter MUST generate a fresh token and instance, preserve the visible
+prompt, and install only process-local editor and private-receiver integration.
+Fish MUST acquire its editor through its native command-line callback; Zsh MUST
+use the candidate-selected ZLE widget. Identity source and child staging MUST
+remain withheld behind the shell-native clear, hold, and frame-admission events.
+A managed Fish or Zsh child MUST receive a fresh child token and publish
+`ChildInstalled` before bootstrap is released. Fish MUST install the child
+receiver through its startup-suppressed `--init-command`. Zsh MUST stage an
+owner-only temporary `ZDOTDIR` in the foreign filesystem, use it to install the
+child receiver, and remove it after the synchronous child handoff returns.
+Certification MUST use the same generation-scoped foreground proofs required
+for Bash. Neither host Fish/Zsh tokens, host startup paths, nor host adapter
+admission state MAY cross the foreign boundary.
+
 Host process metadata MUST authorize non-interactive shell dispatch only when
 the observed foreground process group is either the original pane shell PID or
 process group, or a non-primary shell boundary certified for the current pane
