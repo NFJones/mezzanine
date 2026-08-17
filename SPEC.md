@@ -1857,11 +1857,16 @@ MUST carry a typed outcome: completed, cancelled, frame rejected, source
 failed, or child launch failed. Runtime MUST reject an unsupported version or
 wrong adapter/token before editor ownership is acquired, and a missing
 availability announcement MUST fail closed after a bounded wait without
-writing a handoff. Stale, duplicate, wrong-shell, wrong-marker, and
-wrong-generation events MUST be inert. Runtime MUST settle one handoff exactly
-once and MUST release queued foreground input only after authenticated parent
-readiness or fresh exact foreground ownership proof. Exit requests MUST be
-interpreted by that shared lifecycle owner: before DATA they MUST select only
+writing a handoff. Managed Fish MUST NOT dispatch bootstrap source until the
+current parent process publishes authenticated `AdapterAvailable` after
+installing its private wrapper receiver. Prompt readiness before availability
+MUST leave the existing bootstrap owner pending, and the first matching event
+MUST release that owner at most once. Stale, duplicate, wrong-shell,
+wrong-marker, and wrong-generation events MUST be inert. Runtime MUST settle
+one handoff exactly once and MUST release queued foreground input only after
+authenticated parent readiness or fresh exact foreground ownership proof.
+Exit requests MUST be interpreted by that shared lifecycle owner: before DATA
+they MUST select only
 authenticated cancellation, during payload or launch uncertainty they MUST
 retain intent without terminal text, and after authenticated `ChildInstalled`
 they MUST emit at most one generation-fenced child exit. A live agent-owned
@@ -4527,6 +4532,10 @@ canonical-safe physical lines. The receiver MUST validate each frame's sequence,
 declared byte count, and SHA-256 digest before acknowledging it, MUST reject
 duplicate, skipped, oversized, truncated, or digest-mismatched frames, and MUST
 restore the prior terminal mode and remove incomplete frame state on every exit.
+The canonical managed-Fish wrapper-receiver trigger MUST require the receiver's
+explicit raw acknowledgement before the first encoded source record can be
+written. Buffered startup, prompt, or other unrelated pane output MUST NOT
+satisfy that first-trigger wait.
 Managed Zsh private-source data MUST use the same bounded logical-frame pacing
 principle: physical RX2 FRAME and DATA records MUST stream without waits,
 validated FRAME_END records MUST require one fresh acknowledgement, and the

@@ -1400,19 +1400,7 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
         .unwrap();
     service.start_initial_pane_process(None).unwrap();
     wait_until_primary_shell_foreground(&mut service, "%1");
-    service.set_pane_readiness("%1", PaneReadinessState::PromptCandidate);
-    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
-    for _ in 0..200 {
-        let _ = service.poll_pane_outputs(8192).unwrap();
-        if !service.pane_bootstrap_is_pending_for_tests("%1") {
-            break;
-        }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-    }
-    assert!(
-        !service.pane_bootstrap_is_pending_for_tests("%1"),
-        "initial Fish bootstrap did not settle before dirty admission"
-    );
+    settle_initial_managed_fish_bootstrap(&mut service, "%1");
     service
         .write_input_to_pane(
             &primary,
@@ -1634,19 +1622,7 @@ fn runtime_fish_dirty_prompt_exit_before_receiver_installation_discards_draft() 
         .unwrap();
     service.start_initial_pane_process(None).unwrap();
     wait_until_primary_shell_foreground(&mut service, "%1");
-    service.set_pane_readiness("%1", PaneReadinessState::PromptCandidate);
-    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
-    for _ in 0..200 {
-        let _ = service.poll_pane_outputs(8192).unwrap();
-        if !service.pane_bootstrap_is_pending_for_tests("%1") {
-            break;
-        }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-    }
-    assert!(
-        !service.pane_bootstrap_is_pending_for_tests("%1"),
-        "initial Fish bootstrap did not settle before early-exit admission"
-    );
+    settle_initial_managed_fish_bootstrap(&mut service, "%1");
     service
         .write_input_to_pane(
             &primary,
@@ -3111,6 +3087,136 @@ fn find_test_shell(shell_name: &str, known_locations: &[&str]) -> Option<PathBuf
         .map(|directory| directory.join(shell_name))
         .chain(known_locations.iter().map(|path| PathBuf::from(*path)))
         .find(|candidate| candidate.is_file())
+}
+
+/// Waits for authenticated managed-Fish startup to release and settle the
+/// initial prompt-ready bootstrap transaction.
+///
+/// Prompt readiness can precede receiver installation, especially on Darwin.
+/// The readiness pass must therefore leave bootstrap pending until Fish's
+/// authenticated availability event is observed from pane output.
+fn settle_initial_managed_fish_bootstrap(service: &mut RuntimeSessionService, pane_id: &str) {
+    service.set_pane_readiness(pane_id, PaneReadinessState::PromptCandidate);
+    assert_eq!(
+        service.maybe_bootstrap_ready_panes().unwrap(),
+        0,
+        "managed Fish bootstrap must wait for authenticated adapter availability"
+    );
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if !service.pane_bootstrap_is_pending_for_tests(pane_id) {
+            return;
+        }
+        wait_for_pane_process_activity(service, pane_id, Duration::from_millis(10));
+    }
+    panic!(
+        "initial managed Fish bootstrap did not settle after adapter availability; screen={}",
+        service
+            .process_pane_screen(pane_id)
+            .map(|screen| screen.normal_content_lines().join("\\n"))
+            .unwrap_or_else(|| "<missing>".to_string())
+    );
+}
+
+/// Verifies managed Fish bootstrap delivery requires authenticated receiver
+/// availability from the current parent process and remains idempotent.
+///
+/// Prompt readiness and direct dispatch attempts must create no transaction
+/// before availability. A stale token cannot release bootstrap, one valid
+/// event releases exactly one owner, duplicate availability cannot dispatch a
+/// second owner, and pane teardown clears the process-scoped readiness state.
+#[test]
+fn runtime_managed_fish_bootstrap_requires_authenticated_adapter_availability() {
+    let Some(fish_path) = find_test_shell(
+        "fish",
+        &[
+            "/usr/bin/fish",
+            "/usr/local/bin/fish",
+            "/opt/homebrew/bin/fish",
+        ],
+    ) else {
+        eprintln!("skipping managed Fish availability regression because fish is unavailable");
+        return;
+    };
+    let mut service = test_runtime_service();
+    service.session.shell = ResolvedShell::new(fish_path, ShellSource::ShellEnv).into();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let pane_id = "%1";
+    let token = service
+        .fish_receiver_token_for_pane(pane_id)
+        .cloned()
+        .expect("managed Fish startup should install an authentication token");
+    service.set_pane_readiness(pane_id, PaneReadinessState::PromptCandidate);
+
+    service.dispatch_bootstrap_to_pane(pane_id).unwrap();
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 0);
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    assert!(service.pane_bootstrap_is_pending_for_tests(pane_id));
+    assert!(!service.managed_fish_adapter_is_ready_for_tests(pane_id));
+
+    let availability = mez_terminal::ManagedShellProtocolEvent::AdapterAvailable { trigger: None };
+    assert_eq!(
+        service
+            .observe_managed_shell_protocol_event(
+                pane_id,
+                mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                mez_terminal::ManagedShellAdapter::Fish,
+                "00000000000000000000000000000000",
+                &availability,
+            )
+            .unwrap(),
+        0
+    );
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    assert!(!service.managed_fish_adapter_is_ready_for_tests(pane_id));
+
+    assert_eq!(
+        service
+            .observe_managed_shell_protocol_event(
+                pane_id,
+                mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                mez_terminal::ManagedShellAdapter::Fish,
+                token.as_str(),
+                &availability,
+            )
+            .unwrap(),
+        1
+    );
+    assert!(service.managed_fish_adapter_is_ready_for_tests(pane_id));
+    let markers = service
+        .running_shell_transactions_for_tests()
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(markers.len(), 1);
+
+    assert_eq!(
+        service
+            .observe_managed_shell_protocol_event(
+                pane_id,
+                mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                mez_terminal::ManagedShellAdapter::Fish,
+                token.as_str(),
+                &availability,
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service
+            .running_shell_transactions_for_tests()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        markers
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    service.cleanup_removed_pane_runtime_state(pane_id).unwrap();
+    assert!(!service.managed_fish_adapter_is_ready_for_tests(pane_id));
 }
 
 /// Verifies managed Fish and Zsh retain ownership of deferred bootstrap work

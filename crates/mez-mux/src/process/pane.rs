@@ -53,6 +53,8 @@ pub const SHELL_INPUT_RECORD_ACK_BYTE: u8 = 0x1e;
 #[doc(hidden)]
 pub fn shell_input_record_requires_ack(record: &[u8]) -> bool {
     record.ends_with(b"printf '\\036'\n")
+        || (record.starts_with(b"__mez_agent_wrapper_receive '__MEZ_WRAPPER_SOURCE_END_")
+            && record.ends_with(b"__'\n"))
 }
 
 /// Reports whether one deferred receiver record completes a logical frame.
@@ -86,6 +88,28 @@ mod tests {
     #[test]
     fn sync_pane_input_write_timeout_is_ten_seconds() {
         assert_eq!(PANE_INPUT_WRITE_STALL_TIMEOUT, Duration::from_secs(10));
+    }
+
+    /// Verifies only the canonical generated Fish receiver trigger waits for
+    /// the receiver's raw acknowledgement before subsequent source records.
+    ///
+    /// Startup and prompt output can already be buffered when the trigger is
+    /// written, so generic output activity must not release the first Base64
+    /// record. Similar user commands must retain ordinary output pacing.
+    #[test]
+    fn generated_fish_receiver_trigger_requires_explicit_acknowledgement() {
+        assert!(shell_input_record_requires_ack(
+            b"__mez_agent_wrapper_receive '__MEZ_WRAPPER_SOURCE_END_marker-1__'\n"
+        ));
+        assert!(!shell_input_record_requires_ack(
+            b"__mez_agent_wrapper_receive 'ordinary-user-argument'\n"
+        ));
+        assert!(!shell_input_record_requires_ack(
+            b"printf ordinary-output\n"
+        ));
+        assert!(shell_input_record_requires_ack(
+            b"encoded-wrapper-chunk; printf '\\036'\n"
+        ));
     }
 
     /// Verifies physical sidecar chunks advance without acknowledgements until

@@ -77,7 +77,38 @@ impl RuntimeSessionService {
                         trigger,
                     );
                 }
-                if managed_shell != ManagedShellKind::Bash {
+                if managed_shell == ManagedShellKind::Fish {
+                    let Some(primary_process_id) =
+                        self.primary_pid_for_live_pane_process(output_pane_id)
+                    else {
+                        return Ok(0);
+                    };
+                    let newly_ready = matches!(
+                        self.process.pane_fish_admissions.get(output_pane_id),
+                        Some(crate::runtime::processes::RuntimeManagedFishAdmission::Pending {
+                            primary_process_id: expected,
+                        }) if *expected == primary_process_id
+                    );
+                    let already_ready = matches!(
+                        self.process.pane_fish_admissions.get(output_pane_id),
+                        Some(crate::runtime::processes::RuntimeManagedFishAdmission::Ready {
+                            primary_process_id: expected,
+                            ..
+                        }) if *expected == primary_process_id
+                    );
+                    if !newly_ready && !already_ready {
+                        return Ok(0);
+                    }
+                    if newly_ready {
+                        self.process.pane_fish_admissions.insert(
+                            output_pane_id.to_string(),
+                            crate::runtime::processes::RuntimeManagedFishAdmission::Ready {
+                                primary_process_id,
+                                version,
+                            },
+                        );
+                        let _ = self.maybe_bootstrap_ready_panes()?;
+                    }
                     return Ok(1);
                 }
                 let Some(primary_process_id) =

@@ -521,6 +521,23 @@ pub(super) enum RuntimeManagedBashAdmission {
     },
 }
 
+/// Authenticated parent-shell receiver readiness for one managed Fish pane.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum RuntimeManagedFishAdmission {
+    /// Startup initialization exists, but its receiver is not yet installed.
+    Pending {
+        /// Exact primary process whose startup source must publish availability.
+        primary_process_id: u32,
+    },
+    /// The parent installed its private wrapper receiver and announced support.
+    Ready {
+        /// Exact primary process that published this admission state.
+        primary_process_id: u32,
+        /// Negotiated semantic protocol version.
+        version: u16,
+    },
+}
+
 /// Authenticated parent-shell admission state for one managed zsh pane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum RuntimeManagedZshAdmission {
@@ -575,6 +592,8 @@ pub(crate) struct RuntimeProcessComponent {
     /// Managed passive Fish integration state keyed by pane process.
     pane_fish_compatibility:
         std::collections::BTreeMap<String, fish_compat::ManagedFishCompatibility>,
+    /// Authenticated managed-Fish receiver readiness keyed by pane id.
+    pane_fish_admissions: std::collections::BTreeMap<String, RuntimeManagedFishAdmission>,
     /// Managed Bash private receiver state keyed by pane id.
     pane_bash_compatibility:
         std::collections::BTreeMap<String, bash_compat::ManagedBashCompatibility>,
@@ -1077,6 +1096,7 @@ impl RuntimeSessionService {
         self.process
             .pane_agent_subshell_parent_return_pending
             .remove(pane_id);
+        self.process.pane_fish_admissions.remove(pane_id);
         if let Some(mut handoff) = self.process.pane_managed_shell_handoffs.remove(pane_id) {
             let transition =
                 reduce_managed_shell_handoff(&mut handoff, ManagedShellHandoffEvent::PaneRemoved);
@@ -2269,6 +2289,11 @@ impl RuntimeSessionService {
         self.pane_bootstrap_is_pending(pane_id)
     }
 
+    /// Reports authenticated managed-Fish receiver readiness to runtime tests.
+    pub(crate) fn managed_fish_adapter_is_ready_for_tests(&self, pane_id: &str) -> bool {
+        self.managed_fish_adapter_is_ready_for_pane(pane_id)
+    }
+
     /// Returns the process manager for integration-test observation.
     pub(crate) fn pane_processes(&self) -> &PaneProcessManager {
         &self.process.pane_processes
@@ -2600,6 +2625,18 @@ impl RuntimeSessionService {
             .pane_fish_compatibility
             .get(pane_id)
             .map(fish_compat::ManagedFishCompatibility::token)
+    }
+
+    /// Reports whether the current managed Fish parent installed its receiver.
+    pub(super) fn managed_fish_adapter_is_ready_for_pane(&self, pane_id: &str) -> bool {
+        let current_primary_process_id = self.primary_pid_for_live_pane_process(pane_id);
+        matches!(
+            self.process.pane_fish_admissions.get(pane_id),
+            Some(RuntimeManagedFishAdmission::Ready {
+                primary_process_id,
+                ..
+            }) if Some(*primary_process_id) == current_primary_process_id
+        )
     }
 
     /// Runs the poll pane processes operation for this subsystem.
@@ -3269,6 +3306,12 @@ impl RuntimeSessionService {
             self.process
                 .pane_fish_compatibility
                 .insert(descriptor.pane_id.to_string(), compatibility);
+            self.process.pane_fish_admissions.insert(
+                descriptor.pane_id.to_string(),
+                RuntimeManagedFishAdmission::Pending {
+                    primary_process_id: primary_pid,
+                },
+            );
         }
         if let Some(compatibility) = bash_compatibility {
             self.process
@@ -3834,6 +3877,7 @@ impl RuntimeSessionService {
             .pane_current_working_directories
             .remove(pane_id);
         self.process.pane_fish_compatibility.remove(pane_id);
+        self.process.pane_fish_admissions.remove(pane_id);
         self.process.pane_bash_compatibility.remove(pane_id);
         self.process.pane_bash_admissions.remove(pane_id);
         self.process.pane_zsh_compatibility.remove(pane_id);
