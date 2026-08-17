@@ -649,6 +649,111 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
     let _ = fs::remove_dir_all(audit_root);
 }
 
+/// Verifies a protocol-level MCP call failure remains an ordinary action
+/// failure that the model can inspect and recover from.
+///
+/// A malformed response to one tool call does not prove that every tool on
+/// the discovered server is unavailable. The runtime must therefore preserve
+/// the server catalog, retain the failed result as continuation context, and
+/// queue the same bounded model-recovery path used for failed shell commands.
+#[tokio::test]
+async fn runtime_mcp_call_failure_queues_recovery_without_disabling_server() {
+    let mut service = test_runtime_service();
+    let valid_response = r#"{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"hello from mcp"}],"structuredContent":{"status":"ok"},"isError":false}}"#;
+    let script = runtime_mcp_fixture_script(false).replace(valid_response, "not-json");
+    service
+        .replace_config_layers_async(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "[mcp_servers.fixture]\ncommand = \"/bin/sh\"\nargs = [\"-c\", {}]\napproval = \"allow\"\ntool_timeout_ms = 100\n",
+                toml_string(&script)
+            ),
+        }])
+        .await
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-mcp-failure","input":"call @fixture echo tool"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "calling mcp".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "m1".to_string(),
+                    rationale: "call mcp".to_string(),
+                    payload: mez_agent::AgentActionPayload::McpCall {
+                        server: "fixture".to_string(),
+                        tool: "echo".to_string(),
+                        arguments_json: r#"{"message":"hello"}"#.to_string(),
+                    },
+                }],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+
+    let execution = service
+        .execute_agent_turn_with_provider_async(
+            "turn-1",
+            &provider,
+            ModelProfile {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                reasoning_profile: None,
+                latency_preference: None,
+                multimodal_required: false,
+                provider_options: std::collections::BTreeMap::new(),
+                safety_tier: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    assert_eq!(
+        service.mcp_registry().list_servers()[0].status,
+        mez_agent::mcp::McpServerStatus::Available
+    );
+    assert_eq!(
+        service.mcp_registry().prompt_summary().available_tools[0].tool_name,
+        "echo"
+    );
+    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
+    assert!(context.blocks().iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block.content.contains("[action_result m1 mcp_call failed]")
+    }));
+}
+
 /// Verifies full-access mode satisfies MCP tool prompt approval while still
 /// executing the call through the normal MCP registry and transport path.
 ///
