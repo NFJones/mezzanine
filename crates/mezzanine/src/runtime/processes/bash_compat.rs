@@ -155,17 +155,23 @@ pub(super) fn managed_foreign_bash_child_staging_source(
     let marker = mez_agent::shell_quote(bootstrap_marker);
     let encoded = mez_agent::shell_quote(&encoded_rcfile);
     format!(
-        "umask 077\n\
-MEZ_FOREIGN_BASH_DIR=${{TMPDIR:-/tmp}}/{directory_name}\n\
-command mkdir -m 700 -- \"$MEZ_FOREIGN_BASH_DIR\" || return 70\n\
-MEZ_FOREIGN_BASH_RCFILE=$MEZ_FOREIGN_BASH_DIR/bashrc\n\
-command printf '%s' {encoded} | command base64 -d > \"$MEZ_FOREIGN_BASH_RCFILE\" 2>/dev/null || command printf '%s' {encoded} | command base64 -D > \"$MEZ_FOREIGN_BASH_RCFILE\" 2>/dev/null || {{ command rm -rf -- \"$MEZ_FOREIGN_BASH_DIR\"; return 71; }}\n\
-command chmod 600 -- \"$MEZ_FOREIGN_BASH_RCFILE\" || {{ command rm -rf -- \"$MEZ_FOREIGN_BASH_DIR\"; return 72; }}\n\
-# child-token:{}\n\
-MEZ_BASH_RECEIVER_INSTALL_MARKER={marker} {shell} --noprofile --rcfile \"$MEZ_FOREIGN_BASH_RCFILE\" -i\n\
+        "__mez_foreign_bash_stage_child() {{\n\
+    umask 077\n\
+    MEZ_FOREIGN_BASH_DIR=${{TMPDIR:-/tmp}}/{directory_name}\n\
+    command mkdir -m 700 -- \"$MEZ_FOREIGN_BASH_DIR\" || return 70\n\
+    MEZ_FOREIGN_BASH_RCFILE=$MEZ_FOREIGN_BASH_DIR/bashrc\n\
+    command printf '%s' {encoded} | command base64 -d > \"$MEZ_FOREIGN_BASH_RCFILE\" 2>/dev/null || command printf '%s' {encoded} | command base64 -D > \"$MEZ_FOREIGN_BASH_RCFILE\" 2>/dev/null || {{ command rm -rf -- \"$MEZ_FOREIGN_BASH_DIR\"; return 71; }}\n\
+    command chmod 600 -- \"$MEZ_FOREIGN_BASH_RCFILE\" || {{ command rm -rf -- \"$MEZ_FOREIGN_BASH_DIR\"; return 72; }}\n\
+    # child-token:{}\n\
+    MEZ_BASH_RECEIVER_INSTALL_MARKER={marker} {shell} --noprofile --rcfile \"$MEZ_FOREIGN_BASH_RCFILE\" -i\n\
+    MEZ_FOREIGN_BASH_STATUS=$?\n\
+    command rm -rf -- \"$MEZ_FOREIGN_BASH_DIR\" || :\n\
+    return \"$MEZ_FOREIGN_BASH_STATUS\"\n\
+}}\n\
+__mez_foreign_bash_stage_child\n\
 MEZ_FOREIGN_BASH_STATUS=$?\n\
-command rm -rf -- \"$MEZ_FOREIGN_BASH_DIR\"\n\
-return \"$MEZ_FOREIGN_BASH_STATUS\"",
+unset -f __mez_foreign_bash_stage_child\n\
+(exit \"$MEZ_FOREIGN_BASH_STATUS\")",
         child_token.as_str()
     )
 }
@@ -542,6 +548,58 @@ exit\n",
             "{stdout:?}"
         );
         assert_eq!(stdout.bytes().filter(|byte| *byte == 0x1e).count(), 3);
+    }
+
+    /// Verifies foreign child staging reports a setup failure through the
+    /// authenticated parent-ready event instead of returning from the receiver
+    /// callback before its completion protocol can run.
+    #[test]
+    fn managed_bash_receiver_reports_foreign_child_staging_setup_failure() {
+        if !Path::new("/bin/bash").exists() {
+            return;
+        }
+        let token = "0123456789abcdef0123456789abcdef";
+        let child_token = MarkerToken::new("fedcba9876543210fedcba9876543210").unwrap();
+        let proof = "00112233445566778899aabbccddeeff";
+        let marker = "foreign-staging-failure-marker";
+        let source = format!(
+            "TMPDIR=/dev/null\n{}",
+            managed_foreign_bash_child_staging_source(Path::new("/bin/bash"), marker, &child_token,)
+        );
+        let digest = Sha256::digest(source.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&source);
+        let input = format!(
+            "\x07MEZ_BASH_RX2_BEGIN {token} {marker} {} {digest} 1 {proof}\n\
+MEZ_BASH_RX2_DATA {token} {marker} 0 {encoded}\n\
+MEZ_BASH_RX2_END {token} {marker} 1 {} {digest}\n\
+printf '__MEZ_PARENT_AFTER_STAGING_FAILURE__\\n'\n\
+exit\n",
+            source.len(),
+            source.len(),
+        );
+
+        let output =
+            run_managed_bash_receiver_exchange("foreign-staging-failure", input.as_bytes());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(
+            output.status.success(),
+            "stdout={stdout:?} stderr={stderr:?}"
+        );
+        assert!(
+            stdout.contains("__MEZ_PARENT_AFTER_STAGING_FAILURE__"),
+            "{stdout:?}"
+        );
+        assert!(
+            stdout.contains(&format!(
+                "mez_event=parent-ready;mez_marker={marker};mez_outcome=source-failed;mez_status=70;mez_proof={proof}"
+            )),
+            "{stdout:?}"
+        );
     }
 
     /// Verifies the managed Bash receiver evaluates an authenticated frame
