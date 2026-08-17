@@ -1684,18 +1684,36 @@ impl RuntimeSessionService {
             .pane_shell_handoffs
             .get_mut(output_pane_id)
             .and_then(|handoff| handoff.deferred_bootstrap_wrapper.take());
-        let Some(wrapper) = wrapper else {
-            return self.fail_shell_transaction_protocol_violation(
-                marker,
-                transaction,
-                "unexpected-receiver-installed",
-                "managed child reported receiver installation without a deferred bootstrap trigger",
-            );
-        };
-        if let Err(error) = self.write_runtime_pane_shell_input(output_pane_id, wrapper.as_bytes())
-        {
-            self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
-            return Err(error);
+        if let Some(wrapper) = wrapper {
+            if let Err(error) =
+                self.write_runtime_pane_shell_input(output_pane_id, wrapper.as_bytes())
+            {
+                self.fail_shell_transactions_for_pane_write_failure(
+                    output_pane_id,
+                    error.message(),
+                )?;
+                return Err(error);
+            }
+            self.record_bootstrap_sent(output_pane_id, marker)?;
+        } else {
+            let bootstrap_was_prebuffered = self
+                .process
+                .pane_foreign_shell_boundaries
+                .get(output_pane_id)
+                .is_some_and(|boundary| {
+                    boundary.adapter.is_none()
+                        && boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
+                        && boundary.loader_ready
+                        && boundary.loader_marker.is_some()
+                });
+            if !bootstrap_was_prebuffered {
+                return self.fail_shell_transaction_protocol_violation(
+                    marker,
+                    transaction,
+                    "unexpected-receiver-installed",
+                    "managed child reported receiver installation without a deferred or prebuffered bootstrap trigger",
+                );
+            }
         }
         self.enter_agent_subshell(output_pane_id);
         if fish_receiver_installed || zsh_receiver_installed {
@@ -1704,7 +1722,6 @@ impl RuntimeSessionService {
             self.take_agent_subshell_command_exit(output_pane_id);
         }
         self.remember_hidden_shell_render_suppression(output_pane_id);
-        self.record_bootstrap_sent(output_pane_id, marker)?;
         Ok(1)
     }
 

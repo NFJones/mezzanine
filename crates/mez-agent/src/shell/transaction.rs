@@ -2306,6 +2306,25 @@ pub struct ForeignShellLoaderInput {
     pub payload: String,
 }
 
+/// Renders the fixed syntax-neutral rendezvous command for one foreign loader.
+///
+/// Runtime may queue this command immediately behind its identity probe because
+/// it contains no generated child source or shell-specific assumptions. The
+/// loader publishes its nonce before accepting payload records, preserving the
+/// admission boundary while avoiding a host round trip between identity
+/// discovery and loader startup.
+pub fn dependency_free_foreign_shell_loader_command(
+    marker: &str,
+) -> AgentShellValidationResult<String> {
+    validate_shell_marker_token(marker)?;
+    let loader_source = "umask 077;p=${TMPDIR:-/tmp}/.mez-$1;mkdir -m 700 \"$p\"||exit 70;trap 'r=$?;rm -rf \"$p\";exit $r' 0;f=$p/p;printf '\\033]133;R;mez_foreign_loader=ready;mez_marker=%s\\033\\\\' \"$1\";z=;while IFS= read -r x;do if [ \"$x\" = \"MEZ_LOADER_END_$1\" ];then z=1;printf '\\036';break;fi;printf %s \"$x\">>\"$f\"||exit 71;printf '\\036';done;[ \"$z\" ]||exit 72;q=-d;printf ''|base64 -d>/dev/null 2>&1||q=-D;base64 \"$q\"<\"$f\">\"$p/e\"||exit 73;chmod 600 \"$p/e\"||exit 74;MEZ_FOREIGN_LOADER_DIR=$p /bin/sh \"$p/e\";r=$?;printf '\\033]133;R;mez_foreign_loader=exited;mez_marker=%s;mez_status=%s\\033\\\\' \"$1\" \"$r\";exit \"$r\"";
+    Ok(format!(
+        "/bin/sh -c {} sh {}\n",
+        shell_quote(loader_source),
+        shell_quote(marker)
+    ))
+}
+
 /// Renders a dependency-free loader for generated source inside a foreign shell.
 ///
 /// The syntax-neutral `/bin/sh` command publishes a marker-correlated ready
@@ -2358,12 +2377,7 @@ exit \"$MEZ_FOREIGN_STATUS\"\n",
     );
     let encoded_entry = base64::engine::general_purpose::STANDARD.encode(entry_source.as_bytes());
     let nonce = marker;
-    let loader_source = "umask 077;p=${TMPDIR:-/tmp}/.mez-$1;mkdir -m 700 \"$p\"||exit 70;trap 'r=$?;rm -rf \"$p\";exit $r' 0;f=$p/p;printf '\\033]133;R;mez_foreign_loader=ready;mez_marker=%s\\033\\\\' \"$1\";z=;while IFS= read -r x;do if [ \"$x\" = \"MEZ_LOADER_END_$1\" ];then z=1;printf '\\036';break;fi;printf %s \"$x\">>\"$f\"||exit 71;printf '\\036';done;[ \"$z\" ]||exit 72;q=-d;printf ''|base64 -d>/dev/null 2>&1||q=-D;base64 \"$q\"<\"$f\">\"$p/e\"||exit 73;chmod 600 \"$p/e\"||exit 74;MEZ_FOREIGN_LOADER_DIR=$p /bin/sh \"$p/e\";r=$?;printf '\\033]133;R;mez_foreign_loader=exited;mez_marker=%s;mez_status=%s\\033\\\\' \"$1\" \"$r\";exit \"$r\"";
-    let command = format!(
-        "/bin/sh -c {} sh {}\n",
-        shell_quote(loader_source),
-        shell_quote(nonce)
-    );
+    let command = dependency_free_foreign_shell_loader_command(nonce)?;
     let mut payload = String::new();
     for chunk in encoded_entry
         .as_bytes()

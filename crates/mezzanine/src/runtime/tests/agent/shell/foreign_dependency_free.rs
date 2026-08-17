@@ -53,6 +53,19 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
         identity_input.starts_with("/bin/sh -c "),
         "{identity_input:?}"
     );
+    assert_eq!(
+        identity_input
+            .lines()
+            .filter(|line| line.starts_with("/bin/sh -c "))
+            .count(),
+        2,
+        "identity discovery and loader startup should be pipelined in one pane write"
+    );
+    let loader_command = identity_input
+        .lines()
+        .nth(1)
+        .expect("the pipelined write should contain the loader command");
+    assert!(loader_command.len() <= 700, "{loader_command:?}");
 
     let (identity_marker, identity_turn_id) = service
         .running_shell_transactions_for_tests()
@@ -86,16 +99,32 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
         .unwrap();
     transaction.observed_output_bytes = identity_output.len();
     transaction.observed_output_preview = identity_output;
-    service
-        .observe_agent_shell_transaction_end(
-            &pane_id,
-            &identity_marker,
-            &identity_turn_id,
-            &format!("agent-{pane_id}"),
-            &pane_id,
-            0,
-        )
-        .unwrap();
+    let loader_marker = service
+        .foreign_shell_loader_marker_for_tests(&pane_id)
+        .expect("dependency-free loader should retain its bounded nonce")
+        .to_string();
+    assert_eq!(loader_marker.len(), 32);
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[
+                    TerminalOscEvent::ShellTransactionEnd {
+                        marker: identity_marker.clone(),
+                        turn_id: identity_turn_id.clone(),
+                        agent_id: format!("agent-{pane_id}"),
+                        pane_id: pane_id.clone(),
+                        exit_code: 0,
+                    },
+                    TerminalOscEvent::ForeignShellLoaderReady {
+                        marker: loader_marker.clone(),
+                    },
+                ],
+            )
+            .unwrap(),
+        2,
+        "one SSH output batch should settle identity and admit the queued loader"
+    );
 
     assert_eq!(
         service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
@@ -108,56 +137,24 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
             .any(|transaction| transaction.kind == RunningShellTransactionKind::Bootstrap),
         "dependency-free child bootstrap should be registered"
     );
-    let loader_marker = service
-        .foreign_shell_loader_marker_for_tests(&pane_id)
-        .expect("dependency-free loader should retain its bounded nonce")
-        .to_string();
-    assert_eq!(loader_marker.len(), 32);
     let launch_effects = service.drain_pane_io_transition().side_effects;
     let launch_inputs = pane_input_effects(&launch_effects);
-    assert_eq!(launch_inputs.len(), 1);
-    let launch_input = String::from_utf8_lossy(launch_inputs[0].pane_input_parts().1);
-    assert!(launch_input.starts_with("/bin/sh -c "), "{launch_input:?}");
-    assert!(launch_input.len() <= 700, "{launch_input:?}");
-    assert!(
-        !launch_input.contains("MEZ_BASH_RX2_DATA"),
-        "{launch_input:?}"
-    );
-
     assert_eq!(
-        service
-            .observe_agent_shell_transaction_events(
-                &pane_id,
-                &[TerminalOscEvent::ForeignShellLoaderReady {
-                    marker: "stale-loader-marker".to_string(),
-                }],
-            )
-            .unwrap(),
-        0
+        launch_inputs.len(),
+        2,
+        "same-batch loader admission should release its payload and prebuffer the bootstrap trigger"
     );
-    assert!(
-        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
-        "a stale loader marker must not release generated source"
-    );
-
-    assert_eq!(
-        service
-            .observe_agent_shell_transaction_events(
-                &pane_id,
-                &[TerminalOscEvent::ForeignShellLoaderReady {
-                    marker: loader_marker.clone(),
-                }],
-            )
-            .unwrap(),
-        1
-    );
-    let payload_effects = service.drain_pane_io_transition().side_effects;
-    let payload_inputs = pane_input_effects(&payload_effects);
-    assert_eq!(payload_inputs.len(), 1);
-    let payload = String::from_utf8_lossy(payload_inputs[0].pane_input_parts().1);
+    let payload = launch_inputs
+        .iter()
+        .map(|effect| String::from_utf8_lossy(effect.pane_input_parts().1))
+        .find(|input| input.contains(&format!("MEZ_LOADER_END_{loader_marker}")))
+        .expect("one released input should contain the loader payload");
     assert!(payload.contains(&format!("MEZ_LOADER_END_{loader_marker}")));
-    assert_eq!(payload_inputs[0].pane_input_parts().1.len(), payload.len());
     assert!(payload.lines().all(|line| line.len() <= 700));
+    assert!(launch_inputs.iter().any(|effect| {
+        let input = String::from_utf8_lossy(effect.pane_input_parts().1);
+        input.starts_with('\u{7}') && input.contains("MEZ_BASH_RX1_BEGIN")
+    }));
 
     assert_eq!(
         service
@@ -341,35 +338,20 @@ fn runtime_dependency_free_foreign_bash_completion_preserves_loader_handoff() {
             &pane_id,
         )
         .unwrap();
-    let (start_instance, start_observation_id) = service
-        .drain_pane_io_transition()
-        .side_effects
-        .into_iter()
-        .find_map(|effect| match effect {
-            RuntimeSideEffect::PaneProcessIo {
-                instance,
-                effect:
-                    crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess {
-                        observation_id,
-                        expected_process_group_id: None,
-                    },
-            } => Some((instance, observation_id)),
-            _ => None,
-        })
-        .expect("bootstrap start should request correlated foreground proof");
-    service
-        .apply_pane_foreground_process_observation_transition(
-            start_instance,
-            crate::runtime::PaneForegroundProcessObservation {
-                observation_id: start_observation_id,
-                process_name: Some("ssh".to_string()),
-                process_group_id: Some(primary_pid.saturating_add(1)),
-                current_working_directory: Some("/remote/project".to_string()),
-                error: None,
-            },
-        )
-        .unwrap();
-    service.drain_pane_io_transition();
+    assert!(
+        service
+            .drain_pane_io_transition()
+            .side_effects
+            .into_iter()
+            .all(|effect| !matches!(
+                effect,
+                RuntimeSideEffect::PaneProcessIo {
+                    effect: crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess { .. },
+                    ..
+                }
+            )),
+        "a live dependency-free loader should replace the aliased SSH start observation"
+    );
     let bootstrap_output = "env\tos\tLinux\n\
 env\tarch\tx86_64\n\
 env\thost\tforeign-host\n\
@@ -416,34 +398,20 @@ bootstrap\tcomplete\t1714500000\n";
             .unwrap(),
         1
     );
-    let (completion_instance, completion_observation_id) = service
-        .drain_pane_io_transition()
-        .side_effects
-        .into_iter()
-        .find_map(|effect| match effect {
-            RuntimeSideEffect::PaneProcessIo {
-                instance,
-                effect:
-                    crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess {
-                        observation_id,
-                        expected_process_group_id: Some(_),
-                    },
-            } => Some((instance, observation_id)),
-            _ => None,
-        })
-        .expect("receiver completion should request correlated foreground proof");
-    service
-        .apply_pane_foreground_process_observation_transition(
-            completion_instance,
-            crate::runtime::PaneForegroundProcessObservation {
-                observation_id: completion_observation_id,
-                process_name: Some("ssh".to_string()),
-                process_group_id: Some(primary_pid.saturating_add(1)),
-                current_working_directory: Some("/remote/project".to_string()),
-                error: None,
-            },
-        )
-        .unwrap();
+    assert!(
+        service
+            .drain_pane_io_transition()
+            .side_effects
+            .into_iter()
+            .all(|effect| !matches!(
+                effect,
+                RuntimeSideEffect::PaneProcessIo {
+                    effect: crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess { .. },
+                    ..
+                }
+            )),
+        "a live dependency-free loader should replace the aliased SSH completion observation"
+    );
     assert_eq!(
         service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
         Some("certified")

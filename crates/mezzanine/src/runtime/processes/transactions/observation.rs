@@ -143,13 +143,17 @@ impl RuntimeSessionService {
         {
             return Ok(0);
         }
+        let now_unix_ms = current_unix_millis();
+        let phase_elapsed_ms = now_unix_ms.saturating_sub(boundary.phase_started_at_unix_ms);
+        let lifecycle_elapsed_ms =
+            now_unix_ms.saturating_sub(boundary.lifecycle_started_at_unix_ms);
         let payload = self
             .process
             .pane_foreign_shell_boundaries
             .get_mut(pane_id)
             .and_then(|current| {
                 current.loader_ready = true;
-                current.phase_started_at_unix_ms = current_unix_millis();
+                current.phase_started_at_unix_ms = now_unix_ms;
                 current.loader_payload.take()
             });
         let Some(payload) = payload else {
@@ -164,13 +168,35 @@ impl RuntimeSessionService {
         if let Some(delivery_id) = delivery_id.as_deref() {
             self.mark_managed_shell_payload_released(pane_id, delivery_id);
         }
+        let prebuffered_bootstrap =
+            self.process
+                .pane_shell_handoffs
+                .get_mut(pane_id)
+                .and_then(|handoff| {
+                    let bootstrap_marker = handoff.bootstrap_marker.clone()?;
+                    let wrapper = handoff.deferred_bootstrap_wrapper.take()?;
+                    Some((bootstrap_marker, wrapper))
+                });
+        if let Some((bootstrap_marker, wrapper)) = prebuffered_bootstrap {
+            if let Err(error) = self.write_runtime_pane_shell_input(pane_id, wrapper.as_bytes()) {
+                self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
+                return Ok(0);
+            }
+            self.record_bootstrap_sent(pane_id, &bootstrap_marker)?;
+        }
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
-                r#"{{"pane_id":"{}","foreign_bootstrap":"loader_ready","marker":"{}","payload_bytes":{}}}"#,
+                r#"{{"pane_id":"{}","foreign_bootstrap":"loader_ready","marker":"{}","payload_bytes":{},"bootstrap_prebuffered":{},"phase_elapsed_ms":{},"lifecycle_elapsed_ms":{}}}"#,
                 json_escape(pane_id),
                 json_escape(marker),
-                payload_len
+                payload_len,
+                self.process
+                    .pane_shell_handoffs
+                    .get(pane_id)
+                    .is_some_and(|handoff| handoff.deferred_bootstrap_wrapper.is_none()),
+                phase_elapsed_ms,
+                lifecycle_elapsed_ms
             ),
         )?;
         Ok(1)
@@ -574,6 +600,51 @@ impl RuntimeSessionService {
             })
     }
 
+    /// Returns generation-fenced loader ownership usable as remote bootstrap proof.
+    ///
+    /// An SSH worker can observe only the outer SSH process group, so another
+    /// foreground query cannot distinguish the managed remote child from its
+    /// parent. A ready loader, matching bootstrap handoff, and authenticated
+    /// managed-child installation provide the stronger remote ownership proof.
+    fn dependency_free_foreign_bootstrap_process_group(
+        &self,
+        pane_id: &str,
+        marker: &str,
+    ) -> Option<u32> {
+        let boundary = self.process.pane_foreign_shell_boundaries.get(pane_id)?;
+        let handoff_matches =
+            self.process
+                .pane_shell_handoffs
+                .get(pane_id)
+                .is_some_and(|handoff| {
+                    handoff.bootstrap_marker.as_deref() == Some(marker)
+                        && handoff.primary_process_id == boundary.primary_process_id
+                        && handoff.interaction_generation == boundary.interaction_generation
+                });
+        let managed_child_owns_input = boundary.child_shell.is_none()
+            || self
+                .process
+                .pane_managed_shell_handoffs
+                .get(pane_id)
+                .is_some_and(|handoff| {
+                    handoff.identity().marker == marker && handoff.child_is_installed()
+                });
+        (boundary.adapter.is_none()
+            && boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
+            && boundary.loader_marker.is_some()
+            && boundary.loader_ready
+            && handoff_matches
+            && managed_child_owns_input
+            && self.primary_pid_for_live_pane_process(pane_id) == Some(boundary.primary_process_id)
+            && self
+                .process
+                .pane_shell_interaction_generations
+                .get(pane_id)
+                .copied()
+                == Some(boundary.interaction_generation))
+        .then_some(boundary.process_group_id)
+    }
+
     /// Starts a new runtime-owned agent-subshell handoff and invalidates state
     /// derived from the previous pane environment before bootstrap dispatch.
     pub(crate) fn begin_agent_subshell_shell_handoff(&mut self, pane_id: &str) -> Result<()> {
@@ -687,6 +758,16 @@ impl RuntimeSessionService {
             return false;
         };
         if handoff.bootstrap_marker.as_deref() != Some(marker) {
+            return false;
+        }
+        if let Some(process_group_id) =
+            self.dependency_free_foreign_bootstrap_process_group(pane_id, marker)
+        {
+            self.record_agent_subshell_bootstrap_start_observation(
+                pane_id,
+                marker,
+                Some(process_group_id),
+            );
             return false;
         }
         if let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) {
@@ -807,6 +888,24 @@ impl RuntimeSessionService {
             self.reject_agent_subshell_certification(pane_id, rejection);
             return RuntimeAgentSubshellCertificationOutcome::Rejected(rejection);
         };
+        if self
+            .dependency_free_foreign_bootstrap_process_group(pane_id, marker)
+            .is_some_and(|process_group_id| evidence.process_group_id == Some(process_group_id))
+        {
+            let Some(process_group_id) = evidence.process_group_id else {
+                return RuntimeAgentSubshellCertificationOutcome::Rejected(
+                    RuntimeAgentSubshellCertificationRejection::ForegroundProcessUnavailable,
+                );
+            };
+            self.remove_agent_subshell_bootstrap_proof(pane_id, marker);
+            self.promote_agent_subshell_certification(
+                pane_id,
+                evidence,
+                environment,
+                process_group_id,
+            );
+            return RuntimeAgentSubshellCertificationOutcome::Certified;
+        }
         if let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) {
             let Some(expected_process_group_id) = evidence.process_group_id else {
                 let rejection =
