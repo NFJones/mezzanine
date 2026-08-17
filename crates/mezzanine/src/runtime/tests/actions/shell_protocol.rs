@@ -2175,12 +2175,31 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
     service.start_initial_pane_process(None).unwrap();
     wait_until_primary_shell_foreground(&mut service, "%1");
     service
-        .write_input_to_pane(&primary, Some("%1"), b"set -eu\n")
+        .write_input_to_pane(
+            &primary,
+            Some("%1"),
+            b"set -eu; printf '__MEZ_BASH_STRICT_READY__\\n'\n",
+        )
         .unwrap();
-    for _ in 0..20 {
+    let mut strict_parent_ready = false;
+    for _ in 0..200 {
         let _ = service.poll_pane_outputs(4096).unwrap();
+        if service
+            .process_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .contains("__MEZ_BASH_STRICT_READY__")
+        {
+            strict_parent_ready = true;
+            break;
+        }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
     }
+    assert!(
+        strict_parent_ready,
+        "managed Bash parent did not confirm strict-option readiness"
+    );
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -2242,7 +2261,27 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
     }
-    assert!(service.running_shell_transactions_for_tests().is_empty());
+    let protocol_diagnostics = service
+        .running_shell_transactions_for_tests()
+        .keys()
+        .map(|marker| {
+            (
+                marker.clone(),
+                service.shell_transaction_protocol_diagnostic_for_tests(marker),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        service.running_shell_transactions_for_tests().is_empty(),
+        "managed Bash strict-option transaction did not settle: transactions={:?} protocol={protocol_diagnostics:?} readiness={:?} pane={}",
+        service.running_shell_transactions_for_tests(),
+        service.pane_readiness_state("%1"),
+        service
+            .process_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\\n"),
+    );
     let pane_exits = service.poll_pane_processes().unwrap();
     assert!(pane_exits.is_empty(), "{pane_exits:?}");
     assert!(service.pane_processes().contains_pane("%1"));

@@ -2248,6 +2248,32 @@ impl RuntimeSessionService {
             .contains(marker)
     }
 
+    /// Returns bounded marker-scoped protocol state for regression diagnostics.
+    pub(crate) fn shell_transaction_protocol_diagnostic_for_tests(&self, marker: &str) -> String {
+        format!(
+            "require_start={} started={} receiver_completion_required={} pending_receiver_end={} pending_receiver_payloads={} receiver_acknowledgements={:?}",
+            self.process
+                .shell_transaction_require_start_markers
+                .contains(marker),
+            self.process
+                .shell_transaction_started_markers
+                .contains(marker),
+            self.process
+                .shell_receiver_completion_required
+                .contains(marker),
+            self.process
+                .shell_receiver_pending_ends
+                .contains_key(marker),
+            self.process
+                .shell_receiver_pending_payloads
+                .get(marker)
+                .map_or(0, std::collections::VecDeque::len),
+            self.process
+                .shell_transaction_receiver_acknowledgements
+                .get(marker),
+        )
+    }
+
     /// Installs the remaining private-receiver acknowledgement count for a test transaction.
     pub(crate) fn set_shell_transaction_receiver_acknowledgements_for_tests(
         &mut self,

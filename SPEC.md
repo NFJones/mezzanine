@@ -4365,9 +4365,12 @@ generation, and reducer phase all match the live handoff.
 After an authenticated Bash BEGIN is admitted, the receiver MUST acknowledge
 and drain every declared DATA record and the terminal END record even after it
 detects malformed framing. It MUST evaluate no rejected source and MUST restore
-the saved Readline state before publishing a typed terminal event. Before the
-first RX2 DATA record is consumed, the receiver MAY accept one token-, marker-,
-and parent-proof-authenticated CANCEL record; cancellation MUST acknowledge the
+the saved Readline state before publishing a typed terminal event. The outer
+Readline callback MUST keep inherited `errexit` and `nounset` disabled through
+source status capture, receiver reset, and terminal-event publication, then
+restore both options only as its final operation. Before the first RX2 DATA
+record is consumed, the receiver MAY accept one token-, marker-, and
+parent-proof-authenticated CANCEL record; cancellation MUST acknowledge the
 record, evaluate no source, restore the exact editor state, and publish
 proof-bearing cancelled `ParentReady`. A cancellation received after DATA has
 begun MUST be treated as malformed framing and MUST NOT shorten the required
