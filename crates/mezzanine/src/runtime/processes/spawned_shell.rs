@@ -11,6 +11,7 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
@@ -35,8 +36,18 @@ const MIN_STREAM_CAPTURE_BUDGET: usize = 4096;
 /// Maximum captured bytes retained per stream regardless of transaction
 /// budget; reads continue past the cap but bytes are dropped and counted.
 const SPAWNED_CHILD_CAPTURE_HARD_CAP: usize = 16 * 1024 * 1024;
+/// Maximum trusted lifecycle-status bytes accepted from a typed child.
+const SPAWNED_CHILD_STATUS_CAPTURE_LIMIT: usize = 64 * 1024;
 /// Poll interval while waiting for the spawned child to exit.
 const SPAWNED_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Spawned process plus its optional runtime-owned lifecycle-status reader.
+struct SpawnedChild {
+    /// Running direct child process.
+    child: Child,
+    /// Read end of the descriptor selected by `ShellChildLaunch::status_fd`.
+    status_reader: Option<OwnedFd>,
+}
 
 /// Executes one shell transaction in a freshly spawned shell process.
 pub(crate) struct SpawnedShellExecutor {
@@ -100,7 +111,11 @@ impl SpawnedShellExecutor {
     }
 
     /// Spawns the shell (or typed child launch) with the inferred context.
-    fn spawn_child(&self, transaction: &ShellTransaction, command_file: &Path) -> Result<Child> {
+    fn spawn_child(
+        &self,
+        transaction: &ShellTransaction,
+        command_file: &Path,
+    ) -> Result<SpawnedChild> {
         let mut command = if let Some(launch) = &transaction.child_launch {
             let mut command = Command::new(&launch.executable);
             for argument in &launch.arguments {
@@ -132,8 +147,44 @@ impl SpawnedShellExecutor {
                 OsStr::from_bytes(&entry.value),
             );
         }
-        command.spawn().map_err(|error| {
+        let (status_reader, status_writer) = if let Some(status_fd) = transaction
+            .child_launch
+            .as_ref()
+            .and_then(|launch| launch.status_fd)
+        {
+            let (reader, writer) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
+                .map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "spawned shell execution could not create its status pipe: {error}"
+                    ))
+                })?;
+            let writer_fd = writer.as_raw_fd();
+            let target_fd = i32::from(status_fd);
+            // SAFETY: the closure performs only async-signal-safe descriptor
+            // operations between fork and exec. `writer` remains alive until
+            // `spawn` returns, and the duplicated target has CLOEXEC cleared.
+            unsafe {
+                command.pre_exec(move || {
+                    if libc::dup2(writer_fd, target_fd) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::fcntl(target_fd, libc::F_SETFD, 0) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            (Some(reader), Some(writer))
+        } else {
+            (None, None)
+        };
+        let child = command.spawn().map_err(|error| {
             MezError::invalid_state(format!("spawned shell execution failed to start: {error}"))
+        })?;
+        drop(status_writer);
+        Ok(SpawnedChild {
+            child,
+            status_reader,
         })
     }
 
@@ -141,10 +192,14 @@ impl SpawnedShellExecutor {
     /// then joins the capture readers into normalized shell output.
     fn collect(
         &self,
-        mut child: Child,
+        spawned: SpawnedChild,
         timeout_ms: Option<u64>,
         output_budget: usize,
     ) -> Result<ShellExecutionOutput> {
+        let SpawnedChild {
+            mut child,
+            status_reader,
+        } = spawned;
         let stdout = child.stdout.take().ok_or_else(|| {
             MezError::invalid_state("spawned shell execution lost its stdout pipe")
         })?;
@@ -155,6 +210,14 @@ impl SpawnedShellExecutor {
             (output_budget / 2).clamp(MIN_STREAM_CAPTURE_BUDGET, SPAWNED_CHILD_CAPTURE_HARD_CAP);
         let stdout_reader = std::thread::spawn(move || drain_output_stream(stdout, stream_budget));
         let stderr_reader = std::thread::spawn(move || drain_output_stream(stderr, stream_budget));
+        let status_reader = status_reader.map(|reader| {
+            std::thread::spawn(move || {
+                drain_output_stream(
+                    std::fs::File::from(reader),
+                    SPAWNED_CHILD_STATUS_CAPTURE_LIMIT,
+                )
+            })
+        });
         let pid = child.id() as i32;
         let timeout_ms = timeout_ms.unwrap_or(DEFAULT_AGENT_TURN_TIMEOUT_MS).max(1);
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
@@ -199,7 +262,7 @@ impl SpawnedShellExecutor {
         let (stderr_bytes, stderr_dropped) = stderr_reader
             .join()
             .map_err(|_| MezError::invalid_state("spawned shell execution stderr reader failed"))?;
-        Ok(ShellExecutionOutput {
+        let output = ShellExecutionOutput {
             exit_code: if timed_out || interrupted {
                 None
             } else {
@@ -214,7 +277,14 @@ impl SpawnedShellExecutor {
                 output_bytes_dropped: stdout_dropped.saturating_add(stderr_dropped),
                 ..ShellTransportDiagnostics::default()
             },
-        })
+        };
+        if let Some(status_reader) = status_reader {
+            let (status_bytes, status_dropped) = status_reader.join().map_err(|_| {
+                MezError::invalid_state("spawned shell execution status reader failed")
+            })?;
+            validate_spawned_child_status(&status_bytes, status_dropped, &output)?;
+        }
+        Ok(output)
     }
 }
 
@@ -277,6 +347,41 @@ fn drain_output_stream(mut stream: impl Read, budget: usize) -> (Vec<u8>, usize)
         }
     }
     (retained, dropped)
+}
+
+/// Validates trusted Bubblewrap lifecycle evidence captured outside stdout
+/// and stderr for one completed typed child launch.
+fn validate_spawned_child_status(
+    status_bytes: &[u8],
+    status_dropped: usize,
+    output: &ShellExecutionOutput,
+) -> Result<()> {
+    if output.timed_out || output.interrupted {
+        return Ok(());
+    }
+    if status_dropped > 0 {
+        return Err(MezError::invalid_state(
+            "spawned shell lifecycle status exceeded its capture limit",
+        ));
+    }
+    let status_text = std::str::from_utf8(status_bytes).map_err(|_| {
+        MezError::invalid_state("spawned shell lifecycle status was not valid UTF-8")
+    })?;
+    let status = crate::security::sandbox::parse_bubblewrap_status(status_text)
+        .map_err(|error| MezError::invalid_state(error.message()))?;
+    let reported_exit_code = status.exit_code.ok_or_else(|| {
+        MezError::invalid_state(crate::security::sandbox::bubblewrap_failure_remediation(
+            "Bubblewrap failed before payload execution",
+        ))
+    })?;
+    if output.exit_code != Some(reported_exit_code) {
+        return Err(MezError::invalid_state(
+            crate::security::sandbox::bubblewrap_failure_remediation(
+                "Bubblewrap status exit code contradicts the spawned process",
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Kills the entire process group led by `pid` so command children are
@@ -426,6 +531,67 @@ mod tests {
 
         assert_eq!(output.exit_code, Some(0));
         assert_eq!(output.stdout, "child-launch-ok");
+    }
+
+    /// Verifies direct typed-child execution supplies the selected status
+    /// descriptor and accepts Bubblewrap-compatible lifecycle evidence when
+    /// its reported payload status matches the spawned process status.
+    #[test]
+    fn spawned_executor_captures_matching_typed_child_status() {
+        let mut executor = SpawnedShellExecutor::new(test_context());
+        let mut transaction_request = request("printf status-fd-ok", Some(5_000));
+        let status_script = "printf '{\"child-pid\":%s}\\n' \"$$\" >&3; /bin/sh \"$1\"; status=$?; printf '{\"exit-code\":%s}\\n' \"$status\" >&3; exit \"$status\"";
+        transaction_request.transaction = transaction_request.transaction.with_child_launch(
+            ShellChildLaunch::new(
+                "/bin/sh",
+                vec![
+                    ShellChildArgument::Literal("-c".to_string()),
+                    ShellChildArgument::Literal(status_script.to_string()),
+                    ShellChildArgument::Literal("mez-status-child".to_string()),
+                    ShellChildArgument::MaterializedCommandFile,
+                ],
+            )
+            .unwrap()
+            .with_status_fd(3)
+            .unwrap(),
+        );
+
+        let output = executor.execute_shell(&transaction_request).unwrap();
+
+        assert_eq!(output.exit_code, Some(0));
+        assert_eq!(output.stdout, "status-fd-ok");
+    }
+
+    /// Verifies contradictory lifecycle evidence fails closed rather than
+    /// presenting an untrusted spawned-process result as sandboxed output.
+    #[test]
+    fn spawned_executor_rejects_contradictory_typed_child_status() {
+        let mut executor = SpawnedShellExecutor::new(test_context());
+        let mut transaction_request = request("true", Some(5_000));
+        let status_script =
+            "printf '{\"child-pid\":%s}\\n{\"exit-code\":7}\\n' \"$$\" >&3; /bin/sh \"$1\"";
+        transaction_request.transaction = transaction_request.transaction.with_child_launch(
+            ShellChildLaunch::new(
+                "/bin/sh",
+                vec![
+                    ShellChildArgument::Literal("-c".to_string()),
+                    ShellChildArgument::Literal(status_script.to_string()),
+                    ShellChildArgument::Literal("mez-status-child".to_string()),
+                    ShellChildArgument::MaterializedCommandFile,
+                ],
+            )
+            .unwrap()
+            .with_status_fd(3)
+            .unwrap(),
+        );
+
+        let error = executor.execute_shell(&transaction_request).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("contradicts the spawned process")
+        );
     }
 
     /// Verifies stateful or interactive requests are rejected instead of

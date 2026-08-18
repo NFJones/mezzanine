@@ -17,8 +17,11 @@ policy, network policy, sandbox backend, scopes, and the explicit bypass mode.
 `policy-only` provides no operating-system confinement; approval policy and
 optional audit logging remain separate controls. `bubblewrap` enforces its
 configured filesystem and network boundary for eligible local shell work.
-The Bubblewrap backend requires a Linux pane environment; other pane
-environments support only `policy-only` and therefore have no OS-level shell
+The Bubblewrap backend requires a Linux runtime environment. Pane shell mode
+prepares it through the pane shell; native shell mode derives identity,
+environment, working directory, and canonical path authority from the pane
+root process and host metadata without pane input. Environments without
+Bubblewrap support use `policy-only` and therefore have no OS-level shell
 confinement. Runtime-owned web, fetch, and MCP actions are separate capability
 and approval boundaries rather than child shell processes. `host-access` is a
 primary-user-only approval mode that runs local shell work outside Bubblewrap.

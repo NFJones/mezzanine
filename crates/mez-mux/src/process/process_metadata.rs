@@ -98,13 +98,13 @@ pub(super) fn parse_macos_environment_bytes(buffer: &[u8]) -> Option<&[u8]> {
 
 /// Returns the procfs executable path for `pid` when available.
 #[cfg(target_os = "linux")]
-pub(super) fn process_executable_path_for_pid(pid: u32) -> Option<PathBuf> {
+pub fn process_executable_path_for_pid(pid: u32) -> Option<PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/exe")).ok()
 }
 
 /// Returns the Darwin libproc executable path for `pid`.
 #[cfg(target_os = "macos")]
-pub(super) fn process_executable_path_for_pid(pid: u32) -> Option<PathBuf> {
+pub fn process_executable_path_for_pid(pid: u32) -> Option<PathBuf> {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
@@ -129,7 +129,7 @@ pub(super) fn process_executable_path_for_pid(pid: u32) -> Option<PathBuf> {
 
 /// Returns no executable path on hosts without a reviewed native reader.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(super) fn process_executable_path_for_pid(_pid: u32) -> Option<PathBuf> {
+pub fn process_executable_path_for_pid(_pid: u32) -> Option<PathBuf> {
     None
 }
 
@@ -141,7 +141,7 @@ const PROCESS_ENVIRONMENT_READ_CAP: u64 = 1024 * 1024;
 
 /// Returns the procfs exec-time environment for `pid` when available.
 #[cfg(target_os = "linux")]
-pub(super) fn process_environment_for_pid(pid: u32) -> Option<Vec<RawEnvironmentEntry>> {
+pub fn process_environment_for_pid(pid: u32) -> Option<Vec<RawEnvironmentEntry>> {
     use std::io::Read;
 
     let file = std::fs::File::open(format!("/proc/{pid}/environ")).ok()?;
@@ -163,7 +163,7 @@ const MACOS_PROCARGS2_READ_CAP: usize = 8 * 1024 * 1024;
 
 /// Returns the Darwin `KERN_PROCARGS2` exec-time environment for `pid`.
 #[cfg(target_os = "macos")]
-pub(super) fn process_environment_for_pid(pid: u32) -> Option<Vec<RawEnvironmentEntry>> {
+pub fn process_environment_for_pid(pid: u32) -> Option<Vec<RawEnvironmentEntry>> {
     let pid = libc::c_int::try_from(pid).ok()?;
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     let mut size: usize = 0;
@@ -206,7 +206,7 @@ pub(super) fn process_environment_for_pid(pid: u32) -> Option<Vec<RawEnvironment
 
 /// Returns no environment on hosts without a reviewed native reader.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(super) fn process_environment_for_pid(_pid: u32) -> Option<Vec<RawEnvironmentEntry>> {
+pub fn process_environment_for_pid(_pid: u32) -> Option<Vec<RawEnvironmentEntry>> {
     None
 }
 
@@ -248,13 +248,13 @@ pub(super) fn process_name_for_pid(_pid: u32) -> Option<String> {
 
 /// Returns the procfs current working directory for `pid` when available.
 #[cfg(target_os = "linux")]
-pub(super) fn current_working_directory_for_pid(pid: u32) -> Option<PathBuf> {
+pub fn current_working_directory_for_pid(pid: u32) -> Option<PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
 /// Returns the Darwin libproc current working directory for `pid`.
 #[cfg(target_os = "macos")]
-pub(super) fn current_working_directory_for_pid(pid: u32) -> Option<PathBuf> {
+pub fn current_working_directory_for_pid(pid: u32) -> Option<PathBuf> {
     use std::ffi::CStr;
     use std::mem::{MaybeUninit, size_of};
     use std::os::unix::ffi::OsStrExt;
@@ -289,6 +289,108 @@ pub(super) fn current_working_directory_for_pid(pid: u32) -> Option<PathBuf> {
 
 /// Returns no live working directory without a reviewed native implementation.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(super) fn current_working_directory_for_pid(_pid: u32) -> Option<PathBuf> {
+pub fn current_working_directory_for_pid(_pid: u32) -> Option<PathBuf> {
+    None
+}
+
+/// Host-reported process credentials for one pid.
+///
+/// The values are read from the host kernel, not from shell commands, so
+/// native shell mode can resolve sandbox identity without touching the pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessCredentials {
+    /// Effective user ID.
+    pub user_id: u32,
+    /// Effective primary group ID.
+    pub primary_group_id: u32,
+    /// Supplementary group IDs reported by the host, excluding the primary.
+    pub supplementary_group_ids: Vec<u32>,
+}
+
+/// Returns the procfs process credentials for `pid` when available.
+#[cfg(target_os = "linux")]
+pub fn process_credentials_for_pid(pid: u32) -> Option<ProcessCredentials> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let mut user_id = None;
+    let mut primary_group_id = None;
+    let mut supplementary_group_ids = Vec::new();
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("Uid:") {
+            user_id = Some(rest.split_whitespace().nth(1)?.parse().ok()?);
+        } else if let Some(rest) = line.strip_prefix("Gid:") {
+            primary_group_id = Some(rest.split_whitespace().nth(1)?.parse().ok()?);
+        } else if let Some(rest) = line.strip_prefix("Groups:") {
+            supplementary_group_ids = rest
+                .split_whitespace()
+                .map(|field| field.parse())
+                .collect::<Result<Vec<u32>, _>>()
+                .ok()?;
+        }
+    }
+    let user_id = user_id?;
+    let primary_group_id = primary_group_id?;
+    supplementary_group_ids.retain(|group_id| *group_id != primary_group_id);
+    Some(ProcessCredentials {
+        user_id,
+        primary_group_id,
+        supplementary_group_ids,
+    })
+}
+
+/// Returns the Darwin libproc process credentials for `pid` when available.
+#[cfg(target_os = "macos")]
+pub fn process_credentials_for_pid(pid: u32) -> Option<ProcessCredentials> {
+    use std::mem::{MaybeUninit, size_of};
+
+    let pid = libc::c_int::try_from(pid).ok()?;
+    let mut info = MaybeUninit::<libc::proc_bsdshortinfo>::zeroed();
+    let info_size = libc::c_int::try_from(size_of::<libc::proc_bsdshortinfo>()).ok()?;
+    // SAFETY: libproc receives a correctly sized writable structure. The
+    // structure is initialized only when the call reports the complete size.
+    let length = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDT_SHORTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            info_size,
+        )
+    };
+    if length != info_size {
+        return None;
+    }
+    // SAFETY: the exact structure size was initialized successfully above.
+    let info = unsafe { info.assume_init() };
+    let user_id = info.pbsi_uid;
+    let primary_group_id = info.pbsi_gid;
+    // Darwin cannot enumerate another process's supplementary groups, so
+    // reuse the mez process groups only when the target shares its identity.
+    // SAFETY: geteuid reports the mez process effective user ID.
+    if user_id != unsafe { libc::geteuid() } {
+        return None;
+    }
+    // SAFETY: a null buffer with capacity zero queries the required count.
+    let capacity = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+    if capacity < 0 {
+        return None;
+    }
+    let mut buffer = vec![0 as libc::gid_t; usize::try_from(capacity).ok()?];
+    // SAFETY: the buffer is writable for `capacity` gid entries.
+    let count = unsafe { libc::getgroups(capacity, buffer.as_mut_ptr()) };
+    if count < 0 {
+        return None;
+    }
+    buffer.truncate(usize::try_from(count).ok()?);
+    buffer.retain(|group_id| *group_id != primary_group_id);
+    Some(ProcessCredentials {
+        user_id,
+        primary_group_id,
+        supplementary_group_ids: buffer,
+    })
+}
+
+/// Returns no process credentials on hosts without a reviewed native reader.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn process_credentials_for_pid(_pid: u32) -> Option<ProcessCredentials> {
     None
 }

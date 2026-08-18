@@ -16,7 +16,7 @@ use super::{
     runtime_marker_for_action, runtime_pane_readiness_state_name,
 };
 use crate::runtime::config::ShellMode;
-use crate::runtime::processes::SpawnedShellExecutor;
+use crate::runtime::processes::{NativeShellContext, SpawnedShellExecutor};
 use crate::runtime::runtime_post_shell_hook_payload;
 use crate::runtime::{RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, SandboxConfig};
 use crate::security::project::TrustDecision;
@@ -191,14 +191,43 @@ impl RuntimeSessionService {
         let policy_command = local_action_plan(action)?
             .ok_or_else(|| MezError::invalid_state("shell dispatch requires a local action plan"))?
             .policy_command;
+        let native_mode =
+            self.effective_agent_shell_mode_for_pane(&turn.pane_id) == ShellMode::Native;
+        let native_context = native_mode
+            .then(|| self.native_shell_context_for_pane(&turn.pane_id))
+            .transpose()?;
         let subagent_scope = self.subagent_scope_declaration_for_turn(turn);
         let path_scopes = if subagent_scope.is_some() {
             None
+        } else if let Some(context) = native_context.as_ref() {
+            let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
+            let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
+                &sandbox_config,
+                &permission_policy,
+            ) && !self
+                .sandbox_bypass_active_for_action(&turn.turn_id, &action.id);
+            if bubblewrap_applies {
+                Some(self.native_bubblewrap_maximum_path_scopes_for_turn(turn, context)?)
+            } else {
+                None
+            }
         } else {
             self.path_scopes_for_pane(&turn.pane_id)
         };
-        let shell_identity = self.shell_execution_identity_for_pane(&turn.pane_id)?;
-        let classification = shell_identity.classification();
+        let shell_identity = if native_mode {
+            None
+        } else {
+            Some(self.shell_execution_identity_for_pane(&turn.pane_id)?)
+        };
+        let classification = native_context
+            .as_ref()
+            .map(NativeShellContext::classification)
+            .or_else(|| {
+                shell_identity
+                    .as_ref()
+                    .map(|identity| identity.classification())
+            })
+            .ok_or_else(|| MezError::invalid_state("shell classification is unavailable"))?;
         let current_permission_evaluation = permission_policy
             .evaluate_shell_command_structured_with_approvals_scoped_for_shell_classification(
                 &policy_command,
@@ -230,10 +259,14 @@ impl RuntimeSessionService {
             | mez_agent::permissions::RuleDecision::Prompt => {}
         }
         let permission_evaluation = Some(&current_permission_evaluation);
-        if self.effective_agent_shell_mode_for_pane(&turn.pane_id) == ShellMode::Native {
+        if native_mode {
+            let context = native_context.ok_or_else(|| {
+                MezError::invalid_state("native shell context is unavailable at dispatch")
+            })?;
             return self.dispatch_native_shell_action(
                 turn,
                 action,
+                context,
                 command,
                 preview_already_presented,
                 input_sidecar,
@@ -244,6 +277,9 @@ impl RuntimeSessionService {
                 &current_permission_evaluation,
             );
         }
+        let shell_identity = shell_identity.ok_or_else(|| {
+            MezError::invalid_state("pane shell identity is unavailable at dispatch")
+        })?;
         self.require_pane_ready_for_agent_command(&turn.pane_id)?;
         let previous_readiness = self.pane_readiness_state(&turn.pane_id);
         let marker = runtime_marker_for_action(turn, &action.id)?;
@@ -614,6 +650,7 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
+        context: NativeShellContext,
         command: &str,
         preview_already_presented: bool,
         input_sidecar: Option<&str>,
@@ -648,13 +685,27 @@ impl RuntimeSessionService {
         };
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
         let permission_policy = self.permission_policy_for_turn(turn);
-        if crate::runtime::config::bubblewrap_applies_to_policy(&sandbox_config, &permission_policy)
-        {
-            return Err(MezError::invalid_state(
-                "native transport does not serve Bubblewrap-wrapped execution",
-            ));
-        }
-        let context = self.native_shell_context_for_pane(&turn.pane_id)?;
+        let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
+            &sandbox_config,
+            &permission_policy,
+        );
+        let sandbox_bypassed = bubblewrap_applies
+            && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
+        let native_bubblewrap = if bubblewrap_applies && !sandbox_bypassed {
+            Some(self.native_bubblewrap_dispatch_for_action(
+                turn,
+                action,
+                &context,
+                &sandbox_config,
+                permission_evaluation,
+                program_dialect,
+            )?)
+        } else {
+            None
+        };
+        let sandbox_audit_summary = native_bubblewrap
+            .as_ref()
+            .map(|dispatch| dispatch.audit_summary.clone());
         let emitted_action_log = if is_internal_apply_patch_write_phase {
             false
         } else if let Some(path) = apply_patch_read_path {
@@ -700,7 +751,14 @@ impl RuntimeSessionService {
             context.shell_path(),
             command,
         )?;
-        if let Some(interpreter) = program_dialect.interpreter_path() {
+        if let Some(dispatch) = native_bubblewrap.as_ref() {
+            transaction = transaction.with_child_launch(
+                dispatch
+                    .child_launch
+                    .clone()
+                    .with_status_fd(crate::security::sandbox::BUBBLEWRAP_STATUS_FD)?,
+            );
+        } else if let Some(interpreter) = program_dialect.interpreter_path() {
             transaction = transaction.with_child_launch(ShellChildLaunch::new(
                 interpreter,
                 vec![ShellChildArgument::MaterializedCommandFile],
@@ -806,7 +864,7 @@ impl RuntimeSessionService {
             action,
             command,
             Some(permission_evaluation),
-            None,
+            sandbox_audit_summary.as_ref(),
             "sent",
         )?;
         if !is_apply_patch_read_phase {
@@ -972,7 +1030,7 @@ impl RuntimeSessionService {
 
     /// Returns the exact pane-resolved authority and effect evidence used to
     /// compile one Bubblewrap action.
-    fn bubblewrap_path_scopes_for_turn(
+    pub(crate) fn bubblewrap_path_scopes_for_turn(
         &self,
         turn: &AgentTurnRecord,
         evaluation: &PermissionEvaluation,
@@ -1035,7 +1093,7 @@ impl RuntimeSessionService {
     /// Returns the filesystem boundary semantic patch planning must enforce
     /// for the action's live sandbox mode.
     pub(crate) fn apply_patch_path_boundary_for_action(
-        &self,
+        &mut self,
         turn: &AgentTurnRecord,
         action_id: &str,
     ) -> Result<super::ApplyPatchPathBoundary> {
@@ -1048,7 +1106,13 @@ impl RuntimeSessionService {
         if !bubblewrap_applies || self.sandbox_bypass_active_for_action(&turn.turn_id, action_id) {
             return Ok(super::ApplyPatchPathBoundary::CurrentDirectoryOnly);
         }
-        let scopes = self.bubblewrap_maximum_path_scopes_for_turn(turn)?;
+        let scopes = if self.effective_agent_shell_mode_for_pane(&turn.pane_id) == ShellMode::Native
+        {
+            let context = self.native_shell_context_for_pane(&turn.pane_id)?;
+            self.native_bubblewrap_maximum_path_scopes_for_turn(turn, &context)?
+        } else {
+            self.bubblewrap_maximum_path_scopes_for_turn(turn)?
+        };
         Ok(super::ApplyPatchPathBoundary::SandboxWriteScopes(
             scopes.write_scopes,
         ))

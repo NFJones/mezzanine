@@ -813,10 +813,13 @@ Command rule fields for each entry in a command rule array:
 
 Effects are accepted only on `allow` rules and may narrow but never grant authority.
 For complete effects, Mezzanine resolves read, write, create, delete, and touch
-paths in one action-specific pane-shell request before probing or launching
-Bubblewrap. The action waits for exact evidence; resolver failure, timeout,
-truncation, or stale pane identity fails closed. Unknown effects retain bounded
-maximum authority. Scope configuration alone determines filesystem exposure,
+paths before probing or launching Bubblewrap. Pane shell mode uses one
+action-specific pane-shell request. Native shell mode canonicalizes the same
+authority directly from the pane root process's working directory and host
+filesystem metadata, without sending pane input. Resolver failure, timeout,
+truncation, or stale process identity fails closed. Unknown effects retain
+bounded maximum authority. Scope configuration alone determines filesystem
+exposure,
 including credential-bearing paths; Bubblewrap does not inspect, mask, or
 reject paths based on credential-directory names. The multi-user `/home` root
 remains forbidden. Exact primary, subagent, and

@@ -35,7 +35,6 @@ impl NativeShellContext {
     }
 
     /// Returns the shell grammar paired with this context.
-    #[cfg(test)]
     pub(crate) fn classification(&self) -> ShellClassification {
         self.classification
     }

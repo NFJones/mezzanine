@@ -33,7 +33,9 @@ mod identity;
 mod managed_home;
 mod workflow;
 
-pub(crate) use identity::{ResolvedSandboxIdentity, resolve_sandbox_identity};
+pub(crate) use identity::{
+    ResolvedSandboxIdentity, resolve_group_name, resolve_sandbox_identity, resolve_user_name,
+};
 #[cfg(test)]
 pub(crate) use managed_home::{
     BubblewrapManagedHome, prepare_bubblewrap_managed_home,
@@ -653,10 +655,10 @@ fn validate_request(request: &BubblewrapCompileRequest<'_>) -> Result<(), Sandbo
             "sandbox compilation requires an explicitly allowed permission evaluation",
         ));
     }
-    if request.maximum_authority.resolution_status != PathResolutionStatus::ShellResolved {
+    if request.maximum_authority.resolution_status == PathResolutionStatus::Unresolved {
         return Err(SandboxCompileError::new(
             SandboxCompileErrorKind::UnresolvedAuthority,
-            "sandbox compilation requires pane-shell-resolved path authority",
+            "sandbox compilation requires trusted resolved path authority",
         ));
     }
     validate_canonical_path(
@@ -918,7 +920,7 @@ fn resolve_effect_path(
         None => {
             return Err(SandboxCompileError::new(
                 SandboxCompileErrorKind::UnresolvedEffectPath,
-                "complete sandbox effects require pane-shell canonical path evidence",
+                "complete sandbox effects require trusted canonical path evidence",
             ));
         }
     };

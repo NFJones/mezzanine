@@ -65,6 +65,17 @@ impl RuntimeSessionService {
             .cloned()
     }
 
+    /// Records one verified native-host capability probe for exact reuse.
+    pub(crate) fn record_bubblewrap_capability(
+        &mut self,
+        cache_key: crate::security::sandbox::BubblewrapCapabilityCacheKey,
+        capability: crate::security::sandbox::BubblewrapCapability,
+    ) {
+        self.process
+            .pane_bubblewrap_capabilities
+            .insert(cache_key, capability);
+    }
+
     /// Ensures the active pane environment has passed the exact Bubblewrap
     /// runtime-profile probe required by the configured backend.
     ///

@@ -217,6 +217,31 @@ fn sandbox_compiler_forwards_whitelisted_path() {
     }));
 }
 
+/// Verifies the compiler accepts canonical host-resolved authority used by
+/// native shell mode while retaining the same permission and mount checks as
+/// pane-shell-resolved authority.
+#[test]
+fn sandbox_compiler_accepts_host_resolved_authority() {
+    let config = config();
+    let shell_authority = authority();
+    let host_authority = PathScopes::try_host_resolved_with_evidence(
+        shell_authority.current_directory,
+        shell_authority.read_scopes,
+        shell_authority.write_scopes,
+        shell_authority.path_evidence,
+    )
+    .unwrap();
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+
+    let plan =
+        compile_bubblewrap_launch_plan(request(&config, &host_authority, &evaluation)).unwrap();
+
+    assert_eq!(
+        plan.audit_summary.runtime_profile_version,
+        BUBBLEWRAP_RUNTIME_PROFILE_VERSION
+    );
+}
+
 /// Only explicitly allowed evaluations may produce a Bubblewrap launch plan;
 /// pending prompts and hard forbids both remain non-dispatchable.
 #[test]

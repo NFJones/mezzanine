@@ -3388,10 +3388,13 @@ or certification work is pending MUST be idempotent.
 An explicit configured allow rule MAY declare complete or unknown read, write,
 network, credential, and process-control requirements; such declarations MAY
 only narrow maximum authority. Only explicit complete declared read, write,
-create, delete, and touch paths MAY be resolved through the pane shell as one
-action-specific bounded request and used as a confinement manifest. The action
-MUST remain pending until exact evidence settles; resolver failure, timeout,
-truncation, or stale identity MUST fail it closed. Classifier-only or unknown
+create, delete, and touch paths MAY be resolved into exact canonical evidence
+and used as a confinement manifest. Pane shell mode MUST use one action-specific
+bounded pane-shell request. Native shell mode MUST resolve the same evidence
+directly from the live pane root process's working directory and host filesystem
+metadata without pane input. The action MUST remain pending until exact evidence
+settles; resolver failure, timeout, truncation, or stale process identity MUST
+fail it closed. Classifier-only or unknown
 confinement effects MUST retain bounded maximum authority. Pre-launch failure
 remains valid for explicit policy decisions, invalid or unavailable maximum
 authority, stale capability identity, forbidden sandbox configuration, and
@@ -3401,10 +3404,12 @@ effectively narrowed scopes; Bubblewrap MUST NOT inspect, mask, or reject paths
 based on credential-directory names. The multi-user `/home` root MUST fail
 closed. A failed, stale, truncated, or timed-out Bubblewrap capability probe MUST
 never trigger automatic or approval-gated unsandboxed execution. Probe success
-MUST require complete registered transaction framing, an exact pane,
-environment, configuration-generation, executable, and runtime-profile
-identity match, a zero child exit status, non-truncated output, and exactly the
-fixed newline-free decoded sentinel with no additional bytes. Transaction
+MUST require an exact pane or root-process environment,
+configuration-generation, executable, and runtime-profile identity match, a
+zero child exit status, non-truncated output, and exactly the fixed newline-free
+sentinel with no additional bytes. Pane shell mode MUST additionally require
+complete registered transaction framing and decoded output; native shell mode
+MUST execute the probe directly without pane transactions. Pane transaction
 framing MUST delimit the sentinel without relying on a terminal line ending.
 Probe failures MUST retain a
 bounded escaped output preview, actual exit status when available, decoded and
@@ -5788,9 +5793,10 @@ through the pane shell in normal mode using the bounded command preview rules.
 If the primary client rejects an action, the harness MUST record the rejection
 and MUST return a `maap/1` action result to the agent.
 
-Shell actions MUST be executed by sending input to the pane shell and MUST report pane-shell transport metadata. The harness MUST NOT execute local shell
-actions through an undeclared host-side command runner or silently fall back
-from native mode to pane-shell execution.
+Under pane shell mode, shell actions MUST be executed by sending input to the
+pane shell and MUST report pane-shell transport metadata. The harness MUST NOT
+execute local shell actions through an undeclared host-side command runner or
+silently fall back from native mode to pane-shell execution.
 
 Under native shell mode, Mezzanine MUST execute each shell-backed action in a
 freshly spawned shell process whose executable, environment, and working
@@ -5801,7 +5807,11 @@ interactive actions without falling back to the pane shell, and MUST report
 `spawned_shell` transport metadata with `sent_to_pane` false. Native
 `apply_patch` actions MUST complete the same read and write phases as pane
 transport, materializing final content sidecar records into the spawned
-command file instead of the pane PTY.
+command file instead of the pane PTY. When Bubblewrap is active in native mode,
+Mezzanine MUST derive process identity and optional environment forwarding from
+the live root process, canonicalize filesystem authority directly through host
+filesystem metadata, probe and launch Bubblewrap without pane transactions,
+and capture trusted Bubblewrap lifecycle status outside command output.
 
 For non-interactive shell actions, the harness SHOULD send a complete command
 followed by the pane's configured submit sequence.

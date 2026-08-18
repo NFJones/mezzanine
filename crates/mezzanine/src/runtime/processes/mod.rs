@@ -7,6 +7,7 @@ mod bash_compat;
 mod fish_compat;
 mod layout;
 mod managed_shell_handoff;
+mod native_bubblewrap;
 mod native_shell_inference;
 pub(crate) mod output_filter;
 mod pane_pipes;
@@ -2630,12 +2631,21 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Result<NativeShellContext> {
         let primary_pid = self.primary_pid_for_live_pane_process(pane_id);
-        let executable_path = self.process.pane_processes.executable_path(pane_id);
-        let environment = self.process.pane_processes.environment(pane_id);
+        let executable_path = self
+            .process
+            .pane_processes
+            .executable_path(pane_id)
+            .or_else(|| primary_pid.and_then(mez_mux::process::process_executable_path_for_pid));
+        let environment = self
+            .process
+            .pane_processes
+            .environment(pane_id)
+            .or_else(|| primary_pid.and_then(mez_mux::process::process_environment_for_pid));
         let current_working_directory = self
             .process
             .pane_processes
-            .current_working_directory(pane_id);
+            .current_working_directory(pane_id)
+            .or_else(|| primary_pid.and_then(mez_mux::process::current_working_directory_for_pid));
         let session_shell_path = self.session.shell.path().to_path_buf();
         infer_native_shell_context(
             primary_pid,

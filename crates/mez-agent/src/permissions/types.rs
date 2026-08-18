@@ -853,11 +853,14 @@ pub struct CommandRuleStore {
 pub enum PathResolutionStatus {
     /// Paths were observed and canonicalized through the pane shell.
     ShellResolved,
+    /// Paths were observed and canonicalized directly from host process and
+    /// filesystem metadata without executing a pane-shell command.
+    HostResolved,
     /// Paths are lexical or otherwise not trusted for security decisions.
     Unresolved,
 }
 
-/// Describes how one canonical path was observed by the pane-shell resolver.
+/// Describes how one canonical path was observed by a trusted resolver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolvedPathKind {
     /// The complete requested path existed when it was canonicalized.
@@ -867,7 +870,7 @@ pub enum ResolvedPathKind {
     CreateTarget,
 }
 
-/// Trusted canonical evidence for one path requested from the pane shell.
+/// Trusted canonical evidence for one path requested from a resolver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedPathEvidence {
     /// Canonical absolute path corresponding to the requested path.
@@ -884,15 +887,15 @@ pub struct ResolvedPathEvidence {
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathScopes {
-    /// Pane-shell current directory used to resolve relative paths.
+    /// Trusted current directory used to resolve relative paths.
     pub current_directory: String,
     /// Canonical read scopes active for the agent or subagent.
     pub read_scopes: Vec<String>,
     /// Canonical write scopes active for the agent or subagent.
     pub write_scopes: Vec<String>,
-    /// Canonical pane-shell evidence keyed by requested path or normalized path.
+    /// Canonical resolver evidence keyed by requested path or normalized path.
     pub path_evidence: BTreeMap<String, ResolvedPathEvidence>,
-    /// Whether this scope set came from trusted shell-mediated resolution.
+    /// Trusted resolution source for this scope set.
     pub resolution_status: PathResolutionStatus,
 }
 
@@ -933,6 +936,39 @@ impl PathScopes {
         read_scopes: Vec<String>,
         write_scopes: Vec<String>,
         path_evidence: BTreeMap<String, ResolvedPathEvidence>,
+    ) -> Result<Self> {
+        Self::try_resolved_with_evidence(
+            current_directory,
+            read_scopes,
+            write_scopes,
+            path_evidence,
+            PathResolutionStatus::ShellResolved,
+        )
+    }
+
+    /// Builds validated path authority from direct host filesystem evidence.
+    pub fn try_host_resolved_with_evidence(
+        current_directory: impl Into<String>,
+        read_scopes: Vec<String>,
+        write_scopes: Vec<String>,
+        path_evidence: BTreeMap<String, ResolvedPathEvidence>,
+    ) -> Result<Self> {
+        Self::try_resolved_with_evidence(
+            current_directory,
+            read_scopes,
+            write_scopes,
+            path_evidence,
+            PathResolutionStatus::HostResolved,
+        )
+    }
+
+    /// Validates canonical authority and records its trusted evidence source.
+    fn try_resolved_with_evidence(
+        current_directory: impl Into<String>,
+        read_scopes: Vec<String>,
+        write_scopes: Vec<String>,
+        path_evidence: BTreeMap<String, ResolvedPathEvidence>,
+        resolution_status: PathResolutionStatus,
     ) -> Result<Self> {
         let current_directory = current_directory.into();
         validate_canonical_authority_path(&current_directory, "current directory")?;
@@ -978,7 +1014,7 @@ impl PathScopes {
             read_scopes,
             write_scopes,
             path_evidence,
-            resolution_status: PathResolutionStatus::ShellResolved,
+            resolution_status,
         })
     }
 
@@ -1000,13 +1036,13 @@ impl PathScopes {
     /// Intersects this maximum authority with requested child authority.
     ///
     /// The result can only preserve or narrow access. Both operands must be
-    /// trusted pane-shell results; unresolved operands fail closed.
+    /// trusted resolver results; unresolved operands fail closed.
     pub fn intersection(&self, requested: &Self) -> Result<Self> {
-        if self.resolution_status != PathResolutionStatus::ShellResolved
-            || requested.resolution_status != PathResolutionStatus::ShellResolved
+        if self.resolution_status == PathResolutionStatus::Unresolved
+            || requested.resolution_status == PathResolutionStatus::Unresolved
         {
             return Err(MezError::conflict(
-                "path authority intersection requires shell-resolved operands",
+                "path authority intersection requires trusted resolved operands",
             ));
         }
 
@@ -1014,16 +1050,24 @@ impl PathScopes {
         let write_scopes = intersect_authority_paths(&self.write_scopes, &requested.write_scopes);
         let mut path_evidence = self.path_evidence.clone();
         path_evidence.extend(requested.path_evidence.clone());
-        Self::try_shell_resolved_with_evidence(
+        let resolution_status = if self.resolution_status == PathResolutionStatus::HostResolved
+            || requested.resolution_status == PathResolutionStatus::HostResolved
+        {
+            PathResolutionStatus::HostResolved
+        } else {
+            PathResolutionStatus::ShellResolved
+        };
+        Self::try_resolved_with_evidence(
             requested.current_directory.clone(),
             read_scopes,
             write_scopes,
             path_evidence,
+            resolution_status,
         )
     }
 }
 
-/// Validates one path that is claimed to be canonical pane-shell evidence.
+/// Validates one path that is claimed to be trusted canonical evidence.
 fn validate_canonical_authority_path(path: &str, label: &str) -> Result<()> {
     let parsed = std::path::Path::new(path);
     if path.is_empty() || path.contains('\0') || !parsed.is_absolute() {

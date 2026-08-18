@@ -521,6 +521,39 @@ fn runtime_pane_output_device_status_report_is_forwarded_to_pane_input() {
     assert_eq!(deferred[0].pane_input_parts().1, b"\x1b[3;5R");
 }
 
+/// Verifies native shell context inference reads the root-process working
+/// directory directly for adapter-owned panes after the synchronous process
+/// record has been detached. This guards native mode against failing with
+/// "requires a readable root-process working directory" after adapter handoff
+/// while permitting the independently best-effort environment reader to be
+/// empty during a process-exec race.
+#[test]
+fn runtime_native_shell_context_resolves_adapter_owned_pane_metadata() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let _process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    let primary_pid = service.primary_pid_for_live_pane_process(&pane_id).unwrap();
+    let expected_working_directory =
+        mez_mux::process::current_working_directory_for_pid(primary_pid).unwrap();
+
+    let context = service.native_shell_context_for_pane(&pane_id).unwrap();
+    assert_eq!(
+        context.working_directory(),
+        expected_working_directory.as_path(),
+        "adapter-owned pane working directory should come from the live root process"
+    );
+    assert!(
+        !context.shell_path().as_os_str().is_empty(),
+        "adapter-owned pane shell path should resolve from host metadata"
+    );
+}
+
 /// Verifies hidden retained shell traffic still updates the incremental
 /// terminal protocol observer and emits replies without reaching either
 /// retained display surface.

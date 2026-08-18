@@ -5,8 +5,6 @@
 //! NSS state and never grants groups absent from the pane shell.
 
 use std::collections::BTreeSet;
-
-#[cfg(test)]
 use std::ffi::CStr;
 
 use mez_agent::EnvironmentSignature;
@@ -180,13 +178,18 @@ pub(crate) fn current_process_environment_signature()
     .map_err(|error| identity_error(error.to_string()))
 }
 
-#[cfg(test)]
-fn current_group_name(group_id: u32) -> Result<String, SandboxCompileError> {
+/// Resolves one native group ID to its canonical NSS name.
+///
+/// Native shell mode reads root-process credential IDs without running pane
+/// commands; this lookup projects those IDs to the canonical names used by
+/// configured group whitelists and sandbox account records.
+pub(crate) fn resolve_group_name(group_id: u32) -> Result<String, SandboxCompileError> {
     let mut capacity = 4096usize;
     while capacity <= 1024 * 1024 {
         let mut group = unsafe { std::mem::zeroed::<libc::group>() };
         let mut result = std::ptr::null_mut();
         let mut buffer = vec![0u8; capacity];
+        // SAFETY: writable buffers sized by the loop bound the NSS lookup.
         let status = unsafe {
             libc::getgrgid_r(
                 group_id,
@@ -202,17 +205,56 @@ fn current_group_name(group_id: u32) -> Result<String, SandboxCompileError> {
         }
         if status != 0 || result.is_null() || group.gr_name.is_null() {
             return Err(identity_error(format!(
-                "test process GID {group_id} does not resolve through NSS"
+                "group ID {group_id} does not resolve through NSS"
             )));
         }
+        // SAFETY: gr_name is NUL-terminated on success.
         return unsafe { CStr::from_ptr(group.gr_name) }
             .to_str()
             .map(str::to_string)
-            .map_err(|_| identity_error("test process group name is not valid UTF-8"));
+            .map_err(|_| identity_error("group name is not valid UTF-8"));
     }
-    Err(identity_error(
-        "test process group lookup exceeded its limit",
-    ))
+    Err(identity_error("group lookup exceeded its limit"))
+}
+
+/// Resolves one native user ID to its canonical NSS account name.
+pub(crate) fn resolve_user_name(user_id: u32) -> Result<String, SandboxCompileError> {
+    let mut capacity = 4096usize;
+    while capacity <= 1024 * 1024 {
+        let mut passwd = unsafe { std::mem::zeroed::<libc::passwd>() };
+        let mut result = std::ptr::null_mut();
+        let mut buffer = vec![0u8; capacity];
+        // SAFETY: writable buffers sized by the loop bound the NSS lookup.
+        let status = unsafe {
+            libc::getpwuid_r(
+                user_id,
+                &mut passwd,
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut result,
+            )
+        };
+        if status == libc::ERANGE {
+            capacity *= 2;
+            continue;
+        }
+        if status != 0 || result.is_null() || passwd.pw_name.is_null() {
+            return Err(identity_error(format!(
+                "user ID {user_id} does not resolve through NSS"
+            )));
+        }
+        // SAFETY: pw_name is NUL-terminated on success.
+        return unsafe { CStr::from_ptr(passwd.pw_name) }
+            .to_str()
+            .map(str::to_string)
+            .map_err(|_| identity_error("user name is not valid UTF-8"));
+    }
+    Err(identity_error("user lookup exceeded its limit"))
+}
+
+#[cfg(test)]
+fn current_group_name(group_id: u32) -> Result<String, SandboxCompileError> {
+    resolve_group_name(group_id)
 }
 
 fn identity_sha256(

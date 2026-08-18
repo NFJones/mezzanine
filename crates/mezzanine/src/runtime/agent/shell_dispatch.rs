@@ -571,10 +571,12 @@ impl RuntimeSessionService {
                 &sandbox_config,
                 &permission_policy,
             );
+            let native_mode = self.effective_agent_shell_mode_for_pane(&turn.pane_id)
+                == crate::runtime::config::ShellMode::Native;
             let mut sandbox_bypassed = is_apply_patch
                 && bubblewrap_applies
                 && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
-            if is_apply_patch && bubblewrap_applies && !sandbox_bypassed {
+            if is_apply_patch && bubblewrap_applies && !sandbox_bypassed && !native_mode {
                 match self.ensure_bubblewrap_path_resolution_for_action(
                     turn,
                     &action.id,
@@ -1115,7 +1117,7 @@ impl RuntimeSessionService {
                 sandbox_bypassed = bubblewrap_applies
                     && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
             }
-            if !is_apply_patch && bubblewrap_applies && !sandbox_bypassed {
+            if !is_apply_patch && bubblewrap_applies && !sandbox_bypassed && !native_mode {
                 match self.ensure_bubblewrap_path_resolution_for_action(
                     turn,
                     &action.id,
