@@ -4057,6 +4057,10 @@ returns. While a correlated dependency-free loader owns that return, hiding or
 exiting the agent shell MUST retain its shell-interaction generation until the
 matching loader-exit record settles parent restoration. Settlement MUST release
 runtime input ownership so subsequent user input reaches the foreign parent.
+After child certification, a transient foreground process-group observation
+from a runtime-owned shell action MUST NOT revoke the loader's restoration
+ownership; the live loader marker, pane primary process, and interaction
+generation remain authoritative until correlated settlement.
 
 Foreign bootstrap MUST have finite phase deadlines for identity discovery,
 loader readiness, child bootstrap, and

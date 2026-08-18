@@ -219,15 +219,19 @@ impl RuntimeSessionService {
         if boundary.loader_marker.as_deref() != Some(marker) {
             return Ok(0);
         }
-        if self.primary_pid_for_live_pane_process(pane_id) != Some(boundary.primary_process_id)
-            || self.pane_foreground_process_group_observation(pane_id).0
-                != Some(boundary.process_group_id)
-            || self
+        let stable_identity_matches = self.primary_pid_for_live_pane_process(pane_id)
+            == Some(boundary.primary_process_id)
+            && self
                 .process
                 .pane_shell_interaction_generations
                 .get(pane_id)
                 .copied()
-                != Some(boundary.interaction_generation)
+                == Some(boundary.interaction_generation);
+        let foreground_group_matches = self.pane_foreground_process_group_observation(pane_id).0
+            == Some(boundary.process_group_id);
+        if !stable_identity_matches
+            || (boundary.phase != RuntimeForeignShellBootstrapPhase::Certified
+                && !foreground_group_matches)
         {
             return Ok(0);
         }
@@ -562,20 +566,32 @@ impl RuntimeSessionService {
         cleared
     }
 
-    /// Reports whether a dependency-free loader still owns the observed foreign group.
+    /// Reports whether a certified dependency-free loader owns parent restoration.
     ///
     /// SSH and similar transports expose only their local outer process group, so the
     /// managed remote child and its unmanaged parent can share one host-side identity.
-    /// While the correlated loader marker remains live, only its protocol exit event can
-    /// prove that the managed child returned to the foreign parent.
-    pub(crate) fn dependency_free_foreign_loader_owns_current_process_group(
+    /// Runtime-owned shell actions can temporarily replace the cached foreground group.
+    /// After child certification, the live loader marker and stable process-generation
+    /// fence remain authoritative until the correlated exit proves parent restoration.
+    pub(crate) fn dependency_free_foreign_loader_owns_parent_restoration(
         &self,
         pane_id: &str,
     ) -> bool {
-        self.pane_foreground_process_group_observation(pane_id)
-            .0
-            .is_some_and(|process_group_id| {
-                self.dependency_free_foreign_loader_owns_process_group(pane_id, process_group_id)
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                boundary.phase == RuntimeForeignShellBootstrapPhase::Certified
+                    && boundary.loader_marker.is_some()
+                    && boundary.loader_ready
+                    && self.primary_pid_for_live_pane_process(pane_id)
+                        == Some(boundary.primary_process_id)
+                    && self
+                        .process
+                        .pane_shell_interaction_generations
+                        .get(pane_id)
+                        .copied()
+                        == Some(boundary.interaction_generation)
             })
     }
 

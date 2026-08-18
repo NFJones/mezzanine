@@ -491,10 +491,11 @@ bootstrap\tcomplete\t1714500000\n";
     let _ = process.terminate(Duration::from_millis(10));
 }
 
-/// Verifies exiting an unmanaged dependency-free child retains the loader's
-/// interaction generation until its correlated exit restores the foreign
-/// parent. Once restoration settles, direct user input must reach that parent
-/// instead of remaining queued behind stale runtime ownership.
+/// Verifies exiting an unmanaged dependency-free child after a model shell
+/// action retains the loader's interaction generation until its correlated
+/// exit restores the foreign parent. The action's temporary process group can
+/// remain in the cached foreground observation, but direct user input must
+/// still reach the parent after restoration settles.
 #[test]
 fn runtime_unmanaged_foreign_loader_exit_releases_parent_input() {
     let mut service = test_runtime_service();
@@ -526,6 +527,10 @@ fn runtime_unmanaged_foreign_loader_exit_releases_parent_input() {
     let loader_marker = "unmanaged-loader-restoration";
     assert!(service.certify_unmanaged_foreign_loader_for_tests(&pane_id, loader_marker,));
     service.enter_agent_subshell(pane_id.clone());
+    let transient_action_group = foreign_group.saturating_add(1);
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, Some(transient_action_group));
 
     assert!(service.exit_agent_subshell_if_active(&pane_id).unwrap());
     assert!(!service.agent_subshell_is_active(&pane_id));

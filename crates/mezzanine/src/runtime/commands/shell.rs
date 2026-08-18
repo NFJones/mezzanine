@@ -1476,7 +1476,7 @@ impl RuntimeSessionService {
         }
         let managed_shell_handoff_pending = self.managed_shell_handoff_is_pending(pane_id);
         let dependency_free_loader_handoff_pending =
-            self.dependency_free_foreign_loader_owns_current_process_group(pane_id);
+            self.dependency_free_foreign_loader_owns_parent_restoration(pane_id);
         if !managed_shell_handoff_pending && !dependency_free_loader_handoff_pending {
             self.clear_agent_subshell_shell_identity(pane_id);
         }
