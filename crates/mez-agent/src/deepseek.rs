@@ -129,13 +129,36 @@ pub fn deepseek_chat_completions_request_body_with_strategy(
     let capabilities =
         ProviderCapabilities::for_api(ProviderApiCompatibility::DeepSeekChatCompletions);
     let mut messages = Vec::with_capacity(request.messages.len());
+    let mut pending_tool_call_ids = Vec::new();
     for message in &request.messages {
         if let Some(event) = ProviderTranscriptEvent::from_transcript_content(&message.content) {
             if event.provider_id() == "deepseek" {
-                messages.push(deepseek_provider_transcript_event_message(&event));
+                match &event {
+                    ProviderTranscriptEvent::DeepSeekAssistantToolCall { .. } => {
+                        complete_pending_deepseek_tool_calls(
+                            &mut messages,
+                            &mut pending_tool_call_ids,
+                        );
+                        pending_tool_call_ids = event.deepseek_tool_call_ids();
+                        messages.push(deepseek_provider_transcript_event_message(&event));
+                    }
+                    ProviderTranscriptEvent::DeepSeekToolResult { tool_call_id, .. } => {
+                        let Some(index) = pending_tool_call_ids
+                            .iter()
+                            .position(|pending_id| pending_id == tool_call_id)
+                        else {
+                            continue;
+                        };
+                        pending_tool_call_ids.remove(index);
+                        messages.push(deepseek_provider_transcript_event_message(&event));
+                    }
+                    ProviderTranscriptEvent::OpenAiResponseOutput { .. }
+                    | ProviderTranscriptEvent::OpenAiFunctionCallOutput { .. } => {}
+                }
             }
             continue;
         }
+        complete_pending_deepseek_tool_calls(&mut messages, &mut pending_tool_call_ids);
         let (role, content) = match message.role {
             ModelMessageRole::System => ("system", message.content.clone()),
             ModelMessageRole::User => ("user", message.content.clone()),
@@ -153,6 +176,7 @@ pub fn deepseek_chat_completions_request_body_with_strategy(
             "content": content
         }));
     }
+    complete_pending_deepseek_tool_calls(&mut messages, &mut pending_tool_call_ids);
     if let Some(recovery_input) = request
         .recovery_input
         .as_deref()
@@ -227,6 +251,26 @@ pub fn deepseek_chat_completions_request_body_with_strategy(
             "DeepSeek Chat Completions request encoding failed: {error}"
         ))
     })
+}
+
+/// Completes a DeepSeek assistant tool-call message before any later message.
+///
+/// DeepSeek requires every declared tool call to receive an immediately
+/// following tool result. Restored or partially persisted history can contain
+/// a late result, which is not sufficient even when its id exists elsewhere
+/// in the request. Synthetic results close only the still-pending calls; late
+/// unmatched results are ignored by the renderer.
+fn complete_pending_deepseek_tool_calls(
+    messages: &mut Vec<serde_json::Value>,
+    pending_tool_call_ids: &mut Vec<String>,
+) {
+    for tool_call_id in pending_tool_call_ids.drain(..) {
+        messages.push(serde_json::json!({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": "The prior tool call has no recorded result. Continue from the available transcript and emit a new MAAP action batch if further work is needed."
+        }));
+    }
 }
 
 /// Renders a hidden provider transcript event as a DeepSeek-native message.
@@ -727,6 +771,72 @@ mod tests {
         );
         assert_eq!(messages[4]["role"], "user");
         assert_eq!(messages[4]["content"], "continue");
+    }
+
+    /// Verifies malformed restored DeepSeek history is made protocol-valid
+    /// before the provider receives the first request.
+    ///
+    /// A matching tool result later in the transcript does not satisfy
+    /// DeepSeek's adjacency requirement. The renderer must insert a synthetic
+    /// result immediately after the assistant call, preserve the intervening
+    /// user message, and omit the now-unmatched late result.
+    #[test]
+    fn deepseek_request_completes_non_adjacent_tool_call_results() {
+        let assistant_event = ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: String::new(),
+            reasoning_content: None,
+            tool_calls: vec![serde_json::json!({
+                "id": "call_late",
+                "type": "function",
+                "function": {
+                    "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                    "arguments": "{}"
+                }
+            })],
+        };
+        let late_tool_event = ProviderTranscriptEvent::DeepSeekToolResult {
+            tool_call_id: "call_late".to_string(),
+            content: "late result that DeepSeek cannot accept".to_string(),
+        };
+        let request = deepseek_test_request(vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: assistant_event.to_transcript_content(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::TranscriptUser,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: "intervening user message".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: late_tool_event.to_transcript_content(),
+            },
+        ]);
+
+        let strategy = deepseek_maap_request_strategy(&request);
+        let body_text =
+            deepseek_chat_completions_request_body_with_strategy(&request, true, strategy).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+        let messages = body["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[1]["role"], "tool");
+        assert_eq!(messages[1]["tool_call_id"], "call_late");
+        assert!(
+            messages[1]["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("no recorded result"))
+        );
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["content"], "intervening user message");
+        assert!(!body_text.contains("late result that DeepSeek cannot accept"));
     }
 
     /// Verifies configured DeepSeek base URLs expand to the current documented
