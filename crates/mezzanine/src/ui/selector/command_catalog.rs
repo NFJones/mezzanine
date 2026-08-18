@@ -501,7 +501,7 @@ fn sandbox_argument_candidates(context: &SelectorTokenContext) -> Vec<SelectorCa
 /// Builds parser-aligned candidates for direct `/shell-mode` selection.
 fn shell_mode_argument_candidates(context: &SelectorTokenContext) -> Vec<SelectorCandidate> {
     match context.tokens_before.get(1..) {
-        Some([]) => value_candidates(&["pane", "native"]),
+        Some([]) => value_candidates(&["status", "pane", "native"]),
         Some([mode]) if matches!(mode.as_str(), "pane" | "native") => {
             flag_candidates(&["--global"])
         }

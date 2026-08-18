@@ -13,6 +13,7 @@ use super::{
     ConfigMutationValue, MezError, Result, RuntimeSessionService, parse_slash_command,
     runtime_apply_persisted_config_mutation_batch, runtime_primary_config_path,
 };
+use crate::integrations::agent::slash::AgentShellPresentation;
 use crate::runtime::config::ShellMode;
 use crate::security::audit::{AuditActor, AuditRecord};
 
@@ -28,6 +29,8 @@ enum ShellModeScope {
 /// Strict operations accepted by `/shell-mode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellModeCommand {
+    /// Displays the effective shell execution mode for the invoking pane.
+    Status,
     /// Selects one shell execution mode in the requested scope.
     Set(ShellModeScope, ShellMode),
 }
@@ -53,6 +56,11 @@ impl RuntimeSessionService {
         }
         let operation = parse_shell_mode_command(input)?;
         match operation {
+            ShellModeCommand::Status => Ok(AgentShellCommandOutcome::Presented {
+                command: "shell-mode".to_string(),
+                body: self.render_shell_mode_status(pane_id),
+                presentation: AgentShellPresentation::Pager,
+            }),
             ShellModeCommand::Set(scope, mode) => {
                 if !origin.is_authenticated_primary_input() {
                     return Err(MezError::forbidden(
@@ -62,6 +70,24 @@ impl RuntimeSessionService {
                 self.apply_shell_mode(primary_client_id, pane_id, scope, mode)
             }
         }
+    }
+
+    /// Renders the effective pane mode and the configured global default.
+    fn render_shell_mode_status(&self, pane_id: &str) -> String {
+        let global = self.agent_default_shell_mode();
+        let override_mode = self.agent_shell_mode_override(pane_id);
+        let effective = self.effective_agent_shell_mode_for_pane(pane_id);
+        format!(
+            "# Shell Mode Status\n\n| Field | Value |\n| --- | --- |\n| Pane | `{pane_id}` |\n| Effective mode | `{}` |\n| Global mode | `{}` |\n| Source | {} |\n| Local override | {} |\n",
+            effective.name(),
+            global.name(),
+            if override_mode.is_some() {
+                "pane override"
+            } else {
+                "global default"
+            },
+            if override_mode.is_some() { "yes" } else { "no" },
+        )
     }
 
     /// Applies one local override or persisted global mode mutation.
@@ -164,6 +190,7 @@ fn parse_shell_mode_command(input: &str) -> Result<ShellModeCommand> {
         .ok_or_else(|| MezError::invalid_args("shell-mode arguments contain invalid quoting"))?;
     let words = words.iter().map(String::as_str).collect::<Vec<_>>();
     match words.as_slice() {
+        ["status"] => Ok(ShellModeCommand::Status),
         ["pane"] => Ok(ShellModeCommand::Set(ShellModeScope::Pane, ShellMode::Pane)),
         ["native"] => Ok(ShellModeCommand::Set(
             ShellModeScope::Pane,
@@ -178,7 +205,7 @@ fn parse_shell_mode_command(input: &str) -> Result<ShellModeCommand> {
             ShellMode::Native,
         )),
         _ => Err(MezError::invalid_args(
-            "shell-mode expects pane or native, optionally followed by --global",
+            "shell-mode expects status, pane, or native; pane and native optionally accept --global",
         )),
     }
 }
@@ -196,10 +223,14 @@ mod tests {
     use super::{ShellModeCommand, ShellModeScope, parse_shell_mode_command};
     use crate::runtime::config::ShellMode;
 
-    /// Verifies mode selection defaults to the pane and accepts only the
-    /// optional global scope flag.
+    /// Verifies shell-mode accepts the read-only status view and mode selection
+    /// defaults to the pane with only the optional global scope flag.
     #[test]
     fn parses_narrow_shell_mode_grammar_and_scope() {
+        assert_eq!(
+            parse_shell_mode_command("/shell-mode status").unwrap(),
+            ShellModeCommand::Status
+        );
         assert_eq!(
             parse_shell_mode_command("/shell-mode pane").unwrap(),
             ShellModeCommand::Set(ShellModeScope::Pane, ShellMode::Pane)
@@ -217,6 +248,7 @@ mod tests {
             ShellModeCommand::Set(ShellModeScope::Global, ShellMode::Native)
         );
         assert!(parse_shell_mode_command("/shell-mode").is_err());
+        assert!(parse_shell_mode_command("/shell-mode status --global").is_err());
         assert!(parse_shell_mode_command("/shell-mode native --yes").is_err());
         assert!(parse_shell_mode_command("/shell-mode --global native").is_err());
     }

@@ -6701,9 +6701,11 @@ The baseline command capabilities are:
   working directory, accept `latest` or the only pending project trust request
   for the live session, and provide a list view for pending project trust
   requests.
-- `/shell-mode`: Set pane shell execution mode through exactly `pane` and
-  `native` mode arguments, optionally followed by `--global`. `pane` or
-  `native` without `--global` MUST set an exact-pane runtime override
+- `/shell-mode`: Show shell-mode state through the read-only `status` argument
+  in a pager table that includes the invoking pane, effective mode, global
+  mode, source, and local-override state. Set pane shell execution mode through
+  exactly `pane` and `native` mode arguments, optionally followed by `--global`.
+  `pane` or `native` without `--global` MUST set an exact-pane runtime override
   and MUST NOT persist configuration, affect sibling panes, advance global
   configuration generation, survive pane removal, or survive daemon restart.
   `pane --global` and `native --global` MUST use the atomic

@@ -415,7 +415,7 @@ fn sandbox_parameter_shadow_text(context: &SelectorTokenContext) -> Option<Strin
 /// Returns a position-sensitive hint for direct `/shell-mode` selection.
 fn shell_mode_parameter_shadow_text(context: &SelectorTokenContext) -> Option<String> {
     match context.tokens_before.get(1..) {
-        Some([]) => Some(" <pane|native>".to_string()),
+        Some([]) => Some(" <status|pane|native>".to_string()),
         Some([mode]) if matches!(mode.as_str(), "pane" | "native") => {
             Some(" [--global]".to_string())
         }

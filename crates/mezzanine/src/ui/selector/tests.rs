@@ -929,7 +929,7 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
     assert_eq!(status_hint.text, " [--extended]");
     assert_eq!(plan_hint.text, " <on|off|toggle|status>");
     assert_eq!(trust_hint.text, " [project-root|latest|list|pending]");
-    assert_eq!(shell_mode_hint.text, " <pane|native>");
+    assert_eq!(shell_mode_hint.text, " <status|pane|native>");
     assert_eq!(shell_mode_scope_hint.text, " [--global]");
     assert_eq!(
         routing_hint.text,

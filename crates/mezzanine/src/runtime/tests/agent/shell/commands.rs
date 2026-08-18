@@ -865,6 +865,38 @@ fn runtime_agent_shell_sandbox_global_mutation_preserves_pane_override() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Verifies `/shell-mode status` opens a pager-backed table with the invoking
+/// pane's effective mode and override provenance. This protects the read-only
+/// status path from being treated as a mutation or rendered as a transient
+/// command notice after a pane-local selection changes the effective mode.
+#[test]
+fn runtime_agent_shell_shell_mode_status_uses_pager_and_reports_override() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    service
+        .execute_agent_shell_command(&primary, "/shell-mode native")
+        .unwrap();
+    let response = service
+        .execute_agent_shell_command(&primary, "/shell-mode status")
+        .unwrap();
+
+    assert!(response.contains(r#""kind":"display""#), "{response}");
+    assert!(response.contains(r#""presentation":"pager""#), "{response}");
+    assert!(response.contains("# Shell Mode Status"), "{response}");
+    assert!(response.contains("Pane | `%1`"), "{response}");
+    assert!(response.contains("Effective mode | `native`"), "{response}");
+    assert!(response.contains("Global mode | `pane`"), "{response}");
+    assert!(response.contains("Source | pane override"), "{response}");
+    assert!(response.contains("Local override | yes"), "{response}");
+}
+
 /// Verifies pane-local permission commands do not leak preset or approval
 /// changes into an unrelated root pane or the configured session baseline.
 #[test]
