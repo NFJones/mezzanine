@@ -487,13 +487,15 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies native shell execution presents captured command output through the
-/// shell-view renderer rather than suppressing it with the normal result-preview
-/// policy.
+/// Verifies native shell execution bypasses occupied-pane readiness and presents
+/// captured command output through the shell-view renderer rather than
+/// suppressing it with the normal result-preview policy.
 ///
 /// Pane execution writes child output through the PTY, while native execution
-/// captures it directly. Both transports must expose cleaned stdout and stderr
-/// in shell view without wrapper traffic or a duplicate action-result header.
+/// captures it directly. An alternate-screen program may leave the pane in
+/// `interactive-blocked`, but native actions must still execute without pane
+/// input and expose cleaned stdout and stderr in shell view without wrapper
+/// traffic or a duplicate action-result header.
 #[test]
 fn runtime_native_agent_shell_command_output_is_visible_in_shell_view() {
     let mut service = test_runtime_service();
@@ -511,6 +513,7 @@ fn runtime_native_agent_shell_command_output_is_visible_in_shell_view() {
         .set_log_level("%1", AgentLogLevel::Verbose)
         .unwrap();
     service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Native));
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
     service.permission_policy_mut().set_approval_bypass(true);
 
     let start = service.dispatch_runtime_control_body(

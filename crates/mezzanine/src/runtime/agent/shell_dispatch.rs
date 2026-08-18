@@ -726,7 +726,11 @@ impl RuntimeSessionService {
                 execution.action_results[index] = result;
                 continue;
             }
-            match self.pane_readiness_state(&turn.pane_id) {
+            match if native_mode {
+                PaneReadinessState::Ready
+            } else {
+                self.pane_readiness_state(&turn.pane_id)
+            } {
                 PaneReadinessState::Ready => {}
                 PaneReadinessState::Unknown
                 | PaneReadinessState::PromptCandidate
