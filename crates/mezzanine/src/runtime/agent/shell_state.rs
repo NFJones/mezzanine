@@ -843,7 +843,12 @@ impl RuntimeSessionService {
             if exit_code == Some(0) {
                 self.record_shell_dispatch_success(&turn.turn_id, command);
             }
-            if exit_code == Some(0)
+            if self.agent_shell_view_enabled(&turn.pane_id) && !combined_output.trim().is_empty() {
+                self.append_agent_pty_diagnostic_bytes_to_terminal_buffer(
+                    &turn.pane_id,
+                    combined_output.as_bytes(),
+                )?;
+            } else if exit_code == Some(0)
                 && local_action_plan(action)?
                     .is_some_and(|plan| plan.display_output_after_completion)
                 && (self.agent_debug_enabled(&turn.pane_id)

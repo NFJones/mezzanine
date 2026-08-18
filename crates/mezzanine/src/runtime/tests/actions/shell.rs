@@ -487,6 +487,95 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies native shell execution presents captured command output through the
+/// shell-view renderer rather than suppressing it with the normal result-preview
+/// policy.
+///
+/// Pane execution writes child output through the PTY, while native execution
+/// captures it directly. Both transports must expose cleaned stdout and stderr
+/// in shell view without wrapper traffic or a duplicate action-result header.
+#[test]
+fn runtime_native_agent_shell_command_output_is_visible_in_shell_view() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", AgentLogLevel::Verbose)
+        .unwrap();
+    service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Native));
+    service.permission_policy_mut().set_approval_bypass(true);
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-native-visible-output","input":"print native markers"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "native shell output".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "shell-1".to_string(),
+                    rationale: "print native markers".to_string(),
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
+                        summary: "Print native markers".to_string(),
+                        command: "printf 'native-stdout\\n'; printf 'native-stderr\\n' >&2"
+                            .to_string(),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: None,
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service.remove_pending_agent_provider_task("turn-1");
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains("native-stdout"), "{pane_text}");
+    assert!(pane_text.contains("native-stderr"), "{pane_text}");
+    assert!(!pane_text.contains("MEZ_MARKER_TOKEN"), "{pane_text}");
+    assert!(!pane_text.contains("MEZ_STATUS"), "{pane_text}");
+    assert!(
+        !pane_text.contains("mez> Print native markers"),
+        "{pane_text}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that default agent command execution keeps one bounded command
 /// preview while routing decoded command output into provider context. Raw
 /// shell output may be base64-transported in the pane, but the model-facing
