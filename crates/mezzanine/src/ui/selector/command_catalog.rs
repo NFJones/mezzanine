@@ -352,6 +352,10 @@ pub(super) fn agent_argument_candidates(
         let candidates = sandbox_argument_candidates(context);
         return dedupe_selector_candidates(candidates);
     }
+    if command == "shell-mode" {
+        let candidates = shell_mode_argument_candidates(context);
+        return dedupe_selector_candidates(candidates);
+    }
     if command == "routing"
         && context
             .tokens_before
@@ -489,6 +493,17 @@ fn sandbox_argument_candidates(context: &SelectorTokenContext) -> Vec<SelectorCa
             .collect(),
         "trust" if context.tokens_before.len() == 2 => {
             value_candidates(&["latest", "list", "pending"])
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Builds parser-aligned candidates for direct `/shell-mode` selection.
+fn shell_mode_argument_candidates(context: &SelectorTokenContext) -> Vec<SelectorCandidate> {
+    match context.tokens_before.get(1..) {
+        Some([]) => value_candidates(&["pane", "native"]),
+        Some([mode]) if matches!(mode.as_str(), "pane" | "native") => {
+            flag_candidates(&["--global"])
         }
         _ => Vec::new(),
     }

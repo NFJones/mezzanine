@@ -6701,16 +6701,12 @@ The baseline command capabilities are:
   working directory, accept `latest` or the only pending project trust request
   for the live session, and provide a list view for pending project trust
   requests.
-- `/shell-mode`: Inspect and manage pane shell execution mode through exactly
-  `status`, `enable`, and `disable` subcommands. No argument MUST behave as
-  `status`. `status` MUST report the effective mode for the active pane,
-  whether a pane override exists, and whether the effective value came from
-  that override or the persisted global default. `status --global` MUST report
-  only the persisted default. Both status forms MUST be read-only.
-  `enable --yes` and `disable --yes` MUST set an exact-pane runtime override
+- `/shell-mode`: Set pane shell execution mode through exactly `pane` and
+  `native` mode arguments, optionally followed by `--global`. `pane` or
+  `native` without `--global` MUST set an exact-pane runtime override
   and MUST NOT persist configuration, affect sibling panes, advance global
   configuration generation, survive pane removal, or survive daemon restart.
-  `enable --global --yes` and `disable --global --yes` MUST use the atomic
+  `pane --global` and `native --global` MUST use the atomic
   persisted configuration and live-reload path. A global change MUST affect
   panes without overrides and MUST NOT clear an existing pane override.
   A newly spawned subagent pane MUST receive a snapshot of its parent's
@@ -6721,8 +6717,8 @@ The baseline command capabilities are:
   child override, so it and its child both continue following later global
   mode changes.
   Mutations MUST require authenticated primary-client input, while unsupported
-  subcommands, duplicate or unknown flags, missing `--yes`, and extra
-  positional arguments MUST fail without changing state.
+  modes, duplicate or unknown flags, and extra positional arguments MUST fail
+  without changing state.
 - Bare `/resume`: Show resumable saved agent sessions in the shared interactive
   record-browser table keyed by conversation UUID. The table MUST include name,
   last activity, directory, transcript entry count, and latest prompt columns.

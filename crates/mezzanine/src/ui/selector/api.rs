@@ -342,6 +342,19 @@ fn parameter_shadow_hint(
         });
     }
     if surface == SelectorSurface::AgentCommand
+        && context
+            .tokens_before
+            .first()
+            .is_some_and(|command| command.trim_start_matches('/') == "shell-mode")
+        && let Some(text) = shell_mode_parameter_shadow_text(context)
+    {
+        return Some(SelectorShadowHint {
+            insert_at: cursor,
+            text,
+            kind: SelectorCandidateKind::Value,
+        });
+    }
+    if surface == SelectorSurface::AgentCommand
         && matches!(context.tokens_before.len(), 2 | 3)
         && context.tokens_before[0].trim_start_matches('/') == "routing"
         && context.tokens_before[1] == "policy"
@@ -394,6 +407,17 @@ fn sandbox_parameter_shadow_text(context: &SelectorTokenContext) -> Option<Strin
         }
         [operation] if operation == "trust" => {
             Some(" [project-root|latest|list|pending]".to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Returns a position-sensitive hint for direct `/shell-mode` selection.
+fn shell_mode_parameter_shadow_text(context: &SelectorTokenContext) -> Option<String> {
+    match context.tokens_before.get(1..) {
+        Some([]) => Some(" <pane|native>".to_string()),
+        Some([mode]) if matches!(mode.as_str(), "pane" | "native") => {
+            Some(" [--global]".to_string())
         }
         _ => None,
     }

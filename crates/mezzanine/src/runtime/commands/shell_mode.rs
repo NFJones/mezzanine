@@ -1,9 +1,9 @@
 //! Pane-local shell execution mode command parsing, execution, and
 //! presentation.
 //!
-//! This module owns the narrow `/shell-mode` runtime hierarchy. Status and
-//! the default enable/disable operations act on only the invoking pane.
-//! Explicit `--global` mutations reuse the atomic persisted-config
+//! This module owns the narrow `/shell-mode` runtime hierarchy. Selecting a
+//! mode without `--global` acts on only the invoking pane. Explicit global
+//! selections reuse the atomic persisted-config
 //! transaction, while pane-local mutations mirror the agent routing override
 //! store.
 
@@ -13,11 +13,10 @@ use super::{
     ConfigMutationValue, MezError, Result, RuntimeSessionService, parse_slash_command,
     runtime_apply_persisted_config_mutation_batch, runtime_primary_config_path,
 };
-use crate::integrations::agent::slash::AgentShellPresentation;
 use crate::runtime::config::ShellMode;
 use crate::security::audit::{AuditActor, AuditRecord};
 
-/// Scope selected for a status, enable, or disable operation.
+/// Scope selected for a mode operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellModeScope {
     /// Exact invoking pane only.
@@ -29,12 +28,8 @@ enum ShellModeScope {
 /// Strict operations accepted by `/shell-mode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellModeCommand {
-    /// Displays effective pane or persisted global state.
-    Status(ShellModeScope),
-    /// Enables native spawned-shell execution in the selected scope.
-    Enable(ShellModeScope),
-    /// Restores pane-shell execution in the selected scope.
-    Disable(ShellModeScope),
+    /// Selects one shell execution mode in the requested scope.
+    Set(ShellModeScope, ShellMode),
 }
 
 impl RuntimeSessionService {
@@ -58,55 +53,15 @@ impl RuntimeSessionService {
         }
         let operation = parse_shell_mode_command(input)?;
         match operation {
-            ShellModeCommand::Status(scope) => Ok(AgentShellCommandOutcome::Presented {
-                command: "shell-mode".to_string(),
-                body: self.render_shell_mode_status(pane_id, scope),
-                presentation: AgentShellPresentation::Pager,
-            }),
-            ShellModeCommand::Enable(scope) => {
+            ShellModeCommand::Set(scope, mode) => {
                 if !origin.is_authenticated_primary_input() {
                     return Err(MezError::forbidden(
                         "shell mode mutations require authenticated primary-client input",
                     ));
                 }
-                self.apply_shell_mode(primary_client_id, pane_id, scope, ShellMode::Native)
-            }
-            ShellModeCommand::Disable(scope) => {
-                if !origin.is_authenticated_primary_input() {
-                    return Err(MezError::forbidden(
-                        "shell mode mutations require authenticated primary-client input",
-                    ));
-                }
-                self.apply_shell_mode(primary_client_id, pane_id, scope, ShellMode::Pane)
+                self.apply_shell_mode(primary_client_id, pane_id, scope, mode)
             }
         }
-    }
-
-    /// Renders pane-effective state with explicit override provenance, or only
-    /// the persisted global default when `--global` was selected.
-    fn render_shell_mode_status(&self, pane_id: &str, scope: ShellModeScope) -> String {
-        let global = self.agent_default_shell_mode();
-        if scope == ShellModeScope::Global {
-            return format!(
-                "# Shell Mode Status\n\n| Field | Value |\n| --- | --- |\n| Scope | global |\n| Mode | `{}` |\n| Source | persisted configuration |\n| Generation | {} |\n",
-                global.name(),
-                self.session.config_generation,
-            );
-        }
-        let effective = self.effective_agent_shell_mode_for_pane(pane_id);
-        let overridden = self.agent_shell_mode_override(pane_id).is_some();
-        format!(
-            "# Shell Mode Status\n\n| Field | Value |\n| --- | --- |\n| Scope | pane |\n| Pane | `{pane_id}` |\n| Effective mode | `{}` |\n| Global mode | `{}` |\n| Source | {} |\n| Local override | {} |\n| Generation | {} |\n",
-            effective.name(),
-            global.name(),
-            if overridden {
-                "pane override"
-            } else {
-                "global default"
-            },
-            if overridden { "yes" } else { "no" },
-            self.session.config_generation,
-        )
     }
 
     /// Applies one local override or persisted global mode mutation.
@@ -209,29 +164,21 @@ fn parse_shell_mode_command(input: &str) -> Result<ShellModeCommand> {
         .ok_or_else(|| MezError::invalid_args("shell-mode arguments contain invalid quoting"))?;
     let words = words.iter().map(String::as_str).collect::<Vec<_>>();
     match words.as_slice() {
-        [] | ["status"] => Ok(ShellModeCommand::Status(ShellModeScope::Pane)),
-        ["status", "--global"] => Ok(ShellModeCommand::Status(ShellModeScope::Global)),
-        ["enable", "--yes"] | ["enable", "--yes", "--global"] => {
-            Ok(ShellModeCommand::Enable(if words.contains(&"--global") {
-                ShellModeScope::Global
-            } else {
-                ShellModeScope::Pane
-            }))
-        }
-        ["enable", "--global", "--yes"] => Ok(ShellModeCommand::Enable(ShellModeScope::Global)),
-        ["disable", "--yes"] | ["disable", "--yes", "--global"] => {
-            Ok(ShellModeCommand::Disable(if words.contains(&"--global") {
-                ShellModeScope::Global
-            } else {
-                ShellModeScope::Pane
-            }))
-        }
-        ["disable", "--global", "--yes"] => Ok(ShellModeCommand::Disable(ShellModeScope::Global)),
-        ["enable", ..] | ["disable", ..] => Err(MezError::invalid_args(
-            "shell-mode enable and disable require exactly --yes and optionally --global",
+        ["pane"] => Ok(ShellModeCommand::Set(ShellModeScope::Pane, ShellMode::Pane)),
+        ["native"] => Ok(ShellModeCommand::Set(
+            ShellModeScope::Pane,
+            ShellMode::Native,
+        )),
+        ["pane", "--global"] => Ok(ShellModeCommand::Set(
+            ShellModeScope::Global,
+            ShellMode::Pane,
+        )),
+        ["native", "--global"] => Ok(ShellModeCommand::Set(
+            ShellModeScope::Global,
+            ShellMode::Native,
         )),
         _ => Err(MezError::invalid_args(
-            "shell-mode expects status, enable, or disable",
+            "shell-mode expects pane or native, optionally followed by --global",
         )),
     }
 }
@@ -247,36 +194,30 @@ const fn shell_mode_scope_name(scope: ShellModeScope) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{ShellModeCommand, ShellModeScope, parse_shell_mode_command};
+    use crate::runtime::config::ShellMode;
 
-    /// Verifies the narrow hierarchy defaults status and mutations to the pane
-    /// while requiring confirmation and explicit global selection.
+    /// Verifies mode selection defaults to the pane and accepts only the
+    /// optional global scope flag.
     #[test]
     fn parses_narrow_shell_mode_grammar_and_scope() {
         assert_eq!(
-            parse_shell_mode_command("/shell-mode").unwrap(),
-            ShellModeCommand::Status(ShellModeScope::Pane)
+            parse_shell_mode_command("/shell-mode pane").unwrap(),
+            ShellModeCommand::Set(ShellModeScope::Pane, ShellMode::Pane)
         );
         assert_eq!(
-            parse_shell_mode_command("/shell-mode status --global").unwrap(),
-            ShellModeCommand::Status(ShellModeScope::Global)
+            parse_shell_mode_command("/shell-mode native").unwrap(),
+            ShellModeCommand::Set(ShellModeScope::Pane, ShellMode::Native)
         );
         assert_eq!(
-            parse_shell_mode_command("/shell-mode enable --yes").unwrap(),
-            ShellModeCommand::Enable(ShellModeScope::Pane)
+            parse_shell_mode_command("/shell-mode pane --global").unwrap(),
+            ShellModeCommand::Set(ShellModeScope::Global, ShellMode::Pane)
         );
         assert_eq!(
-            parse_shell_mode_command("/shell-mode enable --global --yes").unwrap(),
-            ShellModeCommand::Enable(ShellModeScope::Global)
+            parse_shell_mode_command("/shell-mode native --global").unwrap(),
+            ShellModeCommand::Set(ShellModeScope::Global, ShellMode::Native)
         );
-        assert_eq!(
-            parse_shell_mode_command("/shell-mode disable --yes").unwrap(),
-            ShellModeCommand::Disable(ShellModeScope::Pane)
-        );
-        assert_eq!(
-            parse_shell_mode_command("/shell-mode disable --global --yes").unwrap(),
-            ShellModeCommand::Disable(ShellModeScope::Global)
-        );
-        assert!(parse_shell_mode_command("/shell-mode enable").is_err());
-        assert!(parse_shell_mode_command("/shell-mode native").is_err());
+        assert!(parse_shell_mode_command("/shell-mode").is_err());
+        assert!(parse_shell_mode_command("/shell-mode native --yes").is_err());
+        assert!(parse_shell_mode_command("/shell-mode --global native").is_err());
     }
 }

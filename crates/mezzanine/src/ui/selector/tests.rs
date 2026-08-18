@@ -84,6 +84,22 @@ fn selector_plans_agent_argument_candidates() {
     let routing_plan = plan_selector(SelectorSurface::AgentCommand, "/routing t", 18).unwrap();
     assert_eq!(routing_plan.candidates[0].value, "toggle");
 
+    let shell_mode_plan = plan_selector(
+        SelectorSurface::AgentCommand,
+        "/shell-mode n",
+        "/shell-mode n".len(),
+    )
+    .unwrap();
+    assert_eq!(shell_mode_plan.candidates[0].value, "native");
+
+    let shell_mode_scope_plan = plan_selector(
+        SelectorSurface::AgentCommand,
+        "/shell-mode native --g",
+        "/shell-mode native --g".len(),
+    )
+    .unwrap();
+    assert_eq!(shell_mode_scope_plan.candidates[0].value, "--global");
+
     let policy_plan = plan_selector(
         SelectorSurface::AgentCommand,
         "/routing policy s",
@@ -891,6 +907,18 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
         "/routing ".len(),
     )
     .unwrap();
+    let shell_mode_hint = shadow_hint(
+        SelectorSurface::AgentCommand,
+        "/shell-mode ",
+        "/shell-mode ".len(),
+    )
+    .unwrap();
+    let shell_mode_scope_hint = shadow_hint(
+        SelectorSurface::AgentCommand,
+        "/shell-mode native ",
+        "/shell-mode native ".len(),
+    )
+    .unwrap();
     let plan_hint = shadow_hint(SelectorSurface::AgentCommand, "/plan ", "/plan ".len()).unwrap();
 
     assert_eq!(
@@ -901,6 +929,8 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
     assert_eq!(status_hint.text, " [--extended]");
     assert_eq!(plan_hint.text, " <on|off|toggle|status>");
     assert_eq!(trust_hint.text, " [project-root|latest|list|pending]");
+    assert_eq!(shell_mode_hint.text, " <pane|native>");
+    assert_eq!(shell_mode_scope_hint.text, " [--global]");
     assert_eq!(
         routing_hint.text,
         " <on|off|toggle|status|policy [--global] <subagent|in-place>>"
