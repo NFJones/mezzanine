@@ -2299,6 +2299,22 @@ impl RuntimeSessionService {
             .and_then(|boundary| boundary.child_token.as_deref())
     }
 
+    /// Marks one dependency-free unmanaged child as certified for ownership tests.
+    pub(crate) fn certify_unmanaged_foreign_loader_for_tests(
+        &mut self,
+        pane_id: &str,
+        loader_marker: &str,
+    ) -> bool {
+        let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) else {
+            return false;
+        };
+        boundary.phase = RuntimeForeignShellBootstrapPhase::Certified;
+        boundary.child_shell = None;
+        boundary.loader_marker = Some(loader_marker.to_string());
+        boundary.loader_ready = true;
+        true
+    }
+
     /// Returns live shell transactions for integration-test observation.
     pub(crate) fn running_shell_transactions_for_tests(
         &self,

@@ -490,3 +490,80 @@ bootstrap\tcomplete\t1714500000\n";
 
     let _ = process.terminate(Duration::from_millis(10));
 }
+
+/// Verifies exiting an unmanaged dependency-free child retains the loader's
+/// interaction generation until its correlated exit restores the foreign
+/// parent. Once restoration settles, direct user input must reach that parent
+/// instead of remaining queued behind stale runtime ownership.
+#[test]
+fn runtime_unmanaged_foreign_loader_exit_releases_parent_input() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    let foreign_group = primary_pid.saturating_add(1);
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, Some(foreign_group));
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+
+    assert!(
+        service.begin_uncertified_foreign_shell_boundary(&pane_id, primary_pid, foreign_group,)
+    );
+    let loader_marker = "unmanaged-loader-restoration";
+    assert!(service.certify_unmanaged_foreign_loader_for_tests(&pane_id, loader_marker,));
+    service.enter_agent_subshell(pane_id.clone());
+
+    assert!(service.exit_agent_subshell_if_active(&pane_id).unwrap());
+    assert!(!service.agent_subshell_is_active(&pane_id));
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("certified"),
+        "agent exit must retain the loader boundary until parent restoration"
+    );
+    service.drain_pane_io_transition();
+
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ForeignShellLoaderExited {
+                    marker: loader_marker.to_string(),
+                    exit_code: 0,
+                }],
+            )
+            .unwrap(),
+        1
+    );
+    assert!(!service.pane_has_uncertified_foreign_shell_boundary(&pane_id));
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        None
+    );
+
+    let input = b"echo foreign-parent\n";
+    let dispatch = service
+        .write_input_to_pane(&primary, Some(&pane_id), input)
+        .unwrap();
+    assert_eq!(dispatch.bytes_written, input.len());
+    let effects = service.drain_pane_io_transition().side_effects;
+    let pane_inputs = pane_input_effects(&effects);
+    assert_eq!(pane_inputs.len(), 1);
+    assert_eq!(pane_inputs[0].pane_input_parts().0, pane_id);
+    assert_eq!(pane_inputs[0].pane_input_parts().1, input);
+
+    let _ = process.terminate(Duration::from_millis(10));
+}

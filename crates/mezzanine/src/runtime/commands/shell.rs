@@ -1475,7 +1475,9 @@ impl RuntimeSessionService {
             self.clear_shell_output_filters_for_foreground_input(pane_id);
         }
         let managed_shell_handoff_pending = self.managed_shell_handoff_is_pending(pane_id);
-        if !managed_shell_handoff_pending {
+        let dependency_free_loader_handoff_pending =
+            self.dependency_free_foreign_loader_owns_current_process_group(pane_id);
+        if !managed_shell_handoff_pending && !dependency_free_loader_handoff_pending {
             self.clear_agent_subshell_shell_identity(pane_id);
         }
         let command_exit = self.take_agent_subshell_command_exit(pane_id);

@@ -568,6 +568,18 @@ impl RuntimeSessionService {
     /// managed remote child and its unmanaged parent can share one host-side identity.
     /// While the correlated loader marker remains live, only its protocol exit event can
     /// prove that the managed child returned to the foreign parent.
+    pub(crate) fn dependency_free_foreign_loader_owns_current_process_group(
+        &self,
+        pane_id: &str,
+    ) -> bool {
+        self.pane_foreground_process_group_observation(pane_id)
+            .0
+            .is_some_and(|process_group_id| {
+                self.dependency_free_foreign_loader_owns_process_group(pane_id, process_group_id)
+            })
+    }
+
+    /// Reports whether a dependency-free loader owns one observed process group.
     pub(crate) fn dependency_free_foreign_loader_owns_process_group(
         &self,
         pane_id: &str,
