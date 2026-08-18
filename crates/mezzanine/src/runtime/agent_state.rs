@@ -12,10 +12,12 @@ use super::{
     SessionApprovalStore, SubagentScopeDeclaration,
 };
 use crate::integrations::agent::provider::AnthropicMessagesProvider;
+use crate::runtime::processes::NativeShellContext;
 use crate::storage::issues::IssueStore;
 use crate::storage::memory::PersistentMemoryStore;
 use mez_agent::{
     AutoSizingRoutingSelection, McpPromptTool, ModelContextCompactionPlan, PreparedModelContext,
+    ShellExecutionOutput, ShellExecutionRequest,
 };
 
 /// Carries Runtime Agent Provider Task state for this subsystem.
@@ -82,6 +84,52 @@ pub(crate) struct RuntimeApprovedExternalActionOutcome {
     pub result: crate::error::Result<mez_agent::ActionResult>,
     /// MCP transport returned to actor ownership after the call.
     pub mcp_transport: Option<(String, super::RuntimeMcpTransport)>,
+}
+
+/// Immutable spawned-shell work transferred from the runtime actor to a worker.
+///
+/// The actor retains turn and action ownership while the worker receives only
+/// the inferred process context and already-authorized execution request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeNativeShellDispatch {
+    /// Turn that owns the native shell action.
+    pub(crate) turn_id: String,
+    /// Stable action identity within the turn.
+    pub(crate) action_id: String,
+    /// Exact transaction marker used to fence stale worker completions.
+    pub(crate) marker: String,
+    /// Inferred shell, environment, and working-directory context.
+    pub(crate) context: NativeShellContext,
+    /// Fully materialized spawned-shell request.
+    pub(crate) request: ShellExecutionRequest,
+    /// Runtime wall-clock timestamp used by shell completion metrics.
+    pub(crate) started_at_unix_ms: u64,
+}
+
+/// Typed spawned-shell failure safe to carry through runtime events.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeNativeShellFailure {
+    /// Stable runtime failure kind used in action-result metadata.
+    pub(crate) kind: String,
+    /// Human-readable worker failure diagnostic.
+    pub(crate) message: String,
+}
+
+/// Result returned by a native shell worker for actor-owned settlement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeNativeShellOutcome {
+    /// Turn that owned the dispatched work.
+    pub(crate) turn_id: String,
+    /// Stable action identity within the turn.
+    pub(crate) action_id: String,
+    /// Exact marker copied from the claimed dispatch.
+    pub(crate) marker: String,
+    /// Command retained for audit, history, and apply-patch phase handling.
+    pub(crate) command: String,
+    /// Runtime wall-clock timestamp captured before worker dispatch.
+    pub(crate) started_at_unix_ms: u64,
+    /// Normalized shell output or a typed worker failure.
+    pub(crate) result: std::result::Result<ShellExecutionOutput, RuntimeNativeShellFailure>,
 }
 
 /// Tracks a provider task after the async actor has claimed it from the queue.

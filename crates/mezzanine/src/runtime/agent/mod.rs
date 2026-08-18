@@ -6,6 +6,7 @@
 
 use super::agent_state::{
     RuntimeAgentLoopCompletion, RuntimeAgentLoopSettlement, RuntimeAgentProviderClaim,
+    RuntimeNativeShellDispatch,
 };
 use super::commands::RuntimeModelCatalog;
 #[cfg(test)]
@@ -304,6 +305,10 @@ pub(crate) struct RuntimeAgentComponent {
     pending_approved_external_actions: BTreeSet<(String, String)>,
     /// Approved external actions currently owned by async workers.
     claimed_approved_external_actions: BTreeSet<(String, String)>,
+    /// Authorized native shell actions waiting for external worker dispatch.
+    pending_native_shell_dispatches: BTreeMap<(String, String), RuntimeNativeShellDispatch>,
+    /// Exact native shell marker owned by an external worker per turn/action.
+    claimed_native_shell_dispatches: BTreeMap<(String, String), String>,
     /// Ambiguous Bubblewrap failures awaiting one bounded internal model
     /// assessment, keyed by the owning turn.
     sandbox_failure_assessments: BTreeMap<String, RuntimeSandboxFailureAssessment>,
@@ -2185,6 +2190,12 @@ impl RuntimeSessionService {
         } else {
             self.agent.agent_shell_mode_overrides.remove(pane_id);
         }
+    }
+
+    /// Selects native shell mode without exposing the private config enum to tests.
+    #[cfg(test)]
+    pub(crate) fn set_agent_native_shell_mode_for_tests(&mut self, pane_id: &str) {
+        self.set_agent_shell_mode_override(pane_id, Some(ShellMode::Native));
     }
 
     /// Clears one pane-local shell mode override during pane teardown.

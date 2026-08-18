@@ -121,6 +121,8 @@ pub enum RuntimeEvent {
     },
     /// An agent provider task completed or failed outside the runtime actor.
     AgentProvider(AgentProviderEvent),
+    /// A native shell worker completed outside the runtime actor.
+    NativeShell(crate::runtime::RuntimeNativeShellOutcome),
     /// A model-backed conversation compaction completed or failed outside the
     /// runtime actor.
     AgentCompaction(AgentCompactionEvent),
@@ -154,6 +156,7 @@ impl RuntimeEvent {
             Self::Process(_) => "process",
             Self::PaneProcess { .. } => "pane_process",
             Self::AgentProvider(_) => "agent_provider",
+            Self::NativeShell(_) => "native_shell",
             Self::AgentCompaction(_) => "agent_compaction",
             Self::AgentRemember(_) => "agent_remember",
             Self::Hook(_) => "hook",
@@ -718,6 +721,13 @@ pub enum RuntimeSideEffect {
         /// Approved action identity within the turn.
         action_id: String,
     },
+    /// Execute one authorized native shell action outside the runtime actor.
+    DispatchNativeShellAction {
+        /// Turn that owns the action.
+        turn_id: String,
+        /// Stable action identity within the turn.
+        action_id: String,
+    },
     /// Start a model-backed conversation compaction outside the actor.
     DispatchAgentCompaction {
         /// Pane whose active conversation should be compacted.
@@ -993,6 +1003,7 @@ const fn runtime_event_application_priority(event: &RuntimeEvent) -> u8 {
         | RuntimeEvent::Pane(_)
         | RuntimeEvent::PaneProcess { .. }
         | RuntimeEvent::AgentProvider(_)
+        | RuntimeEvent::NativeShell(_)
         | RuntimeEvent::AgentCompaction(_)
         | RuntimeEvent::AgentRemember(_)
         | RuntimeEvent::Hook(_)

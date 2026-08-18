@@ -253,6 +253,7 @@ pub(super) fn runtime_event_requires_registry_persistence(event: &RuntimeEvent) 
         RuntimeEvent::Client(_)
         | RuntimeEvent::Process(_)
         | RuntimeEvent::AgentProvider(_)
+        | RuntimeEvent::NativeShell(_)
         | RuntimeEvent::AgentCompaction(_)
         | RuntimeEvent::AgentRemember(_)
         | RuntimeEvent::Shutdown(_) => true,
@@ -384,6 +385,7 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::DispatchApprovedExternalAction { .. } => {
             "dispatch-approved-external-action"
         }
+        RuntimeSideEffect::DispatchNativeShellAction { .. } => "dispatch-native-shell-action",
         RuntimeSideEffect::DispatchAgentCompaction { .. } => "dispatch-agent-compaction",
         RuntimeSideEffect::DispatchAgentRemember { .. } => "dispatch-agent-remember",
         RuntimeSideEffect::RunProgramHook { .. } => "run-program-hook",

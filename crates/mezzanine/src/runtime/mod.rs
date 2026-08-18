@@ -369,7 +369,8 @@ pub use agent_state::{
 pub(crate) use agent_state::{
     RuntimeAgentProviderPersistenceOutcome, RuntimeAgentProviderPersistenceWork,
     RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
-    RuntimeApprovedMcpActionDispatch,
+    RuntimeApprovedMcpActionDispatch, RuntimeNativeShellDispatch, RuntimeNativeShellFailure,
+    RuntimeNativeShellOutcome,
 };
 pub(crate) use commands::{
     RuntimeAgentPromptProviderInfoRefresh, RuntimeProviderInfoRefreshOutcome,
@@ -397,6 +398,7 @@ use pane_io::{ActivePanePipe, PaneExitRecord, StoppedPanePipe};
 pub use pane_io::{
     PaneExitUpdate, PaneInputDispatch, PaneOutputUpdate, PaneProcessStart, PaneResizeUpdate,
 };
+pub(crate) use processes::execute_native_shell_dispatch;
 pub use service_state::{
     DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
     DEFAULT_AGENT_LOOP_LIMIT, DEFAULT_AGENT_ROUTING, DEFAULT_MAX_ROOT_SUBAGENTS,

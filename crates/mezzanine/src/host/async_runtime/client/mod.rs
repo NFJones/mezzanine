@@ -16,8 +16,9 @@ use super::{
     RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentRememberDispatch,
     RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome, RuntimeEvent,
-    RuntimeEventBatch, RuntimeLifecycleState, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind,
-    Size, TerminalClientLoopAction, empty_attached_terminal_loop_report,
+    RuntimeEventBatch, RuntimeLifecycleState, RuntimeNativeShellDispatch,
+    RuntimeNativeShellFailure, RuntimeNativeShellOutcome, RuntimeSideEffect, RuntimeTimerKey,
+    RuntimeTimerKind, Size, TerminalClientLoopAction, empty_attached_terminal_loop_report,
     is_terminal_runtime_lifecycle_state, merge_attached_terminal_loop_report,
     run_async_attached_terminal_client_loop_with_snapshot, sleep,
 };

@@ -178,6 +178,256 @@ async fn async_agent_provider_service_uses_actor_owned_provider_poll_guard() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Builds one provider completion containing a single native shell action.
+///
+/// The returned execution is final so worker settlement closes the turn
+/// without scheduling an unrelated configured-provider continuation.
+fn native_shell_provider_execution(
+    task: &crate::runtime::RuntimeAgentProviderTask,
+    command: String,
+) -> mez_agent::AgentTurnExecution {
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: task.turn_id.clone(),
+        conversation_id: "conversation-1".to_string(),
+        agent_id: task.agent_id.clone(),
+        pane_id: task.pane_id.clone(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        state: mez_agent::AgentTurnState::Running,
+        cooperation_mode: None,
+        initial_capability: None,
+    };
+    let action = mez_agent::AgentAction {
+        id: "shell-1".to_string(),
+        rationale: "exercise native worker liveness".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Run a bounded native command".to_string(),
+            command,
+            interactive: false,
+            stateful: false,
+            timeout_ms: Some(5_000),
+        },
+    };
+    let response_batch = mez_agent::MaapBatch {
+        protocol: "maap/1".to_string(),
+        rationale: "test native worker liveness".to_string(),
+        thought: None,
+        turn_id: task.turn_id.clone(),
+        agent_id: task.agent_id.clone(),
+        actions: vec![action.clone()],
+        final_turn: true,
+    };
+    mez_agent::AgentTurnExecution {
+        request: mez_agent::ModelRequest {
+            provider: task.model_profile.provider.clone(),
+            model: task.model_profile.model.clone(),
+            reasoning_effort: task
+                .model_profile
+                .provider_options
+                .get("reasoning_effort")
+                .cloned()
+                .or_else(|| task.model_profile.reasoning_profile.clone()),
+            thinking_enabled: task.model_profile.thinking_enabled(),
+            latency_preference: task.model_profile.latency_preference.clone(),
+            prompt_cache_retention: task
+                .model_profile
+                .provider_options
+                .get("prompt_cache_retention")
+                .cloned(),
+            max_output_tokens: task.model_profile.max_output_tokens(),
+            temperature: None,
+            stop: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: task.turn_id.clone(),
+            agent_id: task.agent_id.clone(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: true,
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::for_capability(
+                mez_agent::AgentCapability::Shell,
+            ),
+            recovery_input: None,
+            messages: vec![mez_agent::ModelMessage {
+                role: mez_agent::ModelMessageRole::User,
+                source: mez_agent::ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                content: "exercise native worker liveness".to_string(),
+            }]
+            .into(),
+        },
+        response: mez_agent::ModelResponse {
+            provider: task.model_profile.provider.clone(),
+            model: task.model_profile.model.clone(),
+            raw_text: "native shell worker response".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(response_batch),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &turn,
+            &action,
+            vec!["shell command accepted for native execution".to_string()],
+            Some(r#"{"state":"pending_dispatch"}"#.to_string()),
+        )],
+        final_turn: true,
+        terminal_state: mez_agent::AgentTurnState::Running,
+    }
+}
+
+/// Verifies a running native command does not block unrelated actor requests.
+///
+/// The command writes a start sentinel before sleeping. Once that sentinel is
+/// visible, a lifecycle request must complete well before the child exits.
+/// Inline native execution in the serialized actor makes this assertion time
+/// out, while external blocking-worker execution keeps the actor responsive.
+#[tokio::test(flavor = "current_thread")]
+async fn async_native_shell_worker_keeps_runtime_actor_responsive() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_agent_native_shell_mode_for_tests("%1");
+    service.set_pane_readiness("%1", mez_agent::PaneReadinessState::InteractiveBlocked);
+    service.permission_policy_mut().set_approval_bypass(true);
+    let start = service
+        .execute_agent_shell_command(&primary, "exercise native worker liveness")
+        .unwrap();
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let task = service
+        .pending_agent_provider_tasks()
+        .into_iter()
+        .find(|task| task.turn_id == "turn-1")
+        .expect("agent prompt should queue turn-1 provider task");
+    let sentinel = std::env::temp_dir().join(format!(
+        "mez-native-actor-liveness-{}-{}",
+        std::process::id(),
+        crate::runtime::current_unix_millis()
+    ));
+    let command = format!(
+        "printf started > '{}'; sleep 1; printf finished",
+        sentinel.display()
+    );
+    let execution = native_shell_provider_execution(&task, command);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == task.turn_id)
+        .cloned()
+        .expect("native worker turn should remain in the ledger");
+    service.remove_pending_agent_provider_task(&task.turn_id);
+    let execution = service
+        .apply_agent_provider_execution(
+            &turn,
+            &task.model_profile,
+            &task.model_profile.provider,
+            execution,
+        )
+        .unwrap();
+    assert_eq!(execution.terminal_state, mez_agent::AgentTurnState::Running);
+    let (native_turn_id, native_action_id) = service
+        .pending_native_shell_actions()
+        .into_iter()
+        .next()
+        .expect("provider execution should queue native shell work");
+    let turn_id = task.turn_id.clone();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let stop = StdArc::new(AtomicBool::new(false));
+    let provider_handle = handle.clone();
+    let provider_stop = StdArc::clone(&stop);
+    let provider = async move {
+        run_async_agent_provider_service(
+            &provider_handle,
+            AsyncAgentProviderServiceConfig::new(1)
+                .unwrap()
+                .with_idle_interval(Duration::from_millis(5))
+                .unwrap(),
+            move |_, state| {
+                provider_stop.load(Ordering::SeqCst)
+                    || matches!(state, RuntimeLifecycleState::Stopping)
+            },
+        )
+        .await
+        .unwrap()
+    };
+    let submit_handle = handle.clone();
+    let submit = async move {
+        let queued = submit_handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchNativeShellAction {
+                turn_id: native_turn_id,
+                action_id: native_action_id,
+            }])
+            .await
+            .unwrap();
+        assert_eq!(queued, 1);
+    };
+    let probe_handle = handle.clone();
+    let sentinel_for_probe = sentinel.clone();
+    let probe = async move {
+        for _ in 0..200 {
+            if sentinel_for_probe.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            sentinel_for_probe.exists(),
+            "native child did not publish its start sentinel"
+        );
+        let state =
+            tokio::time::timeout(Duration::from_millis(200), probe_handle.lifecycle_state())
+                .await
+                .expect("runtime actor was blocked by native shell execution")
+                .unwrap();
+        assert_eq!(state, RuntimeLifecycleState::Running);
+        for _ in 0..400 {
+            if !probe_handle.agent_turn_is_running(&turn_id).await.unwrap() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("native shell worker did not settle its turn");
+    };
+    let client_work = async {
+        let ((), ()) = tokio::join!(submit, probe);
+        stop.store(true, Ordering::SeqCst);
+    };
+    let client = async {
+        let ((), report) = tokio::join!(client_work, provider);
+        assert_eq!(report.executions, 0);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), mut exit) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(client, actor.run())
+    })
+    .await
+    .expect("native worker liveness regression should remain bounded");
+    assert!(!exit.service.agent_turn_is_running("turn-1"));
+    exit.service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_file(sentinel);
+}
+
 /// Verifies that a provider-completed shell action whose pane cannot accept
 /// shell input fails the agent turn instead of failing the async runtime actor
 /// request. This reproduces the daemon-exit class where the model's first shell

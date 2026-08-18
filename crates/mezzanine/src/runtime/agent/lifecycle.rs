@@ -231,6 +231,12 @@ impl RuntimeSessionService {
         self.agent
             .claimed_approved_external_actions
             .retain(|(claimed_turn_id, _)| claimed_turn_id != turn_id);
+        self.agent
+            .pending_native_shell_dispatches
+            .retain(|(pending_turn_id, _), _| pending_turn_id != turn_id);
+        self.agent
+            .claimed_native_shell_dispatches
+            .retain(|(claimed_turn_id, _), _| claimed_turn_id != turn_id);
         self.clear_agent_provider_retry_attempt(turn_id);
         self.clear_blocked_agent_approvals_for_turn(turn_id);
     }

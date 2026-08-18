@@ -15,6 +15,7 @@ use super::{
 use super::{
     AsyncRenderedClientFlush, ClientStatusLine, RenderedClientView, RuntimeAgentProviderTask,
 };
+use crate::runtime::RuntimeNativeShellDispatch;
 
 impl AsyncRuntimeSessionHandle {
     /// Runs the lifecycle state operation for this subsystem.
@@ -550,6 +551,20 @@ impl AsyncRuntimeSessionHandle {
         action_id: String,
     ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
         self.request(|reply| AsyncRuntimeRequest::ClaimApprovedExternalAction {
+            turn_id,
+            action_id,
+            reply,
+        })
+        .await?
+    }
+
+    /// Claims one authorized native shell action for worker execution.
+    pub async fn claim_native_shell_action(
+        &self,
+        turn_id: String,
+        action_id: String,
+    ) -> Result<Option<RuntimeNativeShellDispatch>> {
+        self.request(|reply| AsyncRuntimeRequest::ClaimNativeShellAction {
             turn_id,
             action_id,
             reply,

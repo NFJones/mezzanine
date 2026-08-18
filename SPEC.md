@@ -5804,10 +5804,14 @@ directory are inferred from the pane's live root process, never by running
 commands through the pane shell. Agent entry and provider preflight in native
 mode MUST inspect only live root-process metadata and MUST NOT schedule pane
 bootstrap, readiness, shell-identity, or path-resolution transactions. Native
-execution MUST work while an
-alternative screen application occupies the pane, MUST reject stateful or
-interactive actions without falling back to the pane shell, and MUST report
-`spawned_shell` transport metadata with `sent_to_pane` false. Native
+execution MUST run outside the serialized runtime actor so pane, client,
+rendering, timer, and cancellation events remain responsive while the child is
+active. Native output capture MUST remain bounded and MUST stop waiting after a
+bounded post-exit drain period when escaped descendants retain inherited output
+pipes. Native execution MUST work while an alternative screen application
+occupies the pane, MUST reject stateful or interactive actions without falling
+back to the pane shell, and MUST report `spawned_shell` transport metadata with
+`sent_to_pane` false. Native
 `apply_patch` actions MUST complete the same read and write phases as pane
 transport, materializing final content sidecar records into the spawned
 command file instead of the pane PTY. When Bubblewrap is active in native mode,

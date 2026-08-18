@@ -89,6 +89,7 @@ impl AsyncRuntimeSessionActor {
                     effect,
                     RuntimeSideEffect::DispatchAgentProvider { .. }
                         | RuntimeSideEffect::DispatchApprovedExternalAction { .. }
+                        | RuntimeSideEffect::DispatchNativeShellAction { .. }
                         | RuntimeSideEffect::DispatchAgentCompaction { .. }
                         | RuntimeSideEffect::DispatchAgentRemember { .. }
                 )

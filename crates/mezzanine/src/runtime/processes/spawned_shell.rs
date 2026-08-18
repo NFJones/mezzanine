@@ -11,13 +11,14 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use mez_agent::SpawnedShellExecutor as SpawnedShellExecutorPort;
@@ -40,6 +41,50 @@ const SPAWNED_CHILD_CAPTURE_HARD_CAP: usize = 16 * 1024 * 1024;
 const SPAWNED_CHILD_STATUS_CAPTURE_LIMIT: usize = 64 * 1024;
 /// Poll interval while waiting for the spawned child to exit.
 const SPAWNED_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// Grace period for draining bytes already buffered when the direct child exits.
+const SPAWNED_CHILD_READER_SHUTDOWN_GRACE: Duration = Duration::from_millis(100);
+
+/// Identifies one pipe drained from the spawned child process tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpawnedChildPipe {
+    /// Captured standard output.
+    Stdout,
+    /// Captured standard error.
+    Stderr,
+    /// Trusted typed-child lifecycle status.
+    Status,
+}
+
+impl SpawnedChildPipe {
+    /// Returns the stable stream label used in failure diagnostics.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+            Self::Status => "status",
+        }
+    }
+}
+
+/// Bounded bytes captured from one child pipe.
+struct CapturedPipeOutput {
+    /// Bytes retained up to the configured stream budget.
+    bytes: Vec<u8>,
+    /// Bytes discarded after the retained budget was exhausted.
+    dropped: usize,
+}
+
+/// Cancelable reader and its completion notification state.
+struct SpawnedChildPipeReader {
+    /// Pipe identity used for diagnostics and completion tracking.
+    stream: SpawnedChildPipe,
+    /// Requests that a nonblocking reader stop waiting for inherited writers.
+    cancel: mpsc::Sender<()>,
+    /// Reader thread joined only after EOF or cancellation.
+    handle: JoinHandle<Result<CapturedPipeOutput>>,
+    /// Whether the reader reported completion through the shared channel.
+    completed: bool,
+}
 
 /// Spawned process plus its optional runtime-owned lifecycle-status reader.
 struct SpawnedChild {
@@ -208,15 +253,26 @@ impl SpawnedShellExecutor {
         })?;
         let stream_budget =
             (output_budget / 2).clamp(MIN_STREAM_CAPTURE_BUDGET, SPAWNED_CHILD_CAPTURE_HARD_CAP);
-        let stdout_reader = std::thread::spawn(move || drain_output_stream(stdout, stream_budget));
-        let stderr_reader = std::thread::spawn(move || drain_output_stream(stderr, stream_budget));
-        let status_reader = status_reader.map(|reader| {
-            std::thread::spawn(move || {
-                drain_output_stream(
-                    std::fs::File::from(reader),
-                    SPAWNED_CHILD_STATUS_CAPTURE_LIMIT,
-                )
-            })
+        let (done_tx, done_rx) = mpsc::channel();
+        let mut stdout_reader = spawn_output_reader(
+            SpawnedChildPipe::Stdout,
+            stdout,
+            stream_budget,
+            done_tx.clone(),
+        );
+        let mut stderr_reader = spawn_output_reader(
+            SpawnedChildPipe::Stderr,
+            stderr,
+            stream_budget,
+            done_tx.clone(),
+        );
+        let mut status_reader = status_reader.map(|reader| {
+            spawn_output_reader(
+                SpawnedChildPipe::Status,
+                std::fs::File::from(reader),
+                SPAWNED_CHILD_STATUS_CAPTURE_LIMIT,
+                done_tx,
+            )
         });
         let pid = child.id() as i32;
         let timeout_ms = timeout_ms.unwrap_or(DEFAULT_AGENT_TURN_TIMEOUT_MS).max(1);
@@ -256,12 +312,35 @@ impl SpawnedShellExecutor {
         let status = exit_status.ok_or_else(|| {
             MezError::invalid_state("spawned shell execution observed no exit status")
         })?;
-        let (stdout_bytes, stdout_dropped) = stdout_reader
-            .join()
-            .map_err(|_| MezError::invalid_state("spawned shell execution stdout reader failed"))?;
-        let (stderr_bytes, stderr_dropped) = stderr_reader
-            .join()
-            .map_err(|_| MezError::invalid_state("spawned shell execution stderr reader failed"))?;
+        drain_reader_completions(
+            &done_rx,
+            &mut stdout_reader,
+            &mut stderr_reader,
+            status_reader.as_mut(),
+        );
+        let drain_deadline = Instant::now() + SPAWNED_CHILD_READER_SHUTDOWN_GRACE;
+        while readers_are_pending(&stdout_reader, &stderr_reader, status_reader.as_ref()) {
+            let now = Instant::now();
+            if now >= drain_deadline {
+                break;
+            }
+            let wait =
+                SPAWNED_CHILD_POLL_INTERVAL.min(drain_deadline.saturating_duration_since(now));
+            wait_for_reader_completion(
+                &done_rx,
+                wait,
+                &mut stdout_reader,
+                &mut stderr_reader,
+                status_reader.as_mut(),
+            );
+        }
+        cancel_pending_reader(&stdout_reader);
+        cancel_pending_reader(&stderr_reader);
+        if let Some(reader) = status_reader.as_ref() {
+            cancel_pending_reader(reader);
+        }
+        let stdout_capture = join_output_reader(stdout_reader)?;
+        let stderr_capture = join_output_reader(stderr_reader)?;
         let output = ShellExecutionOutput {
             exit_code: if timed_out || interrupted {
                 None
@@ -269,20 +348,20 @@ impl SpawnedShellExecutor {
                 status.code()
             },
             signal: status.signal(),
-            stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
-            stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
+            stdout: String::from_utf8_lossy(&stdout_capture.bytes).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr_capture.bytes).into_owned(),
             timed_out,
             interrupted,
             transport_diagnostics: ShellTransportDiagnostics {
-                output_bytes_dropped: stdout_dropped.saturating_add(stderr_dropped),
+                output_bytes_dropped: stdout_capture
+                    .dropped
+                    .saturating_add(stderr_capture.dropped),
                 ..ShellTransportDiagnostics::default()
             },
         };
         if let Some(status_reader) = status_reader {
-            let (status_bytes, status_dropped) = status_reader.join().map_err(|_| {
-                MezError::invalid_state("spawned shell execution status reader failed")
-            })?;
-            validate_spawned_child_status(&status_bytes, status_dropped, &output)?;
+            let status_capture = join_output_reader(status_reader)?;
+            validate_spawned_child_status(&status_capture.bytes, status_capture.dropped, &output)?;
         }
         Ok(output)
     }
@@ -312,6 +391,40 @@ impl SpawnedShellExecutorPort for SpawnedShellExecutor {
     }
 }
 
+/// Executes one actor-authorized native shell dispatch on an external worker.
+///
+/// The returned outcome retains the exact turn, action, and marker fence so
+/// serialized runtime state can reject stale completion after cancellation or
+/// turn replacement without trusting worker timing.
+pub(crate) fn execute_native_shell_dispatch(
+    dispatch: crate::runtime::RuntimeNativeShellDispatch,
+) -> crate::runtime::RuntimeNativeShellOutcome {
+    let crate::runtime::RuntimeNativeShellDispatch {
+        turn_id,
+        action_id,
+        marker,
+        context,
+        request,
+        started_at_unix_ms,
+    } = dispatch;
+    let command = request.transaction.command.clone();
+    let mut executor = SpawnedShellExecutor::new(context);
+    let result = executor.execute_shell(&request).map_err(|error| {
+        crate::runtime::RuntimeNativeShellFailure {
+            kind: format!("{:?}", error.kind()).to_ascii_lowercase(),
+            message: error.message().to_string(),
+        }
+    });
+    crate::runtime::RuntimeNativeShellOutcome {
+        turn_id,
+        action_id,
+        marker,
+        command,
+        started_at_unix_ms,
+        result,
+    }
+}
+
 /// Cancellation handle for one spawned shell execution.
 #[cfg(test)]
 pub(crate) struct SpawnedShellInterrupt {
@@ -328,25 +441,168 @@ impl SpawnedShellInterrupt {
     }
 }
 
-/// Drains one child output stream into memory, retaining at most `budget`
-/// bytes and counting the rest as dropped so bounded capture cannot deadlock
-/// the child on a full pipe.
-fn drain_output_stream(mut stream: impl Read, budget: usize) -> (Vec<u8>, usize) {
+/// Spawns one cancelable nonblocking pipe reader.
+fn spawn_output_reader<R>(
+    stream: SpawnedChildPipe,
+    reader: R,
+    budget: usize,
+    done: mpsc::Sender<SpawnedChildPipe>,
+) -> SpawnedChildPipeReader
+where
+    R: Read + AsFd + Send + 'static,
+{
+    let (cancel, cancellation) = mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let result = drain_output_stream(stream, reader, budget, cancellation);
+        let _ = done.send(stream);
+        result
+    });
+    SpawnedChildPipeReader {
+        stream,
+        cancel,
+        handle,
+        completed: false,
+    }
+}
+
+/// Enables nonblocking reads so cancellation never depends on pipe EOF.
+fn configure_output_reader_nonblocking(stream: SpawnedChildPipe, reader: &impl AsFd) -> Result<()> {
+    let flags = rustix::fs::fcntl_getfl(reader.as_fd()).map_err(|error| {
+        MezError::invalid_state(format!(
+            "spawned shell execution could not inspect its {} pipe: {error}",
+            stream.label()
+        ))
+    })?;
+    if !flags.contains(rustix::fs::OFlags::NONBLOCK) {
+        rustix::fs::fcntl_setfl(reader.as_fd(), flags | rustix::fs::OFlags::NONBLOCK).map_err(
+            |error| {
+                MezError::invalid_state(format!(
+                    "spawned shell execution could not make its {} pipe nonblocking: {error}",
+                    stream.label()
+                ))
+            },
+        )?;
+    }
+    Ok(())
+}
+
+/// Drains one child output stream while permitting bounded cancellation.
+fn drain_output_stream<R>(
+    stream: SpawnedChildPipe,
+    mut reader: R,
+    budget: usize,
+    cancellation: mpsc::Receiver<()>,
+) -> Result<CapturedPipeOutput>
+where
+    R: Read + AsFd,
+{
+    configure_output_reader_nonblocking(stream, &reader)?;
     let mut retained = Vec::new();
     let mut dropped = 0_usize;
     let mut buffer = [0_u8; 8192];
     loop {
-        match stream.read(&mut buffer) {
-            Ok(0) | Err(_) => break,
+        match cancellation.try_recv() {
+            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
             Ok(count) => {
                 let remaining = budget.saturating_sub(retained.len());
                 let keep = count.min(remaining);
                 retained.extend_from_slice(&buffer[..keep]);
                 dropped = dropped.saturating_add(count.saturating_sub(keep));
             }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                match cancellation.recv_timeout(SPAWNED_CHILD_POLL_INTERVAL) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+            }
+            Err(error) => {
+                return Err(MezError::invalid_state(format!(
+                    "spawned shell execution could not read its {} pipe: {error}",
+                    stream.label()
+                )));
+            }
         }
     }
-    (retained, dropped)
+    Ok(CapturedPipeOutput {
+        bytes: retained,
+        dropped,
+    })
+}
+
+/// Records all currently available reader completion notifications.
+fn drain_reader_completions(
+    done: &mpsc::Receiver<SpawnedChildPipe>,
+    stdout: &mut SpawnedChildPipeReader,
+    stderr: &mut SpawnedChildPipeReader,
+    status: Option<&mut SpawnedChildPipeReader>,
+) {
+    let mut status = status;
+    while let Ok(stream) = done.try_recv() {
+        record_reader_completion(stream, stdout, stderr, status.as_deref_mut());
+    }
+}
+
+/// Waits briefly for one reader completion and drains any concurrent notices.
+fn wait_for_reader_completion(
+    done: &mpsc::Receiver<SpawnedChildPipe>,
+    wait: Duration,
+    stdout: &mut SpawnedChildPipeReader,
+    stderr: &mut SpawnedChildPipeReader,
+    status: Option<&mut SpawnedChildPipeReader>,
+) {
+    let mut status = status;
+    if let Ok(stream) = done.recv_timeout(wait) {
+        record_reader_completion(stream, stdout, stderr, status.as_deref_mut());
+    }
+    drain_reader_completions(done, stdout, stderr, status);
+}
+
+/// Marks the matching reader as complete.
+fn record_reader_completion(
+    completed: SpawnedChildPipe,
+    stdout: &mut SpawnedChildPipeReader,
+    stderr: &mut SpawnedChildPipeReader,
+    status: Option<&mut SpawnedChildPipeReader>,
+) {
+    match completed {
+        SpawnedChildPipe::Stdout => stdout.completed = true,
+        SpawnedChildPipe::Stderr => stderr.completed = true,
+        SpawnedChildPipe::Status => {
+            if let Some(status) = status {
+                status.completed = true;
+            }
+        }
+    }
+}
+
+/// Reports whether any reader still waits for EOF from inherited writers.
+fn readers_are_pending(
+    stdout: &SpawnedChildPipeReader,
+    stderr: &SpawnedChildPipeReader,
+    status: Option<&SpawnedChildPipeReader>,
+) -> bool {
+    !stdout.completed || !stderr.completed || status.is_some_and(|reader| !reader.completed)
+}
+
+/// Requests shutdown only when EOF has not already completed the reader.
+fn cancel_pending_reader(reader: &SpawnedChildPipeReader) {
+    if !reader.completed {
+        let _ = reader.cancel.send(());
+    }
+}
+
+/// Joins one canceled or completed reader and preserves typed diagnostics.
+fn join_output_reader(reader: SpawnedChildPipeReader) -> Result<CapturedPipeOutput> {
+    reader.handle.join().map_err(|_| {
+        MezError::invalid_state(format!(
+            "spawned shell execution {} reader failed",
+            reader.stream.label()
+        ))
+    })?
 }
 
 /// Validates trusted Bubblewrap lifecycle evidence captured outside stdout
@@ -492,6 +748,50 @@ mod tests {
         assert!(!output.interrupted);
         assert_eq!(output.exit_code, None);
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    /// Verifies normal completion does not wait indefinitely when a detached
+    /// descendant inherits stdout and stderr after the direct shell exits.
+    #[test]
+    fn spawned_executor_completion_does_not_wait_for_escaped_descendant_pipes() {
+        let mut executor = SpawnedShellExecutor::new(test_context());
+        let started = Instant::now();
+        let output = executor
+            .execute_shell(&request(
+                "python3 -c 'import subprocess,sys; subprocess.Popen([\"python3\",\"-c\",\"import time; time.sleep(2)\"], stdout=sys.stdout, stderr=sys.stderr, start_new_session=True); print(\"done\")'",
+                Some(1_000),
+            ))
+            .unwrap();
+
+        assert_eq!(output.exit_code, Some(0));
+        assert!(output.stdout.contains("done"), "stdout={}", output.stdout);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "completion waited for escaped descendant: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// Verifies timeout completion remains bounded when a detached descendant
+    /// survives process-group cleanup while retaining inherited output pipes.
+    #[test]
+    fn spawned_executor_timeout_does_not_wait_for_escaped_descendant_pipes() {
+        let mut executor = SpawnedShellExecutor::new(test_context());
+        let started = Instant::now();
+        let output = executor
+            .execute_shell(&request(
+                "python3 -c 'import subprocess,sys,time; subprocess.Popen([\"python3\",\"-c\",\"import time; time.sleep(2)\"], stdout=sys.stdout, stderr=sys.stderr, start_new_session=True); time.sleep(2)'",
+                Some(100),
+            ))
+            .unwrap();
+
+        assert!(output.timed_out);
+        assert_eq!(output.exit_code, None);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "timeout waited for escaped descendant: {:?}",
+            started.elapsed()
+        );
     }
 
     /// Verifies the interruption handle kills a running child and reports

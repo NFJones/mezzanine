@@ -833,6 +833,19 @@ impl AsyncRuntimeSessionActor {
                 }
                 false
             }
+            AsyncRuntimeRequest::ClaimNativeShellAction {
+                turn_id,
+                action_id,
+                reply,
+            } => {
+                let result = self.service.claim_native_shell_action(&turn_id, &action_id);
+                let should_notify = result.is_ok();
+                let _ = reply.send(result);
+                if should_notify {
+                    self.notify_event_delivery();
+                }
+                false
+            }
             AsyncRuntimeRequest::CompleteApprovedExternalAction { outcome, reply } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let result = self

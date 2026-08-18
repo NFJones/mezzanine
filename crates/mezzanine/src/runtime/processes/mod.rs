@@ -17,7 +17,7 @@ mod transactions;
 mod zsh_compat;
 
 pub(crate) use native_shell_inference::{NativeShellContext, infer_native_shell_context};
-pub(crate) use spawned_shell::SpawnedShellExecutor;
+pub(crate) use spawned_shell::execute_native_shell_dispatch;
 
 pub(super) use managed_shell_handoff::ManagedShellKind;
 use managed_shell_handoff::{

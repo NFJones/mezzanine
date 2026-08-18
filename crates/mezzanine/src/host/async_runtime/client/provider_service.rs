@@ -10,6 +10,7 @@ use super::{
     RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider,
     RuntimeAgentRememberDispatch, RuntimeApprovedExternalActionDispatch,
     RuntimeApprovedExternalActionOutcome, RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState,
+    RuntimeNativeShellDispatch, RuntimeNativeShellFailure, RuntimeNativeShellOutcome,
     RuntimeSideEffect, execute_network_action_with_transport_async,
     is_terminal_runtime_lifecycle_state, provider_error_retry_class,
     runtime_execute_auto_sizing_with_async_provider, sleep, watch,
@@ -409,6 +410,13 @@ async fn dispatch_agent_provider_side_effects(
                 };
                 workers.spawn(execute_approved_external_action(handle.clone(), dispatch));
             }
+            RuntimeSideEffect::DispatchNativeShellAction { turn_id, action_id } => {
+                let Some(dispatch) = handle.claim_native_shell_action(turn_id, action_id).await?
+                else {
+                    continue;
+                };
+                workers.spawn(execute_native_shell_action(dispatch));
+            }
             RuntimeSideEffect::DispatchAgentCompaction { pane_id } => {
                 let dispatch = match handle.claim_agent_compaction_task(pane_id.clone()).await {
                     Ok(Some(dispatch)) => dispatch,
@@ -465,6 +473,36 @@ async fn dispatch_agent_provider_side_effects(
         }
     }
     Ok(())
+}
+
+/// Executes one native shell action on Tokio's blocking pool.
+async fn execute_native_shell_action(
+    dispatch: RuntimeNativeShellDispatch,
+) -> Result<AsyncAgentProviderWorkerResult> {
+    let turn_id = dispatch.turn_id.clone();
+    let action_id = dispatch.action_id.clone();
+    let marker = dispatch.marker.clone();
+    let command = dispatch.request.transaction.command.clone();
+    let started_at_unix_ms = dispatch.started_at_unix_ms;
+    let outcome = match tokio::task::spawn_blocking(move || {
+        crate::runtime::execute_native_shell_dispatch(dispatch)
+    })
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => RuntimeNativeShellOutcome {
+            turn_id,
+            action_id,
+            marker,
+            command,
+            started_at_unix_ms,
+            result: Err(RuntimeNativeShellFailure {
+                kind: "invalid_state".to_string(),
+                message: format!("native shell worker join failed: {error}"),
+            }),
+        },
+    };
+    Ok(Some((RuntimeEvent::NativeShell(outcome), false)))
 }
 
 /// Executes one approved network or MCP action without holding the runtime actor.

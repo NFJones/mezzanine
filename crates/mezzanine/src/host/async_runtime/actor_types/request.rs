@@ -18,6 +18,7 @@ use super::{
 use crate::runtime::PaneInputDispatch;
 use crate::runtime::PaneProcessInstance;
 use crate::runtime::RuntimeAgentPromptProviderInfoRefresh;
+use crate::runtime::RuntimeNativeShellDispatch;
 use crate::runtime::{RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork};
 use std::time::Instant;
 
@@ -706,6 +707,15 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Returns immutable worker inputs when the queued action is claimable.
         reply: oneshot::Sender<Result<Option<RuntimeApprovedExternalActionDispatch>>>,
     },
+    /// Claims one authorized native shell action for execution outside the actor.
+    ClaimNativeShellAction {
+        /// Turn that owns the action.
+        turn_id: String,
+        /// Stable action identity within the turn.
+        action_id: String,
+        /// Returns immutable worker input when the queued action is claimable.
+        reply: oneshot::Sender<Result<Option<RuntimeNativeShellDispatch>>>,
+    },
     /// Applies one approved external-action worker result inside the actor.
     CompleteApprovedExternalAction {
         /// Worker result, including any MCP transport returning to actor ownership.
@@ -1070,6 +1080,7 @@ impl AsyncRuntimeRequest {
             | Self::PrepareConfiguredAgentProviderTask { .. }
             | Self::ClaimConfiguredAgentProviderTask { .. }
             | Self::ClaimApprovedExternalAction { .. }
+            | Self::ClaimNativeShellAction { .. }
             | Self::CompleteApprovedExternalAction { .. }
             | Self::ClaimAgentCompactionTask { .. }
             | Self::ClaimAgentRememberTask { .. }

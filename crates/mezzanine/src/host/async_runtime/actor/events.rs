@@ -245,6 +245,19 @@ impl AsyncRuntimeSessionActor {
                 self.apply_runtime_agent_provider_event(provider_event)
                     .await
             }
+            RuntimeEvent::NativeShell(outcome) => {
+                let applied = self.service.complete_native_shell_action(outcome)?;
+                let mut transition = self.service.runtime_transition_with_render(
+                    applied,
+                    applied.then_some(RenderInvalidationReason::PaneOutput),
+                );
+                if applied {
+                    transition
+                        .side_effects
+                        .extend(self.pending_provider_dispatch_side_effects()?);
+                }
+                Ok(transition)
+            }
             RuntimeEvent::AgentCompaction(compaction_event) => {
                 let mut transition = self
                     .service
@@ -557,6 +570,12 @@ impl AsyncRuntimeSessionActor {
             side_effects
                 .push(RuntimeSideEffect::DispatchApprovedExternalAction { turn_id, action_id });
         }
+        for (turn_id, action_id) in self.service.pending_native_shell_actions() {
+            if self.native_shell_dispatch_is_already_queued(&turn_id, &action_id) {
+                continue;
+            }
+            side_effects.push(RuntimeSideEffect::DispatchNativeShellAction { turn_id, action_id });
+        }
         for pane_id in self.service.pending_agent_compaction_tasks() {
             if self.compaction_dispatch_is_already_queued(&pane_id) {
                 continue;
@@ -608,6 +627,7 @@ impl AsyncRuntimeSessionActor {
             .cloned()
             .collect();
         turn_ids.extend(self.service.approved_external_action_progress_turn_ids());
+        turn_ids.extend(self.service.native_shell_progress_turn_ids());
         turn_ids.extend(self.service.agent_compaction_resume_turn_ids());
         turn_ids.extend(
             self.service
@@ -699,6 +719,19 @@ impl AsyncRuntimeSessionActor {
             matches!(
                 effect,
                 RuntimeSideEffect::DispatchApprovedExternalAction {
+                    turn_id: queued_turn_id,
+                    action_id: queued_action_id,
+                } if queued_turn_id == turn_id && queued_action_id == action_id
+            )
+        })
+    }
+
+    /// Returns whether one native shell action already has a queued dispatch.
+    fn native_shell_dispatch_is_already_queued(&self, turn_id: &str, action_id: &str) -> bool {
+        self.side_effects.iter().any(|effect| {
+            matches!(
+                effect,
+                RuntimeSideEffect::DispatchNativeShellAction {
                     turn_id: queued_turn_id,
                     action_id: queued_action_id,
                 } if queued_turn_id == turn_id && queued_action_id == action_id

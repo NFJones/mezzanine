@@ -563,6 +563,12 @@ fn runtime_native_agent_shell_command_output_is_visible_in_shell_view() {
         .unwrap();
 
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    let dispatch = service
+        .claim_native_shell_action("turn-1", "shell-1")
+        .unwrap()
+        .expect("native shell action should be queued for a worker");
+    let outcome = crate::runtime::execute_native_shell_dispatch(dispatch);
+    assert!(service.complete_native_shell_action(outcome).unwrap());
     let pane_text = service
         .pane_screen("%1")
         .unwrap()

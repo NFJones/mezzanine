@@ -42,6 +42,7 @@ use crate::runtime::{
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
     RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
     RuntimeEventConnectionTable, RuntimeEventWakeup, RuntimeLifecycleState,
+    RuntimeNativeShellDispatch, RuntimeNativeShellFailure, RuntimeNativeShellOutcome,
     RuntimeProviderInfoRefreshOutcome, RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome,
     RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
     authorize_unix_peer_raw_fd, current_effective_uid,
