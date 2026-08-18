@@ -202,30 +202,32 @@ impl crate::runtime::RuntimeSessionService {
         })
     }
 
-    /// Resolves maximum native Bubblewrap authority directly from host
-    /// filesystem metadata and the pane root-process working directory.
-    pub(crate) fn native_bubblewrap_maximum_path_scopes_for_turn(
+    /// Resolves native filesystem authority directly from host metadata.
+    ///
+    /// Native provider preflight and Bubblewrap dispatch share this owner so
+    /// neither path needs pane-shell environment or path-resolution
+    /// transactions. `None` means the configured permissions and trusted
+    /// project store grant no filesystem authority for the root-process
+    /// working directory.
+    pub(crate) fn native_path_scopes_for_turn(
         &mut self,
         turn: &AgentTurnRecord,
         context: &NativeShellContext,
-    ) -> Result<PathScopes> {
+    ) -> Result<Option<PathScopes>> {
         self.refresh_project_trust_store_from_disk_if_changed()?;
         let resources = &self.configured_permissions().resources;
-        let (read_scopes, write_scopes) = if !resources.read_scopes.is_empty()
-            || !resources.write_scopes.is_empty()
-        {
-            (
-                resources.read_scopes.clone(),
-                resources.write_scopes.clone(),
-            )
-        } else if let Some(project_root) = self.native_trusted_project_root(context) {
-            let project_root = project_root.to_string_lossy().into_owned();
-            (vec![project_root.clone()], vec![project_root])
-        } else {
-            return Err(MezError::invalid_state(
-                "Bubblewrap filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or trust the root-process working directory's project",
-            ));
-        };
+        let (read_scopes, write_scopes) =
+            if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
+                (
+                    resources.read_scopes.clone(),
+                    resources.write_scopes.clone(),
+                )
+            } else if let Some(project_root) = self.native_trusted_project_root(context) {
+                let project_root = project_root.to_string_lossy().into_owned();
+                (vec![project_root.clone()], vec![project_root])
+            } else {
+                return Ok(None);
+            };
         let primary = host_resolved_path_scopes(
             context.working_directory(),
             &read_scopes,
@@ -233,10 +235,11 @@ impl crate::runtime::RuntimeSessionService {
             &[],
         )?;
         let Some(scope) = self.subagent_scope_declaration_for_turn(turn) else {
-            return Ok(primary);
+            return Ok(Some(primary));
         };
         if scope.read_scopes.is_empty() && scope.write_scopes.is_empty() {
-            return host_resolved_path_scopes(Path::new(&scope.current_directory), &[], &[], &[]);
+            return host_resolved_path_scopes(Path::new(&scope.current_directory), &[], &[], &[])
+                .map(Some);
         }
         let child = host_resolved_path_scopes(
             Path::new(&scope.current_directory),
@@ -247,6 +250,22 @@ impl crate::runtime::RuntimeSessionService {
         primary
             .intersection(&child)
             .map_err(|error| MezError::invalid_state(error.message()))
+            .map(Some)
+    }
+
+    /// Resolves maximum native Bubblewrap authority directly from host
+    /// filesystem metadata and the pane root-process working directory.
+    pub(crate) fn native_bubblewrap_maximum_path_scopes_for_turn(
+        &mut self,
+        turn: &AgentTurnRecord,
+        context: &NativeShellContext,
+    ) -> Result<PathScopes> {
+        self.native_path_scopes_for_turn(turn, context)?
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "Bubblewrap filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or trust the root-process working directory's project",
+                )
+            })
     }
 
     /// Resolves complete per-action effects from host filesystem metadata and

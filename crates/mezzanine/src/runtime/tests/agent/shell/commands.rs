@@ -897,6 +897,41 @@ fn runtime_agent_shell_shell_mode_status_uses_pager_and_reports_override() {
     assert!(response.contains("Local override | yes"), "{response}");
 }
 
+/// Verifies returning a visible agent prompt from native to pane mode restores
+/// the pane-shell lifecycle after native mode discarded stale bootstrap state.
+///
+/// Pane mode must not inherit native mode's bootstrap suppression: the mode
+/// change either enters the isolated child immediately or leaves bounded
+/// bootstrap work waiting for the next prompt observation.
+#[test]
+fn runtime_agent_shell_switching_from_native_to_pane_rearms_shell_entry() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    service
+        .execute_agent_shell_command(&primary, "/shell-mode native")
+        .unwrap();
+    assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
+
+    service
+        .execute_agent_shell_command(&primary, "/shell-mode pane")
+        .unwrap();
+
+    assert!(
+        service.agent_subshell_is_active("%1") || service.pane_bootstrap_is_pending_for_tests("%1"),
+        "pane mode must restore an active or bounded pane-shell entry lifecycle"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies pane-local permission commands do not leak preset or approval
 /// changes into an unrelated root pane or the configured session baseline.
 #[test]

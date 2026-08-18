@@ -1718,7 +1718,9 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> bool {
-        if self.pane_has_uncertified_foreign_shell_boundary(pane_id)
+        if self.effective_agent_shell_mode_for_pane(pane_id)
+            == crate::runtime::config::ShellMode::Native
+            || self.pane_has_uncertified_foreign_shell_boundary(pane_id)
             || !self
                 .process
                 .pane_shell_interaction_generations

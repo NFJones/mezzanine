@@ -1110,6 +1110,14 @@ impl RuntimeSessionService {
     /// observes the new child's prompt before it registers and sends the
     /// wrapper, whose command payload remains deferred until its start marker.
     pub(crate) fn enter_agent_subshell_if_needed(&mut self, pane_id: &str) -> Result<bool> {
+        if self.effective_agent_shell_mode_for_pane(pane_id)
+            == crate::runtime::config::ShellMode::Native
+        {
+            self.clear_deferred_agent_subshell_entry(pane_id);
+            self.clear_pane_bootstrap_pending(pane_id);
+            self.native_shell_context_for_pane(pane_id)?;
+            return Ok(false);
+        }
         if self.agent_subshell_is_active(pane_id)
             || self.primary_pid_for_live_pane_process(pane_id).is_none()
         {

@@ -512,7 +512,12 @@ impl RuntimeSessionService {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(None);
         }
-        if self.pane_has_uncertified_foreign_shell_boundary(&turn.pane_id) {
+        let native_mode = self.effective_agent_shell_mode_for_pane(&turn.pane_id)
+            == crate::runtime::config::ShellMode::Native;
+        let native_context = native_mode
+            .then(|| self.native_shell_context_for_pane(&turn.pane_id))
+            .transpose()?;
+        if !native_mode && self.pane_has_uncertified_foreign_shell_boundary(&turn.pane_id) {
             if self.pane_foreign_shell_bootstrap_has_bounded_progress_owner(&turn.pane_id) {
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
@@ -534,8 +539,9 @@ impl RuntimeSessionService {
             .map(Self::subagent_path_resolution_request)
             .transpose()?
             .flatten();
-        let path_resolution_required =
-            primary_path_resolution_request.is_some() || subagent_path_resolution_request.is_some();
+        let path_resolution_required = !native_mode
+            && (primary_path_resolution_request.is_some()
+                || subagent_path_resolution_request.is_some());
         if path_resolution_required {
             match self.pane_environment_authority(&turn.pane_id) {
                 crate::runtime::processes::RuntimePaneEnvironmentAuthority::Certified => {}
@@ -602,7 +608,17 @@ impl RuntimeSessionService {
             }
         }
 
-        let resolved_primary_path_scopes = if let Some(request) = primary_path_resolution_request {
+        let native_path_scopes = native_context
+            .as_ref()
+            .map(|context| self.native_path_scopes_for_turn(&turn, context))
+            .transpose()?
+            .flatten();
+        let resolved_primary_path_scopes = if native_mode {
+            subagent_scope
+                .is_none()
+                .then_some(native_path_scopes.clone())
+                .flatten()
+        } else if let Some(request) = primary_path_resolution_request {
             match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
                 Some(scopes) => Some(scopes),
                 None => {
@@ -614,7 +630,12 @@ impl RuntimeSessionService {
             None
         };
 
-        let resolved_subagent_path_scopes = if let Some(scope) = subagent_scope.as_ref() {
+        let resolved_subagent_path_scopes = if native_mode {
+            subagent_scope
+                .is_some()
+                .then_some(native_path_scopes)
+                .flatten()
+        } else if let Some(scope) = subagent_scope.as_ref() {
             if let Some(request) = subagent_path_resolution_request {
                 match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
                     Some(scopes) => Some(if let Some(primary) = &resolved_primary_path_scopes {
@@ -927,6 +948,8 @@ impl RuntimeSessionService {
         )?;
         let path_scopes = if subagent_scope.is_some() {
             resolved_subagent_path_scopes
+        } else if native_mode {
+            resolved_primary_path_scopes
         } else {
             resolved_primary_path_scopes.or_else(|| self.path_scopes_for_pane(&turn.pane_id))
         };
@@ -936,8 +959,10 @@ impl RuntimeSessionService {
             &sandbox_config,
             &permission_policy,
         );
-        let shell_classification = self
-            .shell_classification_for_pane(&turn.pane_id)
+        let shell_classification = native_context
+            .as_ref()
+            .map(crate::runtime::processes::NativeShellContext::classification)
+            .unwrap_or_else(|| self.shell_classification_for_pane(&turn.pane_id))
             .as_str()
             .to_string();
         self.agent.pending_agent_provider_tasks.remove(turn_id);

@@ -3,6 +3,43 @@
 use super::*;
 use crate::runtime::processes::RuntimePaneEnvironmentAuthority;
 
+/// Verifies native agent entry derives its context from the pane root process
+/// without starting or waiting for pane-shell bootstrap work.
+///
+/// Native actions never execute against the pane shell, so making the agent
+/// prompt visible must not create a child shell, send PTY input, or retain the
+/// startup bootstrap pending bit.
+#[test]
+fn runtime_native_agent_shell_entry_uses_only_root_process_inspection() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    service
+        .set_agent_shell_mode_override(&pane_id, Some(crate::runtime::config::ShellMode::Native));
+
+    let show = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+
+    assert!(show.contains("visibility=visible"), "{show}");
+    assert!(!service.agent_subshell_is_active(&pane_id));
+    assert!(!service.pane_bootstrap_is_pending_for_tests(&pane_id));
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "native entry must not write bootstrap or child-shell input to the pane"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies runtime attached mux action toggles agent shell state.
 ///
 /// This regression scenario documents the behavior being protected so a

@@ -2179,6 +2179,9 @@ impl RuntimeSessionService {
             self.agent
                 .agent_shell_mode_overrides
                 .insert(pane_id.to_string(), mode);
+            if mode == ShellMode::Native {
+                self.clear_pane_bootstrap_pending(pane_id);
+            }
         } else {
             self.agent.agent_shell_mode_overrides.remove(pane_id);
         }

@@ -202,6 +202,8 @@ impl RuntimeSessionService {
                 .is_some_and(|session| {
                     session.visibility == mez_agent::AgentShellVisibility::Visible
                 })
+                && self.effective_agent_shell_mode_for_pane(&pane_id)
+                    != crate::runtime::config::ShellMode::Native
             {
                 self.schedule_parent_shell_discovery_for_agent_entry(&pane_id);
             }

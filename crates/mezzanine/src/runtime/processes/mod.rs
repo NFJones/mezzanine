@@ -2110,6 +2110,12 @@ impl RuntimeSessionService {
         self.process.pane_bootstrap_pending.contains(pane_id)
     }
 
+    /// Clears pane-shell bootstrap state when the selected execution mode does
+    /// not use the pane shell.
+    pub(crate) fn clear_pane_bootstrap_pending(&mut self, pane_id: &str) -> bool {
+        self.process.pane_bootstrap_pending.remove(pane_id)
+    }
+
     /// Reports whether a pending bootstrap still needs current-epoch shell
     /// identity evidence before commands can safely enter a child shell.
     pub(crate) fn pane_bootstrap_awaits_shell_identity(&self, pane_id: &str) -> bool {
@@ -3131,9 +3137,13 @@ impl RuntimeSessionService {
         self.process
             .pane_readiness_states
             .insert(descriptor.pane_id.to_string(), PaneReadinessState::Unknown);
-        self.process
-            .pane_bootstrap_pending
-            .insert(descriptor.pane_id.to_string());
+        if self.effective_agent_shell_mode_for_pane(descriptor.pane_id.as_str())
+            != crate::runtime::config::ShellMode::Native
+        {
+            self.process
+                .pane_bootstrap_pending
+                .insert(descriptor.pane_id.to_string());
+        }
 
         let update = PaneProcessStart {
             session_id: self.session.id.to_string(),
@@ -3788,9 +3798,13 @@ impl RuntimeSessionService {
         self.process
             .pane_readiness_states
             .insert(descriptor.pane_id.to_string(), PaneReadinessState::Unknown);
-        self.process
-            .pane_bootstrap_pending
-            .insert(descriptor.pane_id.to_string());
+        if self.effective_agent_shell_mode_for_pane(descriptor.pane_id.as_str())
+            != crate::runtime::config::ShellMode::Native
+        {
+            self.process
+                .pane_bootstrap_pending
+                .insert(descriptor.pane_id.to_string());
+        }
         if let Some(start_directory) = start_directory {
             self.process.pane_current_working_directories.insert(
                 descriptor.pane_id.to_string(),

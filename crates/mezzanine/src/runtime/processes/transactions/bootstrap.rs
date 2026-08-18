@@ -871,6 +871,8 @@ impl RuntimeSessionService {
                     .contains_key(k.as_str())
                     || self.managed_fish_adapter_is_ready_for_pane(k.as_str());
                 self.process.pane_bootstrap_pending.contains(k.as_str())
+                    && self.effective_agent_shell_mode_for_pane(k.as_str())
+                        != crate::runtime::config::ShellMode::Native
                     && (!self.pane_has_uncertified_foreign_shell_boundary(k.as_str())
                         || awaits_dependency_free_posix_child)
                     && !self.pane_agent_subshell_certification_is_pending(k.as_str())

@@ -131,6 +131,12 @@ impl RuntimeSessionService {
                 .changed
             }
         };
+        if self.effective_agent_shell_mode_for_pane(pane_id) == ShellMode::Native {
+            self.clear_deferred_agent_subshell_entry(pane_id);
+            self.clear_pane_bootstrap_pending(pane_id);
+        } else if visibility == AgentShellVisibility::Visible {
+            let _ = self.enter_agent_subshell_if_needed(pane_id)?;
+        }
         self.append_shell_mode_command_audit(primary_client_id, pane_id, mode, scope, changed)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "shell-mode".to_string(),
