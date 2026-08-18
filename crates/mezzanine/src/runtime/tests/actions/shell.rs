@@ -555,6 +555,11 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         )
         .unwrap();
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let pane_context = config.frame_context.panes.get("%1").unwrap();
+    assert_eq!(pane_context.agent_status.as_deref(), Some("executing"));
 
     let dispatch = service
         .claim_native_shell_action("turn-1", "shell-1")

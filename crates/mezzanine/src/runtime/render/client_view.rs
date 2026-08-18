@@ -1611,6 +1611,13 @@ impl RuntimeSessionService {
         if self.turn_has_running_agent_action_shell_transaction(&turn.turn_id) {
             return "executing";
         }
+        if self
+            .native_shell_progress_turn_ids()
+            .iter()
+            .any(|turn_id| turn_id == &turn.turn_id)
+        {
+            return "executing";
+        }
         if self.turn_has_running_shell_transaction_kind(
             &turn.turn_id,
             &RunningShellTransactionKind::ReadinessProbe,
