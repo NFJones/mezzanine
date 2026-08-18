@@ -4,6 +4,10 @@ use super::pane::{
     append_output_chunk_to_backlog, drain_output_backlog, foreground_process_group_id_from_raw,
     shell_input_acknowledgement_count,
 };
+use super::process_metadata::{
+    parse_environment_bytes, parse_macos_environment_bytes, process_environment_for_pid,
+    process_executable_path_for_pid,
+};
 use super::{
     PaneProcessEnvironment, PaneProcessLaunch, PaneProcessManager, pane_command_plan,
     shell_command_from_argv, spawn_pane_process, spawn_pane_process_with_start_directory,
@@ -663,4 +667,74 @@ fn pane_process_manager_terminate_all_removes_every_tracked_process() {
 
     assert_eq!(terminated.len(), 2);
     assert!(manager.is_empty());
+}
+
+/// Verifies raw environment parsing handles the procfs NUL-separated format.
+///
+/// The parser must keep non-UTF-8 value bytes intact, preserve empty values,
+/// and drop malformed segments instead of fabricating entries.
+#[test]
+fn environment_parsing_preserves_non_utf8_values_and_drops_malformed() {
+    let bytes = b"PATH=/usr/bin\0LANG=en_US.UTF-8\0BROKEN_SEGMENT\0ODD=\xFF\xFE\0=EMPTY_KEY\0EMPTY_VALUE=\0\0";
+    let entries = parse_environment_bytes(bytes);
+    assert_eq!(entries.len(), 4);
+    assert_eq!(entries[0].key, b"PATH");
+    assert_eq!(entries[0].value, b"/usr/bin");
+    assert_eq!(entries[1].key, b"LANG");
+    assert_eq!(entries[1].value, b"en_US.UTF-8");
+    assert_eq!(entries[2].key, b"ODD");
+    assert_eq!(entries[2].value, b"\xFF\xFE");
+    assert_eq!(entries[3].key, b"EMPTY_VALUE");
+    assert!(entries[3].value.is_empty());
+}
+
+/// Verifies the macOS argv-skip parser locates the environment region.
+///
+/// The parser must skip the leading argc field plus NUL-terminated argv
+/// strings and return the environment region that follows the empty-string
+/// separator, for both the Intel and Apple-Silicon argc encodings, and it
+/// must not fabricate a region from buffers without KEY=VALUE content.
+#[test]
+fn macos_environment_parser_skips_argv_to_environment_region() {
+    // Intel layout: plain 4-byte argc followed immediately by argv.
+    let mut intel = vec![3_u8, 0, 0, 0];
+    intel.extend_from_slice(b"/bin/zsh\0-l\0-c\0");
+    intel.extend_from_slice(b"\0");
+    intel.extend_from_slice(b"PATH=/usr/bin\0HOME=/home/neil\0\0");
+    let region = parse_macos_environment_bytes(&intel).expect("intel layout parses");
+    assert_eq!(region, b"PATH=/usr/bin\0HOME=/home/neil\0\0");
+
+    // Apple-Silicon layout: argc bytes carry a flag bit and argv starts at
+    // offset 8; the scan must recover the same region from either offset.
+    let mut arm = vec![0x83_u8, 0, 0, 0, 0, 0, 0, 0];
+    arm.extend_from_slice(b"/bin/zsh\0-l\0-c\0");
+    arm.extend_from_slice(b"\0");
+    arm.extend_from_slice(b"PATH=/usr/bin\0HOME=/home/neil\0\0");
+    let region = parse_macos_environment_bytes(&arm).expect("arm layout parses");
+    assert_eq!(region, b"PATH=/usr/bin\0HOME=/home/neil\0\0");
+
+    // A buffer without any KEY=VALUE region must not fabricate one.
+    let garbage = b"\x01\x02\x03\x04no-equals-anywhere\0still-not\0\0";
+    assert_eq!(parse_macos_environment_bytes(garbage), None);
+}
+
+/// Verifies the Linux environment reader reports the test process's own
+/// exec-time environment.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_environment_reader_reports_own_process_environment() {
+    let entries =
+        process_environment_for_pid(std::process::id()).expect("own environ readable on Linux");
+    assert!(!entries.is_empty(), "test process always has an environment");
+    assert!(entries.iter().all(|entry| !entry.key.is_empty()));
+}
+
+/// Verifies the Linux executable reader reports a real absolute path for the
+/// test process itself.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_executable_reader_reports_own_process_path() {
+    let path = process_executable_path_for_pid(std::process::id())
+        .expect("own executable readable on Linux");
+    assert!(path.is_absolute());
 }

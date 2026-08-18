@@ -3020,7 +3020,7 @@ The `issues` table MUST support `enabled` and `database_path`.
 
 The `agents` table MUST support `default_provider`, `default_model_profile`,
 `active_turn_sleep_inhibition`, `shell_only`, `compaction_raw_retention_percent`, `routing`,
-`action_failure_retry_limit`, `turn_timeout_ms`, `loop_limit`,
+`shell_mode`, `action_failure_retry_limit`, `turn_timeout_ms`, `loop_limit`,
 `custom_system_prompt`, `default_personality`, `subagent_placement`,
 `max_concurrent_agents`, `max_queued_turns`, `max_queued_bytes`,
 `max_root_subagents`, `max_subagents_per_subagent`,
@@ -3061,6 +3061,13 @@ normal failed-action correction budget.
 `1800000`. The runtime MUST snapshot this duration as an absolute
 millisecond-resolution deadline when each turn is created. Reloading the
 setting MUST affect only subsequently created turns.
+`agents.shell_mode` MUST default to `pane` and MUST accept only `pane` or
+`native`. `pane` dispatches agent shell actions through the pane's interactive
+shell. `native` executes agent shell actions in a freshly spawned shell
+process whose path, environment, and working directory are inferred from the
+pane's root process; native execution MUST NOT write to or read from the pane
+PTY and MUST NOT run any command through the pane shell to enable or perform
+the execution.
 `agents.loop_limit` MUST be a positive integer and MUST default to `8`. It
 bounds the number of work iterations a single `/loop` command may run before
 Mezzanine stops automatic continuation and reports that the iteration limit was

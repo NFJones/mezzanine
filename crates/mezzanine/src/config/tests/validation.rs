@@ -601,6 +601,27 @@ fn rejects_invalid_agent_turn_timeout_values() {
     }
 }
 
+/// Verifies agent shell mode rejects unsupported enum values.
+///
+/// Only the pane and native transports have defined runtime behavior; any
+/// other value must fail validation instead of silently selecting one.
+#[test]
+fn rejects_invalid_agent_shell_mode_values() {
+    for value in ["\"spawned\"", "\"direct\"", "3", "\"\"", "\"Native\""] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[agents]\nshell_mode = {value}\n"),
+            ConfigScope::Primary,
+        );
+
+        assert!(!validation.valid, "accepted shell mode {value}");
+        assert!(validation.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "agents.shell_mode"
+                && diagnostic.message.contains("pane or native")
+        }));
+    }
+}
+
 /// Verifies schema 20 rejects the removed implementation-pressure setting.
 ///
 /// Primary migration deletes the schema-19 key before validation. A document

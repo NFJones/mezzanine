@@ -2094,6 +2094,64 @@ fn migrates_schema_64_without_overwriting_explicit_agent_turn_timeout() {
     }
 }
 
+/// Verifies schema v66 materializes the default pane shell execution mode in
+/// every supported format while retaining neighboring settings.
+#[test]
+fn migrates_schema_65_with_agent_shell_mode() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 65\n[agents]\naction_failure_retry_limit = 2\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":65,"agents":{"action_failure_retry_limit":2}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 65\nagents:\n  action_failure_retry_limit: 2\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let values = extract_config_values(format, &plan.text);
+
+        assert_eq!(plan.from_version, 65);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(values.get("agents.shell_mode"), Some(&"pane".to_string()));
+        assert_eq!(
+            values.get("agents.action_failure_retry_limit"),
+            Some(&"2".to_string())
+        );
+    }
+}
+
+/// Verifies schema v66 retains a mode declared before the key became part of
+/// the schema instead of replacing user intent with the default.
+#[test]
+fn migrates_schema_65_without_overwriting_explicit_agent_shell_mode() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 65\n[agents]\nshell_mode = \"native\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":65,"agents":{"shell_mode":"native"}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 65\nagents:\n  shell_mode: native\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let values = extract_config_values(format, &plan.text);
+
+        assert_eq!(plan.from_version, 65);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(values.get("agents.shell_mode"), Some(&"native".to_string()));
+    }
+}
+
 /// Verifies that config validation refuses documents written for a newer
 /// schema version than the running binary understands. This prevents older
 /// binaries from silently interpreting keys whose migration or meaning belongs

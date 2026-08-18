@@ -122,7 +122,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 65
+version = 66
 
 # Process-wide runtime sizing. Changes require a restart.
 [runtime]
@@ -427,6 +427,10 @@ routing = false
 action_failure_retry_limit = 5
 # Total wall-clock budget snapshotted for each new agent turn.
 turn_timeout_ms = 1800000
+# Agent shell command execution mode. `pane` executes commands through the
+# pane shell; `native` spawns a fresh shell process inferred from the pane
+# root process without touching the pane PTY.
+shell_mode = "pane"
 # Default bounded iteration count used by /loop.
 loop_limit = 8
 # User-owned system prompt text appended to the built-in prompt.

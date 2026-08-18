@@ -19,7 +19,10 @@ use rustix::process::Signal;
 use crate::{MuxError as MezError, Result};
 use mez_terminal::TerminalSize;
 
-use super::process_metadata::{current_working_directory_for_pid, process_name_for_pid};
+use super::process_metadata::{
+    RawEnvironmentEntry, current_working_directory_for_pid, process_environment_for_pid,
+    process_executable_path_for_pid, process_name_for_pid,
+};
 use super::pty::{PTY_IO_CHUNK_BYTES, pty_size};
 use super::signals::send_signal_to_pane_process_group;
 #[cfg(target_os = "macos")]
@@ -348,6 +351,26 @@ impl PaneProcess {
     pub fn current_working_directory(&self) -> Option<PathBuf> {
         current_working_directory_for_pid(self.primary_pid)
             .or_else(|| self.initial_working_directory.clone())
+    }
+
+    /// Returns the live process executable path when the host exposes it.
+    ///
+    /// On Linux this reads `/proc/<pid>/exe`, so the value tracks shell
+    /// `exec` replacement. Platforms without an equivalent non-invasive
+    /// process query return `None`.
+    pub fn executable_path(&self) -> Option<PathBuf> {
+        process_executable_path_for_pid(self.primary_pid)
+    }
+
+    /// Returns the live process exec-time environment when the host exposes it.
+    ///
+    /// On Linux this reads `/proc/<pid>/environ`; the result reflects the
+    /// environment captured when the process was executed and does not track
+    /// later variable changes. Platforms without an equivalent non-invasive
+    /// process query return `None`. Values may contain arbitrary non-UTF-8
+    /// bytes and must be treated as protected runtime state.
+    pub fn environment(&self) -> Option<Vec<RawEnvironmentEntry>> {
+        process_environment_for_pid(self.primary_pid)
     }
 
     /// Runs the resize operation for this subsystem.

@@ -478,6 +478,11 @@ pub fn validate_config_text(
                 path,
                 message: "agents.active_turn_sleep_inhibition must be disabled, system, or system-and-display".to_string(),
             });
+        } else if path == "agents.shell_mode" && !matches!(value.as_str(), "pane" | "native") {
+            diagnostics.push(ConfigDiagnostic {
+                path,
+                message: "agents.shell_mode must be pane or native".to_string(),
+            });
         } else if path == "agents.subagent_wait_policy"
             && !matches!(
                 value.as_str(),

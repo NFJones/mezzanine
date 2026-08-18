@@ -7,11 +7,18 @@ mod bash_compat;
 mod fish_compat;
 mod layout;
 mod managed_shell_handoff;
+mod native_shell_inference;
 pub(crate) mod output_filter;
 mod pane_pipes;
+mod spawned_shell;
 mod startup;
 mod transactions;
 mod zsh_compat;
+
+pub(crate) use native_shell_inference::{
+    NativeShellContext, infer_native_shell_context,
+};
+pub(crate) use spawned_shell::{SpawnedShellExecutor, SpawnedShellInterrupt};
 
 pub(super) use managed_shell_handoff::ManagedShellKind;
 use managed_shell_handoff::{

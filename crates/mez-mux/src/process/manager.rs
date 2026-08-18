@@ -11,6 +11,7 @@ use crate::{MuxError as MezError, MuxErrorKind, Result};
 use mez_terminal::TerminalSize;
 
 use super::pane::PaneProcess;
+use super::process_metadata::RawEnvironmentEntry;
 use super::spawn::{spawn_pane_process, spawn_pane_process_with_start_directory};
 use super::types::{
     ExitedPaneProcess, PaneExitStatus, PaneProcessEnvironment, PaneProcessLaunch,
@@ -200,6 +201,29 @@ impl PaneProcessManager {
         self.processes
             .get(pane_id)
             .and_then(PaneProcess::current_working_directory)
+    }
+
+    /// Returns the live primary process executable path for a pane.
+    ///
+    /// The value is sourced from the tracked process handle and is `None` when
+    /// the pane is not tracked or the host cannot expose executable-path
+    /// metadata.
+    pub fn executable_path(&self, pane_id: &str) -> Option<PathBuf> {
+        self.processes
+            .get(pane_id)
+            .and_then(PaneProcess::executable_path)
+    }
+
+    /// Returns the live primary process exec-time environment for a pane.
+    ///
+    /// The value is sourced from the tracked process handle and is `None`
+    /// when the pane is not tracked or the host cannot expose environment
+    /// metadata. Environment values may contain secrets; callers must treat
+    /// the result as protected runtime state and never log it.
+    pub fn environment(&self, pane_id: &str) -> Option<Vec<RawEnvironmentEntry>> {
+        self.processes
+            .get(pane_id)
+            .and_then(PaneProcess::environment)
     }
 
     /// Runs the contains pane operation for this subsystem.

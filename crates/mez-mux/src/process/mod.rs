@@ -40,6 +40,7 @@ mod types;
 
 pub use manager::PaneProcessManager;
 pub use pane::PaneProcess;
+pub use process_metadata::RawEnvironmentEntry;
 #[doc(hidden)]
 pub use pane::{
     PTY_INPUT_WRITE_CHUNK_BYTES, SHELL_INPUT_RECORD_ACK_BYTE, loader_input_record_requires_ack,

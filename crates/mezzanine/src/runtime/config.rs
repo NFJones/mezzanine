@@ -43,7 +43,7 @@ pub(super) use agents::{
     runtime_max_queued_agent_turns_from_config, runtime_max_root_subagents_from_config,
     runtime_max_subagent_depth_from_config, runtime_max_subagent_panes_per_window_from_config,
     runtime_max_subagents_per_subagent_from_config, runtime_subagent_profiles_from_config,
-    runtime_subagent_wait_policy_from_config,
+    runtime_shell_mode_from_config, runtime_subagent_wait_policy_from_config, ShellMode,
 };
 pub(super) use audit::{runtime_audit_config_present, runtime_audit_log_from_config};
 pub use effective::runtime_effective_config_value;

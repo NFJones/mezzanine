@@ -54,6 +54,46 @@ pub(crate) fn runtime_active_turn_sleep_inhibition_from_config(
     }
 }
 
+/// Execution mode for agent shell commands in local-shell panes.
+///
+/// Pane mode delivers actions through the pane's interactive shell; native
+/// mode spawns a fresh shell process derived from pane root-process metadata
+/// and never writes to or reads from the pane PTY.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ShellMode {
+    /// Execute actions through the active pane shell.
+    #[default]
+    Pane,
+    /// Execute actions in a spawned shell process inferred from the pane
+    /// root process.
+    Native,
+}
+
+impl ShellMode {
+    /// Returns the stable config value name for this mode.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Pane => "pane",
+            Self::Native => "native",
+        }
+    }
+}
+
+/// Parses the user-controlled agent shell execution mode.
+pub(crate) fn runtime_shell_mode_from_config(root: &Value) -> Result<ShellMode> {
+    let Some(agents) = runtime_json_object(root, "agents") else {
+        return Ok(ShellMode::Pane);
+    };
+    let Some(value) = agents.get("shell_mode") else {
+        return Ok(ShellMode::Pane);
+    };
+    match runtime_json_string(Some(value)) {
+        Some("pane") => Ok(ShellMode::Pane),
+        Some("native") => Ok(ShellMode::Native),
+        _ => Err(MezError::config("agents.shell_mode must be pane or native")),
+    }
+}
+
 /// Parses the maximum number of concurrently scheduled agent turns.
 pub(crate) fn runtime_max_concurrent_agents_from_config(root: &Value) -> Result<usize> {
     runtime_positive_agents_usize_from_config(

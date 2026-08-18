@@ -550,6 +550,7 @@ pub(super) const AGENT_KEYS: &[&str] = &[
     "default_model_profile",
     "active_turn_sleep_inhibition",
     "shell_only",
+    "shell_mode",
     "compaction_raw_retention_percent",
     "routing",
     "action_failure_retry_limit",

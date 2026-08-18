@@ -466,11 +466,32 @@ pub trait PaneShellExecutor {
     ) -> Result<ShellExecutionOutput, Self::Error>;
 }
 
+/// Port implemented by a concrete spawned shell executor.
+///
+/// Spawned-shell execution runs the rendered transaction in a fresh shell
+/// process derived from pane root-process metadata and never writes to or
+/// reads from the pane PTY. The request/output contracts are shared with the
+/// pane transport so result projection stays transport-neutral.
+pub trait SpawnedShellExecutor {
+    /// Product-specific spawned shell execution failure.
+    type Error: Error;
+
+    /// Executes one shell transaction in a spawned shell process and returns
+    /// normalized output.
+    fn execute_shell(
+        &mut self,
+        request: &ShellExecutionRequest,
+    ) -> Result<ShellExecutionOutput, Self::Error>;
+}
+
 /// Runtime transport selected for one planned local action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalExecutionTransport {
     /// Dispatch the local action through the active pane shell.
     PaneShell,
+    /// Dispatch the local action through a spawned shell process inferred
+    /// from the pane root process; nothing is sent to the pane PTY.
+    SpawnedShell,
 }
 
 impl LocalExecutionTransport {
@@ -478,6 +499,7 @@ impl LocalExecutionTransport {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::PaneShell => "pane_shell",
+            Self::SpawnedShell => "spawned_shell",
         }
     }
 }
@@ -522,6 +544,15 @@ impl LocalExecutionOutput {
         Self {
             transport: LocalExecutionTransport::PaneShell,
             sent_to_pane: true,
+            shell_output,
+        }
+    }
+
+    /// Builds output produced by a spawned shell executor.
+    pub fn spawned_shell(shell_output: ShellExecutionOutput) -> Self {
+        Self {
+            transport: LocalExecutionTransport::SpawnedShell,
+            sent_to_pane: false,
             shell_output,
         }
     }
@@ -634,6 +665,24 @@ mod tests {
         assert_eq!(output.transport, LocalExecutionTransport::PaneShell);
         assert_eq!(output.transport.as_str(), "pane_shell");
         assert!(output.sent_to_pane);
+        assert_eq!(output.shell_output.exit_code, Some(0));
+    }
+
+    /// Spawned-shell execution records mark the distinct transport and never
+    /// claim pane delivery.
+    #[test]
+    fn spawned_shell_execution_records_preserve_transport_contract() {
+        let output = LocalExecutionOutput::spawned_shell(ShellExecutionOutput::new(
+            Some(0),
+            "ok".to_string(),
+            String::new(),
+            false,
+            false,
+        ));
+
+        assert_eq!(output.transport, LocalExecutionTransport::SpawnedShell);
+        assert_eq!(output.transport.as_str(), "spawned_shell");
+        assert!(!output.sent_to_pane);
         assert_eq!(output.shell_output.exit_code, Some(0));
     }
 
