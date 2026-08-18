@@ -64,7 +64,6 @@ impl RuntimeSessionService {
             }
             boundary.phase = super::super::RuntimeForeignShellBootstrapPhase::Failed;
             boundary.phase_started_at_unix_ms = now_unix_ms;
-            boundary.challenge = None;
             boundary.child_token = None;
             boundary.child_shell = None;
             boundary.child_staging_source = None;

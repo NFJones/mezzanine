@@ -111,10 +111,10 @@ Mezzanine integrates with supported interactive shells while preserving their
 normal startup and history behavior. See the shell and terminal documentation
 for shell-specific behavior and nested-session setup.
 
-Agent work inside a nested Bash environment can use the opt-in integration
-printed by `mez shell-integration bash`; activate it explicitly inside that
-environment. Mezzanine does not reuse local startup files or silently modify
-remote shell configuration.
+Agent work inside nested SSH or container environments is discovered and
+bootstrapped automatically without installing anything inside that environment.
+Mezzanine does not reuse local startup files or silently modify remote shell
+configuration.
 
 After upgrading Mezzanine, open a new pane or restart the session to use
 updated shell integration.

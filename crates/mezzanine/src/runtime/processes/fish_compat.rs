@@ -319,41 +319,6 @@ builtin printf '\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=
     )
 }
 
-/// Generates opt-in managed Fish integration for a nested shell environment.
-///
-/// The returned source changes only the current Fish process. Its fixed
-/// command-line binding accepts a bounded source-free challenge before the
-/// ordinary private receiver stages become available.
-pub(crate) fn managed_foreign_fish_adapter_source(
-    owner: &MarkerToken,
-    instance: &MarkerToken,
-) -> String {
-    let source = managed_fish_init_command(owner);
-    let source = source.replace(
-        &format!(
-            "set -g __MEZ_FISH_INTEGRATION_OWNER {}\n",
-            mez_agent::fish_quote(owner.as_str())
-        ),
-        &format!(
-            "set -g __MEZ_FISH_INTEGRATION_OWNER {}\nset -g __MEZ_FISH_FOREIGN_INSTANCE {}\n",
-            mez_agent::fish_quote(owner.as_str()),
-            mez_agent::fish_quote(instance.as_str())
-        ),
-    );
-    let source = source.replace(
-        "    set -l hold_fields (string split ' ' -- \"$hold_record\")\n    if test (count $hold_fields) -ne 3; or test \"$hold_fields[1]\" != MEZ_FISH_RX1_HOLD; or test \"$hold_fields[2]\" != \"$__MEZ_FISH_INTEGRATION_OWNER\"; or test -z \"$hold_fields[3]\"\n",
-        "    set -l hold_fields (string split ' ' -- \"$hold_record\")\n    if test (count $hold_fields) -eq 4; and test \"$hold_fields[1]\" = MEZ_FISH_FOREIGN_CHALLENGE; and test \"$hold_fields[2]\" = \"$__MEZ_FISH_INTEGRATION_OWNER\"; and test \"$hold_fields[3]\" = \"$__MEZ_FISH_FOREIGN_INSTANCE\"; and string match -rq '^[0-9a-f]{32,128}$' -- \"$hold_fields[4]\"\n        if test -n (commandline); or commandline --search-mode; or commandline --paging-mode; or commandline --selection-start >/dev/null 2>&1; or commandline --selection-end >/dev/null 2>&1\n            return 1\n        end\n        builtin printf '\\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=foreign-challenge-completed;mez_instance=%s;mez_challenge=%s\\033\\\\' \"$__MEZ_FISH_INTEGRATION_OWNER\" \"$__MEZ_FISH_FOREIGN_INSTANCE\" \"$hold_fields[4]\"\n        return 2\n    end\n    if test (count $hold_fields) -ne 3; or test \"$hold_fields[1]\" != MEZ_FISH_RX1_HOLD; or test \"$hold_fields[2]\" != \"$__MEZ_FISH_INTEGRATION_OWNER\"; or test -z \"$hold_fields[3]\"\n",
-    );
-    let source = source.replace(
-        "    if not set -q __MEZ_FISH_EDITOR_HELD\n        __mez_fish_hold_editor; or return $status\n        commandline -f repaint\n",
-        "    if not set -q __MEZ_FISH_EDITOR_HELD\n        __mez_fish_hold_editor\n        set -l hold_status $status\n        if test $hold_status -eq 2\n            return 0\n        else if test $hold_status -ne 0\n            return $hold_status\n        end\n        commandline -f repaint\n",
-    );
-    source.replace(
-        "builtin printf '\\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=adapter-available\\033\\\\' \"$__MEZ_FISH_INTEGRATION_OWNER\"",
-        "builtin printf '\\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=foreign-adapter-candidate;mez_instance=%s\\033\\\\' \"$__MEZ_FISH_INTEGRATION_OWNER\" \"$__MEZ_FISH_FOREIGN_INSTANCE\"",
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -13,37 +13,11 @@ mod startup;
 mod transactions;
 mod zsh_compat;
 
-pub(crate) use bash_compat::managed_foreign_bash_adapter_source;
 pub(super) use managed_shell_handoff::ManagedShellKind;
 use managed_shell_handoff::{
     ManagedShellHandoff, ManagedShellHandoffEffect, ManagedShellHandoffEvent,
     ManagedShellHandoffIdentity, ManagedShellRecoveryObservation, reduce_managed_shell_handoff,
 };
-
-/// Generates fresh opt-in Bash integration for one nested shell invocation.
-pub(crate) fn generate_managed_foreign_bash_adapter_source() -> Result<String> {
-    let token = runtime_random_marker_token("foreign-bash-adapter-token")?;
-    let instance = runtime_random_marker_token("foreign-bash-adapter-instance")?;
-    Ok(managed_foreign_bash_adapter_source(&token, &instance))
-}
-
-/// Generates fresh opt-in Fish integration for one nested shell invocation.
-pub(crate) fn generate_managed_foreign_fish_adapter_source() -> Result<String> {
-    let token = runtime_random_marker_token("foreign-fish-adapter-token")?;
-    let instance = runtime_random_marker_token("foreign-fish-adapter-instance")?;
-    Ok(fish_compat::managed_foreign_fish_adapter_source(
-        &token, &instance,
-    ))
-}
-
-/// Generates fresh opt-in Zsh integration for one nested shell invocation.
-pub(crate) fn generate_managed_foreign_zsh_adapter_source() -> Result<String> {
-    let token = runtime_random_marker_token("foreign-zsh-adapter-token")?;
-    let instance = runtime_random_marker_token("foreign-zsh-adapter-instance")?;
-    Ok(zsh_compat::managed_foreign_zsh_adapter_source(
-        &token, &instance,
-    ))
-}
 
 use mez_mux::presentation::{pane_content_size_for_geometry, rendered_window_body_size};
 
@@ -351,13 +325,11 @@ struct RuntimePaneProbedShellIdentity {
 /// certifies an executable and transport for the active environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeForeignShellBootstrapPhase {
-    /// A foreign process group was detected but no prompt-scoped adapter exists.
-    AwaitingAdapter,
-    /// A candidate is pinned while its native editor challenge is outstanding.
-    ChallengingAdapter,
-    /// The admitted adapter is ready for syntax-neutral identity discovery.
+    /// A foreign process group was detected and awaits prompt-scoped admission.
+    AwaitingPrompt,
+    /// The boundary is ready for syntax-neutral identity discovery.
     IdentityProbing,
-    /// The admitted adapter is staging and launching the managed child shell.
+    /// The boundary is staging and launching the managed child shell.
     #[allow(dead_code)]
     BootstrappingChild,
     /// Bootstrap and correlated environment certification completed.
@@ -371,8 +343,7 @@ impl RuntimeForeignShellBootstrapPhase {
     /// Returns the stable protocol name used by diagnostics and tests.
     fn as_str(self) -> &'static str {
         match self {
-            Self::AwaitingAdapter => "awaiting-adapter",
-            Self::ChallengingAdapter => "challenging-adapter",
+            Self::AwaitingPrompt => "awaiting-prompt",
             Self::IdentityProbing => "identity-probing",
             Self::BootstrappingChild => "bootstrapping-child",
             Self::Certified => "certified",
@@ -384,71 +355,6 @@ impl RuntimeForeignShellBootstrapPhase {
     fn has_bounded_owner(self) -> bool {
         !matches!(self, Self::Certified | Self::Failed)
     }
-}
-
-/// Origin of one managed-shell adapter descriptor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeManagedShellAdapterOrigin {
-    /// Adapter belongs to the primary pane shell environment.
-    #[allow(dead_code)]
-    Primary,
-    /// Adapter belongs to the active SSH, container, or other foreign boundary.
-    Foreign,
-}
-
-/// Complete authority identity for one admitted managed-shell adapter.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RuntimeManagedShellAdapterDescriptor {
-    /// Pane process that owns the outer PTY.
-    primary_process_id: u32,
-    /// Outer foreground process group that contains the foreign environment.
-    process_group_id: u32,
-    /// Shell-interaction epoch that fences stale adapter records.
-    interaction_generation: u64,
-    /// Whether this descriptor belongs to the primary or foreign environment.
-    origin: RuntimeManagedShellAdapterOrigin,
-    /// Managed-shell protocol version published by the adapter.
-    version: u16,
-    /// Shell-native adapter implementation.
-    shell: mez_terminal::ManagedShellAdapter,
-    /// Adapter-private authentication token.
-    token: String,
-    /// Adapter instance identity for one foreign shell lifetime.
-    instance_id: String,
-    /// Fixed shell-native trigger when required by the adapter.
-    trigger: Option<String>,
-}
-
-/// Completed foreign prompt boundary that may advertise an adapter candidate.
-///
-/// This record is advisory only. It allows agent entry to correlate a candidate
-/// emitted immediately before the foreign bootstrap boundary was allocated,
-/// but it never grants input or shell-dispatch authority by itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct RuntimeForeignShellPromptBoundary {
-    /// Pane process that owned the outer PTY at prompt completion.
-    primary_process_id: u32,
-    /// Outer foreground process group observed at prompt completion.
-    process_group_id: u32,
-    /// Monotonic prompt sequence used to reject replaced candidates.
-    sequence: u64,
-}
-
-/// Advisory adapter candidate retained for the currently completed prompt.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RuntimeForeignShellAdapterCandidate {
-    /// Prompt boundary that emitted this candidate.
-    prompt: RuntimeForeignShellPromptBoundary,
-    /// Managed-shell protocol version published by the adapter.
-    version: u16,
-    /// Shell-native adapter implementation.
-    shell: mez_terminal::ManagedShellAdapter,
-    /// Adapter-private authentication token.
-    token: String,
-    /// Adapter instance identity for one foreign shell lifetime.
-    instance_id: String,
-    /// Fixed shell-native trigger when required by the adapter.
-    trigger: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -465,12 +371,6 @@ struct RuntimeForeignShellBoundary {
     lifecycle_started_at_unix_ms: u64,
     /// Start time of the current phase for runtime-owned expiry.
     phase_started_at_unix_ms: u64,
-    /// Whether prompt completion was observed after this boundary began.
-    prompt_observed: bool,
-    /// Candidate descriptor pinned to this exact boundary and generation.
-    adapter: Option<RuntimeManagedShellAdapterDescriptor>,
-    /// Runtime nonce that must be echoed after shell-native editor acquisition.
-    challenge: Option<String>,
     /// Fresh private receiver token installed only in the managed foreign child.
     child_token: Option<String>,
     /// Managed adapter implemented by the ephemeral child, when supported.
@@ -887,14 +787,6 @@ pub(crate) struct RuntimeProcessComponent {
     next_detached_pane_generation: u64,
     /// Latest foreground process groups observed by pane workers.
     pane_foreground_process_groups: std::collections::BTreeMap<String, u32>,
-    /// Next monotonic completed-prompt sequence across pane processes.
-    next_foreign_shell_prompt_sequence: u64,
-    /// Latest completed foreign prompt boundary keyed by pane id.
-    pane_foreign_shell_prompt_boundaries:
-        std::collections::BTreeMap<String, RuntimeForeignShellPromptBoundary>,
-    /// Latest advisory adapter candidate for a completed foreign prompt.
-    pane_foreign_shell_adapter_candidates:
-        std::collections::BTreeMap<String, RuntimeForeignShellAdapterCandidate>,
     /// Uncertified non-primary foreground boundaries keyed by pane id.
     pane_foreign_shell_boundaries: std::collections::BTreeMap<String, RuntimeForeignShellBoundary>,
     /// Certified non-primary shell identities keyed by pane id.
@@ -2372,30 +2264,6 @@ impl RuntimeSessionService {
             .map(|boundary| boundary.phase.as_str())
     }
 
-    /// Sets foreign lifecycle clocks for deterministic idle and absolute timeout tests.
-    pub(crate) fn set_foreign_shell_bootstrap_times_for_tests(
-        &mut self,
-        pane_id: &str,
-        lifecycle_started_at_unix_ms: u64,
-        phase_started_at_unix_ms: u64,
-    ) {
-        if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
-            boundary.lifecycle_started_at_unix_ms = lifecycle_started_at_unix_ms;
-            boundary.phase_started_at_unix_ms = phase_started_at_unix_ms;
-        }
-    }
-
-    /// Returns the active foreign adapter challenge for correlation tests.
-    pub(crate) fn foreign_shell_bootstrap_challenge_for_tests(
-        &self,
-        pane_id: &str,
-    ) -> Option<&str> {
-        self.process
-            .pane_foreign_shell_boundaries
-            .get(pane_id)
-            .and_then(|boundary| boundary.challenge.as_deref())
-    }
-
     /// Returns the bounded dependency-free loader nonce for correlation tests.
     pub(crate) fn foreign_shell_loader_marker_for_tests(&self, pane_id: &str) -> Option<&str> {
         self.process
@@ -2404,48 +2272,12 @@ impl RuntimeSessionService {
             .and_then(|boundary| boundary.loader_marker.as_deref())
     }
 
-    /// Returns the fresh foreign Bash child token for staging regressions.
-    pub(crate) fn foreign_bash_child_token_for_tests(&self, pane_id: &str) -> Option<&str> {
-        self.process
-            .pane_foreign_shell_boundaries
-            .get(pane_id)
-            .and_then(|boundary| boundary.child_token.as_deref())
-    }
-
-    /// Returns the parent-only proof for one foreign Bash staging regression.
-    pub(crate) fn foreign_bash_parent_proof_for_tests(&self, pane_id: &str) -> Option<&str> {
-        self.process
-            .pane_managed_shell_handoffs
-            .get(pane_id)
-            .filter(|handoff| handoff.shell() == ManagedShellKind::Bash)
-            .and_then(|handoff| handoff.identity().parent_proof.as_deref())
-    }
-
     /// Returns the fresh child token for one foreign-shell staging regression.
     pub(crate) fn foreign_child_token_for_tests(&self, pane_id: &str) -> Option<&str> {
         self.process
             .pane_foreign_shell_boundaries
             .get(pane_id)
             .and_then(|boundary| boundary.child_token.as_deref())
-    }
-
-    /// Returns retained foreign Bash staging source for isolation regressions.
-    pub(crate) fn foreign_bash_child_staging_source_for_tests(
-        &self,
-        pane_id: &str,
-    ) -> Option<&str> {
-        self.process
-            .pane_foreign_shell_boundaries
-            .get(pane_id)
-            .and_then(|boundary| boundary.child_staging_source.as_deref())
-    }
-
-    /// Returns retained foreign child staging source for isolation regressions.
-    pub(crate) fn foreign_child_staging_source_for_tests(&self, pane_id: &str) -> Option<&str> {
-        self.process
-            .pane_foreign_shell_boundaries
-            .get(pane_id)
-            .and_then(|boundary| boundary.child_staging_source.as_deref())
     }
 
     /// Returns live shell transactions for integration-test observation.
@@ -2816,11 +2648,7 @@ impl RuntimeSessionService {
                 self.process
                     .pane_foreign_shell_boundaries
                     .get(pane_id)
-                    .and_then(|boundary| {
-                        boundary
-                            .child_shell
-                            .or_else(|| boundary.adapter.as_ref().map(|adapter| adapter.shell))
-                    }),
+                    .and_then(|boundary| boundary.child_shell),
                 self.foreign_child_token_for_pane(pane_id),
             ) {
                 (Some(mez_terminal::ManagedShellAdapter::Bash), Some(token)) => {
@@ -2972,49 +2800,6 @@ impl RuntimeSessionService {
             .map(bash_compat::ManagedBashCompatibility::token)
     }
 
-    /// Returns the authenticated Bash token pinned to the active foreign epoch.
-    pub(super) fn foreign_bash_receiver_token_for_pane(
-        &self,
-        pane_id: &str,
-    ) -> Option<mez_agent::MarkerToken> {
-        let boundary = self.process.pane_foreign_shell_boundaries.get(pane_id)?;
-        let adapter = boundary.adapter.as_ref()?;
-        (matches!(
-            boundary.phase,
-            RuntimeForeignShellBootstrapPhase::IdentityProbing
-                | RuntimeForeignShellBootstrapPhase::BootstrappingChild
-                | RuntimeForeignShellBootstrapPhase::Certified
-        ) && adapter.origin == RuntimeManagedShellAdapterOrigin::Foreign
-            && adapter.shell == mez_terminal::ManagedShellAdapter::Bash
-            && adapter.primary_process_id == boundary.primary_process_id
-            && adapter.process_group_id == boundary.process_group_id
-            && adapter.interaction_generation == boundary.interaction_generation)
-            .then(|| mez_agent::MarkerToken::new(adapter.token.clone()).ok())
-            .flatten()
-    }
-
-    /// Returns the parent-adapter token for one generation-scoped foreign shell.
-    pub(super) fn foreign_adapter_token_for_pane(
-        &self,
-        pane_id: &str,
-        shell: mez_terminal::ManagedShellAdapter,
-    ) -> Option<mez_agent::MarkerToken> {
-        let boundary = self.process.pane_foreign_shell_boundaries.get(pane_id)?;
-        let adapter = boundary.adapter.as_ref()?;
-        (matches!(
-            boundary.phase,
-            RuntimeForeignShellBootstrapPhase::IdentityProbing
-                | RuntimeForeignShellBootstrapPhase::BootstrappingChild
-                | RuntimeForeignShellBootstrapPhase::Certified
-        ) && adapter.origin == RuntimeManagedShellAdapterOrigin::Foreign
-            && adapter.shell == shell
-            && adapter.primary_process_id == boundary.primary_process_id
-            && adapter.process_group_id == boundary.process_group_id
-            && adapter.interaction_generation == boundary.interaction_generation)
-            .then(|| mez_agent::MarkerToken::new(adapter.token.clone()).ok())
-            .flatten()
-    }
-
     /// Authenticates one managed-shell event against only the active environment.
     pub(super) fn active_managed_shell_token_matches(
         &self,
@@ -3031,19 +2816,11 @@ impl RuntimeSessionService {
                 .process
                 .pane_foreign_shell_boundaries
                 .get(pane_id)
-                .is_some_and(|boundary| {
-                    boundary
-                        .child_shell
-                        .or_else(|| boundary.adapter.as_ref().map(|adapter| adapter.shell))
-                        == Some(shell)
-                })
+                .is_some_and(|boundary| boundary.child_shell == Some(shell))
                 && self
                     .foreign_child_token_for_pane(pane_id)
                     .is_some_and(|expected| expected.as_str() == token);
-            return self
-                .foreign_adapter_token_for_pane(pane_id, shell)
-                .is_some_and(|expected| expected.as_str() == token)
-                || child_matches;
+            return child_matches;
         }
         match shell {
             mez_terminal::ManagedShellAdapter::Bash => self
@@ -3064,16 +2841,8 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Option<mez_agent::ManagedZshTrigger> {
         if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get(pane_id) {
-            if boundary.adapter.is_none()
-                && boundary.child_shell == Some(mez_terminal::ManagedShellAdapter::Zsh)
-            {
-                return Some(mez_agent::ManagedZshTrigger::EscapeM);
-            }
-            let adapter = boundary.adapter.as_ref()?;
-            return (adapter.shell == mez_terminal::ManagedShellAdapter::Zsh)
-                .then_some(adapter.trigger.as_deref())
-                .flatten()
-                .and_then(mez_agent::ManagedZshTrigger::from_protocol_str);
+            return (boundary.child_shell == Some(mez_terminal::ManagedShellAdapter::Zsh))
+                .then_some(mez_agent::ManagedZshTrigger::EscapeM);
         }
         self.process
             .pane_zsh_admissions
@@ -3107,9 +2876,7 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Option<mez_agent::MarkerToken> {
         let boundary = self.process.pane_foreign_shell_boundaries.get(pane_id)?;
-        let shell = boundary
-            .child_shell
-            .or_else(|| boundary.adapter.as_ref().map(|adapter| adapter.shell));
+        let shell = boundary.child_shell;
         (shell == Some(mez_terminal::ManagedShellAdapter::Bash))
             .then(|| self.foreign_child_token_for_pane(pane_id))
             .flatten()
@@ -3127,11 +2894,8 @@ impl RuntimeSessionService {
             .contains_key(pane_id)
         {
             return self
-                .foreign_bash_receiver_token_for_pane(pane_id)
-                .is_some_and(|expected| expected.as_str() == token)
-                || self
-                    .foreign_bash_child_token_for_pane(pane_id)
-                    .is_some_and(|expected| expected.as_str() == token);
+                .foreign_bash_child_token_for_pane(pane_id)
+                .is_some_and(|expected| expected.as_str() == token);
         }
         self.bash_receiver_token_for_pane(pane_id)
             .is_some_and(|expected| expected.as_str() == token)
@@ -3516,8 +3280,7 @@ impl RuntimeSessionService {
                     .pane_managed_shell_handoffs
                     .get(&pane_id)
                     .map(|handoff| handoff.identity().marker.clone()),
-                RuntimeForeignShellBootstrapPhase::AwaitingAdapter
-                | RuntimeForeignShellBootstrapPhase::ChallengingAdapter
+                RuntimeForeignShellBootstrapPhase::AwaitingPrompt
                 | RuntimeForeignShellBootstrapPhase::Certified
                 | RuntimeForeignShellBootstrapPhase::Failed => None,
             })
@@ -4469,12 +4232,6 @@ impl RuntimeSessionService {
         self.process.pane_zsh_compatibility.remove(pane_id);
         self.process.pane_zsh_admissions.remove(pane_id);
         self.process.pane_foreground_process_groups.remove(pane_id);
-        self.process
-            .pane_foreign_shell_prompt_boundaries
-            .remove(pane_id);
-        self.process
-            .pane_foreign_shell_adapter_candidates
-            .remove(pane_id);
         self.process.pane_foreign_shell_boundaries.remove(pane_id);
         self.process.program_owned_pane_titles.remove(pane_id);
         self.persistence.cleanup_pane_io(pane_id);

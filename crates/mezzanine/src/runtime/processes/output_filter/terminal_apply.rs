@@ -182,9 +182,6 @@ impl RuntimeSessionService {
             .pane_foreground_process_groups
             .get(&pane_id)
             .copied();
-        if previous_foreground_process_group != Some(process_group_id) {
-            self.clear_foreign_shell_advisory_prompt(&pane_id);
-        }
         let previous_foreground_certified_shell = previous_foreground_process_group
             .and_then(|group| self.pane_process_group_is_certified_shell(&pane_id, group));
         self.process

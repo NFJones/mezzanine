@@ -503,39 +503,6 @@ fn rendered_managed_zsh_integration() -> String {
     render_managed_zsh_integration(MANAGED_ZSH_INTEGRATION)
 }
 
-/// Generates opt-in managed Zsh integration for a nested shell environment.
-///
-/// The source installs only process-local ZLE and history guards. Its selected
-/// trigger admits bounded challenge metadata before ordinary private source
-/// framing, without creating or consulting a host-managed `ZDOTDIR`.
-pub(crate) fn managed_foreign_zsh_adapter_source(
-    token: &MarkerToken,
-    instance: &MarkerToken,
-) -> String {
-    let source = MANAGED_ZSH_INTEGRATION.to_string();
-    let source = source.replace(
-        "typeset -g __MEZ_ZSH_RESTORE_MARKER=",
-        &format!(
-            "typeset -g MEZ_ZSH_HISTORY_TOKEN={}\ntypeset -g MEZ_ZSH_PRIVATE_DIRECTORY=${{TMPDIR:-/tmp}}\ntypeset -g MEZ_ZSH_FOREIGN_INSTANCE={}\ntypeset -g __MEZ_ZSH_RESTORE_MARKER=",
-            mez_agent::shell_quote(token.as_str()),
-            mez_agent::shell_quote(instance.as_str())
-        ),
-    );
-    let source = source.replace(
-        "  hold_fields=(${=hold_record})\n  if (( receive_status != 0 || ${#hold_fields} != 3 || ${#hold_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ )) || \\\n",
-        "  hold_fields=(${=hold_record})\n  if (( receive_status == 0 && ${#hold_fields} == 4 && ${#hold_record} <= __MEZ_ZSH_MAX_RECORD_BYTES__ )) && [[ ${hold_fields[1]-} == MEZ_ZSH_FOREIGN_CHALLENGE && ${hold_fields[2]-} == ${MEZ_ZSH_HISTORY_TOKEN-} && ${hold_fields[3]-} == ${MEZ_ZSH_FOREIGN_INSTANCE-} && ${hold_fields[4]-} == [0-9a-f]## && ${#hold_fields[4]} -ge 32 && ${#hold_fields[4]} -le 128 ]]; then\n    command printf '\\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=foreign-challenge-completed;mez_instance=%s;mez_challenge=%s\\033\\\\' \"$MEZ_ZSH_HISTORY_TOKEN\" \"$MEZ_ZSH_FOREIGN_INSTANCE\" \"${hold_fields[4]}\"\n    return 0\n  fi\n  if (( receive_status != 0 || ${#hold_fields} != 3 || ${#hold_record} > __MEZ_ZSH_MAX_RECORD_BYTES__ )) || \\\n",
-    );
-    let source = source.replace(
-        "  command printf '\\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=adapter-available;mez_trigger=%s\\033\\\\' \\\n    \"$MEZ_ZSH_HISTORY_TOKEN\" \"$__MEZ_ZSH_TRIGGER_ID\"",
-        "  command printf '\\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=foreign-adapter-candidate;mez_instance=%s;mez_trigger=%s\\033\\\\' \\\n    \"$MEZ_ZSH_HISTORY_TOKEN\" \"$MEZ_ZSH_FOREIGN_INSTANCE\" \"$__MEZ_ZSH_TRIGGER_ID\"",
-    );
-    let source = source.replace(
-        "if [[ ${MEZ_ZSH_INTEGRATION_ONLY:-0} != 1 ]]; then\n  ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}\n  unset MEZ_ZSH_MANAGED_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET\nfi\n",
-        "",
-    );
-    render_managed_zsh_integration(&source)
-}
-
 /// Stages one owner-only foreign Zsh startup directory and runs its managed child.
 pub(super) fn managed_foreign_zsh_child_staging_source(
     shell_path: &Path,

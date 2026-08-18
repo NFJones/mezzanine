@@ -43,70 +43,25 @@ inspect the current mode.
 
 When the pane enters SSH, a container shell, a chroot, or another nested
 interactive environment, Mezzanine treats that environment as a separate shell
-authority. Agent work waits for compatible Mezzanine shell integration running
-inside the nested environment. The integration must announce itself at a
-completed prompt and pass a shell-native editor challenge before Mezzanine can
-discover that environment's shell or send generated input. Host-side Bash,
-Fish, or Zsh tokens and startup files are never reused across this boundary.
+authority. Explicit agent entry asserts that the foreign shell is at an empty,
+interactive prompt. Mezzanine immediately issues a bounded syntax-neutral
+identity probe and, after resolving the shell, launches an ephemeral managed
+child through a one-command `/bin/sh` loader. No Mezzanine executable,
+startup-file modification, or preinstalled compatibility shim is required
+inside the nested environment, and host-side Bash, Fish, or Zsh tokens and
+startup files are never reused across this boundary.
 
-Install or explicitly activate the matching integration inside each remote or
-container environment where agent commands should run. Mezzanine does not
-silently edit remote startup files. An already-running unmanaged nested shell
-cannot be identified safely from the local `ssh` or container-client process
-alone; bootstrap therefore times out with an installation/activation message
-instead of injecting a probe into a password prompt, full-screen program, or
-unknown command line. After integration is admitted, shell-specific identity
-and child-launch support determines whether that adapter can complete the
-bootstrap.
+Agent work waits for that dependency-free bootstrap to certify the foreign
+shell before generated input is released. Mezzanine never silently edits remote
+startup files and never installs software in the foreign environment. Loader
+and child-startup records stay owner-only, remain within portable PTY
+canonical-line limits, and are removed when the synchronous child returns.
 
-You may activate the integration before opening the agent prompt. Mezzanine
-retains the adapter announcement only for the currently completed nested-shell
-prompt, then performs the normal shell-native challenge when agent mode opens.
-Starting a command, entering an alternate-screen program, changing foreground
-ownership, or reaching another prompt invalidates that advisory announcement;
-the next completed integrated prompt publishes a fresh one.
-
-For Bash, install `mez` inside the nested environment and explicitly activate
-the current shell process:
-
-```bash
-eval "$(mez shell-integration bash)"
-```
-
-Run this only at an ordinary empty Bash prompt. Activation preserves the visible
-prompt and installs the private receiver only in that Bash process; it does not
-edit `.bashrc`. Mezzanine then challenges the adapter, discovers the nested
-shell through its authenticated receiver, creates a temporary owner-only child
-rcfile with a fresh token, and removes that temporary directory when the child
-returns. Large child bootstrap source streams through validated 32 KiB logical
-frames rather than one SSH acknowledgement round trip per physical line.
-Correlated delivery progress refreshes a bounded idle deadline, while an
-absolute lifecycle deadline still prevents an indefinite slow trickle. Exit the
-nested environment to restore normal discovery of the local pane shell.
-
-For Fish, explicitly activate the current process at an empty prompt:
-
-```fish
-mez shell-integration fish | source
-```
-
-The Fish adapter uses a native command-line callback for its source-free
-challenge and authenticated receiver stages. After identity discovery,
-Mezzanine starts a startup-suppressed Fish child with a fresh receiver token in
-its `--init-command`. The parent adapter does not reuse local Fish launch state.
-
-For Zsh, explicitly activate the current process at an empty prompt:
-
-```zsh
-eval "$(mez shell-integration zsh)"
-```
-
-The Zsh adapter selects an unused managed ZLE trigger, uses that widget for the
-challenge and authenticated receiver, and stages an owner-only temporary
-`ZDOTDIR` for the fresh-token child. The temporary startup directory is created
-inside the nested environment and removed when the child returns. Local
-`ZDOTDIR`, startup files, tokens, and trigger admission are not consulted while
-the foreign boundary is active.
+An unmanaged nested shell that is not at an empty, interactive prompt cannot be
+probed safely from the local `ssh` or container-client process alone; Mezzanine
+will not inject input into a password prompt, full-screen program, or unknown
+command line. Exit the nested environment to restore normal discovery of the
+local pane shell.
 
 For all three shells, bootstrap remains bounded and fail-closed. Mezzanine
 releases the environment bootstrap only after the fresh child publishes an

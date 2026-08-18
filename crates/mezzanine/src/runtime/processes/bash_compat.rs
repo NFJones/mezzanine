@@ -116,27 +116,6 @@ fn managed_bash_receiver_source(token: &MarkerToken) -> String {
     )
 }
 
-/// Generates opt-in managed Bash integration for a nested shell environment.
-///
-/// The source changes only the current Bash process. It retains the visible
-/// prompt, publishes a candidate after that prompt, and never edits startup
-/// files or embeds host-side paths.
-pub(crate) fn managed_foreign_bash_adapter_source(
-    token: &MarkerToken,
-    instance: &MarkerToken,
-) -> String {
-    let prelude = format!(
-        "MEZ_BASH_FOREIGN_INSTANCE={}\nMEZ_BASH_FOREIGN_ORIGINAL_PS1=${{PS1-}}",
-        instance.as_str()
-    );
-    let ready = format!(
-        "PS1=$'\\[\\033]133;A\\033\\\\\\]'\"${{MEZ_BASH_FOREIGN_ORIGINAL_PS1}}\"$'\\[\\033]133;B\\033\\\\\\]\\[\\033]133;R;mez_protocol=2;mez_shell=bash;mez_token={};mez_event=foreign-adapter-candidate;mez_instance={}\\033\\\\\\]'",
-        token.as_str(),
-        instance.as_str()
-    );
-    managed_bash_receiver_source_with_prelude(token, &prelude, &ready)
-}
-
 /// Renders private parent-receiver source that stages and runs one managed
 /// Bash child entirely inside the active foreign filesystem.
 ///

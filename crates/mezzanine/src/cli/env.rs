@@ -83,8 +83,6 @@ pub(super) enum CliCommand {
     Sandbox(super::sandbox::SandboxCliArgs),
     /// Generates shell completion definitions.
     Completion(CompletionCliArgs),
-    /// Generates opt-in integration for a shell in a nested environment.
-    ShellIntegration(ShellIntegrationCliArgs),
     /// Prints version information.
     Version,
 }
@@ -183,13 +181,6 @@ pub(super) struct CompletionCliArgs {
     /// Shell syntax used for the generated completion definition.
     #[arg(value_enum)]
     pub(super) shell: clap_complete::Shell,
-}
-
-/// Typed process CLI arguments for `mez shell-integration`.
-#[derive(Debug, Clone, Args)]
-pub(super) struct ShellIntegrationCliArgs {
-    /// Nested shell whose opt-in integration source should be generated.
-    pub(super) shell: String,
 }
 
 impl CliInvocation {

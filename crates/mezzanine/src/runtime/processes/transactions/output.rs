@@ -163,9 +163,7 @@ fn shell_transaction_control_osc_matches_marker(record: &[u8], marker: &str) -> 
                 marker: Some(event_marker),
                 ..
             } => event_marker == marker,
-            mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate { .. }
-            | mez_terminal::ManagedShellProtocolEvent::ForeignChallengeCompleted { .. }
-            | mez_terminal::ManagedShellProtocolEvent::AdapterAvailable { .. }
+            mez_terminal::ManagedShellProtocolEvent::AdapterAvailable { .. }
             | mez_terminal::ManagedShellProtocolEvent::AdapterUnavailable { .. }
             | mez_terminal::ManagedShellProtocolEvent::ReceiverAwaiting
             | mez_terminal::ManagedShellProtocolEvent::EditorClearRequested { marker: None }

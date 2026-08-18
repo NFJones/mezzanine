@@ -2,9 +2,7 @@
 
 use super::super::{
     ManagedShellHandoffEffect, ManagedShellHandoffEvent, ManagedShellHandoffIdentity,
-    ManagedShellKind, ManagedShellSettlementRenderPolicy, RuntimeForeignShellAdapterCandidate,
-    RuntimeForeignShellBootstrapPhase, RuntimeForeignShellPromptBoundary,
-    RuntimeManagedShellAdapterDescriptor, RuntimeManagedShellAdapterOrigin,
+    ManagedShellKind, ManagedShellSettlementRenderPolicy, RuntimeForeignShellBootstrapPhase,
     reduce_managed_shell_handoff,
 };
 use super::{
@@ -16,8 +14,8 @@ use super::{
     local_action_plan, postprocess_shell_action_success_output,
     runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
     runtime_execution_ready_for_provider_continuation, runtime_post_shell_hook_payload,
-    runtime_random_marker_token, runtime_running_shell_transaction_kind_name,
-    shell_action_failure_diagnostic, shell_command_result_content,
+    runtime_running_shell_transaction_kind_name, shell_action_failure_diagnostic,
+    shell_command_result_content,
 };
 use mez_agent::semantic_patch_planning::{
     APPLY_PATCH_RESULT_MARKER, ApplyPatchFileOutcome, parse_apply_patch_file_outcomes,
@@ -50,28 +48,6 @@ impl RuntimeSessionService {
             .contains_key(output_pane_id)
         {
             return match event {
-                mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate {
-                    instance_id,
-                    trigger,
-                } => self.observe_foreign_shell_adapter_candidate(
-                    output_pane_id,
-                    version,
-                    shell,
-                    token,
-                    instance_id,
-                    trigger.as_deref(),
-                ),
-                mez_terminal::ManagedShellProtocolEvent::ForeignChallengeCompleted {
-                    instance_id,
-                    challenge,
-                } => self.observe_foreign_shell_challenge_completed(
-                    output_pane_id,
-                    version,
-                    shell,
-                    token,
-                    instance_id,
-                    challenge,
-                ),
                 mez_terminal::ManagedShellProtocolEvent::EditorClearRequested { marker }
                     if self.active_managed_shell_token_matches(output_pane_id, shell, token) =>
                 {
@@ -132,13 +108,7 @@ impl RuntimeSessionService {
                         .process
                         .pane_foreign_shell_boundaries
                         .get(output_pane_id)
-                        .is_some_and(|boundary| {
-                            boundary.child_shell == Some(shell)
-                                || boundary
-                                    .adapter
-                                    .as_ref()
-                                    .is_some_and(|adapter| adapter.shell == shell)
-                        })
+                        .is_some_and(|boundary| boundary.child_shell == Some(shell))
                         && self
                             .foreign_child_token_for_pane(output_pane_id)
                             .is_some_and(|expected| expected.as_str() == token) =>
@@ -192,25 +162,13 @@ impl RuntimeSessionService {
                     && self.active_bash_receiver_token_matches(output_pane_id, token) =>
                 {
                     if let Some(proof) = proof {
-                        let failed = self.fail_foreign_bash_child_staging(
+                        self.observe_managed_shell_parent_ready(
                             output_pane_id,
+                            ManagedShellKind::Bash,
                             token,
                             marker,
-                            proof,
-                            *outcome,
-                            *exit_code,
-                        )?;
-                        if failed > 0 {
-                            Ok(failed)
-                        } else {
-                            self.observe_managed_shell_parent_ready(
-                                output_pane_id,
-                                ManagedShellKind::Bash,
-                                token,
-                                marker,
-                                Some(proof),
-                            )
-                        }
+                            Some(proof),
+                        )
                     } else if matches!(
                         outcome,
                         mez_terminal::ManagedShellParentOutcome::Completed
@@ -228,26 +186,6 @@ impl RuntimeSessionService {
                 }
                 _ => Ok(0),
             };
-        }
-        if matches!(
-            event,
-            mez_terminal::ManagedShellProtocolEvent::ForeignChallengeCompleted { .. }
-        ) {
-            return Ok(0);
-        }
-        if let mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate {
-            instance_id,
-            trigger,
-        } = event
-        {
-            return self.retain_foreign_shell_adapter_candidate(
-                output_pane_id,
-                version,
-                shell,
-                token,
-                instance_id,
-                trigger.as_deref(),
-            );
         }
         let managed_shell = match shell {
             mez_terminal::ManagedShellAdapter::Bash
@@ -487,316 +425,8 @@ impl RuntimeSessionService {
                 Ok(usize::from(transition.applied))
             }
             mez_terminal::ManagedShellProtocolEvent::ReceiverRejected { marker: None, .. }
-            | mez_terminal::ManagedShellProtocolEvent::ChildExited { .. }
-            | mez_terminal::ManagedShellProtocolEvent::ForeignAdapterCandidate { .. }
-            | mez_terminal::ManagedShellProtocolEvent::ForeignChallengeCompleted { .. } => Ok(0),
+            | mez_terminal::ManagedShellProtocolEvent::ChildExited { .. } => Ok(0),
         }
-    }
-
-    /// Records a completed foreign prompt without treating it as admission.
-    pub(super) fn observe_foreign_shell_prompt_boundary(&mut self, pane_id: &str) {
-        let Some(primary_process_id) = self.primary_pid_for_live_pane_process(pane_id) else {
-            self.clear_foreign_shell_advisory_prompt(pane_id);
-            return;
-        };
-        let Some(process_group_id) = self.pane_foreground_process_group_observation(pane_id).0
-        else {
-            self.clear_foreign_shell_advisory_prompt(pane_id);
-            return;
-        };
-        if self.pane_process_group_is_certified_shell(pane_id, process_group_id) != Some(false)
-            || matches!(
-                self.pane_readiness_state(pane_id),
-                PaneReadinessState::FullScreen
-                    | PaneReadinessState::PasswordPrompt
-                    | PaneReadinessState::InteractiveBlocked
-            )
-        {
-            self.clear_foreign_shell_advisory_prompt(pane_id);
-            return;
-        }
-        self.process.next_foreign_shell_prompt_sequence = self
-            .process
-            .next_foreign_shell_prompt_sequence
-            .saturating_add(1);
-        let prompt = RuntimeForeignShellPromptBoundary {
-            primary_process_id,
-            process_group_id,
-            sequence: self.process.next_foreign_shell_prompt_sequence,
-        };
-        self.process
-            .pane_foreign_shell_prompt_boundaries
-            .insert(pane_id.to_string(), prompt);
-        self.process
-            .pane_foreign_shell_adapter_candidates
-            .remove(pane_id);
-        if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id)
-            && boundary.phase == RuntimeForeignShellBootstrapPhase::AwaitingAdapter
-            && boundary.primary_process_id == primary_process_id
-            && boundary.process_group_id == process_group_id
-        {
-            boundary.prompt_observed = true;
-        }
-    }
-
-    /// Invalidates advisory prompt and candidate metadata for one pane.
-    pub(crate) fn clear_foreign_shell_advisory_prompt(&mut self, pane_id: &str) {
-        self.process
-            .pane_foreign_shell_prompt_boundaries
-            .remove(pane_id);
-        self.process
-            .pane_foreign_shell_adapter_candidates
-            .remove(pane_id);
-    }
-
-    /// Retains a candidate emitted by the currently completed foreign prompt.
-    fn retain_foreign_shell_adapter_candidate(
-        &mut self,
-        pane_id: &str,
-        version: u16,
-        shell: mez_terminal::ManagedShellAdapter,
-        token: &str,
-        instance_id: &str,
-        trigger: Option<&str>,
-    ) -> Result<usize> {
-        let Some(prompt) = self
-            .process
-            .pane_foreign_shell_prompt_boundaries
-            .get(pane_id)
-            .copied()
-        else {
-            return Ok(0);
-        };
-        if self.primary_pid_for_live_pane_process(pane_id) != Some(prompt.primary_process_id)
-            || self.pane_foreground_process_group_observation(pane_id).0
-                != Some(prompt.process_group_id)
-            || self.pane_process_group_is_certified_shell(pane_id, prompt.process_group_id)
-                != Some(false)
-            || matches!(
-                self.pane_readiness_state(pane_id),
-                PaneReadinessState::FullScreen
-                    | PaneReadinessState::PasswordPrompt
-                    | PaneReadinessState::InteractiveBlocked
-            )
-        {
-            self.clear_foreign_shell_advisory_prompt(pane_id);
-            return Ok(0);
-        }
-        self.process.pane_foreign_shell_adapter_candidates.insert(
-            pane_id.to_string(),
-            RuntimeForeignShellAdapterCandidate {
-                prompt,
-                version,
-                shell,
-                token: token.to_string(),
-                instance_id: instance_id.to_string(),
-                trigger: trigger.map(ToOwned::to_owned),
-            },
-        );
-        Ok(1)
-    }
-
-    /// Adopts the retained candidate for a newly allocated foreign boundary.
-    pub(crate) fn adopt_retained_foreign_shell_adapter_candidate(
-        &mut self,
-        pane_id: &str,
-    ) -> Result<usize> {
-        let Some(candidate) = self
-            .process
-            .pane_foreign_shell_adapter_candidates
-            .remove(pane_id)
-        else {
-            return Ok(0);
-        };
-        let prompt_matches = self
-            .process
-            .pane_foreign_shell_prompt_boundaries
-            .get(pane_id)
-            == Some(&candidate.prompt);
-        let boundary_matches = self
-            .process
-            .pane_foreign_shell_boundaries
-            .get(pane_id)
-            .is_some_and(|boundary| {
-                boundary.phase == RuntimeForeignShellBootstrapPhase::AwaitingAdapter
-                    && boundary.prompt_observed
-                    && boundary.primary_process_id == candidate.prompt.primary_process_id
-                    && boundary.process_group_id == candidate.prompt.process_group_id
-            });
-        if !prompt_matches || !boundary_matches {
-            return Ok(0);
-        }
-        self.observe_foreign_shell_adapter_candidate(
-            pane_id,
-            candidate.version,
-            candidate.shell,
-            &candidate.token,
-            &candidate.instance_id,
-            candidate.trigger.as_deref(),
-        )
-    }
-
-    /// Pins one foreign adapter candidate to the active process and generation.
-    fn observe_foreign_shell_adapter_candidate(
-        &mut self,
-        pane_id: &str,
-        version: u16,
-        shell: mez_terminal::ManagedShellAdapter,
-        token: &str,
-        instance_id: &str,
-        trigger: Option<&str>,
-    ) -> Result<usize> {
-        let Some(boundary) = self
-            .process
-            .pane_foreign_shell_boundaries
-            .get(pane_id)
-            .cloned()
-        else {
-            return Ok(0);
-        };
-        if boundary.phase != RuntimeForeignShellBootstrapPhase::AwaitingAdapter
-            || !boundary.prompt_observed
-            || self.primary_pid_for_live_pane_process(pane_id) != Some(boundary.primary_process_id)
-            || self.pane_foreground_process_group_observation(pane_id).0
-                != Some(boundary.process_group_id)
-            || self
-                .process
-                .pane_shell_interaction_generations
-                .get(pane_id)
-                .copied()
-                != Some(boundary.interaction_generation)
-        {
-            return Ok(0);
-        }
-        let challenge = runtime_random_marker_token(&format!(
-            "foreign-shell-challenge\0{pane_id}\0{}\0{}\0{instance_id}",
-            boundary.process_group_id, boundary.interaction_generation
-        ))?
-        .as_str()
-        .to_string();
-        let descriptor = RuntimeManagedShellAdapterDescriptor {
-            primary_process_id: boundary.primary_process_id,
-            process_group_id: boundary.process_group_id,
-            interaction_generation: boundary.interaction_generation,
-            origin: RuntimeManagedShellAdapterOrigin::Foreign,
-            version,
-            shell,
-            token: token.to_string(),
-            instance_id: instance_id.to_string(),
-            trigger: trigger.map(ToOwned::to_owned),
-        };
-        let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) else {
-            return Ok(0);
-        };
-        if current.primary_process_id != boundary.primary_process_id
-            || current.process_group_id != boundary.process_group_id
-            || current.interaction_generation != boundary.interaction_generation
-            || current.phase != RuntimeForeignShellBootstrapPhase::AwaitingAdapter
-        {
-            return Ok(0);
-        }
-        current.phase = RuntimeForeignShellBootstrapPhase::ChallengingAdapter;
-        current.phase_started_at_unix_ms = current_unix_millis();
-        current.adapter = Some(descriptor);
-        current.challenge = Some(challenge.clone());
-        let challenge_input = match shell {
-            mez_terminal::ManagedShellAdapter::Bash => {
-                format!("\u{7}MEZ_BASH_FOREIGN_CHALLENGE {token} {instance_id} {challenge}\n")
-            }
-            mez_terminal::ManagedShellAdapter::Fish => {
-                format!("\u{1b}\u{7}MEZ_FISH_FOREIGN_CHALLENGE {token} {instance_id} {challenge}\n")
-            }
-            mez_terminal::ManagedShellAdapter::Zsh => {
-                let Some(trigger) =
-                    trigger.and_then(mez_agent::ManagedZshTrigger::from_protocol_str)
-                else {
-                    return Ok(0);
-                };
-                format!(
-                    "{}{}MEZ_ZSH_FOREIGN_CHALLENGE {token} {instance_id} {challenge}\n",
-                    trigger.input(),
-                    trigger.input()
-                )
-            }
-        };
-        self.write_runtime_pane_input(pane_id, challenge_input.as_bytes())?;
-        self.append_lifecycle_event(
-            EventKind::AgentStatus,
-            format!(
-                r#"{{"pane_id":"{}","foreign_bootstrap":"challenging_adapter","generation":{},"process_group_id":{}}}"#,
-                json_escape(pane_id),
-                boundary.interaction_generation,
-                boundary.process_group_id
-            ),
-        )?;
-        Ok(1)
-    }
-
-    /// Accepts only the challenge response pinned to the active foreign descriptor.
-    fn observe_foreign_shell_challenge_completed(
-        &mut self,
-        pane_id: &str,
-        version: u16,
-        shell: mez_terminal::ManagedShellAdapter,
-        token: &str,
-        instance_id: &str,
-        challenge: &str,
-    ) -> Result<usize> {
-        let Some(boundary) = self
-            .process
-            .pane_foreign_shell_boundaries
-            .get(pane_id)
-            .cloned()
-        else {
-            return Ok(0);
-        };
-        let Some(adapter) = boundary.adapter.as_ref() else {
-            return Ok(0);
-        };
-        if boundary.phase != RuntimeForeignShellBootstrapPhase::ChallengingAdapter
-            || boundary.challenge.as_deref() != Some(challenge)
-            || adapter.primary_process_id != boundary.primary_process_id
-            || adapter.process_group_id != boundary.process_group_id
-            || adapter.interaction_generation != boundary.interaction_generation
-            || adapter.origin != RuntimeManagedShellAdapterOrigin::Foreign
-            || adapter.version != version
-            || adapter.shell != shell
-            || adapter.token != token
-            || adapter.instance_id != instance_id
-            || self.primary_pid_for_live_pane_process(pane_id) != Some(boundary.primary_process_id)
-            || self.pane_foreground_process_group_observation(pane_id).0
-                != Some(boundary.process_group_id)
-            || self
-                .process
-                .pane_shell_interaction_generations
-                .get(pane_id)
-                .copied()
-                != Some(boundary.interaction_generation)
-        {
-            return Ok(0);
-        }
-        let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) else {
-            return Ok(0);
-        };
-        if current.phase != RuntimeForeignShellBootstrapPhase::ChallengingAdapter
-            || current.challenge.as_deref() != Some(challenge)
-        {
-            return Ok(0);
-        }
-        current.phase = RuntimeForeignShellBootstrapPhase::IdentityProbing;
-        current.phase_started_at_unix_ms = current_unix_millis();
-        current.challenge = None;
-        self.append_lifecycle_event(
-            EventKind::AgentStatus,
-            format!(
-                r#"{{"pane_id":"{}","foreign_bootstrap":"identity_probing","generation":{},"process_group_id":{}}}"#,
-                json_escape(pane_id),
-                boundary.interaction_generation,
-                boundary.process_group_id
-            ),
-        )?;
-        self.dispatch_shell_identity_probe_to_pane(pane_id)?;
-        Ok(1)
     }
 
     /// Routes foreign Fish/Zsh restoration to its identity or child-handoff owner.
@@ -835,116 +465,6 @@ impl RuntimeSessionService {
             mez_terminal::ManagedShellAdapter::Bash => return Ok(0),
         };
         self.observe_managed_shell_parent_ready(pane_id, shell, token, marker, None)
-    }
-
-    /// Fails an authenticated foreign Bash child handoff that restored its
-    /// parent editor before the fresh managed child installed its receiver.
-    fn fail_foreign_bash_child_staging(
-        &mut self,
-        pane_id: &str,
-        token: &str,
-        marker: &str,
-        parent_proof: &str,
-        outcome: mez_terminal::ManagedShellParentOutcome,
-        exit_code: i32,
-    ) -> Result<usize> {
-        let boundary_matches = self
-            .process
-            .pane_foreign_shell_boundaries
-            .get(pane_id)
-            .is_some_and(|boundary| {
-                boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
-                    && boundary.adapter.as_ref().is_some_and(|adapter| {
-                        adapter.shell == mez_terminal::ManagedShellAdapter::Bash
-                            && adapter.token == token
-                    })
-            });
-        let handoff_matches = self
-            .process
-            .pane_managed_shell_handoffs
-            .get(pane_id)
-            .is_some_and(|handoff| {
-                handoff.shell() == ManagedShellKind::Bash
-                    && handoff.identity().marker == marker
-                    && handoff.identity().parent_proof.as_deref() == Some(parent_proof)
-                    && !handoff.child_is_installed()
-            });
-        let transaction_matches = self
-            .process
-            .running_shell_transactions
-            .get(marker)
-            .is_some_and(|transaction| {
-                transaction.pane_id == pane_id
-                    && transaction.kind == RunningShellTransactionKind::Bootstrap
-            });
-        if !boundary_matches || !handoff_matches || !transaction_matches {
-            return Ok(0);
-        }
-
-        let outcome_name = match outcome {
-            mez_terminal::ManagedShellParentOutcome::Completed => "completed",
-            mez_terminal::ManagedShellParentOutcome::Cancelled => "cancelled",
-            mez_terminal::ManagedShellParentOutcome::FrameRejected => "frame-rejected",
-            mez_terminal::ManagedShellParentOutcome::SourceFailed => "source-failed",
-            mez_terminal::ManagedShellParentOutcome::ChildLaunchFailed => "child-launch-failed",
-        };
-        self.process.pane_managed_shell_handoffs.remove(pane_id);
-        self.process.pane_shell_handoffs.remove(pane_id);
-        self.process
-            .pending_agent_subshell_start_observations
-            .remove(pane_id);
-        self.process
-            .pending_agent_subshell_certifications
-            .remove(pane_id);
-        self.process
-            .bootstrap_shell_certification_evidence
-            .remove(marker);
-        self.remove_running_shell_transaction(marker);
-        self.clear_shell_transaction_protocol_state(marker);
-        self.process.pane_bootstrap_pending.remove(pane_id);
-        if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
-            boundary.phase = RuntimeForeignShellBootstrapPhase::Failed;
-            boundary.phase_started_at_unix_ms = current_unix_millis();
-            boundary.challenge = None;
-            boundary.child_token = None;
-            boundary.child_shell = None;
-            boundary.child_staging_source = None;
-            boundary.identity_marker = None;
-        }
-        self.clear_agent_subshell_shell_identity(pane_id);
-        self.mark_pane_environment_authority_unavailable(
-            pane_id,
-            RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapTransactionFailed,
-        );
-        self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
-        let message =
-            format!("foreign Bash child staging failed ({outcome_name}, exit status {exit_code})");
-        self.append_agent_error_text_to_terminal_buffer(pane_id, &format!("agent: {message}"))?;
-        self.append_lifecycle_event(
-            EventKind::AgentStatus,
-            format!(
-                r#"{{"pane_id":"{}","foreign_bootstrap":"failed","phase":"bootstrapping-child","outcome":"{}","exit_code":{},"state":"degraded"}}"#,
-                json_escape(pane_id),
-                outcome_name,
-                exit_code
-            ),
-        )?;
-        let pending_turn_ids = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .filter(|turn| {
-                turn.pane_id == pane_id
-                    && turn.state == AgentTurnState::Running
-                    && self.agent_provider_task_is_pending(&turn.turn_id)
-            })
-            .map(|turn| turn.turn_id.clone())
-            .collect::<Vec<_>>();
-        let error = MezError::invalid_state(message);
-        for turn_id in pending_turn_ids {
-            self.fail_configured_agent_provider_task(&turn_id, &error)?;
-        }
-        Ok(1)
     }
 
     /// Settles one Fish or Zsh identity transaction after native editor restoration.
@@ -1733,8 +1253,7 @@ impl RuntimeSessionService {
                 .pane_foreign_shell_boundaries
                 .get(output_pane_id)
                 .is_some_and(|boundary| {
-                    boundary.adapter.is_none()
-                        && boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
+                    boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
                         && boundary.loader_ready
                         && boundary.loader_marker.is_some()
                 });

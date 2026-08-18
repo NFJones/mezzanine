@@ -39,12 +39,6 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
         service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
         Some("identity-probing")
     );
-    assert!(
-        service
-            .foreign_shell_bootstrap_challenge_for_tests(&pane_id)
-            .is_none(),
-        "dependency-free bootstrap must not require an adapter challenge"
-    );
     let identity_effects = service.drain_pane_io_transition().side_effects;
     let identity_inputs = pane_input_effects(&identity_effects);
     assert_eq!(identity_inputs.len(), 1);

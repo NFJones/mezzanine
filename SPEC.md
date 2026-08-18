@@ -4039,63 +4039,14 @@ loader records MUST NOT release input. Temporary loader and child-startup
 artifacts MUST be owner-only and MUST be removed when the synchronous child
 returns.
 
-A process-local Mezzanine shell adapter inside the foreign environment MAY be
-used as an optional fast path. Such an adapter MUST publish a versioned
-candidate only at a completed prompt boundary. Runtime MUST retain the latest
-candidate as advisory evidence for that currently completed prompt when it
-arrives before agent mode allocates a foreign shell-interaction generation.
-Agent entry MAY adopt that candidate only when the pane primary process, outer
-foreground process group, and completed prompt boundary still match. Runtime
-MUST then bind the candidate to the new shell-interaction generation, shell
-kind, adapter instance, token, and trigger before issuing a shell-native
-editor-acquisition challenge. Candidate metadata or a matching token alone
-MUST NOT authorize generated input. Only a matching challenge completion for
-the active boundary MAY advance identity discovery. The retained candidate
-MUST be discarded on a new prompt start, command start, foreground-group
-change, alternate-screen entry, pane removal, or replacement by a newer prompt
-or adapter instance. Primary-environment adapter tokens, startup paths, shell
-identities, and admission state MUST remain inaccessible while a foreign
-boundary is active.
-
-Foreign bootstrap MUST have finite phase deadlines for optional adapter
-admission, identity discovery, loader readiness, child bootstrap, and
+Foreign bootstrap MUST have finite phase deadlines for identity discovery,
+loader readiness, child bootstrap, and
 certification.
 Provider work MAY remain pending only while one of those deadlines owns
 progress. Expiry MUST fail pending work with an actionable integration
 diagnostic. Before a correlated loader or child has proven ownership, expiry
 MUST NOT interrupt the foreign foreground. Mezzanine MUST NOT install software
 or modify startup files in the foreign environment.
-
-The optional foreign Bash adapter MUST be generated with `mez shell-integration
-bash` and MAY be evaluated only by an explicit user action inside the nested
-Bash environment. It MUST generate a fresh adapter token and instance, preserve
-the visible prompt, install a private Readline receiver in the current process,
-and publish candidates at completed prompts. The first runtime input after a
-candidate MUST contain only the fixed Readline trigger and bounded token,
-instance, and challenge metadata. Identity discovery MUST use authenticated RX1
-delivery through that foreign token. A managed Bash child MUST receive a fresh
-child token, stage its owner-only rcfile in the foreign filesystem through an
-authenticated RX2 parent handoff, publish `ChildInstalled` before bootstrap is
-released, and remove its temporary startup directory when the synchronous child
-handoff returns. Neither the host adapter token nor a host startup path MAY
-appear in foreign delivery.
-
-The optional foreign Fish and Zsh adapters MUST be generated with `mez
-shell-integration fish` and `mez shell-integration zsh`, respectively, and MAY
-be evaluated only by an explicit user action inside the matching nested shell.
-Each adapter MUST generate a fresh token and instance, preserve the visible
-prompt, and install only process-local editor and private-receiver integration.
-Fish MUST acquire its editor through its native command-line callback; Zsh MUST
-use the candidate-selected ZLE widget. Identity source and child staging MUST
-remain withheld behind the shell-native clear, hold, and frame-admission events.
-A managed Fish or Zsh child MUST receive a fresh child token and publish
-`ChildInstalled` before bootstrap is released. Fish MUST install the child
-receiver through its startup-suppressed `--init-command`. Zsh MUST stage an
-owner-only temporary `ZDOTDIR` in the foreign filesystem, use it to install the
-child receiver, and remove it after the synchronous child handoff returns.
-Certification MUST use the same generation-scoped foreground proofs required
-for Bash. Neither host Fish/Zsh tokens, host startup paths, nor host adapter
-admission state MAY cross the foreign boundary.
 
 Host process metadata MUST authorize non-interactive shell dispatch only when
 the observed foreground process group is either the original pane shell PID or

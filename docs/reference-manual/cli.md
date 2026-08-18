@@ -96,7 +96,6 @@ processes that existed when the snapshot was taken.
 | `mez issue` | Add, show, update, query, and delete local project issues. |
 | `mez memory` | List, inspect, add, edit, delete, archive, mark stale, restore, record use or confirmation, supersede, prune, export, and search persistent memory records. |
 | `mez completion <shell>` | Generate a completion definition for `bash`, `elvish`, `fish`, `powershell`, or `zsh`. |
-| `mez shell-integration bash` | Generate opt-in Bash source for explicit evaluation inside an SSH, container, chroot, or other nested Bash environment. The command prints source only and does not edit startup files. |
 
 `mez version` prints version information. `mez help` and `mez <command> --help`
 show the generated command contract. Human-readable output is the default;

@@ -3,8 +3,8 @@
 use mez_agent::{
     AgentShellVisibility, ShellClassification,
     agent_subshell_enter_command_with_shell_compatibility_and_exit_marker,
-    agent_subshell_exit_marker_bytes, bash_private_source_input, fish_private_source_input,
-    parse_shell_identity_probe_output, shell_identity_probe_command, zsh_private_source_input,
+    agent_subshell_exit_marker_bytes, bash_private_source_input, parse_shell_identity_probe_output,
+    shell_identity_probe_command,
 };
 
 use super::super::{
@@ -56,107 +56,19 @@ impl RuntimeSessionService {
         ))?;
         let marker_id = marker.as_str().to_string();
         let command = shell_identity_probe_command(&marker_id, &turn_id, &agent_id, pane_id)?;
-        let foreign_adapter = self
-            .process
-            .pane_foreign_shell_boundaries
-            .get(pane_id)
-            .filter(|boundary| boundary.phase == RuntimeForeignShellBootstrapPhase::IdentityProbing)
-            .and_then(|boundary| boundary.adapter.clone());
         let dependency_free_foreign_probe = self
             .process
             .pane_foreign_shell_boundaries
             .get(pane_id)
             .is_some_and(|boundary| {
                 boundary.phase == RuntimeForeignShellBootstrapPhase::IdentityProbing
-                    && boundary.adapter.is_none()
             });
-        let classification = foreign_adapter.as_ref().map_or_else(
-            || self.shell_classification_for_pane(pane_id),
-            |adapter| match adapter.shell {
-                mez_terminal::ManagedShellAdapter::Bash => ShellClassification::Bash,
-                mez_terminal::ManagedShellAdapter::Fish => ShellClassification::Fish,
-                mez_terminal::ManagedShellAdapter::Zsh => ShellClassification::Zsh,
-            },
-        );
+        let classification = self.shell_classification_for_pane(pane_id);
         let mut input = command.clone();
         let mut staged_inputs = std::collections::VecDeque::new();
-        let mut staged_shell = None;
+        let staged_shell = None;
         let mut completion_required = false;
-        if let Some(adapter) = foreign_adapter.as_ref() {
-            let token = mez_agent::MarkerToken::new(adapter.token.clone())?;
-            match adapter.shell {
-                mez_terminal::ManagedShellAdapter::Bash => {
-                    let private = bash_private_source_input(&command, &token, &marker_id);
-                    input = private.wrapper;
-                    staged_inputs.push_back(
-                        mez_mux::process::ShellInputDelivery::receiver_acknowledged(
-                            private.receiver_payload.into_bytes(),
-                            marker_id.clone(),
-                            true,
-                        ),
-                    );
-                    completion_required = true;
-                }
-                mez_terminal::ManagedShellAdapter::Fish => {
-                    let private = fish_private_source_input(&command, &token, &marker_id);
-                    input = private.wrapper;
-                    staged_shell = Some(super::super::ManagedShellKind::Fish);
-                    staged_inputs.push_back(
-                        mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
-                            private.editor_clear_confirmation.into_bytes(),
-                            marker_id.clone(),
-                        ),
-                    );
-                    staged_inputs.push_back(
-                        mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
-                            private.receiver_admission.into_bytes(),
-                            marker_id.clone(),
-                        ),
-                    );
-                    staged_inputs.push_back(
-                        mez_mux::process::ShellInputDelivery::receiver_acknowledged(
-                            private.receiver_payload.into_bytes(),
-                            marker_id.clone(),
-                            private.payload_receiver_acknowledgements,
-                        ),
-                    );
-                    completion_required = true;
-                }
-                mez_terminal::ManagedShellAdapter::Zsh => {
-                    let trigger = adapter
-                        .trigger
-                        .as_deref()
-                        .and_then(mez_agent::ManagedZshTrigger::from_protocol_str)
-                        .ok_or_else(|| {
-                            MezError::invalid_state("foreign Zsh trigger is unavailable")
-                        })?;
-                    let private = zsh_private_source_input(&command, &token, &marker_id, trigger)
-                        .map_err(|error| MezError::invalid_state(error.to_string()))?;
-                    input = private.wrapper.clone();
-                    staged_shell = Some(super::super::ManagedShellKind::Zsh);
-                    staged_inputs.push_back(
-                        mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
-                            private.receiver_hold.into_bytes(),
-                            marker_id.clone(),
-                        ),
-                    );
-                    staged_inputs.push_back(
-                        mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
-                            private.receiver_admission.into_bytes(),
-                            marker_id.clone(),
-                        ),
-                    );
-                    staged_inputs.push_back(
-                        mez_mux::process::ShellInputDelivery::receiver_acknowledged(
-                            private.receiver_payload.into_bytes(),
-                            marker_id.clone(),
-                            private.payload_receiver_acknowledgements,
-                        ),
-                    );
-                    completion_required = true;
-                }
-            }
-        } else if classification == ShellClassification::Bash && !dependency_free_foreign_probe {
+        if classification == ShellClassification::Bash && !dependency_free_foreign_probe {
             let token = self.bash_receiver_token_for_pane(pane_id).ok_or_else(|| {
                 MezError::invalid_state(
                     "managed Bash receiver is unavailable for shell identity probe",
@@ -171,10 +83,7 @@ impl RuntimeSessionService {
             ));
             completion_required = true;
         }
-        let fixed_zsh_trigger = foreign_adapter
-            .as_ref()
-            .is_some_and(|adapter| adapter.shell == mez_terminal::ManagedShellAdapter::Zsh);
-        if !fixed_zsh_trigger && !input.ends_with('\n') {
+        if !input.ends_with('\n') {
             input.push('\n');
         }
         self.remember_mez_wrapper_filter_command(pane_id, &command);
@@ -231,7 +140,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("foreign shell boundary is unavailable"))?;
-        if boundary.phase != RuntimeForeignShellBootstrapPhase::AwaitingAdapter
+        if boundary.phase != RuntimeForeignShellBootstrapPhase::AwaitingPrompt
             || self.primary_pid_for_live_pane_process(pane_id) != Some(boundary.primary_process_id)
             || self.pane_foreground_process_group_observation(pane_id).0
                 != Some(boundary.process_group_id)
@@ -558,24 +467,6 @@ impl RuntimeSessionService {
                 json_escape(marker)
             ),
         )?;
-        if let Some(shell) = self
-            .process
-            .pane_foreign_shell_boundaries
-            .get(pane_id)
-            .and_then(|boundary| boundary.adapter.as_ref())
-            .map(|adapter| adapter.shell)
-        {
-            match shell {
-                mez_terminal::ManagedShellAdapter::Bash => {
-                    self.begin_foreign_bash_child_bootstrap(pane_id)?;
-                }
-                mez_terminal::ManagedShellAdapter::Fish
-                | mez_terminal::ManagedShellAdapter::Zsh => {
-                    self.begin_foreign_fish_or_zsh_child_bootstrap(pane_id, shell)?;
-                }
-            }
-            return Ok(1);
-        }
         if self
             .process
             .pane_foreign_shell_boundaries
@@ -596,9 +487,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("foreign shell boundary is unavailable"))?;
-        if boundary.phase != RuntimeForeignShellBootstrapPhase::IdentityProbing
-            || boundary.adapter.is_some()
-        {
+        if boundary.phase != RuntimeForeignShellBootstrapPhase::IdentityProbing {
             return Err(MezError::invalid_state(
                 "dependency-free child launch does not own foreign identity discovery",
             ));
@@ -742,246 +631,6 @@ impl RuntimeSessionService {
                 json_escape(&marker)
             ),
         )?;
-        Ok(())
-    }
-
-    /// Stages a managed Fish or Zsh child through its authenticated foreign parent.
-    fn begin_foreign_fish_or_zsh_child_bootstrap(
-        &mut self,
-        pane_id: &str,
-        shell: mez_terminal::ManagedShellAdapter,
-    ) -> Result<()> {
-        let boundary = self
-            .process
-            .pane_foreign_shell_boundaries
-            .get(pane_id)
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("foreign shell boundary is unavailable"))?;
-        if boundary.phase != RuntimeForeignShellBootstrapPhase::IdentityProbing {
-            return Err(MezError::invalid_state(
-                "foreign shell identity completed outside identity-probing ownership",
-            ));
-        }
-        let execution_identity = self
-            .process
-            .pane_probed_shell_identities
-            .get(pane_id)
-            .filter(|identity| {
-                identity.primary_process_id == boundary.primary_process_id
-                    && identity.interaction_generation == boundary.interaction_generation
-            })
-            .map(|identity| identity.execution_identity.clone())
-            .ok_or_else(|| MezError::invalid_state("foreign shell identity is unavailable"))?;
-        let expected_classification = match shell {
-            mez_terminal::ManagedShellAdapter::Fish => ShellClassification::Fish,
-            mez_terminal::ManagedShellAdapter::Zsh => ShellClassification::Zsh,
-            mez_terminal::ManagedShellAdapter::Bash => {
-                return Err(MezError::invalid_state(
-                    "foreign Bash child staging used the Fish/Zsh path",
-                ));
-            }
-        };
-        if execution_identity.classification() != expected_classification {
-            return Err(MezError::invalid_state(
-                "foreign adapter discovered a different child shell type",
-            ));
-        }
-        let child_token = runtime_random_marker_token(&format!(
-            "foreign-child\0{pane_id}\0{}",
-            boundary.interaction_generation
-        ))?;
-        let parent_token = self
-            .foreign_adapter_token_for_pane(pane_id, shell)
-            .ok_or_else(|| MezError::invalid_state("foreign parent token is unavailable"))?;
-        if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
-            current.phase = RuntimeForeignShellBootstrapPhase::BootstrappingChild;
-            current.phase_started_at_unix_ms = current_unix_millis();
-            current.child_token = Some(child_token.as_str().to_string());
-        }
-        self.process.pane_shell_handoffs.insert(
-            pane_id.to_string(),
-            RuntimePaneShellHandoff {
-                primary_process_id: boundary.primary_process_id,
-                interaction_generation: boundary.interaction_generation,
-                bootstrap_marker: None,
-                deferred_bootstrap_wrapper: None,
-            },
-        );
-        let (marker, wrapper) = self
-            .prepare_bootstrap_to_pane(pane_id)?
-            .ok_or_else(|| MezError::invalid_state("foreign bootstrap is already running"))?;
-        self.bind_agent_subshell_bootstrap_marker(pane_id, &marker);
-        self.defer_agent_subshell_bootstrap_wrapper(pane_id, &marker, wrapper);
-        let exit_marker =
-            runtime_random_marker_token(&format!("foreign-child-exit\0{pane_id}\0{marker}"))?;
-        let staging_source = match shell {
-            mez_terminal::ManagedShellAdapter::Fish => {
-                agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
-                    execution_identity.shell_path(),
-                    ShellClassification::Fish,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some((&child_token, marker.as_str())),
-                    None,
-                    Some(&exit_marker),
-                )
-                .map_err(|error| MezError::invalid_state(error.to_string()))?
-            }
-            mez_terminal::ManagedShellAdapter::Zsh => {
-                let trigger = self
-                    .active_zsh_trigger_for_pane(pane_id)
-                    .ok_or_else(|| MezError::invalid_state("foreign Zsh trigger is unavailable"))?;
-                super::super::zsh_compat::managed_foreign_zsh_child_staging_source(
-                    execution_identity.shell_path(),
-                    &marker,
-                    &child_token,
-                    trigger,
-                    &exit_marker,
-                )?
-            }
-            mez_terminal::ManagedShellAdapter::Bash => unreachable!(),
-        };
-        match shell {
-            mez_terminal::ManagedShellAdapter::Fish => {
-                let private = fish_private_source_input(&staging_source, &parent_token, &marker);
-                self.prepend_fish_shell_receiver_payloads(
-                    &marker,
-                    mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
-                        private.editor_clear_confirmation.into_bytes(),
-                        marker.clone(),
-                    ),
-                    mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
-                        private.receiver_admission.into_bytes(),
-                        marker.clone(),
-                    ),
-                    mez_mux::process::ShellInputDelivery::receiver_acknowledged(
-                        private.receiver_payload.into_bytes(),
-                        marker.clone(),
-                        private.payload_receiver_acknowledgements,
-                    ),
-                );
-                self.write_runtime_pane_shell_input(pane_id, private.wrapper.as_bytes())?;
-            }
-            mez_terminal::ManagedShellAdapter::Zsh => {
-                let trigger = self
-                    .active_zsh_trigger_for_pane(pane_id)
-                    .ok_or_else(|| MezError::invalid_state("foreign Zsh trigger is unavailable"))?;
-                let private =
-                    zsh_private_source_input(&staging_source, &parent_token, &marker, trigger)
-                        .map_err(|error| MezError::invalid_state(error.to_string()))?;
-                self.prepend_zsh_shell_receiver_payloads(
-                    &marker,
-                    mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
-                        private.receiver_hold.into_bytes(),
-                        marker.clone(),
-                    ),
-                    mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
-                        private.receiver_admission.into_bytes(),
-                        marker.clone(),
-                    ),
-                    mez_mux::process::ShellInputDelivery::receiver_acknowledged(
-                        private.receiver_payload.into_bytes(),
-                        marker.clone(),
-                        private.payload_receiver_acknowledgements,
-                    ),
-                );
-                self.write_runtime_pane_shell_input(pane_id, private.wrapper.as_bytes())?;
-            }
-            mez_terminal::ManagedShellAdapter::Bash => unreachable!(),
-        }
-        self.remember_agent_subshell_exit_marker(
-            pane_id,
-            agent_subshell_exit_marker_bytes(&exit_marker),
-        );
-        if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
-            current.child_staging_source = Some(staging_source);
-        }
-        Ok(())
-    }
-
-    /// Stages a managed Bash child through the authenticated foreign parent.
-    fn begin_foreign_bash_child_bootstrap(&mut self, pane_id: &str) -> Result<()> {
-        let boundary = self
-            .process
-            .pane_foreign_shell_boundaries
-            .get(pane_id)
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("foreign Bash boundary is unavailable"))?;
-        if boundary.phase != RuntimeForeignShellBootstrapPhase::IdentityProbing {
-            return Err(MezError::invalid_state(
-                "foreign Bash identity completed outside identity-probing ownership",
-            ));
-        }
-        let execution_identity = self
-            .process
-            .pane_probed_shell_identities
-            .get(pane_id)
-            .filter(|identity| {
-                identity.primary_process_id == boundary.primary_process_id
-                    && identity.interaction_generation == boundary.interaction_generation
-            })
-            .map(|identity| identity.execution_identity.clone())
-            .ok_or_else(|| MezError::invalid_state("foreign Bash identity is unavailable"))?;
-        if execution_identity.classification() != ShellClassification::Bash {
-            return Err(MezError::invalid_state(
-                "foreign Bash adapter discovered a non-Bash child shell",
-            ));
-        }
-        let child_token = runtime_random_marker_token(&format!(
-            "foreign-bash-child\0{pane_id}\0{}",
-            boundary.interaction_generation
-        ))?;
-        let parent_token = self
-            .foreign_bash_receiver_token_for_pane(pane_id)
-            .ok_or_else(|| MezError::invalid_state("foreign Bash parent token is unavailable"))?;
-        if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
-            current.phase = RuntimeForeignShellBootstrapPhase::BootstrappingChild;
-            current.phase_started_at_unix_ms = current_unix_millis();
-            current.child_token = Some(child_token.as_str().to_string());
-        }
-        self.process.pane_shell_handoffs.insert(
-            pane_id.to_string(),
-            RuntimePaneShellHandoff {
-                primary_process_id: boundary.primary_process_id,
-                interaction_generation: boundary.interaction_generation,
-                bootstrap_marker: None,
-                deferred_bootstrap_wrapper: None,
-            },
-        );
-        let (marker, wrapper) = self
-            .prepare_bootstrap_to_pane(pane_id)?
-            .ok_or_else(|| MezError::invalid_state("foreign Bash bootstrap is already running"))?;
-        self.bind_agent_subshell_bootstrap_marker(pane_id, &marker);
-        self.defer_agent_subshell_bootstrap_wrapper(pane_id, &marker, wrapper);
-        let staging_source = super::super::bash_compat::managed_foreign_bash_child_staging_source(
-            execution_identity.shell_path(),
-            &marker,
-            &child_token,
-        );
-        let parent_proof = runtime_random_marker_token(&format!(
-            "foreign-bash-parent-ready\0{pane_id}\0{marker}"
-        ))?;
-        let private_input = mez_agent::bash_private_handoff_source_input(
-            &staging_source,
-            &parent_token,
-            &marker,
-            &parent_proof,
-        );
-        self.prepend_bash_shell_handoff_payload(
-            &marker,
-            mez_mux::process::ShellInputDelivery::receiver_acknowledged(
-                private_input.receiver_payload.into_bytes(),
-                marker.clone(),
-                true,
-            ),
-            &parent_proof,
-        );
-        if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
-            current.child_staging_source = Some(staging_source);
-        }
-        self.write_runtime_pane_shell_input(pane_id, private_input.wrapper.as_bytes())?;
         Ok(())
     }
 
@@ -1214,7 +863,6 @@ impl RuntimeSessionService {
                     .get(k.as_str())
                     .is_some_and(|boundary| {
                         boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
-                            && boundary.adapter.is_none()
                             && boundary.child_shell.is_none()
                     });
                 let managed_fish_is_ready = !self
