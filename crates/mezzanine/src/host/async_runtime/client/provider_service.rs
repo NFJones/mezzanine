@@ -415,7 +415,7 @@ async fn dispatch_agent_provider_side_effects(
                 else {
                     continue;
                 };
-                workers.spawn(execute_native_shell_action(dispatch));
+                workers.spawn(execute_native_shell_action(handle.clone(), dispatch));
             }
             RuntimeSideEffect::DispatchAgentCompaction { pane_id } => {
                 let dispatch = match handle.claim_agent_compaction_task(pane_id.clone()).await {
@@ -477,6 +477,7 @@ async fn dispatch_agent_provider_side_effects(
 
 /// Executes one native shell action on Tokio's blocking pool.
 async fn execute_native_shell_action(
+    handle: AsyncRuntimeSessionHandle,
     dispatch: RuntimeNativeShellDispatch,
 ) -> Result<AsyncAgentProviderWorkerResult> {
     let turn_id = dispatch.turn_id.clone();
@@ -484,11 +485,37 @@ async fn execute_native_shell_action(
     let marker = dispatch.marker.clone();
     let command = dispatch.request.transaction.command.clone();
     let started_at_unix_ms = dispatch.started_at_unix_ms;
-    let outcome = match tokio::task::spawn_blocking(move || {
-        crate::runtime::execute_native_shell_dispatch(dispatch)
-    })
-    .await
-    {
+    let progress_turn_id = turn_id.clone();
+    let progress_action_id = action_id.clone();
+    let progress_marker = marker.clone();
+    let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
+    let mut worker = tokio::task::spawn_blocking(move || {
+        crate::runtime::execute_native_shell_dispatch_with_progress(dispatch, progress_sender)
+    });
+    let joined = loop {
+        tokio::select! {
+            joined = &mut worker => break joined,
+            changed = progress_receiver.changed() => {
+                if changed.is_err() {
+                    break worker.await;
+                }
+                let Some(output_preview) = progress_receiver.borrow_and_update().clone() else {
+                    continue;
+                };
+                let mut batch = RuntimeEventBatch::new();
+                batch.push(RuntimeEvent::NativeShellProgress(
+                    crate::runtime::RuntimeNativeShellProgress {
+                        turn_id: progress_turn_id.clone(),
+                        action_id: progress_action_id.clone(),
+                        marker: progress_marker.clone(),
+                        output_preview,
+                    },
+                ));
+                let _ = handle.submit_runtime_events(batch).await;
+            }
+        }
+    };
+    let outcome = match joined {
         Ok(outcome) => outcome,
         Err(error) => RuntimeNativeShellOutcome {
             turn_id,

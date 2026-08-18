@@ -115,6 +115,19 @@ pub(crate) struct RuntimeNativeShellFailure {
     pub(crate) message: String,
 }
 
+/// Bounded cumulative output observed while a native shell worker is running.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeNativeShellProgress {
+    /// Turn that owns the native shell action.
+    pub(crate) turn_id: String,
+    /// Stable action identity within the turn.
+    pub(crate) action_id: String,
+    /// Exact marker copied from the claimed dispatch.
+    pub(crate) marker: String,
+    /// Bounded cumulative stdout/stderr preview observed by pipe readers.
+    pub(crate) output_preview: String,
+}
+
 /// Result returned by a native shell worker for actor-owned settlement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeNativeShellOutcome {

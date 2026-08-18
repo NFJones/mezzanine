@@ -17,7 +17,7 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -43,6 +43,31 @@ const SPAWNED_CHILD_STATUS_CAPTURE_LIMIT: usize = 64 * 1024;
 const SPAWNED_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// Grace period for draining bytes already buffered when the direct child exits.
 const SPAWNED_CHILD_READER_SHUTDOWN_GRACE: Duration = Duration::from_millis(100);
+/// Maximum cumulative output retained for transient native-shell progress.
+const SPAWNED_CHILD_PROGRESS_PREVIEW_LIMIT: usize = 256 * 1024;
+
+/// Shared latest-value relay used by stdout and stderr reader threads.
+#[derive(Clone)]
+struct SpawnedChildProgressReporter {
+    preview: Arc<Mutex<Vec<u8>>>,
+    sender: tokio::sync::watch::Sender<Option<String>>,
+}
+
+impl SpawnedChildProgressReporter {
+    /// Appends one observed chunk and publishes the newest bounded preview.
+    fn report(&self, bytes: &[u8]) {
+        let Ok(mut preview) = self.preview.lock() else {
+            return;
+        };
+        preview.extend_from_slice(bytes);
+        if preview.len() > SPAWNED_CHILD_PROGRESS_PREVIEW_LIMIT {
+            let excess = preview.len() - SPAWNED_CHILD_PROGRESS_PREVIEW_LIMIT;
+            preview.drain(..excess);
+        }
+        self.sender
+            .send_replace(Some(String::from_utf8_lossy(&preview).into_owned()));
+    }
+}
 
 /// Identifies one pipe drained from the spawned child process tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -240,6 +265,7 @@ impl SpawnedShellExecutor {
         spawned: SpawnedChild,
         timeout_ms: Option<u64>,
         output_budget: usize,
+        progress: Option<SpawnedChildProgressReporter>,
     ) -> Result<ShellExecutionOutput> {
         let SpawnedChild {
             mut child,
@@ -259,12 +285,14 @@ impl SpawnedShellExecutor {
             stdout,
             stream_budget,
             done_tx.clone(),
+            progress.clone(),
         );
         let mut stderr_reader = spawn_output_reader(
             SpawnedChildPipe::Stderr,
             stderr,
             stream_budget,
             done_tx.clone(),
+            progress,
         );
         let mut status_reader = status_reader.map(|reader| {
             spawn_output_reader(
@@ -272,6 +300,7 @@ impl SpawnedShellExecutor {
                 std::fs::File::from(reader),
                 SPAWNED_CHILD_STATUS_CAPTURE_LIMIT,
                 done_tx,
+                None,
             )
         });
         let pid = child.id() as i32;
@@ -385,6 +414,7 @@ impl SpawnedShellExecutorPort for SpawnedShellExecutor {
             child,
             request.timeout_ms,
             request.transaction.output_max_raw_bytes,
+            None,
         );
         let _ = fs::remove_file(&command_file);
         output
@@ -396,8 +426,29 @@ impl SpawnedShellExecutorPort for SpawnedShellExecutor {
 /// The returned outcome retains the exact turn, action, and marker fence so
 /// serialized runtime state can reject stale completion after cancellation or
 /// turn replacement without trusting worker timing.
+#[cfg(test)]
 pub(crate) fn execute_native_shell_dispatch(
     dispatch: crate::runtime::RuntimeNativeShellDispatch,
+) -> crate::runtime::RuntimeNativeShellOutcome {
+    execute_native_shell_dispatch_inner(dispatch, None)
+}
+
+/// Executes a native shell dispatch while publishing bounded output previews.
+pub(crate) fn execute_native_shell_dispatch_with_progress(
+    dispatch: crate::runtime::RuntimeNativeShellDispatch,
+    progress_sender: tokio::sync::watch::Sender<Option<String>>,
+) -> crate::runtime::RuntimeNativeShellOutcome {
+    let progress = SpawnedChildProgressReporter {
+        preview: Arc::new(Mutex::new(Vec::new())),
+        sender: progress_sender,
+    };
+    execute_native_shell_dispatch_inner(dispatch, Some(progress))
+}
+
+/// Executes one dispatch with an optional transient output reporter.
+fn execute_native_shell_dispatch_inner(
+    dispatch: crate::runtime::RuntimeNativeShellDispatch,
+    progress: Option<SpawnedChildProgressReporter>,
 ) -> crate::runtime::RuntimeNativeShellOutcome {
     let crate::runtime::RuntimeNativeShellDispatch {
         turn_id,
@@ -408,12 +459,33 @@ pub(crate) fn execute_native_shell_dispatch(
         started_at_unix_ms,
     } = dispatch;
     let command = request.transaction.command.clone();
-    let mut executor = SpawnedShellExecutor::new(context);
-    let result = executor.execute_shell(&request).map_err(|error| {
-        crate::runtime::RuntimeNativeShellFailure {
-            kind: format!("{:?}", error.kind()).to_ascii_lowercase(),
-            message: error.message().to_string(),
-        }
+    let executor = SpawnedShellExecutor::new(context);
+    let result = if request.interactive || request.stateful {
+        Err(MezError::invalid_args(
+            "native transport does not serve stateful or interactive execution",
+        ))
+    } else {
+        executor.interrupted.store(false, Ordering::SeqCst);
+        executor
+            .materialize_command_file(&request.transaction)
+            .and_then(|command_file| {
+                let result = executor
+                    .spawn_child(&request.transaction, &command_file)
+                    .and_then(|child| {
+                        executor.collect(
+                            child,
+                            request.timeout_ms,
+                            request.transaction.output_max_raw_bytes,
+                            progress,
+                        )
+                    });
+                let _ = fs::remove_file(&command_file);
+                result
+            })
+    }
+    .map_err(|error| crate::runtime::RuntimeNativeShellFailure {
+        kind: format!("{:?}", error.kind()).to_ascii_lowercase(),
+        message: error.message().to_string(),
     });
     crate::runtime::RuntimeNativeShellOutcome {
         turn_id,
@@ -447,13 +519,14 @@ fn spawn_output_reader<R>(
     reader: R,
     budget: usize,
     done: mpsc::Sender<SpawnedChildPipe>,
+    progress: Option<SpawnedChildProgressReporter>,
 ) -> SpawnedChildPipeReader
 where
     R: Read + AsFd + Send + 'static,
 {
     let (cancel, cancellation) = mpsc::channel();
     let handle = std::thread::spawn(move || {
-        let result = drain_output_stream(stream, reader, budget, cancellation);
+        let result = drain_output_stream(stream, reader, budget, cancellation, progress);
         let _ = done.send(stream);
         result
     });
@@ -492,6 +565,7 @@ fn drain_output_stream<R>(
     mut reader: R,
     budget: usize,
     cancellation: mpsc::Receiver<()>,
+    progress: Option<SpawnedChildProgressReporter>,
 ) -> Result<CapturedPipeOutput>
 where
     R: Read + AsFd,
@@ -508,6 +582,9 @@ where
         match reader.read(&mut buffer) {
             Ok(0) => break,
             Ok(count) => {
+                if let Some(progress) = progress.as_ref() {
+                    progress.report(&buffer[..count]);
+                }
                 let remaining = budget.saturating_sub(retained.len());
                 let keep = count.min(remaining);
                 retained.extend_from_slice(&buffer[..keep]);

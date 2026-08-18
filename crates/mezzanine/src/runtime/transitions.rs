@@ -123,6 +123,8 @@ pub enum RuntimeEvent {
     AgentProvider(AgentProviderEvent),
     /// A native shell worker completed outside the runtime actor.
     NativeShell(crate::runtime::RuntimeNativeShellOutcome),
+    /// A native shell worker observed a newer bounded output preview.
+    NativeShellProgress(crate::runtime::RuntimeNativeShellProgress),
     /// A model-backed conversation compaction completed or failed outside the
     /// runtime actor.
     AgentCompaction(AgentCompactionEvent),
@@ -157,6 +159,7 @@ impl RuntimeEvent {
             Self::PaneProcess { .. } => "pane_process",
             Self::AgentProvider(_) => "agent_provider",
             Self::NativeShell(_) => "native_shell",
+            Self::NativeShellProgress(_) => "native_shell_progress",
             Self::AgentCompaction(_) => "agent_compaction",
             Self::AgentRemember(_) => "agent_remember",
             Self::Hook(_) => "hook",
@@ -1004,6 +1007,7 @@ const fn runtime_event_application_priority(event: &RuntimeEvent) -> u8 {
         | RuntimeEvent::PaneProcess { .. }
         | RuntimeEvent::AgentProvider(_)
         | RuntimeEvent::NativeShell(_)
+        | RuntimeEvent::NativeShellProgress(_)
         | RuntimeEvent::AgentCompaction(_)
         | RuntimeEvent::AgentRemember(_)
         | RuntimeEvent::Hook(_)

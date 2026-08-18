@@ -28,6 +28,7 @@ use crate::runtime::{RuntimeSandboxFallbackAudit, SandboxConfig, runtime_post_sh
 use mez_agent::semantic_patch_planning::{
     APPLY_PATCH_RESULT_MARKER, ApplyPatchFileOutcome, parse_apply_patch_file_outcomes,
 };
+use mez_agent::shell_observation::latest_agent_shell_transaction_output_lines;
 use mez_agent::{
     LocalExecutionOutput, local_execution_output_to_action_result, postprocess_local_shell_output,
 };
@@ -62,6 +63,57 @@ fn apply_patch_read_transport_failure_message(
 }
 
 impl RuntimeSessionService {
+    /// Applies one fenced native-shell output preview to the transient pane tail.
+    pub(crate) fn apply_native_shell_progress(
+        &mut self,
+        progress: crate::runtime::RuntimeNativeShellProgress,
+    ) -> Result<bool> {
+        let identity = (progress.turn_id.clone(), progress.action_id.clone());
+        let claimed = self.agent.claimed_native_shell_dispatches.get(&identity);
+        let pending = self
+            .agent
+            .pending_native_shell_dispatches
+            .get(&identity)
+            .map(|dispatch| &dispatch.marker);
+        if claimed != Some(&progress.marker) || pending != Some(&progress.marker) {
+            return Ok(false);
+        }
+        let Some(turn) = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == progress.turn_id && turn.state == AgentTurnState::Running)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        let running = self
+            .agent_turn_executions()
+            .get(&progress.turn_id)
+            .is_some_and(|execution| {
+                execution.action_results.iter().any(|result| {
+                    result.action_id == progress.action_id && result.status == ActionStatus::Running
+                })
+            });
+        if !running
+            || !self.agent_shell_transaction_action_shows_live_output(
+                &progress.turn_id,
+                &progress.action_id,
+            )
+        {
+            return Ok(false);
+        }
+        let lines = latest_agent_shell_transaction_output_lines(
+            &progress.output_preview,
+            self.terminal_shell_output_preview_lines(),
+        );
+        if lines.is_empty() {
+            return Ok(false);
+        }
+        self.append_agent_shell_output_status_lines_to_terminal_buffer(&turn.pane_id, &lines)?;
+        Ok(true)
+    }
+
     /// Returns native shell actions ready for external worker dispatch.
     pub(crate) fn pending_native_shell_actions(&self) -> Vec<(String, String)> {
         self.agent

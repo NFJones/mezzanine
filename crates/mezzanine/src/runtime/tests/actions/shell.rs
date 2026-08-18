@@ -487,6 +487,139 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies native shell output reaches the transient pane tail before completion.
+///
+/// Native execution drains stdout and stderr outside the pane PTY. A command
+/// that emits one line and then sleeps must publish that line through the
+/// worker progress relay while its action result is still running. Progress
+/// carrying a stale marker must be rejected without changing the pane.
+#[test]
+fn runtime_native_agent_shell_command_shows_transient_output_before_completion() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Native));
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+    service.permission_policy_mut().set_approval_bypass(true);
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-native-live-output","input":"print native progress"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "native shell live output".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test native progress".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "shell-1".to_string(),
+                    rationale: "print native progress".to_string(),
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
+                        summary: "Print native progress".to_string(),
+                        command:
+                            "printf 'native-live-first\\n'; sleep 1; printf 'native-live-last\\n'"
+                                .to_string(),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: Some(5_000),
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service.remove_pending_agent_provider_task("turn-1");
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+
+    let dispatch = service
+        .claim_native_shell_action("turn-1", "shell-1")
+        .unwrap()
+        .expect("native shell action should be queued for a worker");
+    let marker = dispatch.marker.clone();
+    let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
+    let worker = thread::spawn(move || {
+        crate::runtime::execute_native_shell_dispatch_with_progress(dispatch, progress_sender)
+    });
+    let progress_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let output_preview = loop {
+        if let Some(output_preview) = progress_receiver.borrow_and_update().clone() {
+            break output_preview;
+        }
+        assert!(
+            std::time::Instant::now() < progress_deadline,
+            "native worker did not publish output before completion"
+        );
+        thread::sleep(Duration::from_millis(5));
+    };
+    assert!(
+        !worker.is_finished(),
+        "native worker completed before progress was observed"
+    );
+
+    assert!(
+        service
+            .apply_native_shell_progress(crate::runtime::RuntimeNativeShellProgress {
+                turn_id: "turn-1".to_string(),
+                action_id: "shell-1".to_string(),
+                marker: marker.clone(),
+                output_preview,
+            })
+            .unwrap()
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains("native-live-first"), "{pane_text}");
+
+    assert!(
+        !service
+            .apply_native_shell_progress(crate::runtime::RuntimeNativeShellProgress {
+                turn_id: "turn-1".to_string(),
+                action_id: "shell-1".to_string(),
+                marker: format!("{marker}-stale"),
+                output_preview: "stale-native-tail".to_string(),
+            })
+            .unwrap()
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(!pane_text.contains("stale-native-tail"), "{pane_text}");
+
+    let outcome = worker.join().unwrap();
+    assert!(service.complete_native_shell_action(outcome).unwrap());
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies native shell execution bypasses occupied-pane readiness and presents
 /// captured command output through the shell-view renderer rather than
 /// suppressing it with the normal result-preview policy.

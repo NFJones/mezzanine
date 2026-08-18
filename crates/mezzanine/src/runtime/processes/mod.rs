@@ -17,7 +17,9 @@ mod transactions;
 mod zsh_compat;
 
 pub(crate) use native_shell_inference::{NativeShellContext, infer_native_shell_context};
+#[cfg(test)]
 pub(crate) use spawned_shell::execute_native_shell_dispatch;
+pub(crate) use spawned_shell::execute_native_shell_dispatch_with_progress;
 
 pub(super) use managed_shell_handoff::ManagedShellKind;
 use managed_shell_handoff::{
@@ -1691,6 +1693,11 @@ impl RuntimeSessionService {
     /// Returns the TERM value exported to pane processes and clients.
     pub(crate) fn terminal_term(&self) -> &str {
         &self.process.settings.terminal_term
+    }
+
+    /// Returns the configured transient shell-output tail line count.
+    pub(crate) fn terminal_shell_output_preview_lines(&self) -> usize {
+        self.process.settings.terminal_shell_output_preview_lines
     }
 
     /// Applies one parsed generation of terminal process settings.
