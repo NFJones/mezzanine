@@ -469,8 +469,21 @@ impl PaneProcess {
                         };
                     if !acknowledged {
                         return Err(MezError::invalid_state(format!(
-                            "pane shell input pacing timed out after {} ms",
-                            PANE_INPUT_WRITE_STALL_TIMEOUT.as_millis()
+                            "pane shell input pacing timed out after {} ms: activity={} acknowledgements={} supported={} record={:?} backlog_tail={:?}",
+                            PANE_INPUT_WRITE_STALL_TIMEOUT.as_millis(),
+                            self.output_activity_sequence(),
+                            self.shell_input_acknowledgements_seen,
+                            self.supports_shell_input_acknowledgements(),
+                            String::from_utf8_lossy(&record[..record.len().min(96)]),
+                            String::from_utf8_lossy(
+                                &self
+                                    .output_backlog
+                                    .iter()
+                                    .rev()
+                                    .take(256)
+                                    .copied()
+                                    .collect::<Vec<u8>>()
+                            ),
                         )));
                     }
                     self.buffer_available_output_for_write()?;

@@ -1230,9 +1230,13 @@ async fn async_zsh_dirty_draft_no_prompt_exit_discards_draft_and_restores_respon
             {
                 break;
             }
+            let (child_active, bootstrap_pending, restoration_pending) = client_handle
+                .managed_shell_lifecycle_state("%1")
+                .await
+                .unwrap();
             assert!(
                 tokio::time::Instant::now() < editor_ready_deadline,
-                "managed Zsh editor did not complete its semantic readiness round trip: {retained_process_text:?}"
+                "managed Zsh editor did not complete its semantic readiness round trip: screen={retained_process_text:?} active={child_active} bootstrap_pending={bootstrap_pending} restoration_pending={restoration_pending}"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
