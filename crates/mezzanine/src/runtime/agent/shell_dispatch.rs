@@ -1488,12 +1488,15 @@ impl RuntimeSessionService {
         let batch = execution.response.action_batch.as_ref().ok_or_else(|| {
             MezError::invalid_state("running agent execution has no action batch")
         })?;
-        let action = batch
+        let Some(action) = batch
             .actions
             .iter()
             .find(|action| action.id == action_id)
             .cloned()
-            .ok_or_else(|| MezError::invalid_state("shell transaction does not match an action"))?;
+        else {
+            self.agent.apply_patch_batch_states.remove(&state_key);
+            return Ok(false);
+        };
         let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
             return Ok(false);
         };

@@ -769,6 +769,100 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
     fs::remove_dir_all(target.parent().unwrap()).unwrap();
 }
 
+/// Verifies a delayed `apply_patch` read completion is inert after a provider
+/// continuation supersedes the action that owned the shell transaction.
+///
+/// Pane output can arrive after the active action batch has advanced. The
+/// ordinary shell settlement path treats that marker as stale, and the
+/// apply-patch read follow-up must preserve that behavior instead of failing
+/// the pane-process supervisor while looking up the removed action.
+#[test]
+fn runtime_stale_apply_patch_read_completion_is_inert() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(90, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service.permission_policy_mut().set_approval_bypass(true);
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"stale-apply-patch-read","input":"patch a note"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "patch response".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "patch-stale".to_string(),
+                    rationale: "patch a file".to_string(),
+                    payload: mez_agent::AgentActionPayload::ApplyPatch {
+                        patch: "*** Begin Patch\n*** Add File: target/stale-patch-note.txt\n+note\n*** End Patch"
+                            .to_string(),
+                        strip: None,
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    let marker = service
+        .running_shell_transactions_for_tests()
+        .keys()
+        .next()
+        .cloned()
+        .expect("apply_patch read transaction should be running");
+    service
+        .agent_turn_executions_mut()
+        .get_mut("turn-1")
+        .unwrap()
+        .response
+        .action_batch
+        .as_mut()
+        .unwrap()
+        .actions
+        .clear();
+
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, "turn-1", "agent-%1", "%1")
+        .unwrap();
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_end("%1", &marker, "turn-1", "agent-%1", "%1", 0,)
+            .unwrap(),
+        0
+    );
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies display-only `say` actions can show raw Mezzanine patch examples.
 ///
 /// When a user asks to see a patch, the patch text is ordinary assistant
