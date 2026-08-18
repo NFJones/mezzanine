@@ -32,7 +32,7 @@ mod terminal_options;
 mod theme;
 mod trust;
 pub(super) use agents::{
-    ActiveTurnSleepInhibition, runtime_active_turn_sleep_inhibition_from_config,
+    ActiveTurnSleepInhibition, ShellMode, runtime_active_turn_sleep_inhibition_from_config,
     runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config, runtime_agent_loop_limit_from_config,
@@ -42,8 +42,8 @@ pub(super) use agents::{
     runtime_max_concurrent_agents_from_config, runtime_max_queued_agent_bytes_from_config,
     runtime_max_queued_agent_turns_from_config, runtime_max_root_subagents_from_config,
     runtime_max_subagent_depth_from_config, runtime_max_subagent_panes_per_window_from_config,
-    runtime_max_subagents_per_subagent_from_config, runtime_subagent_profiles_from_config,
-    runtime_shell_mode_from_config, runtime_subagent_wait_policy_from_config, ShellMode,
+    runtime_max_subagents_per_subagent_from_config, runtime_shell_mode_from_config,
+    runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
 };
 pub(super) use audit::{runtime_audit_config_present, runtime_audit_log_from_config};
 pub use effective::runtime_effective_config_value;

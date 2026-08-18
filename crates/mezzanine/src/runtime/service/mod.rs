@@ -44,8 +44,8 @@ use super::{
     runtime_pane_by_id, runtime_parse_approval_policy, runtime_preset_registry_from_config,
     runtime_provider_auth_refresh_leeway_seconds_from_config,
     runtime_provider_registry_from_config, runtime_saved_agent_session_limit_from_config,
-    runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
-    runtime_terminal_emoji_width_from_config,
+    runtime_shell_mode_from_config, runtime_subagent_profiles_from_config,
+    runtime_subagent_wait_policy_from_config, runtime_terminal_emoji_width_from_config,
     runtime_terminal_shell_output_preview_lines_from_config, runtime_terminal_term_from_config,
     spawn_stdio_mcp_connection,
 };

@@ -35,6 +35,7 @@ impl NativeShellContext {
     }
 
     /// Returns the shell grammar paired with this context.
+    #[cfg(test)]
     pub(crate) fn classification(&self) -> ShellClassification {
         self.classification
     }
@@ -158,7 +159,7 @@ fn shell_from_environment(
         return None;
     }
     let classification = ShellClassification::classify(&path);
-    (classification != ShellClassification::UnknownUnix).then(|| (path, classification))
+    (classification != ShellClassification::UnknownUnix).then_some((path, classification))
 }
 
 #[cfg(test)]
@@ -237,11 +238,7 @@ mod tests {
     /// absent or unclassifiable.
     #[test]
     fn inference_falls_back_to_bin_sh_without_any_shell_evidence() {
-        let context = context(
-            Some("/usr/bin/tmux"),
-            Vec::new(),
-            "/opt/unknown-shell",
-        );
+        let context = context(Some("/usr/bin/tmux"), Vec::new(), "/opt/unknown-shell");
 
         assert_eq!(context.shell_path(), Path::new("/bin/sh"));
         assert_eq!(context.classification(), ShellClassification::PosixSh);

@@ -860,6 +860,9 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "sandbox" => {
             "inspect or change pane-local sandbox state; use --global for persisted enable/disable changes, and manage project trust through the nested trust subcommand."
         }
+        "shell-mode" => {
+            "inspect or change pane shell execution mode; use --global for persisted enable/disable changes."
+        }
         "list-macros" => "list available macros and their #macro prompt names.",
         "name-session" => "assign or replace the current conversation's durable display name.",
         "list-skills" => "list available skills and their $skill prompt names.",

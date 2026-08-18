@@ -5718,7 +5718,8 @@ by Mezzanine, `structured_content` MUST include:
 - `summary`: The user-facing action summary supplied by the model or
   synthesized by Mezzanine for semantic local actions.
 - `execution_transport`: The local action transport. Model-authored local
-  actions MUST report `pane_shell`.
+  actions MUST report `pane_shell` under pane shell mode and `spawned_shell`
+  under native shell mode.
 - `command`: The exact shell input sent or proposed for pane execution for
   shell-command actions.
 - `sent_to_pane`: Whether any input was sent to the pane shell.
@@ -5790,6 +5791,17 @@ and MUST return a `maap/1` action result to the agent.
 Shell actions MUST be executed by sending input to the pane shell and MUST report pane-shell transport metadata. The harness MUST NOT execute local shell
 actions through an undeclared host-side command runner or silently fall back
 from native mode to pane-shell execution.
+
+Under native shell mode, Mezzanine MUST execute each shell-backed action in a
+freshly spawned shell process whose executable, environment, and working
+directory are inferred from the pane's live root process, never by running
+commands through the pane shell. Native execution MUST work while an
+alternative screen application occupies the pane, MUST reject stateful or
+interactive actions without falling back to the pane shell, and MUST report
+`spawned_shell` transport metadata with `sent_to_pane` false. Native
+`apply_patch` actions MUST complete the same read and write phases as pane
+transport, materializing final content sidecar records into the spawned
+command file instead of the pane PTY.
 
 For non-interactive shell actions, the harness SHOULD send a complete command
 followed by the pane's configured submit sequence.
@@ -6104,7 +6116,7 @@ the user, and subject to the same permission model as other agent actions.
 
 ### 10.2 Visible Local Interaction
 
-An agent MUST use Mezzanine-visible local MAAP actions for local file reads, file writes, command execution, process inspection, package management, version control operations, and other local system interactions. Mezzanine MUST service those actions through the pane shell and MUST report pane-shell transport metadata.
+An agent MUST use Mezzanine-visible local MAAP actions for local file reads, file writes, command execution, process inspection, package management, version control operations, and other local system interactions. Mezzanine MUST service those actions through the pane shell under pane shell mode or through a freshly spawned shell inferred from the pane's root process under native shell mode, and MUST report the matching pane-shell or spawned-shell transport metadata.
 
 This visible-local-action rule applies to all agent local interaction paths.
 MCP servers and other explicitly configured connectors are external
@@ -6679,6 +6691,28 @@ The baseline command capabilities are:
   working directory, accept `latest` or the only pending project trust request
   for the live session, and provide a list view for pending project trust
   requests.
+- `/shell-mode`: Inspect and manage pane shell execution mode through exactly
+  `status`, `enable`, and `disable` subcommands. No argument MUST behave as
+  `status`. `status` MUST report the effective mode for the active pane,
+  whether a pane override exists, and whether the effective value came from
+  that override or the persisted global default. `status --global` MUST report
+  only the persisted default. Both status forms MUST be read-only.
+  `enable --yes` and `disable --yes` MUST set an exact-pane runtime override
+  and MUST NOT persist configuration, affect sibling panes, advance global
+  configuration generation, survive pane removal, or survive daemon restart.
+  `enable --global --yes` and `disable --global --yes` MUST use the atomic
+  persisted configuration and live-reload path. A global change MUST affect
+  panes without overrides and MUST NOT clear an existing pane override.
+  A newly spawned subagent pane MUST receive a snapshot of its parent's
+  explicit pane shell mode override before entering agent mode. This copied
+  override is child-local: it affects neither siblings nor existing children,
+  is cleared when its pane is removed, and does not survive daemon restart.
+  A parent that follows the persisted global default MUST NOT create a copied
+  child override, so it and its child both continue following later global
+  mode changes.
+  Mutations MUST require authenticated primary-client input, while unsupported
+  subcommands, duplicate or unknown flags, missing `--yes`, and extra
+  positional arguments MUST fail without changing state.
 - Bare `/resume`: Show resumable saved agent sessions in the shared interactive
   record-browser table keyed by conversation UUID. The table MUST include name,
   last activity, directory, transcript entry count, and latest prompt columns.

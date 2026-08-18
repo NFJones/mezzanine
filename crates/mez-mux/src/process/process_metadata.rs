@@ -199,9 +199,9 @@ pub(super) fn process_environment_for_pid(pid: u32) -> Option<Vec<RawEnvironment
         return None;
     }
     buffer.truncate(size);
-    Some(parse_environment_bytes(
-        parse_macos_environment_bytes(&buffer)?,
-    ))
+    Some(parse_environment_bytes(parse_macos_environment_bytes(
+        &buffer,
+    )?))
 }
 
 /// Returns no environment on hosts without a reviewed native reader.

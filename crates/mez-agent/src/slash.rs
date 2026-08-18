@@ -76,6 +76,7 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("approve", &[], SlashCommandEffect::PolicyMutation, true),
         slash("show-approvals", &[], SlashCommandEffect::ReadOnly, true),
         slash("sandbox", &[], SlashCommandEffect::PolicyMutation, true),
+        slash("shell-mode", &[], SlashCommandEffect::PolicyMutation, true),
         slash("list-macros", &[], SlashCommandEffect::ReadOnly, true),
         slash("list-skills", &[], SlashCommandEffect::ReadOnly, true),
         slash(
@@ -328,6 +329,7 @@ mod tests {
             "approval",
             "approve",
             "sandbox",
+            "shell-mode",
             "plan",
             "directive",
             "name-session",

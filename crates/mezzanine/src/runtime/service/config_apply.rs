@@ -27,8 +27,8 @@ use super::{
     runtime_max_subagents_per_subagent_from_config, runtime_mcp_registry_from_config,
     runtime_preset_registry_from_config, runtime_provider_auth_refresh_leeway_seconds_from_config,
     runtime_provider_registry_from_config, runtime_saved_agent_session_limit_from_config,
-    runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
-    runtime_terminal_emoji_width_from_config,
+    runtime_shell_mode_from_config, runtime_subagent_profiles_from_config,
+    runtime_subagent_wait_policy_from_config, runtime_terminal_emoji_width_from_config,
     runtime_terminal_shell_output_preview_lines_from_config, runtime_terminal_term_from_config,
 };
 use crate::runtime::config::{
@@ -428,6 +428,7 @@ impl RuntimeSessionService {
                 runtime_agent_compaction_raw_retention_percent_from_config(&structured)?,
             );
             self.set_agent_default_routing(runtime_agent_routing_from_config(&structured)?);
+            self.set_agent_default_shell_mode(runtime_shell_mode_from_config(&structured)?);
             self.set_agent_action_failure_retry_limit(
                 runtime_agent_action_failure_retry_limit_from_config(&structured)?,
             );

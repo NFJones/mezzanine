@@ -377,6 +377,8 @@ impl RuntimeSessionService {
             self.subagent_parent_effective_scope(&spawn.parent_agent_id, spawn.cooperation_mode);
         let inherited_sandbox_override =
             self.inherited_sandbox_override_for_child_agent(&spawn.parent_agent_id);
+        let inherited_shell_mode =
+            self.inherited_shell_mode_for_child_agent(&spawn.parent_agent_id);
         if let Some(parent_scope) = inherited_scope.as_ref() {
             spawn.cooperation_mode = parent_scope.cooperation_mode;
             spawn.read_scopes = if read_scopes_requested {
@@ -464,6 +466,9 @@ impl RuntimeSessionService {
         if let Some(sandbox_config) = inherited_sandbox_override {
             self.integration
                 .set_pane_sandbox_override(&started.pane_id, Some(sandbox_config));
+        }
+        if let Some(shell_mode) = inherited_shell_mode {
+            self.set_agent_shell_mode_override(&started.pane_id, Some(shell_mode));
         }
         self.set_agent_planning_enabled(
             &started.pane_id,
@@ -887,6 +892,20 @@ impl RuntimeSessionService {
         let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
         self.pane_has_sandbox_override(parent_pane_id.as_str())
             .then(|| self.sandbox_config_for_pane(parent_pane_id.as_str()))
+    }
+
+    /// Returns the parent's explicit shell mode for a newly spawned child.
+    ///
+    /// Global shell mode configuration is deliberately not copied so both
+    /// panes continue following future global changes. An exact pane-local
+    /// override is copied as a child-local snapshot before the child enters
+    /// agent mode.
+    pub(crate) fn inherited_shell_mode_for_child_agent(
+        &self,
+        parent_agent_id: &str,
+    ) -> Option<crate::runtime::config::ShellMode> {
+        let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
+        self.agent_shell_mode_override(parent_pane_id.as_str())
     }
 
     /// Returns the effective local action executor a child agent should inherit.

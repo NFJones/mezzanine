@@ -1014,6 +1014,12 @@ impl ShellTransaction {
         self
     }
 
+    /// Returns the separately streamed Base64 records for the materialized
+    /// script, when one was selected.
+    pub fn input_sidecar(&self) -> Option<&str> {
+        self.input_sidecar.as_deref()
+    }
+
     /// Selects the pane-scoped token used by managed zsh history isolation.
     ///
     /// The pane startup compatibility hook recognizes only the exact control

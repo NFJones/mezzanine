@@ -725,7 +725,10 @@ fn macos_environment_parser_skips_argv_to_environment_region() {
 fn linux_environment_reader_reports_own_process_environment() {
     let entries =
         process_environment_for_pid(std::process::id()).expect("own environ readable on Linux");
-    assert!(!entries.is_empty(), "test process always has an environment");
+    assert!(
+        !entries.is_empty(),
+        "test process always has an environment"
+    );
     assert!(entries.iter().all(|entry| !entry.key.is_empty()));
 }
 

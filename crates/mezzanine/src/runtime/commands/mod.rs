@@ -72,6 +72,7 @@ mod remember;
 mod resume;
 mod sandbox;
 mod shell;
+mod shell_mode;
 mod show_records;
 mod slash;
 mod status;

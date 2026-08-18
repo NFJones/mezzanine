@@ -21,8 +21,8 @@ use super::{
     runtime_agent_action_rejects_duplicate_success, runtime_agent_context_command,
     runtime_agent_execution_prompt_display_lines, runtime_agent_terminal_preview,
     runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
-    runtime_mezzanine_error_code, runtime_pane_readiness_state_name,
-    runtime_pre_shell_hook_payload,
+    runtime_execution_ready_for_provider_continuation, runtime_mezzanine_error_code,
+    runtime_pane_readiness_state_name, runtime_pre_shell_hook_payload,
 };
 use crate::runtime::{RuntimeSandboxFallbackAudit, SandboxConfig};
 
@@ -319,7 +319,18 @@ impl RuntimeSessionService {
             turn_id,
             "pending_shell_dispatch resume started",
         )?;
-        let dispatched = self.dispatch_running_shell_actions_to_panes(&turn, &mut execution)?;
+        let mut dispatched = self.dispatch_running_shell_actions_to_panes(&turn, &mut execution)?;
+        while self
+            .agent
+            .pending_apply_patch_phases
+            .keys()
+            .any(|key| key.starts_with(&format!("{turn_id}/")))
+            && self.execution_has_pending_shell_dispatch(turn_id, &execution)
+        {
+            dispatched = dispatched.saturating_add(
+                self.dispatch_running_shell_actions_to_panes(&turn, &mut execution)?,
+            );
+        }
         self.record_runtime_agent_patch_results_for_turn(&turn, &execution);
         // Routed workers own ephemeral presentation panes. A terminal dispatch
         // result settles the routed workflow and closes that pane below, so
@@ -1184,6 +1195,129 @@ impl RuntimeSessionService {
                     )?;
                     break;
                 }
+                Ok(super::shell_state::ShellActionDispatchOutcome::NativeCompleted {
+                    result,
+                    exit_code,
+                    combined_output,
+                    output_truncated,
+                }) => {
+                    let is_apply_patch_read =
+                        matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
+                            && apply_patch_transaction_phase(command)
+                                == Some(ApplyPatchTransactionPhase::Read);
+                    if is_apply_patch_read {
+                        let followup_plan = self.plan_apply_patch_followup_from_read_output(
+                            turn,
+                            action,
+                            &path_boundary,
+                            exit_code.unwrap_or(1),
+                            &combined_output,
+                            output_truncated,
+                        )?;
+                        if let Some(followup_plan) = followup_plan {
+                            self.agent.pending_apply_patch_phases.insert(
+                                Self::apply_patch_batch_state_key(&turn.turn_id, &action.id),
+                                RuntimePendingApplyPatchPhase {
+                                    plan: followup_plan,
+                                    path_boundary: path_boundary.clone(),
+                                },
+                            );
+                            self.record_shell_dispatch_history(&turn.turn_id, command);
+                            dispatched = dispatched.saturating_add(1);
+                            self.append_agent_trace_turn_event(
+                                &turn.pane_id,
+                                &turn.turn_id,
+                                &format!(
+                                    "action {} dispatched spawned_shell dispatched_count={}",
+                                    action.id, dispatched
+                                ),
+                            )?;
+                            continue;
+                        }
+                    }
+                    self.record_shell_dispatch_history(&turn.turn_id, command);
+                    dispatched = dispatched.saturating_add(1);
+                    let mut settled_results = vec![(*result).clone()];
+                    if matches!(exit_code, Some(code) if code != 0)
+                        && matches!(action.payload, AgentActionPayload::ShellCommand { .. })
+                    {
+                        let mut shell_backed_actions = Vec::new();
+                        for candidate in &batch.actions {
+                            let result_is_running = execution.action_results.iter().any(|result| {
+                                result.action_id == candidate.id
+                                    && result.status == ActionStatus::Running
+                            });
+                            if result_is_running && local_action_plan(candidate)?.is_some() {
+                                shell_backed_actions.push(candidate.clone());
+                            }
+                        }
+                        let skipped_content = vec![format!(
+                            "shell command not run because `{}` exited with status {}",
+                            action.id,
+                            exit_code.unwrap_or(1)
+                        )];
+                        for result in &mut execution.action_results {
+                            if result.status != ActionStatus::Running
+                                || result.action_id == action.id.as_str()
+                            {
+                                continue;
+                            }
+                            let Some(skipped_action) = shell_backed_actions
+                                .iter()
+                                .find(|candidate| candidate.id == result.action_id)
+                            else {
+                                continue;
+                            };
+                            let skipped_plan =
+                                local_action_plan(skipped_action)?.ok_or_else(|| {
+                                    MezError::invalid_state(
+                                        "pending shell result does not match shell-backed action payload",
+                                    )
+                                })?;
+                            let structured_content =
+                                mez_agent::shell_action_structured_content_json(
+                                    skipped_action,
+                                    &skipped_plan,
+                                    Some("spawned_shell"),
+                                    false,
+                                    serde_json::Value::Null,
+                                    &[],
+                                    serde_json::json!({
+                                        "source": "runtime",
+                                        "stream": "pty_input",
+                                        "exit_code": null,
+                                        "signal": null,
+                                        "timed_out": false,
+                                        "combined_output_bytes": 0,
+                                        "combined_output_preview": "",
+                                        "boundary_state": "skipped-after-nonzero-shell-exit",
+                                        "output_truncated": false,
+                                        "skipped": true,
+                                        "previous_action_id": action.id.as_str(),
+                                        "previous_exit_code": exit_code
+                                    }),
+                                );
+                            *result = ActionResult::succeeded(
+                                turn,
+                                skipped_action,
+                                skipped_content.clone(),
+                                Some(structured_content),
+                            );
+                            settled_results.push(result.clone());
+                        }
+                    }
+                    self.commit_settled_action_results_context(&turn.turn_id, &settled_results)?;
+                    execution.action_results[index] = *result;
+                    self.append_agent_trace_turn_event(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        &format!(
+                            "action {} dispatched spawned_shell dispatched_count={}",
+                            action.id, dispatched
+                        ),
+                    )?;
+                    continue;
+                }
                 Ok(super::shell_state::ShellActionDispatchOutcome::SandboxFallbackEligible {
                     marker,
                     proof,
@@ -1204,6 +1338,11 @@ impl RuntimeSessionService {
                     continue;
                 }
             }
+        }
+        if !self.turn_has_running_agent_action_shell_transaction(&turn.turn_id)
+            && runtime_execution_ready_for_provider_continuation(execution)
+        {
+            self.queue_agent_provider_task(turn.turn_id.clone());
         }
         execution.terminal_state =
             if self.turn_has_running_agent_action_shell_transaction(&turn.turn_id) {
@@ -1473,6 +1612,129 @@ impl RuntimeSessionService {
         )?;
         self.dispatch_generated_apply_patch_phase(turn, &action, write_plan, path_boundary)?;
         Ok(true)
+    }
+
+    /// Plans the next generated `apply_patch` phase after a spawned-shell
+    /// read transaction completed, without dispatching it.
+    ///
+    /// Native read output arrives as one raw combined capture, so transport
+    /// decoding is skipped and the batch state machine runs directly on the
+    /// captured bytes. This mirrors `dispatch_apply_patch_followup_if_needed`
+    /// for the pane transport: a truncated first read retries once, complete
+    /// reads advance to the next batched path or the write phase, and terminal
+    /// failures produce an error plan. The caller stores the returned plan in
+    /// `pending_apply_patch_phases` so the ordinary dispatch loop re-runs the
+    /// same hook and authorization path as provider-authored shell actions.
+    ///
+    /// Returns `None` when the read completed nonzero or the action is not an
+    /// `apply_patch` read, meaning the projected read result settles normally.
+    fn plan_apply_patch_followup_from_read_output(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        path_boundary: &ApplyPatchPathBoundary,
+        exit_code: i32,
+        raw_output: &str,
+        output_truncated: bool,
+    ) -> Result<Option<mez_agent::LocalActionPlan>> {
+        let state_key = Self::apply_patch_batch_state_key(&turn.turn_id, &action.id);
+        if exit_code != 0 {
+            self.agent.apply_patch_batch_states.remove(&state_key);
+            return Ok(None);
+        }
+        let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
+            return Ok(None);
+        };
+        let followup_plan =
+            if let Some(mut state) = self.agent.apply_patch_batch_states.remove(&state_key) {
+                if &state.path_boundary != path_boundary {
+                    return Err(MezError::conflict(
+                        "apply_patch sandbox write authority changed after the read phase",
+                    ));
+                }
+                if output_truncated {
+                    if state.current_path.is_some() && state.current_path_read_retries == 0 {
+                        let mut paths = BTreeSet::new();
+                        paths.insert(state.current_path.clone().unwrap_or_default());
+                        state.current_path_read_retries = 1;
+                        state.current_read_transport.clear();
+                        let read_plan =
+                            apply_patch_read_plan_for_paths_with_boundary(&paths, path_boundary);
+                        self.agent.apply_patch_batch_states.insert(state_key, state);
+                        self.append_agent_trace_turn_event(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        &format!(
+                            "action {} apply_patch_phase=read reason=retry_incomplete_transport",
+                            action.id
+                        ),
+                    )?;
+                        return Ok(Some(read_plan));
+                    }
+                    Some(apply_patch_error_plan(
+                        &apply_patch_read_transport_failure_message(
+                            &mez_agent::ShellTransportDiagnostics::default(),
+                            output_truncated,
+                        ),
+                    ))
+                } else {
+                    state.read_outputs.push(raw_output.to_string());
+                    state.current_read_transport.clear();
+                    state.current_path = None;
+                    if !state.remaining_paths.is_empty() {
+                        let path = state.remaining_paths.remove(0);
+                        let mut paths = BTreeSet::new();
+                        paths.insert(path.clone());
+                        state.current_path = Some(path);
+                        state.current_path_read_retries = 0;
+                        let read_plan =
+                            apply_patch_read_plan_for_paths_with_boundary(&paths, path_boundary);
+                        self.agent.apply_patch_batch_states.insert(state_key, state);
+                        self.append_agent_trace_turn_event(
+                            &turn.pane_id,
+                            &turn.turn_id,
+                            &format!(
+                                "action {} apply_patch_phase=read reason=next_batch_read",
+                                action.id
+                            ),
+                        )?;
+                        return Ok(Some(read_plan));
+                    }
+                    Some(
+                        apply_patch_write_plan_from_read_outputs_with_boundary(
+                            patch,
+                            &state.read_outputs,
+                            path_boundary,
+                        )
+                        .unwrap_or_else(|error| apply_patch_error_plan(error.message())),
+                    )
+                }
+            } else if output_truncated {
+                Some(apply_patch_error_plan(
+                    &apply_patch_read_transport_failure_message(
+                        &mez_agent::ShellTransportDiagnostics::default(),
+                        output_truncated,
+                    ),
+                ))
+            } else {
+                Some(
+                    apply_patch_write_plan_from_read_outputs_with_boundary(
+                        patch,
+                        std::slice::from_ref(&raw_output.to_string()),
+                        path_boundary,
+                    )
+                    .unwrap_or_else(|error| apply_patch_error_plan(error.message())),
+                )
+            };
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            &turn.turn_id,
+            &format!(
+                "action {} apply_patch_phase=write reason=read_phase_completed",
+                action.id
+            ),
+        )?;
+        Ok(followup_plan)
     }
 
     /// Converts a local shell dispatch failure into a normal agent action

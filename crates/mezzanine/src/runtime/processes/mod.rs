@@ -15,10 +15,8 @@ mod startup;
 mod transactions;
 mod zsh_compat;
 
-pub(crate) use native_shell_inference::{
-    NativeShellContext, infer_native_shell_context,
-};
-pub(crate) use spawned_shell::{SpawnedShellExecutor, SpawnedShellInterrupt};
+pub(crate) use native_shell_inference::{NativeShellContext, infer_native_shell_context};
+pub(crate) use spawned_shell::SpawnedShellExecutor;
 
 pub(super) use managed_shell_handoff::ManagedShellKind;
 use managed_shell_handoff::{
@@ -2621,6 +2619,33 @@ impl RuntimeSessionService {
         })
     }
 
+    /// Infers native shell context from pane root-process metadata.
+    ///
+    /// Native shell mode never runs commands through the pane shell: the
+    /// spawned shell executable, environment, and working directory come
+    /// from host inspection of the live pane root process, with the
+    /// spawn-time session shell closing the executable fallback chain.
+    pub(crate) fn native_shell_context_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Result<NativeShellContext> {
+        let primary_pid = self.primary_pid_for_live_pane_process(pane_id);
+        let executable_path = self.process.pane_processes.executable_path(pane_id);
+        let environment = self.process.pane_processes.environment(pane_id);
+        let current_working_directory = self
+            .process
+            .pane_processes
+            .current_working_directory(pane_id);
+        let session_shell_path = self.session.shell.path().to_path_buf();
+        infer_native_shell_context(
+            primary_pid,
+            executable_path,
+            environment,
+            current_working_directory,
+            &session_shell_path,
+        )
+    }
+
     /// Runs the shell classification for pane operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -4227,6 +4252,7 @@ impl RuntimeSessionService {
             .agent_personality_selections_mut()
             .remove(pane_id);
         self.clear_agent_routing_override(pane_id);
+        self.clear_agent_shell_mode_override(pane_id);
         self.clear_agent_pane_artifacts(pane_id);
         self.clear_copy_state_for_pane(pane_id);
         self.process

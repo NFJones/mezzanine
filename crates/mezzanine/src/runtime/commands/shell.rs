@@ -675,6 +675,27 @@ impl RuntimeSessionService {
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "shell-mode"
+                {
+                    let shell_mode_outcome = self
+                        .execute_agent_shell_shell_mode_command(
+                            primary_client_id,
+                            &pane_id,
+                            input,
+                            origin,
+                        )
+                        .unwrap_or_else(|error| AgentShellCommandOutcome::Presented {
+                            command: "shell-mode".to_string(),
+                            body: format!("Shell mode error: {}", error.message()),
+                            presentation: AgentShellPresentation::ErrorNotice,
+                        });
+                    runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        Some(&shell_mode_outcome),
+                    )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "memory"
                 {
                     let memory_outcome =

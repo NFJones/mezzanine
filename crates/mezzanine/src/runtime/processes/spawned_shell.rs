@@ -56,23 +56,42 @@ impl SpawnedShellExecutor {
     }
 
     /// Returns a cancellation handle for the next execution.
+    #[cfg(test)]
     pub(crate) fn interrupt_handle(&self) -> SpawnedShellInterrupt {
         SpawnedShellInterrupt {
             flag: Arc::clone(&self.interrupted),
         }
     }
 
-    /// Materializes the transaction command to one temporary file.
+    /// Line prefix appended to materialized apply-patch sidecar records.
+    ///
+    /// The generated write-phase script extracts final-content records with
+    /// `sed -n 's/^# __MEZ_INPUT_SIDECAR_V1__ <index> //p'` from `$0`, so the
+    /// spawned command file must carry exactly the same prefixed lines as the
+    /// pane transport's sidecar-frame appender.
+    const INPUT_SIDECAR_LINE_PREFIX: &str = "# __MEZ_INPUT_SIDECAR_V1__ ";
+
+    /// Materializes the transaction command, plus any input sidecar records,
+    /// to one temporary file.
     fn materialize_command_file(&self, transaction: &ShellTransaction) -> Result<PathBuf> {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!(
-            "mez-spawned-{}-{unique}",
-            std::process::id()
-        ));
-        fs::write(&path, transaction.command.as_bytes()).map_err(|error| {
+        let path =
+            std::env::temp_dir().join(format!("mez-spawned-{}-{unique}", std::process::id()));
+        let mut content = transaction.command.clone();
+        if !content.ends_with('\n') {
+            content.push('\n');
+        }
+        if let Some(sidecar) = transaction.input_sidecar() {
+            for line in sidecar.lines() {
+                content.push_str(Self::INPUT_SIDECAR_LINE_PREFIX);
+                content.push_str(line);
+                content.push('\n');
+            }
+        }
+        fs::write(&path, content.as_bytes()).map_err(|error| {
             MezError::invalid_state(format!(
                 "spawned shell execution could not materialize its command file: {error}"
             ))
@@ -132,9 +151,8 @@ impl SpawnedShellExecutor {
         let stderr = child.stderr.take().ok_or_else(|| {
             MezError::invalid_state("spawned shell execution lost its stderr pipe")
         })?;
-        let stream_budget = (output_budget / 2)
-            .max(MIN_STREAM_CAPTURE_BUDGET)
-            .min(SPAWNED_CHILD_CAPTURE_HARD_CAP);
+        let stream_budget =
+            (output_budget / 2).clamp(MIN_STREAM_CAPTURE_BUDGET, SPAWNED_CHILD_CAPTURE_HARD_CAP);
         let stdout_reader = std::thread::spawn(move || drain_output_stream(stdout, stream_budget));
         let stderr_reader = std::thread::spawn(move || drain_output_stream(stderr, stream_budget));
         let pid = child.id() as i32;
@@ -175,12 +193,12 @@ impl SpawnedShellExecutor {
         let status = exit_status.ok_or_else(|| {
             MezError::invalid_state("spawned shell execution observed no exit status")
         })?;
-        let (stdout_bytes, stdout_dropped) = stdout_reader.join().map_err(|_| {
-            MezError::invalid_state("spawned shell execution stdout reader failed")
-        })?;
-        let (stderr_bytes, stderr_dropped) = stderr_reader.join().map_err(|_| {
-            MezError::invalid_state("spawned shell execution stderr reader failed")
-        })?;
+        let (stdout_bytes, stdout_dropped) = stdout_reader
+            .join()
+            .map_err(|_| MezError::invalid_state("spawned shell execution stdout reader failed"))?;
+        let (stderr_bytes, stderr_dropped) = stderr_reader
+            .join()
+            .map_err(|_| MezError::invalid_state("spawned shell execution stderr reader failed"))?;
         Ok(ShellExecutionOutput {
             exit_code: if timed_out || interrupted {
                 None
@@ -205,10 +223,7 @@ impl SpawnedShellExecutorPort for SpawnedShellExecutor {
 
     /// Executes one shell transaction in a spawned shell process and returns
     /// normalized output.
-    fn execute_shell(
-        &mut self,
-        request: &ShellExecutionRequest,
-    ) -> Result<ShellExecutionOutput> {
+    fn execute_shell(&mut self, request: &ShellExecutionRequest) -> Result<ShellExecutionOutput> {
         if request.interactive || request.stateful {
             return Err(MezError::invalid_args(
                 "native transport does not serve stateful or interactive execution",
@@ -228,11 +243,13 @@ impl SpawnedShellExecutorPort for SpawnedShellExecutor {
 }
 
 /// Cancellation handle for one spawned shell execution.
+#[cfg(test)]
 pub(crate) struct SpawnedShellInterrupt {
     /// Shared flag polled by the executing wait loop.
     flag: Arc<AtomicBool>,
 }
 
+#[cfg(test)]
 impl SpawnedShellInterrupt {
     /// Requests interruption of the currently executing child; the executor
     /// kills the child process group and reports `interrupted`.
@@ -331,10 +348,7 @@ mod tests {
     /// spawned shell exactly as captured from the pane root process.
     #[test]
     fn spawned_executor_forwards_context_environment_and_working_directory() {
-        let directory = std::env::temp_dir().join(format!(
-            "mez-native-cwd-{}",
-            std::process::id()
-        ));
+        let directory = std::env::temp_dir().join(format!("mez-native-cwd-{}", std::process::id()));
         fs::create_dir_all(&directory).unwrap();
         let context = NativeShellContext::for_test(
             PathBuf::from("/bin/sh"),
@@ -352,7 +366,11 @@ mod tests {
 
         assert_eq!(output.exit_code, Some(0));
         assert!(output.stdout.starts_with("visible"));
-        assert!(output.stdout.contains(&directory.file_name().unwrap().to_string_lossy().to_string()));
+        assert!(
+            output
+                .stdout
+                .contains(&directory.file_name().unwrap().to_string_lossy().to_string())
+        );
     }
 
     /// Verifies the timeout kills the child process group and reports the
@@ -381,9 +399,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(300));
             interrupt.interrupt();
         });
-        let output = executor
-            .execute_shell(&request("sleep 30", None))
-            .unwrap();
+        let output = executor.execute_shell(&request("sleep 30", None)).unwrap();
 
         assert!(output.interrupted);
         assert!(!output.timed_out);
@@ -396,18 +412,16 @@ mod tests {
     fn spawned_executor_honors_typed_child_launches() {
         let mut executor = SpawnedShellExecutor::new(test_context());
         let mut transaction_request = request("printf child-launch-ok", Some(5_000));
-        transaction_request.transaction = transaction_request
-            .transaction
-            .with_child_launch(
-                ShellChildLaunch::new(
-                    "/bin/sh",
-                    vec![
-                        ShellChildArgument::Literal("-e".to_string()),
-                        ShellChildArgument::MaterializedCommandFile,
-                    ],
-                )
-                .unwrap(),
-            );
+        transaction_request.transaction = transaction_request.transaction.with_child_launch(
+            ShellChildLaunch::new(
+                "/bin/sh",
+                vec![
+                    ShellChildArgument::Literal("-e".to_string()),
+                    ShellChildArgument::MaterializedCommandFile,
+                ],
+            )
+            .unwrap(),
+        );
         let output = executor.execute_shell(&transaction_request).unwrap();
 
         assert_eq!(output.exit_code, Some(0));
@@ -428,5 +442,29 @@ mod tests {
         stateful_request.stateful = true;
         let error = executor.execute_shell(&stateful_request).unwrap_err();
         assert!(error.to_string().contains("stateful or interactive"));
+    }
+
+    /// Verifies spawned materialization appends input sidecar records with
+    /// the apply-patch line prefix so generated write-phase scripts can
+    /// extract final-content chunks from their own command file.
+    #[test]
+    fn spawned_executor_materializes_apply_patch_sidecar_records() {
+        let mut executor = SpawnedShellExecutor::new(test_context());
+        let mut sidecar_request = request("true", Some(5_000));
+        sidecar_request.transaction.command =
+            "sed -n 's/^# __MEZ_INPUT_SIDECAR_V1__ 0 //p' \"$0\"; sed -n 's/^# __MEZ_INPUT_SIDECAR_V1__ 1 //p' \"$0\""
+                .to_string();
+        sidecar_request.transaction = sidecar_request
+            .transaction
+            .with_input_sidecar(Some("0 YXJjaGl2ZQ==\n1 AQID\n".to_string()));
+        let output = executor.execute_shell(&sidecar_request).unwrap();
+
+        assert_eq!(output.exit_code, Some(0), "stderr={}", output.stderr);
+        assert!(
+            output.stdout.contains("YXJjaGl2ZQ=="),
+            "stdout={}",
+            output.stdout
+        );
+        assert!(output.stdout.contains("AQID"), "stdout={}", output.stdout);
     }
 }

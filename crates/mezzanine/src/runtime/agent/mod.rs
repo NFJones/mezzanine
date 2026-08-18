@@ -70,6 +70,7 @@ use crate::integrations::agent::provider::{
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options,
 };
+use crate::runtime::config::ShellMode;
 #[cfg(test)]
 use mez_agent::CooperationMode;
 use mez_agent::resolve_provider_api;
@@ -196,6 +197,10 @@ pub(crate) struct RuntimeAgentComponent {
     agent_routing: bool,
     /// Explicit pane-local provider-routing overrides.
     agent_routing_overrides: BTreeMap<String, bool>,
+    /// Configured default shell execution mode for agent actions.
+    agent_shell_mode: ShellMode,
+    /// Explicit pane-local shell execution mode overrides.
+    agent_shell_mode_overrides: BTreeMap<String, ShellMode>,
     /// User-controlled host power policy for active agent turns.
     active_turn_sleep_inhibition: ActiveTurnSleepInhibition,
     /// Daemon-wide host power lease retained while canonical turns are running.
@@ -2151,6 +2156,43 @@ impl RuntimeSessionService {
     /// Clears one pane-local routing override during pane teardown.
     pub(crate) fn clear_agent_routing_override(&mut self, pane_id: &str) {
         self.agent.agent_routing_overrides.remove(pane_id);
+    }
+
+    /// Returns the configured default agent shell execution mode.
+    pub(crate) fn agent_default_shell_mode(&self) -> ShellMode {
+        self.agent.agent_shell_mode
+    }
+
+    /// Replaces the configured default agent shell execution mode.
+    pub(crate) fn set_agent_default_shell_mode(&mut self, mode: ShellMode) {
+        self.agent.agent_shell_mode = mode;
+    }
+
+    /// Returns an explicit pane-local shell mode override.
+    pub(crate) fn agent_shell_mode_override(&self, pane_id: &str) -> Option<ShellMode> {
+        self.agent.agent_shell_mode_overrides.get(pane_id).copied()
+    }
+
+    /// Replaces or clears one pane-local shell mode override.
+    pub(crate) fn set_agent_shell_mode_override(&mut self, pane_id: &str, mode: Option<ShellMode>) {
+        if let Some(mode) = mode {
+            self.agent
+                .agent_shell_mode_overrides
+                .insert(pane_id.to_string(), mode);
+        } else {
+            self.agent.agent_shell_mode_overrides.remove(pane_id);
+        }
+    }
+
+    /// Clears one pane-local shell mode override during pane teardown.
+    pub(crate) fn clear_agent_shell_mode_override(&mut self, pane_id: &str) {
+        self.agent.agent_shell_mode_overrides.remove(pane_id);
+    }
+
+    /// Resolves the effective shell execution mode for one pane.
+    pub(crate) fn effective_agent_shell_mode_for_pane(&self, pane_id: &str) -> ShellMode {
+        self.agent_shell_mode_override(pane_id)
+            .unwrap_or_else(|| self.agent_default_shell_mode())
     }
 
     /// Reports whether planning presentation is enabled for one pane.

@@ -616,8 +616,7 @@ fn rejects_invalid_agent_shell_mode_values() {
 
         assert!(!validation.valid, "accepted shell mode {value}");
         assert!(validation.diagnostics.iter().any(|diagnostic| {
-            diagnostic.path == "agents.shell_mode"
-                && diagnostic.message.contains("pane or native")
+            diagnostic.path == "agents.shell_mode" && diagnostic.message.contains("pane or native")
         }));
     }
 }

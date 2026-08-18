@@ -40,13 +40,13 @@ mod types;
 
 pub use manager::PaneProcessManager;
 pub use pane::PaneProcess;
-pub use process_metadata::RawEnvironmentEntry;
 #[doc(hidden)]
 pub use pane::{
     PTY_INPUT_WRITE_CHUNK_BYTES, SHELL_INPUT_RECORD_ACK_BYTE, loader_input_record_requires_ack,
     receiver_input_record_requires_ack, shell_input_record_requires_ack,
     write_pty_fd_nonblocking_io,
 };
+pub use process_metadata::RawEnvironmentEntry;
 pub use spawn::{
     pane_command_plan, shell_command_from_argv, spawn_pane_process,
     spawn_pane_process_with_start_directory,

@@ -6,24 +6,32 @@
 //! command/control paths.
 
 use super::{
-    AgentAction, AgentActionPayload, AgentTurnRecord, AgentTurnState, ApplyPatchTransactionPhase,
-    MezError, PaneReadinessState, PathScopes, PermissionPolicy, ReadinessOverrideRevocation,
-    Result, RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService,
-    ShellTransaction, ShellTransactionOutputTransport, SubagentScopeDeclaration,
-    apply_patch_transaction_phase, current_unix_millis, local_action_plan,
-    runtime_agent_shell_status, runtime_agent_terminal_preview,
-    runtime_execution_ready_for_provider_continuation, runtime_marker_for_action,
-    runtime_pane_readiness_state_name,
+    ActionResult, AgentAction, AgentActionPayload, AgentTurnRecord, AgentTurnState,
+    ApplyPatchTransactionPhase, HookEvent, MezError, PaneReadinessState, PathScopes,
+    PermissionPolicy, ReadinessOverrideRevocation, Result, RunningShellTransactionKind,
+    RunningShellTransactionRef, RuntimeSessionService, ShellTransaction,
+    ShellTransactionOutputTransport, SubagentScopeDeclaration, apply_patch_transaction_phase,
+    current_unix_millis, local_action_plan, runtime_agent_shell_status,
+    runtime_agent_terminal_preview, runtime_execution_ready_for_provider_continuation,
+    runtime_marker_for_action, runtime_pane_readiness_state_name,
 };
+use crate::runtime::config::ShellMode;
+use crate::runtime::processes::SpawnedShellExecutor;
+use crate::runtime::runtime_post_shell_hook_payload;
 use crate::runtime::{RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, SandboxConfig};
 use crate::security::project::TrustDecision;
 use mez_agent::PermissionPreset;
 use mez_agent::permissions::{
     PermissionAuthorityChange, PermissionEvaluation, compare_permission_preset_authority,
 };
+use mez_agent::semantic_patch_planning::{
+    APPLY_PATCH_RESULT_MARKER, ApplyPatchFileOutcome, parse_apply_patch_file_outcomes,
+};
 use mez_agent::{
-    LocalProgramDialect, SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, ShellChildArgument, ShellChildLaunch,
-    ShellClassification,
+    LocalExecutionOutput, LocalProgramDialect, SHELL_OUTPUT_BASE64_MAX_RAW_BYTES,
+    ShellChildArgument, ShellChildLaunch, ShellClassification, ShellExecutionRequest,
+    SpawnedShellExecutor as SpawnedShellExecutorPort, local_execution_output_to_action_result,
+    postprocess_local_shell_output,
 };
 use std::path::{Path, PathBuf};
 
@@ -135,6 +143,17 @@ pub(super) enum ShellActionDispatchOutcome {
         /// Typed, redacted preparation evidence.
         proof: String,
     },
+    /// The spawned shell executed and projected a final result synchronously.
+    NativeCompleted {
+        /// Canonical action result identical in shape to pane completion.
+        result: Box<ActionResult>,
+        /// Observed child exit status before projection.
+        exit_code: Option<i32>,
+        /// Raw combined output captured before presentation postprocessing.
+        combined_output: String,
+        /// Whether spawned capture dropped bytes at the output budget.
+        output_truncated: bool,
+    },
 }
 
 impl RuntimeSessionService {
@@ -211,6 +230,20 @@ impl RuntimeSessionService {
             | mez_agent::permissions::RuleDecision::Prompt => {}
         }
         let permission_evaluation = Some(&current_permission_evaluation);
+        if self.effective_agent_shell_mode_for_pane(&turn.pane_id) == ShellMode::Native {
+            return self.dispatch_native_shell_action(
+                turn,
+                action,
+                command,
+                preview_already_presented,
+                input_sidecar,
+                program_dialect,
+                stateful,
+                interactive,
+                effective_timeout_ms,
+                &current_permission_evaluation,
+            );
+        }
         self.require_pane_ready_for_agent_command(&turn.pane_id)?;
         let previous_readiness = self.pane_readiness_state(&turn.pane_id);
         let marker = runtime_marker_for_action(turn, &action.id)?;
@@ -564,6 +597,256 @@ impl RuntimeSessionService {
             ),
         )?;
         Ok(ShellActionDispatchOutcome::Dispatched)
+    }
+
+    /// Executes one shell action through a freshly spawned shell process.
+    ///
+    /// Native transport never writes to or reads from the pane PTY. The shell
+    /// context is inferred from pane root-process metadata, the output is
+    /// projected through the same canonical converter as pane execution, and
+    /// presentation, trace, audit, metrics, and hook call sites are reused so
+    /// user-visible output matches pane transport exactly.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the pane dispatch surface's per-action inputs"
+    )]
+    fn dispatch_native_shell_action(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        command: &str,
+        preview_already_presented: bool,
+        input_sidecar: Option<&str>,
+        program_dialect: LocalProgramDialect,
+        stateful: bool,
+        interactive: bool,
+        effective_timeout_ms: u64,
+        permission_evaluation: &PermissionEvaluation,
+    ) -> Result<ShellActionDispatchOutcome> {
+        if stateful || interactive {
+            return Err(MezError::invalid_args(
+                "native transport does not serve stateful or interactive execution",
+            ));
+        }
+        let is_internal_apply_patch_write_phase =
+            matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
+                && apply_patch_transaction_phase(command)
+                    == Some(ApplyPatchTransactionPhase::Write);
+        let is_apply_patch_read_phase =
+            matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
+                && apply_patch_transaction_phase(command) == Some(ApplyPatchTransactionPhase::Read);
+        let apply_patch_read_path = if is_apply_patch_read_phase {
+            self.agent
+                .apply_patch_batch_states
+                .get(&Self::apply_patch_batch_state_key(
+                    &turn.turn_id,
+                    &action.id,
+                ))
+                .and_then(|state| state.current_path.clone())
+        } else {
+            None
+        };
+        let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
+        let permission_policy = self.permission_policy_for_turn(turn);
+        if crate::runtime::config::bubblewrap_applies_to_policy(&sandbox_config, &permission_policy)
+        {
+            return Err(MezError::invalid_state(
+                "native transport does not serve Bubblewrap-wrapped execution",
+            ));
+        }
+        let context = self.native_shell_context_for_pane(&turn.pane_id)?;
+        let emitted_action_log = if is_internal_apply_patch_write_phase {
+            false
+        } else if let Some(path) = apply_patch_read_path {
+            self.append_agent_action_execution_header_to_terminal_buffer(
+                &turn.pane_id,
+                action,
+                &format!("apply patch: {path}"),
+            )?;
+            true
+        } else {
+            self.append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, action)?
+        };
+        let is_model_shell_command =
+            matches!(action.payload, AgentActionPayload::ShellCommand { .. });
+        let should_emit_fallback_action_status = (self.agent_verbose_enabled(&turn.pane_id)
+            || !is_model_shell_command)
+            && !is_internal_apply_patch_write_phase
+            && !emitted_action_log;
+        if should_emit_fallback_action_status {
+            let emitted_thinking =
+                self.append_agent_action_model_thinking_to_terminal_buffer(&turn.pane_id, action)?;
+            if !emitted_thinking {
+                self.append_agent_status_text_to_terminal_buffer(
+                    &turn.pane_id,
+                    &runtime_agent_shell_status(action, "shell command"),
+                )?;
+            }
+        }
+        if !preview_already_presented
+            && !is_internal_apply_patch_write_phase
+            && (is_model_shell_command
+                || !emitted_action_log
+                || self.agent_verbose_enabled(&turn.pane_id))
+        {
+            self.append_agent_command_preview_to_terminal_buffer(&turn.pane_id, command)?;
+        }
+        let marker = runtime_marker_for_action(turn, &action.id)?;
+        let mut transaction = ShellTransaction::new(
+            marker.clone(),
+            &turn.turn_id,
+            &turn.agent_id,
+            &turn.pane_id,
+            context.shell_path(),
+            command,
+        )?;
+        if let Some(interpreter) = program_dialect.interpreter_path() {
+            transaction = transaction.with_child_launch(ShellChildLaunch::new(
+                interpreter,
+                vec![ShellChildArgument::MaterializedCommandFile],
+            )?);
+        }
+        let transaction = transaction
+            .with_input_sidecar(input_sidecar.map(ToString::to_string))
+            .with_output_transport(ShellTransactionOutputTransport::Raw)
+            .with_output_max_raw_bytes(shell_transaction_output_max_raw_bytes(command));
+        let mut executor = SpawnedShellExecutor::new(context);
+        let started_at_unix_ms = current_unix_millis();
+        let shell_output = executor.execute_shell(&ShellExecutionRequest {
+            action_id: action.id.clone(),
+            transaction,
+            timeout_ms: Some(effective_timeout_ms),
+            interactive: false,
+            stateful: false,
+        })?;
+        let exit_code = shell_output.exit_code;
+        let output_truncated = shell_output.transport_diagnostics.output_bytes_dropped > 0;
+        let mut shell_output = shell_output;
+        let apply_patch_file_outcomes = if is_internal_apply_patch_write_phase && !output_truncated
+        {
+            let combined = format!("{}{}", shell_output.stdout, shell_output.stderr);
+            parse_apply_patch_file_outcomes(&combined)
+                .ok()
+                .filter(|outcomes| !outcomes.is_empty())
+        } else {
+            None
+        };
+        if apply_patch_file_outcomes.is_some() {
+            let combined = format!("{}{}", shell_output.stdout, shell_output.stderr);
+            let filtered = combined
+                .replace("\r\n", "\n")
+                .replace('\r', "\n")
+                .lines()
+                .filter(|line| !line.starts_with(APPLY_PATCH_RESULT_MARKER))
+                .collect::<Vec<_>>()
+                .join("\n");
+            shell_output.stdout = filtered;
+            shell_output.stderr = String::new();
+        }
+        let shell_output = postprocess_local_shell_output(action, shell_output);
+        let combined_output = format!("{}{}", shell_output.stdout, shell_output.stderr);
+        let result = local_execution_output_to_action_result(
+            turn,
+            action,
+            LocalExecutionOutput::spawned_shell(shell_output),
+            &marker,
+        )
+        .map_err(|error| {
+            MezError::invalid_state(format!(
+                "spawned shell result projection failed: {}",
+                error.message()
+            ))
+        })?;
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            &turn.turn_id,
+            &format!(
+                "action {} dispatched spawned_shell exit_code={:?} marker={}",
+                action.id,
+                exit_code,
+                marker.as_str()
+            ),
+        )?;
+        self.append_agent_trace_maap_action_results(
+            &turn.pane_id,
+            &turn.turn_id,
+            "spawned_shell_action_result",
+            std::slice::from_ref(&result),
+        )?;
+        if !is_apply_patch_read_phase {
+            self.integration
+                .runtime_metrics_mut()
+                .record_shell_transaction_completion(
+                    started_at_unix_ms,
+                    current_unix_millis(),
+                    combined_output.len(),
+                    exit_code.unwrap_or(0),
+                );
+            if exit_code == Some(0) {
+                self.record_shell_dispatch_success(&turn.turn_id, command);
+            }
+            if exit_code == Some(0)
+                && local_action_plan(action)?
+                    .is_some_and(|plan| plan.display_output_after_completion)
+                && (self.agent_debug_enabled(&turn.pane_id)
+                    || self.agent_action_result_renders_in_normal_mode(action))
+                && !self.agent_shell_view_enabled(&turn.pane_id)
+                && !combined_output.trim().is_empty()
+            {
+                self.append_agent_action_result_text_to_terminal_buffer(
+                    &turn.pane_id,
+                    action,
+                    &result,
+                    &combined_output,
+                )?;
+            }
+        }
+        self.append_agent_shell_command_audit(
+            turn,
+            action,
+            command,
+            Some(permission_evaluation),
+            None,
+            "sent",
+        )?;
+        if !is_apply_patch_read_phase {
+            self.run_configured_completed_hooks(
+                HookEvent::PostShellCommand,
+                &runtime_post_shell_hook_payload(turn, action, &result, exit_code.unwrap_or(0)),
+            )?;
+        }
+        if is_internal_apply_patch_write_phase {
+            let confirmed_partial_apply =
+                apply_patch_file_outcomes.as_ref().is_some_and(|outcomes| {
+                    outcomes
+                        .iter()
+                        .any(|outcome| matches!(outcome, ApplyPatchFileOutcome::Applied { .. }))
+                });
+            if exit_code == Some(0) || confirmed_partial_apply {
+                self.record_agent_modified_files_from_diff(&turn.pane_id, &combined_output);
+            }
+            if self.agent_verbose_enabled(&turn.pane_id)
+                && let Some(outcomes) = &apply_patch_file_outcomes
+            {
+                for outcome in outcomes {
+                    if let ApplyPatchFileOutcome::Failed { path, diagnostic } = outcome {
+                        let diagnostic = diagnostic.trim();
+                        let message = if diagnostic.is_empty() {
+                            format!("agent: apply patch failed: {path}")
+                        } else {
+                            format!("agent: apply patch failed: {path}: {diagnostic}")
+                        };
+                        self.append_agent_error_text_to_terminal_buffer(&turn.pane_id, &message)?;
+                    }
+                }
+            }
+        }
+        Ok(ShellActionDispatchOutcome::NativeCompleted {
+            result: Box::new(result),
+            exit_code,
+            combined_output,
+            output_truncated,
+        })
     }
 
     /// Dispatches one ordinary shell action for focused sandbox-boundary tests.
