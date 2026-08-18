@@ -21,10 +21,13 @@ use mez_agent::{
 /// Reports whether a provider error came from malformed model MAAP output that
 /// can be repaired by asking the same model to re-emit the action batch.
 pub(super) fn maap_provider_error_is_repairable(error: &MezError) -> bool {
-    error.provider_raw_text().is_some()
-        && error
-            .message()
-            .starts_with("provider MAAP output is malformed:")
+    error
+        .message()
+        .starts_with("provider MAAP output is malformed:")
+        && error.provider_raw_text().is_some()
+        || error.message().contains(
+            "assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'",
+        )
 }
 
 /// Builds the terminal failed execution for a provider error when a final model

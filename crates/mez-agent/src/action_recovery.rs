@@ -5,13 +5,14 @@
 //! Product turn runners retain provider transport, retry budgets, durable
 //! request promotion, and product-error projection.
 
-use std::fmt;
+use std::{collections::BTreeSet, fmt};
 
 use crate::{
     AgentActionPayload, AgentCapability, AgentTurnNegotiation, AllowedAction, AllowedActionSet,
     CapabilityAvailability, CapabilityRequest, ContextSourceKind, MaapBatch, ModelInteractionKind,
-    ModelMessage, ModelMessageRole, ModelRequest, constrain_skill_actions_for_loaded_context,
-    continuation_surface, decide_capabilities, select_model_interaction_kind,
+    ModelMessage, ModelMessageRole, ModelRequest, ProviderTranscriptEvent,
+    constrain_skill_actions_for_loaded_context, continuation_surface, decide_capabilities,
+    select_model_interaction_kind,
 };
 
 /// Maximum previous-response bytes included in one ephemeral MAAP repair prompt.
@@ -354,6 +355,7 @@ pub fn maap_repair_request(
     attempt: usize,
 ) -> ModelRequest {
     let mut request = original_request.clone();
+    complete_orphaned_deepseek_tool_calls(&mut request);
     select_model_interaction_kind(&mut request, ModelInteractionKind::MaapRepair);
     request.messages.retain(|message| {
         !(message.source == ContextSourceKind::RuntimeHint
@@ -380,6 +382,53 @@ pub fn maap_repair_request(
         ),
     });
     request
+}
+
+/// Appends ephemeral DeepSeek tool results for native calls left unanswered in
+/// a failed request.
+///
+/// A provider may reject a request before Mezzanine receives a response when
+/// restored native continuity contains an assistant tool-call message without
+/// its required tool result. Completing those calls before a MAAP repair retry
+/// makes the retry protocol-valid without changing durable transcript history.
+fn complete_orphaned_deepseek_tool_calls(request: &mut ModelRequest) {
+    let completed_tool_call_ids = request
+        .messages
+        .iter()
+        .filter_map(|message| ProviderTranscriptEvent::from_transcript_content(&message.content))
+        .filter_map(|event| match event {
+            ProviderTranscriptEvent::DeepSeekToolResult { tool_call_id, .. } => Some(tool_call_id),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let mut messages = Vec::with_capacity(request.messages.len());
+    for message in &request.messages {
+        messages.push(message.clone());
+        let Some(ProviderTranscriptEvent::DeepSeekAssistantToolCall { tool_calls, .. }) =
+            ProviderTranscriptEvent::from_transcript_content(&message.content)
+        else {
+            continue;
+        };
+        for tool_call_id in tool_calls
+            .iter()
+            .filter_map(|tool_call| tool_call.get("id")?.as_str())
+            .filter(|tool_call_id| {
+                !tool_call_id.is_empty() && !completed_tool_call_ids.contains(*tool_call_id)
+            })
+        {
+            messages.push(ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::RuntimeHint,
+                placement: crate::ContextPlacement::EphemeralTail,
+                content: ProviderTranscriptEvent::DeepSeekToolResult {
+                    tool_call_id: tool_call_id.to_string(),
+                    content: "The prior tool call was rejected before Mezzanine could run its actions. Emit a new MAAP action batch if further work is needed.".to_string(),
+                }
+                .to_transcript_content(),
+            });
+        }
+    }
+    request.messages = messages.into();
 }
 
 /// Validates one parsed MAAP batch and derives its next controller decision.
@@ -749,6 +798,70 @@ mod tests {
             repair.messages.last().unwrap().placement,
             crate::ContextPlacement::EphemeralTail
         );
+    }
+
+    /// Verifies MAAP repair completes only orphaned DeepSeek native tool calls.
+    ///
+    /// DeepSeek rejects an assistant tool-call message without a matching tool
+    /// result, while duplicating a result for a completed call would also
+    /// corrupt transcript continuity. The repair request must add one
+    /// ephemeral result for the orphan and preserve the already paired call.
+    #[test]
+    fn maap_repair_completes_only_orphaned_deepseek_tool_calls() {
+        let paired_assistant = ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: String::new(),
+            reasoning_content: None,
+            tool_calls: vec![serde_json::json!({"id": "call_paired"})],
+        };
+        let orphaned_assistant = ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: String::new(),
+            reasoning_content: None,
+            tool_calls: vec![serde_json::json!({"id": "call_orphaned"})],
+        };
+        let paired_result = ProviderTranscriptEvent::DeepSeekToolResult {
+            tool_call_id: "call_paired".to_string(),
+            content: "completed".to_string(),
+        };
+        let mut original = request();
+        original.messages = vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: paired_assistant.to_transcript_content(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: paired_result.to_transcript_content(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
+                content: orphaned_assistant.to_transcript_content(),
+            },
+        ]
+        .into();
+
+        let repair = maap_repair_request(&original, "continuity rejected", "", 1);
+        let completed_ids = repair
+            .messages
+            .iter()
+            .filter_map(|message| {
+                ProviderTranscriptEvent::from_transcript_content(&message.content)
+            })
+            .filter_map(|event| match event {
+                ProviderTranscriptEvent::DeepSeekToolResult { tool_call_id, .. } => {
+                    Some(tool_call_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(completed_ids, vec!["call_paired", "call_orphaned"]);
+        assert_eq!(original.messages.len(), 3);
     }
 
     /// Capability extraction permits visible say output alongside one or more

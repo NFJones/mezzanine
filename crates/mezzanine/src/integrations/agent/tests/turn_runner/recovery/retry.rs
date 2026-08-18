@@ -101,6 +101,101 @@ fn turn_runner_retries_malformed_provider_maap_output() {
 }
 
 #[test]
+/// Verifies a provider rejection caused by incomplete native tool-call
+/// continuity enters the bounded MAAP repair flow rather than becoming a
+/// terminal provider failure.
+///
+/// DeepSeek reports this condition as an HTTP 400 invalid-state response, but
+/// the model can recover by emitting a corrected action batch after receiving
+/// the controller diagnostic. The repair request must retain that diagnostic
+/// ephemerally and the corrected execution must not persist it.
+fn turn_runner_retries_deepseek_missing_tool_result_continuity_error() {
+    let turn = turn();
+    let continuity_error = crate::MezError::invalid_state(
+        "DeepSeek Chat Completions API returned status 400: An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'. (insufficient tool messages following tool_calls message)",
+    );
+    let corrected = ModelResponse {
+        provider: "batch".to_string(),
+        model: "test".to_string(),
+        raw_text: "corrected DeepSeek continuity response".to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: Some(MaapBatch {
+            protocol: "maap/1".to_string(),
+            rationale: "test action batch rationale".to_string(),
+            thought: None,
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            actions: vec![say_action("say-1", "Corrected DeepSeek continuity.")],
+            final_turn: true,
+        }),
+        provider_transcript_events: Vec::new(),
+    };
+    let provider = SequencedProvider::new(vec![Err(continuity_error), Ok(corrected)]);
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &crate::security::permissions::ProductPermissionPlanning::new(
+            &policy, &approvals, None,
+        ),
+        subagent_scope: None,
+        subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "user".to_string(),
+                content: "reply".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].interaction_kind,
+        mez_agent::ModelInteractionKind::MaapRepair
+    );
+    assert!(requests[1].messages.iter().any(|message| {
+        message
+            .content
+            .contains("insufficient tool messages following tool_calls message")
+    }));
+    assert!(
+        execution
+            .request
+            .messages
+            .iter()
+            .all(|message| !message.content.contains("[MAAP repair state]")),
+        "{:?}",
+        execution.request.messages
+    );
+}
+
+#[test]
 /// Verifies a provider response with no parsed MAAP batch enters the same
 /// ephemeral repair flow as malformed provider-native MAAP output instead of
 /// becoming an immediate failed turn.
