@@ -304,6 +304,7 @@ pub fn validate_config_text(
         ConfigFormat::Json => extract_json_paths(text),
     };
     let values = extract_config_values(format, text);
+    diagnostics.extend(validate_agent_turn_timeout_config(format, text));
     diagnostics.extend(validate_group_whitelist_config(format, text));
     diagnostics.extend(validate_env_whitelist_config(format, text));
 
@@ -423,6 +424,7 @@ pub fn validate_config_text(
             || path == "agents.max_subagent_panes_per_window"
             || path == "agents.max_depth"
             || path == "agents.action_failure_retry_limit"
+            || path == "agents.turn_timeout_ms"
             || path == "agents.loop_limit"
         {
             if let Some(message) = validate_positive_usize_value(&value, &path) {
@@ -529,6 +531,28 @@ pub fn validate_config_text(
     diagnostics.sort_by(|left, right| left.path.cmp(&right.path));
     diagnostics.dedup();
     ConfigValidation::from_diagnostics(diagnostics)
+}
+
+/// Validates the agent-turn timeout with its structured scalar type intact.
+fn validate_agent_turn_timeout_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
+    let Ok(root) = parse_config_json_value(format, text) else {
+        return Vec::new();
+    };
+    let Some(value) = root
+        .get("agents")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|agents| agents.get("turn_timeout_ms"))
+    else {
+        return Vec::new();
+    };
+    if value.as_u64().is_some_and(|timeout_ms| timeout_ms > 0) {
+        Vec::new()
+    } else {
+        vec![ConfigDiagnostic {
+            path: "agents.turn_timeout_ms".to_string(),
+            message: "agents.turn_timeout_ms must be a positive integer".to_string(),
+        }]
+    }
 }
 
 /// Validates schema-v49 group whitelist names without consulting NSS.

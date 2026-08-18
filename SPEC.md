@@ -3020,7 +3020,7 @@ The `issues` table MUST support `enabled` and `database_path`.
 
 The `agents` table MUST support `default_provider`, `default_model_profile`,
 `active_turn_sleep_inhibition`, `shell_only`, `compaction_raw_retention_percent`, `routing`,
-`action_failure_retry_limit`, `loop_limit`,
+`action_failure_retry_limit`, `turn_timeout_ms`, `loop_limit`,
 `custom_system_prompt`, `default_personality`, `subagent_placement`,
 `max_concurrent_agents`, `max_queued_turns`, `max_queued_bytes`,
 `max_root_subagents`, `max_subagents_per_subagent`,
@@ -3057,6 +3057,10 @@ excluded from this bounded recovery budget and MAY be retried until they succeed
 or some other blocker ends the turn. Non-hunk `apply_patch` validation,
 transport, readiness, and precondition failures MUST remain bounded by the
 normal failed-action correction budget.
+`agents.turn_timeout_ms` MUST be a positive integer and MUST default to
+`1800000`. The runtime MUST snapshot this duration as an absolute
+millisecond-resolution deadline when each turn is created. Reloading the
+setting MUST affect only subsequently created turns.
 `agents.loop_limit` MUST be a positive integer and MUST default to `8`. It
 bounds the number of work iterations a single `/loop` command may run before
 Mezzanine stops automatic continuation and reports that the iteration limit was
@@ -4544,11 +4548,16 @@ a readiness probe times out while a shell action is pending, Mezzanine MUST
 fail that pending action as not sent to the pane rather than leaving the turn
 running. If a bootstrap probe times out, Mezzanine MUST clear the bootstrap
 attempt and mark readiness degraded instead of retrying the hidden wrapper
-indefinitely. Agent turns MUST have one turn-wide timeout that defaults to
-30 minutes. Shell actions MAY request a positive per-action timeout, and omitted
+indefinitely. Agent turns MUST have one turn-wide timeout configured by the
+positive integer `agents.turn_timeout_ms`, which MUST default to 1,800,000 ms
+(30 minutes). Mezzanine MUST snapshot the resulting absolute deadline when a
+turn is created, so configuration reloads affect only subsequently created
+turns. Shell actions MAY request a positive per-action timeout, and omitted
 values MUST inherit the remaining turn-wide timeout budget. The effective
 shell-action timeout MUST be bounded by that remaining turn-wide timeout budget,
-so no shell action can outlive its enclosing turn. Non-stateful shell
+so no shell action can outlive its enclosing turn. Expired turns MUST be
+rejected before provider or shell dispatch rather than represented as a
+minimum-duration shell transaction. Non-stateful shell
 transactions that wait for a deferred command payload receiver MUST also use a
 short implementation-defined start timeout as a handoff watchdog, not as the
 normal sequencing mechanism; if the receiver start marker is not observed before

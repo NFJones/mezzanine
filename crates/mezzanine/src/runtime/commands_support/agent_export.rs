@@ -228,6 +228,7 @@ fn runtime_idle_agent_context_dump_for_pane(
         pane_id: pane_id.to_string(),
         trigger: AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: current_unix_seconds().max(1),
+        deadline_at_unix_millis: 0,
         policy_profile: "runtime".to_string(),
         model_profile: model_profile_name,
         parent_turn_id: None,

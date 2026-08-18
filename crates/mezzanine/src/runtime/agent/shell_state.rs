@@ -159,6 +159,15 @@ impl RuntimeSessionService {
             timeout_ms,
             permission_evaluation,
         } = dispatch;
+        let effective_timeout_ms = mez_agent::agent_shell_timeout_ms(
+            turn.started_at_unix_seconds,
+            turn.deadline_at_unix_millis,
+            current_unix_millis(),
+            timeout_ms,
+        )
+        .ok_or_else(|| {
+            MezError::invalid_state("agent turn deadline expired before shell dispatch")
+        })?;
         let permission_policy = self.permission_policy_for_turn(turn);
         let policy_command = local_action_plan(action)?
             .ok_or_else(|| MezError::invalid_state("shell dispatch requires a local action plan"))?
@@ -493,11 +502,7 @@ impl RuntimeSessionService {
                 pane_id: turn.pane_id.clone(),
                 command: command.to_string(),
                 started_at_unix_ms: current_unix_millis(),
-                timeout_ms: Some(mez_agent::agent_shell_timeout_ms(
-                    turn.started_at_unix_seconds,
-                    current_unix_millis(),
-                    timeout_ms,
-                )),
+                timeout_ms: Some(effective_timeout_ms),
                 pending_input_payload: (!transaction_input.payload.is_empty()).then(|| {
                     mez_mux::process::ShellInputDelivery::receiver_acknowledged(
                         transaction_input.payload.into_bytes(),

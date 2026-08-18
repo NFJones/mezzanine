@@ -241,6 +241,7 @@ impl RuntimeSessionService {
                     pane_id: pane_id.clone(),
                     trigger: AgentTurnTrigger::ScheduledTask,
                     started_at_unix_seconds: restored_at,
+                    deadline_at_unix_millis: 0,
                     policy_profile: "agent-session-restore".to_string(),
                     model_profile: "default".to_string(),
                     parent_turn_id: None,

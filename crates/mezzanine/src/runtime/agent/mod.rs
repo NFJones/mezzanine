@@ -222,6 +222,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_loop_turns: BTreeMap<String, RuntimeAgentLoopTurn>,
     /// Per-signature correction retry limit for failed model actions.
     agent_action_failure_retry_limit: usize,
+    /// Total wall-clock budget snapshotted when each new agent turn is created.
+    agent_turn_timeout_ms: u64,
     /// Per-failure-signature correction attempts keyed by turn/signature.
     agent_turn_failure_feedback_attempts: BTreeMap<String, usize>,
     /// Output-limit recovery attempt currently shaping each active request.
@@ -484,6 +486,7 @@ impl RuntimeAgentComponent {
         agent_compaction_raw_retention_percent: usize,
         agent_loop_limit: usize,
         agent_action_failure_retry_limit: usize,
+        agent_turn_timeout_ms: u64,
     ) -> Self {
         Self {
             agent_routing,
@@ -491,6 +494,7 @@ impl RuntimeAgentComponent {
             agent_compaction_raw_retention_percent,
             agent_loop_limit,
             agent_action_failure_retry_limit,
+            agent_turn_timeout_ms,
             max_subagent_panes_per_window: DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
             max_root_subagents: DEFAULT_MAX_ROOT_SUBAGENTS,
             max_subagents_per_subagent: DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
@@ -1837,6 +1841,16 @@ impl RuntimeSessionService {
     /// Replaces the bounded model-correction retry limit.
     pub(crate) fn set_agent_action_failure_retry_limit(&mut self, limit: usize) {
         self.agent.agent_action_failure_retry_limit = limit;
+    }
+
+    /// Returns the total wall-clock budget snapshotted for each new turn.
+    pub(crate) fn agent_turn_timeout_ms(&self) -> u64 {
+        self.agent.agent_turn_timeout_ms.max(1)
+    }
+
+    /// Replaces the budget used when subsequently creating agent turns.
+    pub(crate) fn set_agent_turn_timeout_ms(&mut self, timeout_ms: u64) {
+        self.agent.agent_turn_timeout_ms = timeout_ms;
     }
 
     /// Returns the configured loop iteration limit.

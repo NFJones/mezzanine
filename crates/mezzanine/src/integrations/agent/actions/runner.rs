@@ -549,7 +549,22 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             progress,
             provider_interaction_index: std::sync::atomic::AtomicUsize::new(0),
         };
-        let limits = AgentTurnLimits::default();
+        let now_unix_millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0);
+        let timeout_ms = mez_agent::agent_turn_remaining_timeout_ms(
+            turn.started_at_unix_seconds,
+            turn.deadline_at_unix_millis,
+            now_unix_millis,
+        )
+        .ok_or_else(|| {
+            MezError::invalid_state("agent turn deadline expired before provider dispatch")
+        })?;
+        let limits = AgentTurnLimits {
+            timeout_ms,
+            ..AgentTurnLimits::default()
+        };
         let turn_id = turn.turn_id.clone();
         match tokio::time::timeout(
             std::time::Duration::from_millis(limits.timeout_ms),

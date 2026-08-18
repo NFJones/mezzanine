@@ -268,6 +268,7 @@ mod tests {
             pane_id: "%1".to_string(),
             trigger: AgentTurnTrigger::UserPrompt,
             started_at_unix_seconds: 1,
+            deadline_at_unix_millis: 0,
             policy_profile: "default".to_string(),
             model_profile: "default".to_string(),
             parent_turn_id: None,

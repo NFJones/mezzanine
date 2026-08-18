@@ -1260,6 +1260,8 @@ impl RuntimeSessionService {
             pane_id: pane_id.to_string(),
             trigger: mez_agent::AgentTurnTrigger::UserPrompt,
             started_at_unix_seconds: created_at_unix_seconds,
+            deadline_at_unix_millis: crate::runtime::current_unix_millis()
+                .saturating_add(self.agent_turn_timeout_ms()),
             policy_profile: "runtime".to_string(),
             model_profile: model_profile_name.clone(),
             parent_turn_id: None,

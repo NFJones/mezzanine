@@ -222,6 +222,37 @@ fn runtime_config_reload_applies_action_failure_retry_limit() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies runtime config reload changes the deadline used by future turns.
+///
+/// Existing turns retain their snapshotted absolute deadline in their turn
+/// record, while this live value supplies the duration for later turn creation.
+#[test]
+fn runtime_config_reload_applies_agent_turn_timeout() {
+    let mut service = test_runtime_service();
+    assert_eq!(
+        service.agent_turn_timeout_ms(),
+        mez_agent::DEFAULT_AGENT_TURN_TIMEOUT_MS
+    );
+    let root = temp_root("runtime-agent-turn-timeout");
+    let path = root.join("config.toml");
+    fs::write(&path, "[agents]\nturn_timeout_ms = 900000\n").unwrap();
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: fs::read_to_string(&path).unwrap(),
+        }])
+        .unwrap();
+
+    assert_eq!(service.agent_turn_timeout_ms(), 900_000);
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies always-exposed MCP server selection is replaced on config reload.
 ///
 /// The setting is live request policy, so removing a server from configuration

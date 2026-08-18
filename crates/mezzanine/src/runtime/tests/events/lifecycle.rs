@@ -937,6 +937,7 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
             pane_id: "%1".to_string(),
             trigger: mez_agent::AgentTurnTrigger::UserPrompt,
             started_at_unix_seconds: 200,
+            deadline_at_unix_millis: 0,
             policy_profile: "runtime".to_string(),
             model_profile: "default".to_string(),
             parent_turn_id: None,

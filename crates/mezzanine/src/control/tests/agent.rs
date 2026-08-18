@@ -490,6 +490,7 @@ fn agent_state_dispatch_persists_visibility_and_lists_turns() {
             pane_id: "%1".to_string(),
             trigger: mez_agent::AgentTurnTrigger::UserPrompt,
             started_at_unix_seconds: 42,
+            deadline_at_unix_millis: 0,
             policy_profile: "default".to_string(),
             model_profile: "default".to_string(),
             parent_turn_id: None,

@@ -50,6 +50,11 @@ pub struct AgentTurnRecord {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub started_at_unix_seconds: u64,
+    /// Absolute Unix-millisecond deadline snapshotted when this turn is created.
+    ///
+    /// A zero value is accepted for synthetic and compatibility records and
+    /// derives the historical default deadline from `started_at_unix_seconds`.
+    pub deadline_at_unix_millis: u64,
     /// Stores the policy profile value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

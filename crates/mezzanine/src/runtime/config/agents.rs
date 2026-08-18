@@ -17,7 +17,7 @@ use super::{
     runtime_config_permission_preset, runtime_cooperation_mode, runtime_json_bool,
     runtime_json_object, runtime_json_string, runtime_json_string_array, runtime_json_string_map,
 };
-use mez_agent::AutoSizingRoutingPolicy;
+use mez_agent::{AutoSizingRoutingPolicy, DEFAULT_AGENT_TURN_TIMEOUT_MS};
 
 /// User-selected policy for idle sleep inhibition during active agent turns.
 ///
@@ -158,6 +158,22 @@ pub(crate) fn runtime_agent_action_failure_retry_limit_from_config(root: &Value)
         "action_failure_retry_limit",
         DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
     )
+}
+
+/// Parses the total wall-clock deadline snapshotted for each new agent turn.
+pub(crate) fn runtime_agent_turn_timeout_ms_from_config(root: &Value) -> Result<u64> {
+    let Some(agents) = runtime_json_object(root, "agents") else {
+        return Ok(DEFAULT_AGENT_TURN_TIMEOUT_MS);
+    };
+    let Some(value) = agents.get("turn_timeout_ms") else {
+        return Ok(DEFAULT_AGENT_TURN_TIMEOUT_MS);
+    };
+    match value.as_u64() {
+        Some(timeout_ms) if timeout_ms > 0 => Ok(timeout_ms),
+        _ => Err(MezError::config(
+            "agents.turn_timeout_ms must be a positive integer",
+        )),
+    }
 }
 
 /// Parses the `/loop` work-iteration budget from `[agents]`.

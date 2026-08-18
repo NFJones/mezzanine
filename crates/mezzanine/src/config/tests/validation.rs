@@ -580,6 +580,27 @@ fn rejects_invalid_action_failure_retry_limit_values() {
     );
 }
 
+/// Verifies agent-turn deadlines reject zero and non-integer values.
+///
+/// A turn must always have a finite positive wall-clock budget so runtime
+/// adapters can distinguish an expired deadline from a dispatchable timeout.
+#[test]
+fn rejects_invalid_agent_turn_timeout_values() {
+    for value in ["0", "-1", "1.5", "\"1800000\""] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[agents]\nturn_timeout_ms = {value}\n"),
+            ConfigScope::Primary,
+        );
+
+        assert!(!validation.valid, "accepted timeout value {value}");
+        assert!(validation.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "agents.turn_timeout_ms"
+                && diagnostic.message.contains("positive integer")
+        }));
+    }
+}
+
 /// Verifies schema 20 rejects the removed implementation-pressure setting.
 ///
 /// Primary migration deletes the schema-19 key before validation. A document

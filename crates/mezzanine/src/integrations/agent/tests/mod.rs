@@ -443,6 +443,7 @@ fn turn() -> AgentTurnRecord {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or(0),
+        deadline_at_unix_millis: 0,
         policy_profile: "ask".to_string(),
         model_profile: "default".to_string(),
         parent_turn_id: None,

@@ -107,33 +107,49 @@ pub fn validate_mcp_execution_request(
     Ok(())
 }
 
-/// Returns the remaining turn-wide shell budget at one injected clock value.
+/// Returns the remaining turn-wide budget at one injected clock value.
 ///
-/// Synthetic turns use timestamps before 2000 in tests and compatibility
-/// fixtures. Treat those timestamps as having a fresh budget instead of
-/// immediately expiring them against the host clock.
-pub fn agent_turn_remaining_timeout_ms(started_at_unix_seconds: u64, now_unix_millis: u64) -> u64 {
-    if started_at_unix_seconds < 946_684_800 {
-        return DEFAULT_AGENT_TURN_TIMEOUT_MS;
+/// Zero deadlines retain compatibility with synthetic records by deriving the
+/// historical default from their start timestamp. Expired deadlines return
+/// `None` so adapters can reject work before dispatch.
+pub fn agent_turn_remaining_timeout_ms(
+    started_at_unix_seconds: u64,
+    deadline_at_unix_millis: u64,
+    now_unix_millis: u64,
+) -> Option<u64> {
+    if deadline_at_unix_millis == 0 && started_at_unix_seconds < 946_684_800 {
+        return Some(DEFAULT_AGENT_TURN_TIMEOUT_MS);
     }
-    let started_at_millis = started_at_unix_seconds.saturating_mul(1000);
-    let elapsed_millis = now_unix_millis.saturating_sub(started_at_millis);
-    DEFAULT_AGENT_TURN_TIMEOUT_MS
-        .saturating_sub(elapsed_millis)
-        .max(1)
+    let deadline = if deadline_at_unix_millis == 0 {
+        started_at_unix_seconds
+            .saturating_mul(1000)
+            .saturating_add(DEFAULT_AGENT_TURN_TIMEOUT_MS)
+    } else {
+        deadline_at_unix_millis
+    };
+    deadline
+        .checked_sub(now_unix_millis)
+        .filter(|remaining| *remaining > 0)
 }
 
 /// Bounds one model-authored shell timeout by the remaining turn-wide budget.
 pub fn agent_shell_timeout_ms(
     started_at_unix_seconds: u64,
+    deadline_at_unix_millis: u64,
     now_unix_millis: u64,
     requested_timeout_ms: Option<u64>,
-) -> u64 {
-    let remaining = agent_turn_remaining_timeout_ms(started_at_unix_seconds, now_unix_millis);
-    requested_timeout_ms
-        .map(|timeout_ms| timeout_ms.min(remaining))
-        .unwrap_or(remaining)
-        .max(1)
+) -> Option<u64> {
+    let remaining = agent_turn_remaining_timeout_ms(
+        started_at_unix_seconds,
+        deadline_at_unix_millis,
+        now_unix_millis,
+    )?;
+    Some(
+        requested_timeout_ms
+            .map(|timeout_ms| timeout_ms.min(remaining))
+            .unwrap_or(remaining)
+            .max(1),
+    )
 }
 
 /// Builds compact action-result content for a plain model-authored shell
@@ -565,6 +581,7 @@ mod tests {
             pane_id: "%1".to_string(),
             trigger: AgentTurnTrigger::UserPrompt,
             started_at_unix_seconds: 1,
+            deadline_at_unix_millis: 0,
             policy_profile: "default".to_string(),
             model_profile: "default".to_string(),
             parent_turn_id: None,
@@ -625,16 +642,21 @@ mod tests {
     #[test]
     fn shell_timeout_policy_bounds_requests_by_remaining_turn_budget() {
         assert_eq!(
-            agent_shell_timeout_ms(1, 2_000_000_000_000, None),
-            DEFAULT_AGENT_TURN_TIMEOUT_MS
+            agent_shell_timeout_ms(1, 0, 2_000_000_000_000, None),
+            Some(DEFAULT_AGENT_TURN_TIMEOUT_MS)
         );
         assert_eq!(
-            agent_shell_timeout_ms(2_000_000_000, 2_000_000_010_000, Some(2_000)),
-            2_000
+            agent_shell_timeout_ms(
+                2_000_000_000,
+                2_000_000_015_000,
+                2_000_000_010_000,
+                Some(2_000),
+            ),
+            Some(2_000)
         );
         assert_eq!(
-            agent_shell_timeout_ms(2_000_000_000, 2_001_800_000_000, None),
-            1
+            agent_shell_timeout_ms(2_000_000_000, 2_000_000_010_000, 2_000_000_010_000, None,),
+            None
         );
     }
 

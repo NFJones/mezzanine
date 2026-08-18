@@ -133,9 +133,11 @@ pub fn execute_local_action(
         .unwrap_or(0);
     let effective_timeout_ms = mez_agent::agent_shell_timeout_ms(
         turn.started_at_unix_seconds,
+        turn.deadline_at_unix_millis,
         now_unix_millis,
         plan.timeout_ms,
-    );
+    )
+    .ok_or_else(|| MezError::invalid_state("agent turn deadline expired before shell dispatch"))?;
     let transport = executor.transport();
     let request = LocalExecutionRequest {
         action_id: action.id.clone(),

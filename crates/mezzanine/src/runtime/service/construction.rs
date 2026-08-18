@@ -131,6 +131,7 @@ impl RuntimeSessionService {
                 DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
                 DEFAULT_AGENT_LOOP_LIMIT,
                 DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
+                mez_agent::DEFAULT_AGENT_TURN_TIMEOUT_MS,
             ),
             persistence: RuntimePersistenceComponent::default(),
             control: RuntimeControlComponent::new(control_idempotency, message_service, event_log),

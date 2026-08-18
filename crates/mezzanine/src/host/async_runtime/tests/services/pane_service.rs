@@ -1496,6 +1496,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             pane_id: task.pane_id.clone(),
             trigger: mez_agent::AgentTurnTrigger::UserPrompt,
             started_at_unix_seconds: 1,
+            deadline_at_unix_millis: 0,
             policy_profile: "default".to_string(),
             model_profile: "default".to_string(),
             parent_turn_id: None,

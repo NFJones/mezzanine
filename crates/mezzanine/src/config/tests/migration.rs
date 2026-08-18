@@ -2030,6 +2030,70 @@ fn migrates_schema_63_with_streaming_output_enabled() {
     }
 }
 
+/// Verifies schema v65 materializes the historical 30-minute agent-turn
+/// deadline in every supported format while retaining neighboring settings.
+#[test]
+fn migrates_schema_64_with_agent_turn_timeout() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 64\n[agents]\naction_failure_retry_limit = 2\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":64,"agents":{"action_failure_retry_limit":2}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 64\nagents:\n  action_failure_retry_limit: 2\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let values = extract_config_values(format, &plan.text);
+
+        assert_eq!(plan.from_version, 64);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            values.get("agents.turn_timeout_ms"),
+            Some(&"1800000".to_string())
+        );
+        assert_eq!(
+            values.get("agents.action_failure_retry_limit"),
+            Some(&"2".to_string())
+        );
+    }
+}
+
+/// Verifies schema v65 retains a timeout explicitly declared before the key
+/// became part of the schema instead of replacing user intent with the default.
+#[test]
+fn migrates_schema_64_without_overwriting_explicit_agent_turn_timeout() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 64\n[agents]\nturn_timeout_ms = 900000\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":64,"agents":{"turn_timeout_ms":900000}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 64\nagents:\n  turn_timeout_ms: 900000\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let values = extract_config_values(format, &plan.text);
+
+        assert_eq!(plan.from_version, 64);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            values.get("agents.turn_timeout_ms"),
+            Some(&"900000".to_string())
+        );
+    }
+}
+
 /// Verifies that config validation refuses documents written for a newer
 /// schema version than the running binary understands. This prevents older
 /// binaries from silently interpreting keys whose migration or meaning belongs

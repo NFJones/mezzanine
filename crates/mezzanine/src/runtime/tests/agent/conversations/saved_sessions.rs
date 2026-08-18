@@ -1073,6 +1073,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         pane_id: "%1".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 3,
+        deadline_at_unix_millis: 0,
         policy_profile: "runtime".to_string(),
         model_profile: "test".to_string(),
         parent_turn_id: None,

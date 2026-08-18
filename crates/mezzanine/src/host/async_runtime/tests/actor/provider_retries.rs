@@ -1075,6 +1075,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         pane_id: task.pane_id.clone(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 2,
+        deadline_at_unix_millis: 0,
         policy_profile: "default".to_string(),
         model_profile: "default".to_string(),
         parent_turn_id: None,

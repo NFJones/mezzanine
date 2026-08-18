@@ -122,7 +122,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 63
+version = 65
 
 # Process-wide runtime sizing. Changes require a restart.
 [runtime]
@@ -425,6 +425,8 @@ compaction_raw_retention_percent = 10
 routing = false
 # Maximum recovery attempts after action execution failures.
 action_failure_retry_limit = 5
+# Total wall-clock budget snapshotted for each new agent turn.
+turn_timeout_ms = 1800000
 # Default bounded iteration count used by /loop.
 loop_limit = 8
 # User-owned system prompt text appended to the built-in prompt.

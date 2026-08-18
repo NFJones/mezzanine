@@ -1122,6 +1122,7 @@ fn runtime_subagent_profile_preset_restricts_pane_override() {
         pane_id: "%2".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 1,
+        deadline_at_unix_millis: 0,
         policy_profile: "default".to_string(),
         model_profile: "default".to_string(),
         parent_turn_id: None,
