@@ -2489,7 +2489,18 @@ fn bash_private_receiver_transport(
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
-    let chunk_count = encoded.len().div_ceil(SHELL_WRAPPER_BASE64_LINE_BYTES);
+    // Frame boundaries are not necessarily aligned to the base64 line size, so
+    // the sum of per-frame chunk counts can exceed the whole-string ceiling.
+    // The BEGIN and END records must declare the emitted DATA record count.
+    let chunk_count = if parent_proof.is_some() {
+        encoded
+            .as_bytes()
+            .chunks(BASH_PRIVATE_SOURCE_FRAME_BYTES)
+            .map(|frame| frame.len().div_ceil(SHELL_WRAPPER_BASE64_LINE_BYTES))
+            .sum()
+    } else {
+        encoded.len().div_ceil(SHELL_WRAPPER_BASE64_LINE_BYTES)
+    };
     let record_version = if parent_proof.is_some() { "RX2" } else { "RX1" };
     let trigger = parent_proof.map_or_else(
         || {

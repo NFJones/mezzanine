@@ -182,6 +182,62 @@ mod tests {
         run_command_stdin(&mut command, script)
     }
 
+    /// Runs one dependency-free foreign loader exchange through a real shell.
+    ///
+    /// Dash script read-ahead consumes concatenated stdin records before the
+    /// loader child can read them, so this mirrors production ordering: the
+    /// rendezvous command is delivered alone and the payload is withheld until
+    /// the loader publishes its ready event on stdout.
+    fn run_foreign_loader_exchange(command: &str, payload: &str) -> Output {
+        let root = test_temp_dir("foreign-loader");
+        let stdout_path = root.join("stdout");
+        let stderr_path = root.join("stderr");
+        let mut child = Command::new("/bin/sh")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::from(std::fs::File::create(&stdout_path).unwrap()))
+            .stderr(Stdio::from(std::fs::File::create(&stderr_path).unwrap()))
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(command.as_bytes())
+            .unwrap();
+        let mut observed = false;
+        for _ in 0..300 {
+            if String::from_utf8_lossy(&std::fs::read(&stdout_path).unwrap_or_default())
+                .contains("mez_foreign_loader=ready")
+            {
+                observed = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        if !observed {
+            drop(child.stdin.take());
+            let _ = child.kill();
+            let _ = child.wait();
+            std::fs::remove_dir_all(&root).unwrap();
+            panic!("dependency-free loader ready event was not observed");
+        }
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .unwrap();
+        drop(child.stdin.take());
+        let status = child.wait().unwrap();
+        let output = Output {
+            status,
+            stdout: std::fs::read(&stdout_path).unwrap_or_default(),
+            stderr: std::fs::read(&stderr_path).unwrap_or_default(),
+        };
+        std::fs::remove_dir_all(&root).unwrap();
+        output
+    }
+
     /// Streams one transaction wrapper and payload through a POSIX shell.
     fn run_sh_transaction(input: &ShellTransactionInput, suffix: &str) -> Output {
         let mut command = Command::new("/bin/sh");
@@ -598,12 +654,69 @@ mod tests {
         assert!(!input.command.contains("dependency-free-loader-ok"));
         assert!(input.payload.lines().all(|line| line.len() <= 700));
 
-        let output = run_sh_stdin(&(input.command + &input.payload));
+        let output = run_foreign_loader_exchange(&input.command, &input.payload);
         assert!(output.status.success(), "{output:?}");
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("mez_foreign_loader=ready"), "{stdout:?}");
         assert!(stdout.contains("dependency-free-loader-ok"), "{stdout:?}");
         assert!(stdout.contains("mez_foreign_loader=exited"), "{stdout:?}");
+    }
+
+    /// Verifies multi-frame Bash RX2 transport declares the exact emitted
+    /// DATA record count.
+    ///
+    /// Frame boundaries need not align with the base64 line record size, so
+    /// each frame's record count rounds up independently. The admission and
+    /// END records must declare the sum of per-frame counts rather than the
+    /// whole-string ceiling, otherwise the receiver's chunk loop exits before
+    /// the final frame and misreads a frame header as the END record.
+    #[test]
+    fn bash_private_handoff_transport_declares_emitted_data_record_count() {
+        let token = marker();
+        let proof = MarkerToken::new("00112233445566778899aabbccddeeff")
+            .expect("the handoff proof should be valid");
+        let source = "# comment\n".repeat(64 * 1024);
+        let input =
+            bash_private_handoff_source_input(&source, &token, "multi-frame-accounting", &proof);
+        let declared_chunks: usize = input
+            .wrapper
+            .split_whitespace()
+            .nth(5)
+            .expect("the admission record should declare a chunk count")
+            .parse()
+            .expect("the declared chunk count should be numeric");
+        let frame_lines = input
+            .receiver_payload
+            .lines()
+            .filter(|line| line.starts_with("MEZ_BASH_RX2_FRAME "))
+            .collect::<Vec<_>>();
+        assert!(
+            frame_lines.len() >= 2,
+            "the probe source should span multiple frames"
+        );
+        let frame_chunk_sum: usize = frame_lines
+            .iter()
+            .map(|line| {
+                line.split_whitespace()
+                    .nth(6)
+                    .expect("a frame record should declare its chunk count")
+                    .parse::<usize>()
+                    .expect("the frame chunk count should be numeric")
+            })
+            .sum();
+        assert_eq!(
+            frame_chunk_sum, declared_chunks,
+            "per-frame accounting must match the admission record"
+        );
+        let data_records = input
+            .receiver_payload
+            .lines()
+            .filter(|line| line.starts_with("MEZ_BASH_RX2_DATA"))
+            .count();
+        assert_eq!(
+            data_records, declared_chunks,
+            "the admission record must match the emitted DATA records"
+        );
     }
 
     /// Shell transaction validation accepts strong markers and absolute

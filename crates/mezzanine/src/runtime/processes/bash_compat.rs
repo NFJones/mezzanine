@@ -552,6 +552,84 @@ mod tests {
         output
     }
 
+    /// Runs one dependency-free foreign loader exchange through real dash.
+    ///
+    /// Records are withheld until the prior phase publishes its event,
+    /// matching production ordering: loader payload after the ready event,
+    /// the prebuffered private trigger plus RX1 after child installation,
+    /// command payload after the transaction start marker, and `exit` after
+    /// parent completion.
+    fn run_dependency_free_loader_bash_exchange(
+        test_name: &str,
+        initial: &str,
+        stages: &[(&str, &str)],
+    ) -> std::process::Output {
+        let root = std::env::temp_dir().join(format!(
+            "mez-loader-{test_name}-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let home = root.join("home");
+        fs::create_dir_all(&home).unwrap();
+        let stdout_path = root.join("stdout");
+        let stderr_path = root.join("stderr");
+        let mut child = Command::new("/bin/sh")
+            .env("HOME", &home)
+            .env("HISTFILE", "/dev/null")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::from(fs::File::create(&stdout_path).unwrap()))
+            .stderr(Stdio::from(fs::File::create(&stderr_path).unwrap()))
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(initial.as_bytes())
+            .unwrap();
+        for (expected_event, staged_input) in stages {
+            let mut observed = false;
+            for _ in 0..300 {
+                let stdout = fs::read(&stdout_path).unwrap_or_default();
+                if String::from_utf8_lossy(&stdout).contains(expected_event) {
+                    observed = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            if !observed {
+                drop(child.stdin.take());
+                let _ = child.kill();
+                let status = child.wait().unwrap();
+                let stdout = fs::read(&stdout_path).unwrap_or_default();
+                let stderr = fs::read(&stderr_path).unwrap_or_default();
+                let _ = fs::remove_dir_all(&root);
+                panic!(
+                    "dependency-free loader event was not observed: event={expected_event:?} status={status:?} stdout={:?} stderr={:?}",
+                    String::from_utf8_lossy(&stdout),
+                    String::from_utf8_lossy(&stderr),
+                );
+            }
+            child
+                .stdin
+                .as_mut()
+                .unwrap()
+                .write_all(staged_input.as_bytes())
+                .unwrap();
+        }
+        drop(child.stdin.take());
+        let status = child.wait().unwrap();
+        let output = std::process::Output {
+            status,
+            stdout: fs::read(&stdout_path).unwrap_or_default(),
+            stderr: fs::read(&stderr_path).unwrap_or_default(),
+        };
+        fs::remove_dir_all(root).unwrap();
+        output
+    }
+
     /// Verifies the generated receiver binds its trigger in Readline's real vi
     /// insertion map so ordinary Bash startup does not emit a keymap diagnostic.
     #[test]
@@ -729,29 +807,19 @@ exit\n",
         .unwrap()
         .with_bash_receiver_token(child_token.clone())
         .render_for_classification_input(mez_agent::ShellClassification::Bash);
-        let input = format!(
-            "{}{}{}{}{}exit\n",
-            loader.command,
-            loader.payload,
-            bootstrap.wrapper,
-            bootstrap.receiver_payload,
-            bootstrap.payload
+        let start = format!("133;C;mez_marker={}", marker.as_str());
+        let parent_ready = format!("mez_event=parent-ready;mez_marker={}", marker.as_str());
+        let launch = format!("{}{}", bootstrap.wrapper, bootstrap.receiver_payload);
+        let output = run_dependency_free_loader_bash_exchange(
+            "real-managed-bash",
+            loader.command.as_str(),
+            &[
+                ("mez_foreign_loader=ready", loader.payload.as_str()),
+                ("mez_event=child-installed", launch.as_str()),
+                (start.as_str(), bootstrap.payload.as_str()),
+                (parent_ready.as_str(), "exit\n"),
+            ],
         );
-
-        let mut command = Command::new("/bin/sh");
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = command.spawn().unwrap();
-        child
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
-        drop(child.stdin.take());
-        let output = child.wait_with_output().unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -802,13 +870,19 @@ exit\n",
         );
         let transport =
             mez_agent::bash_private_handoff_source_input(&source, &token, marker, &proof);
-        let input = format!(
-            "{}{}printf '__MEZ_PARENT_AFTER_STAGING_FAILURE__\\n'\nexit\n",
-            transport.wrapper, transport.receiver_payload
+        let admitted = format!("mez_event=frame-admitted;mez_marker={marker}");
+        let parent_ready = format!("mez_event=parent-ready;mez_marker={marker}");
+        let output = run_managed_bash_receiver_exchange_after_events(
+            "foreign-staging-failure",
+            transport.wrapper.as_bytes(),
+            &[
+                (admitted.as_str(), transport.receiver_payload.as_bytes()),
+                (
+                    parent_ready.as_str(),
+                    b"printf '__MEZ_PARENT_AFTER_STAGING_FAILURE__\\n'\nexit\n",
+                ),
+            ],
         );
-
-        let output =
-            run_managed_bash_receiver_exchange("foreign-staging-failure", input.as_bytes());
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
