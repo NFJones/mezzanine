@@ -903,6 +903,30 @@ async fn async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_respo
         return;
     };
 
+    let fixture_root = std::env::temp_dir().join(format!(
+        "mez-async-fish-no-prompt-fixture-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&fixture_root).unwrap();
+    let fixture_fish = fixture_root.join("fish");
+    std::fs::write(
+        &fixture_fish,
+        format!(
+            "#!/bin/sh\nexec {} --no-config \"$@\"\n",
+            mez_agent::shell::shell_quote(fish)
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(&fixture_fish, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let executed_path = std::env::temp_dir().join(format!(
         "mez-async-fish-no-prompt-executed-{}-{}",
         std::process::id(),
@@ -922,7 +946,7 @@ async fn async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_respo
         "builtin printf '__MEZ_ASYNC_FISH_PARENT_RESPONSIVE__\\n'; command stty -a > {}\n",
         mez_agent::shell::fish_quote(executed_path.to_str().unwrap())
     );
-    let mut service = test_service_with_shell(fish);
+    let mut service = test_service_with_shell(fixture_fish.to_str().unwrap());
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();

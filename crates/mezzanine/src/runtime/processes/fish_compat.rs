@@ -333,6 +333,11 @@ mod tests {
         PaneProcess, PaneProcessEnvironment, ShellInputDelivery, pane_command_plan,
         spawn_pane_process,
     };
+    #[cfg(target_os = "macos")]
+    use mez_mux::process::{
+        ShellInputPacing, loader_input_record_requires_ack, receiver_input_record_requires_ack,
+        shell_input_record_requires_ack,
+    };
     use mez_mux::{Result, layout::Size};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
@@ -410,6 +415,20 @@ mod tests {
                     self.process
                         .write_input(record)
                         .expect("managed Fish shell record should remain writable");
+                    let requires_acknowledgement = match delivery.pacing {
+                        ShellInputPacing::GeneratedSource => {
+                            shell_input_record_requires_ack(record)
+                        }
+                        ShellInputPacing::ReceiverAcknowledged => {
+                            receiver_input_record_requires_ack(record)
+                        }
+                        ShellInputPacing::LoaderAcknowledged => {
+                            loader_input_record_requires_ack(record)
+                        }
+                    };
+                    if !requires_acknowledgement {
+                        continue;
+                    }
                     let deadline = Instant::now() + Duration::from_secs(5);
                     loop {
                         let record_output = self
@@ -748,7 +767,13 @@ mod tests {
         let marker = MarkerToken::new("00112233445566778899aabbccddeeff").unwrap();
         let child_token = MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap();
         let exit_marker = MarkerToken::new("abcdefabcdefabcdefabcdefabcdefab").unwrap();
-        let loader_marker = "fedcba9876543210fedcba9876543210";
+        let loader_marker = format!(
+            "{:032x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after the Unix epoch")
+                .as_nanos()
+        );
         let staging_source = agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
             &fish,
             ShellClassification::Fish,
@@ -766,7 +791,7 @@ mod tests {
             &fish,
             ShellClassification::Fish,
             Some(&child_token),
-            loader_marker,
+            &loader_marker,
         )
         .unwrap();
         let bootstrap = ShellTransaction::new(
@@ -792,13 +817,12 @@ mod tests {
         let mut output = read_fish_output_until(&mut process, |output| {
             String::from_utf8_lossy(output).contains("mez_foreign_loader=ready")
         });
-        process
-            .process
-            .write_shell_delivery(&ShellInputDelivery::loader_acknowledged(
+        output.extend(
+            process.write_shell_delivery(&ShellInputDelivery::loader_acknowledged(
                 loader.payload.into_bytes(),
                 marker.as_str(),
-            ))
-            .expect("the foreign loader payload should remain writable");
+            )),
+        );
         process.write_input(bootstrap.wrapper.as_bytes()).unwrap();
 
         let installed = format!(

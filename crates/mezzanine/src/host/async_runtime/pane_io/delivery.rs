@@ -363,13 +363,7 @@ mod tests {
             Ok(None)
         );
         assert_eq!(
-            record_wait(
-                &delivery,
-                b"MEZ_LOADER_END_marker\n",
-                false,
-                true,
-                true
-            ),
+            record_wait(&delivery, b"MEZ_LOADER_END_marker\n", false, true, true),
             Ok(Some(ShellInputProgressWait::Acknowledgement))
         );
     }

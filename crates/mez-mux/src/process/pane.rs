@@ -482,25 +482,22 @@ impl PaneProcess {
                 written = written.saturating_add(record_len);
                 if (receiver_acknowledged && receiver_input_record_requires_ack(record))
                     || (loader_acknowledged && loader_input_record_requires_ack(record))
-                    || (!receiver_acknowledged
-                        && !loader_acknowledged
-                        && written < input.len())
+                    || (!receiver_acknowledged && !loader_acknowledged && written < input.len())
                 {
-                    let acknowledged =
-                        if receiver_acknowledged
-                            || loader_acknowledged
-                            || shell_input_record_requires_ack(record)
-                        {
-                            self.wait_for_shell_input_ack_after(
-                                acknowledgement_count,
-                                PANE_INPUT_WRITE_STALL_TIMEOUT,
-                            )?
-                        } else {
-                            self.wait_for_output_activity_after(
-                                activity,
-                                PANE_INPUT_WRITE_STALL_TIMEOUT,
-                            )
-                        };
+                    let acknowledged = if receiver_acknowledged
+                        || loader_acknowledged
+                        || shell_input_record_requires_ack(record)
+                    {
+                        self.wait_for_shell_input_ack_after(
+                            acknowledgement_count,
+                            PANE_INPUT_WRITE_STALL_TIMEOUT,
+                        )?
+                    } else {
+                        self.wait_for_output_activity_after(
+                            activity,
+                            PANE_INPUT_WRITE_STALL_TIMEOUT,
+                        )
+                    };
                     if !acknowledged {
                         return Err(MezError::invalid_state(format!(
                             "pane shell input pacing timed out after {} ms: activity={} acknowledgements={} supported={} record={:?} backlog_tail={:?}",
