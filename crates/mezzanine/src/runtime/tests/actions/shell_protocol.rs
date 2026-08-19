@@ -1409,19 +1409,7 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
             b"fish_vi_key_bindings; printf '__MEZ_FISH_VI_READY__\\n'\n",
         )
         .unwrap();
-    for _ in 0..200 {
-        let _ = service.poll_pane_outputs(8192).unwrap();
-        if service
-            .process_pane_screen("%1")
-            .unwrap()
-            .normal_content_lines()
-            .join("\n")
-            .contains("__MEZ_FISH_VI_READY__")
-        {
-            break;
-        }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-    }
+    wait_for_managed_fish_command_prompt(&mut service, "%1", "__MEZ_FISH_VI_READY__");
     let discarded_path = root.join("discarded-fish-draft");
     let draft = format!(
         "command touch {}",
@@ -1631,19 +1619,7 @@ fn runtime_fish_dirty_prompt_exit_before_receiver_installation_discards_draft() 
             b"fish_vi_key_bindings; printf '__MEZ_FISH_EARLY_EXIT_READY__\\n'\n",
         )
         .unwrap();
-    for _ in 0..200 {
-        let _ = service.poll_pane_outputs(8192).unwrap();
-        if service
-            .process_pane_screen("%1")
-            .unwrap()
-            .normal_content_lines()
-            .join("\n")
-            .contains("__MEZ_FISH_EARLY_EXIT_READY__")
-        {
-            break;
-        }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-    }
+    wait_for_managed_fish_command_prompt(&mut service, "%1", "__MEZ_FISH_EARLY_EXIT_READY__");
 
     let discarded_path = root.join("discarded-fish-early-exit-draft");
     let draft = format!(
@@ -3151,6 +3127,58 @@ fn settle_initial_managed_fish_bootstrap(service: &mut RuntimeSessionService, pa
     }
     panic!(
         "initial managed Fish bootstrap did not settle after adapter availability; screen={}",
+        service
+            .process_pane_screen(pane_id)
+            .map(|screen| screen.normal_content_lines().join("\\n"))
+            .unwrap_or_else(|| "<missing>".to_string())
+    );
+}
+
+/// Waits for one managed-Fish setup command to finish at an authenticated,
+/// editable prompt before a test installs an unsubmitted command-line draft.
+///
+/// Visible command output can arrive before Fish publishes its prompt-end
+/// lifecycle event. Requiring settled readiness, environment authority, and
+/// shell transactions prevents the following draft from racing that event or
+/// being consumed by an identity probe intended for the private receiver.
+fn wait_for_managed_fish_command_prompt(
+    service: &mut RuntimeSessionService,
+    pane_id: &str,
+    output_marker: &str,
+) {
+    let mut observed_command_start = false;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        let read_limit = if observed_command_start { 8192 } else { 1 };
+        let _ = service.poll_pane_outputs(read_limit).unwrap();
+        observed_command_start |= service.pane_readiness_state(pane_id) == PaneReadinessState::Busy;
+        let screen = service
+            .process_pane_screen(pane_id)
+            .map(|screen| screen.normal_content_lines().join("\n"))
+            .unwrap_or_default();
+        let prompt_ready = matches!(
+            service.pane_readiness_state(pane_id),
+            PaneReadinessState::PromptCandidate | PaneReadinessState::Ready
+        );
+        let authority_settled = !matches!(
+            service.pane_environment_authority(pane_id),
+            crate::runtime::processes::RuntimePaneEnvironmentAuthority::Pending
+        );
+        if observed_command_start
+            && screen.contains(output_marker)
+            && prompt_ready
+            && authority_settled
+            && service.running_shell_transactions_for_tests().is_empty()
+        {
+            return;
+        }
+        wait_for_pane_process_activity(service, pane_id, Duration::from_millis(10));
+    }
+    panic!(
+        "managed Fish setup command did not settle at an editable prompt; marker={output_marker:?}; observed_command_start={observed_command_start}; authority={:?}; readiness={:?}; transactions={:?}; screen={}",
+        service.pane_environment_authority(pane_id),
+        service.pane_readiness_state(pane_id),
+        service.running_shell_transactions_for_tests(),
         service
             .process_pane_screen(pane_id)
             .map(|screen| screen.normal_content_lines().join("\\n"))
