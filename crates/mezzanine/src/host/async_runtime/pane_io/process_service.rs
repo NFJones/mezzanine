@@ -139,7 +139,25 @@ where
             }
         }
 
-        let effects = if pending_pane_io_side_effects.is_empty() {
+        let effects = if pending_shell_input.is_some() {
+            let actor_effects = if let Some(instance) = driver.process_instance().cloned() {
+                handle
+                    .drain_pane_process_io_side_effects(instance, config.drain_limit)
+                    .await?
+            } else {
+                handle
+                    .drain_pane_io_side_effects(driver.pane_id().to_string(), config.drain_limit)
+                    .await?
+            };
+            if actor_effects.is_empty() {
+                drain_pending_pane_io_side_effects(
+                    &mut pending_pane_io_side_effects,
+                    config.drain_limit,
+                )
+            } else {
+                actor_effects
+            }
+        } else if pending_pane_io_side_effects.is_empty() {
             if let Some(instance) = driver.process_instance().cloned() {
                 handle
                     .drain_pane_process_io_side_effects(instance, config.drain_limit)
@@ -189,7 +207,17 @@ where
                     ..
                 } | RuntimeSideEffect::TerminatePane { .. }
             );
-            if pending_shell_input.is_some() && !terminates_process {
+            let is_priority_terminal_response = matches!(
+                effect,
+                RuntimeSideEffect::PaneProcessIo {
+                    effect: super::PaneProcessIoEffect::WriteInputPriority { .. },
+                    ..
+                } | RuntimeSideEffect::WritePaneInputPriority { .. }
+            );
+            if pending_shell_input.is_some()
+                && !terminates_process
+                && !is_priority_terminal_response
+            {
                 pending_pane_io_side_effects.push_back(effect);
                 pending_pane_io_side_effects.extend(effects);
                 break;

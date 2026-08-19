@@ -655,6 +655,142 @@ mod tests {
     }
 
     #[test]
+    /// Verifies an unmanaged interactive Fish completes the full dependency-free
+    /// bootstrap after the identity probe and loader command are pipelined.
+    ///
+    /// This reproduces the production foreign-shell ordering through the
+    /// unmanaged parent, staged loader, managed child, and bootstrap receiver.
+    /// Reaching loader-ready alone is insufficient because the pane can still
+    /// remain in child bootstrapping if any later ownership boundary stalls.
+    fn dependency_free_foreign_fish_bootstrap_completes_after_pipelined_identity_probe() {
+        let Some(fish) = fish_path_for_tests() else {
+            eprintln!("skipping pipelined Fish loader assertion because Fish is unavailable");
+            return;
+        };
+        let identity_marker = "00112233445566778899aabbccddeeff";
+        let loader_marker = "0123456789abcdef0123456789abcdef";
+        let bootstrap_marker = MarkerToken::new("11223344556677889900aabbccddeeff").unwrap();
+        let child_token = MarkerToken::new("22334455667788990011aabbccddeeff").unwrap();
+        let exit_marker = MarkerToken::new("33445566778899001122aabbccddeeff").unwrap();
+        let identity = shell_identity_probe_command(
+            identity_marker,
+            "foreign-fish-identity-turn",
+            "foreign-fish-agent",
+            "foreign-fish-pane",
+        )
+        .unwrap();
+        let staging_source = agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
+            &fish,
+            ShellClassification::Fish,
+            None,
+            None,
+            None,
+            None,
+            Some((&child_token, bootstrap_marker.as_str())),
+            None,
+            Some(&exit_marker),
+        )
+        .unwrap();
+        let loader = dependency_free_foreign_shell_loader_input(
+            &staging_source,
+            &fish,
+            ShellClassification::Fish,
+            Some(&child_token),
+            loader_marker,
+        )
+        .unwrap();
+        let bootstrap = ShellTransaction::new(
+            bootstrap_marker.clone(),
+            "foreign-fish-bootstrap-turn",
+            "foreign-fish-agent",
+            "foreign-fish-pane",
+            &fish,
+            mez_agent::fish_bootstrap_script(),
+        )
+        .unwrap()
+        .with_payload_receiver_acknowledgements(cfg!(target_os = "macos"))
+        .render_for_classification_input(ShellClassification::Fish);
+        let input = format!("{identity}\n{}", loader.command);
+        let launch = PaneProcessLaunch::new(fish.clone())
+            .with_interactive_arguments([
+                "--no-config",
+                "--init-command",
+                "function fish_prompt; printf '__MEZ_FOREIGN_FISH_READY__>'; end",
+                "-i",
+            ])
+            .with_environment_variable("SHELL", fish.as_os_str());
+        let size = Size::new(80, 24).expect("the foreign Fish PTY size should be valid");
+        let process = spawn_pane_process(&launch, None, &test_environment(), size)
+            .expect("the foreign Fish pane should spawn");
+        let terminal = mez_terminal::TerminalScreen::new(size, 1_000)
+            .expect("the foreign Fish terminal screen should initialize");
+        let mut process = ManagedFishTestPane { process, terminal };
+        let mut output = read_fish_output_until(&mut process, |output| {
+            output
+                .windows(b"__MEZ_FOREIGN_FISH_READY__".len())
+                .any(|window| window == b"__MEZ_FOREIGN_FISH_READY__")
+        });
+
+        process
+            .process
+            .write_shell_delivery(&ShellInputDelivery::generated_source(input.into_bytes()))
+            .unwrap();
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(b"mez_foreign_loader=ready".len())
+                .any(|window| window == b"mez_foreign_loader=ready")
+        });
+        output.extend(
+            process.write_shell_delivery(&ShellInputDelivery::loader_acknowledged(
+                loader.payload.into_bytes(),
+                bootstrap_marker.as_str(),
+            )),
+        );
+        output.extend(process.write_shell_delivery(
+            &ShellInputDelivery::generated_source_for_transaction(
+                bootstrap.wrapper.into_bytes(),
+                bootstrap_marker.as_str(),
+            ),
+        ));
+        let installed = format!(
+            "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=child-installed;mez_marker={}",
+            child_token.as_str(),
+            bootstrap_marker.as_str()
+        );
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(installed.len())
+                .any(|window| window == installed.as_bytes())
+        });
+        let start = format!("\x1b]133;C;mez_marker={};", bootstrap_marker.as_str());
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(start.len())
+                .any(|window| window == start.as_bytes())
+        });
+        output.extend(
+            process.write_shell_delivery(&ShellInputDelivery::receiver_acknowledged(
+                bootstrap.payload.into_bytes(),
+                bootstrap_marker.as_str(),
+                bootstrap.payload_receiver_acknowledgements,
+            )),
+        );
+        let end = format!("\x1b]133;D;0;mez_marker={};", bootstrap_marker.as_str());
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(end.len())
+                .any(|window| window == end.as_bytes())
+        });
+        assert!(
+            String::from_utf8_lossy(&output).contains("bootstrap\tcomplete\t"),
+            "{:?}",
+            String::from_utf8_lossy(&output)
+        );
+
+        process.terminate(Duration::from_millis(100)).unwrap();
+    }
+
+    #[test]
     /// Verifies the persistent Fish child announces its authenticated semantic
     /// installation event from the first interactive prompt under real PTY semantics.
     ///

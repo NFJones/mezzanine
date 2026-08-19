@@ -883,6 +883,163 @@ async fn async_agent_subshell_bootstrap_certifies_with_fresh_worker_observation(
     actor_exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies the production async owner certifies Fish when it is an
+/// uninstrumented foreign child of the configured parent shell.
+///
+/// Component tests can reach loader-ready and the managed child prompt without
+/// proving that async foreground observation, transaction delivery, and final
+/// environment certification clear the pane's bootstrap gate. The pane must
+/// leave bootstrapping while the managed foreign child remains active.
+#[tokio::test(flavor = "current_thread")]
+async fn async_foreign_fish_child_clears_bootstrap_pending() {
+    let Some(fish) = [
+        "/usr/bin/fish",
+        "/usr/local/bin/fish",
+        "/opt/homebrew/bin/fish",
+    ]
+    .into_iter()
+    .find(|path| Path::new(path).is_file()) else {
+        eprintln!("skipping async foreign Fish bootstrap because fish is unavailable");
+        return;
+    };
+    let parent_shell = if Path::new("/bin/bash").is_file() {
+        "/bin/bash"
+    } else {
+        "/bin/sh"
+    };
+    let mut service = test_service_with_shell(parent_shell);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let parent_environment = mez_agent::EnvironmentSignature::new(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        None,
+        "foreign-fish-parent",
+        "test-user",
+        None,
+        parent_shell,
+        if parent_shell.ends_with("bash") {
+            mez_agent::ShellClassification::Bash
+        } else {
+            mez_agent::ShellClassification::PosixSh
+        },
+        None,
+        Some("/usr/bin:/bin".to_string()),
+        "/tmp",
+        None,
+        false,
+        None,
+        Vec::new(),
+    )
+    .unwrap();
+    service.set_pane_environment_signature_for_tests("%1", parent_environment);
+    service.set_pane_readiness("%1", mez_agent::PaneReadinessState::Ready);
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: 512,
+            ..AsyncRuntimeActorConfig::default()
+        })
+        .build()
+        .unwrap();
+    let pane_worker_handle = handle.clone();
+    let client_handle = handle.clone();
+    let pane_worker_done = StdArc::new(AtomicBool::new(false));
+    let pane_worker_stop = StdArc::clone(&pane_worker_done);
+
+    let pane_worker = async move {
+        run_async_pane_process_supervisor_service(
+            pane_worker_handle,
+            AsyncPaneProcessSupervisorServiceConfig {
+                max_polls: u64::MAX,
+                take_limit: 8,
+                idle_interval: Duration::from_millis(1),
+                pane_service: AsyncPaneProcessServiceConfig {
+                    max_polls: u64::MAX,
+                    output_drain_limit: 4,
+                    drain_limit: 8,
+                    idle_interval: Duration::from_millis(1),
+                    foreground_metadata_interval: Duration::from_millis(10),
+                },
+            },
+            move |_, state| {
+                pane_worker_stop.load(Ordering::SeqCst)
+                    || matches!(state, RuntimeLifecycleState::Stopping)
+            },
+        )
+        .await
+    };
+
+    let client = async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let launch = format!("{} --no-config -i\n", mez_agent::shell::shell_quote(fish));
+        client_handle
+            .write_input_to_pane(primary.clone(), "%1", launch.into_bytes())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        client_handle
+            .execute_terminal_command(primary, "agent-shell".to_string())
+            .await
+            .unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let (child_active, bootstrap_pending, _) = client_handle
+                .managed_shell_lifecycle_state("%1")
+                .await
+                .unwrap();
+            if child_active && !bootstrap_pending {
+                pane_worker_done.store(true, Ordering::SeqCst);
+                let lifecycle = client_handle.shutdown().await.unwrap();
+                break (lifecycle, child_active, bootstrap_pending);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                pane_worker_done.store(true, Ordering::SeqCst);
+                let lifecycle = client_handle.shutdown().await.unwrap();
+                break (lifecycle, child_active, bootstrap_pending);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+
+    let ((lifecycle, child_active, bootstrap_pending), supervisor, mut actor_exit) =
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let (client, worker, actor) = tokio::join!(client, pane_worker, actor.run());
+            (client, worker, actor)
+        })
+        .await
+        .expect("foreign Fish bootstrap should not hang");
+    assert_eq!(lifecycle, RuntimeLifecycleState::Running);
+    if let Err(error) = supervisor {
+        assert!(
+            matches!(
+                error.message(),
+                "async runtime session actor is closed"
+                    | "async runtime session actor reply was dropped"
+            ),
+            "pane supervisor failed before actor shutdown: {error}"
+        );
+    }
+    assert!(
+        child_active && !bootstrap_pending,
+        "foreign Fish did not clear bootstrap pending: active={child_active} bootstrap_pending={bootstrap_pending} phase={:?} readiness={:?} foreground={:?} transactions={:?} screen={:?}",
+        actor_exit
+            .service
+            .foreign_shell_bootstrap_phase_for_tests("%1"),
+        actor_exit.service.pane_readiness_state("%1"),
+        actor_exit.service.pane_foreground_process_diagnostic("%1"),
+        actor_exit.service.running_shell_transactions_for_tests(),
+        actor_exit
+            .service
+            .pane_screen("%1")
+            .map(|screen| screen.normal_content_lines().join("\n"))
+    );
+    assert!(!actor_exit.service.pane_bootstrap_is_pending_for_tests("%1"));
+    actor_exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a managed Fish pane remains responsive when agent mode is entered
 /// with an unsubmitted draft and exited before any agent prompt is submitted.
 ///
