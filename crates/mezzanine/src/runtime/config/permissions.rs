@@ -45,8 +45,21 @@ impl Default for ConfiguredPermissions {
         Self {
             authorization: PermissionPolicy::default(),
             resources: ResourceAuthorityConfig::default(),
-            sandbox: SandboxConfig::PolicyOnly,
+            sandbox: default_sandbox_config(),
         }
+    }
+}
+
+/// Selects the supported built-in confinement backend for this platform.
+///
+/// Bubblewrap is the default on Linux, where the runtime supports its launch
+/// contract. Other platforms retain policy-only execution until they provide
+/// an equivalent OS-level backend.
+fn default_sandbox_config() -> SandboxConfig {
+    if cfg!(target_os = "linux") {
+        SandboxConfig::default_bubblewrap()
+    } else {
+        SandboxConfig::PolicyOnly
     }
 }
 
@@ -480,15 +493,7 @@ pub(crate) fn runtime_configured_permissions_from_config(
 ) -> Result<ConfiguredPermissions> {
     let mut policy = PermissionPolicy::default();
     let Some(permissions) = runtime_json_object(root, "permissions") else {
-        return Ok(ConfiguredPermissions {
-            authorization: policy,
-            resources: ResourceAuthorityConfig {
-                read_scopes: Vec::new(),
-                write_scopes: Vec::new(),
-                network_policy: NetworkPolicy::Prompt,
-            },
-            sandbox: SandboxConfig::PolicyOnly,
-        });
+        return Ok(ConfiguredPermissions::default());
     };
     if let Some(preset) = runtime_json_string(permissions.get("preset")) {
         policy.preset = runtime_config_permission_preset(preset)?;
@@ -530,9 +535,10 @@ pub(crate) fn runtime_configured_permissions_from_config(
             "allow" => NetworkPolicy::Allow,
             _ => return Err(MezError::config("unsupported permissions.network_policy")),
         };
-    let sandbox = match runtime_json_string(permissions.get("sandbox")).unwrap_or("policy-only") {
-        "policy-only" => SandboxConfig::PolicyOnly,
-        "bubblewrap" => {
+    let sandbox = match runtime_json_string(permissions.get("sandbox")) {
+        None => default_sandbox_config(),
+        Some("policy-only") => SandboxConfig::PolicyOnly,
+        Some("bubblewrap") => {
             let bubblewrap = permissions.get("bubblewrap").and_then(Value::as_object);
             let executable = bubblewrap
                 .and_then(|config| runtime_json_string(config.get("executable")))
@@ -624,7 +630,7 @@ pub(crate) fn runtime_configured_permissions_from_config(
                 git_user_email,
             })
         }
-        _ => return Err(MezError::config("unsupported permissions.sandbox backend")),
+        Some(_) => return Err(MezError::config("unsupported permissions.sandbox backend")),
     };
 
     Ok(ConfiguredPermissions {

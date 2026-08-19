@@ -1240,6 +1240,17 @@ fn restored_pane_prompt_actor_fixture() -> (RuntimeSessionService, ClientId, Str
         1,
     )
     .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "restored-prompt-pane-shell".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nshell_mode = \"pane\"\n[permissions]\nsandbox = \"policy-only\"\n"
+                .to_string(),
+        }])
+        .unwrap();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();

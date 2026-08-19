@@ -56,17 +56,17 @@ pub(crate) fn runtime_active_turn_sleep_inhibition_from_config(
 
 /// Execution mode for agent shell commands in local-shell panes.
 ///
-/// Pane mode delivers actions through the pane's interactive shell; native
-/// mode spawns a fresh shell process derived from pane root-process metadata
-/// and never writes to or reads from the pane PTY.
+/// Native mode spawns a fresh shell process derived from pane root-process
+/// metadata and never writes to or reads from the pane PTY. Pane mode delivers
+/// actions through the pane's interactive shell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum ShellMode {
-    /// Execute actions through the active pane shell.
-    #[default]
-    Pane,
     /// Execute actions in a spawned shell process inferred from the pane
     /// root process.
+    #[default]
     Native,
+    /// Execute actions through the active pane shell.
+    Pane,
 }
 
 impl ShellMode {
@@ -82,10 +82,10 @@ impl ShellMode {
 /// Parses the user-controlled agent shell execution mode.
 pub(crate) fn runtime_shell_mode_from_config(root: &Value) -> Result<ShellMode> {
     let Some(agents) = runtime_json_object(root, "agents") else {
-        return Ok(ShellMode::Pane);
+        return Ok(ShellMode::Native);
     };
     let Some(value) = agents.get("shell_mode") else {
-        return Ok(ShellMode::Pane);
+        return Ok(ShellMode::Native);
     };
     match runtime_json_string(Some(value)) {
         Some("pane") => Ok(ShellMode::Pane),

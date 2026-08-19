@@ -59,6 +59,34 @@ fn default_config_disables_active_turn_sleep_inhibition() {
     );
 }
 
+/// Verifies generated configuration selects native shell execution and
+/// platform-appropriate sandbox confinement for first-run users.
+#[test]
+fn initial_config_uses_native_shell_and_platform_sandbox_defaults() {
+    let parsed: toml::Value = toml::from_str(&initial_config_toml().unwrap()).unwrap();
+    let agents = parsed
+        .get("agents")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+    let permissions = parsed
+        .get("permissions")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    assert_eq!(
+        agents.get("shell_mode").and_then(toml::Value::as_str),
+        Some("native")
+    );
+    assert_eq!(
+        permissions.get("sandbox").and_then(toml::Value::as_str),
+        Some(if cfg!(target_os = "linux") {
+            "bubblewrap"
+        } else {
+            "policy-only"
+        })
+    );
+}
+
 /// Verifies the first-run configuration does not retain references to model
 /// profiles that are deliberately withheld until provider authentication.
 ///
@@ -174,6 +202,14 @@ fn rejects_ambiguous_primary_config_files() {
 fn default_config_matches_documented_example() {
     let documented = include_str!("../../../../../docs/examples/config.toml");
 
+    let documented = documented.replace(
+        "sandbox = \"bubblewrap\"",
+        if cfg!(target_os = "linux") {
+            "sandbox = \"bubblewrap\""
+        } else {
+            "sandbox = \"policy-only\""
+        },
+    );
     assert_eq!(initial_config_toml().unwrap().trim(), documented.trim());
 }
 

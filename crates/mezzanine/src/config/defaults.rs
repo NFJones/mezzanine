@@ -40,6 +40,21 @@ pub(crate) fn initial_config_toml() -> crate::error::Result<String> {
     ] {
         auto_sizing.insert(key, toml_edit::value("default"));
     }
+    let sandbox = root
+        .get_mut("permissions")
+        .and_then(toml_edit::Item::as_table_mut)
+        .and_then(|permissions| permissions.get_mut("sandbox"))
+        .and_then(toml_edit::Item::as_value_mut)
+        .ok_or_else(|| {
+            crate::error::MezError::config(
+                "built-in default config is missing `permissions.sandbox`",
+            )
+        })?;
+    *sandbox = toml_edit::Value::from(if cfg!(target_os = "linux") {
+        "bubblewrap"
+    } else {
+        "policy-only"
+    });
     Ok(document.to_string())
 }
 
@@ -427,10 +442,10 @@ routing = false
 action_failure_retry_limit = 5
 # Total wall-clock budget snapshotted for each new agent turn.
 turn_timeout_ms = 1800000
-# Agent shell command execution mode. `pane` executes commands through the
-# pane shell; `native` spawns a fresh shell process inferred from the pane
-# root process without touching the pane PTY.
-shell_mode = "pane"
+# Agent shell command execution mode. `native` spawns a fresh shell process
+# inferred from the pane root process without touching the pane PTY; `pane`
+# executes commands through the pane shell.
+shell_mode = "native"
 # Default bounded iteration count used by /loop.
 loop_limit = 8
 # User-owned system prompt text appended to the built-in prompt.
@@ -766,9 +781,9 @@ allowed_reasoning_efforts = ["high"]
 approval_policy = "ask"
 # Optional named permission preset applied before explicit settings.
 # preset = "default"
-# policy-only performs approval classification and auditing but provides no OS
-# filesystem or shell-network confinement. Select bubblewrap for enforcement.
-sandbox = "policy-only"
+# Linux uses Bubblewrap by default for OS-level confinement. Other platforms
+# use policy-only execution until they provide an equivalent sandbox backend.
+sandbox = "bubblewrap"
 # Scope paths may name files or directories. A Unix-domain socket may also be
 # placed in read_scopes for an explicitly trusted service endpoint; a read-only
 # mount does not make requests sent through that socket read-only.

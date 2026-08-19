@@ -10,12 +10,14 @@ pub(super) fn test_service() -> RuntimeSessionService {
     );
     let size = Size::new(80, 24).unwrap();
     let session = Session::new_default(shell, size);
-    RuntimeSessionService::new(
-        session,
-        PathBuf::from("/tmp/mez-async-runtime-test.sock"),
-        1,
+    legacy_test_service(
+        RuntimeSessionService::new(
+            session,
+            PathBuf::from("/tmp/mez-async-runtime-test.sock"),
+            1,
+        )
+        .unwrap(),
     )
-    .unwrap()
 }
 
 /// Builds the shared async runtime fixture with an explicit shell executable.
@@ -23,12 +25,31 @@ pub(super) fn test_service_with_shell(shell_path: &str) -> RuntimeSessionService
     let shell = resolve_shell(Some(OsString::from(shell_path))).unwrap();
     let size = Size::new(80, 24).unwrap();
     let session = Session::new_default(shell, size);
-    RuntimeSessionService::new(
-        session,
-        PathBuf::from("/tmp/mez-async-runtime-test.sock"),
-        1,
+    legacy_test_service(
+        RuntimeSessionService::new(
+            session,
+            PathBuf::from("/tmp/mez-async-runtime-test.sock"),
+            1,
+        )
+        .unwrap(),
     )
-    .unwrap()
+}
+
+/// Applies legacy pane-shell and policy-only defaults to shared tests whose
+/// scenarios exercise transport behavior rather than production default selection.
+fn legacy_test_service(mut service: RuntimeSessionService) -> RuntimeSessionService {
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "async-test-fixture".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nshell_mode = \"pane\"\n[permissions]\nsandbox = \"policy-only\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    service
 }
 
 /// Returns the Unix permission mode for a test path without file type bits.

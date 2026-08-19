@@ -293,6 +293,16 @@ fn native_shell_provider_execution(
 #[tokio::test(flavor = "current_thread")]
 async fn async_native_shell_worker_keeps_runtime_actor_responsive() {
     let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "native-worker-liveness".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[permissions]\nsandbox = \"policy-only\"\n".to_string(),
+        }])
+        .unwrap();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();

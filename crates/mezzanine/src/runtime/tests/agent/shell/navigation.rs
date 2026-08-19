@@ -918,6 +918,7 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
         1024,
     )
     .unwrap();
+    configure_pane_shell_protocol_fixture(&mut service);
     *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -1123,6 +1124,7 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
         1024,
     )
     .unwrap();
+    configure_pane_shell_protocol_fixture(&mut service);
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();

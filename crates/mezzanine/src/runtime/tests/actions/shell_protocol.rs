@@ -1293,6 +1293,7 @@ fn runtime_bash_dirty_prompt_survives_agent_subshell_admission() {
         1024,
     )
     .unwrap();
+    configure_pane_shell_protocol_fixture(&mut service);
     *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -1395,6 +1396,7 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
         1024,
     )
     .unwrap();
+    configure_pane_shell_protocol_fixture(&mut service);
     *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -1605,6 +1607,7 @@ fn runtime_fish_dirty_prompt_exit_before_receiver_installation_discards_draft() 
         1024,
     )
     .unwrap();
+    configure_pane_shell_protocol_fixture(&mut service);
     *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -1915,6 +1918,7 @@ fn runtime_posix_dirty_prompt_is_interrupted_before_agent_admission() {
         1024,
     )
     .unwrap();
+    configure_pane_shell_protocol_fixture(&mut service);
     *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -2025,6 +2029,7 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
         1024,
     )
     .unwrap();
+    configure_pane_shell_protocol_fixture(&mut service);
     *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -2145,6 +2150,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
         1024,
     )
     .unwrap();
+    configure_pane_shell_protocol_fixture(&mut service);
     *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)

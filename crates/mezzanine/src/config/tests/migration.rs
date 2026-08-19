@@ -2094,7 +2094,7 @@ fn migrates_schema_64_without_overwriting_explicit_agent_turn_timeout() {
     }
 }
 
-/// Verifies schema v66 materializes the default pane shell execution mode in
+/// Verifies schema v66 materializes the default native shell execution mode in
 /// every supported format while retaining neighboring settings.
 #[test]
 fn migrates_schema_65_with_agent_shell_mode() {
@@ -2117,7 +2117,7 @@ fn migrates_schema_65_with_agent_shell_mode() {
 
         assert_eq!(plan.from_version, 65);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("agents.shell_mode"), Some(&"pane".to_string()));
+        assert_eq!(values.get("agents.shell_mode"), Some(&"native".to_string()));
         assert_eq!(
             values.get("agents.action_failure_retry_limit"),
             Some(&"2".to_string())

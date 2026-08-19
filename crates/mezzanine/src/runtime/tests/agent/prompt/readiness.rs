@@ -25,6 +25,7 @@ fn runtime_service_restarts_restored_panes_without_assuming_prompt_readiness() {
         1024,
     )
     .unwrap();
+    configure_pane_shell_protocol_fixture(&mut service);
 
     let starts = service
         .restart_restored_pane_processes(Some("sleep 30"))

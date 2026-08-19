@@ -118,6 +118,24 @@ fn runtime_allows_bubblewrap_without_explicit_scopes() {
     assert!(matches!(configured.sandbox, SandboxConfig::Bubblewrap(_)));
 }
 
+/// Verifies omitted sandbox configuration selects Bubblewrap only on Linux
+/// while explicit policy-only configuration remains an available override.
+#[test]
+fn runtime_uses_platform_sandbox_default_when_omitted() {
+    let configured = runtime_configured_permissions_from_config(&serde_json::json!({})).unwrap();
+    if cfg!(target_os = "linux") {
+        assert!(matches!(configured.sandbox, SandboxConfig::Bubblewrap(_)));
+    } else {
+        assert!(matches!(configured.sandbox, SandboxConfig::PolicyOnly));
+    }
+
+    let explicit = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {"sandbox": "policy-only"}
+    }))
+    .unwrap();
+    assert!(matches!(explicit.sandbox, SandboxConfig::PolicyOnly));
+}
+
 /// Verifies live config application adds user skill and macro directories to
 /// sandbox authority without replacing explicitly configured resource scopes.
 #[test]

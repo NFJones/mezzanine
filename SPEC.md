@@ -3061,9 +3061,8 @@ normal failed-action correction budget.
 `1800000`. The runtime MUST snapshot this duration as an absolute
 millisecond-resolution deadline when each turn is created. Reloading the
 setting MUST affect only subsequently created turns.
-`agents.shell_mode` MUST default to `pane` and MUST accept only `pane` or
-`native`. `pane` dispatches agent shell actions through the pane's interactive
-shell. `native` executes agent shell actions in a freshly spawned shell
+`agents.shell_mode` MUST default to `native` and MUST accept only `pane` or
+`native`. `native` executes agent shell actions in a freshly spawned shell
 process whose path, environment, and working directory are inferred from the
 pane's root process; native execution MUST NOT write to or read from the pane
 PTY and MUST NOT run any command through the pane shell to enable or perform
@@ -3289,8 +3288,7 @@ non-actionable empty state.
 The `permissions` table MUST support `approval_policy`, `sandbox`,
 `read_scopes`, `write_scopes`, `command_rules`, `session_command_rules`, `global_command_rules`,
 `network_policy`, `destructive_action_policy`, `bypass_mode`, and the typed
-`bubblewrap` table. `sandbox` MUST default to `policy-only`; `bubblewrap` MUST
-be opt-in and fail closed. Policy-only execution provides approval
+`bubblewrap` table. `sandbox` MUST default to fail-closed `bubblewrap` on Linux and `policy-only` on other platforms. Policy-only execution provides approval
 classification and auditing, not operating-system filesystem or shell-network
 confinement. Under policy-only execution, configured and subagent scopes are
 advisory approval and coordination metadata. When Bubblewrap is active,

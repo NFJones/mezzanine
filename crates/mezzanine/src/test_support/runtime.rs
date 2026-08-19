@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
 use crate::host::shell::{ResolvedShell, ShellSource};
 use crate::host::terminal::HostClipboard;
 use crate::runtime::RuntimeSessionService;
@@ -96,6 +97,17 @@ impl RuntimeServiceFixture {
         )
         .unwrap();
         service.set_host_clipboard_for_tests(HostClipboard::disabled());
+        service
+            .replace_config_layers(vec![ConfigLayer {
+                name: "test-fixture".to_string(),
+                path: None,
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: "[agents]\nshell_mode = \"pane\"\n[permissions]\nsandbox = \"policy-only\"\n"
+                    .to_string(),
+            }])
+            .unwrap();
         service
     }
 }

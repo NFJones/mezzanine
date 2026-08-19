@@ -383,6 +383,25 @@ fn test_runtime_service_with_size(size: Size) -> RuntimeSessionService {
     RuntimeServiceFixture::new().size(size).build()
 }
 
+/// Configures direct runtime fixtures for pane-shell protocol scenarios.
+///
+/// Production defaults use native transport and platform-specific sandboxing;
+/// tests that assert pane bootstrap and parent-shell behavior select their
+/// required legacy execution boundary explicitly.
+fn configure_pane_shell_protocol_fixture(service: &mut RuntimeSessionService) {
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "pane-shell-protocol-fixture".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nshell_mode = \"pane\"\n[permissions]\nsandbox = \"policy-only\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+}
+
 /// Resolves a bash binary for tests that need to exercise interactive bash
 /// parent-shell behavior rather than the fallback POSIX shell.
 fn bash_path_for_tests() -> Option<PathBuf> {

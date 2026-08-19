@@ -417,6 +417,9 @@ fn runtime_configured_input_cap_compacts_before_provider_claim() {
             text: r#"[agents]
 default_provider = "runtime-batch"
 default_model_profile = "configured-input-cap-test"
+shell_mode = "pane"
+[permissions]
+sandbox = "policy-only"
 [providers.runtime-batch]
 kind = "openai"
 models = ["test"]
@@ -592,6 +595,9 @@ fn runtime_configured_input_cap_fails_without_compactable_context() {
             text: r#"[agents]
 default_provider = "runtime-batch"
 default_model_profile = "configured-input-cap-protected-only"
+shell_mode = "pane"
+[permissions]
+sandbox = "policy-only"
 [providers.runtime-batch]
 kind = "openai"
 models = ["test"]

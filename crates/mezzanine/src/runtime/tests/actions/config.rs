@@ -886,6 +886,10 @@ fn runtime_config_change_duplicate_waits_for_sibling_shell_action() {
     let config_root = temp_root("runtime-agent-config-change-mixed-loop-guard");
     service.set_config_root(config_root.clone());
     service.start_initial_pane_process(None).unwrap();
+    service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Pane));
+    service
+        .integration
+        .set_pane_sandbox_override("%1", Some(crate::runtime::SandboxConfig::PolicyOnly));
     mark_test_pane_ready(&mut service, "%1");
     service
         .agent_shell_store_mut()
