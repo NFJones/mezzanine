@@ -191,6 +191,52 @@ fn command_overlay_wrapping_preserves_split_selection_and_style_ranges() {
     );
 }
 
+/// Verifies a selectable styled label remains at its row-local origin after
+/// preceding soft wraps consume spaces that are absent from physical rows.
+#[cfg(test)]
+#[test]
+fn command_overlay_wrapping_accounts_for_consumed_spaces_in_ranges() {
+    let rendition = mez_terminal::GraphicRendition {
+        bold: true,
+        ..mez_terminal::GraphicRendition::default()
+    };
+    let content = RuntimeCommandDisplayOverlayContent {
+        command: Some("open-link".to_string()),
+        lines: vec!["alpha beta gamma".to_string()],
+        line_style_spans: vec![vec![TerminalStyleSpan {
+            start: 11,
+            length: 5,
+            rendition,
+        }]],
+        line_kinds: vec![RichTextLineKind::Normal],
+        line_copy_texts: vec![Some("alpha beta [gamma](target)".to_string())],
+        selections: vec![OverlaySelection {
+            logical_id: 9,
+            line_index: 0,
+            start_column: 11,
+            width: 5,
+            command: "/open-link target".to_string(),
+            kind: OverlaySelectionKind::Primary,
+        }],
+    };
+
+    let wrapped = wrap_runtime_command_display_overlay_content(content, 6, 6);
+
+    assert_eq!(wrapped.lines, ["alpha", "beta", "gamma"]);
+    assert_eq!(wrapped.selections.len(), 1, "{wrapped:?}");
+    assert_eq!(wrapped.selections[0].line_index, 2);
+    assert_eq!(wrapped.selections[0].start_column, 0);
+    assert_eq!(wrapped.selections[0].width, 5);
+    assert_eq!(
+        wrapped.line_style_spans[2],
+        [TerminalStyleSpan {
+            start: 0,
+            length: 5,
+            rendition,
+        }]
+    );
+}
+
 /// One rendered command-overlay display line with selectable choices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeDisplayLine {

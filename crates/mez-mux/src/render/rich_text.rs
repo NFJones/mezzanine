@@ -307,8 +307,9 @@ fn wrap_rich_text_line_to_width_with_overflow_policy(
             source_end_column: segment.end_column,
             display_prefix_width,
         });
+        display_start =
+            display_start.saturating_add(terminal_text_width(&remaining[..segment.bytes_consumed]));
         remaining = &remaining[segment.bytes_consumed..];
-        display_start = segment.end_column;
         first = false;
     }
     if wrapped.is_empty() {
@@ -2522,6 +2523,64 @@ mod tests {
             wrapped[1].copy_text.as_deref(),
             Some(COPY_WRAP_CONTINUATION)
         );
+    }
+
+    /// Verifies consumed soft-wrap spaces advance source coordinates so
+    /// styles on later link-like labels remain aligned after repeated wraps.
+    #[test]
+    fn rich_text_wrapping_accounts_for_consumed_spaces_in_style_ranges() {
+        let rendition = GraphicRendition {
+            bold: true,
+            underline: true,
+            ..GraphicRendition::default()
+        };
+        let line = RichTextLine {
+            display: "alpha beta gamma".to_string(),
+            style_spans: vec![
+                TerminalStyleSpan {
+                    start: 0,
+                    length: 5,
+                    rendition,
+                },
+                TerminalStyleSpan {
+                    start: 6,
+                    length: 4,
+                    rendition,
+                },
+                TerminalStyleSpan {
+                    start: 11,
+                    length: 5,
+                    rendition,
+                },
+            ],
+            copy_text: None,
+            kind: RichTextLineKind::Normal,
+        };
+
+        let wrapped = wrap_rich_text_line_to_width_with_source_ranges(line, 6);
+
+        assert_eq!(
+            wrapped
+                .iter()
+                .map(|row| row.line.display.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "beta", "gamma"]
+        );
+        assert_eq!(
+            wrapped
+                .iter()
+                .map(|row| (row.source_start_column, row.source_end_column))
+                .collect::<Vec<_>>(),
+            [(0, 5), (6, 10), (11, 16)]
+        );
+        assert!(wrapped.iter().all(|row| {
+            row.line.style_spans
+                == vec![TerminalStyleSpan {
+                    start: 0,
+                    length: terminal_text_width(row.line.display.as_str()),
+                    rendition,
+                }]
+        }));
     }
 
     /// Verifies a long breakable Unicode line advances monotonically through
