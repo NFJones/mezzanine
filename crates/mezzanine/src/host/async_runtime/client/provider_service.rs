@@ -515,6 +515,19 @@ async fn execute_native_shell_action(
             }
         }
     };
+    let final_output_preview = { progress_receiver.borrow_and_update().clone() };
+    if let Some(output_preview) = final_output_preview {
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::NativeShellProgress(
+            crate::runtime::RuntimeNativeShellProgress {
+                turn_id: progress_turn_id,
+                action_id: progress_action_id,
+                marker: progress_marker,
+                output_preview,
+            },
+        ));
+        let _ = handle.submit_runtime_events(batch).await;
+    }
     let outcome = match joined {
         Ok(outcome) => outcome,
         Err(error) => RuntimeNativeShellOutcome {

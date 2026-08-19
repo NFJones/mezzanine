@@ -327,6 +327,14 @@ impl RuntimeSessionService {
         let shell_output = postprocess_local_shell_output(&action, shell_output);
         let combined_output = format!("{}{}", shell_output.stdout, shell_output.stderr);
 
+        if matches!(action.payload, AgentActionPayload::ShellCommand { .. }) {
+            let lines = latest_agent_shell_transaction_output_lines(
+                &combined_output,
+                self.terminal_shell_output_preview_lines(),
+            );
+            self.append_agent_shell_output_status_lines_to_terminal_buffer(&turn.pane_id, &lines)?;
+        }
+
         self.integration
             .runtime_metrics_mut()
             .record_shell_transaction_completion(

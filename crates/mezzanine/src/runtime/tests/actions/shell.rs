@@ -534,7 +534,7 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Print native progress".to_string(),
                         command:
-                            "printf 'native-live-first\\n'; sleep 1; printf 'native-live-last\\n'"
+                            "printf \"%s%s\\n\" \"native-live-\" \"first\"; sleep 1; printf \"%s%s\\n\" \"native-live-\" \"last\""
                                 .to_string(),
                         interactive: false,
                         stateful: false,
@@ -628,6 +628,7 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         .normal_content_lines()
         .join("\n");
     assert!(pane_text.contains("native-live-first"), "{pane_text}");
+    assert!(pane_text.contains("native-live-last"), "{pane_text}");
     service.terminate_all_pane_processes().unwrap();
 }
 
