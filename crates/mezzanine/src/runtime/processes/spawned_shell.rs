@@ -46,6 +46,28 @@ const SPAWNED_CHILD_READER_SHUTDOWN_GRACE: Duration = Duration::from_millis(100)
 /// Maximum cumulative output retained for transient native-shell progress.
 const SPAWNED_CHILD_PROGRESS_PREVIEW_LIMIT: usize = 256 * 1024;
 
+/// Creates a status pipe whose original descriptors never leak through exec.
+///
+/// Darwin does not implement `pipe2`, so Rustix intentionally does not expose
+/// `pipe_with` there. Set `FD_CLOEXEC` on both ends after creating the POSIX
+/// pipe; the child pre-exec hook duplicates the writer to its requested status
+/// descriptor and explicitly clears that duplicate's close-on-exec flag.
+fn status_pipe() -> Result<(OwnedFd, OwnedFd)> {
+    let (reader, writer) = rustix::pipe::pipe().map_err(|error| {
+        MezError::invalid_state(format!(
+            "spawned shell execution could not create its status pipe: {error}"
+        ))
+    })?;
+    for descriptor in [&reader, &writer] {
+        rustix::io::fcntl_setfd(descriptor, rustix::io::FdFlags::CLOEXEC).map_err(|error| {
+            MezError::invalid_state(format!(
+                "spawned shell execution could not set close-on-exec on its status pipe: {error}"
+            ))
+        })?;
+    }
+    Ok((reader, writer))
+}
+
 /// Shared latest-value relay used by stdout and stderr reader threads.
 #[derive(Clone)]
 struct SpawnedChildProgressReporter {
@@ -222,12 +244,7 @@ impl SpawnedShellExecutor {
             .as_ref()
             .and_then(|launch| launch.status_fd)
         {
-            let (reader, writer) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
-                .map_err(|error| {
-                    MezError::invalid_state(format!(
-                        "spawned shell execution could not create its status pipe: {error}"
-                    ))
-                })?;
+            let (reader, writer) = status_pipe()?;
             let writer_fd = writer.as_raw_fd();
             let target_fd = i32::from(status_fd);
             // SAFETY: the closure performs only async-signal-safe descriptor

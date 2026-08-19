@@ -133,10 +133,11 @@ pub fn process_executable_path_for_pid(_pid: u32) -> Option<PathBuf> {
     None
 }
 
-/// Maximum raw bytes accepted from a process environment source.
+/// Maximum raw bytes accepted from a Linux procfs environment source.
 ///
 /// Real process environments are far smaller; the cap bounds host reads so a
 /// misbehaving or exotic process cannot drive unbounded allocation.
+#[cfg(target_os = "linux")]
 const PROCESS_ENVIRONMENT_READ_CAP: u64 = 1024 * 1024;
 
 /// Returns the procfs exec-time environment for `pid` when available.
@@ -343,14 +344,15 @@ pub fn process_credentials_for_pid(pid: u32) -> Option<ProcessCredentials> {
     use std::mem::{MaybeUninit, size_of};
 
     let pid = libc::c_int::try_from(pid).ok()?;
-    let mut info = MaybeUninit::<libc::proc_bsdshortinfo>::zeroed();
-    let info_size = libc::c_int::try_from(size_of::<libc::proc_bsdshortinfo>()).ok()?;
-    // SAFETY: libproc receives a correctly sized writable structure. The
-    // structure is initialized only when the call reports the complete size.
+    let mut info = MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let info_size = libc::c_int::try_from(size_of::<libc::proc_bsdinfo>()).ok()?;
+    // SAFETY: libproc receives a correctly sized writable full BSD-info
+    // structure. The structure is initialized only when the call reports the
+    // complete size.
     let length = unsafe {
         libc::proc_pidinfo(
             pid,
-            libc::PROC_PIDT_SHORTBSDINFO,
+            libc::PROC_PIDTBSDINFO,
             0,
             info.as_mut_ptr().cast(),
             info_size,
@@ -361,8 +363,8 @@ pub fn process_credentials_for_pid(pid: u32) -> Option<ProcessCredentials> {
     }
     // SAFETY: the exact structure size was initialized successfully above.
     let info = unsafe { info.assume_init() };
-    let user_id = info.pbsi_uid;
-    let primary_group_id = info.pbsi_gid;
+    let user_id = info.pbi_uid;
+    let primary_group_id = info.pbi_gid;
     // Darwin cannot enumerate another process's supplementary groups, so
     // reuse the mez process groups only when the target shares its identity.
     // SAFETY: geteuid reports the mez process effective user ID.

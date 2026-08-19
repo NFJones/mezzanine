@@ -5,9 +5,10 @@ use super::pane::{
     shell_input_acknowledgement_count,
 };
 use super::process_metadata::{
-    parse_environment_bytes, parse_macos_environment_bytes, process_environment_for_pid,
-    process_executable_path_for_pid,
+    parse_environment_bytes, parse_macos_environment_bytes, process_credentials_for_pid,
 };
+#[cfg(target_os = "linux")]
+use super::process_metadata::{process_environment_for_pid, process_executable_path_for_pid};
 use super::{
     PaneProcessEnvironment, PaneProcessLaunch, PaneProcessManager, pane_command_plan,
     shell_command_from_argv, spawn_pane_process, spawn_pane_process_with_start_directory,
@@ -740,4 +741,26 @@ fn linux_executable_reader_reports_own_process_path() {
     let path = process_executable_path_for_pid(std::process::id())
         .expect("own executable readable on Linux");
     assert!(path.is_absolute());
+}
+
+/// Verifies the native credential reader reports the current process identity.
+///
+/// Native Bubblewrap dispatch derives the pane root process's effective UID
+/// and primary GID through this boundary. Reading the test process provides a
+/// portable live-kernel regression for both the procfs and Darwin libproc
+/// implementations without relying on an external process's visibility.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn native_credential_reader_reports_own_process_identity() {
+    let credentials = process_credentials_for_pid(std::process::id())
+        .expect("own process credentials are readable on supported hosts");
+
+    assert_eq!(credentials.user_id, unsafe { libc::geteuid() });
+    assert_eq!(credentials.primary_group_id, unsafe { libc::getegid() });
+    assert!(
+        !credentials
+            .supplementary_group_ids
+            .contains(&credentials.primary_group_id),
+        "the primary group must not be duplicated among supplementary groups"
+    );
 }
