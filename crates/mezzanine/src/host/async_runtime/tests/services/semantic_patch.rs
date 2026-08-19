@@ -220,21 +220,27 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
         let expected_tail = b"MEZ_LARGE_PATCH_NEW\n";
         let settled = loop {
             let mut tail = vec![0; expected_tail.len()];
-            let mut target_file = std::fs::File::open(&client_target).unwrap();
-            let target_len = target_file.metadata().unwrap().len();
-            std::io::Seek::seek(
-                &mut target_file,
-                std::io::SeekFrom::Start(target_len - expected_tail.len() as u64),
-            )
-            .unwrap();
-            std::io::Read::read_exact(&mut target_file, &mut tail).unwrap();
+            let tail_matches = std::fs::File::open(&client_target)
+                .and_then(|mut target_file| {
+                    let target_len = target_file.metadata()?.len();
+                    if target_len < expected_tail.len() as u64 {
+                        return Ok(false);
+                    }
+                    std::io::Seek::seek(
+                        &mut target_file,
+                        std::io::SeekFrom::Start(target_len - expected_tail.len() as u64),
+                    )?;
+                    std::io::Read::read_exact(&mut target_file, &mut tail)?;
+                    Ok(tail == expected_tail)
+                })
+                .unwrap_or(false);
             let continuation_queued = client_handle
                 .pending_agent_provider_tasks()
                 .await
                 .unwrap()
                 .into_iter()
                 .any(|pending| pending.turn_id == "turn-1");
-            if tail == expected_tail && continuation_queued {
+            if tail_matches && continuation_queued {
                 break true;
             }
             if tokio::time::Instant::now() >= deadline {

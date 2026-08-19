@@ -817,15 +817,22 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_live_parent_cursor() {
     service.start_initial_pane_process(None).unwrap();
     wait_until_primary_shell_foreground(&mut service, "%1");
     service
-        .write_input_to_pane(&primary, Some("%1"), b"PS1='parent$ '; export PS1\n")
+        .write_input_to_pane(
+            &primary,
+            Some("%1"),
+            b"PS1='parent$ '; export PS1; printf '__MEZ_PARENT_CURSOR_READY__\\n'\n",
+        )
         .unwrap();
     let prompt_column = "parent$ ".chars().count();
     let mut initial_screen = String::new();
     for _ in 0..200 {
         let _ = service.poll_pane_outputs(8192).unwrap();
-        let screen = service.pane_screen("%1").unwrap();
-        initial_screen = screen.visible_lines().join("\n");
-        if initial_screen.contains("parent$") && screen.cursor_state().column == prompt_column {
+        let screen = service.process_pane_screen("%1").unwrap();
+        initial_screen = screen.normal_content_lines().join("\n");
+        if initial_screen.contains("__MEZ_PARENT_CURSOR_READY__")
+            && initial_screen.contains("parent$")
+            && screen.cursor_state().column == prompt_column
+        {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
@@ -1072,7 +1079,8 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
         .unwrap();
     assert!(show_again.contains("visibility=visible"), "{show_again}");
     let mut reentry_completed = false;
-    for _ in 0..500 {
+    let reentry_deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < reentry_deadline {
         let _ = service.poll_pane_outputs(8192).unwrap();
         if service.agent_subshell_is_active("%1")
             && service.pane_environment_signature("%1").is_some()

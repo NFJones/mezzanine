@@ -845,10 +845,15 @@ exit\n",
             .split("mez_event=child-installed")
             .next()
             .expect("loader ready output must precede child installation");
+        let expected_loader_acknowledgements = if cfg!(target_os = "macos") {
+            loader.payload.lines().count()
+        } else {
+            1
+        };
         assert_eq!(
             loader_output.bytes().filter(|byte| *byte == 0x1e).count(),
-            1,
-            "the loader must acknowledge only its terminating record: {loader_output:?}"
+            expected_loader_acknowledgements,
+            "the loader acknowledgement count must match the host PTY policy: {loader_output:?}"
         );
     }
 

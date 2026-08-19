@@ -39,7 +39,7 @@ pub(super) const DEFAULT_OUTPUT_BACKLOG_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 /// The runtime uses pane input for agent-owned shell transactions. If the PTY
 /// stops accepting bytes, the caller needs a bounded error instead of blocking
 /// before shell-transaction timeout bookkeeping can run.
-const PANE_INPUT_WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(10);
+const PANE_INPUT_WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// Maximum pane input bytes written in one PTY write attempt.
 ///
 /// PTYs are interactive streams, not bulk pipes. Keeping every physical write
@@ -84,27 +84,28 @@ pub fn receiver_input_record_requires_ack(record: &[u8]) -> bool {
 /// Reports whether one dependency-free loader record requires acknowledgement.
 ///
 /// Loader data records are bounded physical terminal lines but are consumed by
-/// an already-running POSIX reader rather than an interactive editor. Waiting
-/// for every raw base64 line serializes the transfer over SSH. The loader's
-/// marker-correlated terminator is the sole acknowledgement boundary.
+/// an already-running POSIX reader rather than an interactive editor. Linux
+/// streams those records and acknowledges only the marker-correlated terminator.
+/// Darwin acknowledges every record after the reader consumes it because PTY
+/// echo does not prove that the constrained typeahead buffer has drained.
 #[doc(hidden)]
 pub fn loader_input_record_requires_ack(record: &[u8]) -> bool {
-    record.starts_with(b"MEZ_LOADER_END_")
+    cfg!(target_os = "macos") || record.starts_with(b"MEZ_LOADER_END_")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Verifies synchronous pane-input writes allow ten seconds of stalled PTY
+    /// Verifies synchronous pane-input writes allow thirty seconds of stalled PTY
     /// progress before surfacing a bounded failure.
     ///
     /// Agent shell transactions can need several seconds to drain large
     /// generated wrappers through slower remotes, but they still must not hang
     /// indefinitely when the PTY stops accepting input.
     #[test]
-    fn sync_pane_input_write_timeout_is_ten_seconds() {
-        assert_eq!(PANE_INPUT_WRITE_STALL_TIMEOUT, Duration::from_secs(10));
+    fn sync_pane_input_write_timeout_is_thirty_seconds() {
+        assert_eq!(PANE_INPUT_WRITE_STALL_TIMEOUT, Duration::from_secs(30));
     }
 
     /// Verifies only the canonical generated Fish receiver trigger waits for
@@ -166,11 +167,14 @@ mod tests {
         ));
     }
 
-    /// Verifies loader base64 records stream while its terminating marker
-    /// remains an explicit bounded acknowledgement point.
+    /// Verifies Linux streams loader data while Darwin explicitly acknowledges
+    /// every consumed record to protect its constrained PTY typeahead buffer.
     #[test]
-    fn loader_acknowledges_only_its_terminating_record() {
-        assert!(!loader_input_record_requires_ack(b"cGF5bG9hZA==\n"));
+    fn loader_acknowledgement_policy_matches_host_pty_requirements() {
+        assert_eq!(
+            loader_input_record_requires_ack(b"cGF5bG9hZA==\n"),
+            cfg!(target_os = "macos")
+        );
         assert!(loader_input_record_requires_ack(
             b"MEZ_LOADER_END_0123456789abcdef0123456789abcdef\n"
         ));
@@ -480,12 +484,16 @@ impl PaneProcess {
                 let acknowledgement_count = self.shell_input_acknowledgements_seen;
                 self.write_input(record)?;
                 written = written.saturating_add(record_len);
-                if (receiver_acknowledged && receiver_input_record_requires_ack(record))
-                    || (loader_acknowledged && loader_input_record_requires_ack(record))
+                let receiver_record_acknowledged =
+                    receiver_acknowledged && receiver_input_record_requires_ack(record);
+                let loader_record_acknowledged =
+                    loader_acknowledged && loader_input_record_requires_ack(record);
+                if receiver_record_acknowledged
+                    || loader_record_acknowledged
                     || (!receiver_acknowledged && !loader_acknowledged && written < input.len())
                 {
-                    let acknowledged = if receiver_acknowledged
-                        || loader_acknowledged
+                    let acknowledged = if receiver_record_acknowledged
+                        || loader_record_acknowledged
                         || shell_input_record_requires_ack(record)
                     {
                         self.wait_for_shell_input_ack_after(

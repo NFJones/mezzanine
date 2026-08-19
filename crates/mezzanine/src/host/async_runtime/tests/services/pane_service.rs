@@ -1057,7 +1057,7 @@ async fn async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_respo
             .await
             .unwrap();
         assert_eq!(hidden.mux_actions_applied, 1);
-        let restoration_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let restoration_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
             let (child_active, bootstrap_pending, restoration_pending) = client_handle
                 .managed_shell_lifecycle_state("%1")
@@ -1107,7 +1107,7 @@ async fn async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_respo
     };
 
     let (lifecycle, supervisor, mut actor_exit) =
-        tokio::time::timeout(Duration::from_secs(15), async {
+        tokio::time::timeout(Duration::from_secs(45), async {
             let (client, worker, actor) = tokio::join!(client, pane_worker, actor.run());
             (client, worker, actor)
         })
@@ -1165,6 +1165,30 @@ async fn async_zsh_dirty_draft_no_prompt_exit_discards_draft_and_restores_respon
         return;
     };
 
+    let fixture_root = std::env::temp_dir().join(format!(
+        "mez-async-zsh-no-prompt-fixture-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&fixture_root).unwrap();
+    let fixture_zsh = fixture_root.join("zsh");
+    std::fs::write(
+        &fixture_zsh,
+        format!(
+            "#!/bin/sh\nexec {} -d \"$@\"\n",
+            mez_agent::shell::shell_quote(zsh)
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(&fixture_zsh, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let executed_path = std::env::temp_dir().join(format!(
         "mez-async-zsh-no-prompt-executed-{}-{}",
         std::process::id(),
@@ -1184,7 +1208,7 @@ async fn async_zsh_dirty_draft_no_prompt_exit_discards_draft_and_restores_respon
         "print -r -- __MEZ_ASYNC_ZSH_PARENT_RESPONSIVE__; command stty -a > {}\n",
         mez_agent::shell::shell_quote(executed_path.to_str().unwrap())
     );
-    let mut service = test_service_with_shell(zsh);
+    let mut service = test_service_with_shell(fixture_zsh.to_str().unwrap());
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
@@ -1223,14 +1247,21 @@ async fn async_zsh_dirty_draft_no_prompt_exit_discards_draft_and_restores_respon
 
     let client = async move {
         let admission_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while !client_handle
-            .managed_zsh_admission_ready("%1")
-            .await
-            .unwrap()
-        {
+        loop {
+            let admission_ready = client_handle
+                .managed_zsh_admission_ready("%1")
+                .await
+                .unwrap();
+            let (_, bootstrap_pending, restoration_pending) = client_handle
+                .managed_shell_lifecycle_state("%1")
+                .await
+                .unwrap();
+            if admission_ready && !bootstrap_pending && !restoration_pending {
+                break;
+            }
             assert!(
                 tokio::time::Instant::now() < admission_deadline,
-                "managed Zsh adapter did not become ready before dirty-draft entry"
+                "managed Zsh adapter and initial bootstrap did not settle before dirty-draft entry: admission_ready={admission_ready} bootstrap_pending={bootstrap_pending} restoration_pending={restoration_pending}"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -1347,7 +1378,7 @@ async fn async_zsh_dirty_draft_no_prompt_exit_discards_draft_and_restores_respon
             .await
             .unwrap();
         assert_eq!(hidden.mux_actions_applied, 1);
-        let restoration_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let restoration_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
             let (child_active, bootstrap_pending, restoration_pending) = client_handle
                 .managed_shell_lifecycle_state("%1")
@@ -1393,7 +1424,7 @@ async fn async_zsh_dirty_draft_no_prompt_exit_discards_draft_and_restores_respon
     };
 
     let (lifecycle, supervisor, mut actor_exit) =
-        tokio::time::timeout(Duration::from_secs(15), async {
+        tokio::time::timeout(Duration::from_secs(60), async {
             let (client, worker, actor) = tokio::join!(client, pane_worker, actor.run());
             (client, worker, actor)
         })
@@ -1432,6 +1463,7 @@ async fn async_zsh_dirty_draft_no_prompt_exit_discards_draft_and_restores_respon
     );
     actor_exit.service.terminate_all_pane_processes().unwrap();
     std::fs::remove_file(executed_path).unwrap();
+    std::fs::remove_dir_all(fixture_root).unwrap();
 }
 
 /// Verifies that the async-owned pane path keeps the pane shell alive after the

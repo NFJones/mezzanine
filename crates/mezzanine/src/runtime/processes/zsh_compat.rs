@@ -144,6 +144,7 @@ typeset -g __MEZ_ZSH_RESTORE_MARKER=
 typeset -gi __MEZ_ZSH_RESTORE_STATUS=1
 typeset -g __MEZ_ZSH_RESTORE_OUTCOME=frame-rejected
 typeset -gi __MEZ_ZSH_ADMISSION_READY=0
+typeset -gi __MEZ_ZSH_ADMISSION_PUBLISHED=0
 typeset -gi __MEZ_ZSH_EDITOR_CLEARED=0
 typeset -g __MEZ_ZSH_TRIGGER_ID=
 typeset -g __MEZ_ZSH_TRIGGER_SEQUENCE=
@@ -376,6 +377,12 @@ function __mez_zsh_private_widget() {
 }
 function __mez_zsh_line_init() {
   emulate -L zsh
+  if (( __MEZ_ZSH_ADMISSION_READY && ! __MEZ_ZSH_ADMISSION_PUBLISHED )); then
+    zle redisplay
+    __MEZ_ZSH_ADMISSION_PUBLISHED=1
+    command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=adapter-available;mez_trigger=%s\033\\' \
+      "$MEZ_ZSH_HISTORY_TOKEN" "$__MEZ_ZSH_TRIGGER_ID"
+  fi
   if [[ -n ${__MEZ_ZSH_RESTORE_MARKER} ]]; then
     command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=parent-ready;mez_marker=%s;mez_outcome=%s;mez_status=%s\033\\' \
       "$MEZ_ZSH_HISTORY_TOKEN" "$__MEZ_ZSH_RESTORE_MARKER" "$__MEZ_ZSH_RESTORE_OUTCOME" "$__MEZ_ZSH_RESTORE_STATUS"
@@ -445,8 +452,6 @@ function __mez_zsh_install_integration() {
     return 1
   fi
   __MEZ_ZSH_ADMISSION_READY=1
-  command printf '\033]133;R;mez_protocol=2;mez_shell=zsh;mez_token=%s;mez_event=adapter-available;mez_trigger=%s\033\\' \
-    "$MEZ_ZSH_HISTORY_TOKEN" "$__MEZ_ZSH_TRIGGER_ID"
 }
 function __mez_zsh_schedule_integration() {
   emulate -L zsh
@@ -537,12 +542,12 @@ pub(super) fn managed_foreign_zsh_child_staging_source(
     ];
     let directory_word = mez_agent::shell_quote(&directory.to_string_lossy());
     let mut source = format!(
-        "umask 077\nMEZ_FOREIGN_ZSH_DIR={directory_word}\ncommand mkdir -m 700 -- $MEZ_FOREIGN_ZSH_DIR || return 70\n"
+        "umask 077\nMEZ_FOREIGN_ZSH_DIR={directory_word}\ncommand mkdir -m 700 $MEZ_FOREIGN_ZSH_DIR || return 70\n"
     );
     for (name, contents) in files {
         let encoded = base64::engine::general_purpose::STANDARD.encode(contents.as_bytes());
         source.push_str(&format!(
-            "command printf '%s' {} | command base64 -d > $MEZ_FOREIGN_ZSH_DIR/{} 2>/dev/null || command printf '%s' {} | command base64 -D > $MEZ_FOREIGN_ZSH_DIR/{} 2>/dev/null || {{ command rm -rf -- $MEZ_FOREIGN_ZSH_DIR; return 71; }}\ncommand chmod 600 -- $MEZ_FOREIGN_ZSH_DIR/{} || {{ command rm -rf -- $MEZ_FOREIGN_ZSH_DIR; return 72; }}\n",
+            "command printf '%s' {} | command base64 -d > $MEZ_FOREIGN_ZSH_DIR/{} 2>/dev/null || command printf '%s' {} | command base64 -D > $MEZ_FOREIGN_ZSH_DIR/{} 2>/dev/null || {{ command rm -rf $MEZ_FOREIGN_ZSH_DIR; return 71; }}\ncommand chmod 600 $MEZ_FOREIGN_ZSH_DIR/{} || {{ command rm -rf $MEZ_FOREIGN_ZSH_DIR; return 72; }}\n",
             mez_agent::shell_quote(&encoded),
             name,
             mez_agent::shell_quote(&encoded),
@@ -551,7 +556,7 @@ pub(super) fn managed_foreign_zsh_child_staging_source(
         ));
     }
     source.push_str(&handoff);
-    source.push_str("\nMEZ_FOREIGN_ZSH_STATUS=$?\ncommand rm -rf -- $MEZ_FOREIGN_ZSH_DIR\nreturn $MEZ_FOREIGN_ZSH_STATUS");
+    source.push_str("\nMEZ_FOREIGN_ZSH_STATUS=$?\ncommand rm -rf $MEZ_FOREIGN_ZSH_DIR\nreturn $MEZ_FOREIGN_ZSH_STATUS");
     Ok(source)
 }
 
@@ -708,7 +713,8 @@ mod tests {
     use super::*;
     use mez_mux::layout::Size;
     use mez_mux::process::{
-        PaneProcess, PaneProcessEnvironment, pane_command_plan, spawn_pane_process,
+        PaneProcess, PaneProcessEnvironment, ShellInputDelivery, pane_command_plan,
+        spawn_pane_process,
     };
     use std::process::{Command, Stdio};
     use std::thread;
@@ -842,13 +848,95 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// Verifies the dependency-free POSIX loader transfers the complete managed
+    /// Zsh staging source through a real PTY and reaches the authenticated child.
+    ///
+    /// The generated Zsh integration is large enough to overflow Darwin's
+    /// constrained PTY typeahead buffer when loader records are streamed without
+    /// reader acknowledgements. Reaching `child-installed` proves each record was
+    /// consumed intact while Linux retains its existing streaming transport.
+    #[test]
+    fn dependency_free_loader_starts_real_managed_zsh_child() {
+        let zsh = Path::new("/bin/zsh");
+        if !zsh.exists() {
+            return;
+        }
+
+        let marker = MarkerToken::new("00112233445566778899aabbccddeeff").unwrap();
+        let child_token = MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let exit_marker = MarkerToken::new("abcdefabcdefabcdefabcdefabcdefab").unwrap();
+        let loader_marker = "1023456789abcdef0123456789abcdef";
+        let staging_source = managed_foreign_zsh_child_staging_source(
+            zsh,
+            marker.as_str(),
+            &child_token,
+            mez_agent::ManagedZshTrigger::EscapeM,
+            &exit_marker,
+        )
+        .unwrap();
+        let loader = mez_agent::dependency_free_foreign_shell_loader_input(
+            &staging_source,
+            zsh,
+            ShellClassification::Zsh,
+            Some(&child_token),
+            loader_marker,
+        )
+        .unwrap();
+
+        let launch = PaneProcessLaunch::new(PathBuf::from("/bin/sh"));
+        let size = Size::new(80, 24).expect("the foreign Zsh loader PTY size should be valid");
+        let process = spawn_pane_process(&launch, None, &test_environment(), size)
+            .expect("the foreign Zsh loader pane should spawn");
+        let terminal = mez_terminal::TerminalScreen::new(size, 1_000)
+            .expect("the foreign Zsh loader terminal screen should initialize");
+        let mut process = ManagedZshTestPane { process, terminal };
+        process.write_input(loader.command.as_bytes()).unwrap();
+        let mut output = read_zsh_output_until(&mut process, |output| {
+            String::from_utf8_lossy(output).contains("mez_foreign_loader=ready")
+        });
+        process
+            .process
+            .write_shell_delivery(&ShellInputDelivery::loader_acknowledged(
+                loader.payload.into_bytes(),
+                loader_marker,
+            ))
+            .unwrap();
+
+        let installed = format!(
+            "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=child-installed;mez_marker={}",
+            child_token.as_str(),
+            marker.as_str()
+        );
+        extend_zsh_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(installed.len())
+                .any(|window| window == installed.as_bytes())
+        });
+        process.write_input(b"exit\n").unwrap();
+        let exited = format!("mez_foreign_loader=exited;mez_marker={loader_marker};mez_status=0");
+        extend_zsh_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(exited.len())
+                .any(|window| window == exited.as_bytes())
+        });
+
+        assert!(
+            output
+                .windows(installed.len())
+                .any(|window| window == installed.as_bytes()),
+            "managed Zsh child did not authenticate after loader transfer: {:?}",
+            String::from_utf8_lossy(&output)
+        );
+        process.terminate(Duration::from_millis(100)).unwrap();
+    }
+
     /// Reads managed Zsh output until one expected boundary appears.
     fn extend_zsh_output_until(
         process: &mut ManagedZshTestPane,
         output: &mut Vec<u8>,
         predicate: impl Fn(&[u8]) -> bool,
     ) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             output.extend(
                 process
@@ -1509,15 +1597,18 @@ function zshaddhistory() {{\n\
         let mut process = ManagedZshTestPane { process, terminal };
         let parent_pid = process.process.primary_pid();
         let parent_process_group = process.process.process_group_leader();
-        let startup_output = read_zsh_output_until(&mut process, |output| {
-            output
-                .windows(b"__MEZ_ZSH_PROMPT__>".len())
-                .any(|window| window == b"__MEZ_ZSH_PROMPT__>")
-        });
         let available = format!(
             "mez_protocol=2;mez_shell=zsh;mez_token={};mez_event=adapter-available;mez_trigger=escape-m",
             owner.as_str()
         );
+        let startup_output = read_zsh_output_until(&mut process, |output| {
+            output
+                .windows(b"__MEZ_ZSH_PROMPT__>".len())
+                .any(|window| window == b"__MEZ_ZSH_PROMPT__>")
+                && output
+                    .windows(available.len())
+                    .any(|window| window == available.as_bytes())
+        });
         assert!(
             startup_output
                 .windows(available.len())

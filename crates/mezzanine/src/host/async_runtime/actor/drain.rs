@@ -566,6 +566,13 @@ impl AsyncRuntimeSessionActor {
                 ) => delivery.delivery_id.as_deref() == Some(owner_id.as_str()),
                 (
                     RuntimeSideEffect::PaneProcessIo {
+                        effect: crate::runtime::PaneProcessIoEffect::WriteInputPriority { .. },
+                        ..
+                    },
+                    Some(_),
+                ) => true,
+                (
+                    RuntimeSideEffect::PaneProcessIo {
                         effect: crate::runtime::PaneProcessIoEffect::Terminate { .. },
                         ..
                     },

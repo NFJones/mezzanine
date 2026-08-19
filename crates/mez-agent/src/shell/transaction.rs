@@ -1827,7 +1827,9 @@ fn fish_shell_interactive_invocation_words(
     let mut init_command = fish_wrapper_receiver_init_command().to_string();
     if let Some((token, marker)) = receiver_install {
         init_command.push_str(&format!(
-            "\nfunction fish_prompt\n    functions --erase fish_prompt\n    builtin printf '\\e]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=child-installed;mez_marker=%s\\e\\\\' {} {}\n    fish_default_prompt\nend",
+            "\nfunction __mez_agent_child_exit\n    commandline --replace 'exit'\n    commandline -f execute\nend\nbind -M default \\cx __mez_agent_child_exit\nbind -M insert \\cx __mez_agent_child_exit\nbind -M visual \\cx __mez_agent_child_exit\nbind -M replace_one \\cx __mez_agent_child_exit\nfunction fish_prompt\n    bind -M default \\cx __mez_agent_child_exit\n    bind -M insert \\cx __mez_agent_child_exit\n    bind -M visual \\cx __mez_agent_child_exit\n    bind -M replace_one \\cx __mez_agent_child_exit\n    fish_default_prompt\n    if not set -q __MEZ_AGENT_CHILD_INSTALLED\n        set -g __MEZ_AGENT_CHILD_INSTALLED 1\n        builtin printf '\\e]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=child-installed;mez_marker=%s\\e\\\\' {} {}\n    else\n        builtin printf '\\e]133;B\\e\\\\'\n        builtin printf '\\e]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=child-prompt-ready;mez_marker=%s\\e\\\\' {} {}\n    end\nend",
+            fish_quote(token.as_str()),
+            fish_quote(marker),
             fish_quote(token.as_str()),
             fish_quote(marker)
         ));
@@ -1863,6 +1865,13 @@ fn fish_command_file_materialization(
     } else {
         "true"
     };
+    let posix_payload_reader = (acknowledge_payload_records && input_sidecar.is_none()).then(|| {
+        let source = "end=$1; output=$2; receive_status=$3; seen_end=0; while IFS= read -r record; do if [ \"$record\" = \"$end\" ]; then seen_end=1; printf '\\036'; break; fi; case \"$record\" in 'C '*) if [ \"$receive_status\" -eq 0 ]; then printf '%s\\n' \"${record#C }\" >>\"$output\" || receive_status=$?; fi ;; *) receive_status=1 ;; esac; printf '\\036'; done; [ \"$seen_end\" -eq 1 ] || receive_status=1; exit \"$receive_status\"";
+        format!(
+            "command /bin/sh -c {} sh \"$MEZ_COMMAND_END\" \"$MEZ_COMMAND_B64\" \"$MEZ_WRITE_STATUS\"",
+            fish_quote(source)
+        )
+    });
     let acknowledge_command_record = format!(
         "string replace -r '^C ' '' -- \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\"; or set MEZ_WRITE_STATUS $status; {acknowledge}"
     );
@@ -1911,50 +1920,62 @@ fn fish_command_file_materialization(
         "end".to_string(),
         start_marker_line.to_string(),
         receiver_ready_marker_line.to_string(),
-        "while read -l MEZ_COMMAND_LINE".to_string(),
-        "if test \"$MEZ_COMMAND_LINE\" = \"$MEZ_COMMAND_END\"".to_string(),
     ]);
-    if let Some(open_frame_check) = open_frame_check {
-        lines.push(open_frame_check.to_string());
-    }
-    lines.extend([
-        "set MEZ_COMMAND_SEEN_END 1".to_string(),
-        acknowledge.to_string(),
-        "break".to_string(),
-        "end".to_string(),
-    ]);
-    if input_sidecar.is_some() {
+    if let Some(posix_payload_reader) = posix_payload_reader {
         lines.extend([
-            "switch \"$MEZ_COMMAND_LINE\"".to_string(),
-            "case 'C *'".to_string(),
-            format!("if test \"$MEZ_WRITE_STATUS\" -eq 0; {acknowledge_command_record}; else; {acknowledge}; end"),
-            "case 'S1B *'".to_string(),
-            "if test \"$MEZ_WRITE_STATUS\" -eq 0; set MEZ_SIDECAR_FRAME_FIELDS (string split ' ' -- \"$MEZ_COMMAND_LINE\"); if test (count $MEZ_SIDECAR_FRAME_FIELDS) -ne 4; or test \"$MEZ_SIDECAR_FRAME_OPEN\" -ne 0; or test \"$MEZ_SIDECAR_FRAME_FIELDS[2]\" != \"$MEZ_SIDECAR_FRAME_SEQUENCE\"; or not string match -rq '^[0-9]+$' -- \"$MEZ_SIDECAR_FRAME_FIELDS[3]\"; or test \"$MEZ_SIDECAR_FRAME_FIELDS[3]\" -gt 32768; or not string match -rq '^[0-9a-f]{64}$' -- \"$MEZ_SIDECAR_FRAME_FIELDS[4]\"; set MEZ_WRITE_STATUS 1; else; set MEZ_SIDECAR_FRAME_LENGTH $MEZ_SIDECAR_FRAME_FIELDS[3]; set MEZ_SIDECAR_FRAME_DIGEST $MEZ_SIDECAR_FRAME_FIELDS[4]; set MEZ_SIDECAR_FRAME_OPEN 1; : > \"$MEZ_SIDECAR_FRAME\"; or set MEZ_WRITE_STATUS $status; end; end".to_string(),
-            "case 'S1D *'".to_string(),
-            "if test \"$MEZ_WRITE_STATUS\" -eq 0; and test \"$MEZ_SIDECAR_FRAME_OPEN\" -eq 1; string replace -r '^S1D ' '' -- \"$MEZ_COMMAND_LINE\" >> \"$MEZ_SIDECAR_FRAME\"; or set MEZ_WRITE_STATUS $status; else; set MEZ_WRITE_STATUS 1; end".to_string(),
-            "case 'S1E *'".to_string(),
-            "if test \"$MEZ_WRITE_STATUS\" -eq 0; set MEZ_SIDECAR_FRAME_FIELDS (string split ' ' -- \"$MEZ_COMMAND_LINE\"); set MEZ_SIDECAR_FRAME_COUNT (wc -c < \"$MEZ_SIDECAR_FRAME\" | string trim); if test \"$MEZ_SIDECAR_SHA256\" = sha256sum; set MEZ_SIDECAR_FRAME_ACTUAL (sha256sum -- \"$MEZ_SIDECAR_FRAME\" | string split -f 1 ' '); else; set MEZ_SIDECAR_FRAME_ACTUAL (shasum -a 256 -- \"$MEZ_SIDECAR_FRAME\" | string split -f 1 ' '); end; if test (count $MEZ_SIDECAR_FRAME_FIELDS) -ne 2; or test \"$MEZ_SIDECAR_FRAME_OPEN\" -ne 1; or test \"$MEZ_SIDECAR_FRAME_FIELDS[2]\" != \"$MEZ_SIDECAR_FRAME_SEQUENCE\"; or test \"$MEZ_SIDECAR_FRAME_COUNT\" != \"$MEZ_SIDECAR_FRAME_LENGTH\"; or test \"$MEZ_SIDECAR_FRAME_ACTUAL\" != \"$MEZ_SIDECAR_FRAME_DIGEST\"; set MEZ_WRITE_STATUS 1; else; sed 's/^/# __MEZ_INPUT_SIDECAR_V1__ /' \"$MEZ_SIDECAR_FRAME\" >> \"$MEZ_SIDECAR_DATA\"; or set MEZ_WRITE_STATUS $status; set MEZ_SIDECAR_FRAME_SEQUENCE (math $MEZ_SIDECAR_FRAME_SEQUENCE + 1); set MEZ_SIDECAR_FRAME_OPEN 0; end; end".to_string(),
-            acknowledge.to_string(),
-            "case '*'".to_string(),
-            "set MEZ_WRITE_STATUS 1".to_string(),
-            acknowledge.to_string(),
+            posix_payload_reader,
+            "set MEZ_WRITE_STATUS $status".to_string(),
+            "if test \"$MEZ_WRITE_STATUS\" -eq 0".to_string(),
+            "set MEZ_COMMAND_SEEN_END 1".to_string(),
             "end".to_string(),
         ]);
     } else {
         lines.extend([
-            "if test \"$MEZ_WRITE_STATUS\" -eq 0".to_string(),
-            "switch \"$MEZ_COMMAND_LINE\"".to_string(),
-            "case 'C *'".to_string(),
-            "string replace -r '^C ' '' -- \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\"; or set MEZ_WRITE_STATUS $status".to_string(),
-            "case '*'".to_string(),
-            "set MEZ_WRITE_STATUS 1".to_string(),
-            "end".to_string(),
-            "end".to_string(),
-            acknowledge.to_string(),
+            "while read -l MEZ_COMMAND_LINE".to_string(),
+            "if test \"$MEZ_COMMAND_LINE\" = \"$MEZ_COMMAND_END\"".to_string(),
         ]);
+        if let Some(open_frame_check) = open_frame_check {
+            lines.push(open_frame_check.to_string());
+        }
+        lines.extend([
+            "set MEZ_COMMAND_SEEN_END 1".to_string(),
+            acknowledge.to_string(),
+            "break".to_string(),
+            "end".to_string(),
+        ]);
+        if input_sidecar.is_some() {
+            lines.extend([
+                "switch \"$MEZ_COMMAND_LINE\"".to_string(),
+                "case 'C *'".to_string(),
+                format!("if test \"$MEZ_WRITE_STATUS\" -eq 0; {acknowledge_command_record}; else; {acknowledge}; end"),
+                "case 'S1B *'".to_string(),
+                "if test \"$MEZ_WRITE_STATUS\" -eq 0; set MEZ_SIDECAR_FRAME_FIELDS (string split ' ' -- \"$MEZ_COMMAND_LINE\"); if test (count $MEZ_SIDECAR_FRAME_FIELDS) -ne 4; or test \"$MEZ_SIDECAR_FRAME_OPEN\" -ne 0; or test \"$MEZ_SIDECAR_FRAME_FIELDS[2]\" != \"$MEZ_SIDECAR_FRAME_SEQUENCE\"; or not string match -rq '^[0-9]+$' -- \"$MEZ_SIDECAR_FRAME_FIELDS[3]\"; or test \"$MEZ_SIDECAR_FRAME_FIELDS[3]\" -gt 32768; or not string match -rq '^[0-9a-f]{64}$' -- \"$MEZ_SIDECAR_FRAME_FIELDS[4]\"; set MEZ_WRITE_STATUS 1; else; set MEZ_SIDECAR_FRAME_LENGTH $MEZ_SIDECAR_FRAME_FIELDS[3]; set MEZ_SIDECAR_FRAME_DIGEST $MEZ_SIDECAR_FRAME_FIELDS[4]; set MEZ_SIDECAR_FRAME_OPEN 1; : > \"$MEZ_SIDECAR_FRAME\"; or set MEZ_WRITE_STATUS $status; end; end".to_string(),
+                "case 'S1D *'".to_string(),
+                "if test \"$MEZ_WRITE_STATUS\" -eq 0; and test \"$MEZ_SIDECAR_FRAME_OPEN\" -eq 1; string replace -r '^S1D ' '' -- \"$MEZ_COMMAND_LINE\" >> \"$MEZ_SIDECAR_FRAME\"; or set MEZ_WRITE_STATUS $status; else; set MEZ_WRITE_STATUS 1; end".to_string(),
+                "case 'S1E *'".to_string(),
+                "if test \"$MEZ_WRITE_STATUS\" -eq 0; set MEZ_SIDECAR_FRAME_FIELDS (string split ' ' -- \"$MEZ_COMMAND_LINE\"); set MEZ_SIDECAR_FRAME_COUNT (wc -c < \"$MEZ_SIDECAR_FRAME\" | string trim); if test \"$MEZ_SIDECAR_SHA256\" = sha256sum; set MEZ_SIDECAR_FRAME_ACTUAL (sha256sum -- \"$MEZ_SIDECAR_FRAME\" | string split -f 1 ' '); else; set MEZ_SIDECAR_FRAME_ACTUAL (shasum -a 256 -- \"$MEZ_SIDECAR_FRAME\" | string split -f 1 ' '); end; if test (count $MEZ_SIDECAR_FRAME_FIELDS) -ne 2; or test \"$MEZ_SIDECAR_FRAME_OPEN\" -ne 1; or test \"$MEZ_SIDECAR_FRAME_FIELDS[2]\" != \"$MEZ_SIDECAR_FRAME_SEQUENCE\"; or test \"$MEZ_SIDECAR_FRAME_COUNT\" != \"$MEZ_SIDECAR_FRAME_LENGTH\"; or test \"$MEZ_SIDECAR_FRAME_ACTUAL\" != \"$MEZ_SIDECAR_FRAME_DIGEST\"; set MEZ_WRITE_STATUS 1; else; sed 's/^/# __MEZ_INPUT_SIDECAR_V1__ /' \"$MEZ_SIDECAR_FRAME\" >> \"$MEZ_SIDECAR_DATA\"; or set MEZ_WRITE_STATUS $status; set MEZ_SIDECAR_FRAME_SEQUENCE (math $MEZ_SIDECAR_FRAME_SEQUENCE + 1); set MEZ_SIDECAR_FRAME_OPEN 0; end; end".to_string(),
+                acknowledge.to_string(),
+                "case '*'".to_string(),
+                "set MEZ_WRITE_STATUS 1".to_string(),
+                acknowledge.to_string(),
+                "end".to_string(),
+            ]);
+        } else {
+            lines.extend([
+                "if test \"$MEZ_WRITE_STATUS\" -eq 0".to_string(),
+                "switch \"$MEZ_COMMAND_LINE\"".to_string(),
+                "case 'C *'".to_string(),
+                "string replace -r '^C ' '' -- \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\"; or set MEZ_WRITE_STATUS $status".to_string(),
+                "case '*'".to_string(),
+                "set MEZ_WRITE_STATUS 1".to_string(),
+                "end".to_string(),
+                "end".to_string(),
+                acknowledge.to_string(),
+            ]);
+        }
+        lines.push("end".to_string());
     }
     lines.extend([
-        "end".to_string(),
         "if test \"$MEZ_WRITE_STATUS\" -eq 0; and test \"$MEZ_COMMAND_SEEN_END\" != 1".to_string(),
         "printf '%s\\n' 'Mezzanine shell transaction command payload ended before sentinel' >&2".to_string(),
         "set MEZ_WRITE_STATUS 1".to_string(),
@@ -2052,10 +2073,12 @@ fn command_payload_lines(command: &str, end_marker: &str, input_sidecar: Option<
 /// Fish function installed before interactive transaction delivery begins.
 ///
 /// The interactive reader sees only one short function invocation. The
-/// function then owns stdin while it receives bounded base64 records, writes
-/// the decoded wrapper to a temporary file, and sources that file without
-/// command substitution so physical newlines remain intact. Each record emits
-/// the acknowledgement byte used by paced Darwin PTY delivery.
+/// function delegates stdin ownership to a non-interactive POSIX reader while
+/// it receives bounded base64 records. This avoids entering Fish's line editor
+/// and its terminal-query handshake between records. The reader writes the
+/// decoded wrapper to a temporary file, acknowledges each consumed record for
+/// paced Darwin PTY delivery, and Fish sources the file without command
+/// substitution so physical newlines remain intact.
 pub fn fish_wrapper_receiver_init_command() -> &'static str {
     r#"function __mez_agent_wrapper_receive --argument-names sentinel
     set -l source_file (command mktemp); or return 1
@@ -2065,24 +2088,12 @@ pub fn fish_wrapper_receiver_init_command() -> &'static str {
         command stty -echo 2>/dev/null; or true
     end
     set -l receive_status 0
-    set -l seen_end 0
     command printf '' > "$encoded_file"; or set receive_status $status
     builtin history delete --exact --case-sensitive "__mez_agent_wrapper_receive '$sentinel'" >/dev/null 2>&1
     builtin printf '\036'
-    while read -l record
-        set -l payload (string split -m 1 ';' -- "$record")[1]
-        if test "$payload" = "$sentinel"
-            set seen_end 1
-            builtin printf '\036'
-            break
-        end
-        if test "$receive_status" -eq 0
-            command printf '%s' "$payload" >> "$encoded_file"; or set receive_status $status
-        end
-        builtin printf '\036'
-    end
-    if test "$seen_end" != 1
-        set receive_status 1
+    if test "$receive_status" -eq 0
+        command /bin/sh -c 'sentinel=$1; encoded_file=$2; while IFS= read -r record; do payload=${record%%;*}; if [ "$payload" = "$sentinel" ]; then printf "\036"; exit 0; fi; printf %s "$payload" >>"$encoded_file" || exit 1; printf "\036"; done; exit 1' sh "$sentinel" "$encoded_file"
+        set receive_status $status
     end
     set -l decode_status 1
     if test "$receive_status" -eq 0
@@ -2109,8 +2120,10 @@ end"#
 /// Staged private input for one managed Fish editor handoff.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FishPrivateSourceInput {
-    /// Source-free trigger and authenticated hold metadata.
+    /// Source-free trigger that starts the private receiver callback.
     pub wrapper: String,
+    /// Authenticated hold metadata released after the receiver starts reading.
+    pub receiver_hold: String,
     /// Trigger-only stage released after Fish queues its empty-line repaint.
     pub editor_clear_confirmation: String,
     /// Second trigger and authenticated frame header released after editor hold.
@@ -2123,10 +2136,11 @@ pub struct FishPrivateSourceInput {
 
 /// Renders a staged private Fish editor trigger and deferred source frame.
 ///
-/// The first trigger carries only token and marker metadata so the native
-/// binding can save, clear, and repaint the editor before runtime releases the
-/// second trigger and bounded BEGIN header. DATA and END remain withheld until
-/// the adapter publishes semantic frame admission.
+/// The first trigger is source-free. Runtime releases authenticated HOLD
+/// metadata only after Fish publishes receiver-awaiting, then waits for the
+/// native editor to clear and repaint before releasing the second trigger and
+/// bounded BEGIN header. DATA and END remain withheld until the adapter
+/// publishes semantic frame admission.
 pub fn fish_private_source_input(
     source: &str,
     token: &MarkerToken,
@@ -2139,7 +2153,8 @@ pub fn fish_private_source_input(
     let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
     let chunks = encoded.as_bytes().chunks(SHELL_WRAPPER_BASE64_LINE_BYTES);
     let chunk_count = chunks.len();
-    let wrapper = format!("\x1b\x07MEZ_FISH_RX1_HOLD {} {}\n", token.as_str(), marker,);
+    let wrapper = "\x1b\x07".to_string();
+    let receiver_hold = format!("MEZ_FISH_RX1_HOLD {} {}\n", token.as_str(), marker);
     let receiver_admission = format!(
         "\x1b\x07MEZ_FISH_RX1_BEGIN {} {} {} {} {}\n",
         token.as_str(),
@@ -2170,6 +2185,7 @@ pub fn fish_private_source_input(
     ));
     FishPrivateSourceInput {
         wrapper,
+        receiver_hold,
         editor_clear_confirmation: "\x1b\x07".to_string(),
         receiver_admission,
         receiver_payload,
@@ -2325,10 +2341,17 @@ pub fn dependency_free_foreign_shell_loader_command(
     marker: &str,
 ) -> AgentShellValidationResult<String> {
     validate_shell_marker_token(marker)?;
-    let loader_source = "umask 077;p=${TMPDIR:-/tmp}/.mez-$1;mkdir -m 700 \"$p\"||exit 70;trap 'r=$?;rm -rf \"$p\";exit $r' 0;f=$p/p;printf '\\033]133;R;mez_foreign_loader=ready;mez_marker=%s\\033\\\\' \"$1\";z=;while IFS= read -r x;do if [ \"$x\" = \"MEZ_LOADER_END_$1\" ];then z=1;printf '\\036';break;fi;printf %s \"$x\">>\"$f\"||exit 71;done;[ \"$z\" ]||exit 72;q=-d;printf ''|base64 -d>/dev/null 2>&1||q=-D;base64 \"$q\"<\"$f\">\"$p/e\"||exit 73;chmod 600 \"$p/e\"||exit 74;MEZ_FOREIGN_LOADER_DIR=$p /bin/sh \"$p/e\";r=$?;printf '\\033]133;R;mez_foreign_loader=exited;mez_marker=%s;mez_status=%s\\033\\\\' \"$1\" \"$r\";exit \"$r\"";
+    let record_acknowledgement = if cfg!(target_os = "macos") {
+        "printf '\\036';"
+    } else {
+        ""
+    };
+    let loader_source = format!(
+        "umask 077;p=${{TMPDIR:-/tmp}}/.mez-$1;mkdir -m 700 \"$p\"||exit 70;trap 'r=$?;rm -rf \"$p\";exit $r' 0;f=$p/p;printf '\\033]133;R;mez_foreign_loader=ready;mez_marker=%s\\033\\\\' \"$1\";z=;while IFS= read -r x;do if [ \"$x\" = \"MEZ_LOADER_END_$1\" ];then z=1;printf '\\036';break;fi;printf %s \"$x\">>\"$f\"||exit 71;{record_acknowledgement}done;[ \"$z\" ]||exit 72;q=-d;printf ''|base64 -d>/dev/null 2>&1||q=-D;base64 \"$q\"<\"$f\">\"$p/e\"||exit 73;chmod 600 \"$p/e\"||exit 74;MEZ_FOREIGN_LOADER_DIR=$p /bin/sh \"$p/e\";r=$?;printf '\\033]133;R;mez_foreign_loader=exited;mez_marker=%s;mez_status=%s\\033\\\\' \"$1\" \"$r\";exit \"$r\""
+    );
     Ok(format!(
         "/bin/sh -c {} sh {}\n",
-        shell_quote(loader_source),
+        shell_quote(&loader_source),
         shell_quote(marker)
     ))
 }
@@ -3076,6 +3099,14 @@ pub fn agent_subshell_enter_command_with_shell_compatibility(
 /// the parent shell only after child-shell cleanup has completed.
 pub fn agent_subshell_exit_marker_bytes(marker: &MarkerToken) -> Vec<u8> {
     format!("\x1b]133;mez_agent_subshell_exit={}\x1b\\", marker.as_str()).into_bytes()
+}
+
+/// Returns the fixed editor-independent input bound to managed Fish child exit.
+///
+/// The generated child installs this sequence in every supported Fish keymap,
+/// so runtime does not depend on whether the user selected Emacs or vi editing.
+pub fn fish_agent_subshell_exit_input() -> &'static [u8] {
+    b"\x18"
 }
 
 /// Renders the shell command that emits one parent-owned subshell exit marker.

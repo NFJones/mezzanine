@@ -101,6 +101,8 @@ pub(super) struct ManagedShellHandoff {
     phase: ManagedShellHandoffPhase,
     /// Exit intent retained independently from payload and child phases.
     exit_requested: bool,
+    /// Whether a managed Fish child reached an editable prompt after bootstrap.
+    child_prompt_ready: bool,
     /// Time when return or recovery waiting began.
     started_at_unix_ms: Option<u64>,
     /// Fresh foreground proof currently owned by this handoff.
@@ -119,6 +121,7 @@ impl ManagedShellHandoff {
             identity,
             phase: ManagedShellHandoffPhase::TriggerQueued,
             exit_requested: false,
+            child_prompt_ready: false,
             started_at_unix_ms: None,
             recovery_observation: None,
             pending_input: Vec::new(),
@@ -170,6 +173,12 @@ impl ManagedShellHandoff {
         )
     }
 
+    /// Reports whether a proven child is waiting for its first exit dispatch.
+    pub(super) fn child_exit_is_dispatchable(&self) -> bool {
+        self.phase == ManagedShellHandoffPhase::ChildInstalled
+            && (self.shell != ManagedShellKind::Fish || self.child_prompt_ready)
+    }
+
     /// Reports whether presentation still needs to expose the native clear repaint.
     pub(super) fn editor_clear_is_pending(&self) -> bool {
         self.phase == ManagedShellHandoffPhase::TriggerQueued
@@ -213,8 +222,12 @@ pub(super) enum ManagedShellHandoffEvent {
     PayloadReleased { marker: String },
     /// The persistent child authenticated terminal-input ownership.
     ChildInstalled { marker: String, now_unix_ms: u64 },
+    /// A managed Fish child reached an editable prompt after bootstrap.
+    ChildPromptReady,
     /// The user requested exit at the current lifecycle phase.
     ExitRequested { now_unix_ms: u64 },
+    /// Exit intent must wait for a live shell transaction to settle.
+    ExitDeferredUntilTransactionsSettle,
     /// Runtime sent authenticated pre-payload cancellation.
     CancellationSent { now_unix_ms: u64 },
     /// Transaction transport failed before lifecycle completion was proven.
@@ -252,6 +265,8 @@ pub(super) enum ManagedShellHandoffEffect {
     CancelBeforePayload,
     /// Retain exit intent until child installation proves a safe reader.
     WaitForChildInstallation,
+    /// Retain exit intent until the managed Fish editor reaches a prompt.
+    WaitForChildPrompt,
     /// Send one generation-fenced exit request to the proven child.
     ExitChild,
     /// Arm or refresh the bounded parent-return watchdog.
@@ -326,7 +341,8 @@ pub(super) fn reduce_managed_shell_handoff(
             && handoff.phase == ManagedShellHandoffPhase::PayloadInFlight =>
         {
             handoff.phase = ManagedShellHandoffPhase::ChildInstalled;
-            if handoff.exit_requested {
+            handoff.child_prompt_ready = handoff.shell != ManagedShellKind::Fish;
+            if handoff.exit_requested && handoff.child_prompt_ready {
                 handoff.phase = ManagedShellHandoffPhase::Returning;
                 handoff.started_at_unix_ms = Some(now_unix_ms);
                 transition
@@ -335,7 +351,17 @@ pub(super) fn reduce_managed_shell_handoff(
                 transition
                     .effects
                     .push(ManagedShellHandoffEffect::ArmWatchdog);
+            } else if handoff.exit_requested {
+                transition
+                    .effects
+                    .push(ManagedShellHandoffEffect::WaitForChildPrompt);
             }
+        }
+        ManagedShellHandoffEvent::ChildPromptReady
+            if handoff.shell == ManagedShellKind::Fish
+                && handoff.phase == ManagedShellHandoffPhase::ChildInstalled =>
+        {
+            handoff.child_prompt_ready = true;
         }
         ManagedShellHandoffEvent::ExitRequested { now_unix_ms } => {
             handoff.exit_requested = true;
@@ -348,6 +374,13 @@ pub(super) fn reduce_managed_shell_handoff(
                 ManagedShellHandoffPhase::PayloadInFlight => transition
                     .effects
                     .push(ManagedShellHandoffEffect::WaitForChildInstallation),
+                ManagedShellHandoffPhase::ChildInstalled
+                    if handoff.shell == ManagedShellKind::Fish && !handoff.child_prompt_ready =>
+                {
+                    transition
+                        .effects
+                        .push(ManagedShellHandoffEffect::WaitForChildPrompt);
+                }
                 ManagedShellHandoffPhase::ChildInstalled => {
                     handoff.phase = ManagedShellHandoffPhase::Returning;
                     handoff.started_at_unix_ms = Some(now_unix_ms);
@@ -364,6 +397,11 @@ pub(super) fn reduce_managed_shell_handoff(
                 | ManagedShellHandoffPhase::ParentReady => {}
                 ManagedShellHandoffPhase::Settled => unreachable!(),
             }
+        }
+        ManagedShellHandoffEvent::ExitDeferredUntilTransactionsSettle
+            if handoff.phase == ManagedShellHandoffPhase::ChildInstalled =>
+        {
+            handoff.exit_requested = true;
         }
         ManagedShellHandoffEvent::CancellationSent { now_unix_ms }
             if matches!(
@@ -620,6 +658,57 @@ mod tests {
         );
         assert_eq!(
             installed.effects,
+            vec![
+                ManagedShellHandoffEffect::ExitChild,
+                ManagedShellHandoffEffect::ArmWatchdog,
+            ]
+        );
+        assert_eq!(handoff.phase(), ManagedShellHandoffPhase::Returning);
+    }
+
+    /// Verifies managed Fish retains exit intent after child installation
+    /// until a later prompt proves that its editor can consume the fixed exit
+    /// trigger. Prompt readiness alone does not dispatch I/O; the caller
+    /// replays `ExitRequested` after observing this transition.
+    #[test]
+    fn fish_exit_waits_for_post_bootstrap_child_prompt() {
+        let mut handoff = ManagedShellHandoff::new(ManagedShellKind::Fish, identity("fish-marker"));
+        let _ = reduce_managed_shell_handoff(
+            &mut handoff,
+            ManagedShellHandoffEvent::PayloadReleased {
+                marker: "fish-marker".to_string(),
+            },
+        );
+        let _ = reduce_managed_shell_handoff(
+            &mut handoff,
+            ManagedShellHandoffEvent::ChildInstalled {
+                marker: "fish-marker".to_string(),
+                now_unix_ms: 21,
+            },
+        );
+
+        let exit = reduce_managed_shell_handoff(
+            &mut handoff,
+            ManagedShellHandoffEvent::ExitRequested { now_unix_ms: 22 },
+        );
+        assert_eq!(
+            exit.effects,
+            vec![ManagedShellHandoffEffect::WaitForChildPrompt]
+        );
+        assert_eq!(handoff.phase(), ManagedShellHandoffPhase::ChildInstalled);
+
+        let prompt =
+            reduce_managed_shell_handoff(&mut handoff, ManagedShellHandoffEvent::ChildPromptReady);
+        assert!(prompt.applied);
+        assert!(prompt.effects.is_empty());
+        assert!(handoff.child_exit_is_dispatchable());
+
+        let retry = reduce_managed_shell_handoff(
+            &mut handoff,
+            ManagedShellHandoffEvent::ExitRequested { now_unix_ms: 23 },
+        );
+        assert_eq!(
+            retry.effects,
             vec![
                 ManagedShellHandoffEffect::ExitChild,
                 ManagedShellHandoffEffect::ArmWatchdog,

@@ -1864,6 +1864,34 @@ impl RuntimeSessionService {
                 TerminalOscEvent::TitleChanged { .. } | TerminalOscEvent::Clipboard(_) => {}
                 TerminalOscEvent::ShellPromptStart => {}
                 TerminalOscEvent::ShellPromptEnd => {
+                    let current_primary_process_id =
+                        self.primary_pid_for_live_pane_process(output_pane_id);
+                    let fish_prompt_admission = self
+                        .process
+                        .pane_fish_admissions
+                        .get(output_pane_id)
+                        .and_then(|admission| {
+                            match admission {
+                            crate::runtime::processes::RuntimeManagedFishAdmission::AwaitingPrompt {
+                                primary_process_id,
+                                version,
+                            } if Some(*primary_process_id) == current_primary_process_id => {
+                                Some((*primary_process_id, *version))
+                            }
+                            _ => None,
+                        }
+                        });
+                    if let Some((primary_process_id, version)) = fish_prompt_admission {
+                        self.process.pane_fish_admissions.insert(
+                            output_pane_id.to_string(),
+                            crate::runtime::processes::RuntimeManagedFishAdmission::Ready {
+                                primary_process_id,
+                                version,
+                            },
+                        );
+                        observed = observed.saturating_add(1);
+                        observed = observed.saturating_add(self.maybe_bootstrap_ready_panes()?);
+                    }
                     if !observed_harness_transaction_end {
                         observed =
                             observed.saturating_add(self.observe_passive_shell_prompt_candidate(

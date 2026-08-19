@@ -1505,11 +1505,13 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
         // before the later authenticated Fish parent-restored event. This
         // deterministically exercises foreground input arriving while the
         // private callback is still unwinding.
-        let _ = service.poll_pane_outputs(1).unwrap();
+        let updates = service.poll_pane_outputs(8192).unwrap();
         if service.agent_subshell_exit_marker_for_tests("%1").is_none() {
             break;
         }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+        if updates.is_empty() {
+            wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+        }
     }
     assert!(
         service.agent_subshell_exit_marker_for_tests("%1").is_none(),
@@ -1747,11 +1749,16 @@ fn runtime_fish_parent_restoration_timeout_requires_foreground_proof() {
         mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
         mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
         mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
+        mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
     );
     service.bind_agent_subshell_bootstrap_marker(pane_id, "fish-restoration-marker");
     assert!(service.mark_managed_shell_payload_released(pane_id, "fish-restoration-marker"));
     assert_eq!(
         service.mark_managed_shell_child_installed(pane_id, "fish-restoration-marker"),
+        Some(false)
+    );
+    assert_eq!(
+        service.mark_managed_fish_child_prompt_ready(pane_id, "fish-restoration-marker"),
         Some(false)
     );
     service.remove_running_shell_transaction("fish-restoration-marker");
@@ -1761,7 +1768,7 @@ fn runtime_fish_parent_restoration_timeout_requires_foreground_proof() {
     assert_eq!(pane_input_effects(&exit_effects).len(), 1);
     assert_eq!(
         pane_input_effects(&exit_effects)[0].pane_input_parts().1,
-        b"exit\n"
+        mez_agent::fish_agent_subshell_exit_input()
     );
     service
         .write_input_to_pane(&primary, Some(pane_id), b"queued-after-fish-exit\n")
@@ -3259,13 +3266,12 @@ fn runtime_managed_fish_bootstrap_requires_authenticated_adapter_availability() 
             .unwrap(),
         1
     );
+    assert!(!service.managed_fish_adapter_is_ready_for_tests(pane_id));
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    settle_initial_managed_fish_bootstrap(&mut service, pane_id);
     assert!(service.managed_fish_adapter_is_ready_for_tests(pane_id));
-    let markers = service
-        .running_shell_transactions_for_tests()
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
-    assert_eq!(markers.len(), 1);
+    assert!(!service.pane_bootstrap_is_pending_for_tests(pane_id));
+    assert!(service.running_shell_transactions_for_tests().is_empty());
 
     assert_eq!(
         service
@@ -3279,14 +3285,8 @@ fn runtime_managed_fish_bootstrap_requires_authenticated_adapter_availability() 
             .unwrap(),
         1
     );
-    assert_eq!(
-        service
-            .running_shell_transactions_for_tests()
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>(),
-        markers
-    );
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    assert!(!service.pane_bootstrap_is_pending_for_tests(pane_id));
 
     service.terminate_all_pane_processes().unwrap();
     service.cleanup_removed_pane_runtime_state(pane_id).unwrap();

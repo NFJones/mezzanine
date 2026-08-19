@@ -89,14 +89,25 @@ impl RuntimeSessionService {
                     )
                 }
                 mez_terminal::ManagedShellProtocolEvent::ReceiverAwaiting
-                    if shell == mez_terminal::ManagedShellAdapter::Zsh
-                        && self.active_managed_shell_token_matches(
-                            output_pane_id,
-                            shell,
-                            token,
-                        ) =>
+                    if matches!(
+                        shell,
+                        mez_terminal::ManagedShellAdapter::Fish
+                            | mez_terminal::ManagedShellAdapter::Zsh
+                    ) && self.active_managed_shell_token_matches(
+                        output_pane_id,
+                        shell,
+                        token,
+                    ) =>
                 {
-                    self.observe_zsh_shell_receiver_awaiting(output_pane_id, token)
+                    self.observe_managed_shell_receiver_awaiting(
+                        output_pane_id,
+                        match shell {
+                            mez_terminal::ManagedShellAdapter::Fish => ManagedShellKind::Fish,
+                            mez_terminal::ManagedShellAdapter::Zsh => ManagedShellKind::Zsh,
+                            mez_terminal::ManagedShellAdapter::Bash => return Ok(0),
+                        },
+                        token,
+                    )
                 }
                 mez_terminal::ManagedShellProtocolEvent::FrameAdmitted { marker }
                     if self.active_managed_shell_token_matches(output_pane_id, shell, token) =>
@@ -114,6 +125,16 @@ impl RuntimeSessionService {
                             .is_some_and(|expected| expected.as_str() == token) =>
                 {
                     self.observe_shell_receiver_installed(output_pane_id, token, marker)
+                }
+                mez_terminal::ManagedShellProtocolEvent::ChildPromptReady { marker }
+                    if shell == mez_terminal::ManagedShellAdapter::Fish
+                        && self.active_managed_shell_token_matches(
+                            output_pane_id,
+                            shell,
+                            token,
+                        ) =>
+                {
+                    self.observe_managed_fish_child_prompt_ready(output_pane_id, marker)
                 }
                 mez_terminal::ManagedShellProtocolEvent::ReceiverRejected {
                     marker: Some(marker),
@@ -237,6 +258,12 @@ impl RuntimeSessionService {
                     );
                     let already_ready = matches!(
                         self.process.pane_fish_admissions.get(output_pane_id),
+                        Some(crate::runtime::processes::RuntimeManagedFishAdmission::AwaitingPrompt {
+                            primary_process_id: expected,
+                            ..
+                        }) if *expected == primary_process_id
+                    ) || matches!(
+                        self.process.pane_fish_admissions.get(output_pane_id),
                         Some(crate::runtime::processes::RuntimeManagedFishAdmission::Ready {
                             primary_process_id: expected,
                             ..
@@ -248,12 +275,11 @@ impl RuntimeSessionService {
                     if newly_ready {
                         self.process.pane_fish_admissions.insert(
                             output_pane_id.to_string(),
-                            crate::runtime::processes::RuntimeManagedFishAdmission::Ready {
+                            crate::runtime::processes::RuntimeManagedFishAdmission::AwaitingPrompt {
                                 primary_process_id,
                                 version,
                             },
                         );
-                        let _ = self.maybe_bootstrap_ready_panes()?;
                     }
                     return Ok(1);
                 }
@@ -295,8 +321,15 @@ impl RuntimeSessionService {
                 Ok(0)
             }
             mez_terminal::ManagedShellProtocolEvent::ReceiverAwaiting => {
-                if managed_shell == ManagedShellKind::Zsh {
-                    return self.observe_zsh_shell_receiver_awaiting(output_pane_id, token);
+                if matches!(
+                    managed_shell,
+                    ManagedShellKind::Fish | ManagedShellKind::Zsh
+                ) {
+                    return self.observe_managed_shell_receiver_awaiting(
+                        output_pane_id,
+                        managed_shell,
+                        token,
+                    );
                 }
                 Ok(0)
             }
@@ -337,6 +370,11 @@ impl RuntimeSessionService {
             }
             mez_terminal::ManagedShellProtocolEvent::ChildInstalled { marker } => {
                 self.observe_shell_receiver_installed(output_pane_id, token, marker)
+            }
+            mez_terminal::ManagedShellProtocolEvent::ChildPromptReady { marker }
+                if managed_shell == ManagedShellKind::Fish =>
+            {
+                self.observe_managed_fish_child_prompt_ready(output_pane_id, marker)
             }
             mez_terminal::ManagedShellProtocolEvent::ParentReady {
                 marker,
@@ -425,8 +463,25 @@ impl RuntimeSessionService {
                 Ok(usize::from(transition.applied))
             }
             mez_terminal::ManagedShellProtocolEvent::ReceiverRejected { marker: None, .. }
+            | mez_terminal::ManagedShellProtocolEvent::ChildPromptReady { .. }
             | mez_terminal::ManagedShellProtocolEvent::ChildExited { .. } => Ok(0),
         }
+    }
+
+    /// Applies one authenticated managed-Fish post-bootstrap prompt event.
+    fn observe_managed_fish_child_prompt_ready(
+        &mut self,
+        pane_id: &str,
+        marker: &str,
+    ) -> Result<usize> {
+        let Some(exit_requested) = self.mark_managed_fish_child_prompt_ready(pane_id, marker)
+        else {
+            return Ok(0);
+        };
+        if exit_requested && self.request_managed_shell_handoff_exit(pane_id)? {
+            return Ok(2);
+        }
+        Ok(1)
     }
 
     /// Routes foreign Fish/Zsh restoration to its identity or child-handoff owner.
@@ -1033,6 +1088,8 @@ impl RuntimeSessionService {
                 trigger,
             },
         );
+        let _ =
+            self.observe_passive_shell_prompt_candidate(output_pane_id, "managed-zsh-line-init")?;
         if self.agent_subshell_entry_is_deferred(output_pane_id)
             && self
                 .agent_shell_store()
@@ -1074,24 +1131,26 @@ impl RuntimeSessionService {
         Ok(1)
     }
 
-    /// Releases authenticated HOLD metadata after ZLE starts its fixed receiver.
-    pub(crate) fn observe_zsh_shell_receiver_awaiting(
+    /// Releases authenticated HOLD metadata after a managed editor starts its fixed receiver.
+    fn observe_managed_shell_receiver_awaiting(
         &mut self,
         output_pane_id: &str,
+        shell: ManagedShellKind,
         token: &str,
     ) -> Result<usize> {
-        if !self.active_managed_shell_token_matches(
-            output_pane_id,
-            mez_terminal::ManagedShellAdapter::Zsh,
-            token,
-        ) {
+        let adapter = match shell {
+            ManagedShellKind::Fish => mez_terminal::ManagedShellAdapter::Fish,
+            ManagedShellKind::Zsh => mez_terminal::ManagedShellAdapter::Zsh,
+            ManagedShellKind::Bash => return Ok(0),
+        };
+        if !self.active_managed_shell_token_matches(output_pane_id, adapter, token) {
             return Ok(0);
         }
         let Some(marker) = self
             .process
             .pane_managed_shell_handoffs
             .get(output_pane_id)
-            .filter(|handoff| handoff.shell() == ManagedShellKind::Zsh)
+            .filter(|handoff| handoff.shell() == shell)
             .map(|handoff| handoff.identity().marker.clone())
         else {
             return Ok(0);
@@ -1108,8 +1167,8 @@ impl RuntimeSessionService {
             return self.fail_shell_transaction_protocol_violation(
                 &marker,
                 transaction,
-                "zsh-receiver-awaiting-pane-mismatch",
-                "Zsh receiver-awaiting event does not match the pending subshell handoff",
+                "managed-receiver-awaiting-pane-mismatch",
+                "managed receiver-awaiting event does not match the pending subshell handoff",
             );
         }
         let payload = self
@@ -1121,21 +1180,26 @@ impl RuntimeSessionService {
             return self.fail_shell_transaction_protocol_violation(
                 &marker,
                 transaction,
-                "unexpected-zsh-receiver-awaiting",
-                "Zsh receiver emitted awaiting without pending HOLD metadata",
+                "unexpected-managed-receiver-awaiting",
+                "managed receiver emitted awaiting without pending HOLD metadata",
             );
+        };
+        let remaining_stages = if shell == ManagedShellKind::Fish {
+            3
+        } else {
+            2
         };
         if self
             .process
             .shell_receiver_pending_payloads
             .get(&marker)
-            .is_none_or(|pending| pending.len() < 2)
+            .is_none_or(|pending| pending.len() < remaining_stages)
         {
             return self.fail_shell_transaction_protocol_violation(
                 &marker,
                 transaction,
-                "zsh-receiver-awaiting-without-staged-frame",
-                "Zsh HOLD metadata has no pending BEGIN and DATA/END stages",
+                "managed-receiver-awaiting-without-staged-frame",
+                "managed HOLD metadata has incomplete pending receiver stages",
             );
         }
         let payload_len = payload.bytes.len();
@@ -1146,7 +1210,9 @@ impl RuntimeSessionService {
         self.append_agent_trace_turn_event(
             output_pane_id,
             &transaction.turn_id,
-            &format!("zsh_shell_receiver awaiting_hold marker={marker} bytes={payload_len}"),
+            &format!(
+                "managed_shell receiver_awaiting shell={shell:?} marker={marker} bytes={payload_len}"
+            ),
         )?;
         Ok(1)
     }
@@ -1227,7 +1293,11 @@ impl RuntimeSessionService {
             self.mark_agent_subshell_command_exit(output_pane_id.to_string());
             self.remember_hidden_shell_render_suppression(output_pane_id);
             self.remember_agent_subshell_exit_echo(output_pane_id);
-            cancelled_bootstrap.extend_from_slice(b"exit\n");
+            if fish_receiver_installed {
+                cancelled_bootstrap.extend_from_slice(mez_agent::fish_agent_subshell_exit_input());
+            } else {
+                cancelled_bootstrap.extend_from_slice(b"exit\n");
+            }
             self.write_runtime_pane_input(output_pane_id, &cancelled_bootstrap)?;
             return Ok(1);
         }

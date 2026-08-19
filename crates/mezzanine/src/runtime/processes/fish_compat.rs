@@ -73,11 +73,12 @@ if not functions --query __mez_fish_user_right_prompt
         end
     end
 end
-functions --erase __mez_fish_hold_editor __mez_fish_release_editor __mez_fish_restore_editor __mez_fish_private_trigger __mez_fish_private_receiver __mez_fish_publish_parent_restored __mez_fish_passive_command_is_internal __mez_fish_passive_prompt_start __mez_fish_passive_preexec __mez_fish_passive_postexec fish_prompt fish_right_prompt 2>/dev/null
+functions --erase __mez_fish_hold_editor __mez_fish_release_editor __mez_fish_restore_editor __mez_fish_validate_private_frame __mez_fish_private_trigger __mez_fish_private_receiver __mez_fish_publish_parent_restored __mez_fish_passive_command_is_internal __mez_fish_passive_prompt_start __mez_fish_passive_preexec __mez_fish_passive_postexec fish_prompt fish_right_prompt 2>/dev/null
 set -g __MEZ_FISH_INTEGRATION_OWNER {}
 set -e __MEZ_FISH_EDITOR_HELD __MEZ_FISH_EDITOR_CLEAR_PENDING __MEZ_FISH_HOLD_MARKER __MEZ_FISH_PARENT_RESTORE_MARKER __MEZ_FISH_PARENT_RESTORE_STATUS __MEZ_FISH_PARENT_RESTORE_OUTCOME __MEZ_FISH_PASSIVE_COMMAND_ACTIVE __MEZ_FISH_PASSIVE_SKIP_POSTEXEC
 function __mez_fish_hold_editor
     set -l hold_record
+    builtin printf '\033]133;R;mez_protocol=2;mez_shell=fish;mez_token=%s;mez_event=receiver-awaiting\033\\' "$__MEZ_FISH_INTEGRATION_OWNER"
     read -l hold_record; or return 1
     set -l hold_fields (string split ' ' -- "$hold_record")
     if test (count $hold_fields) -ne 3; or test "$hold_fields[1]" != MEZ_FISH_RX1_HOLD; or test "$hold_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or test -z "$hold_fields[3]"
@@ -97,6 +98,38 @@ function __mez_fish_release_editor
         return 0
     end
     set -e __MEZ_FISH_EDITOR_HELD __MEZ_FISH_EDITOR_CLEAR_PENDING __MEZ_FISH_HOLD_MARKER
+end
+function __mez_fish_validate_private_frame --argument-names marker expected_chunks expected_length expected_digest encoded_file
+    set -l receive_status 0
+    set -l sequence 0
+    set -l encoded_bytes 0
+    while test "$sequence" -lt "$expected_chunks"
+        set -l data_record
+        read -l data_record; or begin; set receive_status 1; break; end
+        set -l data_fields (string split -m 4 ' ' -- "$data_record")
+        if test "$receive_status" -eq 0
+            if test (count $data_fields) -ne 5; or test "$data_fields[1]" != MEZ_FISH_RX1_DATA; or test "$data_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or test "$data_fields[3]" != "$marker"; or test "$data_fields[4]" != "$sequence"; or test (string length -- "$data_fields[5]") -gt 640; or not string match -rq '^[A-Za-z0-9+/]*={{0,2}}$' -- "$data_fields[5]"
+                set receive_status 1
+            else
+                set encoded_bytes (math "$encoded_bytes + "(string length -- "$data_fields[5]"))
+                if test "$encoded_bytes" -gt 22369624
+                    set receive_status 1
+                else
+                    command printf '%s' "$data_fields[5]" >> "$encoded_file"; or set receive_status $status
+                end
+            end
+        end
+        set sequence (math "$sequence + 1")
+    end
+    set -l end_record
+    read -l end_record; or set receive_status 1
+    if test -n "$end_record"; and test "$receive_status" -eq 0
+        set -l end_fields (string split ' ' -- "$end_record")
+        if test (count $end_fields) -ne 6; or test "$end_fields[1]" != MEZ_FISH_RX1_END; or test "$end_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or test "$end_fields[3]" != "$marker"; or test "$end_fields[4]" != "$expected_chunks"; or test "$end_fields[5]" != "$expected_length"; or test "$end_fields[6]" != "$expected_digest"
+            set receive_status 1
+        end
+    end
+    return $receive_status
 end
 function __mez_fish_private_receiver
     if not set -q __MEZ_FISH_EDITOR_HELD
@@ -134,57 +167,25 @@ function __mez_fish_private_receiver
     set -l source_status 1
     set -l source_file (command mktemp); or set source_file ''
     set -l encoded_file "$source_file.b64"
+    set -l records_file "$source_file.rx1"
     set -l receive_status 0
-    set -l sequence 0
-    set -l encoded_bytes 0
     if test -z "$source_file"
         set receive_status 1
     else
         command printf '' > "$encoded_file"; or set receive_status $status
+        command printf '' > "$records_file"; or set receive_status $status
     end
     set -l cancelled 0
-    while test "$sequence" -lt "$expected_chunks"
-        set -l data_record
-        read -l data_record; or begin; set receive_status 1; break; end
-        set -l cancel_fields (string split ' ' -- "$data_record")
-        if test (count $cancel_fields) -eq 3; and test "$cancel_fields[1]" = MEZ_FISH_RX1_CANCEL; and test "$cancel_fields[2]" = "$__MEZ_FISH_INTEGRATION_OWNER"; and test "$cancel_fields[3]" = "$marker"
-            if test "$sequence" -eq 0
-                set cancelled 1
-                set source_status 130
-                builtin printf '\036'
-                break
-            end
-            set receive_status 1
-            set sequence (math "$sequence + 1")
-            builtin printf '\036'
-            continue
-        end
-        set -l data_fields (string split -m 4 ' ' -- "$data_record")
-        if test "$receive_status" -eq 0
-            if test (count $data_fields) -ne 5; or test "$data_fields[1]" != MEZ_FISH_RX1_DATA; or test "$data_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or test "$data_fields[3]" != "$marker"; or test "$data_fields[4]" != "$sequence"; or test (string length -- "$data_fields[5]") -gt 640; or not string match -rq '^[A-Za-z0-9+/]*={{0,2}}$' -- "$data_fields[5]"
-                set receive_status 1
-            else
-                set encoded_bytes (math "$encoded_bytes + "(string length -- "$data_fields[5]"))
-                if test "$encoded_bytes" -gt 22369624
-                    set receive_status 1
-                else
-                    command printf '%s' "$data_fields[5]" >> "$encoded_file"; or set receive_status $status
-                end
-            end
-        end
-        set sequence (math "$sequence + 1")
-        builtin printf '\036'
-    end
-    if test "$cancelled" -eq 0
-        set -l end_record
-        read -l end_record; or set receive_status 1
-        if test -n "$end_record"; and test "$receive_status" -eq 0
-            set -l end_fields (string split ' ' -- "$end_record")
-            if test (count $end_fields) -ne 6; or test "$end_fields[1]" != MEZ_FISH_RX1_END; or test "$end_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or test "$end_fields[3]" != "$marker"; or test "$end_fields[4]" != "$expected_chunks"; or test "$end_fields[5]" != "$expected_length"; or test "$end_fields[6]" != "$expected_digest"
-                set receive_status 1
-            end
-        end
-        builtin printf '\036'
+    command /bin/sh -c 'owner=$1; marker=$2; expected=$3; records=$4; capture_status=0; sequence=0; while [ "$sequence" -lt "$expected" ]; do IFS= read -r record || exit 1; if [ -n "$records" ]; then printf "%s\n" "$record" >>"$records" 2>/dev/null || capture_status=1; else capture_status=1; fi; printf "\036"; if [ "$sequence" -eq 0 ] && [ "$record" = "MEZ_FISH_RX1_CANCEL $owner $marker" ]; then exit 130; fi; sequence=$((sequence + 1)); done; IFS= read -r record || exit 1; if [ -n "$records" ]; then printf "%s\n" "$record" >>"$records" 2>/dev/null || capture_status=1; else capture_status=1; fi; printf "\036"; exit "$capture_status"' sh "$__MEZ_FISH_INTEGRATION_OWNER" "$marker" "$expected_chunks" "$records_file"
+    set -l capture_status $status
+    if test "$capture_status" -eq 130
+        set cancelled 1
+        set source_status 130
+    else if test "$capture_status" -ne 0
+        set receive_status 1
+    else if test "$receive_status" -eq 0
+        __mez_fish_validate_private_frame "$marker" "$expected_chunks" "$expected_length" "$expected_digest" "$encoded_file" < "$records_file"
+        set receive_status $status
     end
     if test "$cancelled" -eq 0; and test "$receive_status" -eq 0
         if command printf '' | command base64 -d >/dev/null 2>&1
@@ -218,7 +219,7 @@ function __mez_fish_private_receiver
         end
     end
     if test -n "$source_file"
-        command rm -f -- "$source_file" "$encoded_file" >/dev/null 2>&1; or true
+        command rm -f -- "$source_file" "$encoded_file" "$records_file" >/dev/null 2>&1; or true
     end
     set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$marker"
     set -g __MEZ_FISH_PARENT_RESTORE_STATUS "$source_status"
@@ -505,11 +506,23 @@ mod tests {
         marker: &str,
     ) -> Vec<u8> {
         process.write_input(admission.wrapper.as_bytes()).unwrap();
+        let receiver_awaiting = format!(
+            "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=receiver-awaiting",
+            owner.as_str()
+        );
+        let mut output = read_fish_output_until(process, |output| {
+            output
+                .windows(receiver_awaiting.len())
+                .any(|window| window == receiver_awaiting.as_bytes())
+        });
+        process
+            .write_input(admission.receiver_hold.as_bytes())
+            .unwrap();
         let clear_requested = format!(
             "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=editor-clear-requested;mez_marker={marker}",
             owner.as_str()
         );
-        let mut output = read_fish_output_until(process, |output| {
+        extend_fish_output_until(process, &mut output, |output| {
             output
                 .windows(clear_requested.len())
                 .any(|window| window == clear_requested.as_bytes())
@@ -665,6 +678,7 @@ mod tests {
         settle_managed_fish_startup(&mut process);
 
         let bootstrap_marker = "fish-child-bootstrap-marker";
+        let exit_marker = MarkerToken::new("abcdefabcdefabcdefabcdefabcdefab").unwrap();
         let handoff = agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
             &fish,
             ShellClassification::Fish,
@@ -674,7 +688,7 @@ mod tests {
             None,
             Some((&receiver_token, bootstrap_marker)),
             None,
-            None,
+            Some(&exit_marker),
         )
         .unwrap();
         let admission = fish_private_source_input(&handoff, &receiver_token, bootstrap_marker);
@@ -751,7 +765,26 @@ mod tests {
             String::from_utf8_lossy(&transaction_output)
         );
 
-        process.write_input(b"exit\n").unwrap();
+        process
+            .write_input(b"fish_vi_key_bindings; printf '__MEZ_CHILD_VI_READY__\\n'\n")
+            .unwrap();
+        extend_fish_output_until(&mut process, &mut transaction_output, |output| {
+            String::from_utf8_lossy(output).contains("__MEZ_CHILD_VI_READY__")
+        });
+        process
+            .write_input(mez_agent::fish_agent_subshell_exit_input())
+            .unwrap();
+        let exit_boundary = format!("mez_agent_subshell_exit={}", exit_marker.as_str());
+        extend_fish_output_until(&mut process, &mut transaction_output, |output| {
+            output
+                .windows(exit_boundary.len())
+                .any(|window| window == exit_boundary.as_bytes())
+        });
+        assert!(
+            String::from_utf8_lossy(&transaction_output).contains(&exit_boundary),
+            "managed Fish parent did not publish its child-exit boundary: {:?}",
+            String::from_utf8_lossy(&transaction_output)
+        );
         process.terminate(Duration::from_millis(100)).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -823,7 +856,12 @@ mod tests {
                 marker.as_str(),
             )),
         );
-        process.write_input(bootstrap.wrapper.as_bytes()).unwrap();
+        output.extend(process.write_shell_delivery(
+            &ShellInputDelivery::generated_source_for_transaction(
+                bootstrap.wrapper.as_bytes().to_vec(),
+                marker.as_str(),
+            ),
+        ));
 
         let installed = format!(
             "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=child-installed;mez_marker={}",

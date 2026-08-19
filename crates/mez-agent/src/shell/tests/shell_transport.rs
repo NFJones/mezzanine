@@ -316,6 +316,7 @@ fn agent_subshell_exit_boundary_follows_child_cleanup_for_every_shell() {
         )
         .into_bytes()
     );
+    assert_eq!(fish_agent_subshell_exit_input(), b"\x18");
 
     for (path, classification, managed_bash) in [
         ("/bin/sh", ShellClassification::PosixSh, false),
@@ -341,6 +342,15 @@ fn agent_subshell_exit_boundary_follows_child_cleanup_for_every_shell() {
         } else {
             decoded_posix_wrapper_source(&handoff)
         };
+        if classification == ShellClassification::Fish {
+            for keymap in ["default", "insert", "visual", "replace_one"] {
+                assert!(
+                    source.contains(&format!("bind -M {keymap} "))
+                        && source.contains("__mez_agent_child_exit"),
+                    "{source}"
+                );
+            }
+        }
         let cleanup = if classification == ShellClassification::Fish {
             source.find("set -e MEZ_SHELL_STTY_STATE")
         } else {
@@ -1464,7 +1474,11 @@ fn fish_receiver_renders_acknowledged_payload_contract() {
     let wrapper = decoded_fish_wrapper_source(&input.wrapper);
 
     assert!(input.payload_receiver_acknowledgements);
-    assert_eq!(wrapper.matches("printf '\\036'").count(), 2);
+    assert!(wrapper.contains("command /bin/sh -c"), "{wrapper}");
+    assert!(
+        !wrapper.contains("while read -l MEZ_COMMAND_LINE"),
+        "{wrapper}"
+    );
     assert!(wrapper.contains("printf '\\033]133;C;"));
     assert!(wrapper.contains("set MEZ_COMMAND_SEEN_END 1"));
     assert!(!wrapper.contains("set MEZ_WRITE_STATUS $status; break"));

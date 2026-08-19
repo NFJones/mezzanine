@@ -1140,6 +1140,12 @@ impl RuntimeSessionService {
             self.defer_agent_subshell_entry(pane_id);
             return Ok(false);
         }
+        if self.pane_bootstrap_is_pending(pane_id)
+            && self.pane_has_running_shell_transaction(pane_id)
+        {
+            self.defer_agent_subshell_entry(pane_id);
+            return Ok(false);
+        }
         let _ = self.schedule_parent_shell_discovery_for_agent_entry(pane_id);
         if self.pane_bootstrap_awaits_shell_identity(pane_id) {
             self.defer_agent_subshell_entry(pane_id);
@@ -1320,6 +1326,10 @@ impl RuntimeSessionService {
                 mez_agent::fish_private_source_input(&shell_command, &token, marker);
             self.prepend_fish_shell_receiver_payloads(
                 marker,
+                mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
+                    private_input.receiver_hold.into_bytes(),
+                    marker.clone(),
+                ),
                 mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
                     private_input.editor_clear_confirmation.into_bytes(),
                     marker.clone(),

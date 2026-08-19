@@ -819,6 +819,12 @@ async fn async_actor_defers_foreign_input_until_matching_shell_lease_release() {
                 },
                 RuntimeSideEffect::PaneProcessIo {
                     instance: instance.clone(),
+                    effect: PaneProcessIoEffect::WriteInputPriority {
+                        bytes: b"terminal-response".to_vec(),
+                    },
+                },
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: instance.clone(),
                     effect: PaneProcessIoEffect::WriteShellInput {
                         delivery: wrapper.clone(),
                     },
@@ -832,10 +838,18 @@ async fn async_actor_defers_foreign_input_until_matching_shell_lease_release() {
                 .drain_pane_process_io_side_effects(instance.clone(), 8)
                 .await
                 .unwrap(),
-            vec![RuntimeSideEffect::PaneProcessIo {
-                instance: instance.clone(),
-                effect: PaneProcessIoEffect::WriteShellInput { delivery: wrapper },
-            }]
+            vec![
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: instance.clone(),
+                    effect: PaneProcessIoEffect::WriteInputPriority {
+                        bytes: b"terminal-response".to_vec(),
+                    },
+                },
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: instance.clone(),
+                    effect: PaneProcessIoEffect::WriteShellInput { delivery: wrapper },
+                },
+            ]
         );
 
         handle

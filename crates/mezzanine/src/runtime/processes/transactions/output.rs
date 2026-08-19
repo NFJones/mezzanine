@@ -151,6 +151,9 @@ fn shell_transaction_control_osc_matches_marker(record: &[u8], marker: &str) -> 
             | mez_terminal::ManagedShellProtocolEvent::ChildInstalled {
                 marker: event_marker,
             }
+            | mez_terminal::ManagedShellProtocolEvent::ChildPromptReady {
+                marker: event_marker,
+            }
             | mez_terminal::ManagedShellProtocolEvent::ChildExited {
                 marker: event_marker,
                 ..

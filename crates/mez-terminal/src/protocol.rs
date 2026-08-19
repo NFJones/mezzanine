@@ -273,6 +273,11 @@ pub enum ManagedShellProtocolEvent {
         /// Unpredictable handoff marker inherited by the child.
         marker: String,
     },
+    /// The persistent Fish child reached an editable prompt after bootstrap.
+    ChildPromptReady {
+        /// Unpredictable handoff marker inherited by the child.
+        marker: String,
+    },
     /// The adapter rejected admission without evaluating source.
     ReceiverRejected {
         /// Marker when the adapter parsed one safely, otherwise absent.

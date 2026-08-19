@@ -613,7 +613,14 @@ pub(super) enum RuntimeManagedFishAdmission {
         /// Exact primary process whose startup source must publish availability.
         primary_process_id: u32,
     },
-    /// The parent installed its private wrapper receiver and announced support.
+    /// The parent installed its receiver but has not completed an editable prompt.
+    AwaitingPrompt {
+        /// Exact primary process that published receiver availability.
+        primary_process_id: u32,
+        /// Negotiated semantic protocol version.
+        version: u16,
+    },
+    /// The parent installed its private receiver and reached an editable prompt.
     Ready {
         /// Exact primary process that published this admission state.
         primary_process_id: u32,
@@ -1011,6 +1018,7 @@ impl RuntimeSessionService {
     pub(crate) fn prepend_fish_shell_receiver_payloads(
         &mut self,
         marker: &str,
+        hold: mez_mux::process::ShellInputDelivery,
         clear_confirmation: mez_mux::process::ShellInputDelivery,
         admission: mez_mux::process::ShellInputDelivery,
         payload: mez_mux::process::ShellInputDelivery,
@@ -1024,6 +1032,7 @@ impl RuntimeSessionService {
         pending.push_front(payload);
         pending.push_front(admission);
         pending.push_front(clear_confirmation);
+        pending.push_front(hold);
     }
 
     /// Registers one live editor handoff for the current process epoch.
@@ -1271,11 +1280,51 @@ impl RuntimeSessionService {
         })
     }
 
+    /// Marks a managed Fish child editable after its post-bootstrap prompt.
+    ///
+    /// Returns whether a prior exit request must now be dispatched to the
+    /// child. Other shells do not use this prompt gate.
+    pub(super) fn mark_managed_fish_child_prompt_ready(
+        &mut self,
+        pane_id: &str,
+        marker: &str,
+    ) -> Option<bool> {
+        let handoff = self.process.pane_managed_shell_handoffs.get_mut(pane_id)?;
+        if handoff.identity().marker != marker {
+            return None;
+        }
+        let transition =
+            reduce_managed_shell_handoff(handoff, ManagedShellHandoffEvent::ChildPromptReady);
+        transition.applied.then(|| handoff.exit_requested())
+    }
+
     /// Routes one managed-shell exit request through reducer-selected effects.
     pub(super) fn request_managed_shell_handoff_exit(&mut self, pane_id: &str) -> Result<bool> {
-        let Some(handoff) = self.process.pane_managed_shell_handoffs.get_mut(pane_id) else {
+        let Some(child_exit_is_dispatchable) = self
+            .process
+            .pane_managed_shell_handoffs
+            .get(pane_id)
+            .map(ManagedShellHandoff::child_exit_is_dispatchable)
+        else {
             return Ok(false);
         };
+        if child_exit_is_dispatchable && self.pane_has_running_shell_transaction(pane_id) {
+            let handoff = self
+                .process
+                .pane_managed_shell_handoffs
+                .get_mut(pane_id)
+                .expect("managed shell handoff should remain owned while exit is deferred");
+            let transition = reduce_managed_shell_handoff(
+                handoff,
+                ManagedShellHandoffEvent::ExitDeferredUntilTransactionsSettle,
+            );
+            return Ok(transition.applied);
+        }
+        let handoff = self
+            .process
+            .pane_managed_shell_handoffs
+            .get_mut(pane_id)
+            .expect("managed shell handoff should remain owned during exit dispatch");
         let shell = handoff.shell();
         let transition = reduce_managed_shell_handoff(
             handoff,
@@ -1318,7 +1367,11 @@ impl RuntimeSessionService {
             self.remember_hidden_shell_render_suppression(pane_id);
             self.remember_agent_subshell_exit_echo(pane_id);
             let mut input = cancelled_bootstrap.unwrap_or_default();
-            input.extend_from_slice(b"exit\n");
+            if shell == ManagedShellKind::Fish {
+                input.extend_from_slice(mez_agent::fish_agent_subshell_exit_input());
+            } else {
+                input.extend_from_slice(b"exit\n");
+            }
             self.write_runtime_pane_input(pane_id, &input)?;
             if self.agent_subshell_is_active(pane_id) {
                 self.leave_agent_subshell(pane_id);

@@ -4051,14 +4051,19 @@ canonical-line limits. Generated child source MUST remain withheld until the
 loader publishes a matching fresh nonce, and mismatched, stale, or duplicate
 loader records MUST NOT release input. Temporary loader and child-startup
 artifacts MUST be owner-only and MUST be removed when the synchronous child
-returns. While a correlated dependency-free loader owns that return, hiding or
-exiting the agent shell MUST retain its shell-interaction generation until the
-matching loader-exit record settles parent restoration. Settlement MUST release
-runtime input ownership so subsequent user input reaches the foreign parent.
-After child certification, a transient foreground process-group observation
-from a runtime-owned shell action MUST NOT revoke the loader's restoration
-ownership; the live loader marker, pane primary process, and interaction
-generation remain authoritative until correlated settlement.
+returns. On Darwin, the loader MUST acknowledge each payload record after it
+has been consumed and runtime MUST wait for that acknowledgement before writing
+the next record so the constrained PTY typeahead buffer cannot corrupt staged
+source. Other hosts MAY stream payload records, but the marker-correlated
+terminator MUST remain an acknowledgement boundary. While a correlated
+dependency-free loader owns that return, hiding or exiting the agent shell MUST
+retain its shell-interaction generation until the matching loader-exit record
+settles parent restoration. Settlement MUST release runtime input ownership so
+subsequent user input reaches the foreign parent. After child certification, a
+transient foreground process-group observation from a runtime-owned shell
+action MUST NOT revoke the loader's restoration ownership; the live loader
+marker, pane primary process, and interaction generation remain authoritative
+until correlated settlement.
 
 Foreign bootstrap MUST have finite phase deadlines for identity discovery,
 loader readiness, child bootstrap, and

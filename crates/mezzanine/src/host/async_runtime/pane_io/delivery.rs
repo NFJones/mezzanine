@@ -346,13 +346,13 @@ mod tests {
         );
     }
 
-    /// Verifies dependency-free loader delivery owns its terminal
-    /// acknowledgement independently of the shell that initially launched the
-    /// pane. Explicit-command panes can begin with SSH or another foreign
-    /// program, but the transient POSIX loader emits the acknowledgement after
-    /// it validates its marker-correlated terminator.
+    /// Verifies dependency-free loader delivery applies the host PTY policy
+    /// independently of the shell that initially launched the pane.
+    ///
+    /// Darwin waits for every reader acknowledgement, while other hosts stream
+    /// data records and retain the marker-correlated terminator boundary.
     #[test]
-    fn loader_delivery_requires_only_its_own_terminal_acknowledgement() {
+    fn loader_delivery_uses_host_specific_terminal_acknowledgements() {
         let delivery = ShellInputDelivery::loader_acknowledged(
             b"cGF5bG9hZA==\nMEZ_LOADER_END_marker\n".to_vec(),
             "delivery-1",
@@ -360,7 +360,11 @@ mod tests {
 
         assert_eq!(
             record_wait(&delivery, b"cGF5bG9hZA==\n", false, false, true),
-            Ok(None)
+            if cfg!(target_os = "macos") {
+                Ok(Some(ShellInputProgressWait::Acknowledgement))
+            } else {
+                Ok(None)
+            }
         );
         assert_eq!(
             record_wait(&delivery, b"MEZ_LOADER_END_marker\n", false, true, true),

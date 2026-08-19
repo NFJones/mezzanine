@@ -488,12 +488,12 @@ pub use shell::{
     bash_private_handoff_cancel_input, bash_private_handoff_source_input,
     bash_private_source_input, bootstrap_script, bootstrap_script_for_classification,
     dependency_free_foreign_shell_loader_command, dependency_free_foreign_shell_loader_input,
-    fish_bootstrap_script, fish_private_source_cancel_input, fish_private_source_input, fish_quote,
-    parse_bootstrap_env_output, parse_shell_identity_probe_output,
-    posix_shell_history_suppression_finish, posix_shell_history_suppression_start,
-    readiness_probe_command_for_classification, shell_command_contains_unquoted_heredoc,
-    shell_identity_probe_command, shell_quote, tool_discovery_script,
-    validate_agent_authored_shell_command, validate_resolved_shell_path,
+    fish_agent_subshell_exit_input, fish_bootstrap_script, fish_private_source_cancel_input,
+    fish_private_source_input, fish_quote, parse_bootstrap_env_output,
+    parse_shell_identity_probe_output, posix_shell_history_suppression_finish,
+    posix_shell_history_suppression_start, readiness_probe_command_for_classification,
+    shell_command_contains_unquoted_heredoc, shell_identity_probe_command, shell_quote,
+    tool_discovery_script, validate_agent_authored_shell_command, validate_resolved_shell_path,
     validate_shell_marker_token, zsh_private_source_cancel_input, zsh_private_source_input,
 };
 pub use shell_read_observation::{

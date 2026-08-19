@@ -13,12 +13,12 @@ pub enum ShellInputPacing {
     GeneratedSource,
     /// Deferred payload records acknowledged by the shell receiver.
     ReceiverAcknowledged,
-    /// Foreign-loader records acknowledged only when their terminating record arrives.
+    /// Foreign-loader records paced by the host-specific acknowledgement policy.
     ///
-    /// The loader is already a non-interactive `/bin/sh` reader, so its bounded
-    /// base64 data lines may stream without a stop-and-wait acknowledgement.
-    /// Its marker-correlated terminating record remains the one flow-control
-    /// boundary before the staged source is decoded and executed.
+    /// Linux streams bounded base64 data lines through the non-interactive
+    /// `/bin/sh` reader and acknowledges the terminator. Darwin acknowledges
+    /// every consumed line so its PTY typeahead buffer cannot overflow before
+    /// the staged source is decoded and executed.
     LoaderAcknowledged,
 }
 
@@ -85,7 +85,7 @@ impl ShellInputDelivery {
         }
     }
 
-    /// Builds a priority dependency-free loader payload with one final acknowledgement.
+    /// Builds a priority dependency-free loader payload with host-specific acknowledgements.
     pub fn loader_acknowledged(bytes: Vec<u8>, delivery_id: impl Into<String>) -> Self {
         Self {
             bytes,

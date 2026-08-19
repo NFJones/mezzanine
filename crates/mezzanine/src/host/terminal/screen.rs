@@ -141,6 +141,9 @@ fn parse_managed_shell_protocol_event(values: &BTreeMap<&str, &str>) -> Option<T
         "child-installed" => ManagedShellProtocolEvent::ChildInstalled {
             marker: required_marker_field(values, "mez_marker")?,
         },
+        "child-prompt-ready" => ManagedShellProtocolEvent::ChildPromptReady {
+            marker: required_marker_field(values, "mez_marker")?,
+        },
         "receiver-rejected" => ManagedShellProtocolEvent::ReceiverRejected {
             marker: values
                 .contains_key("mez_marker")
@@ -379,6 +382,19 @@ mod tests {
                 shell: ManagedShellAdapter::Zsh,
                 token: "pane-token".to_string(),
                 event: ManagedShellProtocolEvent::EditorCleared { marker: None },
+            })
+        );
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_protocol=2;mez_shell=fish;mez_token=pane-token;mez_event=child-prompt-ready;mez_marker=handoff-marker"
+            ),
+            Some(TerminalOscEvent::ManagedShell {
+                version: 2,
+                shell: ManagedShellAdapter::Fish,
+                token: "pane-token".to_string(),
+                event: ManagedShellProtocolEvent::ChildPromptReady {
+                    marker: "handoff-marker".to_string(),
+                },
             })
         );
         assert_eq!(
