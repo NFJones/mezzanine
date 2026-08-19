@@ -286,7 +286,7 @@ pub fn local_execution_output_to_action_result(
     let content = if combined_output.is_empty() {
         Vec::new()
     } else {
-        vec![combined_output]
+        vec![combined_output.clone()]
     };
     if matches!(action.payload, AgentActionPayload::ShellCommand { .. }) {
         return Ok(ActionResult::succeeded(
@@ -308,6 +308,25 @@ pub fn local_execution_output_to_action_result(
             content,
             Some(structured),
         ));
+    }
+    if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+        let exit_code = output.exit_code.unwrap_or(1);
+        let diagnostic = combined_output
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("apply_patch:") && *line != "apply_patch: patch failed")
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| format!("apply_patch write phase exited with status {exit_code}"));
+        let mut result = ActionResult::failed(
+            turn,
+            action,
+            ActionStatus::Failed,
+            "apply_patch_write_failed",
+            diagnostic,
+        )?;
+        result.content = action_text_content_blocks(content);
+        result.structured_content_json = Some(structured);
+        return Ok(result);
     }
     let exit_message = match output.exit_code {
         Some(exit_code) => format!("shell command exited with status {exit_code}"),
@@ -733,6 +752,46 @@ mod tests {
             serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
         assert_eq!(structured["execution_transport"], "pane_shell");
         assert_eq!(structured["terminal_observation"]["exit_code"], 2);
+    }
+
+    /// Verifies failed semantic patch writes retain the patch diagnostic instead
+    /// of being misclassified as a generic shell-command failure.
+    #[test]
+    fn failed_apply_patch_projection_preserves_patch_diagnostic() {
+        let action = AgentAction {
+            id: "patch-1".to_string(),
+            rationale: "update note".to_string(),
+            payload: AgentActionPayload::ApplyPatch {
+                patch: "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n*** End Patch"
+                    .to_string(),
+                strip: None,
+            },
+        };
+        let result = local_execution_output_to_action_result(
+            &turn(),
+            &action,
+            LocalExecutionOutput::spawned_shell(ShellExecutionOutput::new(
+                Some(1),
+                "diff -- apply patch\n+applied\n".to_string(),
+                "apply_patch: hunk did not match: note.txt\napply_patch: patch failed\n"
+                    .to_string(),
+                false,
+                false,
+            )),
+            &MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(result.status, ActionStatus::Failed);
+        assert_eq!(
+            result.error.as_ref().unwrap().code,
+            "apply_patch_write_failed"
+        );
+        assert_eq!(
+            result.error.as_ref().unwrap().message,
+            "apply_patch: hunk did not match: note.txt"
+        );
+        assert!(result.content_text().contains("+applied"));
     }
 
     /// Verifies successful MCP responses preserve text blocks and structured

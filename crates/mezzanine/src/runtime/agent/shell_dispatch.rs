@@ -468,7 +468,7 @@ impl RuntimeSessionService {
                     &turn.pane_id,
                     combined_output.as_bytes(),
                 )?;
-            } else if exit_code == Some(0)
+            } else if (exit_code == Some(0) || (is_apply_patch_write && confirmed_partial_apply))
                 && local_action_plan(&action)?
                     .is_some_and(|plan| plan.display_output_after_completion)
                 && (self.agent_debug_enabled(&turn.pane_id)

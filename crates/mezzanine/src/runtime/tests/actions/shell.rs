@@ -622,6 +622,12 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
 
     let outcome = worker.join().unwrap();
     assert!(service.complete_native_shell_action(outcome).unwrap());
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains("native-live-first"), "{pane_text}");
     service.terminate_all_pane_processes().unwrap();
 }
 

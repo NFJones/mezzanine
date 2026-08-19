@@ -127,15 +127,6 @@ impl RuntimeSessionService {
         turn_id: &str,
         execution: AgentTurnExecution,
     ) -> Result<crate::runtime::RuntimeTransition> {
-        let pane_id = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == turn_id)
-            .map(|turn| turn.pane_id.clone());
-        if let Some(pane_id) = pane_id {
-            self.clear_agent_shell_output_status_line(&pane_id)?;
-        }
         let application = self
             .apply_agent_provider_completed_event_with_render_intent(agent_id, turn_id, execution)
             .await?;
