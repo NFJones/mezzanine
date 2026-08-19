@@ -252,7 +252,7 @@ fn record_wait(
                 .then_some(ShellInputProgressWait::Acknowledgement))
         }
         ShellInputPacing::LoaderAcknowledged => {
-            if !delivery.receiver_acknowledgements || !supports_acknowledgements {
+            if !delivery.receiver_acknowledgements {
                 return Err("loader-acknowledged shell delivery was not negotiated");
             }
             Ok(loader_input_record_requires_ack(record)
@@ -342,6 +342,34 @@ mod tests {
         );
         assert_eq!(
             record_wait(&delivery, b"S1E 0\n", true, true, true),
+            Ok(Some(ShellInputProgressWait::Acknowledgement))
+        );
+    }
+
+    /// Verifies dependency-free loader delivery owns its terminal
+    /// acknowledgement independently of the shell that initially launched the
+    /// pane. Explicit-command panes can begin with SSH or another foreign
+    /// program, but the transient POSIX loader emits the acknowledgement after
+    /// it validates its marker-correlated terminator.
+    #[test]
+    fn loader_delivery_requires_only_its_own_terminal_acknowledgement() {
+        let delivery = ShellInputDelivery::loader_acknowledged(
+            b"cGF5bG9hZA==\nMEZ_LOADER_END_marker\n".to_vec(),
+            "delivery-1",
+        );
+
+        assert_eq!(
+            record_wait(&delivery, b"cGF5bG9hZA==\n", false, false, true),
+            Ok(None)
+        );
+        assert_eq!(
+            record_wait(
+                &delivery,
+                b"MEZ_LOADER_END_marker\n",
+                false,
+                true,
+                true
+            ),
             Ok(Some(ShellInputProgressWait::Acknowledgement))
         );
     }

@@ -445,10 +445,10 @@ impl PaneProcess {
 
         #[cfg(target_os = "macos")]
         {
-            let receiver_acknowledged = matches!(
-                delivery.pacing,
-                ShellInputPacing::ReceiverAcknowledged | ShellInputPacing::LoaderAcknowledged
-            );
+            let receiver_acknowledged =
+                matches!(delivery.pacing, ShellInputPacing::ReceiverAcknowledged);
+            let loader_acknowledged =
+                matches!(delivery.pacing, ShellInputPacing::LoaderAcknowledged);
             if receiver_acknowledged
                 && (!delivery.receiver_acknowledgements
                     || !self.supports_shell_input_acknowledgements())
@@ -457,7 +457,12 @@ impl PaneProcess {
                     "receiver-acknowledged shell delivery was not negotiated",
                 ));
             }
-            if !self.supports_shell_input_acknowledgements() {
+            if loader_acknowledged && !delivery.receiver_acknowledgements {
+                return Err(MezError::invalid_state(
+                    "loader-acknowledged shell delivery was not negotiated",
+                ));
+            }
+            if !self.supports_shell_input_acknowledgements() && !loader_acknowledged {
                 return self.write_input(input);
             }
             let mut written = 0usize;
@@ -476,10 +481,16 @@ impl PaneProcess {
                 self.write_input(record)?;
                 written = written.saturating_add(record_len);
                 if (receiver_acknowledged && receiver_input_record_requires_ack(record))
-                    || (!receiver_acknowledged && written < input.len())
+                    || (loader_acknowledged && loader_input_record_requires_ack(record))
+                    || (!receiver_acknowledged
+                        && !loader_acknowledged
+                        && written < input.len())
                 {
                     let acknowledged =
-                        if receiver_acknowledged || shell_input_record_requires_ack(record) {
+                        if receiver_acknowledged
+                            || loader_acknowledged
+                            || shell_input_record_requires_ack(record)
+                        {
                             self.wait_for_shell_input_ack_after(
                                 acknowledgement_count,
                                 PANE_INPUT_WRITE_STALL_TIMEOUT,
