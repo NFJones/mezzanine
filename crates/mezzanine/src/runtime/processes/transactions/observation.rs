@@ -131,8 +131,6 @@ impl RuntimeSessionService {
             || boundary.loader_marker.as_deref() != Some(marker)
             || boundary.loader_ready
             || self.primary_pid_for_live_pane_process(pane_id) != Some(boundary.primary_process_id)
-            || self.pane_foreground_process_group_observation(pane_id).0
-                != Some(boundary.process_group_id)
             || self
                 .process
                 .pane_shell_interaction_generations
@@ -227,12 +225,7 @@ impl RuntimeSessionService {
                 .get(pane_id)
                 .copied()
                 == Some(boundary.interaction_generation);
-        let foreground_group_matches = self.pane_foreground_process_group_observation(pane_id).0
-            == Some(boundary.process_group_id);
-        if !stable_identity_matches
-            || (boundary.phase != RuntimeForeignShellBootstrapPhase::Certified
-                && !foreground_group_matches)
-        {
+        if !stable_identity_matches {
             return Ok(0);
         }
         let bootstrap_marker = self

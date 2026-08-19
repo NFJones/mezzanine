@@ -98,6 +98,10 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
         .expect("dependency-free loader should retain its bounded nonce")
         .to_string();
     assert_eq!(loader_marker.len(), 32);
+    let loader_process_group = primary_pid.saturating_add(2);
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, Some(loader_process_group));
     assert_eq!(
         service
             .observe_agent_shell_transaction_events(

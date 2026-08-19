@@ -325,8 +325,9 @@ mod tests {
     use mez_agent::shell::{
         FishPrivateSourceInput, PanePathResolutionRequest, ShellClassification, ShellTransaction,
         agent_subshell_enter_command_with_shell_compatibility_and_exit_marker,
-        fish_private_source_cancel_input, fish_private_source_input, pane_path_resolution_command,
-        parse_pane_path_resolution_output, shell_identity_probe_command,
+        dependency_free_foreign_shell_loader_input, fish_private_source_cancel_input,
+        fish_private_source_input, pane_path_resolution_command, parse_pane_path_resolution_output,
+        shell_identity_probe_command,
     };
     use mez_mux::process::{
         PaneProcess, PaneProcessEnvironment, ShellInputDelivery, pane_command_plan,
@@ -734,6 +735,109 @@ mod tests {
         process.write_input(b"exit\n").unwrap();
         process.terminate(Duration::from_millis(100)).unwrap();
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    /// Verifies the dependency-free POSIX loader can stage an interactive Fish
+    /// child and consume the bootstrap wrapper prebuffered behind its payload.
+    fn dependency_free_loader_completes_real_managed_fish_exchange() {
+        let Some(fish) = fish_path_for_tests() else {
+            eprintln!("skipping dependency-free Fish loader assertion because Fish is unavailable");
+            return;
+        };
+        let marker = MarkerToken::new("00112233445566778899aabbccddeeff").unwrap();
+        let child_token = MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let exit_marker = MarkerToken::new("abcdefabcdefabcdefabcdefabcdefab").unwrap();
+        let loader_marker = "fedcba9876543210fedcba9876543210";
+        let staging_source = agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
+            &fish,
+            ShellClassification::Fish,
+            None,
+            None,
+            None,
+            None,
+            Some((&child_token, marker.as_str())),
+            None,
+            Some(&exit_marker),
+        )
+        .unwrap();
+        let loader = dependency_free_foreign_shell_loader_input(
+            &staging_source,
+            &fish,
+            ShellClassification::Fish,
+            Some(&child_token),
+            loader_marker,
+        )
+        .unwrap();
+        let bootstrap = ShellTransaction::new(
+            marker.clone(),
+            "turn-1",
+            "agent-1",
+            "pane-1",
+            &fish,
+            mez_agent::fish_bootstrap_script(),
+        )
+        .unwrap()
+        .with_payload_receiver_acknowledgements(cfg!(target_os = "macos"))
+        .render_for_classification_input(ShellClassification::Fish);
+
+        let launch = PaneProcessLaunch::new(PathBuf::from("/bin/sh"));
+        let size = Size::new(80, 24).expect("the foreign loader PTY size should be valid");
+        let process = spawn_pane_process(&launch, None, &test_environment(), size)
+            .expect("the foreign loader pane should spawn");
+        let terminal = mez_terminal::TerminalScreen::new(size, 1_000)
+            .expect("the foreign loader terminal screen should initialize");
+        let mut process = ManagedFishTestPane { process, terminal };
+        process.write_input(loader.command.as_bytes()).unwrap();
+        let mut output = read_fish_output_until(&mut process, |output| {
+            String::from_utf8_lossy(output).contains("mez_foreign_loader=ready")
+        });
+        process
+            .process
+            .write_shell_delivery(&ShellInputDelivery::loader_acknowledged(
+                loader.payload.into_bytes(),
+                marker.as_str(),
+            ))
+            .expect("the foreign loader payload should remain writable");
+        process.write_input(bootstrap.wrapper.as_bytes()).unwrap();
+
+        let installed = format!(
+            "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=child-installed;mez_marker={}",
+            child_token.as_str(),
+            marker.as_str()
+        );
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(installed.len())
+                .any(|window| window == installed.as_bytes())
+        });
+        let start = format!("\x1b]133;C;mez_marker={};", marker.as_str());
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(start.len())
+                .any(|window| window == start.as_bytes())
+        });
+        output.extend(
+            process.write_shell_delivery(&ShellInputDelivery::receiver_acknowledged(
+                bootstrap.payload.into_bytes(),
+                marker.as_str(),
+                bootstrap.payload_receiver_acknowledgements,
+            )),
+        );
+        let end = format!("\x1b]133;D;0;mez_marker={};", marker.as_str());
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(end.len())
+                .any(|window| window == end.as_bytes())
+        });
+
+        let rendered = String::from_utf8_lossy(&output);
+        assert!(rendered.contains("bootstrap\tcomplete\t"), "{rendered:?}");
+        process.write_input(b"exit\n").unwrap();
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            String::from_utf8_lossy(output).contains("mez_foreign_loader=exited")
+        });
+        process.terminate(Duration::from_millis(100)).unwrap();
     }
 
     #[test]
