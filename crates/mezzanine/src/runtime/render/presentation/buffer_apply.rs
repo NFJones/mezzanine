@@ -1035,7 +1035,9 @@ impl RuntimeSessionService {
         context: &str,
     ) -> Result<()> {
         screen.set_wrap_continuation_prefix(AGENT_TERMINAL_MESSAGE_PREFIX);
-        catch_agent_terminal_presentation_panic(context, || screen.feed(bytes))
+        catch_agent_terminal_presentation_panic(context, || {
+            screen.feed(bytes);
+        })
     }
 
     /// Retires provisional provider output before an unrelated pane write.

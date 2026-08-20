@@ -6,5 +6,6 @@ mod history;
 mod protocol_strings;
 mod resize_reflow;
 mod styling;
+mod synchronized_output;
 mod unicode;
 mod wrapping;

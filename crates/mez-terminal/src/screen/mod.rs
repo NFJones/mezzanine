@@ -70,6 +70,9 @@ fn terminal_text_width(value: &str, emoji_width: TerminalEmojiWidth) -> usize {
 /// Maximum bytes retained for one CSI parameter/intermediate sequence.
 const MAX_CSI_STRING_BYTES: usize = 1024;
 
+/// Maximum bytes retained for one DCS payload before it is discarded.
+const MAX_DCS_STRING_BYTES: usize = 1024;
+
 /// Runs the parse dec private mode params operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -678,6 +681,12 @@ pub struct TerminalScreen {
     /// Once set, the parser ignores bytes until the final byte and then drops
     /// the complete malformed sequence rather than dispatching truncated state.
     pub(super) csi_buffer_truncated: bool,
+    /// Bounded payload for a DCS sequence introduced by `ESC P`.
+    pub(super) dcs_buffer: String,
+    /// Whether the current DCS payload exceeded its retained parser bound.
+    pub(super) dcs_buffer_truncated: bool,
+    /// Whether the active string sequence was introduced specifically by DCS.
+    pub(super) dcs_enabled: bool,
     /// Stores the osc buffer value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -789,6 +798,10 @@ pub struct TerminalScreen {
     /// Pane compositors use this conservative signal to reuse immutable row
     /// projections only while the owning screen remains unchanged.
     pub(super) render_generation: RenderGeneration,
+    /// Transient projection state for synchronized terminal redraws.
+    pub(super) synchronized_output: SynchronizedOutputState,
+    /// Per-feed synchronization transition summary accumulated by parser dispatch.
+    pub(super) synchronized_output_outcome: SynchronizedOutputFeedOutcome,
     /// Stores the activity events value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -819,6 +832,9 @@ mod editing;
 mod lifecycle;
 mod parser;
 mod state;
+mod synchronized_output;
+pub use synchronized_output::SynchronizedOutputFeedOutcome;
+use synchronized_output::SynchronizedOutputState;
 mod wrap;
 
 /// Builds a screen-sized rendition grid initialized to one rendition value.
