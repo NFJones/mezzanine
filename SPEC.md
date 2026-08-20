@@ -1147,6 +1147,37 @@ Terminal autowrap MUST follow terminal conventions: writing a glyph in the final
 column MUST defer wrapping until the next printable glyph instead of scrolling
 immediately.
 
+Mezzanine MUST recognize synchronized terminal updates bracketed by DEC private
+mode 2026 (`CSI ? 2026 h` to begin and `CSI ? 2026 l` to end) and the legacy
+`DCS = 1 s ... ST` and `DCS = 2 s ... ST` forms. Recognition MUST remain
+incremental when introducers, parameters, or `ST` terminators are fragmented
+across PTY reads; malformed or oversized DCS payloads MUST be bounded and MUST
+NOT activate synchronization.
+
+During a synchronized update, the process terminal model MUST continue applying
+all PTY bytes, including terminal replies, OSC events, title changes, activity,
+bell state, input modes, cursor state, styles, clears, and normal or alternate
+screen transitions. Attached-client composition, however, MUST use the frozen
+published pane projection captured at the first begin marker. Output from other
+panes, cursor blink, status changes, overlays, and any other whole-window
+render MUST NOT expose the synchronized pane's intermediate rows, styles,
+cursor, or alternate-screen state.
+
+Synchronized updates MUST be boolean rather than nested. A repeated begin MUST
+retain the original published projection, advance the recovery epoch, and rearm
+bounded recovery. A normal end MUST publish the fully updated projection once;
+if an alternate-buffer transition or equivalent retained-frame invalidation
+occurred while publication was frozen, that publication MUST use a full redraw.
+An unterminated transaction MUST be force-released after a bounded internal
+timeout. Stale timeout events, normal release, pane removal, process exit, or
+session replacement MUST NOT recreate or republish synchronized state.
+
+Pane resize and copy-mode entry MUST force-release synchronized output before
+changing geometry or deriving a copy viewport. Synchronization state is
+transient presentation state: it MUST NOT be persisted in terminal saved state
+or restored sessions, and pane teardown MUST discard it without rendering a
+removed pane.
+
 Foreground attached clients MUST take ownership of the terminal presentation
 surface while attached. They MUST enter the configured presentation mode, hide or
 replace any host-terminal cursor that would otherwise leak through the drawn
