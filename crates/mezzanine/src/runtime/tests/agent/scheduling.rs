@@ -1635,15 +1635,13 @@ async fn runtime_three_nonrouted_subagents_release_waiting_parent() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies a failed nonrouted child terminalizes its joined waiting parent.
+/// Verifies a failed nonrouted child remains context for its joined parent.
 ///
-/// Joined failure makes the parent execution terminal rather than ready for a
-/// provider continuation. With several children still outstanding, that path
-/// must cancel the parent's scheduler wait and clear every sibling dependency;
-/// otherwise each failed child can report visibly while the parent remains
-/// blocked forever.
+/// One failed child must not terminalize the parent or discard sibling work.
+/// The parent remains blocked until every joined child settles, then resumes
+/// with both the failed task result and successful sibling results as context.
 #[tokio::test]
-async fn runtime_failed_nonrouted_subagent_releases_waiting_parent() {
+async fn runtime_failed_nonrouted_subagent_preserves_siblings_and_resumes_parent() {
     let mut service = test_runtime_service();
     service
         .agent_scheduler_mut()
@@ -1695,21 +1693,80 @@ async fn runtime_failed_nonrouted_subagent_releases_waiting_parent() {
 
     assert_eq!(service.joined_subagent_dependency_count(), 4);
     assert_eq!(service.agent_scheduler().snapshot().waiting, 1);
-    let failed_child = service
+    let children = service
         .agent_turn_ledger()
         .turns()
         .iter()
-        .find(|turn| turn.turn_id != parent.turn_id)
+        .filter(|turn| turn.turn_id != parent.turn_id)
         .cloned()
-        .expect("spawned child turn should be recorded");
+        .collect::<Vec<_>>();
+    assert_eq!(children.len(), 4, "{children:#?}");
+    let failed_child = &children[0];
 
     service
         .complete_running_agent_turn_and_start_ready(
-            &failed_child,
+            failed_child,
             AgentTurnState::Failed,
             "nonrouted_child_failed",
         )
         .unwrap();
+
+    assert_eq!(service.joined_subagent_dependency_count(), 3);
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 1);
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Blocked)
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .all(|task| task.turn_id != parent.turn_id)
+    );
+
+    for (index, child) in children.iter().skip(1).enumerate() {
+        let response = runtime_say_response_for_agent(
+            &child.turn_id,
+            &child.agent_id,
+            &format!("sibling {} done", index + 1),
+            true,
+        );
+        let action = response
+            .action_batch
+            .as_ref()
+            .and_then(|batch| batch.actions.first())
+            .cloned()
+            .unwrap();
+        let execution = mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&child.turn_id, &child.agent_id),
+            response,
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![mez_agent::ActionResult::succeeded(
+                child,
+                &action,
+                vec![format!("sibling {} done", index + 1)],
+                None,
+            )],
+            final_turn: true,
+            terminal_state: AgentTurnState::Completed,
+        };
+        assert!(
+            service
+                .apply_agent_provider_completed_event(
+                    &AgentId::opaque(child.agent_id.clone()).unwrap(),
+                    &child.turn_id,
+                    execution,
+                )
+                .await
+                .unwrap()
+        );
+    }
 
     assert_eq!(service.joined_subagent_dependency_count(), 0);
     assert_eq!(service.agent_scheduler().snapshot().waiting, 0);
@@ -1720,14 +1777,27 @@ async fn runtime_failed_nonrouted_subagent_releases_waiting_parent() {
             .iter()
             .find(|turn| turn.turn_id == parent.turn_id)
             .map(|turn| turn.state),
-        Some(AgentTurnState::Failed)
+        Some(AgentTurnState::Running)
     );
     assert!(
         service
             .pending_agent_provider_tasks()
             .iter()
-            .all(|task| task.turn_id != parent.turn_id)
+            .any(|task| task.turn_id == parent.turn_id)
     );
+    let parent_context = service.agent_turn_contexts().get(&parent.turn_id).unwrap();
+    assert!(parent_context.blocks().iter().any(|block| {
+        block.content.contains(r#""success":false"#)
+            && block.content.contains("subagent task failed")
+    }));
+    for index in 1..=3 {
+        assert!(
+            parent_context
+                .blocks()
+                .iter()
+                .any(|block| { block.content.contains(&format!("sibling {index} done")) })
+        );
+    }
     assert_ne!(
         service
             .terminal_frame_context()

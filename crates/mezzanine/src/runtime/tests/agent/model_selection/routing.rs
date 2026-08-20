@@ -2235,8 +2235,10 @@ fn runtime_routed_child_post_summary_compaction_failure_recovers_parent() {
     );
 }
 
-/// Verifies a failed joined descendant settles its routed worker and releases
-/// the outer routed workflow instead of leaving the worker publicly waiting.
+/// Verifies a failed joined descendant resumes its routed worker with context.
+///
+/// The outer routed workflow keeps waiting for the worker while the worker
+/// model decides how to handle the descendant failure.
 #[test]
 fn runtime_routed_worker_joined_child_failure_recovers_parent() {
     let (mut service, parent_turn_id, worker_turn) =
@@ -2343,7 +2345,7 @@ fn runtime_routed_worker_joined_child_failure_recovers_parent() {
             .agent_scheduler()
             .waiting_turns()
             .any(|work| work.turn_id == worker_turn.turn_id),
-        "failed routed worker must leave dependency-waiting scheduler state"
+        "routed worker must leave dependency-waiting scheduler state"
     );
     assert_eq!(
         service
@@ -2352,20 +2354,29 @@ fn runtime_routed_worker_joined_child_failure_recovers_parent() {
             .iter()
             .find(|turn| turn.turn_id == worker_turn.turn_id)
             .map(|turn| turn.state),
-        Some(AgentTurnState::Failed)
+        Some(AgentTurnState::Running)
     );
     let workflow = service
         .routed_workflow_for_tests(&parent_turn_id)
-        .expect("failed worker should retain routed recovery state");
+        .expect("routed workflow should remain active while the worker continues");
     assert_eq!(
         workflow.phase,
-        mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForErrorExplanation
+        mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult
     );
     assert!(
         service
             .pending_agent_provider_tasks()
             .iter()
-            .any(|task| task.turn_id == parent_turn_id)
+            .any(|task| task.turn_id == worker_turn.turn_id)
+    );
+    assert!(
+        service
+            .agent_turn_contexts()
+            .get(&worker_turn.turn_id)
+            .is_some_and(|context| context
+                .blocks()
+                .iter()
+                .any(|block| { block.content.contains(r#""success":false"#) }))
     );
 }
 

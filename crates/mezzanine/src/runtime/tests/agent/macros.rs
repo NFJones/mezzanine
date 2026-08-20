@@ -524,14 +524,14 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies a failed macro step releases its worker without closing its pane.
+/// Verifies a failed macro step remains available for judge evaluation.
 ///
-/// Failed work must not remain reusable by macro routing or retain delegation
-/// authority, but its pane and shell session must stay available for user
-/// inspection and no subsequent macro step may be dispatched.
+/// A child task failure is context, not an immediate parent failure. The macro
+/// parent resumes its judge request while retaining the persistent worker, its
+/// authority, and its pane so the judge can retry, continue, or stop the run.
 #[test]
-fn runtime_agent_macro_failed_step_releases_worker_and_retains_pane() {
-    let config_root = temp_root("runtime-macro-failed-step-retains-pane");
+fn runtime_agent_macro_failed_step_waits_for_judge_and_retains_worker() {
+    let config_root = temp_root("runtime-macro-failed-step-waits-for-judge");
     let macro_dir = config_root.join("macros/release-check");
     fs::create_dir_all(&macro_dir).unwrap();
     fs::write(
@@ -582,12 +582,21 @@ fn runtime_agent_macro_failed_step_releases_worker_and_retains_pane() {
             .iter()
             .find(|turn| turn.turn_id == parent_turn.turn_id)
             .map(|turn| turn.state),
-        Some(AgentTurnState::Failed)
+        Some(AgentTurnState::Running)
     );
-    assert!(!service.has_macro_run(parent_turn.turn_id.as_str()));
-    assert!(!service.has_macro_managed_subagent(&child_turn.agent_id));
-    assert!(!service.has_subagent_lineage(&child_turn.agent_id));
-    assert!(!service.has_subagent_scope_declaration(&child_turn.agent_id));
+    assert_eq!(
+        service.macro_judge_step_index_for_turn(&parent_turn.turn_id),
+        Some(0)
+    );
+    let failed_task_result = service
+        .macro_run_for_tests(parent_turn.turn_id.as_str())
+        .and_then(|run| run.steps[0].task_result.as_ref())
+        .expect("failed child result should remain available to the judge");
+    assert!(!failed_task_result.success);
+    assert!(service.agent_provider_task_is_pending(&parent_turn.turn_id));
+    assert!(service.has_macro_managed_subagent(&child_turn.agent_id));
+    assert!(service.has_subagent_lineage(&child_turn.agent_id));
+    assert!(service.has_subagent_scope_declaration(&child_turn.agent_id));
     assert!(service.find_pane_descriptor(&child_turn.pane_id).is_some());
     assert!(
         service
@@ -654,15 +663,21 @@ fn runtime_agent_macro_judge_retries_current_step_after_child_result() {
 
     service
         .agent_turn_ledger_mut()
-        .finish_turn(&first_child_turn.turn_id, AgentTurnState::Completed)
+        .finish_turn(&first_child_turn.turn_id, AgentTurnState::Failed)
         .unwrap();
     service
-        .emit_subagent_task_result_for_state(&first_child_turn, AgentTurnState::Completed)
+        .emit_subagent_task_result_for_state(&first_child_turn, AgentTurnState::Failed)
         .unwrap();
     assert_eq!(
         service.macro_judge_step_index_for_turn(&parent_turn.turn_id),
         Some(0)
     );
+    let failed_task_result = service
+        .macro_run_for_tests(parent_turn.turn_id.as_str())
+        .and_then(|run| run.steps[0].task_result.as_ref())
+        .expect("failed child result should reach the macro judge");
+    assert!(!failed_task_result.success);
+    assert!(service.agent_provider_task_is_pending(&parent_turn.turn_id));
 
     let judge_provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
@@ -974,12 +989,11 @@ fn runtime_agent_macro_judge_finish_success_closes_child_subagent_and_completes_
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies a joined child failure without a shell binding settles its parent.
+/// Verifies a joined child failure without a shell binding resumes its parent.
 ///
-/// Joined children can fail through the no-shell-session cleanup path before a
-/// provider execution exists. The parent must receive that failed result and
-/// leave blocked scheduler and ledger state instead of retaining an execution
-/// that no provider task can continue.
+/// Child cleanup can report failure without a live child shell. The parent must
+/// retain that result as context and leave dependency waiting for provider
+/// continuation instead of failing with the child.
 #[test]
 fn runtime_joined_child_failure_without_shell_session_settles_parent() {
     let mut service = test_runtime_service();
@@ -1077,7 +1091,7 @@ fn runtime_joined_child_failure_without_shell_session_settles_parent() {
     service.remove_pending_agent_provider_task(&parent.turn_id);
     service
         .agent_scheduler_mut()
-        .complete(&parent.turn_id)
+        .wait_running(&parent.turn_id)
         .unwrap();
     service
         .agent_turn_ledger_mut()
@@ -1096,12 +1110,18 @@ fn runtime_joined_child_failure_without_shell_session_settles_parent() {
         .unwrap();
 
     assert!(!service.has_joined_subagent_dependency(&child.turn_id));
-    assert!(!service.agent_provider_task_is_pending(&parent.turn_id));
+    assert!(service.agent_provider_task_is_pending(&parent.turn_id));
+    let execution = service
+        .agent_turn_executions()
+        .get(&parent.turn_id)
+        .expect("parent execution should remain available for continuation");
+    let result = execution.action_results.first().unwrap();
+    assert_eq!(result.status, mez_agent::ActionStatus::Succeeded);
     assert!(
-        service
-            .agent_turn_executions()
-            .get(&parent.turn_id)
-            .is_none()
+        result
+            .structured_content_json
+            .as_deref()
+            .is_some_and(|content| content.contains(r#""success":false"#))
     );
     assert_eq!(
         service
@@ -1110,6 +1130,6 @@ fn runtime_joined_child_failure_without_shell_session_settles_parent() {
             .iter()
             .find(|turn| turn.turn_id == parent.turn_id)
             .map(|turn| turn.state),
-        Some(AgentTurnState::Failed)
+        Some(AgentTurnState::Running)
     );
 }

@@ -899,11 +899,8 @@ impl RuntimeSessionService {
             )?;
         }
         self.agent.subagent_task_routes.remove(&turn.turn_id);
-        if !is_persistent_macro_step || !success {
+        if !is_persistent_macro_step {
             self.remove_subagent_authority_state(&turn.agent_id);
-        }
-        if is_persistent_macro_step && !success {
-            self.deregister_macro_managed_subagent(&turn.agent_id);
         }
         if success && !is_persistent_macro_step {
             self.agent
@@ -1139,7 +1136,6 @@ impl RuntimeSessionService {
                 dependency.parent_turn_id
             )));
         }
-        let parent_previous_state = parent_turn.state;
         let (observed_result, ready_for_continuation, terminal_state) = {
             let Some(execution) = self
                 .agent_turn_executions_mut()
@@ -1199,24 +1195,12 @@ impl RuntimeSessionService {
                 json_escape(summary),
                 json_escape(output)
             );
-            let observed_result = if success {
-                ActionResult::succeeded(
-                    &parent_turn,
-                    &action,
-                    vec![result_summary],
-                    Some(structured_result),
-                )
-            } else {
-                let mut result = ActionResult::failed(
-                    &parent_turn,
-                    &action,
-                    ActionStatus::Failed,
-                    "macro_step_failed",
-                    result_summary,
-                )?;
-                result.structured_content_json = Some(structured_result);
-                result
-            };
+            let observed_result = ActionResult::succeeded(
+                &parent_turn,
+                &action,
+                vec![result_summary],
+                Some(structured_result),
+            );
             execution.action_results[result_index] = observed_result.clone();
             execution.final_turn = false;
             execution.terminal_state = runtime_agent_turn_state_from_action_results(
@@ -1232,7 +1216,6 @@ impl RuntimeSessionService {
             )
         };
         self.append_action_result_context_if_absent(&dependency.parent_turn_id, &observed_result)?;
-        let mut failed_macro_parent_turn = None;
         let mut macro_result_status = None;
         if let Some(parent_run_id) = self
             .agent
@@ -1256,13 +1239,9 @@ impl RuntimeSessionService {
             run.phase = MacroRunPhase::WaitingForJudge {
                 step_index: step.index,
             };
-            macro_result_status =
-                Some((run.macro_name.clone(), step.index, run.steps.len(), success));
-            if !success {
-                failed_macro_parent_turn = Some(parent_run_id);
-            }
+            macro_result_status = Some((run.macro_name.clone(), step.index, run.steps.len()));
         }
-        if let Some((macro_name, step_index, total_steps, true)) = macro_result_status.as_ref() {
+        if let Some((macro_name, step_index, total_steps)) = macro_result_status.as_ref() {
             self.append_agent_macro_status_to_terminal_buffer(
                 &parent_turn.pane_id,
                 macro_name,
@@ -1279,34 +1258,6 @@ impl RuntimeSessionService {
                 dependency.child_turn_id, dependency.child_agent_id, success
             ),
         )?;
-        if let Some(parent_turn_id) = failed_macro_parent_turn {
-            self.agent.macro_runs_by_parent_turn.remove(&parent_turn_id);
-            let _ = self.agent.agent_scheduler.cancel(&parent_turn_id);
-            self.agent_turn_ledger_mut()
-                .finish_turn(&parent_turn_id, AgentTurnState::Failed)?;
-            self.reconcile_active_turn_sleep_inhibition();
-            self.append_agent_trace_turn_transition(
-                &parent_turn,
-                parent_previous_state,
-                AgentTurnState::Failed,
-                "macro_step_failed",
-            )?;
-            let (macro_name, step_index, total_steps, _) = macro_result_status
-                .as_ref()
-                .ok_or_else(|| MezError::invalid_state("failed macro step lost lifecycle state"))?;
-            self.append_agent_macro_error_to_terminal_buffer(
-                &parent_turn.pane_id,
-                macro_name,
-                *step_index,
-                *total_steps,
-                &format!("worker failed: {summary}"),
-            )?;
-            self.agent
-                .joined_subagent_dependencies
-                .remove(&dependency.child_turn_id);
-            self.start_ready_agent_turns()?;
-            return Ok(());
-        }
         self.agent
             .joined_subagent_dependencies
             .remove(&dependency.child_turn_id);
