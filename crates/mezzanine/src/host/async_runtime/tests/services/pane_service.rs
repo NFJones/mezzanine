@@ -1437,8 +1437,15 @@ async fn async_zsh_dirty_draft_no_prompt_exit_discards_draft_and_restores_respon
                 .managed_shell_process_screen_text("%1")
                 .await
                 .unwrap();
-            if retained_process_text.contains("__MEZ_ASYNC_ZSH_ROUND_TRIP__")
-                && retained_process_text.contains("__MEZ_ASYNC_ZSH_READY__> ")
+            // Screen text intentionally strips terminal-grid padding, including the prompt's
+            // trailing space. Require adjacent complete lines so an echoed setup command cannot
+            // be mistaken for the round-trip output followed by the restored editor prompt.
+            if retained_process_text
+                .lines()
+                .zip(retained_process_text.lines().skip(1))
+                .any(|(output, prompt)| {
+                    output == "__MEZ_ASYNC_ZSH_ROUND_TRIP__" && prompt == "__MEZ_ASYNC_ZSH_READY__>"
+                })
             {
                 break;
             }
