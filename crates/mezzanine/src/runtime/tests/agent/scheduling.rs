@@ -1635,6 +1635,110 @@ async fn runtime_three_nonrouted_subagents_release_waiting_parent() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a failed nonrouted child terminalizes its joined waiting parent.
+///
+/// Joined failure makes the parent execution terminal rather than ready for a
+/// provider continuation. With several children still outstanding, that path
+/// must cancel the parent's scheduler wait and clear every sibling dependency;
+/// otherwise each failed child can report visibly while the parent remains
+/// blocked forever.
+#[tokio::test]
+async fn runtime_failed_nonrouted_subagent_releases_waiting_parent() {
+    let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(5)
+        .unwrap();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let parent = service.start_agent_prompt_turn("%1", "parent").unwrap();
+    let actions = (1..=4)
+        .map(|index| {
+            runtime_spawn_agent_action(&format!("spawn-{index}"), &format!("child {index}"))
+        })
+        .collect::<Vec<_>>();
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "spawn four children".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "delegate four joined tasks".to_string(),
+                thought: None,
+                turn_id: parent.turn_id.clone(),
+                agent_id: parent.agent_id.clone(),
+                actions,
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &parent.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(service.joined_subagent_dependency_count(), 4);
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 1);
+    let failed_child = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id != parent.turn_id)
+        .cloned()
+        .expect("spawned child turn should be recorded");
+
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &failed_child,
+            AgentTurnState::Failed,
+            "nonrouted_child_failed",
+        )
+        .unwrap();
+
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 0);
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .all(|task| task.turn_id != parent.turn_id)
+    );
+    assert_ne!(
+        service
+            .terminal_frame_context()
+            .panes
+            .get("%1")
+            .and_then(|pane| pane.agent_status.as_deref()),
+        Some("waiting")
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Blocks one running parent turn on a joined child result in lifecycle tests.
 ///
 /// The helper installs the same running spawn result, chronology, routing, and
