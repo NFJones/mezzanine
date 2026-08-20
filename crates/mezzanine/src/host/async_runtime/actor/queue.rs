@@ -71,6 +71,9 @@ impl AsyncRuntimeSessionActor {
             RuntimeTimerKind::PanePipeHealth => {
                 Self::track_owned_timer_key(&mut self.timers.pane_pipe_health, key, scheduled);
             }
+            RuntimeTimerKind::SynchronizedOutput => {
+                Self::track_owned_timer_key(&mut self.timers.synchronized_output, key, scheduled);
+            }
         }
     }
 

@@ -1817,6 +1817,25 @@ impl RuntimeSessionService {
         self.process.process_pane_screens.get_mut(pane_id)
     }
 
+    /// Force-releases one matching synchronized terminal transaction after its recovery timeout.
+    pub(crate) fn apply_synchronized_output_timeout_transition(
+        &mut self,
+        pane_id: &str,
+        begin_epoch: u64,
+    ) -> RuntimeTransition {
+        let released = self.process_pane_screen_mut(pane_id).is_some_and(|screen| {
+            screen.synchronized_output_begin_epoch() == Some(begin_epoch)
+                && screen.force_release_synchronized_output()
+        });
+        self.runtime_transition_with_render(released, Some(RenderInvalidationReason::FullRedraw))
+    }
+
+    /// Releases a pane synchronized-output transaction before a lifecycle mutation.
+    pub(crate) fn force_release_pane_synchronized_output(&mut self, pane_id: &str) -> bool {
+        self.process_pane_screen_mut(pane_id)
+            .is_some_and(TerminalScreen::force_release_synchronized_output)
+    }
+
     /// Replaces the authoritative process terminal screen for one pane.
     #[allow(
         dead_code,
