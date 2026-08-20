@@ -706,7 +706,12 @@ pub(super) fn sha256(input: &[u8]) -> [u8; 32] {
     }
     message.extend_from_slice(&bit_len.to_be_bytes());
 
-    for chunk in message.chunks_exact(64) {
+    let (chunks, remainder) = message.as_chunks::<64>();
+    debug_assert!(
+        remainder.is_empty(),
+        "SHA-256 padding must fill whole blocks"
+    );
+    for chunk in chunks {
         let mut w = [0u32; 64];
         for (index, word) in w.iter_mut().take(16).enumerate() {
             let offset = index * 4;
