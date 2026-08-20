@@ -105,6 +105,14 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Receives child-active, bootstrap-pending, and restoration-pending flags.
         reply: oneshot::Sender<(bool, bool, bool)>,
     },
+    /// Reads semantic bootstrap-certification state for boundary tests.
+    #[cfg(test)]
+    PaneCertificationSnapshot {
+        /// Pane whose certification state is observed.
+        pane_id: String,
+        /// Receives one internally consistent actor-owned state snapshot.
+        reply: oneshot::Sender<crate::host::async_runtime::AsyncPaneCertificationSnapshot>,
+    },
     /// Reads the retained process presentation during a managed-shell handoff.
     #[cfg(test)]
     ManagedShellProcessScreenText {
@@ -1060,6 +1068,7 @@ impl AsyncRuntimeRequest {
             #[cfg(test)]
             Self::WriteInputToPane { .. }
             | Self::ManagedShellLifecycleState { .. }
+            | Self::PaneCertificationSnapshot { .. }
             | Self::ManagedShellProcessScreenText { .. }
             | Self::ManagedZshAdmissionReady { .. } => Family::Terminal,
             Self::ApplyAttachedTerminalStep { .. }

@@ -85,6 +85,35 @@ impl AsyncRuntimeSessionActor {
                 false
             }
             #[cfg(test)]
+            AsyncRuntimeRequest::PaneCertificationSnapshot { pane_id, reply } => {
+                let _ = reply.send(crate::host::async_runtime::AsyncPaneCertificationSnapshot {
+                    child_active: self.service.agent_subshell_is_active(&pane_id),
+                    bootstrap_pending: self.service.pane_bootstrap_is_pending_for_tests(&pane_id),
+                    certification_pending: self
+                        .service
+                        .pane_agent_subshell_certification_is_pending(&pane_id),
+                    environment_signature_present: self
+                        .service
+                        .pane_environment_signature(&pane_id)
+                        .is_some(),
+                    readiness: self.service.pane_readiness_state(&pane_id),
+                    certification_rejection: self
+                        .service
+                        .pane_agent_subshell_certification_rejection(&pane_id),
+                    foreground_certified_shell: self
+                        .service
+                        .pane_foreground_certified_shell_state(&pane_id),
+                    shell_interaction_generation: self
+                        .service
+                        .pane_shell_interaction_generation_for_tests(&pane_id),
+                    foreground_diagnostic: self
+                        .service
+                        .pane_foreground_process_diagnostic(&pane_id)
+                        .json(),
+                });
+                false
+            }
+            #[cfg(test)]
             AsyncRuntimeRequest::ManagedShellProcessScreenText { pane_id, reply } => {
                 let text = self
                     .service

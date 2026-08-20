@@ -56,6 +56,34 @@ use mez_mux::process::{PaneExitStatus, PaneProcess};
 use mez_mux::session::ClientState;
 use mez_terminal::TerminalStyleSpan;
 
+/// Typed pane-certification state exposed only to async boundary tests.
+///
+/// The snapshot lets tests wait on runtime-owned lifecycle and identity state
+/// instead of guessing how long bootstrap output and foreground observation
+/// should take on a loaded host.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AsyncPaneCertificationSnapshot {
+    /// Whether the pane currently delegates input ownership to an agent shell.
+    pub child_active: bool,
+    /// Whether environment bootstrap still gates pane readiness.
+    pub bootstrap_pending: bool,
+    /// Whether parsed bootstrap evidence awaits a fresh worker observation.
+    pub certification_pending: bool,
+    /// Whether certified environment context has been published.
+    pub environment_signature_present: bool,
+    /// Current semantic readiness state for the pane.
+    pub readiness: mez_agent::PaneReadinessState,
+    /// Latest stable certification rejection, when certification failed.
+    pub certification_rejection: Option<&'static str>,
+    /// Whether the current foreground group is a certified shell identity.
+    pub foreground_certified_shell: Option<bool>,
+    /// Current shell-interaction generation used to reject stale evidence.
+    pub shell_interaction_generation: Option<u64>,
+    /// Structured foreground-process evidence retained for timeout diagnosis.
+    pub foreground_diagnostic: serde_json::Value,
+}
+
 /// Exposes the actor module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

@@ -837,7 +837,32 @@ async fn async_agent_subshell_bootstrap_certifies_with_fresh_worker_observation(
     };
 
     let client = async move {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let initial_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let initial_generation = loop {
+            let snapshot = client_handle
+                .pane_certification_snapshot("%1")
+                .await
+                .unwrap();
+            if !snapshot.child_active
+                && !snapshot.certification_pending
+                && snapshot.foreground_certified_shell == Some(true)
+            {
+                break snapshot.shell_interaction_generation;
+            }
+            assert!(
+                snapshot.certification_rejection.is_none(),
+                "initial pane-shell certification was rejected: {snapshot:?}"
+            );
+            assert!(
+                tokio::time::Instant::now() < initial_deadline,
+                "initial pane shell did not become the observed foreground owner before agent-shell entry: snapshot={snapshot:?} screen={:?}",
+                client_handle
+                    .managed_shell_process_screen_text("%1")
+                    .await
+                    .unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
         let toggled = tokio::time::timeout(
             Duration::from_secs(3),
             client_handle.execute_terminal_command(primary, "agent-shell".to_string()),
@@ -846,7 +871,37 @@ async fn async_agent_subshell_bootstrap_certifies_with_fresh_worker_observation(
         .expect("agent-shell toggle should not hang")
         .unwrap();
         assert!(toggled.contains("agent-shell"), "{toggled}");
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        let certification_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let snapshot = client_handle
+                .pane_certification_snapshot("%1")
+                .await
+                .unwrap();
+            if snapshot.child_active
+                && !snapshot.bootstrap_pending
+                && !snapshot.certification_pending
+                && snapshot.environment_signature_present
+                && snapshot.readiness == mez_agent::PaneReadinessState::Ready
+                && snapshot.certification_rejection.is_none()
+                && snapshot.foreground_certified_shell == Some(true)
+                && snapshot.shell_interaction_generation != initial_generation
+            {
+                break;
+            }
+            assert!(
+                snapshot.certification_rejection.is_none(),
+                "agent-subshell certification was rejected: {snapshot:?}"
+            );
+            assert!(
+                tokio::time::Instant::now() < certification_deadline,
+                "agent subshell did not become certified: initial_generation={initial_generation:?} snapshot={snapshot:?} screen={:?}",
+                client_handle
+                    .managed_shell_process_screen_text("%1")
+                    .await
+                    .unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         pane_worker_done.store(true, Ordering::SeqCst);
         assert_eq!(
             client_handle.shutdown().await.unwrap(),
@@ -854,7 +909,7 @@ async fn async_agent_subshell_bootstrap_certifies_with_fresh_worker_observation(
         );
     };
 
-    let ((), (), mut actor_exit) = tokio::time::timeout(Duration::from_secs(10), async {
+    let ((), (), mut actor_exit) = tokio::time::timeout(Duration::from_secs(20), async {
         tokio::join!(client, pane_worker, actor.run())
     })
     .await

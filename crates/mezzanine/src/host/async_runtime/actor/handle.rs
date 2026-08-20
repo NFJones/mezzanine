@@ -81,6 +81,17 @@ impl AsyncRuntimeSessionHandle {
             .await
     }
 
+    /// Returns semantic pane bootstrap-certification state for boundary tests.
+    #[cfg(test)]
+    pub async fn pane_certification_snapshot(
+        &self,
+        pane_id: &str,
+    ) -> Result<crate::host::async_runtime::AsyncPaneCertificationSnapshot> {
+        let pane_id = pane_id.to_string();
+        self.request(|reply| AsyncRuntimeRequest::PaneCertificationSnapshot { pane_id, reply })
+            .await
+    }
+
     /// Returns the retained process presentation during a managed-shell handoff.
     #[cfg(test)]
     pub async fn managed_shell_process_screen_text(&self, pane_id: &str) -> Result<String> {

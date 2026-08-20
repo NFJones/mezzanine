@@ -480,6 +480,12 @@ impl PaneProcess {
                     .position(|byte| *byte == b'\n')
                     .map_or(bounded.len(), |index| index + 1);
                 let record = &bounded[..record_len];
+                // Attribute only output observed after this record boundary.
+                // A delayed acknowledgement from earlier generated work may
+                // already be readable even though it has not reached the
+                // monotonic counter yet. Drain it before capturing baselines so
+                // it cannot release this record and shift pacing one step ahead.
+                self.buffer_available_output_for_write()?;
                 let activity = self.output_activity_sequence();
                 let acknowledgement_count = self.shell_input_acknowledgements_seen;
                 self.write_input(record)?;
@@ -492,10 +498,10 @@ impl PaneProcess {
                     || loader_record_acknowledged
                     || (!receiver_acknowledged && !loader_acknowledged && written < input.len())
                 {
-                    let acknowledged = if receiver_record_acknowledged
+                    let waits_for_acknowledgement = receiver_record_acknowledged
                         || loader_record_acknowledged
-                        || shell_input_record_requires_ack(record)
-                    {
+                        || shell_input_record_requires_ack(record);
+                    let acknowledged = if waits_for_acknowledgement {
                         self.wait_for_shell_input_ack_after(
                             acknowledgement_count,
                             PANE_INPUT_WRITE_STALL_TIMEOUT,
@@ -508,11 +514,32 @@ impl PaneProcess {
                     };
                     if !acknowledged {
                         return Err(MezError::invalid_state(format!(
-                            "pane shell input pacing timed out after {} ms: activity={} acknowledgements={} supported={} record={:?} backlog_tail={:?}",
+                            "pane shell input pacing timed out after {} ms: record_index={} record_count={} delivery_id={:?} pacing={:?} wait_kind={} activity_before={} activity_after={} acknowledgements_before={} acknowledgements_after={} supported={} foreground_process_group={:?} foreground_process={:?} record={:?} backlog_tail={:?}",
                             PANE_INPUT_WRITE_STALL_TIMEOUT.as_millis(),
+                            input[..written.saturating_sub(record_len)]
+                                .iter()
+                                .filter(|byte| **byte == b'\n')
+                                .count()
+                                .saturating_add(1),
+                            input
+                                .iter()
+                                .filter(|byte| **byte == b'\n')
+                                .count()
+                                .saturating_add(usize::from(!input.ends_with(b"\n"))),
+                            delivery.delivery_id,
+                            delivery.pacing,
+                            if waits_for_acknowledgement {
+                                "acknowledgement"
+                            } else {
+                                "output_activity"
+                            },
+                            activity,
                             self.output_activity_sequence(),
+                            acknowledgement_count,
                             self.shell_input_acknowledgements_seen,
                             self.supports_shell_input_acknowledgements(),
+                            self.foreground_process_group_id(),
+                            self.foreground_process_name(),
                             String::from_utf8_lossy(&record[..record.len().min(96)]),
                             String::from_utf8_lossy(
                                 &self

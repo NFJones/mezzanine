@@ -10,8 +10,9 @@ use super::process_metadata::{
 #[cfg(target_os = "linux")]
 use super::process_metadata::{process_environment_for_pid, process_executable_path_for_pid};
 use super::{
-    PaneProcessEnvironment, PaneProcessLaunch, PaneProcessManager, pane_command_plan,
-    shell_command_from_argv, spawn_pane_process, spawn_pane_process_with_start_directory,
+    PaneProcessEnvironment, PaneProcessLaunch, PaneProcessManager, ShellInputDelivery,
+    pane_command_plan, shell_command_from_argv, spawn_pane_process,
+    spawn_pane_process_with_start_directory,
 };
 use mez_terminal::TerminalSize as Size;
 use std::collections::VecDeque;
@@ -189,6 +190,71 @@ fn shell_input_acknowledgements_are_counted_per_new_chunk() {
         ]),
         2
     );
+}
+
+/// Verifies a delayed acknowledgement from earlier generated work cannot be
+/// attributed to the next Darwin shell-input record.
+///
+/// The stale byte is made readable before a three-record delivery starts. The
+/// first two records each delay their own acknowledgement, and the second also
+/// creates a file. Delivery may return only after that second acknowledgement,
+/// so the file proves pacing did not advance one record ahead by consuming the
+/// pre-existing byte.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_shell_input_pacing_drains_stale_acknowledgement_before_record_boundary() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-shell-ack-boundary-test-{}",
+        std::process::id()
+    ));
+    let stale_acknowledgement_ready = root.join("stale-acknowledgement-ready");
+    let side_effect = root.join("second-record-complete");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let mut process = spawn_pane_process(
+        &test_shell(),
+        None,
+        &test_environment(),
+        Size::new(80, 24).unwrap(),
+    )
+    .unwrap();
+
+    let startup_sequence = process.output_activity_sequence();
+    assert!(process.wait_for_output_activity_after(startup_sequence, Duration::from_secs(2)));
+    let _ = process.read_available_output(4096).unwrap();
+    process
+        .write_input(
+            format!(
+                "printf '\\036'; printf ready > '{}'\n",
+                stale_acknowledgement_ready.display()
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let stale_deadline = Instant::now() + Duration::from_secs(2);
+    while !stale_acknowledgement_ready.is_file() && Instant::now() < stale_deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        stale_acknowledgement_ready.is_file(),
+        "shell did not publish the stale acknowledgement boundary"
+    );
+
+    let delivery = ShellInputDelivery::generated_source(
+        format!(
+            "sleep 0.2; printf '\\036'\nsleep 0.4; printf done > '{}'; printf '\\036'\n:\n",
+            side_effect.display()
+        )
+        .into_bytes(),
+    );
+    process.write_shell_delivery(&delivery).unwrap();
+
+    assert!(
+        side_effect.is_file(),
+        "delivery returned before the second record acknowledgement"
+    );
+    process.terminate(Duration::from_millis(100)).unwrap();
+    let _ = fs::remove_dir_all(root);
 }
 
 /// Verifies spawns explicit command on pty.

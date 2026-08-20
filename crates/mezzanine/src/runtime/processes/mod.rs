@@ -1589,6 +1589,15 @@ impl RuntimeSessionService {
             .contains_key(pane_id)
     }
 
+    /// Returns one pane's current shell-interaction generation for tests.
+    #[cfg(test)]
+    pub(crate) fn pane_shell_interaction_generation_for_tests(&self, pane_id: &str) -> Option<u64> {
+        self.process
+            .pane_shell_interaction_generations
+            .get(pane_id)
+            .copied()
+    }
+
     /// Clears a recovery-owned foreground observation when its shell action no
     /// longer awaits foreground stabilization.
     pub(crate) fn clear_shell_dispatch_recovery_observations_for_action(

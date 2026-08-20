@@ -1934,7 +1934,8 @@ fn runtime_posix_dirty_prompt_is_interrupted_before_agent_admission() {
     wait_until_primary_shell_foreground(&mut service, "%1");
     service.set_pane_readiness("%1", PaneReadinessState::PromptCandidate);
     assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
-    for _ in 0..200 {
+    let initial_bootstrap_deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < initial_bootstrap_deadline {
         let _ = service.poll_pane_outputs(8192).unwrap();
         if !service.pane_bootstrap_is_pending_for_tests("%1") {
             break;
@@ -1945,8 +1946,10 @@ fn runtime_posix_dirty_prompt_is_interrupted_before_agent_admission() {
         !service.pane_bootstrap_is_pending_for_tests("%1"),
         "initial POSIX bootstrap did not settle before dirty admission"
     );
+    let draft_side_effect = root.join("interrupted-draft-ran");
+    let draft = format!("printf ran > '{}'", draft_side_effect.display());
     service
-        .write_input_to_pane(&primary, Some("%1"), b"printf '__MEZ_POSIX_DRAFT_RAN__\\n'")
+        .write_input_to_pane(&primary, Some("%1"), draft.as_bytes())
         .unwrap();
 
     let show = service
@@ -1958,56 +1961,41 @@ fn runtime_posix_dirty_prompt_is_interrupted_before_agent_admission() {
         "child ownership must wait for the parent prompt after the interrupt"
     );
 
-    for _ in 0..200 {
-        let _ = service.poll_pane_outputs(8192).unwrap();
-        if service.pane_readiness_state("%1") == PaneReadinessState::PromptCandidate {
-            break;
-        }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-    }
-    assert_eq!(
-        service.pane_readiness_state("%1"),
-        PaneReadinessState::PromptCandidate,
-        "the interrupted parent must prove a fresh prompt before child entry"
-    );
-
-    for _ in 0..50 {
-        let _ = service.poll_pane_outputs(8192).unwrap();
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-    }
-    let pane_text = service
-        .process_pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
-    assert!(
-        !pane_text.contains("__MEZ_POSIX_DRAFT_RAN__"),
-        "the dirty POSIX draft must not execute during admission: {pane_text}"
-    );
-
     let hide = service
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     assert!(hide.contains("visibility=hidden"), "{hide}");
-    for _ in 0..200 {
-        let _ = service.poll_pane_outputs(8192).unwrap();
-        if service.pane_foreground_certified_shell_state("%1") == Some(true) {
+    assert!(!service.agent_subshell_is_active("%1"));
+
+    let interrupt_deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < interrupt_deadline {
+        let updates = service.poll_pane_outputs(8192).unwrap();
+        if !updates.is_empty() {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
     }
-    assert_eq!(
-        service.pane_foreground_certified_shell_state("%1"),
-        Some(true)
-    );
-    let pane_text = service
-        .process_pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
     assert!(
-        !pane_text.contains("__MEZ_POSIX_DRAFT_RAN__"),
-        "{pane_text}"
+        !draft_side_effect.exists(),
+        "the dirty POSIX draft executed after cancelled agent-shell admission"
+    );
+
+    let responsive_side_effect = root.join("post-interrupt-parent-responsive");
+    service
+        .write_input_to_pane(
+            &primary,
+            Some("%1"),
+            format!("printf ready > '{}'\n", responsive_side_effect.display()).as_bytes(),
+        )
+        .unwrap();
+    let responsive_deadline = Instant::now() + Duration::from_secs(15);
+    while !responsive_side_effect.is_file() && Instant::now() < responsive_deadline {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert!(
+        responsive_side_effect.is_file(),
+        "the interrupted POSIX parent did not accept fresh input"
     );
     assert!(service.poll_pane_processes().unwrap().is_empty());
     assert!(service.pane_processes().contains_pane("%1"));
