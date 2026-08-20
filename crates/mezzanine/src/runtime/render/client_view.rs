@@ -172,7 +172,7 @@ impl RuntimeSessionService {
             window,
             |pane_id| self.presented_pane_screen(pane_id),
             |pane_id, screen| {
-                let generation = screen.render_generation();
+                let generation = screen.presentation_render_generation();
                 let mut cache = pane_styled_row_cache.borrow_mut();
                 if let Some(rows) = cache
                     .rows
@@ -184,7 +184,7 @@ impl RuntimeSessionService {
                     return rows;
                 }
                 let rows: std::sync::Arc<[TerminalStyledLine]> =
-                    std::sync::Arc::from(screen.visible_styled_lines());
+                    std::sync::Arc::from(screen.presentation_visible_styled_lines());
                 cache.misses = cache.misses.saturating_add(1);
                 cache
                     .rows

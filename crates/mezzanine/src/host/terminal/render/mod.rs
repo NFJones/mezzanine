@@ -253,7 +253,7 @@ pub fn render_attached_client_view_with_screen_resolvers<'a>(
         role,
         window,
         visual_screen_for_pane,
-        |_pane_id, screen| std::sync::Arc::from(screen.visible_styled_lines()),
+        |_pane_id, screen| std::sync::Arc::from(screen.presentation_visible_styled_lines()),
         &presentation_plan,
         config,
         client_size,
@@ -336,7 +336,8 @@ pub fn render_attached_client_view_with_screen_and_row_resolvers<'a>(
         application_keypad: config.mouse_policy.pane_application_keypad_mode,
         bracketed_paste: config.pane_bracketed_paste_mode,
         focus_events: active_pane_screen.is_some_and(|screen| screen.focus_events_enabled()),
-        alternate_screen: active_pane_screen.is_some_and(|screen| screen.alternate_screen_active()),
+        alternate_screen: active_pane_screen
+            .is_some_and(|screen| screen.presentation_alternate_screen_active()),
         host_mouse_reporting: config.mouse_policy.enabled,
         animation_refresh_interval_ms: if config.frame_context.animation_tick_ms > 0 {
             AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS
@@ -430,9 +431,11 @@ fn rendered_cursor<'a>(
     let pane_id = active_pane.id.to_string();
     let screen = screen_for_pane(&pane_id);
     let cursor = screen
-        .map(TerminalScreen::cursor_state)
+        .map(TerminalScreen::presentation_cursor_state)
         .unwrap_or(mez_terminal::TerminalCursorState { row: 0, column: 0 });
-    let cursor_visible = screen.map(TerminalScreen::cursor_visible).unwrap_or(true);
+    let cursor_visible = screen
+        .map(TerminalScreen::presentation_cursor_visible)
+        .unwrap_or(true);
     let row =
         usize::from(pane_plan.content_region.row).saturating_add(cursor.row.min(max_cursor_row));
     let column = usize::from(pane_plan.content_region.column)

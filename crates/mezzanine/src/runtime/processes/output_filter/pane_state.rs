@@ -149,24 +149,31 @@ impl RuntimeSessionService {
                 self.process.settings.terminal_history_rotate_lines,
             )?);
         process_screen.resize(process_presentation_size);
+        let mut synchronized_output = mez_terminal::SynchronizedOutputFeedOutcome::default();
         if let Some(offset) = restored_prompt_offset {
-            process_screen.feed_protocol_preserving_content(&protocol_bytes[..offset]);
+            synchronized_output
+                .merge(process_screen.feed_protocol_preserving_content(&protocol_bytes[..offset]));
             if matches!(
                 settled_render_mode,
                 PaneOutputRenderMode::Normal | PaneOutputRenderMode::ManagedEditorClear
             ) {
-                process_screen.feed(&protocol_bytes[offset..]);
+                synchronized_output.merge(process_screen.feed(&protocol_bytes[offset..]));
             } else {
-                process_screen.feed_protocol_preserving_content(&protocol_bytes[offset..]);
+                synchronized_output.merge(
+                    process_screen.feed_protocol_preserving_content(&protocol_bytes[offset..]),
+                );
             }
         } else if matches!(
             render_mode,
             PaneOutputRenderMode::Normal | PaneOutputRenderMode::ManagedEditorClear
         ) {
-            process_screen.feed(&protocol_bytes);
+            synchronized_output.merge(process_screen.feed(&protocol_bytes));
         } else {
-            process_screen.feed_protocol_preserving_content(&protocol_bytes);
+            synchronized_output
+                .merge(process_screen.feed_protocol_preserving_content(&protocol_bytes));
         }
+        let defer_render =
+            process_screen.synchronized_output_active() && !synchronized_output.released;
         let terminal_response_bytes = process_screen.drain_terminal_response_bytes();
         osc_events.extend(
             process_screen
@@ -315,7 +322,8 @@ impl RuntimeSessionService {
             activity_events,
             bell_events,
             background,
-            invalidate_output_frame: alternate_screen_switched,
+            invalidate_output_frame: alternate_screen_switched || synchronized_output.full_redraw,
+            defer_render,
         };
         self.append_pane_output_event(&update)?;
         if title_changed {

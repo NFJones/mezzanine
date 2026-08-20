@@ -3612,12 +3612,12 @@ impl RuntimeSessionService {
     ) -> Result<RuntimeTransition> {
         let update = self.apply_pane_output_bytes(pane_id, bytes)?;
         let applied = update.is_some();
-        let render_reason = update.map(|update| {
-            if update.invalidate_output_frame {
+        let render_reason = update.and_then(|update| {
+            (!update.defer_render).then_some(if update.invalidate_output_frame {
                 RenderInvalidationReason::FullRedraw
             } else {
                 RenderInvalidationReason::PaneOutput
-            }
+            })
         });
         Ok(self.runtime_transition_with_render(applied, render_reason))
     }
