@@ -869,6 +869,8 @@ Pane frames MUST support the following fields:
   segments when deeper.
 - `pane.mode`: Current pane interaction mode, such as normal, copy, resize, or
   agent.
+- `pane.status`: Most recently updated external harness status for the pane,
+  with caller-and-source-isolated ownership and bounded optional display text.
 - `agent.id`: Agent identity associated with the pane.
 - `agent.name`: Human-readable display name associated with the pane agent.
 - `agent.status`: Agent state, such as idle, running, waiting, or errored.
@@ -7624,7 +7626,13 @@ The baseline control methods are:
 | `pane/zoom` | `{ "target": PaneTarget \| null, "zoomed": boolean, "idempotency_key": string }` | `{ "pane_id": string, "zoomed": boolean, "layout": LayoutState }` | Primary-only explicit zoom state. An omitted target selects the active pane. The mutation MUST NOT change focus. |
 | `pane/input-sync` | `{ "target": WindowTarget \| null, "enabled": boolean, "idempotency_key": string }` | `{ "window_id": string, "enabled": boolean }` | Primary-only explicit synchronized-input state for all panes in the target window. An omitted target selects the active window. The mutation MUST NOT change focus. |
 | `pane/attention` | `{ "target": PaneTarget \| null, "attention": boolean, "idempotency_key": string }` | `{ "pane_id": string, "attention": boolean }` | Primary- or automation-client mutation of the pane's completion-attention pill. An omitted target selects the active pane. The mutation MUST NOT change focus. |
+| `pane/status` | `{ "target": PaneTarget \| null, "source": string, "state": "running" \| "waiting" \| "blocked" \| "failed" \| "complete" \| null, "text": string \| null, "idempotency_key": string }` | `{ "pane_id": string, "source": string, "state": string \| null, "text": string \| null }` | Primary- or automation-client mutation of caller-and-source-owned pane status. Null state clears only that owner. Source is limited to 64 characters and text to 96 characters. The mutation MUST NOT change focus. |
+| `pane/notice` | `{ "target": PaneTarget \| null, "source": string, "severity": "info" \| "warning" \| "error" \| "success" \| null, "text": string, "idempotency_key": string }` | `{ "pane_id": string, "source": string, "severity": string, "emitted": true }` | Primary- or automation-client append to the bounded structured message event log. Source is limited to 64 characters and text to 512 characters. The method MUST NOT write to a PTY or change focus. |
 | `pane/capture` | `{ "target": PaneTarget, "range": CaptureRange, "include_history": boolean }` | `{ "content": string, "truncated": boolean, "range": CaptureRange }` | Read-only when policy allows. |
+| `buffer/list` | `{}` | `{ "buffers": [PasteBufferState] }` | Primary-only read of bounded internal paste-buffer metadata. |
+| `buffer/create` | `{ "name": string, "content": string, "replace": boolean \| null, "idempotency_key": string }` | `{ "name": string, "bytes": integer, "created": boolean, "replaced": boolean }` | Primary-only mutation. Existing buffers require explicit `replace: true`; content uses the configured paste-buffer byte limit. |
+| `buffer/read` | `{ "name": string }` | `{ "name": string, "content": string, "bytes": integer }` | Primary-only read of one internal paste buffer. |
+| `buffer/delete` | `{ "name": string, "idempotency_key": string }` | `{ "name": string, "deleted": true }` | Primary-only mutation; unknown names return `not_found`. |
 | `frame/read` | `{ "target": WindowTarget \| PaneTarget }` | `{ "fields": object, "rendered": string }` | Read-only and naturally idempotent. |
 | `terminal/view` | `{ "client_size": { "columns": integer, "rows": integer } \| null, "view_offset": { "row": integer, "column": integer } \| null }` | `{ "view": RenderedClientView \| null }` | Read-only for an attached primary or approved observer. Pending observers MUST receive no session view. `viewport` MAY be accepted as a compatibility alias for `view_offset`. |
 | `terminal/step` | `{ "idempotency_key": string, "client_size": { "columns": integer, "rows": integer } \| null, "render": boolean \| null, "input_bytes": [integer] }` | `{ "input_bytes": integer, "application": object, "view": RenderedClientView \| null, "ui_theme": object \| null, "session_terminated": boolean }` | Primary-only mutating input and resize step. Every input byte MUST be in `0..255`; `render` defaults to true. |

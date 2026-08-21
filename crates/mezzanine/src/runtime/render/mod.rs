@@ -366,6 +366,13 @@ pub(crate) struct RuntimePresentationComponent {
     primary_error_status_overlay: Option<String>,
     /// Active pane-agent status selector.
     pane_agent_status_selector: Option<RuntimePaneAgentStatusSelector>,
+    /// Source-isolated harness statuses keyed first by pane and then source.
+    pane_harness_statuses: std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, harness_status::RuntimePaneHarnessStatusEntry>,
+    >,
+    /// Monotonic sequence used to select the most recently updated source.
+    next_pane_harness_status_sequence: u64,
     /// Unacknowledged background agent completions keyed by stable pane id.
     completion_attention_panes: std::collections::BTreeSet<String>,
 }
@@ -676,6 +683,7 @@ impl RuntimePresentationComponent {
         self.agent_presentation_replay_panes.remove(pane_id);
         self.pending_agent_presentation_resize_sizes.remove(pane_id);
         self.agent_presentation_projection_cache.remove(pane_id);
+        self.pane_harness_statuses.remove(pane_id);
     }
 
     /// Seeds every pane-keyed agent presentation map for teardown regressions.
@@ -1571,6 +1579,8 @@ use mez_terminal::{
 mod attached_step;
 mod client_view;
 mod copy_mode;
+mod harness_status;
+pub(crate) use harness_status::RuntimePaneHarnessStatus;
 mod input;
 mod mouse;
 mod mux;

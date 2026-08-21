@@ -1052,6 +1052,12 @@ impl RuntimeSessionService {
                 let pane_id = pane.id.as_str();
                 self.pane_has_live_agent_footer(pane_id)
                     || self.pane_has_active_agent_frame_status(pane_id)
+                    || self
+                        .presentation
+                        .pane_harness_status(pane_id)
+                        .is_some_and(|status| {
+                            matches!(status.state.as_str(), "running" | "waiting")
+                        })
             })
     }
 
@@ -1434,6 +1440,7 @@ impl RuntimeSessionService {
                         latest_turn.map(|turn| self.runtime_agent_frame_status(turn).to_string())
                     })
                     .or_else(|| agent_session.map(|_| "idle".to_string()));
+                let pane_harness_status = self.presentation.pane_harness_status(&pane_id).cloned();
                 let active_turn_profile = latest_turn.filter(|turn| {
                     matches!(
                         turn.state,
@@ -1559,6 +1566,12 @@ impl RuntimeSessionService {
                         agent_id,
                         agent_name,
                         agent_status,
+                        pane_status_state: pane_harness_status
+                            .as_ref()
+                            .map(|status| status.state.clone()),
+                        pane_status_text: pane_harness_status.as_ref().map(|status| {
+                            status.text.clone().unwrap_or_else(|| status.state.clone())
+                        }),
                         agent_model,
                         agent_reasoning,
                         agent_thinking,

@@ -621,6 +621,10 @@ pub struct TerminalPaneFrameContext<Prompt = (), DisplayLines = Vec<String>> {
     pub agent_name: Option<String>,
     /// Opaque agent state shown by `agent.status`.
     pub agent_status: Option<String>,
+    /// Harness-owned pane status state shown by `pane.status`.
+    pub pane_status_state: Option<String>,
+    /// Harness-owned pane status display text shown by `pane.status`.
+    pub pane_status_text: Option<String>,
     /// Active model label shown by `agent.model`.
     pub agent_model: Option<String>,
     /// Active reasoning label shown by `agent.reasoning`.
@@ -659,6 +663,8 @@ impl<Prompt, DisplayLines: Default> Default for TerminalPaneFrameContext<Prompt,
             agent_id: None,
             agent_name: None,
             agent_status: None,
+            pane_status_state: None,
+            pane_status_text: None,
             agent_model: None,
             agent_reasoning: None,
             agent_thinking: None,

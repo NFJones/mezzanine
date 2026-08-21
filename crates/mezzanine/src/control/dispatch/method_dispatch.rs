@@ -498,7 +498,53 @@ pub(super) fn dispatch_parsed_request(
                 "pane attention requires the terminal runtime",
             ))
         }
+        ControlDispatchKind::PaneStatus => {
+            let params = request
+                .params
+                .as_deref()
+                .ok_or_else(|| MezError::invalid_args("pane/status requires a params object"))?;
+            require_idempotency_key(params)?;
+            let source = json_string_field(params, "source")
+                .ok_or_else(|| MezError::invalid_args("pane/status requires source"))?;
+            if source.trim().is_empty() {
+                return Err(MezError::invalid_args(
+                    "pane/status source must not be empty",
+                ));
+            }
+            let _target = pane_target_checked_resolved(session, params)?;
+            Err(MezError::invalid_state(
+                "pane status requires the terminal runtime",
+            ))
+        }
+        ControlDispatchKind::PaneNotice => {
+            let params = request
+                .params
+                .as_deref()
+                .ok_or_else(|| MezError::invalid_args("pane/notice requires a params object"))?;
+            require_idempotency_key(params)?;
+            let _text = json_string_field(params, "text")
+                .ok_or_else(|| MezError::invalid_args("pane/notice requires text"))?;
+            let _target = pane_target_checked_resolved(session, params)?;
+            Err(MezError::invalid_state(
+                "pane notice requires the terminal runtime",
+            ))
+        }
         ControlDispatchKind::PaneCapture => dispatch_pane_capture_request(request, session, &[]),
+        ControlDispatchKind::BufferList | ControlDispatchKind::BufferRead => Err(
+            MezError::invalid_state("paste buffers require the terminal runtime"),
+        ),
+        ControlDispatchKind::BufferCreate | ControlDispatchKind::BufferDelete => {
+            let params = request.params.as_deref().ok_or_else(|| {
+                MezError::invalid_args(format!("{} requires a params object", request.method))
+            })?;
+            require_idempotency_key(params)?;
+            let _name = json_string_field(params, "name").ok_or_else(|| {
+                MezError::invalid_args(format!("{} requires name", request.method))
+            })?;
+            Err(MezError::invalid_state(
+                "paste buffers require the terminal runtime",
+            ))
+        }
         ControlDispatchKind::TerminalView => {
             Err(MezError::invalid_state("terminal runtime is not attached"))
         }

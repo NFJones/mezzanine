@@ -7,6 +7,7 @@ mod approval;
 mod component;
 mod configuration;
 mod context;
+mod external_presentation;
 mod ingress;
 mod lifecycle;
 mod live_snapshot;

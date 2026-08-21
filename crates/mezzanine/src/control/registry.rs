@@ -74,8 +74,20 @@ pub(super) enum ControlDispatchKind {
     PaneInputSync,
     /// Set or clear a pane's attention indicator.
     PaneAttention,
+    /// Set or clear a source-owned pane status.
+    PaneStatus,
+    /// Emit a bounded pane-scoped notice.
+    PaneNotice,
     /// Capture pane output.
     PaneCapture,
+    /// List internal paste buffers.
+    BufferList,
+    /// Create an internal paste buffer.
+    BufferCreate,
+    /// Read an internal paste buffer.
+    BufferRead,
+    /// Delete an internal paste buffer.
+    BufferDelete,
     /// Read a rendered frame.
     FrameRead,
     /// Render a terminal view.
@@ -427,9 +439,62 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         ]),
     },
     ControlMethodSpec {
+        method: "pane/status",
+        dispatch: ControlDispatchKind::PaneStatus,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "target",
+            "pane_id",
+            "pane_title",
+            "pane_index",
+            "source",
+            "state",
+            "text",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
+        method: "pane/notice",
+        dispatch: ControlDispatchKind::PaneNotice,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "target",
+            "pane_id",
+            "pane_title",
+            "pane_index",
+            "source",
+            "severity",
+            "text",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
         method: "pane/capture",
         dispatch: ControlDispatchKind::PaneCapture,
         params_schema: ControlParamsSchema::Allowed(PANE_TARGET_MUTATION_PARAMS),
+    },
+    ControlMethodSpec {
+        method: "buffer/list",
+        dispatch: ControlDispatchKind::BufferList,
+        params_schema: ControlParamsSchema::Allowed(NO_PARAMS),
+    },
+    ControlMethodSpec {
+        method: "buffer/create",
+        dispatch: ControlDispatchKind::BufferCreate,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "name",
+            "content",
+            "replace",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
+        method: "buffer/read",
+        dispatch: ControlDispatchKind::BufferRead,
+        params_schema: ControlParamsSchema::Allowed(&["name"]),
+    },
+    ControlMethodSpec {
+        method: "buffer/delete",
+        dispatch: ControlDispatchKind::BufferDelete,
+        params_schema: ControlParamsSchema::Allowed(&["name", "idempotency_key"]),
     },
     ControlMethodSpec {
         method: "pane/swap",

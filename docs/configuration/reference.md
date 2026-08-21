@@ -264,7 +264,7 @@ max_output_chars = 32
 Default `frames.pane.visible_fields`:
 
 ```toml
-["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.thinking", "agent.planning", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
+["pane.index", "pane.title", "pane.id", "pane.status", "history.position", "agent.model", "agent.reasoning", "agent.thinking", "agent.planning", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
 ```
 
 ### Frame template fields
@@ -278,7 +278,7 @@ active-pane fields such as `pane.index`, `pane.id`, and `pane.title`.
 
 Pane templates support `session.id`, `window.id`, `window.index`, `pane.id`,
 `pane.index`, `pane.title`, `pane.active`, `pane.size`, `pane.primary_pid`,
-`pane.process_name`, `pane.exit_status`, `pane.pwd`, `pane.mode`, `agent.id`,
+`pane.process_name`, `pane.exit_status`, `pane.pwd`, `pane.mode`, `pane.status`, `agent.id`,
 `agent.name`, `agent.status`, `agent.model`, `agent.reasoning`,
 `agent.thinking`, `agent.planning`, `agent.routing`, `agent.latency`, `agent.preset`,
 `agent.context_usage`, `policy.mode`, `observer.pending_count`, and

@@ -314,7 +314,7 @@ pub(in crate::host::terminal::render) fn pane_frame_right_status_segment_style_s
     frame_context: &TerminalFrameContext,
     ui_theme: &UiTheme,
 ) -> Vec<TerminalStyleSpan> {
-    if segment.key == "agent.status"
+    if matches!(segment.key, "agent.status" | "pane.status")
         && pane_frame_agent_status_is_active(&segment.value)
         && !frame_context.reduced_motion
     {
@@ -345,6 +345,7 @@ pub(in crate::host::terminal::render) fn pane_frame_right_status_rendition(
         "history.position" => ui_theme.colors.scroll_indicator.rendition(),
         "pane.progress" => ui_theme.colors.pane_progress.rendition(),
         "pane.pwd" => ui_theme.colors.pane_pwd.rendition(),
+        "pane.status" => pane_frame_agent_status_rendition(&segment.value, ui_theme),
         "agent.model" => ui_theme.colors.agent_model.rendition(),
         "agent.reasoning" => ui_theme.colors.agent_reasoning.rendition(),
         "agent.thinking" => pane_frame_agent_thinking_rendition(&segment.value, ui_theme),

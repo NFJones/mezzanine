@@ -116,7 +116,8 @@ the [baseline method table in `SPEC.md`](../../../SPEC.md#13-control-endpoint).
 | Client | `client/list`, `client/detach`, `client/select_primary` | Inspect clients, detach a client, or atomically transfer primary ownership. |
 | Observer | `observer/list`, `observer/inspect`, `observer/approve`, `observer/reject`, `observer/revoke` | Inspect and primary-manage observer requests. Pending/approved observers can inspect only their own request-local status. |
 | Window | `window/list`, `window/create`, `window/rename`, `window/select`, `window/close`, `window/layout`, `window/rebalance` | Inspect, create, name, select, close, or arrange windows. List is RO; rename is naturally idempotent when unchanged. Layout and rebalance are primary-only presentation mutations. |
-| Pane | `pane/list`, `pane/create`, `pane/select`, `pane/resize`, `pane/move`, `pane/swap`, `pane/break`, `pane/join`, `pane/close`, `pane/rename`, `pane/zoom`, `pane/input-sync`, `pane/attention`, `pane/capture` | Inspect panes, mutate layout and presentation, control synchronized input or completion attention, or capture pane content. List is RO; capture is RO when policy permits. Rename, zoom, and input synchronization are primary-only. |
+| Pane | `pane/list`, `pane/create`, `pane/select`, `pane/resize`, `pane/move`, `pane/swap`, `pane/break`, `pane/join`, `pane/close`, `pane/rename`, `pane/zoom`, `pane/input-sync`, `pane/attention`, `pane/status`, `pane/notice`, `pane/capture` | Inspect panes, mutate layout and presentation, control synchronized input, completion attention, source-owned status, or bounded notices, or capture pane content. List is RO; capture is RO when policy permits. Status and notices are available to primary and automation clients; rename, zoom, and input synchronization are primary-only. |
+| Buffer | `buffer/list`, `buffer/create`, `buffer/read`, `buffer/delete` | Primary-only bounded internal paste-buffer inspection and mutation. List/read are RO; create requires explicit replacement for existing names. |
 | Frame | `frame/read` | Read rendered frame fields and text (RO). |
 | Terminal | `terminal/view`, `terminal/step`, `terminal/command` | Render a client view, submit bytes/resize, or invoke a terminal command. Primary-only mutation applies to step and command. |
 | Agent | `agent/list`, `agent/task/list`, `agent/spawn`, `agent/shell/show`, `agent/shell/hide`, `agent/shell/command` | Inspect agents/tasks (RO), manage an agent shell, start prompt work, or spawn an agent. |
@@ -176,6 +177,19 @@ disables synchronized input for a target window. `window/layout` selects one
 of `tiled`, `even-vertical`, `even-horizontal`, or `even-grid`, while
 `window/rebalance` reapplies the selected policy. Targets default to the active
 pane or window, and targeted operations do not change focus.
+
+Harness hooks can publish richer state with `pane/status`. Each entry is owned
+by the calling client plus its bounded `source`, so clearing one source does not
+remove another source status. Supported states are `running`, `waiting`,
+`blocked`, `failed`, and `complete`; a null state clears that owner. Optional
+text is bounded and appears through the `pane.status` frame field. `pane/notice`
+appends a structured, bounded `message` event with `info`, `warning`, `error`,
+or `success` severity without writing into the PTY or stealing focus.
+
+Primary clients can also stage bounded internal handoffs with `buffer/create`,
+`buffer/list`, `buffer/read`, and `buffer/delete`. Existing names are preserved
+unless create explicitly requests replacement; buffer APIs do not access the
+host clipboard.
 
 The recommended loop is initialize, fetch a view, render it, pass physical
 input and size updates via `terminal/step`, then apply the returned view or

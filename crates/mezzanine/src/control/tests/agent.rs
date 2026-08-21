@@ -333,6 +333,24 @@ fn primary_control_method_fixture_request(
         "pane/attention" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"pane/attention","params":{"target":{"pane_id":"%1"},"attention":true,"idempotency_key":"pane-attention"}}"#.to_string()
         }
+        "pane/status" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"pane/status","params":{"target":{"pane_id":"%1"},"source":"fixture","state":"running","text":"Working","idempotency_key":"pane-status"}}"#.to_string()
+        }
+        "pane/notice" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"pane/notice","params":{"target":{"pane_id":"%1"},"source":"fixture","severity":"info","text":"Notice","idempotency_key":"pane-notice"}}"#.to_string()
+        }
+        "buffer/list" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"buffer/list","params":{}}"#.to_string()
+        }
+        "buffer/create" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"buffer/create","params":{"name":"fixture","content":"value","idempotency_key":"buffer-create"}}"#.to_string()
+        }
+        "buffer/read" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"buffer/read","params":{"name":"fixture"}}"#.to_string()
+        }
+        "buffer/delete" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"buffer/delete","params":{"name":"fixture","idempotency_key":"buffer-delete"}}"#.to_string()
+        }
         "pane/capture" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"pane/capture","params":{"target":{"pane_id":"%1"},"range":{"origin":"visible","start":"start","end":"end"}}}"#.to_string()
         }
