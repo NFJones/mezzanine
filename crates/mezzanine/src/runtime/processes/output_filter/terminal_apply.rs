@@ -192,6 +192,8 @@ impl RuntimeSessionService {
         let primary_shell_returned = current_foreground_certified_shell == Some(true)
             && !self.dependency_free_foreign_loader_owns_process_group(&pane_id, process_group_id)
             && self.clear_uncertified_foreign_shell_boundary(&pane_id);
+        let resumed_agent_entry =
+            self.resume_agent_entry_discovery_for_foreground(&pane_id, process_group_id)?;
         if primary_shell_returned {
             self.leave_agent_subshell(&pane_id);
             self.clear_agent_subshell_shell_identity(&pane_id);
@@ -208,10 +210,11 @@ impl RuntimeSessionService {
                 self.schedule_parent_shell_discovery_for_agent_entry(&pane_id);
             }
         }
-        let awaiting_initial_prompt = self
-            .process
-            .pane_bootstrap_pending
-            .contains(pane_id.as_str())
+        let awaiting_initial_prompt = !resumed_agent_entry
+            && self
+                .process
+                .pane_bootstrap_pending
+                .contains(pane_id.as_str())
             && self.pane_readiness_state(&pane_id) == PaneReadinessState::Unknown;
         let certified_shell_regained_foreground = primary_shell_returned
             || previous_foreground_process_group.is_some()

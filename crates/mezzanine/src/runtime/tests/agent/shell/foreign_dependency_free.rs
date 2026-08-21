@@ -461,7 +461,7 @@ bootstrap\tcomplete\t1714500000\n";
         )
         .as_bytes(),
     );
-    restored_prompt_batch.extend_from_slice(b"\rforeign$ ");
+    restored_prompt_batch.extend_from_slice(b"foreign$ ");
 
     service
         .apply_pane_process_output(
@@ -485,6 +485,15 @@ bootstrap\tcomplete\t1714500000\n";
     assert!(
         process_content.contains("foreign$"),
         "the restored foreign prompt in the loader-exit batch must be visible: {process_content:?}"
+    );
+    assert_eq!(
+        service
+            .process_pane_screen(&pane_id)
+            .unwrap()
+            .cursor_state()
+            .column,
+        "foreign$ ".chars().count(),
+        "a prompt without an explicit carriage return must replace the retained prompt"
     );
     assert_eq!(
         service.renderable_pane_output_bytes(&pane_id, b"foreign output\r\n"),

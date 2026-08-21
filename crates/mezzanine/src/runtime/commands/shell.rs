@@ -1105,10 +1105,10 @@ impl RuntimeSessionService {
     /// to the original interactive shell without inheriting prompt, option, or
     /// environment changes made inside the agent context.
     ///
-    /// Bootstrap delivery is intentionally prompt-gated: this method sends only
-    /// the child-shell handoff. The ordinary pending-bootstrap state machine
-    /// observes the new child's prompt before it registers and sends the
-    /// wrapper, whose command payload remains deferred until its start marker.
+    /// Shell discovery and bootstrap begin only after this explicit entry
+    /// point. An unmanaged parent is generation-fenced and handed to the
+    /// dependency-free loader, which installs compatibility only in the
+    /// agent-owned child before releasing the bootstrap payload.
     pub(crate) fn enter_agent_subshell_if_needed(&mut self, pane_id: &str) -> Result<bool> {
         if self.effective_agent_shell_mode_for_pane(pane_id)
             == crate::runtime::config::ShellMode::Native
@@ -1127,11 +1127,62 @@ impl RuntimeSessionService {
             self.defer_agent_subshell_entry(pane_id);
             return Ok(false);
         }
-        if self.pane_foreground_certified_shell_state(pane_id) == Some(false) {
-            if !self.pane_has_running_shell_transaction(pane_id)
-                && self.begin_uncertified_foreign_shell_boundary_for_current_foreground(pane_id)
-            {
-                self.begin_dependency_free_foreign_shell_bootstrap(pane_id)?;
+        let legacy_managed_startup = self.legacy_managed_startup_is_enabled();
+        let legacy_managed_parent = legacy_managed_startup
+            && matches!(
+                self.shell_classification_for_pane(pane_id),
+                ShellClassification::Bash | ShellClassification::Fish | ShellClassification::Zsh
+            );
+        if !legacy_managed_parent
+            && self.pane_has_unsubmitted_process_input(pane_id)
+            && !self.agent_subshell_input_clear_is_pending(pane_id)
+        {
+            self.defer_agent_subshell_entry(pane_id);
+            self.begin_agent_subshell_input_clear(pane_id);
+            self.set_pane_readiness(pane_id, PaneReadinessState::InteractiveBlocked);
+            self.remember_hidden_shell_render_suppression(pane_id);
+            match self.write_runtime_pane_input(pane_id, b"\x03") {
+                Ok(()) => return Ok(true),
+                Err(error) if error.kind() == MezErrorKind::NotFound => {
+                    self.clear_agent_subshell_state(pane_id);
+                    return Ok(false);
+                }
+                Err(error) => {
+                    self.clear_agent_subshell_state(pane_id);
+                    return Err(error);
+                }
+            }
+        }
+        if !legacy_managed_parent && self.agent_subshell_input_clear_is_pending(pane_id) {
+            self.defer_agent_subshell_entry(pane_id);
+            if !matches!(
+                self.pane_readiness_state(pane_id),
+                PaneReadinessState::Ready | PaneReadinessState::PromptCandidate
+            ) {
+                return Ok(false);
+            }
+            self.finish_agent_subshell_input_clear(pane_id);
+        }
+        if !legacy_managed_startup
+            && !self.pane_has_uncertified_foreign_shell_boundary(pane_id)
+            && !self.dependency_free_foreign_loader_owns_parent_restoration(pane_id)
+            && !self.pane_has_running_shell_transaction(pane_id)
+        {
+            let foreground_is_observed = self
+                .pane_foreground_process_group_observation(pane_id)
+                .0
+                .is_some();
+            let prompt_is_ready = matches!(
+                self.pane_readiness_state(pane_id),
+                PaneReadinessState::Ready | PaneReadinessState::PromptCandidate
+            );
+            if self.begin_agent_entry_shell_boundary_for_current_foreground(pane_id) {
+                if foreground_is_observed || prompt_is_ready {
+                    self.begin_dependency_free_foreign_shell_bootstrap(pane_id)?;
+                }
+            } else {
+                self.defer_agent_subshell_entry(pane_id);
+                return Ok(false);
             }
             self.defer_agent_subshell_entry(pane_id);
             return Ok(false);
@@ -1220,30 +1271,6 @@ impl RuntimeSessionService {
                 }
             }
         }
-        let needs_non_native_input_clear =
-            matches!(
-                classification,
-                ShellClassification::PosixSh | ShellClassification::UnknownUnix
-            ) && self.adapter_owned_pane_process_instance(pane_id).is_none()
-                && self.pane_has_unsubmitted_process_input(pane_id);
-        if needs_non_native_input_clear && !self.agent_subshell_input_clear_is_pending(pane_id) {
-            self.defer_agent_subshell_entry(pane_id);
-            self.begin_agent_subshell_input_clear(pane_id);
-            self.set_pane_readiness(pane_id, PaneReadinessState::InteractiveBlocked);
-            self.remember_hidden_shell_render_suppression(pane_id);
-            match self.write_runtime_pane_input(pane_id, b"\x03") {
-                Ok(()) => return Ok(true),
-                Err(error) if error.kind() == MezErrorKind::NotFound => {
-                    self.clear_agent_subshell_state(pane_id);
-                    return Ok(false);
-                }
-                Err(error) => {
-                    self.clear_agent_subshell_state(pane_id);
-                    return Err(error);
-                }
-            }
-        }
-        self.finish_agent_subshell_input_clear(pane_id);
         let zsh_history_token = self.zsh_history_token_for_pane(pane_id).cloned();
         let managed_zsh = self.managed_zsh_shell_for_pane(pane_id)?;
         let bash_receiver_rcfile = self
@@ -1437,6 +1464,13 @@ impl RuntimeSessionService {
         if !self.agent_subshell_is_active(pane_id) {
             if self.managed_shell_handoff_is_pending(pane_id) {
                 return self.request_managed_shell_handoff_exit(pane_id);
+            }
+            if self.foreign_shell_bootstrap_phase_for_exit(pane_id) == Some("awaiting-prompt") {
+                self.clear_uncertified_foreign_shell_boundary(pane_id);
+                self.clear_deferred_agent_subshell_entry(pane_id);
+                self.invalidate_agent_subshell_environment_after_exit(pane_id);
+                self.clear_shell_output_filters_for_foreground_input(pane_id);
+                return Ok(true);
             }
             if self
                 .cancel_agent_subshell_bootstrap_for_exit(pane_id)

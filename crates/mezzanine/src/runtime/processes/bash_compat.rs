@@ -28,6 +28,7 @@ pub(super) struct ManagedBashCompatibility {
 impl ManagedBashCompatibility {
     /// Creates a private rcfile which sources the user's rcfile once before
     /// installing the receiver binding.
+    #[allow(dead_code)]
     pub(super) fn create(socket_path: &Path, pane_id: &str, token: MarkerToken) -> Result<Self> {
         let parent = socket_path.parent().ok_or_else(|| {
             MezError::invalid_state("control socket has no parent for managed Bash startup")
@@ -80,6 +81,7 @@ impl ManagedBashCompatibility {
 
     /// Starts interactive Bash with the managed rcfile after normal user rc
     /// loading has been delegated to that private file.
+    #[allow(dead_code)]
     pub(super) fn configure_launch(&self, launch: PaneProcessLaunch) -> PaneProcessLaunch {
         launch
             .with_interactive_arguments([
@@ -423,6 +425,7 @@ impl Drop for ManagedBashCompatibility {
 }
 
 /// Writes one owner-only startup artifact without following an existing file.
+#[allow(dead_code)]
 fn write_private_file(path: &Path, contents: &str) -> Result<()> {
     let mut file = OpenOptions::new()
         .write(true)

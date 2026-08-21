@@ -1,6 +1,8 @@
 //! Passive shell readiness and readiness-probe transitions.
 
-use crate::runtime::processes::RuntimePaneEnvironmentAuthority;
+use crate::runtime::processes::{
+    RuntimeForeignShellBootstrapPhase, RuntimePaneEnvironmentAuthority,
+};
 use mez_agent::ShellClassification;
 
 use super::{
@@ -108,6 +110,14 @@ impl RuntimeSessionService {
         }
         if rearm_identity_bootstrap {
             self.clear_pane_environment_authority_failure(pane_id);
+            if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+                boundary.phase = RuntimeForeignShellBootstrapPhase::AwaitingPrompt;
+                boundary.phase_started_at_unix_ms = current_unix_millis();
+                boundary.loader_marker = None;
+                boundary.loader_payload = None;
+                boundary.loader_ready = false;
+                boundary.identity_marker = None;
+            }
             self.process
                 .pane_bootstrap_pending
                 .insert(pane_id.to_string());

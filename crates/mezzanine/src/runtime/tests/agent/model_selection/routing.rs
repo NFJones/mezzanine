@@ -61,6 +61,7 @@ fn selected_routed_loop(
     command: &str,
 ) -> (RuntimeSessionService, String, mez_agent::AgentTurnRecord) {
     let mut service = test_runtime_service();
+    service.enable_legacy_managed_startup_for_tests();
     service
         .agent_scheduler_mut()
         .set_max_concurrent_agents(1)
@@ -124,6 +125,7 @@ fn selected_routed_loop(
 #[test]
 fn runtime_concurrent_routed_workers_share_bucket_with_independent_bootstraps() {
     let mut service = test_runtime_service();
+    service.enable_legacy_managed_startup_for_tests();
     service
         .agent_scheduler_mut()
         .set_max_concurrent_agents(2)

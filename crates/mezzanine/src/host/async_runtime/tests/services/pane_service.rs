@@ -963,6 +963,7 @@ async fn async_foreign_fish_child_clears_bootstrap_pending() {
         "/bin/sh"
     };
     let mut service = test_service_with_shell(parent_shell);
+    service.disable_legacy_managed_startup_for_tests();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();

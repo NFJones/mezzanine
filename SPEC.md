@@ -4023,6 +4023,23 @@ when `/bin/sh` is executable. The same resolved shell path precedence MUST
 apply to pane creation, explicit pane commands, shell hooks, bootstrap probes,
 and agent command wrappers.
 
+Pane creation MUST stop after resolving the executable needed to launch the
+ordinary process shell. It MUST NOT probe or classify the running shell, arm
+bootstrap, install managed startup files, replace shell startup arguments, or
+inject shell hooks merely because a pane was created. Until agent mode is
+explicitly shown, the pane shell and its startup sequence remain user-owned;
+terminal parsing and passive process metadata observation MAY continue, but
+Mezzanine MUST NOT write discovery or bootstrap input to the pane.
+
+When pane-shell agent mode is explicitly shown, the harness MUST create a
+fresh shell-interaction epoch and use the current prompt boundary to begin
+bounded identity discovery. If prompt ownership is not yet available, entry
+MUST remain deferred without writing to the pane. Hiding agent mode before
+that boundary is reached MUST cancel the deferred entry without sending probe,
+handoff, bootstrap, newline, interrupt, EOF, or exit bytes. Compatibility for
+Bash, Fish, or Zsh MUST be installed only in the agent-owned child; the
+ordinary parent shell MUST remain unmodified.
+
 The `SHELL` environment variable is the definitive source of truth for the pane
 shell executable only when it is set, non-empty, absolute, and executable by the
 current user. Configuration MAY control login mode, interactivity, environment
@@ -4676,6 +4693,12 @@ is required.
 
 Before the first model request for a pane, the harness MUST perform a bootstrap
 phase.
+
+For pane-shell execution, this requirement is activated by explicit agent-shell
+entry, not by pane creation. Ordinary pane startup MUST NOT create a pending
+bootstrap owner or hide process output in anticipation of future agent work.
+After entry, bootstrap MUST remain prompt-gated and MUST complete or degrade
+before the first model request or agent-owned pane-shell action proceeds.
 
 The harness MUST also perform a bootstrap phase after any environment
 signature change detected before an agent turn. A bootstrap phase caused by a

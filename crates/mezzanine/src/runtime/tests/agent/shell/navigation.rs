@@ -211,12 +211,11 @@ fn runtime_terminal_command_toggles_agent_shell_state() {
     );
 }
 
-/// Verifies that showing agent mode starts a pane-local subshell and hiding it
-/// exits that subshell instead of sending redraw traffic to the user's original
-/// interactive shell. This protects prompt, option, and environment mutations
-/// made by agent commands from leaking back to the parent shell, and confirms
-/// that hiding agent mode immediately restores unmediated process input without
-/// arming hidden bootstrap work.
+/// Verifies that showing agent mode without prompt evidence defers discovery.
+///
+/// Neither showing nor hiding the agent surface may write to the user's shell
+/// before a prompt authorizes discovery. The retained process screen and later
+/// user input must remain unchanged by the cancelled entry attempt.
 #[test]
 fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     let mut service = test_runtime_service();
@@ -254,21 +253,9 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     assert!(show.contains("visibility=visible"), "{show}");
     let enter_input = service.drain_pane_io_transition().side_effects;
     let enter_inputs = pane_input_effects(&enter_input);
-    assert_eq!(enter_inputs.len(), 1);
-    assert_eq!(enter_inputs[0].pane_input_parts().0, pane_id);
-    let enter_text = String::from_utf8_lossy(enter_inputs[0].pane_input_parts().1);
-    let enter_source = decoded_posix_shell_wrapper_sources(&enter_text);
-    assert!(
-        enter_source.contains("command env \\\n  -u BASH_ENV \\\n  -u ENV \\\n  -u ZDOTDIR"),
-        "{enter_source}"
-    );
-    assert!(
-        enter_source.contains("HISTFILE=/dev/null"),
-        "{enter_source}"
-    );
-    assert!(enter_source.contains("'/bin/sh'"), "{enter_source}");
-    assert!(service.agent_subshell_is_active(&pane_id));
-    service.remember_mez_wrapper_filter_command(&pane_id, "MEZ_MARKER_TOKEN='abc'");
+    assert!(enter_inputs.is_empty(), "{enter_input:?}");
+    assert!(!service.agent_subshell_is_active(&pane_id));
+    assert!(service.pane_bootstrap_is_pending_for_tests(&pane_id));
 
     let hide = service
         .execute_terminal_command(&primary, "agent-shell")
@@ -276,16 +263,7 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     assert!(hide.contains("visibility=hidden"), "{hide}");
     let exit_effects = service.drain_pane_io_transition().side_effects;
     let exit_inputs = pane_input_effects(&exit_effects);
-    assert_eq!(exit_inputs.len(), 1);
-    assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
-    let exit_bytes = exit_inputs[0].pane_input_parts().1;
-    assert!(
-        !exit_bytes
-            .windows(b"__MEZ_COMMAND_PAYLOAD_END_".len())
-            .any(|window| window == b"__MEZ_COMMAND_PAYLOAD_END_"),
-        "a prompt-gated wrapper that was never sent must not receive payload"
-    );
-    assert_eq!(exit_bytes.last(), Some(&b'\x04'));
+    assert!(exit_inputs.is_empty(), "{exit_effects:?}");
     assert!(!service.agent_subshell_is_active(&pane_id));
     assert!(!service.hidden_shell_render_retention_timer_needed());
     assert!(!service.pane_bootstrap_is_pending_for_tests(&pane_id));
@@ -293,29 +271,6 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
         service.pane_screen(&pane_id).unwrap(),
         service.process_pane_screen(&pane_id).unwrap(),
     ));
-    let exit_marker = service
-        .agent_subshell_exit_marker_for_tests(&pane_id)
-        .unwrap()
-        .to_vec();
-
-    let marker_only = service.visible_pane_output_bytes(&pane_id, &exit_marker);
-    assert!(
-        marker_only.is_empty(),
-        "a marker-only PTY fragment must not move the visible cursor"
-    );
-    service
-        .apply_pane_output_bytes(
-            pane_id.clone(),
-            b"\x1b]133;R;mez_receiver=complete;mez_token=token;mez_marker=marker;mez_status=0\x1b\\parent$ "
-                .to_vec(),
-        )
-        .unwrap();
-    for _ in 0..64 {
-        let _ = service.tick_hidden_shell_render_retention();
-    }
-    service
-        .apply_pane_output_bytes(pane_id.clone(), b"\r\x1b[K\r".to_vec())
-        .unwrap();
     assert_eq!(
         service
             .process_pane_screen(&pane_id)
@@ -367,12 +322,14 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     let _ = process.terminate(Duration::from_millis(10));
 }
 
-/// Verifies a rapid agent-shell enter and exit releases the bootstrap input
-/// lease before delivering EOF to the child shell. The async pane actor blocks
-/// ordinary user input while a transaction lease is retained, so omitting this
-/// release strands both the exit byte and every later parent-shell keystroke.
+/// Verifies a rapid agent-shell enter and exit cancels before shell discovery.
+///
+/// Without prompt evidence, explicit entry owns only an in-memory discovery
+/// boundary. Hiding the agent surface at that point must remove the boundary
+/// without acquiring an input lease or writing discovery, handoff, or exit
+/// bytes into the user's shell.
 #[test]
-fn runtime_agent_shell_rapid_toggle_releases_bootstrap_input_lease() {
+fn runtime_agent_shell_rapid_toggle_cancels_before_shell_discovery() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -397,60 +354,20 @@ fn runtime_agent_shell_rapid_toggle_releases_bootstrap_input_lease() {
         .unwrap();
 
     let effects = service.drain_pane_io_transition().side_effects;
-    let (lease_index, owner_id) = effects
-        .iter()
-        .enumerate()
-        .find_map(|(index, effect)| match effect {
+    assert!(pane_input_effects(&effects).is_empty(), "{effects:?}");
+    assert!(
+        effects.iter().all(|effect| !matches!(
+            effect,
             RuntimeSideEffect::PaneProcessIo {
-                effect: crate::runtime::PaneProcessIoEffect::AcquireShellInputLease { owner_id },
+                effect: crate::runtime::PaneProcessIoEffect::AcquireShellInputLease { .. }
+                    | crate::runtime::PaneProcessIoEffect::ReleaseShellInputLease { .. },
                 ..
-            } => Some((index, owner_id.as_str())),
-            _ => None,
-        })
-        .expect("agent subshell entry should acquire a bootstrap input lease");
-    let handoff_index = effects
-        .iter()
-        .position(|effect| {
-            matches!(
-                effect,
-                RuntimeSideEffect::PaneProcessIo {
-                    effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
-                    ..
-                } if delivery.delivery_id.as_deref() == Some(owner_id)
-            )
-        })
-        .expect("agent subshell entry should queue its leased shell handoff");
-    let release_index = effects
-        .iter()
-        .position(|effect| {
-            matches!(
-                effect,
-                RuntimeSideEffect::PaneProcessIo {
-                    effect:
-                        crate::runtime::PaneProcessIoEffect::ReleaseShellInputLease {
-                            owner_id: released_owner,
-                        },
-                    ..
-                } if released_owner == owner_id
-            )
-        })
-        .expect("rapid agent-shell exit should release the bootstrap input lease");
-    let exit_index = effects
-        .iter()
-        .position(|effect| {
-            matches!(
-                effect,
-                RuntimeSideEffect::PaneProcessIo {
-                    effect: crate::runtime::PaneProcessIoEffect::WriteInput { bytes },
-                    ..
-                } if bytes.last() == Some(&b'\x04')
-            )
-        })
-        .expect("rapid agent-shell exit should queue EOF for the child shell");
-
-    assert!(lease_index < handoff_index, "{effects:?}");
-    assert!(handoff_index < release_index, "{effects:?}");
-    assert!(release_index < exit_index, "{effects:?}");
+            }
+        )),
+        "{effects:?}"
+    );
+    assert!(!service.pane_bootstrap_is_pending_for_tests(&pane_id));
+    assert!(service.running_shell_transactions_for_tests().is_empty());
     let _ = process.terminate(Duration::from_millis(10));
 }
 
@@ -597,10 +514,9 @@ bootstrap\tcomplete\t1714500000\n";
         .unwrap();
 
     assert!(service.agent_subshell_is_active(&pane_id));
-    assert_eq!(
-        pane_input_effects(&service.drain_pane_io_transition().side_effects).len(),
-        1,
-        "successful parent bootstrap should enter exactly one agent subshell"
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "dependency-free bootstrap must not send a second child-shell handoff"
     );
     let _ = process.terminate(Duration::from_millis(10));
 }
@@ -627,21 +543,7 @@ fn runtime_agent_shell_reentry_uses_hidden_parent_prompt_without_hidden_probe() 
         .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
 
-    service
-        .execute_terminal_command(&primary, "agent-shell")
-        .unwrap();
-    service.drain_pane_io_transition();
-    service
-        .execute_terminal_command(&primary, "agent-shell")
-        .unwrap();
-    service.drain_pane_io_transition();
-    let exit_marker = service
-        .agent_subshell_exit_marker_for_tests(&pane_id)
-        .unwrap()
-        .to_vec();
-
-    let mut parent_prompt_output = exit_marker;
-    parent_prompt_output.extend_from_slice(b"\x1b]133;A\x1b\\user@host ~/repo $ \x1b]133;B\x1b\\");
+    let parent_prompt_output = b"\x1b]133;A\x1b\\user@host ~/repo $ \x1b]133;B\x1b\\".to_vec();
     service
         .apply_pane_output_bytes(pane_id.clone(), parent_prompt_output)
         .unwrap();
@@ -1132,7 +1034,7 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
         1024,
     )
     .unwrap();
-    configure_pane_shell_protocol_fixture(&mut service);
+    configure_unmanaged_pane_shell_protocol_fixture(&mut service);
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -1152,8 +1054,12 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
         .unwrap();
     assert!(show.contains("visibility=visible"), "{show}");
     let enter_effects = service.drain_pane_io_transition().side_effects;
-    assert_eq!(pane_input_effects(&enter_effects).len(), 1);
-    assert!(service.agent_subshell_is_active(&pane_id));
+    assert!(
+        pane_input_effects(&enter_effects).is_empty(),
+        "{enter_effects:?}"
+    );
+    assert!(!service.agent_subshell_is_active(&pane_id));
+    assert!(service.pane_bootstrap_is_pending_for_tests(&pane_id));
     service
         .agent_pane_screen_mut(&pane_id)
         .unwrap()
@@ -1186,17 +1092,9 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
     );
     let exit_effects = service.drain_pane_io_transition().side_effects;
     let exit_inputs = pane_input_effects(&exit_effects);
-    assert_eq!(exit_inputs.len(), 1);
-    assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
-    let exit_bytes = exit_inputs[0].pane_input_parts().1;
-    assert!(
-        !exit_bytes
-            .windows(b"__MEZ_COMMAND_PAYLOAD_END_".len())
-            .any(|window| window == b"__MEZ_COMMAND_PAYLOAD_END_"),
-        "a prompt-gated wrapper that was never sent must not receive payload"
-    );
-    assert_eq!(exit_bytes.last(), Some(&b'\x04'));
+    assert!(exit_inputs.is_empty(), "{exit_effects:?}");
     assert!(!service.agent_subshell_is_active(&pane_id));
+    assert!(!service.pane_bootstrap_is_pending_for_tests(&pane_id));
     let after_exit_screen = service.agent_pane_screen(&pane_id).unwrap();
     assert!(
         after_exit_screen

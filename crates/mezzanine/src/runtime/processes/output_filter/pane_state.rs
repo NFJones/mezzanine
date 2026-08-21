@@ -155,6 +155,11 @@ impl RuntimeSessionService {
                 settled_render_mode,
                 PaneOutputRenderMode::Normal | PaneOutputRenderMode::ManagedEditorClear
             ) {
+                // Hidden loader traffic preserves the retained parent cursor.
+                // Some shells emit the restored prompt immediately after the
+                // loader-exit record without a carriage return, so normalize
+                // that repaint to the beginning of the retained prompt row.
+                process_screen.feed(b"\r");
                 process_screen.feed(&protocol_bytes[offset..]);
             } else {
                 process_screen.feed_protocol_preserving_content(&protocol_bytes[offset..]);

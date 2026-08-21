@@ -389,9 +389,26 @@ fn test_runtime_service_with_size(size: Size) -> RuntimeSessionService {
 /// tests that assert pane bootstrap and parent-shell behavior select their
 /// required legacy execution boundary explicitly.
 fn configure_pane_shell_protocol_fixture(service: &mut RuntimeSessionService) {
+    service.enable_legacy_managed_startup_for_tests();
     service
         .replace_config_layers(vec![ConfigLayer {
             name: "pane-shell-protocol-fixture".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nshell_mode = \"pane\"\n[permissions]\nsandbox = \"policy-only\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+}
+
+/// Configures pane-shell mode while preserving production unmanaged startup.
+fn configure_unmanaged_pane_shell_protocol_fixture(service: &mut RuntimeSessionService) {
+    service.disable_legacy_managed_startup_for_tests();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "unmanaged-pane-shell-protocol-fixture".to_string(),
             path: None,
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,

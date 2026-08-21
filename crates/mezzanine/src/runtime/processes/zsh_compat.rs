@@ -25,6 +25,7 @@ use mez_mux::process::PaneProcessLaunch;
 use super::{MezError, Result};
 use crate::error::MezErrorKind;
 
+#[allow(dead_code)]
 const MANAGED_ZSHENV: &str = r#"# Mezzanine-managed zsh startup compatibility.
 typeset -g MEZ_ZSH_MANAGED_ZDOTDIR=${ZDOTDIR}
 typeset -g MEZ_ZSH_PRIVATE_DIRECTORY=${ZDOTDIR}
@@ -56,6 +57,7 @@ else
 fi
 "#;
 
+#[allow(dead_code)]
 const MANAGED_ZSHRC: &str = r#"# Mezzanine-managed zsh interactive startup compatibility.
 ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
 typeset -g MEZ_ZSH_SYSTEM_HISTFILE_WAS_SET=${+HISTFILE}
@@ -80,6 +82,7 @@ else
 fi
 "#;
 
+#[allow(dead_code)]
 const MANAGED_ZPROFILE: &str = r#"# Mezzanine-managed zsh login startup compatibility.
 ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
 if [[ -r ${ZDOTDIR}/.zprofile ]]; then
@@ -96,6 +99,7 @@ else
 fi
 "#;
 
+#[allow(dead_code)]
 const MANAGED_ZLOGIN: &str = r#"# Mezzanine-managed zsh login completion compatibility.
 ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
 if [[ -r ${ZDOTDIR}/.zlogin ]]; then
@@ -565,11 +569,13 @@ pub(super) fn managed_foreign_zsh_child_staging_source(
 pub(super) struct ManagedZshCompatibility {
     token: MarkerToken,
     directory: PathBuf,
+    #[allow(dead_code)]
     original_zdotdir: Option<OsString>,
 }
 
 impl ManagedZshCompatibility {
     /// Creates private startup files beside the session's private socket.
+    #[allow(dead_code)]
     pub(super) fn create(
         socket_path: &Path,
         pane_id: &str,
@@ -633,6 +639,7 @@ impl ManagedZshCompatibility {
     }
 
     /// Adds the managed startup directory and authentication state to launch.
+    #[allow(dead_code)]
     pub(super) fn configure_launch(&self, launch: PaneProcessLaunch) -> PaneProcessLaunch {
         let launch = launch
             .with_interactive_arguments(["-l", "-i"])
@@ -681,6 +688,7 @@ impl Drop for ManagedZshCompatibility {
 }
 
 /// Creates one owner-only startup file without following an existing file.
+#[allow(dead_code)]
 fn write_private_file(path: &Path, contents: &str) -> Result<()> {
     let mut file = OpenOptions::new()
         .write(true)

@@ -140,10 +140,16 @@ impl RuntimeSessionService {
             .get(pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("foreign shell boundary is unavailable"))?;
+        let observed_process_group = self.pane_foreground_process_group_observation(pane_id).0;
+        let foreground_matches = if boundary.process_group_observed {
+            observed_process_group == Some(boundary.process_group_id)
+        } else {
+            observed_process_group
+                .is_none_or(|process_group_id| process_group_id == boundary.process_group_id)
+        };
         if boundary.phase != RuntimeForeignShellBootstrapPhase::AwaitingPrompt
             || self.primary_pid_for_live_pane_process(pane_id) != Some(boundary.primary_process_id)
-            || self.pane_foreground_process_group_observation(pane_id).0
-                != Some(boundary.process_group_id)
+            || !foreground_matches
             || self
                 .process
                 .pane_shell_interaction_generations
@@ -425,7 +431,14 @@ impl RuntimeSessionService {
         let Some(probe) = probe else {
             self.process.pane_probed_shell_identities.remove(pane_id);
             self.process.pane_bootstrap_pending.remove(pane_id);
-            self.clear_agent_subshell_shell_identity(pane_id);
+            self.process.pane_certified_shell_identities.remove(pane_id);
+            if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+                boundary.phase = RuntimeForeignShellBootstrapPhase::Failed;
+                boundary.phase_started_at_unix_ms = current_unix_millis();
+                boundary.identity_marker = None;
+                boundary.loader_payload = None;
+                boundary.loader_ready = false;
+            }
             self.mark_pane_environment_authority_unavailable(
                 pane_id,
                 RuntimePaneEnvironmentAuthorityUnavailableReason::ShellIdentityProbeFailed,
@@ -840,6 +853,27 @@ impl RuntimeSessionService {
     /// Dispatches hidden bootstrap wrappers for pending panes that have reached
     /// prompt-like readiness.
     pub(crate) fn maybe_bootstrap_ready_panes(&mut self) -> Result<usize> {
+        let prompt_ready_boundaries = self
+            .process
+            .pane_foreign_shell_boundaries
+            .iter()
+            .filter(|(pane_id, boundary)| {
+                boundary.phase == RuntimeForeignShellBootstrapPhase::AwaitingPrompt
+                    && self
+                        .process
+                        .pane_bootstrap_pending
+                        .contains(pane_id.as_str())
+                    && matches!(
+                        self.pane_readiness_state(pane_id),
+                        PaneReadinessState::Ready | PaneReadinessState::PromptCandidate
+                    )
+            })
+            .map(|(pane_id, _)| pane_id.clone())
+            .collect::<Vec<_>>();
+        let prompt_ready_dispatches = prompt_ready_boundaries.len();
+        for pane_id in prompt_ready_boundaries {
+            self.begin_dependency_free_foreign_shell_bootstrap(&pane_id)?;
+        }
         let ready_panes: Vec<String> = self
             .process
             .pane_readiness_states
@@ -891,7 +925,7 @@ impl RuntimeSessionService {
             })
             .map(|(k, _)| k.clone())
             .collect();
-        let dispatches = ready_panes.len();
+        let dispatches = prompt_ready_dispatches.saturating_add(ready_panes.len());
         for pane_id in ready_panes {
             let deferred = self
                 .process

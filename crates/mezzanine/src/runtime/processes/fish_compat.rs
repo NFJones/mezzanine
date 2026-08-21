@@ -17,11 +17,13 @@ pub(super) struct ManagedFishCompatibility {
     /// Opaque owner retained in Fish state for generation diagnostics.
     _owner: MarkerToken,
     /// Fish source evaluated after user configuration and before interaction.
+    #[allow(dead_code)]
     init_command: String,
 }
 
 impl ManagedFishCompatibility {
     /// Creates one process-local Fish integration owner.
+    #[allow(dead_code)]
     pub(super) fn new(owner: MarkerToken) -> Self {
         let init_command = managed_fish_init_command(&owner);
         Self {
@@ -31,6 +33,7 @@ impl ManagedFishCompatibility {
     }
 
     /// Adds passive integration initialization to an ordinary Fish launch.
+    #[allow(dead_code)]
     pub(super) fn configure_launch(&self, launch: PaneProcessLaunch) -> PaneProcessLaunch {
         launch.with_interactive_arguments(["--init-command", self.init_command.as_str(), "-i"])
     }
@@ -54,6 +57,7 @@ impl ManagedFishCompatibility {
 }
 
 /// Renders stable Fish handlers for passive OSC 133 prompt and command boundaries.
+#[allow(dead_code)]
 fn managed_fish_init_command(owner: &MarkerToken) -> String {
     format!(
         r#"{}

@@ -366,7 +366,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the best foreground process-group observation and its source.
-    pub(super) fn pane_foreground_process_group_observation(
+    pub(crate) fn pane_foreground_process_group_observation(
         &self,
         pane_id: &str,
     ) -> (Option<u32>, &'static str) {
@@ -439,7 +439,55 @@ impl RuntimeSessionService {
             .is_some_and(|boundary| boundary.phase != RuntimeForeignShellBootstrapPhase::Certified)
     }
 
+    /// Returns the active dependency-free phase used by agent-exit admission.
+    pub(crate) fn foreign_shell_bootstrap_phase_for_exit(
+        &self,
+        pane_id: &str,
+    ) -> Option<&'static str> {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .map(|boundary| boundary.phase.as_str())
+    }
+
+    /// Resumes explicit agent-entry discovery after fresh foreground proof.
+    ///
+    /// Agent entry can precede the pane worker's first process-group event.
+    /// Once that exact event proves the selected shell still owns the PTY, the
+    /// awaiting boundary may issue its first identity probe without requiring
+    /// shell startup integration or another user action.
+    pub(crate) fn resume_agent_entry_discovery_for_foreground(
+        &mut self,
+        pane_id: &str,
+        process_group_id: u32,
+    ) -> Result<bool> {
+        let resumable = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                boundary.phase == RuntimeForeignShellBootstrapPhase::AwaitingPrompt
+                    && boundary.process_group_id == process_group_id
+                    && self.primary_pid_for_live_pane_process(pane_id)
+                        == Some(boundary.primary_process_id)
+            })
+            && self
+                .agent_shell_store()
+                .get(pane_id)
+                .is_some_and(|session| {
+                    session.visibility == mez_agent::AgentShellVisibility::Visible
+                })
+            && self.effective_agent_shell_mode_for_pane(pane_id)
+                != crate::runtime::config::ShellMode::Native;
+        if !resumable {
+            return Ok(false);
+        }
+        self.begin_dependency_free_foreign_shell_bootstrap(pane_id)?;
+        Ok(true)
+    }
+
     /// Starts a foreign boundary from the current worker or PTY foreground observation.
+    #[allow(dead_code)]
     pub(crate) fn begin_uncertified_foreign_shell_boundary_for_current_foreground(
         &mut self,
         pane_id: &str,
@@ -457,6 +505,37 @@ impl RuntimeSessionService {
         self.begin_uncertified_foreign_shell_boundary(pane_id, primary_process_id, process_group_id)
     }
 
+    /// Starts explicit agent-entry discovery for the current pane foreground.
+    ///
+    /// Ordinary pane startup deliberately installs no managed shell adapter.
+    /// Once the user shows the agent shell, both the original primary shell and
+    /// a foreign foreground shell therefore use the dependency-free loader.
+    /// The live foreground observation fences discovery against writing into an
+    /// application that no longer owns the prompt selected by the user.
+    pub(crate) fn begin_agent_entry_shell_boundary_for_current_foreground(
+        &mut self,
+        pane_id: &str,
+    ) -> bool {
+        let Some(primary_process_id) = self.primary_pid_for_live_pane_process(pane_id) else {
+            return false;
+        };
+        let observed_process_group = self.pane_foreground_process_group_observation(pane_id).0;
+        let process_group_id = observed_process_group
+            .unwrap_or_else(|| self.pane_primary_process_group_id(pane_id, primary_process_id));
+        if self
+            .pane_process_group_is_certified_shell(pane_id, process_group_id)
+            .is_none()
+        {
+            return false;
+        }
+        self.begin_uncertified_shell_boundary(
+            pane_id,
+            primary_process_id,
+            process_group_id,
+            observed_process_group.is_some(),
+        )
+    }
+
     /// Starts a generation-fenced discovery boundary for foreign foreground ownership.
     ///
     /// The transition invalidates all authority derived from the previous pane
@@ -468,6 +547,17 @@ impl RuntimeSessionService {
         pane_id: &str,
         primary_process_id: u32,
         process_group_id: u32,
+    ) -> bool {
+        self.begin_uncertified_shell_boundary(pane_id, primary_process_id, process_group_id, true)
+    }
+
+    /// Starts a generation-fenced discovery boundary with explicit ownership evidence.
+    fn begin_uncertified_shell_boundary(
+        &mut self,
+        pane_id: &str,
+        primary_process_id: u32,
+        process_group_id: u32,
+        process_group_observed: bool,
     ) -> bool {
         if self
             .process
@@ -526,6 +616,7 @@ impl RuntimeSessionService {
             RuntimeForeignShellBoundary {
                 primary_process_id,
                 process_group_id,
+                process_group_observed,
                 interaction_generation,
                 phase: RuntimeForeignShellBootstrapPhase::AwaitingPrompt,
                 lifecycle_started_at_unix_ms: started_at_unix_ms,
@@ -598,7 +689,7 @@ impl RuntimeSessionService {
             .pane_foreign_shell_boundaries
             .get(pane_id)
             .is_some_and(|boundary| {
-                boundary.loader_marker.is_some()
+                boundary.phase != RuntimeForeignShellBootstrapPhase::Failed
                     && boundary.process_group_id == process_group_id
                     && self.primary_pid_for_live_pane_process(pane_id)
                         == Some(boundary.primary_process_id)
@@ -623,6 +714,13 @@ impl RuntimeSessionService {
         marker: &str,
     ) -> Option<u32> {
         let boundary = self.process.pane_foreign_shell_boundaries.get(pane_id)?;
+        let primary_process_group =
+            self.pane_primary_process_group_id(pane_id, boundary.primary_process_id);
+        if boundary.process_group_id == boundary.primary_process_id
+            || boundary.process_group_id == primary_process_group
+        {
+            return None;
+        }
         let handoff_matches =
             self.process
                 .pane_shell_handoffs

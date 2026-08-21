@@ -1870,16 +1870,14 @@ fn runtime_foreground_process_event_recovers_after_alternate_screen_exit() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies foreground-shell metadata cannot start hidden bootstrap work before
-/// a newly spawned pane has emitted concrete prompt evidence.
+/// Verifies a newly spawned pane remains unmanaged until explicit agent entry.
 ///
-/// Pane workers can observe the primary shell before its initial prompt bytes
-/// arrive. Treating that metadata as prompt readiness starts hidden bootstrap
-/// filtering too early and can suppress the delayed prompt. The pane must stay
-/// unknown until an OSC 133 prompt-end event arrives, while the prompt bytes
-/// themselves remain visible.
+/// Foreground metadata and prompt output may advance passive terminal readiness,
+/// but neither event may arm bootstrap, register a hidden shell transaction, or
+/// hide ordinary process output. This keeps startup and user input independent
+/// from agent shell discovery until the user shows the agent surface.
 #[test]
-fn runtime_foreground_process_event_waits_for_initial_prompt_before_bootstrap() {
+fn runtime_pane_start_stays_unmanaged_until_agent_entry() {
     let mut service = test_runtime_service();
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
@@ -1892,37 +1890,34 @@ fn runtime_foreground_process_event_waits_for_initial_prompt_before_bootstrap() 
 
     assert_eq!(
         service.pane_readiness_state("%1"),
-        PaneReadinessState::Unknown
-    );
-    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 0);
-    assert!(service.pane_bootstrap_is_pending_for_tests("%1"));
-
-    service
-        .apply_pane_output_bytes("%1", b"\x1b]133;B\x07$ ".to_vec())
-        .unwrap();
-
-    assert_eq!(
-        service.pane_readiness_state("%1"),
         PaneReadinessState::PromptCandidate
     );
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 0);
+    assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+
+    service
+        .apply_pane_output_bytes("%1", b"typed-before-agent".to_vec())
+        .unwrap();
+
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert!(pane_text.contains('$'), "{pane_text}");
+    assert!(pane_text.contains("typed-before-agent"), "{pane_text}");
+    assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
+    assert!(service.running_shell_transactions_for_tests().is_empty());
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies a pending bootstrap regains a bounded progress owner when the
-/// certified host shell returns from a foreign foreground process.
+/// Verifies foreground-process changes do not arm agent bootstrap by themselves.
 ///
-/// Initial shell metadata must not replace concrete prompt evidence, but that
-/// suppression must not strand a bootstrap after a foreground program such as
-/// SSH relinquishes the PTY. The returning certified shell is sufficient to
-/// resume the prompt-candidate and bootstrap-dispatch path.
+/// A newly spawned shell can temporarily yield the PTY to SSH or another
+/// foreground process before returning. Neither transition is an agent-entry
+/// request, so the restored shell must remain free of discovery transactions.
 #[test]
-fn runtime_foreground_shell_return_recovers_pending_bootstrap_owner() {
+fn runtime_foreground_shell_return_does_not_arm_bootstrap_before_agent_entry() {
     let mut service = test_runtime_service();
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
@@ -1948,8 +1943,9 @@ fn runtime_foreground_shell_return_recovers_pending_bootstrap_owner() {
         service.pane_readiness_state("%1"),
         PaneReadinessState::PromptCandidate
     );
-    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
-    assert!(service.pane_bootstrap_has_bounded_progress_owner("%1"));
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 0);
+    assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
+    assert!(service.running_shell_transactions_for_tests().is_empty());
     service.terminate_all_pane_processes().unwrap();
 }
 

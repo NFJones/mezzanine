@@ -25,7 +25,7 @@ fn runtime_service_restarts_restored_panes_without_assuming_prompt_readiness() {
         1024,
     )
     .unwrap();
-    configure_pane_shell_protocol_fixture(&mut service);
+    configure_unmanaged_pane_shell_protocol_fixture(&mut service);
 
     let starts = service
         .restart_restored_pane_processes(Some("sleep 30"))
@@ -37,7 +37,8 @@ fn runtime_service_restarts_restored_panes_without_assuming_prompt_readiness() {
         PaneReadinessState::Unknown
     );
     assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 0);
-    assert!(service.pane_bootstrap_is_pending_for_tests(&starts[0].pane_id));
+    assert!(!service.pane_bootstrap_is_pending_for_tests(&starts[0].pane_id));
+    assert!(service.running_shell_transactions_for_tests().is_empty());
     service.terminate_all_pane_processes().unwrap();
 }
 

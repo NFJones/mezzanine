@@ -38,6 +38,7 @@ pub(super) fn test_service_with_shell(shell_path: &str) -> RuntimeSessionService
 /// Applies legacy pane-shell and policy-only defaults to shared tests whose
 /// scenarios exercise transport behavior rather than production default selection.
 fn legacy_test_service(mut service: RuntimeSessionService) -> RuntimeSessionService {
+    service.enable_legacy_managed_startup_for_tests();
     service
         .replace_config_layers(vec![ConfigLayer {
             name: "async-test-fixture".to_string(),

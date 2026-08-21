@@ -2559,6 +2559,7 @@ fn runtime_missing_environment_defers_bubblewrap_action_for_pending_bootstrap() 
     let root = temp_root("runtime-pending-bootstrap-bubblewrap-action");
     let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
     configure_path_resolution_bubblewrap(&mut service);
+    service.mark_pane_bootstrap_pending_for_tests("%1");
 
     assert!(service.pane_bootstrap_is_pending_for_tests("%1"));
     service
@@ -3592,9 +3593,9 @@ fn runtime_control_agent_shell_visibility_enters_and_exits_pane_subshell() {
     );
     let enter_input = service.drain_pane_io_transition().side_effects;
     let enter_inputs = pane_input_effects(&enter_input);
-    assert_eq!(enter_inputs.len(), 1);
-    assert_eq!(enter_inputs[0].pane_input_parts().0, pane_id);
-    assert!(service.agent_subshell_is_active(&pane_id));
+    assert!(enter_inputs.is_empty(), "{enter_input:?}");
+    assert!(!service.agent_subshell_is_active(&pane_id));
+    assert!(service.pane_bootstrap_is_pending_for_tests(&pane_id));
 
     let hide = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"hide","method":"agent/shell/hide","params":{"target":{"pane_id":"%1"},"idempotency_key":"hide-agent"}}"#,
@@ -3603,17 +3604,9 @@ fn runtime_control_agent_shell_visibility_enters_and_exits_pane_subshell() {
     assert!(hide.contains(r#""visible":false"#), "{hide}");
     let exit_effects = service.drain_pane_io_transition().side_effects;
     let exit_inputs = pane_input_effects(&exit_effects);
-    assert_eq!(exit_inputs.len(), 1);
-    assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
-    let exit_bytes = exit_inputs[0].pane_input_parts().1;
-    assert!(
-        !exit_bytes
-            .windows(b"__MEZ_COMMAND_PAYLOAD_END_".len())
-            .any(|window| window == b"__MEZ_COMMAND_PAYLOAD_END_"),
-        "a prompt-gated wrapper that was never sent must not receive payload"
-    );
-    assert_eq!(exit_bytes.last(), Some(&b'\x04'));
+    assert!(exit_inputs.is_empty(), "{exit_effects:?}");
     assert!(!service.agent_subshell_is_active(&pane_id));
+    assert!(!service.pane_bootstrap_is_pending_for_tests(&pane_id));
     service
         .apply_pane_output_bytes(
             pane_id.clone(),

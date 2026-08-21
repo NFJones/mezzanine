@@ -1267,12 +1267,12 @@ fn restored_pane_prompt_actor_fixture() -> (RuntimeSessionService, ClientId, Str
     (service, primary, start.pane_id, start.primary_pid)
 }
 
-/// Verifies that bootstrap waits for a completed prompt when OSC 133 prompt
-/// markers and visible prompt bytes arrive in separate pane-output events.
-/// Prompt start must not activate hidden bootstrap rendering before the PS1 is
-/// retained; prompt end should then dispatch bootstrap without a later tick.
+/// Verifies a restored pane remains unmanaged across a split prompt sequence.
+///
+/// Prompt markers and visible bytes may advance passive readiness, but no
+/// bootstrap write or timeout may be created before explicit agent entry.
 #[tokio::test(flavor = "current_thread")]
-async fn async_actor_preserves_split_prompt_before_bootstrap_dispatch() {
+async fn async_actor_preserves_split_prompt_without_startup_bootstrap() {
     let (service, primary, restored_pane_id, primary_pid) = restored_pane_prompt_actor_fixture();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -1364,30 +1364,15 @@ async fn async_actor_preserves_split_prompt_before_bootstrap_dispatch() {
             .drain_pane_io_side_effects(pane_id.as_str(), 8)
             .await
             .unwrap();
-        let bootstrap_bytes = match pane_effects.as_slice() {
-            [
-                RuntimeSideEffect::WritePaneShellInput {
-                    pane_id: effect_pane,
-                    delivery,
-                },
-            ] if effect_pane == &pane_id => &delivery.bytes,
-            effects => panic!("expected one bootstrap pane write, got {effects:?}"),
-        };
-        let bootstrap_wrapper = std::str::from_utf8(bootstrap_bytes).unwrap();
         assert!(
-            bootstrap_wrapper.contains("MEZ_WRAPPER_B64")
-                && bootstrap_wrapper.contains("base64 -d"),
-            "bootstrap wrapper should be queued for the pane worker"
+            pane_effects.is_empty(),
+            "prompt completion must not write bootstrap input before agent entry: {pane_effects:?}"
         );
 
         let timer_effects = handle.drain_timer_side_effects(8).await.unwrap();
         assert!(
-            timer_effects.iter().any(|effect| matches!(
-                effect,
-                RuntimeSideEffect::ScheduleTimer { key, .. }
-                    if key.kind == RuntimeTimerKind::Bootstrap
-            )),
-            "bootstrap timeout should be scheduled by actor timer side effects: {timer_effects:?}"
+            timer_effects.is_empty(),
+            "prompt completion must not schedule bootstrap timeout before agent entry: {timer_effects:?}"
         );
         assert_eq!(
             handle.shutdown().await.unwrap(),
@@ -1411,12 +1396,13 @@ async fn async_actor_preserves_split_prompt_before_bootstrap_dispatch() {
     assert!(exit.service.terminate_all_pane_processes().is_ok());
 }
 
-/// Verifies a restored prompt and its OSC 133 end marker can share one chunk.
+/// Verifies a restored prompt and its OSC 133 end marker can share one chunk
+/// without arming startup bootstrap.
 ///
-/// The visible bytes must invalidate the client before bootstrap filtering is
-/// active, while the same event may subsequently authorize bootstrap dispatch.
+/// The visible bytes must invalidate the client and remain retained, while the
+/// prompt marker alone must not authorize generated shell input.
 #[tokio::test(flavor = "current_thread")]
-async fn async_actor_preserves_same_batch_restored_prompt_before_bootstrap() {
+async fn async_actor_preserves_same_batch_prompt_without_startup_bootstrap() {
     let (service, primary, restored_pane_id, _primary_pid) = restored_pane_prompt_actor_fixture();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -1445,14 +1431,13 @@ async fn async_actor_preserves_same_batch_restored_prompt_before_bootstrap() {
                 reason: RenderInvalidationReason::PaneOutput,
             }]
         );
-        assert_eq!(
+        assert!(
             handle
                 .drain_pane_io_side_effects(pane_id.as_str(), 8)
                 .await
                 .unwrap()
-                .len(),
-            1,
-            "prompt end should dispatch bootstrap after retaining prompt bytes"
+                .is_empty(),
+            "prompt end must not dispatch bootstrap before explicit agent entry"
         );
         assert_eq!(
             handle.shutdown().await.unwrap(),

@@ -2610,6 +2610,7 @@ fn runtime_shell_transaction_end_before_start_marker_fails_live_action() {
 #[test]
 fn runtime_agent_subshell_bootstrap_waits_for_start_before_releasing_payload() {
     let mut service = test_runtime_service();
+    service.enable_legacy_managed_startup_for_tests();
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -3208,6 +3209,7 @@ fn runtime_managed_fish_bootstrap_requires_authenticated_adapter_availability() 
         return;
     };
     let mut service = test_runtime_service();
+    service.enable_legacy_managed_startup_for_tests();
     service.session.shell = ResolvedShell::new(fish_path, ShellSource::ShellEnv).into();
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)

@@ -67,6 +67,7 @@ fn runtime_attached_agent_prompt_reports_invalid_state_errors_in_status_line() {
 #[test]
 fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
     let mut service = test_runtime_service();
+    service.enable_legacy_managed_startup_for_tests();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -246,6 +247,7 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
 #[test]
 fn runtime_agent_shell_ctrl_d_waits_for_started_bootstrap_completion() {
     let mut service = test_runtime_service();
+    service.enable_legacy_managed_startup_for_tests();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
