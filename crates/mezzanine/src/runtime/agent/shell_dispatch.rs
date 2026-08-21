@@ -24,6 +24,7 @@ use super::{
     runtime_execution_ready_for_provider_continuation, runtime_mezzanine_error_code,
     runtime_pane_readiness_state_name, runtime_pre_shell_hook_payload,
 };
+use crate::runtime::render::RuntimeAgentShellPreviewOwner;
 use crate::runtime::{RuntimeSandboxFallbackAudit, SandboxConfig, runtime_post_shell_hook_payload};
 use mez_agent::semantic_patch_planning::{
     APPLY_PATCH_RESULT_MARKER, ApplyPatchFileOutcome, parse_apply_patch_file_outcomes,
@@ -110,7 +111,17 @@ impl RuntimeSessionService {
         if lines.is_empty() {
             return Ok(false);
         }
-        self.append_agent_shell_output_status_lines_to_terminal_buffer(&turn.pane_id, &lines)?;
+        let revision = u64::try_from(progress.output_preview.len()).unwrap_or(u64::MAX);
+        self.update_agent_shell_output_preview(
+            &turn.pane_id,
+            RuntimeAgentShellPreviewOwner {
+                turn_id: progress.turn_id,
+                action_id: progress.action_id,
+                marker: progress.marker,
+            },
+            revision,
+            &lines,
+        )?;
         Ok(true)
     }
 
@@ -252,10 +263,16 @@ impl RuntimeSessionService {
         if execution.action_results[result_index].status != ActionStatus::Running {
             return Ok(false);
         }
+        let preview_owner = RuntimeAgentShellPreviewOwner {
+            turn_id: outcome.turn_id.clone(),
+            action_id: outcome.action_id.clone(),
+            marker: outcome.marker.clone(),
+        };
 
         let mut shell_output = match outcome.result {
             Ok(output) => output,
             Err(failure) => {
+                self.settle_agent_shell_output_preview(&turn.pane_id, &preview_owner);
                 let mut result = ActionResult::failed(
                     &turn,
                     &action,
@@ -326,13 +343,20 @@ impl RuntimeSessionService {
         }
         let shell_output = postprocess_local_shell_output(&action, shell_output);
         let combined_output = format!("{}{}", shell_output.stdout, shell_output.stderr);
-
         if matches!(action.payload, AgentActionPayload::ShellCommand { .. }) {
             let lines = latest_agent_shell_transaction_output_lines(
                 &combined_output,
                 self.terminal_shell_output_preview_lines(),
             );
-            self.append_agent_shell_output_status_lines_to_terminal_buffer(&turn.pane_id, &lines)?;
+            if !lines.is_empty() {
+                self.update_agent_shell_output_preview(
+                    &turn.pane_id,
+                    preview_owner.clone(),
+                    u64::MAX,
+                    &lines,
+                )?;
+            }
+            self.settle_agent_shell_output_preview(&turn.pane_id, &preview_owner);
         }
 
         self.integration

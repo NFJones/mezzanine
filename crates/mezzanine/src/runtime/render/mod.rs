@@ -252,6 +252,49 @@ impl Default for RuntimeCopyPresentationState {
 /// Fields are private to the render component and its descendants. Other
 /// runtime components cross this boundary through narrow methods instead of
 /// reaching into the session coordinator's former shared field bag.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct RuntimeAgentShellPreviewOwner {
+    /// Turn that owns the running shell action.
+    pub(crate) turn_id: String,
+    /// Stable action identity within the turn.
+    pub(crate) action_id: String,
+    /// Exact shell transaction marker fencing stale output.
+    pub(crate) marker: String,
+}
+
+/// Latest transient output retained for one running shell action.
+#[derive(Debug, Clone)]
+struct RuntimeAgentShellPreview {
+    /// Pane-local order assigned when this owner first appears.
+    first_seen_order: u64,
+    /// Monotonic producer revision accepted for this owner.
+    revision: u64,
+    /// Sanitized terminal-width-fitted preview rows.
+    lines: Vec<String>,
+}
+
+/// Pane-local projection of independently owned live shell previews.
+///
+/// `baseline_screen` contains durable presentation without these previews.
+/// `installed_screen` is the exact composite generation currently owned by
+/// this projection. A replacement or cleanup may mutate the pane only while
+/// the live screen still equals that installed generation.
+#[derive(Debug, Clone)]
+struct RuntimeAgentShellPreviewPresentation {
+    /// Conversation that owns both retained screen generations.
+    conversation_id: String,
+    /// Durable pane generation onto which previews are projected.
+    baseline_screen: std::sync::Arc<TerminalScreen>,
+    /// Exact composite generation installed by the latest projection.
+    installed_screen: std::sync::Arc<TerminalScreen>,
+    /// Next pane-local first-seen order.
+    next_order: u64,
+    /// Independently mutable previews keyed by exact shell owner.
+    previews: std::collections::BTreeMap<RuntimeAgentShellPreviewOwner, RuntimeAgentShellPreview>,
+    /// Settled owners whose final tail remains until the next durable pane write.
+    settled_owners: std::collections::BTreeSet<RuntimeAgentShellPreviewOwner>,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct RuntimePresentationComponent {
     /// Current atomically replaceable presentation configuration.
@@ -271,8 +314,9 @@ pub(crate) struct RuntimePresentationComponent {
     /// Background selector discoveries keyed by their pane-local owner.
     agent_prompt_selector_refreshes:
         std::collections::BTreeMap<String, RuntimeAgentSelectorCandidateRefresh>,
-    /// Pane-local transient shell-output status rows.
-    agent_shell_output_status_lines: std::collections::BTreeMap<String, Vec<String>>,
+    /// Pane-local owner-aware transient shell-output projections.
+    agent_shell_output_previews:
+        std::collections::BTreeMap<String, RuntimeAgentShellPreviewPresentation>,
     /// Source-backed provider `say` output awaiting validated completion.
     agent_streaming_say_presentations:
         std::collections::BTreeMap<String, RuntimeStreamingSayPresentation>,
@@ -555,7 +599,7 @@ pub(crate) struct RuntimeStreamingSayProjectionResult {
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeAgentResumePresentationSnapshot {
     prompt_input: Option<RuntimeAgentPromptInput>,
-    shell_output_status_lines: Option<Vec<String>>,
+    shell_output_previews: Option<RuntimeAgentShellPreviewPresentation>,
     streaming_say_presentation: Option<RuntimeStreamingSayPresentation>,
     promoted_streaming_say_actions:
         std::collections::BTreeMap<(String, String), std::collections::BTreeSet<usize>>,
@@ -623,7 +667,7 @@ impl RuntimePresentationComponent {
     pub(crate) fn remove_agent_presentation_state(&mut self, pane_id: &str) {
         self.agent_prompt_inputs.remove(pane_id);
         self.agent_prompt_selector_refreshes.remove(pane_id);
-        self.agent_shell_output_status_lines.remove(pane_id);
+        self.agent_shell_output_previews.remove(pane_id);
         self.agent_streaming_say_presentations.remove(pane_id);
         self.agent_promoted_streaming_say_actions
             .retain(|(candidate_pane_id, _turn_id), _indices| candidate_pane_id != pane_id);
@@ -642,8 +686,19 @@ impl RuntimePresentationComponent {
     ) {
         self.agent_prompt_inputs
             .insert(pane_id.to_string(), default_runtime_agent_prompt_input());
-        self.agent_shell_output_status_lines
-            .insert(pane_id.to_string(), vec!["pending status".to_string()]);
+        let baseline_screen =
+            TerminalScreen::new(size, 10).expect("test presentation screen should be valid");
+        self.agent_shell_output_previews.insert(
+            pane_id.to_string(),
+            RuntimeAgentShellPreviewPresentation {
+                conversation_id: conversation_id.to_string(),
+                baseline_screen: std::sync::Arc::new(baseline_screen.clone()),
+                installed_screen: std::sync::Arc::new(baseline_screen),
+                next_order: 0,
+                previews: std::collections::BTreeMap::new(),
+                settled_owners: std::collections::BTreeSet::new(),
+            },
+        );
         self.agent_presentation_replay_panes
             .insert(pane_id.to_string());
         self.pending_agent_presentation_resize_sizes
@@ -656,7 +711,7 @@ impl RuntimePresentationComponent {
     #[cfg(test)]
     pub(crate) fn has_agent_presentation_state_for_tests(&self, pane_id: &str) -> bool {
         self.agent_prompt_inputs.contains_key(pane_id)
-            || self.agent_shell_output_status_lines.contains_key(pane_id)
+            || self.agent_shell_output_previews.contains_key(pane_id)
             || self.agent_streaming_say_presentations.contains_key(pane_id)
             || self
                 .agent_promoted_streaming_say_actions
@@ -722,9 +777,9 @@ impl RuntimeSessionService {
     ) -> RuntimeAgentResumePresentationSnapshot {
         RuntimeAgentResumePresentationSnapshot {
             prompt_input: self.presentation.agent_prompt_inputs.get(pane_id).cloned(),
-            shell_output_status_lines: self
+            shell_output_previews: self
                 .presentation
-                .agent_shell_output_status_lines
+                .agent_shell_output_previews
                 .get(pane_id)
                 .cloned(),
             streaming_say_presentation: self
@@ -807,11 +862,11 @@ impl RuntimeSessionService {
                 .insert(pane_id.to_string(), value);
         }
         self.presentation
-            .agent_shell_output_status_lines
+            .agent_shell_output_previews
             .remove(pane_id);
-        if let Some(value) = snapshot.shell_output_status_lines {
+        if let Some(value) = snapshot.shell_output_previews {
             self.presentation
-                .agent_shell_output_status_lines
+                .agent_shell_output_previews
                 .insert(pane_id.to_string(), value);
         }
         self.presentation

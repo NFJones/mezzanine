@@ -288,8 +288,14 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
     assert!(first_text.contains("first output"), "{first_text}");
 
     service
-        .append_agent_shell_output_status_lines_to_terminal_buffer(
+        .update_agent_shell_output_preview(
             "%1",
+            crate::runtime::render::RuntimeAgentShellPreviewOwner {
+                turn_id: "turn-1".to_string(),
+                action_id: "shell-1".to_string(),
+                marker: "marker-1".to_string(),
+            },
+            1,
             &["first output".to_string()],
         )
         .unwrap();
@@ -397,6 +403,182 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
         .join("\n");
     assert!(!final_text.contains("second output"), "{final_text}");
     assert!(final_text.contains("agent: next stage"), "{final_text}");
+}
+
+/// Verifies concurrent shell previews retain actor chronology and durable rows.
+///
+/// Each running action owns an independent preview slot. Updating one owner
+/// must preserve first-seen ordering, stale revisions must be ignored, and a
+/// durable diff appended between updates must survive later projection and
+/// owner-specific retirement.
+#[test]
+fn runtime_shell_previews_preserve_owner_order_and_durable_output() {
+    let mut service = test_runtime_service();
+    let mut screen = TerminalScreen::new(Size::new(100, 20).unwrap(), 40).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let owner_a = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-a".to_string(),
+        action_id: "action-a".to_string(),
+        marker: "marker-a".to_string(),
+    };
+    let owner_b = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-b".to_string(),
+        action_id: "action-b".to_string(),
+        marker: "marker-b".to_string(),
+    };
+
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            owner_a.clone(),
+            1,
+            &["shared owner output".to_string()],
+        )
+        .unwrap();
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            owner_b.clone(),
+            1,
+            &["shared owner output".to_string()],
+        )
+        .unwrap();
+    let identical_previews = service.agent_shell_output_previews_for_tests("%1");
+    assert_eq!(identical_previews.len(), 2, "{identical_previews:?}");
+    assert_ne!(identical_previews[0].0, identical_previews[1].0);
+    assert_eq!(identical_previews[0].3, identical_previews[1].3);
+
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            owner_a.clone(),
+            2,
+            &["owner A revision 2".to_string()],
+        )
+        .unwrap();
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            owner_a.clone(),
+            1,
+            &["stale owner A revision".to_string()],
+        )
+        .unwrap();
+
+    let previews = service.agent_shell_output_previews_for_tests("%1");
+    assert_eq!(previews.len(), 2, "{previews:?}");
+    assert_eq!(
+        previews[0],
+        (
+            owner_a.clone(),
+            0,
+            2,
+            vec!["owner A revision 2".to_string()]
+        )
+    );
+    assert_eq!(
+        previews[1],
+        (
+            owner_b.clone(),
+            1,
+            1,
+            vec!["shared owner output".to_string()]
+        )
+    );
+
+    service
+        .append_agent_diff_text_to_terminal_buffer(
+            "%1",
+            "diff --git a/note.txt b/note.txt\n--- a/note.txt\n+++ b/note.txt\n@@ -1 +1 @@\n-old\n+new\n",
+        )
+        .unwrap();
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            owner_b.clone(),
+            2,
+            &["owner B revision 2".to_string()],
+        )
+        .unwrap();
+    assert!(service.settle_agent_shell_output_preview("%1", &owner_a));
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            owner_a.clone(),
+            3,
+            &["post-settlement owner A revision".to_string()],
+        )
+        .unwrap();
+    assert_eq!(
+        service.agent_shell_output_previews_for_tests("%1")[0].3,
+        vec!["owner A revision 2".to_string()]
+    );
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "agent: next stage")
+        .unwrap();
+
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains("+++ note.txt"), "{pane_text}");
+    assert!(pane_text.contains("+new"), "{pane_text}");
+    assert!(!pane_text.contains("owner A revision"), "{pane_text}");
+    assert!(pane_text.contains("owner B revision 2"), "{pane_text}");
+    assert!(!pane_text.contains("stale owner A revision"), "{pane_text}");
+    let diff_index = pane_text.find("+++ note.txt").unwrap();
+    let preview_index = pane_text.find("owner B revision 2").unwrap();
+    assert!(diff_index < preview_index, "{pane_text}");
+}
+
+/// Verifies stale preview cleanup cannot erase an intervening pane generation.
+///
+/// If a write outside the preview compositor changes the retained screen, the
+/// remembered installed generation no longer owns the pane. Cleanup must then
+/// discard only stale metadata and leave the intervening row untouched.
+#[test]
+fn runtime_shell_preview_cleanup_requires_exact_screen_lineage() {
+    let mut service = test_runtime_service();
+    let mut screen = TerminalScreen::new(Size::new(100, 20).unwrap(), 40).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen("%1".to_string(), screen);
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-a".to_string(),
+        action_id: "action-a".to_string(),
+        marker: "marker-a".to_string(),
+    };
+    service
+        .update_agent_shell_output_preview("%1", owner, 1, &["live preview".to_string()])
+        .unwrap();
+    let mut intervening = service.agent_pane_screen("%1").unwrap().clone();
+    intervening.feed(b"\r\nintervening durable row\r\n");
+    service.set_agent_pane_screen("%1", conversation_id, intervening);
+
+    service.clear_agent_shell_output_status_line("%1").unwrap();
+
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains("intervening durable row"), "{pane_text}");
+    assert!(
+        service
+            .agent_shell_output_previews_for_tests("%1")
+            .is_empty()
+    );
 }
 
 /// Verifies that a shell command selected by the model is monitorable when

@@ -2223,6 +2223,18 @@ overwrite it. If a PTY read contains both a Mezzanine transaction-end marker and
 the parent shell's next prompt repaint, prompt bytes after the marker MUST NOT
 be considered command output for this transient preview. The transient preview
 SHOULD use the same muted foreground treatment as agent thinking or status text.
+Concurrent shell previews MUST remain independently owned by their exact turn,
+action, and transaction-marker identity. The runtime actor's accepted-event order
+MUST define their first-seen display order; a newer observation MAY replace only
+the same owner's preview, and a stale or post-settlement observation MUST NOT
+recreate or reorder it. Durable presentation rows, including semantic mutation
+diffs, MUST remain in accepted-event order and MUST NOT be erased by a preview
+update or cleanup. Preview replacement and cleanup MUST mutate the pane only
+while the pane still matches the exact screen generation installed by the
+preview compositor; a lineage mismatch MUST discard stale preview metadata
+without changing the intervening pane content. A settled shell preview MAY keep
+its final bounded tail visible until the next durable pane append, but transient
+preview rows MUST NOT become durable presentation records or resume history.
 While a provider response streams, Mezzanine MUST accept provisional visible
 source only from a structurally established supported `say.text`, the direct
 batch-level `rationale` string, or a direct `shell_command.command` string. A

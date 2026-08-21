@@ -571,8 +571,14 @@ fn runtime_routed_worker_presents_child_prompt_status_and_output() {
     );
 
     service
-        .append_agent_shell_output_status_lines_to_terminal_buffer(
+        .update_agent_shell_output_preview(
             "%2",
+            crate::runtime::render::RuntimeAgentShellPreviewOwner {
+                turn_id: child_turn_id.to_string(),
+                action_id: "routed-shell".to_string(),
+                marker: "routed-marker".to_string(),
+            },
+            1,
             &["running routed command".to_string()],
         )
         .unwrap();

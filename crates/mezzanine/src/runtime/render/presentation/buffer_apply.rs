@@ -27,8 +27,8 @@ use super::{
     wrap_rich_text_lines_to_width,
 };
 use crate::runtime::render::{
-    ActionResult, AgentPresentationEntry, MezError, Result, RuntimeSessionService,
-    RuntimeStreamingSayAction, RuntimeStreamingSayPresentation,
+    ActionResult, AgentPresentationEntry, MezError, Result, RuntimeAgentShellPreviewOwner,
+    RuntimeSessionService, RuntimeStreamingSayAction, RuntimeStreamingSayPresentation,
     RuntimeStreamingSayProjectionContext, Size, TerminalScreen, current_unix_seconds,
     default_runtime_agent_prompt_input,
 };
@@ -139,7 +139,7 @@ impl RuntimeSessionService {
             .is_some_and(|screen| screen.conversation_id() != conversation_id);
         if binding_changed {
             self.presentation
-                .agent_shell_output_status_lines
+                .agent_shell_output_previews
                 .remove(pane_id);
             self.presentation
                 .agent_streaming_say_presentations
@@ -757,11 +757,9 @@ impl RuntimeSessionService {
         }
         self.ensure_current_agent_presentation_screen(pane_id)?;
         self.retire_agent_streaming_say_before_pane_write(pane_id)?;
-        self.clear_agent_shell_output_status_line(pane_id)?;
         let ui_theme = self.presentation.settings.ui_theme.clone();
-        let screen = self.agent_pane_screen_mut(pane_id).ok_or_else(|| {
-            MezError::invalid_state("agent terminal presentation screen was not initialized")
-        })?;
+        let (conversation_id, mut screen, preview_presentation) =
+            self.agent_shell_preview_write_base(pane_id)?;
         let mut rendered = String::new();
         let cursor = screen.cursor_state();
         let current_line_has_content = screen
@@ -783,9 +781,15 @@ impl RuntimeSessionService {
             rendered.push_str("\x1b[0m\r\n");
         }
         Self::feed_agent_terminal_screen(
-            screen,
+            &mut screen,
             rendered.as_bytes(),
             "appending transient agent PTY diagnostics",
+        )?;
+        self.install_agent_shell_preview_write(
+            pane_id,
+            &conversation_id,
+            screen,
+            preview_presentation,
         )
     }
 
@@ -1071,12 +1075,10 @@ impl RuntimeSessionService {
         }
         self.ensure_current_agent_presentation_screen(pane_id)?;
         self.retire_agent_streaming_say_before_pane_write(pane_id)?;
-        self.clear_agent_shell_output_status_line(pane_id)?;
         let ui_theme = self.presentation.settings.ui_theme.clone();
+        let (conversation_id, mut screen, preview_presentation) =
+            self.agent_shell_preview_write_base(pane_id)?;
         let ansi_text = {
-            let screen = self.agent_pane_screen_mut(pane_id).ok_or_else(|| {
-                MezError::invalid_state("agent terminal presentation screen was not initialized")
-            })?;
             let mut bytes = String::new();
             let cursor = screen.cursor_state();
             let current_line_has_content = screen
@@ -1093,12 +1095,18 @@ impl RuntimeSessionService {
                 bytes.push_str("\x1b[0m\r\n");
             }
             Self::feed_agent_terminal_screen(
-                screen,
+                &mut screen,
                 bytes.as_bytes(),
                 "appending styled agent lines",
             )?;
             bytes
         };
+        self.install_agent_shell_preview_write(
+            pane_id,
+            &conversation_id,
+            screen,
+            preview_presentation,
+        )?;
         self.persist_agent_presentation_entry(
             pane_id,
             styled_lines
@@ -1141,12 +1149,10 @@ impl RuntimeSessionService {
         }
         self.ensure_current_agent_presentation_screen(pane_id)?;
         self.retire_agent_streaming_say_before_pane_write(pane_id)?;
-        self.clear_agent_shell_output_status_line(pane_id)?;
         let ui_theme = self.presentation.settings.ui_theme.clone();
+        let (conversation_id, mut screen, preview_presentation) =
+            self.agent_shell_preview_write_base(pane_id)?;
         let ansi_text = {
-            let screen = self.agent_pane_screen_mut(pane_id).ok_or_else(|| {
-                MezError::invalid_state("agent terminal presentation screen was not initialized")
-            })?;
             let mut bytes = String::new();
             let cursor = screen.cursor_state();
             let current_line_has_content = screen
@@ -1163,13 +1169,19 @@ impl RuntimeSessionService {
                 bytes.push_str("\x1b[0m\r\n");
             }
             Self::feed_agent_terminal_screen(
-                screen,
+                &mut screen,
                 bytes.as_bytes(),
                 "appending rendered agent lines",
             )?;
             screen.set_recent_normal_copy_texts(copy_lines, AGENT_COPY_SKIP_LINE);
             bytes
         };
+        self.install_agent_shell_preview_write(
+            pane_id,
+            &conversation_id,
+            screen,
+            preview_presentation,
+        )?;
         self.persist_agent_presentation_entry(
             pane_id,
             vec![style.persistence_name().to_string(); rendered_lines.len()],
@@ -2512,14 +2524,147 @@ impl RuntimeSessionService {
             .remove(&(pane_id.to_string(), turn_id.to_string()));
     }
 
-    /// Updates the transient status rows for a hidden running shell command.
+    /// Projects all active shell previews onto one preview-free pane screen.
+    fn append_agent_shell_previews_to_screen(
+        screen: &mut TerminalScreen,
+        previews: &std::collections::BTreeMap<
+            RuntimeAgentShellPreviewOwner,
+            super::super::RuntimeAgentShellPreview,
+        >,
+        ui_theme: &mez_mux::theme::UiTheme,
+    ) -> Result<()> {
+        let mut ordered = previews.values().collect::<Vec<_>>();
+        ordered.sort_by_key(|preview| preview.first_seen_order);
+        let mut bytes = String::new();
+        let cursor = screen.cursor_state();
+        let current_line_has_content = screen
+            .visible_lines()
+            .get(cursor.row)
+            .is_some_and(|line| !line.trim().is_empty());
+        if cursor.column == 0 && !current_line_has_content {
+            bytes.push('\r');
+        } else {
+            bytes.push_str("\r\n");
+        }
+        let mut first_line = true;
+        for preview in ordered {
+            for line in &preview.lines {
+                if !first_line {
+                    bytes.push_str("\r\n");
+                }
+                first_line = false;
+                append_styled_agent_terminal_line(
+                    &mut bytes,
+                    AgentTerminalPresentationStyle::Status,
+                    line,
+                    ui_theme,
+                );
+                bytes.push_str("\x1b[0m");
+            }
+        }
+        if first_line {
+            return Ok(());
+        }
+        Self::feed_agent_terminal_screen(screen, bytes.as_bytes(), "projecting shell previews")
+    }
+
+    /// Returns a preview-free candidate and retained projection for one pane write.
     ///
-    /// The preview intentionally has no trailing newline after its final row.
-    /// Later output replaces it in place, while the next durable agent
-    /// transcript append clears it before writing normal log content.
-    pub(crate) fn append_agent_shell_output_status_lines_to_terminal_buffer(
+    /// Exact installed-screen lineage is required before the durable baseline is
+    /// reused. A mismatch discards stale projection metadata without changing
+    /// the pane, so an intervening durable row can never be erased.
+    fn agent_shell_preview_write_base(
         &mut self,
         pane_id: &str,
+    ) -> Result<(
+        String,
+        TerminalScreen,
+        Option<super::super::RuntimeAgentShellPreviewPresentation>,
+    )> {
+        let (conversation_id, _) = self.agent_presentation_target(pane_id)?;
+        let current_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
+            MezError::invalid_state("agent terminal presentation screen was not initialized")
+        })?;
+        let presentation = self
+            .presentation
+            .agent_shell_output_previews
+            .get(pane_id)
+            .cloned();
+        let owns_live_screen = presentation.as_ref().is_some_and(|presentation| {
+            presentation.conversation_id == conversation_id
+                && presentation.installed_screen.as_ref() == &current_screen
+        });
+        if owns_live_screen {
+            let mut presentation = presentation.ok_or_else(|| {
+                MezError::invalid_state("checked shell preview presentation disappeared")
+            })?;
+            let baseline = presentation.baseline_screen.as_ref().clone();
+            for owner in std::mem::take(&mut presentation.settled_owners) {
+                presentation.previews.remove(&owner);
+            }
+            if presentation.previews.is_empty() {
+                return Ok((conversation_id, baseline, None));
+            }
+            return Ok((conversation_id, baseline, Some(presentation)));
+        }
+        if presentation.is_some() {
+            self.presentation
+                .agent_shell_output_previews
+                .remove(pane_id);
+        }
+        Ok((conversation_id, current_screen, None))
+    }
+
+    /// Atomically installs one durable candidate and reprojects active previews.
+    fn install_agent_shell_preview_write(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        baseline_screen: TerminalScreen,
+        presentation: Option<super::super::RuntimeAgentShellPreviewPresentation>,
+    ) -> Result<()> {
+        let mut installed_screen = baseline_screen.clone();
+        let mut presentation = presentation;
+        if let Some(presentation) = presentation.as_ref() {
+            let ui_theme = self.presentation.settings.ui_theme.clone();
+            Self::append_agent_shell_previews_to_screen(
+                &mut installed_screen,
+                &presentation.previews,
+                &ui_theme,
+            )?;
+        }
+        if !self.update_agent_pane_screen_preserving_interaction(
+            pane_id,
+            conversation_id,
+            installed_screen.clone(),
+        ) {
+            return Err(MezError::invalid_state(
+                "agent durable presentation conversation changed",
+            ));
+        }
+        self.presentation
+            .agent_shell_output_previews
+            .remove(pane_id);
+        if let Some(mut presentation) = presentation.take() {
+            presentation.baseline_screen = std::sync::Arc::new(baseline_screen);
+            presentation.installed_screen = std::sync::Arc::new(installed_screen);
+            self.presentation
+                .agent_shell_output_previews
+                .insert(pane_id.to_string(), presentation);
+        }
+        Ok(())
+    }
+
+    /// Updates one action-owned transient preview for a hidden shell command.
+    ///
+    /// The full preview set is rebuilt from a preview-free baseline. Exact
+    /// installed-screen lineage prevents a delayed update from replacing any
+    /// durable output that appeared after the previous projection.
+    pub(crate) fn update_agent_shell_output_preview(
+        &mut self,
+        pane_id: &str,
+        owner: RuntimeAgentShellPreviewOwner,
+        revision: u64,
         lines: &[String],
     ) -> Result<()> {
         if self.agent_shell_view_enabled(pane_id) || lines.is_empty() {
@@ -2550,86 +2695,160 @@ impl RuntimeSessionService {
         if lines.is_empty() {
             return Ok(());
         }
-        if self
-            .presentation
-            .agent_shell_output_status_lines
-            .get(pane_id)
-            .is_some_and(|previous_lines| previous_lines == &lines)
-        {
-            return Ok(());
-        }
-        let previous_line_count = self
-            .presentation
-            .agent_shell_output_status_lines
-            .get(pane_id)
-            .map(Vec::len)
-            .unwrap_or(0);
-        let ui_theme = self.presentation.settings.ui_theme.clone();
-        let screen = self.agent_pane_screen_mut(pane_id).ok_or_else(|| {
+        let (conversation_id, _) = self.agent_presentation_target(pane_id)?;
+        let current_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
             MezError::invalid_state("agent terminal presentation screen was not initialized")
         })?;
-        let mut bytes = String::new();
-        if previous_line_count > 0 {
-            for index in 0..previous_line_count {
-                if index > 0 {
-                    bytes.push_str("\x1b[1A");
-                }
-                bytes.push_str("\r\x1b[2K");
-            }
-        } else {
-            let cursor = screen.cursor_state();
-            let current_line_has_content = screen
-                .visible_lines()
-                .get(cursor.row)
-                .is_some_and(|line| !line.trim().is_empty());
-            if cursor.column == 0 && !current_line_has_content {
-                bytes.push('\r');
-            } else {
-                bytes.push_str("\r\n");
-            }
+        let stale_projection = self
+            .presentation
+            .agent_shell_output_previews
+            .get(pane_id)
+            .is_some_and(|presentation| {
+                presentation.conversation_id != conversation_id
+                    || presentation.installed_screen.as_ref() != &current_screen
+            });
+        if stale_projection {
+            self.presentation
+                .agent_shell_output_previews
+                .remove(pane_id);
         }
-        for (index, line) in lines.iter().enumerate() {
-            if index > 0 {
-                bytes.push_str("\r\n");
-            }
-            append_styled_agent_terminal_line(
-                &mut bytes,
-                AgentTerminalPresentationStyle::Status,
-                line,
-                &ui_theme,
-            );
-            bytes.push_str("\x1b[0m");
+        let mut presentation = self
+            .presentation
+            .agent_shell_output_previews
+            .remove(pane_id)
+            .unwrap_or_else(|| super::super::RuntimeAgentShellPreviewPresentation {
+                conversation_id: conversation_id.clone(),
+                baseline_screen: std::sync::Arc::new(current_screen.clone()),
+                installed_screen: std::sync::Arc::new(current_screen),
+                next_order: 0,
+                previews: std::collections::BTreeMap::new(),
+                settled_owners: std::collections::BTreeSet::new(),
+            });
+        if presentation.settled_owners.contains(&owner)
+            || presentation
+                .previews
+                .get(&owner)
+                .is_some_and(|preview| revision <= preview.revision)
+        {
+            self.presentation
+                .agent_shell_output_previews
+                .insert(pane_id.to_string(), presentation);
+            return Ok(());
         }
-        Self::feed_agent_terminal_screen(screen, bytes.as_bytes(), "updating shell output status")?;
+        let first_seen_order = presentation
+            .previews
+            .get(&owner)
+            .map(|preview| preview.first_seen_order)
+            .unwrap_or_else(|| {
+                let order = presentation.next_order;
+                presentation.next_order = presentation.next_order.saturating_add(1);
+                order
+            });
+        presentation.previews.insert(
+            owner,
+            super::super::RuntimeAgentShellPreview {
+                first_seen_order,
+                revision,
+                lines,
+            },
+        );
+        let ui_theme = self.presentation.settings.ui_theme.clone();
+        let mut candidate = presentation.baseline_screen.as_ref().clone();
+        Self::append_agent_shell_previews_to_screen(
+            &mut candidate,
+            &presentation.previews,
+            &ui_theme,
+        )?;
+        let installed_screen = std::sync::Arc::new(candidate.clone());
+        if !self.update_agent_pane_screen_preserving_interaction(
+            pane_id,
+            &conversation_id,
+            candidate,
+        ) {
+            return Err(MezError::invalid_state(
+                "shell preview presentation conversation changed",
+            ));
+        }
+        presentation.installed_screen = installed_screen;
         self.presentation
-            .agent_shell_output_status_lines
-            .insert(pane_id.to_string(), lines);
+            .agent_shell_output_previews
+            .insert(pane_id.to_string(), presentation);
         Ok(())
     }
 
-    /// Clears transient shell-output status rows for one pane.
-    pub(crate) fn clear_agent_shell_output_status_line(&mut self, pane_id: &str) -> Result<()> {
-        let line_count = self
+    /// Settles one owner while retaining its final tail until a durable write.
+    ///
+    /// Settled owners reject later preview revisions. Their final rows remain
+    /// part of the transient projection only until the next durable pane append,
+    /// which drops settled rows before rebasing active previews.
+    pub(crate) fn settle_agent_shell_output_preview(
+        &mut self,
+        pane_id: &str,
+        owner: &RuntimeAgentShellPreviewOwner,
+    ) -> bool {
+        let Some(presentation) = self
             .presentation
-            .agent_shell_output_status_lines
-            .remove(pane_id)
-            .map_or(0, |lines| lines.len());
-        if line_count == 0 {
-            return Ok(());
+            .agent_shell_output_previews
+            .get_mut(pane_id)
+        else {
+            return false;
+        };
+        if !presentation.previews.contains_key(owner) {
+            return false;
         }
-        if let Some(screen) = self.agent_pane_screen_mut(pane_id) {
-            let mut bytes = String::new();
-            for index in 0..line_count {
-                if index > 0 {
-                    bytes.push_str("\x1b[1A");
-                }
-                bytes.push_str("\r\x1b[2K");
-            }
-            Self::feed_agent_terminal_screen(
-                screen,
-                bytes.as_bytes(),
-                "clearing shell output status",
-            )?;
+        presentation.settled_owners.insert(owner.clone())
+    }
+
+    /// Returns structured shell preview state for chronology regressions.
+    #[cfg(test)]
+    pub(crate) fn agent_shell_output_previews_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> Vec<(RuntimeAgentShellPreviewOwner, u64, u64, Vec<String>)> {
+        let Some(presentation) = self.presentation.agent_shell_output_previews.get(pane_id) else {
+            return Vec::new();
+        };
+        let mut previews = presentation
+            .previews
+            .iter()
+            .map(|(owner, preview)| {
+                (
+                    owner.clone(),
+                    preview.first_seen_order,
+                    preview.revision,
+                    preview.lines.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        previews.sort_by_key(|(_owner, first_seen_order, _revision, _lines)| *first_seen_order);
+        previews
+    }
+
+    /// Clears transient shell previews only while their installed lineage owns the pane.
+    pub(crate) fn clear_agent_shell_output_status_line(&mut self, pane_id: &str) -> Result<()> {
+        let Some(presentation) = self
+            .presentation
+            .agent_shell_output_previews
+            .remove(pane_id)
+        else {
+            return Ok(());
+        };
+        let owns_live_screen = self.agent_pane_screen(pane_id).is_some_and(|screen| {
+            screen == presentation.installed_screen.as_ref()
+                && self
+                    .agent_pane_screen_state(pane_id)
+                    .is_some_and(|state| state.conversation_id() == presentation.conversation_id)
+        });
+        if owns_live_screen
+            && !self.update_agent_pane_screen_preserving_interaction(
+                pane_id,
+                &presentation.conversation_id,
+                presentation.baseline_screen.as_ref().clone(),
+            )
+        {
+            return Err(MezError::invalid_state(
+                "shell preview cleanup conversation changed",
+            ));
         }
         Ok(())
     }

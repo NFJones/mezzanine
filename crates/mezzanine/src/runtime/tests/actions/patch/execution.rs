@@ -111,6 +111,19 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
         .next()
         .cloned()
         .expect("apply_patch transaction should be running");
+    let unrelated_owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-background".to_string(),
+        action_id: "shell-background".to_string(),
+        marker: "marker-background".to_string(),
+    };
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            unrelated_owner.clone(),
+            1,
+            &["background output 1".to_string()],
+        )
+        .unwrap();
     let transaction = service
         .running_shell_transactions_mut_for_tests()
         .get_mut(&marker)
@@ -125,6 +138,14 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
         .unwrap();
     service
         .observe_agent_shell_transaction_end("%1", &marker, "turn-1", "agent-%1", "%1", 0)
+        .unwrap();
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            unrelated_owner,
+            2,
+            &["background output 2".to_string()],
+        )
         .unwrap();
 
     let context = service
@@ -171,6 +192,9 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
     );
     assert!(pane_text.contains("@@ -0,0 +1,2 @@"), "{pane_text}");
     assert!(pane_text.contains("            1 +alpha"), "{pane_text}");
+    assert!(pane_text.contains("background output 2"), "{pane_text}");
+    assert!(!pane_text.contains("background output 1"), "{pane_text}");
+    assert_eq!(pane_text.matches("+++ ").count(), 1, "{pane_text}");
     assert!(!pane_text.contains("$ python3 - <<'MEZ_PY'"), "{pane_text}");
     assert!(!pane_text.contains("MEZ_MARKER_TOKEN"), "{pane_text}");
     assert!(!pane_text.contains("MEZ_COMMAND_"), "{pane_text}");

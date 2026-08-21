@@ -17,6 +17,7 @@ use super::{
     runtime_running_shell_transaction_kind_name, shell_action_failure_diagnostic,
     shell_command_result_content,
 };
+use crate::runtime::render::RuntimeAgentShellPreviewOwner;
 use mez_agent::semantic_patch_planning::{
     APPLY_PATCH_RESULT_MARKER, ApplyPatchFileOutcome, parse_apply_patch_file_outcomes,
 };
@@ -1829,6 +1830,11 @@ impl RuntimeSessionService {
                 "shell transaction marker identity does not match agent turn",
             ));
         }
+        let preview_owner = RuntimeAgentShellPreviewOwner {
+            turn_id: turn_id.to_string(),
+            action_id: action_id.clone(),
+            marker: marker.to_string(),
+        };
         if sandboxed {
             let status = if transaction_ref.observed_output_truncated {
                 Err("Bubblewrap status transport was truncated".to_string())
@@ -2223,6 +2229,24 @@ impl RuntimeSessionService {
                 apply_patch_file_outcomes,
             )
         };
+        if matches!(
+            observed_action.payload,
+            AgentActionPayload::ShellCommand { .. }
+        ) {
+            let lines = mez_agent::shell_observation::latest_agent_shell_transaction_output_lines(
+                &transaction_ref.observed_output_preview,
+                self.terminal_shell_output_preview_lines(),
+            );
+            if !lines.is_empty() {
+                self.update_agent_shell_output_preview(
+                    pane_id,
+                    preview_owner.clone(),
+                    u64::MAX,
+                    &lines,
+                )?;
+            }
+            self.settle_agent_shell_output_preview(pane_id, &preview_owner);
+        }
         self.integration
             .runtime_metrics_mut()
             .record_shell_transaction_completion(

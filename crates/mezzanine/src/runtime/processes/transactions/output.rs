@@ -7,6 +7,7 @@ use super::{
     latest_agent_shell_transaction_output_lines, runtime_shell_transaction_observation_limit,
 };
 use crate::host::terminal::parse_mez_shell_transaction_osc;
+use crate::runtime::render::RuntimeAgentShellPreviewOwner;
 use mez_terminal::TerminalOscEvent;
 
 /// Maximum bytes retained while waiting for one mandatory OSC start boundary.
@@ -410,7 +411,9 @@ impl RuntimeSessionService {
                         status_line_updates.push((
                             transaction.turn_id.clone(),
                             action_id.clone(),
+                            marker.clone(),
                             transaction.pane_id.clone(),
+                            u64::try_from(transaction.observed_output_bytes).unwrap_or(u64::MAX),
                             lines,
                         ));
                     }
@@ -420,10 +423,18 @@ impl RuntimeSessionService {
         for (state_key, transport_chunk) in apply_patch_transport_updates {
             self.append_apply_patch_batch_transport(&state_key, &transport_chunk);
         }
-        for (turn_id, action_id, pane_id, lines) in status_line_updates {
+        for (turn_id, action_id, marker, pane_id, revision, lines) in status_line_updates {
             if self.agent_shell_transaction_action_shows_live_output(&turn_id, &action_id) {
-                let _ = self
-                    .append_agent_shell_output_status_lines_to_terminal_buffer(&pane_id, &lines);
+                let _ = self.update_agent_shell_output_preview(
+                    &pane_id,
+                    RuntimeAgentShellPreviewOwner {
+                        turn_id,
+                        action_id,
+                        marker,
+                    },
+                    revision,
+                    &lines,
+                );
             }
         }
     }
