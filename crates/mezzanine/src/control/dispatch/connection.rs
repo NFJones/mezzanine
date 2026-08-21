@@ -13,12 +13,18 @@ use super::{
 };
 #[cfg(test)]
 use super::{decode_control_frame, encode_control_body};
+use crate::control::AuthenticatedPeer;
 /// Carries Control Connection State state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControlConnectionState {
+    /// Authenticated identity supplied by the concrete transport adapter.
+    ///
+    /// This identity is deliberately separate from the initialized client and
+    /// its application role.
+    pub(super) authenticated_peer: Option<AuthenticatedPeer>,
     /// Stores the initialized value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -44,6 +50,8 @@ pub struct ControlConnectionState {
     /// This is opt-in for foreground attach sockets so request-scoped control
     /// clients can close without mutating primary ownership.
     pub(super) detach_primary_on_disconnect: bool,
+    /// Whether this connection has already emitted its primary disconnect.
+    pub(super) disconnect_submitted: bool,
 }
 
 impl ControlConnectionState {
@@ -54,11 +62,13 @@ impl ControlConnectionState {
     /// on duplicated control-flow logic.
     pub fn new(outer_authenticated: bool, trusted_interactive_assertion: bool) -> Self {
         Self {
+            authenticated_peer: None,
             initialized: false,
             outer_authenticated,
             trusted_interactive_assertion,
             caller_client_id: None,
             detach_primary_on_disconnect: false,
+            disconnect_submitted: false,
         }
     }
 
@@ -69,12 +79,37 @@ impl ControlConnectionState {
     /// on duplicated control-flow logic.
     pub fn trusted_existing_client(caller_client_id: ClientId) -> Self {
         Self {
+            authenticated_peer: None,
             initialized: true,
             outer_authenticated: true,
             trusted_interactive_assertion: true,
             caller_client_id: Some(caller_client_id),
             detach_primary_on_disconnect: false,
+            disconnect_submitted: false,
         }
+    }
+
+    /// Binds the transport-authenticated peer to this connection.
+    ///
+    /// Rebinding to a different identity is rejected so reconnect or adapter
+    /// bugs cannot silently change the principal associated with live state.
+    pub fn bind_authenticated_peer(&mut self, peer: AuthenticatedPeer) -> Result<()> {
+        match &self.authenticated_peer {
+            Some(existing) if existing != &peer => Err(MezError::invalid_state(
+                "control connection authenticated peer cannot change",
+            )),
+            Some(_) => Ok(()),
+            None => {
+                self.authenticated_peer = Some(peer);
+                Ok(())
+            }
+        }
+    }
+
+    /// Returns the identity established by the concrete transport adapter.
+    #[cfg(test)]
+    pub fn authenticated_peer(&self) -> Option<&AuthenticatedPeer> {
+        self.authenticated_peer.as_ref()
     }
 
     /// Runs the caller client id operation for this subsystem.
@@ -110,9 +145,17 @@ impl ControlConnectionState {
         self.initialized
     }
 
-    /// Returns whether EOF on this connection should detach the primary client.
-    pub fn detach_primary_on_disconnect(&self) -> bool {
-        self.detach_primary_on_disconnect
+    /// Takes the primary client that should receive an EOF disconnect event.
+    ///
+    /// At most one call returns a client ID, making duplicate EOF, reset, and
+    /// shutdown notifications harmless at this boundary.
+    pub fn take_disconnect_client_id(&mut self) -> Option<ClientId> {
+        if self.disconnect_submitted || !self.detach_primary_on_disconnect {
+            return None;
+        }
+        let client_id = self.caller_client_id.clone()?;
+        self.disconnect_submitted = true;
+        Some(client_id)
     }
 }
 

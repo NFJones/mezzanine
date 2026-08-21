@@ -1,6 +1,7 @@
 //! CLI new serve tests.
 
 use super::*;
+use crate::cli::control_client::exchange_control_request;
 
 /// Verifies noninteractive new requires dry run.
 ///
@@ -344,6 +345,62 @@ fn read_control_response_frames_rejects_eof_before_complete_frame() {
         !error.message().contains("missing header terminator"),
         "{error}"
     );
+}
+
+/// Verifies direct control framing is reusable over an established non-Unix stream.
+///
+/// The scripted stream has no socket path or peer-credential API. Successful
+/// initialization and follow-up exchange therefore prove the client protocol
+/// boundary no longer owns Unix connection setup.
+#[test]
+fn control_request_exchange_uses_generic_read_write_stream() {
+    struct ScriptedControlStream {
+        responses: std::collections::VecDeque<Vec<u8>>,
+        written: Vec<u8>,
+    }
+
+    impl Read for ScriptedControlStream {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let Some(response) = self.responses.pop_front() else {
+                return Ok(0);
+            };
+            assert!(response.len() <= buffer.len());
+            buffer[..response.len()].copy_from_slice(&response);
+            Ok(response.len())
+        }
+    }
+
+    impl Write for ScriptedControlStream {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.written.extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut stream = ScriptedControlStream {
+        responses: [
+            encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary"}}"#,
+            ),
+            encode_control_body(r#"{"jsonrpc":"2.0","id":"cli","result":{"session_id":"$1"}}"#),
+        ]
+        .into(),
+        written: Vec::new(),
+    };
+
+    let response = exchange_control_request(&mut stream, "session/get", "{}").unwrap();
+    let (initialize, consumed) = decode_control_frame(&stream.written, 1024 * 1024).unwrap();
+    let (request, request_len) =
+        decode_control_frame(&stream.written[consumed..], 1024 * 1024).unwrap();
+
+    assert!(initialize.contains(r#""method":"control/initialize""#));
+    assert!(request.contains(r#""method":"session/get""#));
+    assert_eq!(consumed + request_len, stream.written.len());
+    assert!(response.contains(r#""session_id":"$1""#));
 }
 
 /// Verifies that daemon startup does not spawn an auth refresh worker when the

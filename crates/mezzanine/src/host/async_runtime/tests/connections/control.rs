@@ -1,6 +1,7 @@
 //! Async-runtime tests owned by control behavior.
 
 use super::super::*;
+use crate::host::async_runtime::serve_authenticated_async_runtime_control_connection_loop_with_snapshots;
 
 /// Verifies async control connection authorizes and round trips control frame.
 ///
@@ -309,4 +310,57 @@ async fn async_control_listener_registers_observer_while_primary_connection_rema
 
     let ((), (), (), _exit) = tokio::join!(primary_client, observer_client, server, actor.run());
     let _ = std::fs::remove_file(&path);
+}
+
+/// Verifies the shared control loop accepts a non-Unix async byte stream.
+///
+/// A Tokio duplex stream has no raw descriptor or peer credentials, so this
+/// round trip proves framing and dispatch consume the explicit authenticated
+/// peer rather than reaching back into a Unix socket.
+#[tokio::test(flavor = "current_thread")]
+async fn authenticated_control_loop_round_trips_over_duplex_stream() {
+    use crate::control::{AuthenticatedPeer, decode_control_frame, encode_control_body};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let (mut client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let input = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+    );
+    let expected_peer = AuthenticatedPeer::iroh_endpoint("endpoint-a");
+
+    let client = async {
+        client_stream.write_all(&input).await.unwrap();
+        let mut output = vec![0; 4096];
+        let read = client_stream.read(&mut output).await.unwrap();
+        output.truncate(read);
+        let (body, consumed) = decode_control_frame(&output, 4096).unwrap();
+        assert_eq!(consumed, output.len());
+        assert!(body.contains(r#""granted_role":"primary""#), "{body}");
+    };
+    let server = async {
+        let mut connection = ControlConnectionState::new(true, true);
+        let served = serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
+            &mut server_stream,
+            expected_peer.clone(),
+            &handle,
+            &mut connection,
+            AsyncRuntimeControlConnectionConfig::new(4096, current_effective_uid()).unwrap(),
+            None,
+            |served, _state| served >= 1,
+        )
+        .await
+        .unwrap();
+        assert_eq!(served, 1);
+        assert_eq!(connection.authenticated_peer(), Some(&expected_peer));
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), (), exit) = tokio::join!(client, server, actor.run());
+    assert_eq!(exit.commands_processed, 2);
 }

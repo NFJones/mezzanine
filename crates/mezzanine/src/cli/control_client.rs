@@ -12,6 +12,9 @@ use super::{
 
 // Direct control request framing and response handling.
 
+/// Maximum control response body accepted by direct CLI requests.
+const CLI_CONTROL_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
+
 /// Runs the run control request operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -26,6 +29,22 @@ pub(super) fn run_control_request<W: Write>(
 ) -> Result<()> {
     let socket_path = selected_socket_path(socket_selection);
     let mut stream = UnixStream::connect(socket_path)?;
+    let body = exchange_control_request(&mut stream, method, params)?;
+    write_control_response(stdout, output_format, &body)?;
+    Ok(())
+}
+
+/// Exchanges initialization and one request over an established byte stream.
+///
+/// Connection selection and transport authentication remain the concrete
+/// connector's responsibility. This function owns only ordered control framing
+/// and response decoding, so later connectors can reuse it without changing the
+/// Unix-socket default.
+pub(super) fn exchange_control_request<S: Read + Write>(
+    stream: &mut S,
+    method: &str,
+    params: &str,
+) -> Result<String> {
     let initialize = r#"{"jsonrpc":"2.0","id":"cli-init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
     let request = format!(
         r#"{{"jsonrpc":"2.0","id":"cli","method":"{}","params":{}}}"#,
@@ -34,14 +53,14 @@ pub(super) fn run_control_request<W: Write>(
     );
     stream.write_all(&encode_control_body(initialize))?;
     stream.flush()?;
-    let initialize_response = read_control_response_frames(&mut stream, 1024 * 1024, 1)?;
-    let _ = decode_control_frame(&initialize_response, 1024 * 1024)?;
+    let initialize_response =
+        read_control_response_frames(stream, CLI_CONTROL_MAX_CONTENT_LENGTH, 1)?;
+    let _ = decode_control_frame(&initialize_response, CLI_CONTROL_MAX_CONTENT_LENGTH)?;
     stream.write_all(&encode_control_body(&request))?;
     stream.flush()?;
-    let response = read_control_response_frames(&mut stream, 1024 * 1024, 1)?;
-    let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
-    write_control_response(stdout, output_format, &body)?;
-    Ok(())
+    let response = read_control_response_frames(stream, CLI_CONTROL_MAX_CONTENT_LENGTH, 1)?;
+    let (body, _) = decode_control_frame(&response, CLI_CONTROL_MAX_CONTENT_LENGTH)?;
+    Ok(body)
 }
 
 /// Runs the read control response frames operation for this subsystem.
@@ -49,8 +68,8 @@ pub(super) fn run_control_request<W: Write>(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn read_control_response_frames(
-    stream: &mut UnixStream,
+pub(super) fn read_control_response_frames<R: Read>(
+    stream: &mut R,
     max_content_length: usize,
     expected_frames: usize,
 ) -> Result<Vec<u8>> {

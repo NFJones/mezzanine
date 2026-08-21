@@ -1,6 +1,7 @@
 //! Control connections tests.
 
 use super::*;
+use crate::control::AuthenticatedPeer;
 
 /// Verifies handles one framed control request.
 ///
@@ -377,4 +378,60 @@ fn pending_observer_connection_gets_no_session_data_after_initialize() {
             .rows,
         40
     );
+}
+
+/// Verifies transport-authenticated identity cannot change on a live connection.
+///
+/// The transport peer is evidence supplied by the concrete adapter, so accepting
+/// a different identity after request state exists would cross authorization
+/// contexts even when the byte stream itself remains valid.
+#[test]
+fn authenticated_peer_binding_is_immutable() {
+    let mut connection = ControlConnectionState::new(true, true);
+    let unix_peer = AuthenticatedPeer::unix_user(1000);
+
+    connection
+        .bind_authenticated_peer(unix_peer.clone())
+        .unwrap();
+    connection
+        .bind_authenticated_peer(unix_peer.clone())
+        .unwrap();
+    let error = connection
+        .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint("endpoint-a"))
+        .unwrap_err();
+
+    assert_eq!(connection.authenticated_peer(), Some(&unix_peer));
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(error.message().contains("cannot change"));
+}
+
+/// Verifies a primary disconnect can be consumed only once from connection state.
+///
+/// EOF, stream reset, and supervisor shutdown can race. The shared connection
+/// boundary must therefore expose at most one detach event for the initialized
+/// primary client.
+#[test]
+fn primary_disconnect_client_is_taken_once() {
+    let mut session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let mut connection = ControlConnectionState::new(true, true);
+    let mut cache = ControlIdempotencyCache::default();
+    let input = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+    );
+
+    let (_, consumed) = handle_control_frames_for_connection(
+        &input,
+        4096,
+        &mut session,
+        &mut connection,
+        &mut cache,
+    )
+    .unwrap();
+
+    assert_eq!(consumed, input.len());
+    assert!(connection.take_disconnect_client_id().is_some());
+    assert!(connection.take_disconnect_client_id().is_none());
 }

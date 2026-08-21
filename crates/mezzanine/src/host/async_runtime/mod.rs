@@ -25,7 +25,7 @@ use tokio::task::{Id as TokioTaskId, JoinError, JoinSet};
 use tokio::time::sleep;
 use tokio_util::codec::Framed;
 
-use crate::control::{ControlConnectionState, encode_control_body};
+use crate::control::{AuthenticatedPeer, ControlConnectionState, encode_control_body};
 use crate::error::{MezError, Result};
 use crate::host::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopReport,
@@ -45,7 +45,7 @@ use crate::runtime::{
     RuntimeNativeShellDispatch, RuntimeNativeShellFailure, RuntimeNativeShellOutcome,
     RuntimeProviderInfoRefreshOutcome, RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome,
     RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
-    authorize_unix_peer_raw_fd, current_effective_uid,
+    authenticated_unix_peer_uid, authorize_unix_peer_raw_fd, current_effective_uid,
 };
 use mez_agent::AgentTurnLedger;
 use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageConnection, delivery_batch_json};
@@ -162,6 +162,7 @@ pub use actor_types::{
     serve_async_runtime_control_connection_loop, serve_async_runtime_control_listener,
     serve_async_runtime_message_connection, serve_async_runtime_message_connection_loop,
     serve_async_runtime_message_listener,
+    serve_authenticated_async_runtime_control_connection_loop_with_snapshots,
 };
 pub use actor_types::{
     AsyncRenderedClientFlush, AsyncRenderedClientFrame, AsyncTerminalClientConfigSnapshot,

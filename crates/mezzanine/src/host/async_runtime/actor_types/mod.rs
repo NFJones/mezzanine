@@ -11,17 +11,17 @@ use super::{
     AgentId, AsRawFd, AsyncControlInputResult, AsyncMessageFanout, AsyncMessageInputResult,
     AsyncRuntimeControlConnectionConfig, AsyncRuntimeMessageConnectionConfig,
     AsyncRuntimeSessionHandle, AsyncWriteExt, AttachedClientStepApplication,
-    AttachedTerminalClientStepPlan, AttachedTerminalOutputModes, ClientEvent, ClientId,
-    ClientStatusLine, ClientViewRole, ControlConnectionState, DeliveryCursor, FanoutBatch, Framed,
-    JoinSet, MessageConnection, MezError, PaneProcess, ProtocolFrameCodec, RenderedClientView,
-    Result, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch, RuntimeAgentProviderTask,
-    RuntimeAgentRememberDispatch, RuntimeApprovedExternalActionDispatch,
+    AttachedTerminalClientStepPlan, AttachedTerminalOutputModes, AuthenticatedPeer, ClientEvent,
+    ClientId, ClientStatusLine, ClientViewRole, ControlConnectionState, DeliveryCursor,
+    FanoutBatch, Framed, JoinSet, MessageConnection, MezError, PaneProcess, ProtocolFrameCodec,
+    RenderedClientView, Result, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
+    RuntimeAgentProviderTask, RuntimeAgentRememberDispatch, RuntimeApprovedExternalActionDispatch,
     RuntimeApprovedExternalActionOutcome, RuntimeEvent, RuntimeEventBatch,
     RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
     RuntimeLifecycleState, RuntimeProviderInfoRefreshOutcome, RuntimeSideEffect,
     RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork, Size, StreamExt,
     TerminalClientLoopConfig, TerminalStyleSpan, UnixListener, UnixStream,
-    authorize_unix_peer_raw_fd, encode_frame, oneshot,
+    authenticated_unix_peer_uid, encode_frame, oneshot,
 };
 use crate::runtime::PaneResizeUpdate;
 use crate::storage::snapshot::SnapshotRepository;
@@ -43,6 +43,7 @@ pub use control::serve_async_runtime_control_listener_with_snapshots;
 pub use control::{
     serve_async_runtime_control_connection, serve_async_runtime_control_connection_loop,
     serve_async_runtime_control_listener,
+    serve_authenticated_async_runtime_control_connection_loop_with_snapshots,
 };
 pub use message::serve_async_runtime_message_listener_concurrent;
 #[cfg(test)]

@@ -377,7 +377,18 @@ pub fn current_effective_uid() -> u32 {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub fn authorize_unix_peer_raw_fd(raw_fd: RawFd, owner_uid: u32) -> Result<()> {
-    authorize_unix_peer_uid(unix_peer_uid(raw_fd)?, owner_uid)
+    authenticated_unix_peer_uid(raw_fd, owner_uid).map(|_| ())
+}
+
+/// Returns the OS-authenticated Unix peer UID after enforcing session
+/// ownership.
+///
+/// Concrete Unix transport adapters use this to construct typed peer identity
+/// before handing the byte stream to transport-neutral protocol processing.
+pub fn authenticated_unix_peer_uid(raw_fd: RawFd, owner_uid: u32) -> Result<u32> {
+    let peer_uid = unix_peer_uid(raw_fd)?;
+    authorize_unix_peer_uid(peer_uid, owner_uid)?;
+    Ok(peer_uid)
 }
 
 /// Runs the authorize unix peer operation for this subsystem.

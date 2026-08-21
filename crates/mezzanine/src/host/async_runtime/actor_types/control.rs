@@ -1,13 +1,16 @@
 //! Async control-connection and listener adapters over the runtime actor handle.
 
+#[cfg(test)]
+use super::UnixStream;
 use super::{
     AsRawFd, AsyncControlInputResult, AsyncRuntimeControlConnectionConfig,
-    AsyncRuntimeSessionHandle, AsyncWriteExt, ClientEvent, ControlConnectionState, Framed, JoinSet,
-    MezError, ProtocolFrameCodec, Result, RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState,
-    SnapshotRepository, StreamExt, UnixListener, UnixStream, authorize_unix_peer_raw_fd,
-    encode_frame,
+    AsyncRuntimeSessionHandle, AsyncWriteExt, AuthenticatedPeer, ClientEvent,
+    ControlConnectionState, Framed, JoinSet, MezError, ProtocolFrameCodec, Result, RuntimeEvent,
+    RuntimeEventBatch, RuntimeLifecycleState, SnapshotRepository, StreamExt, UnixListener,
+    authenticated_unix_peer_uid, encode_frame,
 };
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Maximum time terminal daemon shutdown waits for active control responses to
 /// finish writing before aborting non-responsive connection tasks.
@@ -42,7 +45,31 @@ pub async fn serve_async_runtime_control_connection_with_snapshots(
     config: AsyncRuntimeControlConnectionConfig,
     snapshots: Option<&SnapshotRepository>,
 ) -> Result<usize> {
-    authorize_unix_peer_raw_fd(stream.as_raw_fd(), config.owner_uid)?;
+    let peer_uid = authenticated_unix_peer_uid(stream.as_raw_fd(), config.owner_uid)?;
+    serve_authenticated_async_runtime_control_connection_with_snapshots(
+        stream,
+        AuthenticatedPeer::unix_user(peer_uid),
+        handle,
+        connection,
+        config,
+        snapshots,
+    )
+    .await
+}
+
+#[cfg(test)]
+async fn serve_authenticated_async_runtime_control_connection_with_snapshots<S>(
+    stream: &mut S,
+    peer: AuthenticatedPeer,
+    handle: &AsyncRuntimeSessionHandle,
+    connection: &mut ControlConnectionState,
+    config: AsyncRuntimeControlConnectionConfig,
+    snapshots: Option<&SnapshotRepository>,
+) -> Result<usize>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    connection.bind_authenticated_peer(peer)?;
     let mut framed = Framed::new(stream, ProtocolFrameCodec::new(config.max_content_length)?);
     let Some(frame) = framed.next().await else {
         return Ok(0);
@@ -94,8 +121,39 @@ where
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn serve_async_runtime_control_connection_loop_with_snapshots<F>(
     stream: &mut UnixStream,
+    handle: &AsyncRuntimeSessionHandle,
+    connection: &mut ControlConnectionState,
+    config: AsyncRuntimeControlConnectionConfig,
+    snapshots: Option<&SnapshotRepository>,
+    should_stop: F,
+) -> Result<u64>
+where
+    F: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    let peer_uid = authenticated_unix_peer_uid(stream.as_raw_fd(), config.owner_uid)?;
+    serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
+        stream,
+        AuthenticatedPeer::unix_user(peer_uid),
+        handle,
+        connection,
+        config,
+        snapshots,
+        should_stop,
+    )
+    .await
+}
+
+/// Serves ordered control frames over an authenticated async byte stream.
+///
+/// Concrete adapters authenticate the peer before entering this function. The
+/// peer identity is transport evidence only; control initialization and method
+/// authorization continue to determine application authority.
+pub async fn serve_authenticated_async_runtime_control_connection_loop_with_snapshots<S, F>(
+    stream: &mut S,
+    peer: AuthenticatedPeer,
     handle: &AsyncRuntimeSessionHandle,
     connection: &mut ControlConnectionState,
     config: AsyncRuntimeControlConnectionConfig,
@@ -103,9 +161,10 @@ pub async fn serve_async_runtime_control_connection_loop_with_snapshots<F>(
     mut should_stop: F,
 ) -> Result<u64>
 where
+    S: AsyncRead + AsyncWrite + Unpin,
     F: FnMut(u64, RuntimeLifecycleState) -> bool,
 {
-    authorize_unix_peer_raw_fd(stream.as_raw_fd(), config.owner_uid)?;
+    connection.bind_authenticated_peer(peer)?;
     let mut framed = Framed::new(stream, ProtocolFrameCodec::new(config.max_content_length)?);
     let mut served = 0u64;
     let mut lifecycle = handle.lifecycle_state_watcher();
@@ -153,12 +212,9 @@ where
 /// end of one RPC exchange.
 async fn submit_control_connection_disconnect_event(
     handle: &AsyncRuntimeSessionHandle,
-    connection: &ControlConnectionState,
+    connection: &mut ControlConnectionState,
 ) -> Result<()> {
-    if !connection.detach_primary_on_disconnect() {
-        return Ok(());
-    }
-    let Some(client_id) = connection.caller_client_id().cloned() else {
+    let Some(client_id) = connection.take_disconnect_client_id() else {
         return Ok(());
     };
     let mut batch = RuntimeEventBatch::new();
@@ -233,12 +289,15 @@ where
                 continue;
             }
         };
+        let peer_uid = authenticated_unix_peer_uid(stream.as_raw_fd(), config.owner_uid)?;
+        let peer = AuthenticatedPeer::unix_user(peer_uid);
         let connection_handle = handle.clone();
         let connection_snapshots = snapshots.clone();
         tasks.spawn(async move {
             let mut connection = ControlConnectionState::new(true, true);
-            serve_async_runtime_control_connection_loop_with_snapshots(
+            serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
                 &mut stream,
+                peer,
                 &connection_handle,
                 &mut connection,
                 config,

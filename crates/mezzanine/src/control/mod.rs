@@ -76,6 +76,9 @@ mod initialize;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod json;
+/// Exposes authenticated transport identity without coupling control dispatch
+/// to a concrete socket implementation.
+mod peer;
 /// Exposes the registry module boundary.
 ///
 /// The nested module keeps method metadata in one place so dispatch,
@@ -129,6 +132,7 @@ pub use framing::{decode_control_frame, encode_control_body};
 pub use framing::{handle_control_frame, handle_control_frames};
 pub use idempotency::{ControlIdempotencyCache, JsonRpcRequest, parse_json_rpc_request};
 pub use initialize::initialize;
+pub use peer::AuthenticatedPeer;
 pub(crate) use snapshot::dispatch_snapshot_request_with_context_async;
 pub(crate) use targets::{
     destination_target_checked_resolved, pane_target_checked_resolved,

@@ -419,10 +419,10 @@ pub(crate) use service_state::{
     RuntimeMcpDiscoveryOutcome, RuntimeMcpDiscoverySuccess,
 };
 pub use sockets::{
-    apply_registry_update, apply_registry_update_async, authorize_unix_peer_raw_fd,
-    auxiliary_socket_path_for_control_socket, bind_control_socket, current_effective_uid,
-    default_socket_directory, ensure_private_socket_directory, pane_environment_with_term,
-    prune_stale_socket_files_in_directory, socket_path_for_name,
+    apply_registry_update, apply_registry_update_async, authenticated_unix_peer_uid,
+    authorize_unix_peer_raw_fd, auxiliary_socket_path_for_control_socket, bind_control_socket,
+    current_effective_uid, default_socket_directory, ensure_private_socket_directory,
+    pane_environment_with_term, prune_stale_socket_files_in_directory, socket_path_for_name,
 };
 #[cfg(test)]
 pub use sockets::{authorize_unix_peer, authorize_unix_peer_uid, pane_environment};
