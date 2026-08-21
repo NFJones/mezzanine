@@ -1714,7 +1714,7 @@ impl RuntimeSessionService {
         let current_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
             MezError::invalid_state("streaming presentation screen was not initialized")
         })?;
-        let preview_presentation = self
+        let mut preview_presentation = self
             .presentation
             .agent_shell_output_previews
             .get(pane_id)
@@ -1723,6 +1723,12 @@ impl RuntimeSessionService {
                 preview.conversation_id == conversation_id
                     && preview.installed_screen.as_ref() == &current_screen
             });
+        if let Some(preview) = preview_presentation.as_mut() {
+            Self::retire_settled_agent_shell_previews(preview);
+            if preview.previews.is_empty() {
+                preview_presentation = None;
+            }
+        }
         let mut installed_screen = provider_screen.clone();
         if let Some(preview) = preview_presentation.as_ref() {
             let ui_theme = self.presentation.settings.ui_theme.clone();
@@ -2664,6 +2670,15 @@ impl RuntimeSessionService {
             .remove(&(pane_id.to_string(), turn_id.to_string()));
     }
 
+    /// Removes previews whose final output has already been retained.
+    fn retire_settled_agent_shell_previews(
+        presentation: &mut super::super::RuntimeAgentShellPreviewPresentation,
+    ) {
+        for owner in std::mem::take(&mut presentation.settled_owners) {
+            presentation.previews.remove(&owner);
+        }
+    }
+
     /// Projects all active shell previews onto one preview-free pane screen.
     fn append_agent_shell_previews_to_screen(
         screen: &mut TerminalScreen,
@@ -2739,9 +2754,7 @@ impl RuntimeSessionService {
                 MezError::invalid_state("checked shell preview presentation disappeared")
             })?;
             let baseline = presentation.baseline_screen.as_ref().clone();
-            for owner in std::mem::take(&mut presentation.settled_owners) {
-                presentation.previews.remove(&owner);
-            }
+            Self::retire_settled_agent_shell_previews(&mut presentation);
             if presentation.previews.is_empty() {
                 return Ok((conversation_id, baseline, None));
             }
@@ -2936,11 +2949,11 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Settles one owner while retaining its final tail until a durable write.
+    /// Settles one owner while retaining its final tail until later pane content.
     ///
     /// Settled owners reject later preview revisions. Their final rows remain
-    /// part of the transient projection only until the next durable pane append,
-    /// which drops settled rows before rebasing active previews.
+    /// part of the transient projection until the next durable pane append or
+    /// provider streaming update drops settled rows before recomposing active previews.
     pub(crate) fn settle_agent_shell_output_preview(
         &mut self,
         pane_id: &str,

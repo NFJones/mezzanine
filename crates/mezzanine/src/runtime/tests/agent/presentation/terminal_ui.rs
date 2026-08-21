@@ -1545,6 +1545,116 @@ fn runtime_streaming_say_composes_with_active_shell_preview() {
     assert!(!restored.contains("provider one"), "{restored}");
 }
 
+/// Verifies a provider update removes a settled command tail in one projection.
+///
+/// A completed command intentionally remains visible until the next pane
+/// content is installed. Provider streaming must be that cleanup boundary, or
+/// stale terminal rows survive until later output overwrites them physically.
+#[test]
+fn runtime_streaming_say_retires_settled_shell_preview() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(40, 12).unwrap(), 120).unwrap(),
+    );
+    for event in [
+        mez_agent::StreamingSayEvent::Started {
+            action_index: 0,
+            status: mez_agent::SayStatus::Progress,
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE.to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextDelta {
+            action_index: 0,
+            text: "provider one".to_string(),
+        },
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-provider", &event)
+            .unwrap();
+    }
+    let first_projection = RuntimeSessionService::build_agent_streaming_say_projection(
+        service
+            .take_agent_streaming_say_projection_work("%1", "turn-provider")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(first_projection)
+            .unwrap()
+    );
+
+    let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-shell".to_string(),
+        action_id: "shell-1".to_string(),
+        marker: "marker-1".to_string(),
+    };
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            owner.clone(),
+            1,
+            &[
+                "settled shell tail one".to_string(),
+                "settled shell tail two".to_string(),
+            ],
+        )
+        .unwrap();
+    assert!(service.settle_agent_shell_output_preview("%1", &owner));
+    let retained = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(retained.contains("settled shell tail one"), "{retained}");
+
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-provider",
+            &mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 0,
+                text: " and provider two".to_string(),
+            },
+        )
+        .unwrap();
+    let second_projection = RuntimeSessionService::build_agent_streaming_say_projection(
+        service
+            .take_agent_streaming_say_projection_work("%1", "turn-provider")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(second_projection)
+            .unwrap()
+    );
+
+    let updated = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        updated.contains("provider one and provider two"),
+        "{updated}"
+    );
+    assert!(!updated.contains("settled shell tail one"), "{updated}");
+    assert!(!updated.contains("settled shell tail two"), "{updated}");
+    assert!(
+        service
+            .agent_shell_output_previews_for_tests("%1")
+            .is_empty()
+    );
+}
+
 /// Verifies streamed source is neither truncated by shell-preview settings nor
 /// retained when validated completion supplies different authoritative text.
 ///
