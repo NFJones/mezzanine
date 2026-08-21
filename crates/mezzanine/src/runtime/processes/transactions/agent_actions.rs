@@ -2357,12 +2357,16 @@ impl RuntimeSessionService {
             self.commit_settled_action_results_context(turn_id, &observed_results)?;
             self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
             if ready_for_provider_continuation {
-                self.queue_agent_provider_task(turn_id.to_string());
-                self.append_agent_trace_turn_event(
-                    pane_id,
-                    turn_id,
-                    "provider_task queued reason=shell_transaction_result_ready",
-                )?;
+                if !self
+                    .resume_dependency_wait_if_ready(turn_id, "shell_transaction_result_ready")?
+                {
+                    self.queue_agent_provider_task(turn_id.to_string());
+                    self.append_agent_trace_turn_event(
+                        pane_id,
+                        turn_id,
+                        "provider_task queued reason=shell_transaction_result_ready",
+                    )?;
+                }
             } else {
                 let should_dispatch_stored_shell = self
                     .agent_turn_executions()

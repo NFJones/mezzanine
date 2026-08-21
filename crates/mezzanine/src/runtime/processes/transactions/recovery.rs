@@ -59,6 +59,41 @@ impl RuntimeSessionService {
         })
     }
 
+    /// Requeues dependency-waiting parents whose stored results are complete.
+    ///
+    /// Direct settlement paths normally perform this transition immediately.
+    /// Reconciliation repeats the invariant so an interrupted callback cannot
+    /// leave a ready parent split between scheduler `Waiting` and ledger
+    /// `Blocked` state indefinitely.
+    pub(crate) fn recover_ready_dependency_waits(&mut self) -> Result<usize> {
+        let candidates = self
+            .agent_scheduler()
+            .waiting_turns()
+            .map(|work| work.turn_id.clone())
+            .collect::<Vec<_>>();
+        let mut recovered = 0usize;
+        for turn_id in candidates {
+            if self.resume_dependency_wait_if_ready(&turn_id, "dependency_wait_reconciliation")? {
+                recovered = recovered.saturating_add(1);
+            }
+        }
+        Ok(recovered)
+    }
+
+    /// Reports whether a ready dependency wait needs reconciliation.
+    pub(crate) fn ready_dependency_wait_recovery_needed(&self) -> bool {
+        self.agent_scheduler().waiting_turns().any(|work| {
+            self.agent_turn_ledger()
+                .turns()
+                .iter()
+                .any(|turn| turn.turn_id == work.turn_id && turn.state == AgentTurnState::Blocked)
+                && self
+                    .agent_turn_executions()
+                    .get(&work.turn_id)
+                    .is_some_and(runtime_execution_ready_for_provider_continuation)
+        })
+    }
+
     /// Requeues pending shell dispatches that have no live transaction and are
     /// waiting behind readiness state that can be safely retried.
     pub(crate) fn recover_stranded_agent_shell_dispatches(&mut self) -> Result<usize> {

@@ -1708,6 +1708,415 @@ async fn runtime_three_nonrouted_subagents_release_waiting_parent() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a late shell result resumes a parent after three joined children.
+///
+/// All child results intentionally settle while a sibling shell action is
+/// still running, so the final child callback cannot yet requeue the parent.
+/// The later shell settlement must reconcile scheduler `Waiting` with ledger
+/// `Blocked` before queuing provider continuation; otherwise the pending task
+/// is discarded and the parent remains visibly waiting forever.
+#[tokio::test]
+async fn runtime_late_shell_result_resumes_parent_after_three_joined_children() {
+    let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(4)
+        .unwrap();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let parent = service.start_agent_prompt_turn("%1", "parent").unwrap();
+    let shell = mez_agent::AgentAction {
+        id: "shell-late".to_string(),
+        rationale: "settle after all joined children".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Run a late sibling command".to_string(),
+            command: "printf late-shell-result".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "spawn three children and run one command".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "exercise mixed joined and shell settlement".to_string(),
+                thought: None,
+                turn_id: parent.turn_id.clone(),
+                agent_id: parent.agent_id.clone(),
+                actions: vec![
+                    runtime_spawn_agent_action("spawn-one", "child one"),
+                    runtime_spawn_agent_action("spawn-two", "child two"),
+                    runtime_spawn_agent_action("spawn-three", "child three"),
+                    shell,
+                ],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &parent.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    let shell_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| match &transaction.kind {
+            RunningShellTransactionKind::AgentAction { action_id } if action_id == "shell-late" => {
+                Some(marker.clone())
+            }
+            _ => None,
+        })
+        .expect("late shell action should own a live transaction");
+    let children = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .filter(|turn| turn.turn_id != parent.turn_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(children.len(), 3, "{children:#?}");
+
+    for (index, child) in children.iter().enumerate() {
+        let response = runtime_say_response_for_agent(
+            &child.turn_id,
+            &child.agent_id,
+            &format!("child {} done", index + 1),
+            true,
+        );
+        let action = response
+            .action_batch
+            .as_ref()
+            .and_then(|batch| batch.actions.first())
+            .cloned()
+            .unwrap();
+        let execution = mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&child.turn_id, &child.agent_id),
+            response,
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![mez_agent::ActionResult::succeeded(
+                child,
+                &action,
+                vec![format!("child {} done", index + 1)],
+                None,
+            )],
+            final_turn: true,
+            terminal_state: AgentTurnState::Completed,
+        };
+        assert!(
+            service
+                .apply_agent_provider_completed_event(
+                    &AgentId::opaque(child.agent_id.clone()).unwrap(),
+                    &child.turn_id,
+                    execution,
+                )
+                .await
+                .unwrap()
+        );
+    }
+
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 1);
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Blocked)
+    );
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&shell_marker)
+        .unwrap();
+    transaction.observed_output_preview = "late-shell-result".to_string();
+    transaction.observed_output_bytes = transaction.observed_output_preview.len();
+    service
+        .observe_agent_shell_transaction_start(
+            "%1",
+            &shell_marker,
+            &parent.turn_id,
+            &parent.agent_id,
+            "%1",
+        )
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end(
+            "%1",
+            &shell_marker,
+            &parent.turn_id,
+            &parent.agent_id,
+            "%1",
+            0,
+        )
+        .unwrap();
+
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 0);
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Running)
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent.turn_id)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies terminal delivery reconstructs a lost joined dependency index.
+///
+/// The running spawn result durably identifies its child. If the in-memory
+/// correlation index is lost before terminal delivery, the runtime must rebuild
+/// it, attach the result, and resume the waiting parent.
+#[tokio::test]
+async fn runtime_terminal_child_reconstructs_missing_join_dependency() {
+    let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(2)
+        .unwrap();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let parent = service.start_agent_prompt_turn("%1", "parent").unwrap();
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "spawn one child".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "exercise recoverable joined correlation".to_string(),
+                thought: None,
+                turn_id: parent.turn_id.clone(),
+                agent_id: parent.agent_id.clone(),
+                actions: vec![runtime_spawn_agent_action("spawn-one", "child one")],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &parent.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    let child = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id != parent.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_joined_subagent_dependencies_for_agent(&child.agent_id);
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+
+    let response = runtime_say_response_for_agent(
+        &child.turn_id,
+        &child.agent_id,
+        "child result after index loss",
+        true,
+    );
+    let action = response
+        .action_batch
+        .as_ref()
+        .and_then(|batch| batch.actions.first())
+        .cloned()
+        .unwrap();
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&child.turn_id, &child.agent_id),
+        response,
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &child,
+            &action,
+            vec!["child result after index loss".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    assert!(
+        service
+            .apply_agent_provider_completed_event(
+                &AgentId::opaque(child.agent_id.clone()).unwrap(),
+                &child.turn_id,
+                execution,
+            )
+            .await
+            .unwrap()
+    );
+
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 0);
+    assert!(
+        service.agent_turn_ledger().turns().iter().any(|turn| {
+            turn.turn_id == parent.turn_id && turn.state == AgentTurnState::Running
+        })
+    );
+    assert!(
+        service
+            .agent_turn_contexts()
+            .get(&parent.turn_id)
+            .unwrap()
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("child result after index loss"))
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies reconciliation releases an already-ready dependency wait.
+///
+/// This models interruption after the parent result was stored and the join
+/// removed, but before scheduler `Waiting` and ledger `Blocked` were requeued.
+#[test]
+fn runtime_reconciliation_resumes_ready_dependency_wait() {
+    let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(2)
+        .unwrap();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let parent = service.start_agent_prompt_turn("%1", "parent").unwrap();
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "spawn one child".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "exercise dependency wait recovery".to_string(),
+                thought: None,
+                turn_id: parent.turn_id.clone(),
+                agent_id: parent.agent_id.clone(),
+                actions: vec![runtime_spawn_agent_action("spawn-one", "child one")],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &parent.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    let child = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id != parent.turn_id)
+        .cloned()
+        .unwrap();
+    let parent_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == parent.turn_id)
+        .cloned()
+        .unwrap();
+    let action = service
+        .agent_turn_executions()
+        .get(&parent.turn_id)
+        .and_then(|execution| execution.response.action_batch.as_ref())
+        .and_then(|batch| batch.actions.first())
+        .cloned()
+        .unwrap();
+    let settled = mez_agent::ActionResult::succeeded(
+        &parent_turn,
+        &action,
+        vec!["stored child result".to_string()],
+        None,
+    );
+    let execution = service
+        .agent_turn_executions_mut()
+        .get_mut(&parent.turn_id)
+        .unwrap();
+    execution.action_results[0] = settled;
+    execution.final_turn = false;
+    execution.terminal_state = AgentTurnState::Running;
+    service.remove_joined_subagent_dependencies_for_agent(&child.agent_id);
+    service.remove_pending_agent_provider_task(&parent.turn_id);
+
+    assert!(service.ready_dependency_wait_recovery_needed());
+    assert_eq!(
+        service
+            .reconcile_agent_runtime_progress_paths_with_actor_progress(
+                &std::collections::BTreeSet::new(),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 0);
+    assert!(
+        service.agent_turn_ledger().turns().iter().any(|turn| {
+            turn.turn_id == parent.turn_id && turn.state == AgentTurnState::Running
+        })
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent.turn_id)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a failed nonrouted child remains context for its joined parent.
 ///
 /// One failed child must not terminalize the parent or discard sibling work.

@@ -606,12 +606,14 @@ impl RuntimeSessionService {
         self.agent_turn_executions_mut()
             .insert(turn.turn_id.clone(), execution.clone());
         if runtime_execution_ready_for_provider_continuation(&execution) {
-            self.queue_agent_provider_task(turn.turn_id.clone());
-            self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                &turn.turn_id,
-                "provider_task queued reason=spawned_shell_result_ready",
-            )?;
+            if !self.resume_dependency_wait_if_ready(&turn.turn_id, "spawned_shell_result_ready")? {
+                self.queue_agent_provider_task(turn.turn_id.clone());
+                self.append_agent_trace_turn_event(
+                    &turn.pane_id,
+                    &turn.turn_id,
+                    "provider_task queued reason=spawned_shell_result_ready",
+                )?;
+            }
         } else if self.execution_has_pending_shell_dispatch(&turn.turn_id, &execution) {
             let _ = self.dispatch_stored_running_shell_actions(&turn.turn_id)?;
         }
