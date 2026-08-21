@@ -10,11 +10,24 @@ async fn async_status_pill_worker_does_not_block_actor_heartbeats() {
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
         .build()
         .unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "mez-status-pill-worker-gates-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
     let plans = ["first", "second"].map(|name| {
+        let started = root.join(format!("{name}.started"));
+        let release = root.join(format!("{name}.release"));
         crate::runtime::RuntimeStatusPillRefreshPlan::for_tests(
             name,
             1,
-            "sleep 0.5; printf ready",
+            &format!(
+                "printf started > '{}'; while [ ! -e '{}' ]; do sleep 0.01; done; printf ready",
+                started.display(),
+                release.display()
+            ),
             1_000,
             32,
         )
@@ -45,26 +58,38 @@ async fn async_status_pill_worker_does_not_block_actor_heartbeats() {
             .unwrap()
         };
         let heartbeat = async {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            tokio::time::timeout(Duration::from_millis(50), handle.lifecycle_state())
-                .await
-                .expect("actor heartbeat should not wait for status-pill helpers")
-                .unwrap()
+            let started = [root.join("first.started"), root.join("second.started")];
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while !started.iter().all(|path| path.is_file()) {
+                assert!(
+                    Instant::now() < deadline,
+                    "status-pill helpers did not reach their test gates"
+                );
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            let lifecycle =
+                tokio::time::timeout(Duration::from_millis(50), handle.lifecycle_state())
+                    .await
+                    .expect("actor heartbeat should not wait for status-pill helpers")
+                    .unwrap();
+            for name in ["first", "second"] {
+                std::fs::write(root.join(format!("{name}.release")), b"release").unwrap();
+            }
+            lifecycle
         };
 
-        let started = Instant::now();
         let (report, lifecycle) = tokio::join!(worker, heartbeat);
 
         assert_eq!(lifecycle, RuntimeLifecycleState::Running);
         assert_eq!(report.drained, 2);
         assert_eq!(report.submitted_events, 2);
         assert_eq!(report.applied_events, 0);
-        assert!(started.elapsed() < Duration::from_millis(750));
         handle.shutdown().await.unwrap();
     };
 
     let ((), exit) = tokio::join!(client, actor.run());
     assert!(exit.commands_processed >= 5);
+    let _ = std::fs::remove_dir_all(root);
 }
 
 /// Verifies an actor render schedules one refresh, the worker applies its

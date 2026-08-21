@@ -136,12 +136,12 @@ pub(crate) enum RuntimeSnapshotControlAsyncWorkKind {
         config_generation: u64,
         /// Active layers whose path-backed contents must be refreshed.
         layers: Vec<crate::config::ConfigLayer>,
-        /// Test-only signal set when asynchronous preparation starts.
+        /// Test-only notification sent when asynchronous preparation starts.
         #[cfg(test)]
-        preparation_started: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-        /// Test-only delay that keeps preparation observably in flight.
+        preparation_started: Option<std::sync::Arc<tokio::sync::Notify>>,
+        /// Test-only gate that keeps preparation observably in flight.
         #[cfg(test)]
-        preparation_delay_ms: u64,
+        preparation_release: Option<std::sync::Arc<tokio::sync::Notify>>,
     },
     /// Snapshot list/create/delete or plan-only resume dispatch.
     Dispatch {

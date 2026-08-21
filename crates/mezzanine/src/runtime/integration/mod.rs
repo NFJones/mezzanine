@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::Arc;
 
 use crate::config::ConfigLayer;
 use crate::host::async_runtime::AsyncRuntimeActorMetrics;
@@ -48,9 +48,9 @@ pub(crate) struct RuntimeIntegrationComponent {
     config_layers: Vec<ConfigLayer>,
     config_root: Option<PathBuf>,
     #[cfg(test)]
-    config_reload_preparation_started: Option<Arc<AtomicBool>>,
+    config_reload_preparation_started: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
-    config_reload_preparation_delay_ms: u64,
+    config_reload_preparation_release: Option<Arc<tokio::sync::Notify>>,
     async_runtime_metrics: Option<AsyncRuntimeActorMetrics>,
     runtime_metrics: RuntimeMetricsSnapshot,
     security: RuntimeSecurityState,
@@ -71,7 +71,7 @@ impl RuntimeIntegrationComponent {
             #[cfg(test)]
             config_reload_preparation_started: None,
             #[cfg(test)]
-            config_reload_preparation_delay_ms: 0,
+            config_reload_preparation_release: None,
             async_runtime_metrics: None,
             runtime_metrics: RuntimeMetricsSnapshot::default(),
             security: RuntimeSecurityState::default(),
@@ -100,19 +100,24 @@ impl RuntimeIntegrationComponent {
     #[cfg(test)]
     pub(crate) fn set_config_reload_preparation_probe(
         &mut self,
-        started: Arc<AtomicBool>,
-        delay_ms: u64,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
     ) {
         self.config_reload_preparation_started = Some(started);
-        self.config_reload_preparation_delay_ms = delay_ms;
+        self.config_reload_preparation_release = Some(release);
     }
 
     /// Clones the active asynchronous reload probe for worker handoff.
     #[cfg(test)]
-    pub(crate) fn config_reload_preparation_probe(&self) -> (Option<Arc<AtomicBool>>, u64) {
+    pub(crate) fn config_reload_preparation_probe(
+        &self,
+    ) -> (
+        Option<Arc<tokio::sync::Notify>>,
+        Option<Arc<tokio::sync::Notify>>,
+    ) {
         (
             self.config_reload_preparation_started.clone(),
-            self.config_reload_preparation_delay_ms,
+            self.config_reload_preparation_release.clone(),
         )
     }
 

@@ -21,16 +21,15 @@ pub(super) async fn execute_snapshot_control_async_work(
             #[cfg(test)]
             if let RuntimeSnapshotControlAsyncWorkKind::ConfigReload {
                 preparation_started,
-                preparation_delay_ms,
+                preparation_release,
                 ..
             } = &work.kind
             {
                 if let Some(started) = preparation_started {
-                    started.store(true, std::sync::atomic::Ordering::SeqCst);
+                    started.notify_one();
                 }
-                if *preparation_delay_ms > 0 {
-                    tokio::time::sleep(std::time::Duration::from_millis(*preparation_delay_ms))
-                        .await;
+                if let Some(release) = preparation_release {
+                    release.notified().await;
                 }
             }
             RuntimeSnapshotControlAsyncOutcome::ConfigReload(

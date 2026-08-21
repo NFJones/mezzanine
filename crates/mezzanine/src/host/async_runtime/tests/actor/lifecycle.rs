@@ -821,7 +821,8 @@ async fn async_actor_rejects_stale_config_reload_without_blocking_lifecycle() {
     let path = root.join("config.toml");
     std::fs::write(&path, "[history]\nlines = 4\n").unwrap();
     let snapshots = SnapshotRepository::new(root.join("snapshots"));
-    let preparation_started = StdArc::new(AtomicBool::new(false));
+    let preparation_started = StdArc::new(tokio::sync::Notify::new());
+    let preparation_release = StdArc::new(tokio::sync::Notify::new());
     let mut service = test_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -836,7 +837,10 @@ async fn async_actor_rejects_stale_config_reload_without_blocking_lifecycle() {
     let primary = service
         .attach_primary("primary", true, Size::new(100, 40).unwrap(), 10)
         .unwrap();
-    service.set_config_reload_preparation_probe_for_tests(preparation_started.clone(), 500);
+    service.set_config_reload_preparation_probe_for_tests(
+        preparation_started.clone(),
+        preparation_release.clone(),
+    );
     std::fs::write(&path, "[history]\nlines = 2\n").unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -858,13 +862,9 @@ async fn async_actor_rejects_stale_config_reload_without_blocking_lifecycle() {
                 .await
                 .unwrap()
         });
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while !preparation_started.load(Ordering::SeqCst) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("config reload preparation should enter the delayed worker");
+        tokio::time::timeout(Duration::from_secs(1), preparation_started.notified())
+            .await
+            .expect("config reload preparation should enter the delayed worker");
 
         assert_eq!(
             tokio::time::timeout(Duration::from_millis(100), handle.lifecycle_state())
@@ -890,6 +890,7 @@ async fn async_actor_rejects_stale_config_reload_without_blocking_lifecycle() {
             "{mutation_body}"
         );
 
+        preparation_release.notify_one();
         let reload = reload.await.unwrap();
         let (reload_body, _) = decode_control_frame(&reload.output, 4096).unwrap();
         assert!(

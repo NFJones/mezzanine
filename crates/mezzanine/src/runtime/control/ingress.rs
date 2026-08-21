@@ -237,7 +237,7 @@ impl RuntimeSessionService {
         }
         let kind = if is_config_reload {
             #[cfg(test)]
-            let (preparation_started, preparation_delay_ms) =
+            let (preparation_started, preparation_release) =
                 self.integration.config_reload_preparation_probe();
             RuntimeSnapshotControlAsyncWorkKind::ConfigReload {
                 config_generation: self.session.config_generation,
@@ -245,7 +245,7 @@ impl RuntimeSessionService {
                 #[cfg(test)]
                 preparation_started,
                 #[cfg(test)]
-                preparation_delay_ms,
+                preparation_release,
             }
         } else if request.method == "snapshot/resume" {
             RuntimeSnapshotControlAsyncWorkKind::Resume {

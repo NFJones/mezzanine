@@ -101,15 +101,15 @@ impl RuntimeSessionService {
         Ok(report)
     }
 
-    /// Injects a deterministic preparation delay for actor responsiveness tests.
+    /// Injects deterministic preparation gates for actor responsiveness tests.
     #[cfg(test)]
     pub(crate) fn set_config_reload_preparation_probe_for_tests(
         &mut self,
-        started: std::sync::Arc<std::sync::atomic::AtomicBool>,
-        delay_ms: u64,
+        started: std::sync::Arc<tokio::sync::Notify>,
+        release: std::sync::Arc<tokio::sync::Notify>,
     ) {
         self.integration
-            .set_config_reload_preparation_probe(started, delay_ms);
+            .set_config_reload_preparation_probe(started, release);
     }
 
     /// Reads and validates a reload candidate outside serialized actor ownership.
