@@ -1964,3 +1964,135 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
     );
     actor_exit.service.terminate_all_pane_processes().unwrap();
 }
+
+/// Verifies the production unmanaged Bash lifecycle can certify the pane
+/// environment while the first submitted prompt is waiting for provider work.
+///
+/// The async pane worker owns loader pacing and foreground observations in the
+/// daemon. This regression therefore submits immediately after explicit agent
+/// entry instead of preinstalling the historical test-only startup adapter.
+#[tokio::test(flavor = "current_thread")]
+async fn async_unmanaged_bash_first_prompt_completes_deferred_bootstrap() {
+    if !Path::new("/bin/bash").is_file() {
+        eprintln!("skipping async unmanaged Bash bootstrap because Bash is unavailable");
+        return;
+    }
+    let mut service = test_service_with_shell("/bin/bash");
+    service.disable_legacy_managed_startup_for_tests();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let pane_worker_handle = handle.clone();
+    let client_handle = handle.clone();
+    let pane_worker_done = StdArc::new(AtomicBool::new(false));
+    let pane_worker_stop = StdArc::clone(&pane_worker_done);
+    let pane_worker = async move {
+        let result = run_async_pane_process_supervisor_service(
+            pane_worker_handle,
+            AsyncPaneProcessSupervisorServiceConfig {
+                max_polls: u64::MAX,
+                take_limit: 8,
+                idle_interval: Duration::from_millis(1),
+                pane_service: AsyncPaneProcessServiceConfig {
+                    max_polls: u64::MAX,
+                    output_drain_limit: 1,
+                    drain_limit: 8,
+                    idle_interval: Duration::from_millis(1),
+                    foreground_metadata_interval: Duration::from_millis(10),
+                },
+            },
+            move |_, state| {
+                pane_worker_stop.load(Ordering::SeqCst)
+                    || matches!(state, RuntimeLifecycleState::Stopping)
+            },
+        )
+        .await;
+        if let Err(error) = result {
+            assert!(
+                matches!(
+                    error.message(),
+                    "async runtime session actor is closed"
+                        | "async runtime session actor reply was dropped"
+                ),
+                "pane supervisor failed before actor shutdown: {error}"
+            );
+        }
+    };
+
+    let client = async move {
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        let shown = client_handle
+            .execute_terminal_command(primary.clone(), "agent-shell".to_string())
+            .await
+            .unwrap();
+        assert!(shown.contains("visibility=visible"), "{shown}");
+        let submitted = client_handle
+            .execute_agent_shell_command(primary, "inspect the repository".to_string())
+            .await
+            .unwrap();
+        assert!(submitted.contains(r#""state":"running""#), "{submitted}");
+        let task = client_handle
+            .pending_agent_provider_tasks()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|task| task.turn_id == "turn-1")
+            .expect("the first prompt should queue provider work");
+        let mut last_snapshot = client_handle
+            .pane_certification_snapshot("%1")
+            .await
+            .unwrap();
+        let mut certified = false;
+        for _ in 0..2_000 {
+            last_snapshot = client_handle
+                .pane_certification_snapshot("%1")
+                .await
+                .unwrap();
+            if last_snapshot.child_active
+                && !last_snapshot.bootstrap_pending
+                && last_snapshot.foreign_bootstrap_phase == Some("certified")
+                && last_snapshot.environment_signature_present
+                && last_snapshot.readiness == mez_agent::PaneReadinessState::Ready
+            {
+                certified = true;
+                break;
+            }
+            if last_snapshot.certification_rejection.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            certified,
+            "first prompt remained blocked by deferred bootstrap: {last_snapshot:?}"
+        );
+        assert!(
+            client_handle
+                .pending_agent_provider_tasks()
+                .await
+                .unwrap()
+                .iter()
+                .any(|pending| pending.turn_id == task.turn_id),
+            "bootstrap settlement must preserve the queued first provider task"
+        );
+        pane_worker_done.store(true, Ordering::SeqCst);
+        assert_eq!(
+            client_handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), (), mut actor_exit) = tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::join!(client, pane_worker, actor.run())
+    })
+    .await
+    .expect("first-prompt bootstrap should not time out");
+    actor_exit.service.terminate_all_pane_processes().unwrap();
+}

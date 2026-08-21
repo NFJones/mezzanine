@@ -68,6 +68,8 @@ pub(crate) struct AsyncPaneCertificationSnapshot {
     pub child_active: bool,
     /// Whether environment bootstrap still gates pane readiness.
     pub bootstrap_pending: bool,
+    /// Current dependency-free loader phase, when explicit entry owns one.
+    pub foreign_bootstrap_phase: Option<&'static str>,
     /// Whether parsed bootstrap evidence awaits a fresh worker observation.
     pub certification_pending: bool,
     /// Whether certified environment context has been published.

@@ -89,6 +89,9 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(crate::host::async_runtime::AsyncPaneCertificationSnapshot {
                     child_active: self.service.agent_subshell_is_active(&pane_id),
                     bootstrap_pending: self.service.pane_bootstrap_is_pending_for_tests(&pane_id),
+                    foreign_bootstrap_phase: self
+                        .service
+                        .foreign_shell_bootstrap_phase_for_tests(&pane_id),
                     certification_pending: self
                         .service
                         .pane_agent_subshell_certification_is_pending(&pane_id),

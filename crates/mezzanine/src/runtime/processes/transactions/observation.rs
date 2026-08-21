@@ -389,7 +389,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the original pane-shell process group for one live pane.
-    fn pane_primary_process_group_id(&self, pane_id: &str, primary_pid: u32) -> u32 {
+    pub(crate) fn pane_primary_process_group_id(&self, pane_id: &str, primary_pid: u32) -> u32 {
         self.process
             .pane_processes
             .process_group_leader(pane_id)
@@ -1677,9 +1677,9 @@ impl RuntimeSessionService {
             .pane_agent_subshell_certification_rejections
             .remove(pane_id);
         if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id)
+            && boundary.phase == RuntimeForeignShellBootstrapPhase::BootstrappingChild
             && boundary.primary_process_id == evidence.primary_process_id
             && boundary.interaction_generation == evidence.interaction_generation
-            && boundary.process_group_id == process_group_id
         {
             boundary.phase = RuntimeForeignShellBootstrapPhase::Certified;
             boundary.phase_started_at_unix_ms = current_unix_millis();

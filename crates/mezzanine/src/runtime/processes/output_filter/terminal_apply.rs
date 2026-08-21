@@ -187,9 +187,10 @@ impl RuntimeSessionService {
         self.process
             .pane_foreground_process_groups
             .insert(pane_id.clone(), process_group_id);
-        let current_foreground_certified_shell =
-            self.pane_process_group_is_certified_shell(&pane_id, process_group_id);
-        let primary_shell_returned = current_foreground_certified_shell == Some(true)
+        let primary_process_group = self.pane_primary_process_group_id(&pane_id, primary_pid);
+        let primary_shell_owns_foreground =
+            process_group_id == primary_pid || process_group_id == primary_process_group;
+        let primary_shell_returned = primary_shell_owns_foreground
             && !self.dependency_free_foreign_loader_owns_process_group(&pane_id, process_group_id)
             && self.clear_uncertified_foreign_shell_boundary(&pane_id);
         let resumed_agent_entry =
@@ -207,7 +208,7 @@ impl RuntimeSessionService {
                 && self.effective_agent_shell_mode_for_pane(&pane_id)
                     != crate::runtime::config::ShellMode::Native
             {
-                self.schedule_parent_shell_discovery_for_agent_entry(&pane_id);
+                let _ = self.enter_agent_subshell_if_needed(&pane_id)?;
             }
         }
         let awaiting_initial_prompt = !resumed_agent_entry
