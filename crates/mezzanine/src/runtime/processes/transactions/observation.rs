@@ -471,6 +471,10 @@ impl RuntimeSessionService {
                     && self.primary_pid_for_live_pane_process(pane_id)
                         == Some(boundary.primary_process_id)
             })
+            && matches!(
+                self.pane_readiness_state(pane_id),
+                PaneReadinessState::Ready | PaneReadinessState::PromptCandidate
+            )
             && self
                 .agent_shell_store()
                 .get(pane_id)

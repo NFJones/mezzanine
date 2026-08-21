@@ -42,6 +42,63 @@ fn runtime_service_restarts_restored_panes_without_assuming_prompt_readiness() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies fresh agent panes do not bootstrap from foreground metadata before
+/// their pane shell has published prompt readiness.
+///
+/// Routed subagents enter agent mode immediately after process creation. Their
+/// first process-group observation can therefore precede the initial prompt;
+/// it may fence the shell boundary, but must not authorize hidden probe input.
+#[test]
+fn runtime_fresh_agent_entry_waits_for_prompt_after_foreground_observation() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let pane_id = "%1";
+    let primary_pid = service.pane_processes().primary_pid(pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(pane_id, None);
+
+    service.enter_agent_mode_for_pane(pane_id).unwrap();
+    assert_eq!(
+        service.pane_readiness_state(pane_id),
+        PaneReadinessState::Unknown
+    );
+    assert!(service.pane_bootstrap_is_pending_for_tests(pane_id));
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "agent entry before the first prompt must not write bootstrap input"
+    );
+
+    service
+        .apply_pane_foreground_process_event(pane_id, "sh", primary_pid, Some("/tmp".to_string()))
+        .unwrap();
+
+    assert_eq!(
+        service.pane_readiness_state(pane_id),
+        PaneReadinessState::Unknown
+    );
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "foreground metadata alone must not dispatch the identity probe"
+    );
+
+    service
+        .observe_passive_shell_prompt_candidate(pane_id, "test-prompt")
+        .unwrap();
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
+    assert_eq!(
+        service.pane_readiness_state(pane_id),
+        PaneReadinessState::Busy,
+        "prompt readiness should release the deferred identity probe"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies only the completed-prompt OSC 133 marker authorizes passive shell
 /// readiness. Prompt-start and ordinary command-finished markers can precede
 /// visible PS1 bytes, so treating either as actionable would let hidden
