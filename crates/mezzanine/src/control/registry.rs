@@ -62,6 +62,8 @@ pub(super) enum ControlDispatchKind {
     PaneJoinMove,
     /// Close a pane.
     PaneClose,
+    /// Set or clear a pane's attention indicator.
+    PaneAttention,
     /// Capture pane output.
     PaneCapture,
     /// Read a rendered frame.
@@ -349,6 +351,18 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         method: "pane/close",
         dispatch: ControlDispatchKind::PaneClose,
         params_schema: ControlParamsSchema::Allowed(PANE_TARGET_MUTATION_PARAMS),
+    },
+    ControlMethodSpec {
+        method: "pane/attention",
+        dispatch: ControlDispatchKind::PaneAttention,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "target",
+            "pane_id",
+            "pane_title",
+            "pane_index",
+            "attention",
+            "idempotency_key",
+        ]),
     },
     ControlMethodSpec {
         method: "pane/capture",

@@ -116,7 +116,7 @@ the [baseline method table in `SPEC.md`](../../../SPEC.md#13-control-endpoint).
 | Client | `client/list`, `client/detach`, `client/select_primary` | Inspect clients, detach a client, or atomically transfer primary ownership. |
 | Observer | `observer/list`, `observer/inspect`, `observer/approve`, `observer/reject`, `observer/revoke` | Inspect and primary-manage observer requests. Pending/approved observers can inspect only their own request-local status. |
 | Window | `window/list`, `window/create`, `window/rename`, `window/select`, `window/close` | Inspect, create, name, select, or close windows. List is RO; rename is naturally idempotent when unchanged. |
-| Pane | `pane/list`, `pane/create`, `pane/select`, `pane/resize`, `pane/move`, `pane/swap`, `pane/break`, `pane/join`, `pane/close`, `pane/capture` | Inspect, mutate layout, or capture pane content. List is RO; capture is RO when policy permits. |
+| Pane | `pane/list`, `pane/create`, `pane/select`, `pane/resize`, `pane/move`, `pane/swap`, `pane/break`, `pane/join`, `pane/close`, `pane/attention`, `pane/capture` | Inspect, mutate layout, control a pane's completion-attention pill, or capture pane content. List is RO; capture is RO when policy permits. |
 | Frame | `frame/read` | Read rendered frame fields and text (RO). |
 | Terminal | `terminal/view`, `terminal/step`, `terminal/command` | Render a client view, submit bytes/resize, or invoke a terminal command. Primary-only mutation applies to step and command. |
 | Agent | `agent/list`, `agent/task/list`, `agent/spawn`, `agent/shell/show`, `agent/shell/hide`, `agent/shell/command` | Inspect agents/tasks (RO), manage an agent shell, start prompt work, or spawn an agent. |
@@ -158,6 +158,15 @@ JSON-RPC method aliases:
 
 ```json
 {"jsonrpc":"2.0","id":4,"method":"terminal/command","params":{"idempotency_key":"ui-command-0001","input":"list-windows"}}
+```
+
+Automation and primary clients can set or clear the existing flashing
+completion-attention pill for a pane with `pane/attention`. This is useful for
+agent-harness hooks that need to signal completion without moving focus. Omit
+`target` to use the active pane, or provide any standard `PaneTarget`:
+
+```json
+{"jsonrpc":"2.0","id":5,"method":"pane/attention","params":{"target":{"pane_id":"%2"},"attention":true,"idempotency_key":"hook-attention-0001"}}
 ```
 
 The recommended loop is initialize, fetch a view, render it, pass physical

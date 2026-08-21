@@ -7618,6 +7618,7 @@ The baseline control methods are:
 | `pane/break` | `{ "target": PaneTarget, "name": string \| null, "idempotency_key": string }` | `{ "window": WindowState, "pane": PaneState }` | Mutating. |
 | `pane/join` | `{ "source": PaneTarget, "destination": WindowTarget \| PaneTarget, "idempotency_key": string }` | `{ "pane": PaneState, "layout": LayoutState }` | Mutating. |
 | `pane/close` | `{ "target": PaneTarget, "force": boolean, "idempotency_key": string }` | `{ "closed": boolean }` | Mutating and destructive. |
+| `pane/attention` | `{ "target": PaneTarget \| null, "attention": boolean, "idempotency_key": string }` | `{ "pane_id": string, "attention": boolean }` | Primary- or automation-client mutation of the pane's completion-attention pill. An omitted target selects the active pane. The mutation MUST NOT change focus. |
 | `pane/capture` | `{ "target": PaneTarget, "range": CaptureRange, "include_history": boolean }` | `{ "content": string, "truncated": boolean, "range": CaptureRange }` | Read-only when policy allows. |
 | `frame/read` | `{ "target": WindowTarget \| PaneTarget }` | `{ "fields": object, "rendered": string }` | Read-only and naturally idempotent. |
 | `terminal/view` | `{ "client_size": { "columns": integer, "rows": integer } \| null, "view_offset": { "row": integer, "column": integer } \| null }` | `{ "view": RenderedClientView \| null }` | Read-only for an attached primary or approved observer. Pending observers MUST receive no session view. `viewport` MAY be accepted as a compatibility alias for `view_offset`. |

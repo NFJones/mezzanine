@@ -534,6 +534,7 @@ pub(crate) const AUTOMATION_CONTROL_METHODS: &[&str] = &[
     "control/cancel",
     "session/list",
     "event/list",
+    "pane/attention",
 ];
 
 /// Defines the UNAUTHENTICATED CONTROL METHODS const used by this subsystem.
@@ -569,6 +570,7 @@ pub(crate) const PRIMARY_CONTROL_METHODS: &[&str] = &[
     "pane/break",
     "pane/join",
     "pane/close",
+    "pane/attention",
     "pane/capture",
     "terminal/step",
     "terminal/view",

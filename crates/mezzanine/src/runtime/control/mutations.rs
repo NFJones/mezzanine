@@ -103,6 +103,7 @@ impl RuntimeSessionService {
             "pane/break" => self.dispatch_runtime_pane_break(primary_client_id, params),
             "pane/join" | "pane/move" => self.dispatch_runtime_pane_join(primary_client_id, params),
             "pane/close" => self.dispatch_runtime_pane_close(primary_client_id, params),
+            "pane/attention" => self.dispatch_runtime_pane_attention(params),
             "window/close" => self.dispatch_runtime_window_close(primary_client_id, params),
             "session/kill" => self.dispatch_runtime_session_kill(primary_client_id, params),
             "observer/approve" => self.dispatch_runtime_observer_approve(primary_client_id, params),
@@ -752,6 +753,31 @@ impl RuntimeSessionService {
         let input = runtime_json_string_field(params, "input")
             .ok_or_else(|| MezError::invalid_args("terminal/command requires input"))?;
         self.execute_terminal_command(primary_client_id, &input)
+    }
+
+    /// Sets or clears the completion-attention indicator for one pane.
+    ///
+    /// An omitted target resolves to the active pane. The pane must exist, and
+    /// `attention` must be an explicit boolean so hook integrations cannot
+    /// accidentally toggle presentation state with a malformed request.
+    pub(super) fn dispatch_runtime_pane_attention(&mut self, params: &str) -> Result<String> {
+        let attention = runtime_json_bool_field(params, "attention").ok_or_else(|| {
+            MezError::invalid_args("pane/attention requires attention to be a boolean")
+        })?;
+        let pane_id = pane_target_checked_resolved(&self.session, params)?
+            .map(Ok)
+            .unwrap_or_else(|| self.active_pane_id())?;
+        runtime_pane_by_id(&self.session, &pane_id)?;
+        if attention {
+            self.presentation
+                .register_completion_attention(&pane_id, None);
+        } else {
+            self.presentation.acknowledge_completion_attention(&pane_id);
+        }
+        Ok(format!(
+            r#"{{"pane_id":"{}","attention":{attention}}}"#,
+            json_escape(&pane_id)
+        ))
     }
 
     /// Runs the dispatch runtime agent shell command operation for this subsystem.

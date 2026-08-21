@@ -45,6 +45,7 @@ pub(crate) fn runtime_mutating_method(method: &str) -> bool {
             | "pane/join"
             | "pane/move"
             | "pane/close"
+            | "pane/attention"
             | "observer/approve"
             | "observer/reject"
             | "observer/revoke"

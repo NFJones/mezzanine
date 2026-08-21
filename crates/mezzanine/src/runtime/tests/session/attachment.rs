@@ -76,6 +76,49 @@ fn runtime_control_initialize_can_reattach_primary_without_existing_primary() {
     assert!(service.last_attach_at_unix_seconds().is_some());
 }
 
+/// Verifies an initialized automation client can set pane attention through
+/// the framed runtime control endpoint used by external harness hooks.
+///
+/// Automation clients do not own terminal focus, but they must be able to
+/// target an existing pane and request the same completion-attention pill that
+/// native agent completion uses.
+#[test]
+fn runtime_automation_connection_can_set_pane_attention() {
+    let mut service = test_runtime_service();
+    let mut connection = ControlConnectionState::new(true, true);
+    let initialize = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"automation","requested_version":1,"client_name":"hook-harness","client":{"name":"hook-harness","interactive":false}}}"#,
+    );
+    let attention = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"attention","method":"pane/attention","params":{"target":{"pane_id":"%1"},"attention":true,"idempotency_key":"hook-attention"}}"#,
+    );
+    let mut input = initialize;
+    input.extend_from_slice(&attention);
+
+    let (output, consumed) = service
+        .handle_control_input_for_connection(&input, 4096, &mut connection)
+        .unwrap();
+    let (initialize_body, initialize_consumed) = decode_control_frame(&output, 4096).unwrap();
+    let (attention_body, _) = decode_control_frame(&output[initialize_consumed..], 4096).unwrap();
+
+    assert_eq!(consumed, input.len());
+    assert!(
+        initialize_body.contains(r#""granted_role":"automation""#),
+        "{initialize_body}"
+    );
+    assert!(
+        attention_body.contains(r#""result":{"pane_id":"%1","attention":true}"#),
+        "{attention_body}"
+    );
+    assert!(
+        service
+            .terminal_frame_context()
+            .panes
+            .get("%1")
+            .is_some_and(|pane| pane.completion_attention)
+    );
+}
+
 /// Verifies that the live control attach path applies the primary terminal size
 /// to an already-started initial pane. The daemon starts the first pane before
 /// the CLI sends `control/initialize`, so the initialize side effect must use

@@ -315,6 +315,9 @@ fn primary_control_method_fixture_request(
         "pane/close" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"pane/close","params":{"target":{"pane_id":"%1"},"force":true,"idempotency_key":"pane-close"}}"#.to_string()
         }
+        "pane/attention" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"pane/attention","params":{"target":{"pane_id":"%1"},"attention":true,"idempotency_key":"pane-attention"}}"#.to_string()
+        }
         "pane/capture" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"pane/capture","params":{"target":{"pane_id":"%1"},"range":{"origin":"visible","start":"start","end":"end"}}}"#.to_string()
         }

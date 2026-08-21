@@ -376,6 +376,20 @@ pub(super) fn dispatch_parsed_request(
             session.kill_pane(primary_client_id, target.as_deref(), force)?;
             Ok(r#"{"closed":true}"#.to_string())
         }
+        ControlDispatchKind::PaneAttention => {
+            let params = request
+                .params
+                .as_deref()
+                .ok_or_else(|| MezError::invalid_args("pane/attention requires a params object"))?;
+            require_idempotency_key(params)?;
+            let _attention = json_bool_field(params, "attention").ok_or_else(|| {
+                MezError::invalid_args("pane/attention requires attention to be a boolean")
+            })?;
+            let _target = pane_target_checked_resolved(session, params)?;
+            Err(MezError::invalid_state(
+                "pane attention requires the terminal runtime",
+            ))
+        }
         ControlDispatchKind::PaneCapture => dispatch_pane_capture_request(request, session, &[]),
         ControlDispatchKind::TerminalView => {
             Err(MezError::invalid_state("terminal runtime is not attached"))

@@ -279,6 +279,79 @@ fn runtime_background_completion_attention_projects_and_acknowledges_on_focus() 
     );
 }
 
+/// Verifies JSON-RPC hook clients can explicitly set and clear a pane's
+/// completion-attention pill without changing pane focus.
+///
+/// The control accepts standard pane targets, projects attention through the
+/// existing presentation hierarchy, rejects malformed boolean state, and
+/// leaves the target pane unfocused throughout the request sequence.
+#[test]
+fn runtime_pane_attention_control_sets_clears_and_validates_state() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let background_pane = service.active_pane_id().unwrap();
+    let focused_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+
+    let set_response = service.dispatch_runtime_control_body(
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"attention-set","method":"pane/attention","params":{{"target":{{"pane_id":"{background_pane}"}},"attention":true,"idempotency_key":"attention-set"}}}}"#
+        ),
+        &primary,
+    );
+    assert!(
+        set_response.contains(&format!(
+            r#""result":{{"pane_id":"{background_pane}","attention":true}}"#
+        )),
+        "{set_response}"
+    );
+    assert_eq!(service.active_pane_id().unwrap(), focused_pane.to_string());
+    assert!(
+        service
+            .terminal_frame_context()
+            .panes
+            .get(&background_pane)
+            .is_some_and(|pane| pane.completion_attention)
+    );
+
+    let clear_response = service.dispatch_runtime_control_body(
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"attention-clear","method":"pane/attention","params":{{"pane_id":"{background_pane}","attention":false,"idempotency_key":"attention-clear"}}}}"#
+        ),
+        &primary,
+    );
+    assert!(
+        clear_response.contains(&format!(
+            r#""result":{{"pane_id":"{background_pane}","attention":false}}"#
+        )),
+        "{clear_response}"
+    );
+    assert!(
+        service
+            .terminal_frame_context()
+            .panes
+            .values()
+            .all(|pane| !pane.completion_attention)
+    );
+
+    let invalid_response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"attention-invalid","method":"pane/attention","params":{"attention":"yes","idempotency_key":"attention-invalid"}}"#,
+        &primary,
+    );
+    assert!(
+        invalid_response.contains(r#""mezzanine_code":"invalid_params""#),
+        "{invalid_response}"
+    );
+    assert!(
+        invalid_response.contains("pane/attention requires attention to be a boolean"),
+        "{invalid_response}"
+    );
+}
+
 /// Verifies pending approvals project attention through the visible pane,
 /// window, and group title hierarchy and disappear after a decision.
 ///
