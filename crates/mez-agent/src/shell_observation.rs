@@ -578,6 +578,33 @@ pub fn find_byte_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
+/// Normalizes shell output into terminal-like logical rows.
+///
+/// CRLF terminates a row, while a bare carriage return starts replacement of
+/// the current row. Progress reporters commonly use the latter to redraw one
+/// percentage or status line in place; treating it as a newline makes the
+/// transient agent preview jump through every intermediate update.
+fn shell_output_logical_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' if chars.peek() == Some(&'\n') => {
+                chars.next();
+                lines.push(std::mem::take(&mut current));
+            }
+            '\r' => current.clear(),
+            '\n' => lines.push(std::mem::take(&mut current)),
+            _ => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
 /// Returns the latest non-empty model-visible shell output lines.
 pub fn latest_agent_shell_transaction_output_lines(output: &str, max_lines: usize) -> Vec<String> {
     if max_lines == 0 {
@@ -588,10 +615,9 @@ pub fn latest_agent_shell_transaction_output_lines(output: &str, max_lines: usiz
     let output_is_framed = decoded.diagnostics.saw_begin_marker;
     let empty_commands: Vec<String> = Vec::new();
     let normalized_lines = |text: &str, trust_content: bool| {
-        text.replace("\r\n", "\n")
-            .replace('\r', "\n")
-            .lines()
-            .map(sanitized_shell_output_status_line)
+        shell_output_logical_lines(text)
+            .into_iter()
+            .map(|line| sanitized_shell_output_status_line(&line))
             .map(|line| line.trim_end().to_string())
             .filter(|line| {
                 let trimmed = line.trim();
@@ -857,6 +883,41 @@ mod tests {
         let lines = latest_agent_shell_transaction_output_lines(output, 5);
 
         assert_eq!(lines, vec!["ASYNC_PANE_STILL_ALIVE".to_string()]);
+    }
+
+    /// Verifies progress reporters that redraw with bare carriage returns
+    /// occupy one transient preview row instead of scrolling every percentage
+    /// update through the bounded shell-output window.
+    #[test]
+    fn latest_agent_shell_transaction_output_lines_collapses_progress_redraws() {
+        let output = "preparing\n10%\r20%\r30%\r100%\ncomplete\n";
+        let lines = latest_agent_shell_transaction_output_lines(output, 5);
+
+        assert_eq!(
+            lines,
+            vec![
+                "preparing".to_string(),
+                "100%".to_string(),
+                "complete".to_string(),
+            ]
+        );
+    }
+
+    /// Verifies ordinary CRLF shell output keeps distinct logical rows while
+    /// bare carriage returns retain in-place progress-update semantics.
+    #[test]
+    fn latest_agent_shell_transaction_output_lines_preserves_crlf_rows() {
+        let output = "first\r\nsecond\r\nthird\n";
+        let lines = latest_agent_shell_transaction_output_lines(output, 5);
+
+        assert_eq!(
+            lines,
+            vec![
+                "first".to_string(),
+                "second".to_string(),
+                "third".to_string(),
+            ]
+        );
     }
 
     /// Verifies decoded transport payload is authoritative command output even
