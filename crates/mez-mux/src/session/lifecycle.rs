@@ -103,6 +103,15 @@ impl Session {
             .is_some_and(|window| self.synchronized_window_ids.contains(window.id.as_str()))
     }
 
+    /// Returns whether pane input synchronization is enabled for a target window.
+    pub fn window_panes_synchronized(&self, target: Option<&str>) -> Result<bool> {
+        let index = self.window_index_or_active(target)?;
+        Ok(self
+            .windows
+            .get(index)
+            .is_some_and(|window| self.synchronized_window_ids.contains(window.id.as_str())))
+    }
+
     /// Runs the clients operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

@@ -107,6 +107,22 @@ impl Window {
         self.zoomed_pane_id.as_ref()
     }
 
+    /// Explicitly sets zoom for one pane without changing the active pane.
+    ///
+    /// Disabling zoom for a pane that is not currently zoomed is a no-op. The
+    /// target must belong to this window.
+    pub fn set_pane_zoom(&mut self, pane_id: &PaneId, zoomed: bool) -> Result<Option<&PaneId>> {
+        if !self.panes.iter().any(|pane| &pane.id == pane_id) {
+            return Err(MezError::new(MuxErrorKind::NotFound, "pane not found"));
+        }
+        if zoomed {
+            self.zoomed_pane_id = Some(pane_id.clone());
+        } else if self.zoomed_pane_id.as_ref() == Some(pane_id) {
+            self.zoomed_pane_id = None;
+        }
+        Ok(self.zoomed_pane_id.as_ref())
+    }
+
     /// Runs the layout policy operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

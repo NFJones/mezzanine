@@ -9,9 +9,9 @@ use super::super::{
     ClientState, ConfigScope, MezError, PaneProcessStart, PaneResizeUpdate, Result,
     RuntimeSessionService, TrustDecision, dispatch_event_list_request,
     frame_read_json_with_context, json_escape, layout_state_json, observers_json,
-    runtime_approval_policy_name, runtime_pane_by_id, runtime_pane_readiness_state_name,
-    runtime_permission_preset_name, runtime_string_array_json, session_state_name,
-    state_request_pane_list_window_ids, state_request_session_target_matches,
+    runtime_approval_policy_name, runtime_json_string_field, runtime_pane_by_id,
+    runtime_pane_readiness_state_name, runtime_permission_preset_name, runtime_string_array_json,
+    session_state_name, state_request_pane_list_window_ids, state_request_session_target_matches,
 };
 use super::protocol::{
     runtime_client_requested_role_name, runtime_client_role_name, runtime_client_state_name,
@@ -108,6 +108,58 @@ impl RuntimeSessionService {
                             self.runtime_panes_state_json_for_window_ids(&window_ids)?,
                         None => self.runtime_panes_state_json(),
                     }
+                )))
+            }
+            "buffer/list" => {
+                runtime_validate_state_request_params(
+                    request.params.as_deref(),
+                    "buffer/list",
+                    &[],
+                )?;
+                let buffers = self
+                    .paste_buffers()
+                    .list()
+                    .into_iter()
+                    .map(|buffer| {
+                        let origin = buffer
+                            .origin
+                            .as_deref()
+                            .map(|origin| format!(r#""{}""#, json_escape(origin)))
+                            .unwrap_or_else(|| "null".to_string());
+                        format!(
+                            r#"{{"name":"{}","bytes":{},"created_at":{},"origin":{},"preview":"{}"}}"#,
+                            json_escape(&buffer.name),
+                            buffer.bytes,
+                            buffer.created_at_unix_seconds,
+                            origin,
+                            json_escape(&buffer.preview)
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                Ok(Some(format!(r#"{{"buffers":[{}]}}"#, buffers.join(","))))
+            }
+            "buffer/read" => {
+                runtime_validate_state_request_params(
+                    request.params.as_deref(),
+                    "buffer/read",
+                    &["name"],
+                )?;
+                let params = request.params.as_deref().ok_or_else(|| {
+                    MezError::invalid_args("buffer/read requires a params object")
+                })?;
+                let name = runtime_json_string_field(params, "name")
+                    .ok_or_else(|| MezError::invalid_args("buffer/read requires name"))?;
+                let content = self.paste_buffers().get(&name).ok_or_else(|| {
+                    MezError::new(
+                        crate::error::MezErrorKind::NotFound,
+                        "paste buffer not found",
+                    )
+                })?;
+                Ok(Some(format!(
+                    r#"{{"name":"{}","content":"{}","bytes":{}}}"#,
+                    json_escape(&name),
+                    json_escape(content),
+                    content.len()
                 )))
             }
             "frame/read" => Ok(Some(frame_read_json_with_context(

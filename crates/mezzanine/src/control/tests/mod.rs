@@ -6,6 +6,8 @@
 
 // Control module tests.
 
+mod presentation_controls;
+
 use self::json_rpc_fixture::JsonRpcRequestBuilder;
 use self::temp_dir::TestTempDir;
 use super::registry::control_method_spec;

@@ -231,6 +231,54 @@ pub(super) fn dispatch_parsed_request(
             session.kill_window(primary_client_id, target.as_deref(), force)?;
             Ok(r#"{"closed":true}"#.to_string())
         }
+        ControlDispatchKind::WindowLayout => {
+            let params = request
+                .params
+                .as_deref()
+                .ok_or_else(|| MezError::invalid_args("window/layout requires a params object"))?;
+            require_idempotency_key(params)?;
+            let target = window_target_checked_resolved(session, params)?;
+            let layout = json_string_field(params, "layout")
+                .ok_or_else(|| MezError::invalid_args("window/layout requires layout"))?;
+            let (policy, _) = session.select_window_layout_transition(
+                primary_client_id,
+                target.as_deref(),
+                &layout,
+            )?;
+            let window = target
+                .as_deref()
+                .map(|id| window_by_id(session, id))
+                .transpose()?
+                .or_else(|| session.active_window())
+                .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
+            Ok(format!(
+                r#"{{"window_id":"{}","layout":"{}","state":{}}}"#,
+                json_escape(window.id.as_str()),
+                policy.name(),
+                layout_state_json(window)
+            ))
+        }
+        ControlDispatchKind::WindowRebalance => {
+            let params = request.params.as_deref().ok_or_else(|| {
+                MezError::invalid_args("window/rebalance requires a params object")
+            })?;
+            require_idempotency_key(params)?;
+            let target = window_target_checked_resolved(session, params)?;
+            let (policy, _) =
+                session.rebalance_target_window_transition(primary_client_id, target.as_deref())?;
+            let window = target
+                .as_deref()
+                .map(|id| window_by_id(session, id))
+                .transpose()?
+                .or_else(|| session.active_window())
+                .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
+            Ok(format!(
+                r#"{{"window_id":"{}","layout":"{}","state":{}}}"#,
+                json_escape(window.id.as_str()),
+                policy.name(),
+                layout_state_json(window)
+            ))
+        }
         ControlDispatchKind::PaneCreate => {
             let params = request
                 .params
@@ -376,7 +424,127 @@ pub(super) fn dispatch_parsed_request(
             session.kill_pane(primary_client_id, target.as_deref(), force)?;
             Ok(r#"{"closed":true}"#.to_string())
         }
+        ControlDispatchKind::PaneRename => {
+            let params = request
+                .params
+                .as_deref()
+                .ok_or_else(|| MezError::invalid_args("pane/rename requires a params object"))?;
+            require_idempotency_key(params)?;
+            let target = pane_target_checked_resolved(session, params)?;
+            let name = json_string_field(params, "name")
+                .ok_or_else(|| MezError::invalid_args("pane/rename requires name"))?;
+            session.rename_pane(primary_client_id, target.as_deref(), name)?;
+            let (window, pane) = target_or_active_pane(session, target.as_deref())?;
+            Ok(format!(
+                r#"{{"pane":{}}}"#,
+                pane_state_json(session, window, pane)
+            ))
+        }
+        ControlDispatchKind::PaneZoom => {
+            let params = request
+                .params
+                .as_deref()
+                .ok_or_else(|| MezError::invalid_args("pane/zoom requires a params object"))?;
+            require_idempotency_key(params)?;
+            let zoomed = json_bool_field(params, "zoomed").ok_or_else(|| {
+                MezError::invalid_args("pane/zoom requires zoomed to be a boolean")
+            })?;
+            let target = pane_target_checked_resolved(session, params)?;
+            let (pane_id, zoomed, _) =
+                session.set_pane_zoom_transition(primary_client_id, target.as_deref(), zoomed)?;
+            let (window, _) = pane_by_id(session, pane_id.as_str())?;
+            Ok(format!(
+                r#"{{"pane_id":"{}","zoomed":{zoomed},"layout":{}}}"#,
+                json_escape(pane_id.as_str()),
+                layout_state_json(window)
+            ))
+        }
+        ControlDispatchKind::PaneInputSync => {
+            let params = request.params.as_deref().ok_or_else(|| {
+                MezError::invalid_args("pane/input-sync requires a params object")
+            })?;
+            require_idempotency_key(params)?;
+            let enabled = json_bool_field(params, "enabled").ok_or_else(|| {
+                MezError::invalid_args("pane/input-sync requires enabled to be a boolean")
+            })?;
+            let target = window_target_checked_resolved(session, params)?;
+            let enabled = session.set_window_panes_synchronized(
+                primary_client_id,
+                target.as_deref(),
+                enabled,
+            )?;
+            let window = target
+                .as_deref()
+                .map(|id| window_by_id(session, id))
+                .transpose()?
+                .or_else(|| session.active_window())
+                .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
+            Ok(format!(
+                r#"{{"window_id":"{}","enabled":{enabled}}}"#,
+                json_escape(window.id.as_str())
+            ))
+        }
+        ControlDispatchKind::PaneAttention => {
+            let params = request
+                .params
+                .as_deref()
+                .ok_or_else(|| MezError::invalid_args("pane/attention requires a params object"))?;
+            require_idempotency_key(params)?;
+            let _attention = json_bool_field(params, "attention").ok_or_else(|| {
+                MezError::invalid_args("pane/attention requires attention to be a boolean")
+            })?;
+            let _target = pane_target_checked_resolved(session, params)?;
+            Err(MezError::invalid_state(
+                "pane attention requires the terminal runtime",
+            ))
+        }
+        ControlDispatchKind::PaneStatus => {
+            let params = request
+                .params
+                .as_deref()
+                .ok_or_else(|| MezError::invalid_args("pane/status requires a params object"))?;
+            require_idempotency_key(params)?;
+            let source = json_string_field(params, "source")
+                .ok_or_else(|| MezError::invalid_args("pane/status requires source"))?;
+            if source.trim().is_empty() {
+                return Err(MezError::invalid_args(
+                    "pane/status source must not be empty",
+                ));
+            }
+            let _target = pane_target_checked_resolved(session, params)?;
+            Err(MezError::invalid_state(
+                "pane status requires the terminal runtime",
+            ))
+        }
+        ControlDispatchKind::PaneNotice => {
+            let params = request
+                .params
+                .as_deref()
+                .ok_or_else(|| MezError::invalid_args("pane/notice requires a params object"))?;
+            require_idempotency_key(params)?;
+            let _text = json_string_field(params, "text")
+                .ok_or_else(|| MezError::invalid_args("pane/notice requires text"))?;
+            let _target = pane_target_checked_resolved(session, params)?;
+            Err(MezError::invalid_state(
+                "pane notice requires the terminal runtime",
+            ))
+        }
         ControlDispatchKind::PaneCapture => dispatch_pane_capture_request(request, session, &[]),
+        ControlDispatchKind::BufferList | ControlDispatchKind::BufferRead => Err(
+            MezError::invalid_state("paste buffers require the terminal runtime"),
+        ),
+        ControlDispatchKind::BufferCreate | ControlDispatchKind::BufferDelete => {
+            let params = request.params.as_deref().ok_or_else(|| {
+                MezError::invalid_args(format!("{} requires a params object", request.method))
+            })?;
+            require_idempotency_key(params)?;
+            let _name = json_string_field(params, "name").ok_or_else(|| {
+                MezError::invalid_args(format!("{} requires name", request.method))
+            })?;
+            Err(MezError::invalid_state(
+                "paste buffers require the terminal runtime",
+            ))
+        }
         ControlDispatchKind::TerminalView => {
             Err(MezError::invalid_state("terminal runtime is not attached"))
         }

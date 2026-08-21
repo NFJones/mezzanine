@@ -339,11 +339,20 @@ pub(in crate::host::terminal::render) fn pane_frame_right_aligned_values(
         .filter(|field| agent_mode || (!field.starts_with("agent.") && **field != "policy.mode"))
         .filter(|field| !template.contains(&format!("#{{{field}}}")))
         .filter_map(|field| {
-            let value = pane_frame_field_value(window, pane, frame_context, field);
-            if value.is_empty() {
+            let display_value = pane_frame_field_value(window, pane, frame_context, field);
+            if display_value.is_empty() {
                 None
             } else {
-                let segment_value = pane_frame_right_aligned_segment_value(field, &value);
+                let value = if *field == "pane.status" {
+                    frame_context
+                        .panes
+                        .get(pane.id.as_str())
+                        .and_then(|context| context.pane_status_state.clone())
+                        .unwrap_or_else(|| display_value.clone())
+                } else {
+                    display_value.clone()
+                };
+                let segment_value = pane_frame_right_aligned_segment_value(field, &display_value);
                 if segment_value.is_empty() {
                     return None;
                 }
@@ -425,6 +434,7 @@ pub(in crate::host::terminal::render) fn pane_frame_right_aligned_display_value(
     if matches!(
         field,
         "pane.pwd"
+            | "pane.status"
             | "agent.model"
             | "agent.reasoning"
             | "agent.thinking"

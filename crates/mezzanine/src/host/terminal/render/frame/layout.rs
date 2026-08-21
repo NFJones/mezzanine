@@ -71,6 +71,8 @@ pub(in crate::host::terminal::render) fn pane_frame_field_value(
             }
             "pane.mode" => optional_pane_context_value(pane_context, |ctx| &ctx.mode)
                 .unwrap_or_else(|| "normal".to_string()),
+            "pane.status" => optional_pane_context_value(pane_context, |ctx| &ctx.pane_status_text)
+                .unwrap_or_default(),
             "agent.id" => {
                 optional_pane_context_value(pane_context, |ctx| &ctx.agent_id).unwrap_or_default()
             }

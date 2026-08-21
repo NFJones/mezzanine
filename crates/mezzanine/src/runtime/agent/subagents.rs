@@ -163,6 +163,160 @@ impl RuntimeSessionService {
             })
     }
 
+    /// Reconstructs a missing joined-child record from the persisted parent result.
+    ///
+    /// The running spawn result is durable execution evidence tying one parent
+    /// action to one child identity. Rebuilding the controller index from that
+    /// evidence lets terminal delivery repair an interrupted or lost in-memory
+    /// dependency without guessing from lineage alone.
+    fn reconstruct_joined_dependency_for_child(
+        &mut self,
+        child_turn: &AgentTurnRecord,
+    ) -> Result<Option<JoinedSubagentDependency>> {
+        let Some(parent_agent_id) = self.subagent_task_result_parent_agent_id(child_turn) else {
+            return Ok(None);
+        };
+        let parent_turns = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .filter(|turn| {
+                turn.agent_id == parent_agent_id
+                    && matches!(
+                        turn.state,
+                        AgentTurnState::Running | AgentTurnState::Blocked
+                    )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut candidates = Vec::new();
+        for parent_turn in parent_turns {
+            let Some(execution) = self.agent_turn_executions().get(&parent_turn.turn_id) else {
+                continue;
+            };
+            for result in execution.action_results.iter().filter(|result| {
+                result.action_type == "spawn_agent" && result.status == ActionStatus::Running
+            }) {
+                let Some(structured) = result.structured_content_json.as_deref() else {
+                    continue;
+                };
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(structured) else {
+                    continue;
+                };
+                if value.get("join_policy").and_then(serde_json::Value::as_str) != Some("join") {
+                    continue;
+                }
+                let persisted_child_turn = value
+                    .get("child_turn_id")
+                    .and_then(serde_json::Value::as_str);
+                let persisted_child_agent = value
+                    .get("child_agent_id")
+                    .and_then(serde_json::Value::as_str);
+                if persisted_child_turn.is_none() && persisted_child_agent.is_none() {
+                    continue;
+                }
+                if persisted_child_turn
+                    .is_some_and(|turn_id| turn_id != child_turn.turn_id.as_str())
+                    || persisted_child_agent
+                        .is_some_and(|agent_id| agent_id != child_turn.agent_id.as_str())
+                {
+                    continue;
+                }
+                let child_display_name = value
+                    .get("child_display_name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string)
+                    .or_else(|| {
+                        self.subagent_lineage(&child_turn.agent_id)
+                            .map(|lineage| lineage.display_name.clone())
+                    });
+                candidates.push((
+                    parent_turn.turn_id.clone(),
+                    parent_turn.pane_id.clone(),
+                    result.action_id.clone(),
+                    child_display_name,
+                ));
+            }
+        }
+        if candidates.len() > 1 {
+            return Err(MezError::invalid_state(format!(
+                "terminal subagent `{}` matches multiple joined parent actions",
+                child_turn.turn_id
+            )));
+        }
+        let Some((parent_turn_id, parent_pane_id, parent_action_id, child_display_name)) =
+            candidates.pop()
+        else {
+            return Ok(None);
+        };
+        let dependency = JoinedSubagentDependency {
+            parent_turn_id: parent_turn_id.clone(),
+            parent_action_id,
+            child_turn_id: child_turn.turn_id.clone(),
+            child_agent_id: child_turn.agent_id.clone(),
+            child_display_name,
+        };
+        self.agent
+            .joined_subagent_dependencies
+            .insert(child_turn.turn_id.clone(), dependency.clone());
+        self.append_agent_trace_turn_event(
+            &parent_pane_id,
+            &parent_turn_id,
+            &format!(
+                "joined_subagent_dependency reconstructed child_turn={} child_agent={}",
+                child_turn.turn_id, child_turn.agent_id
+            ),
+        )?;
+        Ok(Some(dependency))
+    }
+
+    /// Requeues a dependency-waiting parent once its stored execution is ready.
+    ///
+    /// The scheduler wait and blocked ledger state are independent durable
+    /// records. This idempotent operation moves only a matching dependency wait
+    /// through normal scheduler reacquisition, which resumes the ledger and
+    /// queues provider continuation when capacity becomes available.
+    pub(crate) fn resume_dependency_wait_if_ready(
+        &mut self,
+        parent_turn_id: &str,
+        reason: &str,
+    ) -> Result<bool> {
+        let Some(parent_turn) = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent_turn_id)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        if parent_turn.state != AgentTurnState::Blocked
+            || !self
+                .agent
+                .agent_scheduler
+                .waiting_turns()
+                .any(|work| work.turn_id == parent_turn_id)
+            || !self
+                .agent_turn_executions()
+                .get(parent_turn_id)
+                .is_some_and(runtime_execution_ready_for_provider_continuation)
+        {
+            return Ok(false);
+        }
+        self.agent.agent_scheduler.requeue_waiting(parent_turn_id)?;
+        self.append_agent_trace_turn_event(
+            &parent_turn.pane_id,
+            parent_turn_id,
+            &format!("scheduler waiting -> queued reason={reason} capacity=reacquire"),
+        )?;
+        self.append_agent_status_text_to_terminal_buffer(
+            &parent_turn.pane_id,
+            "agent: dependency results received; continuing",
+        )?;
+        self.start_ready_agent_turns()?;
+        Ok(true)
+    }
+
     /// Executes any provider-produced MAAP `spawn_agent` actions in a running
     /// turn and rewrites their planned running results to terminal action
     /// results. Successful spawns create the child pane, child turn, MMP task
@@ -805,6 +959,10 @@ impl RuntimeSessionService {
                         .cloned()
                 })
         });
+        let dependency = match dependency {
+            Some(dependency) => Some(dependency),
+            None => self.reconstruct_joined_dependency_for_child(turn)?,
+        };
         let parent_agent_id = dependency
             .as_ref()
             .and_then(|dependency| {
@@ -854,6 +1012,7 @@ impl RuntimeSessionService {
                 .agent
                 .macro_managed_subagent_agents
                 .contains_key(&turn.agent_id);
+        let parent_result_attached = dependency.is_some();
         let settlement_error = if let Some(dependency) = dependency.as_ref() {
             self.resolve_joined_subagent_dependency_record(
                 turn,
@@ -864,8 +1023,7 @@ impl RuntimeSessionService {
             )
             .err()
         } else {
-            self.resolve_joined_subagent_dependency(turn, success, summary, output)
-                .err()
+            None
         };
         if let Some(error) = settlement_error {
             if let Some(dependency) = dependency.as_ref() {
@@ -888,12 +1046,18 @@ impl RuntimeSessionService {
             return Ok(());
         }
         if let Some(parent_agent_id) = parent_agent_id.as_deref() {
+            let handoff = if parent_result_attached {
+                "result committed"
+            } else {
+                "result delivered"
+            };
             self.append_subagent_parent_status_line(
                 parent_agent_id,
                 &format!(
-                    "subagent {} {}; result committed: {}",
+                    "subagent {} {}; {}: {}",
                     child_label,
                     runtime_subagent_result_status_label(success, summary),
+                    handoff,
                     summary
                 ),
             )?;
@@ -1072,38 +1236,6 @@ impl RuntimeSessionService {
             .accept_at(&child_identity.agent_id, envelope, now_ms)?;
         self.deliver_pending_runtime_agent_messages(now_ms)?;
         Ok(())
-    }
-
-    /// Resolves a parent `spawn_agent` action that joined a child task result.
-    ///
-    /// Joined child task results are delivered through MMP for observability and
-    /// also converted into the parent turn's MAAP action result so the next
-    /// provider request receives the child output as tool context. The parent
-    /// stays blocked until every joined child action in its current execution
-    /// has settled, then it is resumed and queued for provider continuation.
-    fn resolve_joined_subagent_dependency(
-        &mut self,
-        turn: &AgentTurnRecord,
-        success: bool,
-        summary: &str,
-        output: &str,
-    ) -> Result<()> {
-        let Some(dependency) = self
-            .agent
-            .joined_subagent_dependencies
-            .get(&turn.turn_id)
-            .cloned()
-            .or_else(|| {
-                self.agent
-                    .joined_subagent_dependencies
-                    .values()
-                    .find(|dependency| dependency.child_agent_id == turn.agent_id)
-                    .cloned()
-            })
-        else {
-            return Ok(());
-        };
-        self.resolve_joined_subagent_dependency_record(turn, dependency, success, summary, output)
     }
 
     /// Resolves one explicit joined dependency against a terminal child turn.
@@ -1293,17 +1425,9 @@ impl RuntimeSessionService {
             return Ok(());
         }
         if ready_for_continuation {
-            self.agent
-                .agent_scheduler
-                .requeue_waiting(&parent_turn.turn_id)?;
-            self.append_agent_trace_turn_event(
-                &parent_turn.pane_id,
+            let _ = self.resume_dependency_wait_if_ready(
                 &parent_turn.turn_id,
-                "scheduler waiting -> queued reason=joined_subagent_result_ready capacity=reacquire",
-            )?;
-            self.append_agent_status_text_to_terminal_buffer(
-                &parent_turn.pane_id,
-                "agent: subagent results received; continuing",
+                "joined_subagent_result_ready",
             )?;
         }
         self.start_ready_agent_turns()?;

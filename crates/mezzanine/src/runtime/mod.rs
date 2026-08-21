@@ -328,8 +328,8 @@ pub(crate) use processes::{
 /// declaration makes the boundary available to the crate.
 mod render;
 pub(crate) use render::{
-    RuntimePresentationComponent, RuntimePresentationSettings, RuntimeStreamingSayProjectionResult,
-    RuntimeStreamingSayProjectionWork,
+    RuntimePaneHarnessStatus, RuntimePresentationComponent, RuntimePresentationSettings,
+    RuntimeStreamingSayProjectionResult, RuntimeStreamingSayProjectionWork,
 };
 /// Exposes the service module boundary.
 ///

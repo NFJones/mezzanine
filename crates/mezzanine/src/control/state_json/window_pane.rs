@@ -420,6 +420,12 @@ pub(super) fn frame_read_fields(
                 .unwrap_or_else(|| "normal".to_string()),
         ),
         (
+            "pane.status",
+            pane_context
+                .and_then(|context| context.pane_status_text.clone())
+                .unwrap_or_default(),
+        ),
+        (
             "agent.id",
             pane_context
                 .and_then(|context| context.agent_id.clone())

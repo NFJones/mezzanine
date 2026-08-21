@@ -46,6 +46,10 @@ pub(super) enum ControlDispatchKind {
     WindowSelect,
     /// Close a window.
     WindowClose,
+    /// Select a window layout policy.
+    WindowLayout,
+    /// Reapply a window layout policy.
+    WindowRebalance,
     /// List panes.
     PaneList,
     /// Create a pane.
@@ -62,8 +66,28 @@ pub(super) enum ControlDispatchKind {
     PaneJoinMove,
     /// Close a pane.
     PaneClose,
+    /// Assign an explicit pane title.
+    PaneRename,
+    /// Explicitly set pane zoom state.
+    PaneZoom,
+    /// Set or inspect synchronized input for a pane's window.
+    PaneInputSync,
+    /// Set or clear a pane's attention indicator.
+    PaneAttention,
+    /// Set or clear a source-owned pane status.
+    PaneStatus,
+    /// Emit a bounded pane-scoped notice.
+    PaneNotice,
     /// Capture pane output.
     PaneCapture,
+    /// List internal paste buffers.
+    BufferList,
+    /// Create an internal paste buffer.
+    BufferCreate,
+    /// Read an internal paste buffer.
+    BufferRead,
+    /// Delete an internal paste buffer.
+    BufferDelete,
     /// Read a rendered frame.
     FrameRead,
     /// Render a terminal view.
@@ -310,6 +334,29 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         params_schema: ControlParamsSchema::Allowed(WINDOW_TARGET_MUTATION_PARAMS),
     },
     ControlMethodSpec {
+        method: "window/layout",
+        dispatch: ControlDispatchKind::WindowLayout,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "target",
+            "window_id",
+            "window_name",
+            "window_index",
+            "layout",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
+        method: "window/rebalance",
+        dispatch: ControlDispatchKind::WindowRebalance,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "target",
+            "window_id",
+            "window_name",
+            "window_index",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
         method: "pane/list",
         dispatch: ControlDispatchKind::PaneList,
         params_schema: ControlParamsSchema::Allowed(TARGET_PARAMS),
@@ -351,9 +398,103 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         params_schema: ControlParamsSchema::Allowed(PANE_TARGET_MUTATION_PARAMS),
     },
     ControlMethodSpec {
+        method: "pane/rename",
+        dispatch: ControlDispatchKind::PaneRename,
+        params_schema: ControlParamsSchema::Allowed(PANE_TARGET_MUTATION_PARAMS),
+    },
+    ControlMethodSpec {
+        method: "pane/zoom",
+        dispatch: ControlDispatchKind::PaneZoom,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "target",
+            "pane_id",
+            "pane_title",
+            "pane_index",
+            "zoomed",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
+        method: "pane/input-sync",
+        dispatch: ControlDispatchKind::PaneInputSync,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "target",
+            "window_id",
+            "window_name",
+            "window_index",
+            "enabled",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
+        method: "pane/attention",
+        dispatch: ControlDispatchKind::PaneAttention,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "target",
+            "pane_id",
+            "pane_title",
+            "pane_index",
+            "attention",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
+        method: "pane/status",
+        dispatch: ControlDispatchKind::PaneStatus,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "target",
+            "pane_id",
+            "pane_title",
+            "pane_index",
+            "source",
+            "state",
+            "text",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
+        method: "pane/notice",
+        dispatch: ControlDispatchKind::PaneNotice,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "target",
+            "pane_id",
+            "pane_title",
+            "pane_index",
+            "source",
+            "severity",
+            "text",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
         method: "pane/capture",
         dispatch: ControlDispatchKind::PaneCapture,
         params_schema: ControlParamsSchema::Allowed(PANE_TARGET_MUTATION_PARAMS),
+    },
+    ControlMethodSpec {
+        method: "buffer/list",
+        dispatch: ControlDispatchKind::BufferList,
+        params_schema: ControlParamsSchema::Allowed(NO_PARAMS),
+    },
+    ControlMethodSpec {
+        method: "buffer/create",
+        dispatch: ControlDispatchKind::BufferCreate,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "name",
+            "content",
+            "replace",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
+        method: "buffer/read",
+        dispatch: ControlDispatchKind::BufferRead,
+        params_schema: ControlParamsSchema::Allowed(&["name"]),
+    },
+    ControlMethodSpec {
+        method: "buffer/delete",
+        dispatch: ControlDispatchKind::BufferDelete,
+        params_schema: ControlParamsSchema::Allowed(&["name", "idempotency_key"]),
     },
     ControlMethodSpec {
         method: "pane/swap",

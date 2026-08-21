@@ -97,12 +97,20 @@ impl RuntimeSessionService {
     ) -> Result<String> {
         match method {
             "window/create" => self.dispatch_runtime_window_create(primary_client_id, params),
+            "window/layout" => self.dispatch_runtime_window_layout(primary_client_id, params),
+            "window/rebalance" => self.dispatch_runtime_window_rebalance(primary_client_id, params),
             "pane/create" => self.dispatch_runtime_pane_create(primary_client_id, params),
             "pane/resize" => self.dispatch_runtime_pane_resize(primary_client_id, params),
             "pane/swap" => self.dispatch_runtime_pane_swap(primary_client_id, params),
             "pane/break" => self.dispatch_runtime_pane_break(primary_client_id, params),
             "pane/join" | "pane/move" => self.dispatch_runtime_pane_join(primary_client_id, params),
             "pane/close" => self.dispatch_runtime_pane_close(primary_client_id, params),
+            "pane/zoom" => self.dispatch_runtime_pane_zoom(primary_client_id, params),
+            "pane/attention" => self.dispatch_runtime_pane_attention(params),
+            "pane/status" => self.dispatch_runtime_pane_status(primary_client_id, params),
+            "pane/notice" => self.dispatch_runtime_pane_notice(params),
+            "buffer/create" => self.dispatch_runtime_buffer_create(params),
+            "buffer/delete" => self.dispatch_runtime_buffer_delete(params),
             "window/close" => self.dispatch_runtime_window_close(primary_client_id, params),
             "session/kill" => self.dispatch_runtime_session_kill(primary_client_id, params),
             "observer/approve" => self.dispatch_runtime_observer_approve(primary_client_id, params),
@@ -164,6 +172,68 @@ impl RuntimeSessionService {
             None,
         )?;
         self.runtime_started_pane_result_json(&started, true)
+    }
+
+    /// Selects a layout policy for a target window and synchronizes live PTYs.
+    pub(super) fn dispatch_runtime_window_layout(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        params: &str,
+    ) -> Result<String> {
+        let target = window_target_checked_resolved(&self.session, params)?;
+        let layout = runtime_json_string_field(params, "layout")
+            .ok_or_else(|| MezError::invalid_args("window/layout requires layout"))?;
+        let (policy, effects) = self.session.select_window_layout_transition(
+            primary_client_id,
+            target.as_deref(),
+            &layout,
+        )?;
+        self.sync_pane_resize_effects(&effects)?;
+        let window = target
+            .as_deref()
+            .and_then(|id| {
+                self.session
+                    .windows()
+                    .iter()
+                    .find(|window| window.id.as_str() == id)
+            })
+            .or_else(|| self.session.active_window())
+            .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
+        Ok(format!(
+            r#"{{"window_id":"{}","layout":"{}","state":{}}}"#,
+            json_escape(window.id.as_str()),
+            policy.name(),
+            layout_state_json(window)
+        ))
+    }
+
+    /// Reapplies a target window's selected layout and synchronizes live PTYs.
+    pub(super) fn dispatch_runtime_window_rebalance(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        params: &str,
+    ) -> Result<String> {
+        let target = window_target_checked_resolved(&self.session, params)?;
+        let (policy, effects) = self
+            .session
+            .rebalance_target_window_transition(primary_client_id, target.as_deref())?;
+        self.sync_pane_resize_effects(&effects)?;
+        let window = target
+            .as_deref()
+            .and_then(|id| {
+                self.session
+                    .windows()
+                    .iter()
+                    .find(|window| window.id.as_str() == id)
+            })
+            .or_else(|| self.session.active_window())
+            .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
+        Ok(format!(
+            r#"{{"window_id":"{}","layout":"{}","state":{}}}"#,
+            json_escape(window.id.as_str()),
+            policy.name(),
+            layout_state_json(window)
+        ))
     }
 
     /// Runs the dispatch runtime pane create operation for this subsystem.
@@ -752,6 +822,52 @@ impl RuntimeSessionService {
         let input = runtime_json_string_field(params, "input")
             .ok_or_else(|| MezError::invalid_args("terminal/command requires input"))?;
         self.execute_terminal_command(primary_client_id, &input)
+    }
+
+    /// Sets or clears the completion-attention indicator for one pane.
+    ///
+    /// An omitted target resolves to the active pane. The pane must exist, and
+    /// `attention` must be an explicit boolean so hook integrations cannot
+    /// accidentally toggle presentation state with a malformed request.
+    pub(super) fn dispatch_runtime_pane_attention(&mut self, params: &str) -> Result<String> {
+        let attention = runtime_json_bool_field(params, "attention").ok_or_else(|| {
+            MezError::invalid_args("pane/attention requires attention to be a boolean")
+        })?;
+        let pane_id = pane_target_checked_resolved(&self.session, params)?
+            .map(Ok)
+            .unwrap_or_else(|| self.active_pane_id())?;
+        runtime_pane_by_id(&self.session, &pane_id)?;
+        if attention {
+            self.presentation
+                .register_completion_attention(&pane_id, None);
+        } else {
+            self.presentation.acknowledge_completion_attention(&pane_id);
+        }
+        Ok(format!(
+            r#"{{"pane_id":"{}","attention":{attention}}}"#,
+            json_escape(&pane_id)
+        ))
+    }
+
+    /// Explicitly sets pane zoom and synchronizes the affected live PTYs.
+    pub(super) fn dispatch_runtime_pane_zoom(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        params: &str,
+    ) -> Result<String> {
+        let zoomed = runtime_json_bool_field(params, "zoomed")
+            .ok_or_else(|| MezError::invalid_args("pane/zoom requires zoomed to be a boolean"))?;
+        let target = pane_target_checked_resolved(&self.session, params)?;
+        let (pane_id, zoomed, effects) =
+            self.session
+                .set_pane_zoom_transition(primary_client_id, target.as_deref(), zoomed)?;
+        self.sync_pane_resize_effects(&effects)?;
+        let (window, _) = runtime_pane_by_id(&self.session, pane_id.as_str())?;
+        Ok(format!(
+            r#"{{"pane_id":"{}","zoomed":{zoomed},"layout":{}}}"#,
+            json_escape(pane_id.as_str()),
+            layout_state_json(window)
+        ))
     }
 
     /// Runs the dispatch runtime agent shell command operation for this subsystem.

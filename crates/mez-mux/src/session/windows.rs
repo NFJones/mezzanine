@@ -401,11 +401,19 @@ impl Session {
         primary_client_id: &ClientId,
         enabled: bool,
     ) -> Result<bool> {
+        self.set_window_panes_synchronized(primary_client_id, None, enabled)
+    }
+
+    /// Sets pane input synchronization for a target window without changing focus.
+    pub fn set_window_panes_synchronized(
+        &mut self,
+        primary_client_id: &ClientId,
+        target: Option<&str>,
+        enabled: bool,
+    ) -> Result<bool> {
         self.require_primary(primary_client_id)?;
-        let window = self
-            .active_window()
-            .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
-        let window_id = window.id.to_string();
+        let index = self.window_index_or_active(target)?;
+        let window_id = self.windows[index].id.to_string();
         if enabled {
             self.synchronized_window_ids.insert(window_id);
         } else {
@@ -841,6 +849,30 @@ impl Session {
         Ok((zoomed, effects))
     }
 
+    /// Explicitly sets zoom for a target pane without changing focus.
+    pub fn set_pane_zoom_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        target: Option<&str>,
+        zoomed: bool,
+    ) -> Result<(PaneId, bool, Vec<PaneResizeEffect>)> {
+        self.require_primary(primary_client_id)?;
+        let (window_index, pane_index) = self.pane_location(target)?;
+        let pane_id = self.windows[window_index].panes()[pane_index].id.clone();
+        let window = &mut self.windows[window_index];
+        window.set_pane_zoom(&pane_id, zoomed)?;
+        let effects = window
+            .panes()
+            .iter()
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
+        self.record_event();
+        Ok((pane_id, zoomed, effects))
+    }
+
     /// Runs the rotate panes operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -928,13 +960,21 @@ impl Session {
         primary_client_id: &ClientId,
         layout_name: &str,
     ) -> Result<(LayoutPolicy, Vec<PaneResizeEffect>)> {
+        self.select_window_layout_transition(primary_client_id, None, layout_name)
+    }
+
+    /// Selects a layout for a target window without changing focus.
+    pub fn select_window_layout_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        target: Option<&str>,
+        layout_name: &str,
+    ) -> Result<(LayoutPolicy, Vec<PaneResizeEffect>)> {
         self.require_primary(primary_client_id)?;
         let policy = LayoutPolicy::from_name(layout_name)
             .ok_or_else(|| MezError::invalid_args("select-layout layout is invalid"))?;
-        let window = self
-            .windows
-            .get_mut(self.active_window_index)
-            .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
+        let index = self.window_index_or_active(target)?;
+        let window = &mut self.windows[index];
         let policy = window.set_layout_policy(policy);
         let effects = window
             .panes()
@@ -963,11 +1003,18 @@ impl Session {
         &mut self,
         primary_client_id: &ClientId,
     ) -> Result<(LayoutPolicy, Vec<PaneResizeEffect>)> {
+        self.rebalance_target_window_transition(primary_client_id, None)
+    }
+
+    /// Reapplies the selected policy for a target window without changing focus.
+    pub fn rebalance_target_window_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        target: Option<&str>,
+    ) -> Result<(LayoutPolicy, Vec<PaneResizeEffect>)> {
         self.require_primary(primary_client_id)?;
-        let window = self
-            .windows
-            .get_mut(self.active_window_index)
-            .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
+        let index = self.window_index_or_active(target)?;
+        let window = &mut self.windows[index];
         let policy = window.set_layout_policy(window.layout_policy());
         let effects = window
             .panes()
