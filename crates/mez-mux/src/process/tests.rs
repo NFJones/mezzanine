@@ -1,5 +1,7 @@
 //! Unit tests for pane process command planning and PTY lifecycle behavior.
 
+#[cfg(target_os = "macos")]
+use super::ShellInputDelivery;
 use super::pane::{
     append_output_chunk_to_backlog, drain_output_backlog, foreground_process_group_id_from_raw,
     shell_input_acknowledgement_count,
@@ -10,9 +12,8 @@ use super::process_metadata::{
 #[cfg(target_os = "linux")]
 use super::process_metadata::{process_environment_for_pid, process_executable_path_for_pid};
 use super::{
-    PaneProcessEnvironment, PaneProcessLaunch, PaneProcessManager, ShellInputDelivery,
-    pane_command_plan, shell_command_from_argv, spawn_pane_process,
-    spawn_pane_process_with_start_directory,
+    PaneProcessEnvironment, PaneProcessLaunch, PaneProcessManager, pane_command_plan,
+    shell_command_from_argv, spawn_pane_process, spawn_pane_process_with_start_directory,
 };
 use mez_terminal::TerminalSize as Size;
 use std::collections::VecDeque;

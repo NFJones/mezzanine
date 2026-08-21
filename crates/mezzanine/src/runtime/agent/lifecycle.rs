@@ -109,10 +109,9 @@ impl RuntimeSessionService {
                 session.visibility == AgentShellVisibility::HidePendingTaskCompletion
             });
 
-        if matches!(
-            state,
-            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
-        ) {
+        if state == AgentTurnState::Interrupted {
+            self.finalize_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
+        } else if matches!(state, AgentTurnState::Completed | AgentTurnState::Failed) {
             self.discard_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
         }
 
@@ -261,10 +260,9 @@ impl RuntimeSessionService {
         let conversation_still_owned = current_conversation == Some(turn.conversation_id.as_str());
         let conversation_was_replaced = current_conversation
             .is_some_and(|conversation_id| conversation_id != turn.conversation_id);
-        if matches!(
-            state,
-            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
-        ) {
+        if state == AgentTurnState::Interrupted {
+            self.finalize_agent_streaming_say_presentation(&turn.pane_id, Some(&turn.turn_id))?;
+        } else if matches!(state, AgentTurnState::Completed | AgentTurnState::Failed) {
             self.discard_agent_streaming_say_presentation(&turn.pane_id, Some(&turn.turn_id))?;
         }
         if pane_present

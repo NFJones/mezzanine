@@ -2175,6 +2175,37 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Finalizes one live response while retaining its installed pane output.
+    ///
+    /// Interrupted turns have no authoritative provider completion to
+    /// reconcile, but output already streamed to the user is still a useful
+    /// record. Removing only the live ownership prevents later projection
+    /// work from replacing the pane while preserving the installed generation
+    /// in the terminal buffer.
+    pub(crate) fn finalize_agent_streaming_say_presentation(
+        &mut self,
+        pane_id: &str,
+        expected_turn_id: Option<&str>,
+    ) -> Result<bool> {
+        let Some(presentation) = self
+            .presentation
+            .agent_streaming_say_presentations
+            .remove(pane_id)
+        else {
+            return Ok(false);
+        };
+        if expected_turn_id.is_some_and(|expected| expected != presentation.turn_id) {
+            self.presentation
+                .agent_streaming_say_presentations
+                .insert(pane_id.to_string(), presentation);
+            return Ok(false);
+        }
+        self.presentation
+            .agent_promoted_streaming_say_actions
+            .remove(&(pane_id.to_string(), presentation.turn_id));
+        Ok(true)
+    }
+
     /// Discards every live presentation owned by one provider turn.
     pub(crate) fn discard_agent_streaming_say_presentations_for_turn(
         &mut self,
