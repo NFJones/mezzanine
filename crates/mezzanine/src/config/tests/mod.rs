@@ -14,6 +14,7 @@ use super::{
     validate_config_file, validate_config_file_async, validate_config_text,
 };
 use mez_agent::permissions::{exact_command_sha256, normalize_exact_command_text};
+use mez_mux::theme::UI_COLOR_SLOT_NAMES;
 /// Runs the temp root operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

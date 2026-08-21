@@ -18,6 +18,7 @@ use super::{
     TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER, binding_config_key, key_chord_notation,
     runtime_expand_user_path, runtime_positional_args,
 };
+use crate::config::plan_config_mutations;
 use mez_mux::input::{KeyBindings, KeyChord};
 use mez_mux::key_preset::{
     BUILTIN_KEY_PRESET_NAMES, KeyPresetDefinition, builtin_key_preset_definition,
@@ -780,22 +781,12 @@ fn runtime_plan_config_mutations(
     scope: ConfigScope,
     mutations: &[ConfigMutation],
 ) -> Result<RuntimeConfigMutationBatch> {
-    let mut text = text.to_string();
-    let mut changed = false;
-    let mut reload_required = false;
-    let mut mutation_changed = Vec::with_capacity(mutations.len());
-    for mutation in mutations {
-        let plan = plan_config_mutation(format, &text, scope, mutation.clone())?;
-        changed |= plan.changed;
-        reload_required |= plan.reload_required;
-        mutation_changed.push(plan.changed);
-        text = plan.text;
-    }
+    let plan = plan_config_mutations(format, text, scope, mutations.to_vec())?;
     Ok(RuntimeConfigMutationBatch {
-        text,
-        changed,
-        reload_required,
-        mutation_changed,
+        text: plan.text,
+        changed: plan.changed,
+        reload_required: plan.reload_required,
+        mutation_changed: plan.mutation_changed,
     })
 }
 

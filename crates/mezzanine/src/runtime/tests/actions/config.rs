@@ -1189,14 +1189,11 @@ fn runtime_config_change_failure_is_redacted_and_not_recorded_as_success() {
     let _ = fs::remove_dir_all(config_root);
 }
 
-/// Verifies broad theme color changes from an agent turn are applied in one
-/// runtime config batch.
+/// Verifies representative theme changes from an agent turn apply in one batch.
 ///
-/// The built-in `$mez-reference` skill can legitimately emit aliases plus
-/// every `theme.colors.*` slot when the user asks for a complete palette.
-/// Applying those changes as independent config-control requests reloads and
-/// redraws the runtime dozens of times in one turn; batching preserves the
-/// same final config while keeping live mutation to one validated reload.
+/// Complete-palette breadth is covered by the pure config planner regression.
+/// This runtime scenario retains aliases, color slots, one live reload, action
+/// results, and queued persistence without repeating equivalent action paths.
 #[test]
 fn runtime_agent_config_change_batches_broad_theme_palette() {
     let mut service = test_runtime_service();
@@ -1204,7 +1201,21 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
         .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
         .unwrap();
     let config_root = temp_root("runtime-agent-config-change-theme-batch");
+    let config_path = config_root.join("config.toml");
+    fs::create_dir_all(&config_root).unwrap();
+    fs::write(&config_path, crate::config::DEFAULT_CONFIG_TOML).unwrap();
     service.set_config_root(config_root.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(config_path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: crate::config::DEFAULT_CONFIG_TOML.to_string(),
+        }])
+        .unwrap();
+    service.use_config_effect_adapter();
     service.start_initial_pane_process(None).unwrap();
     service
         .agent_shell_store_mut()
@@ -1224,53 +1235,27 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
         .into_iter()
         .filter(|event| event.kind == EventKind::ConfigChanged)
         .count();
-    let mut actions = Vec::new();
-    for (name, value) in [
-        ("primary", "#ffc72c"),
-        ("secondary", "#da291c"),
-        ("surface", "#fff8e1"),
-        ("foreground", "#241400"),
-        ("muted", "#6b5a32"),
-        ("tertiary", "#009a44"),
-        ("danger", "#b00020"),
-        ("thinking", "#7a5c00"),
-    ] {
-        actions.push(mez_agent::AgentAction {
-            id: format!("alias-{name}"),
-            rationale: String::new(),
-            payload: mez_agent::AgentActionPayload::ConfigChange {
-                setting_path: format!("theme.aliases.{name}"),
-                operation: "set".to_string(),
-                value: Some(value.to_string()),
-            },
-        });
-    }
-    for slot in UI_COLOR_SLOT_NAMES {
-        let value = if slot.ends_with("_bg") {
-            if slot.contains("error") || slot.contains("danger") {
-                "surface"
-            } else {
-                "primary"
-            }
-        } else if slot.contains("error") || slot.contains("danger") {
-            "danger"
-        } else if slot.contains("comment") || slot.contains("muted") {
-            "muted"
-        } else if slot.contains("string") || slot.contains("function") {
-            "secondary"
-        } else {
-            "foreground"
-        };
-        actions.push(mez_agent::AgentAction {
-            id: format!("color-{slot}"),
-            rationale: String::new(),
-            payload: mez_agent::AgentActionPayload::ConfigChange {
-                setting_path: format!("theme.colors.{slot}"),
-                operation: "set".to_string(),
-                value: Some(value.to_string()),
-            },
-        });
-    }
+    let actions = [
+        ("alias-primary", "theme.aliases.primary", "#ffc72c"),
+        ("alias-danger", "theme.aliases.danger", "#b00020"),
+        ("color-prompt-bg", "theme.colors.prompt_bg", "primary"),
+        (
+            "color-error-fg",
+            "theme.colors.agent_transcript_error_fg",
+            "danger",
+        ),
+    ]
+    .into_iter()
+    .map(|(id, setting_path, value)| mez_agent::AgentAction {
+        id: id.to_string(),
+        rationale: String::new(),
+        payload: mez_agent::AgentActionPayload::ConfigChange {
+            setting_path: setting_path.to_string(),
+            operation: "set".to_string(),
+            value: Some(value.to_string()),
+        },
+    })
+    .collect::<Vec<_>>();
     let action_count = actions.len();
     let provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
@@ -1328,7 +1313,21 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
         .filter(|event| event.kind == EventKind::ConfigChanged)
         .count();
     assert_eq!(after_config_events - before_config_events, 1);
-    let config_text = fs::read_to_string(config_root.join("config.toml")).unwrap();
+    let persistence = service.drain_config_persistence_transition();
+    assert_eq!(persistence.side_effects.len(), 1, "{persistence:?}");
+    let RuntimeSideEffect::Persist {
+        target,
+        path,
+        bytes,
+        mode,
+    } = &persistence.side_effects[0]
+    else {
+        panic!("theme batch should queue one config replacement");
+    };
+    assert_eq!(*target, crate::runtime::PersistenceTarget::Config);
+    assert_eq!(path, &config_path);
+    assert_eq!(*mode, crate::runtime::PersistenceWriteMode::Replace);
+    let config_text = String::from_utf8(bytes.clone()).unwrap();
     assert!(
         config_text.contains(r##"primary = "#ffc72c""##),
         "{config_text}"

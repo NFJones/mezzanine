@@ -114,15 +114,18 @@ pub fn plan_config_mutations(
     mutations: Vec<ConfigMutation>,
 ) -> Result<ConfigBatchMutationPlan> {
     let mut mutated = text.to_string();
+    let mut mutation_changed = Vec::with_capacity(mutations.len());
     for mutation in &mutations {
         let segments = parse_mutation_path(&mutation.path)?;
         reject_unsupported_mutation_path(&segments)?;
         reject_container_target(format, &mutated, &segments, &mutation.operation)?;
-        mutated = match format {
+        let next = match format {
             ConfigFormat::Toml => mutate_toml_text(&mutated, &segments, &mutation.operation)?,
             ConfigFormat::Yaml => mutate_yaml_text(&mutated, &segments, &mutation.operation)?,
             ConfigFormat::Json => mutate_json_text(&mutated, &segments, &mutation.operation)?,
         };
+        mutation_changed.push(next != mutated);
+        mutated = next;
     }
     if scope == ConfigScope::ProjectOverlay {
         mutated = materialize_project_overlay_schema_version(format, &mutated)?;
@@ -139,6 +142,7 @@ pub fn plan_config_mutations(
         format,
         scope,
         mutations,
+        mutation_changed,
         text: mutated,
         validation,
         changed,

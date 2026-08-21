@@ -343,6 +343,76 @@ fn config_mutation_batch_validates_only_the_final_document() {
     );
 }
 
+/// Verifies a complete theme palette composes through one final-document validation.
+///
+/// Agent-authored theme batches can contain aliases plus every UI color slot.
+/// This pure planner regression keeps that breadth without pane startup or
+/// persistence, while runtime coverage uses a representative multi-action batch.
+#[test]
+fn config_mutation_batch_materializes_complete_theme_palette() {
+    let mut mutations = [
+        ("primary", "#ffc72c"),
+        ("danger", "#b00020"),
+        ("foreground", "#241400"),
+    ]
+    .into_iter()
+    .map(|(name, value)| set_string(&format!("theme.aliases.{name}"), value))
+    .collect::<Vec<_>>();
+    mutations.extend(UI_COLOR_SLOT_NAMES.iter().map(|slot| {
+        let alias = if slot.contains("error") || slot.contains("danger") {
+            "danger"
+        } else if slot.ends_with("_bg") {
+            "primary"
+        } else {
+            "foreground"
+        };
+        set_string(&format!("theme.colors.{slot}"), alias)
+    }));
+
+    let plan = crate::config::plan_config_mutations(
+        ConfigFormat::Toml,
+        DEFAULT_CONFIG_TOML,
+        ConfigScope::Primary,
+        mutations,
+    )
+    .unwrap();
+
+    assert!(plan.changed);
+    assert!(plan.reload_required);
+    assert!(plan.validation.valid);
+    assert_eq!(plan.mutation_changed.len(), 3 + UI_COLOR_SLOT_NAMES.len());
+    assert!(plan.mutation_changed.iter().any(|changed| *changed));
+    let values = extract_config_values(ConfigFormat::Toml, &plan.text);
+    assert_eq!(
+        values.get("theme.aliases.primary"),
+        Some(&"#ffc72c".to_string())
+    );
+    assert_eq!(
+        values.get("theme.colors.prompt_bg"),
+        Some(&"primary".to_string())
+    );
+    assert_eq!(
+        values.get("theme.colors.agent_transcript_error_fg"),
+        Some(&"danger".to_string())
+    );
+    for slot in UI_COLOR_SLOT_NAMES {
+        let expected = if slot.contains("error") || slot.contains("danger") {
+            "danger"
+        } else if slot.ends_with("_bg") {
+            "primary"
+        } else {
+            "foreground"
+        };
+        assert_eq!(
+            values
+                .get(&format!("theme.colors.{slot}"))
+                .map(String::as_str),
+            Some(expected),
+            "missing or incorrect complete-palette slot {slot}"
+        );
+    }
+}
+
 /// Verifies configuration mutation rejects removed nested custom-toolchain
 /// paths before constructing a final document for persistence.
 #[test]

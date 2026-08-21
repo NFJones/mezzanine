@@ -302,6 +302,8 @@ pub struct ConfigBatchMutationPlan {
     pub scope: ConfigScope,
     /// Ordered mutations applied in memory.
     pub mutations: Vec<ConfigMutation>,
+    /// Per-mutation change flags in request order.
+    pub mutation_changed: Vec<bool>,
     /// Complete validated replacement text.
     pub text: String,
     /// Validation result for the final document only.

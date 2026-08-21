@@ -13,8 +13,7 @@ use crate::config::parse_config_json_value;
 #[cfg(test)]
 use crate::config::{
     ConfigFormat, ConfigMutation, ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue,
-    ConfigPaths, ConfigScope, persist_config_mutation, persist_config_text, plan_config_mutation,
-    validate_config_file,
+    ConfigPaths, ConfigScope, persist_config_mutation, persist_config_text, validate_config_file,
 };
 use crate::error::{MezError, Result};
 use crate::security::audit::{AuditActor, AuditLog, AuditRecord};

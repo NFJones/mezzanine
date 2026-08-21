@@ -9,11 +9,12 @@ use super::{AuthStatus, credential_store_kind_name};
 use super::{
     ConfigFormat, ConfigMutation, ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue,
     ConfigPaths, ConfigScope, UI_COLOR_SLOT_NAMES, UiThemeDefinition, builtin_ui_theme_definition,
-    fs, parse_config_json_value, persist_config_mutation, persist_config_text,
-    plan_config_mutation, resolve_ui_theme,
+    fs, parse_config_json_value, persist_config_mutation, persist_config_text, resolve_ui_theme,
 };
 #[cfg(test)]
 use super::{MezError, Result};
+#[cfg(test)]
+use crate::config::plan_config_mutations;
 #[cfg(test)]
 use serde_json::Value;
 #[cfg(test)]
@@ -196,19 +197,11 @@ fn command_plan_config_mutations(
     scope: ConfigScope,
     mutations: &[ConfigMutation],
 ) -> Result<CommandConfigMutationBatch> {
-    let mut text = text.to_string();
-    let mut changed = false;
-    let mut reload_required = false;
-    for mutation in mutations {
-        let plan = plan_config_mutation(format, &text, scope, mutation.clone())?;
-        changed |= plan.changed;
-        reload_required |= plan.reload_required;
-        text = plan.text;
-    }
+    let plan = plan_config_mutations(format, text, scope, mutations.to_vec())?;
     Ok(CommandConfigMutationBatch {
-        text,
-        changed,
-        reload_required,
+        text: plan.text,
+        changed: plan.changed,
+        reload_required: plan.reload_required,
     })
 }
 
