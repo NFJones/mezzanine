@@ -1502,6 +1502,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
 #[tokio::test]
 async fn runtime_three_nonrouted_subagents_release_waiting_parent() {
     let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
     service
         .agent_scheduler_mut()
         .set_max_concurrent_agents(4)
@@ -1643,6 +1644,7 @@ async fn runtime_three_nonrouted_subagents_release_waiting_parent() {
 #[tokio::test]
 async fn runtime_failed_nonrouted_subagent_preserves_siblings_and_resumes_parent() {
     let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
     service
         .agent_scheduler_mut()
         .set_max_concurrent_agents(5)

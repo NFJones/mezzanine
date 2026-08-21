@@ -31,37 +31,13 @@ fn routed_path_resolution_environment(working_directory: &Path) -> mez_agent::En
     .unwrap()
 }
 
-/// Configures Bubblewrap with explicit filesystem authority for routed-worker
-/// provider path-resolution lifecycle tests.
-fn configure_routed_path_resolution_bubblewrap(service: &mut RuntimeSessionService, root: &Path) {
-    let root = root.to_string_lossy();
-    let configured =
-        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
-            "permissions": {
-                "sandbox": "bubblewrap",
-                "read_scopes": [root],
-                "write_scopes": [root],
-                "network_policy": "deny",
-                "bubblewrap": {
-                    "executable": "/usr/bin/bwrap",
-                    "unavailable": "fail",
-                    "network": "isolated",
-                    "environment": "minimal"
-                }
-            }
-        }))
-        .unwrap();
-    service
-        .integration
-        .replace_configured_permissions(configured);
-}
-
-/// Starts a routed loop and returns its blocked parent plus selected worker turn.
-fn selected_routed_loop(
+/// Starts a routed loop with one explicit worker startup mode.
+fn selected_routed_loop_with_mode(
     command: &str,
+    shell_mode: crate::runtime::config::ShellMode,
 ) -> (RuntimeSessionService, String, mez_agent::AgentTurnRecord) {
     let mut service = test_runtime_service();
-    service.enable_legacy_managed_startup_for_tests();
+    service.set_agent_default_shell_mode(shell_mode);
     service
         .agent_scheduler_mut()
         .set_max_concurrent_agents(1)
@@ -116,6 +92,13 @@ fn selected_routed_loop(
     (service, parent_turn_id, worker_turn)
 }
 
+/// Starts a routed loop whose worker is immediately ready through native mode.
+fn selected_routed_loop(
+    command: &str,
+) -> (RuntimeSessionService, String, mez_agent::AgentTurnRecord) {
+    selected_routed_loop_with_mode(command, crate::runtime::config::ShellMode::Native)
+}
+
 /// Verifies concurrent routed workers spawned by independent parent panes can
 /// share one subagent bucket without sharing bootstrap or readiness ownership.
 ///
@@ -125,7 +108,6 @@ fn selected_routed_loop(
 #[test]
 fn runtime_concurrent_routed_workers_share_bucket_with_independent_bootstraps() {
     let mut service = test_runtime_service();
-    service.enable_legacy_managed_startup_for_tests();
     service
         .agent_scheduler_mut()
         .set_max_concurrent_agents(2)
@@ -209,78 +191,43 @@ fn runtime_concurrent_routed_workers_share_bucket_with_independent_bootstraps() 
     assert_ne!(worker_turns[0].pane_id, worker_turns[1].pane_id);
     for worker in &worker_turns {
         assert!(service.pane_bootstrap_is_pending_for_tests(&worker.pane_id));
-        assert!(service.pane_bootstrap_has_bounded_progress_owner(&worker.pane_id));
+        assert_eq!(
+            service.runtime_agent_surface_startup_phase_for_tests(&worker.pane_id),
+            Some("managed-admitting")
+        );
+        assert_eq!(worker.state, AgentTurnState::Queued);
+        assert!(!service.agent_provider_task_is_pending(&worker.turn_id));
         assert!(
             service
                 .running_shell_transactions_for_tests()
                 .values()
-                .any(|transaction| transaction.pane_id == worker.pane_id
-                    && transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .all(|transaction| transaction.pane_id != worker.pane_id)
         );
     }
 
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies a routed provider claim defers path resolution while its worker
-/// pane is only a prompt candidate instead of failing the worker lifecycle.
-///
-/// Prompt-candidate is explicitly probeable readiness. A provider prerequisite
-/// must retain the pending provider task behind a bounded readiness probe so a
-/// later successful probe can retry canonical path resolution.
+/// Verifies native routed-worker startup does not inherit pane readiness or
+/// foreign-shell bootstrap requirements before provider dispatch.
 #[test]
-fn runtime_routed_worker_provider_probes_before_prompt_candidate_path_resolution() {
-    let root = temp_root("runtime-routed-worker-provider-prompt-candidate");
-    fs::create_dir_all(&root).unwrap();
+fn runtime_routed_worker_native_startup_skips_pane_readiness() {
     let (mut service, parent_turn_id, worker_turn) =
-        selected_routed_loop("/loop --limit 3 recover routed prompt candidate");
-    configure_routed_path_resolution_bubblewrap(&mut service, &root);
-    service.set_pane_environment_signature_for_tests(
-        &worker_turn.pane_id,
-        routed_path_resolution_environment(&root),
-    );
-    let bootstrap_markers = service
-        .running_shell_transactions_for_tests()
-        .iter()
-        .filter(|(_, transaction)| {
-            transaction.pane_id == worker_turn.pane_id
-                && transaction.kind == RunningShellTransactionKind::Bootstrap
-        })
-        .map(|(marker, _)| marker.clone())
-        .collect::<Vec<_>>();
-    for marker in bootstrap_markers {
-        service
-            .running_shell_transactions_mut_for_tests()
-            .remove(&marker);
-        service.clear_shell_transaction_protocol_state(&marker);
-    }
-    service.set_pane_readiness(&worker_turn.pane_id, PaneReadinessState::PromptCandidate);
-    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
-
-    assert!(
-        service
-            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
-            .unwrap()
-            .is_none()
-    );
+        selected_routed_loop("/loop --limit 3 use native routed startup");
 
     assert_eq!(
-        service
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == worker_turn.turn_id)
-            .map(|turn| turn.state),
-        Some(AgentTurnState::Running)
+        service.runtime_agent_surface_startup_phase_for_tests(&worker_turn.pane_id),
+        Some("ready")
     );
+    assert_eq!(worker_turn.state, AgentTurnState::Running);
     assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
+    assert!(!service.pane_bootstrap_is_pending_for_tests(&worker_turn.pane_id));
+    assert!(!service.pane_has_uncertified_foreign_shell_boundary(&worker_turn.pane_id));
     assert!(
         service
             .running_shell_transactions_for_tests()
             .values()
-            .any(|transaction| transaction.pane_id == worker_turn.pane_id
-                && transaction.turn_id == worker_turn.turn_id
-                && transaction.kind == RunningShellTransactionKind::ReadinessProbe)
+            .all(|transaction| transaction.pane_id != worker_turn.pane_id)
     );
     assert_eq!(
         service
@@ -290,7 +237,6 @@ fn runtime_routed_worker_provider_probes_before_prompt_candidate_path_resolution
     );
 
     service.terminate_all_pane_processes().unwrap();
-    fs::remove_dir_all(root).unwrap();
 }
 
 /// Verifies restart metadata retains only the durable routed parent and never
@@ -498,6 +444,7 @@ fn runtime_subagent_routing_applies_selected_profile_in_place_once() {
 #[test]
 fn runtime_routed_worker_presents_child_prompt_status_and_output() {
     let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
     service.set_agent_default_routing(true);
     service
         .agent_scheduler_mut()
@@ -1284,6 +1231,7 @@ fn runtime_routed_parent_continuation_reacquires_trusted_project_authority() {
     fs::create_dir_all(project_root.join(".git")).unwrap();
     let (mut service, parent_turn_id, worker_turn) =
         selected_routed_loop("/loop --limit 3 recover routed parent authority");
+    service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Pane));
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
@@ -1353,552 +1301,78 @@ fn runtime_routed_parent_continuation_reacquires_trusted_project_authority() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// Verifies a routed worker provider task that requires pane-resolved
-/// filesystem authority remains pending while the fresh worker pane awaits its
-/// one-shot bootstrap. Repeated claims must be idempotent, and the same task
-/// must advance to canonical path resolution after environment evidence exists.
+/// Verifies a pane-mode routed worker remains queued until its authenticated
+/// POSIX startup admission and environment bootstrap complete.
 #[test]
-fn runtime_routed_worker_provider_waits_for_bootstrap_before_path_resolution() {
-    let root = temp_root("runtime-routed-worker-provider-bootstrap");
-    fs::create_dir_all(&root).unwrap();
-    let (mut service, parent_turn_id, worker_turn) =
-        selected_routed_loop("/loop --limit 3 inspect routed worker bootstrap ordering");
-    configure_routed_path_resolution_bubblewrap(&mut service, &root);
-    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
-
-    assert!(service.pane_bootstrap_is_pending_for_tests(&worker_turn.pane_id));
-    assert!(
-        service
-            .pane_environment_signature(&worker_turn.pane_id)
-            .is_none()
+fn runtime_routed_worker_waits_for_agent_surface_startup() {
+    let (mut service, parent_turn_id, worker_turn) = selected_routed_loop_with_mode(
+        "/loop --limit 3 wait for routed agent surface",
+        crate::runtime::config::ShellMode::Pane,
     );
-    for _ in 0..2 {
-        assert!(
-            service
-                .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
-                .unwrap()
-                .is_none()
-        );
-    }
+
+    assert_eq!(worker_turn.state, AgentTurnState::Queued);
     assert_eq!(
-        service
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == worker_turn.turn_id)
-            .map(|turn| turn.state),
-        Some(AgentTurnState::Running)
+        service.runtime_agent_surface_startup_phase_for_tests(&worker_turn.pane_id),
+        Some("managed-admitting")
     );
-    assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
-    assert!(
-        service
-            .running_shell_transactions_for_tests()
-            .values()
-            .all(|transaction| !matches!(
-                transaction.kind,
-                RunningShellTransactionKind::PathResolution { .. }
-            ))
-    );
-    assert_eq!(
-        service
-            .routed_workflow_for_tests(&parent_turn_id)
-            .map(|workflow| workflow.phase.clone()),
-        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult)
-    );
-    let frame_context = service.terminal_frame_context();
-    let pane_context = frame_context
-        .panes
-        .get(&worker_turn.pane_id)
-        .expect("routed bootstrap pane context should exist");
-    assert_eq!(pane_context.agent_status.as_deref(), Some("bootstrapping"));
-    assert!(
-        pane_context
-            .agent_display_lines
-            .iter()
-            .any(|line| line.starts_with("bootstrapping (")
-                && line.contains(" • esc to interrupt")),
-        "{pane_context:?}"
-    );
-
-    let (bootstrap_marker, bootstrap_turn_id) = service
-        .running_shell_transactions_for_tests()
-        .iter()
-        .find_map(|(marker, transaction)| {
-            (transaction.pane_id == worker_turn.pane_id
-                && transaction.kind == RunningShellTransactionKind::Bootstrap)
-                .then(|| (marker.clone(), transaction.turn_id.clone()))
-        })
-        .expect("fresh routed worker should retain its bootstrap transaction");
-    let bootstrap_output = format!(
-        "env\tos\tLinux\n\
-env\tarch\tx86_64\n\
-env\thost\ttest-host\n\
-env\tuser\ttest-user\n\
-env\tshell_path\t/bin/sh\n\
-env\tshell_class\tposix-sh\n\
-env\tpath\t/usr/bin:/bin\n\
-env\tcwd\t{}\n\
-env\tgit_repo\t0\n\
-bootstrap\tcomplete\t1714500000\n",
-        root.to_string_lossy()
-    );
-    let process_group_id = service
-        .pane_processes()
-        .primary_pid(&worker_turn.pane_id)
-        .unwrap();
-    service.set_pane_readiness(
-        &worker_turn.pane_id,
-        crate::runtime::PaneReadinessState::PromptCandidate,
-    );
-    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
-    service
-        .pane_processes_mut()
-        .set_foreground_process_group_id_for_test(&worker_turn.pane_id, Some(process_group_id));
-    service
-        .observe_agent_shell_transaction_start(
-            &worker_turn.pane_id,
-            &bootstrap_marker,
-            &bootstrap_turn_id,
-            &worker_turn.agent_id,
-            &worker_turn.pane_id,
-        )
-        .unwrap();
-    let transaction = service
-        .running_shell_transactions_mut_for_tests()
-        .get_mut(&bootstrap_marker)
-        .unwrap();
-    transaction.observed_output_bytes = bootstrap_output.len();
-    transaction.observed_output_preview = bootstrap_output;
-    service
-        .observe_agent_shell_transaction_end(
-            &worker_turn.pane_id,
-            &bootstrap_marker,
-            &bootstrap_turn_id,
-            &worker_turn.agent_id,
-            &worker_turn.pane_id,
-            0,
-        )
-        .unwrap();
-    assert!(!service.pane_bootstrap_is_pending_for_tests(&worker_turn.pane_id));
-    assert!(
-        service
-            .pane_environment_signature(&worker_turn.pane_id)
-            .is_some()
-    );
-    assert!(
-        service
-            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
-            .unwrap()
-            .is_none()
-    );
-    let transaction = service
-        .running_shell_transactions_for_tests()
-        .values()
-        .find(|transaction| {
-            transaction.pane_id == worker_turn.pane_id
-                && matches!(
-                    transaction.kind,
-                    RunningShellTransactionKind::PathResolution { .. }
-                )
-        })
-        .expect("bootstrap evidence should advance the worker to path resolution");
-    let RunningShellTransactionKind::PathResolution { cache_key, .. } = &transaction.kind else {
-        unreachable!();
-    };
-    let expected = root.to_string_lossy().into_owned();
-    assert_eq!(cache_key.request.read_scopes, vec![expected.clone()]);
-    assert_eq!(cache_key.request.write_scopes, vec![expected]);
-    assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
-
-    service.terminate_all_pane_processes().unwrap();
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// Verifies a routed worker retained behind adapter-owned bootstrap
-/// certification fails terminally when the exact completion observation never
-/// settles.
-///
-/// The timeout must clear the bootstrap gate and record a stable rejection so
-/// the next provider claim fails the worker instead of preserving the routed
-/// parent in `WaitingForWorkerResult` indefinitely.
-#[test]
-fn runtime_routed_worker_provider_fails_after_bootstrap_certification_timeout() {
-    let root = temp_root("runtime-routed-worker-provider-certification-timeout");
-    fs::create_dir_all(&root).unwrap();
-    let (mut service, parent_turn_id, worker_turn) =
-        selected_routed_loop("/loop --limit 3 bound routed worker certification");
-    configure_routed_path_resolution_bubblewrap(&mut service, &root);
-    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
-
-    assert!(
-        service
-            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
-            .unwrap()
-            .is_none()
-    );
-    let (bootstrap_marker, bootstrap_turn_id) = service
-        .running_shell_transactions_for_tests()
-        .iter()
-        .find_map(|(marker, transaction)| {
-            (transaction.pane_id == worker_turn.pane_id
-                && transaction.kind == RunningShellTransactionKind::Bootstrap)
-                .then(|| (marker.clone(), transaction.turn_id.clone()))
-        })
-        .expect("fresh routed worker should retain its bootstrap transaction");
-    let bootstrap_output = format!(
-        "env\tos\tLinux\n\
-env\tarch\tx86_64\n\
-env\thost\ttest-host\n\
-env\tuser\ttest-user\n\
-env\tshell_path\t/bin/sh\n\
-env\tshell_class\tposix-sh\n\
-env\tpath\t/usr/bin:/bin\n\
-env\tcwd\t{}\n\
-env\tgit_repo\t0\n\
-bootstrap\tcomplete\t1714500000\n",
-        root.to_string_lossy()
-    );
-    let process_group_id = service
-        .pane_processes()
-        .primary_pid(&worker_turn.pane_id)
-        .unwrap();
-    service
-        .pane_processes_mut()
-        .set_foreground_process_group_id_for_test(&worker_turn.pane_id, Some(process_group_id));
-    service
-        .running_shell_transactions_mut_for_tests()
-        .get_mut(&bootstrap_marker)
+    assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
+    assert!(!service.pane_has_uncertified_foreign_shell_boundary(&worker_turn.pane_id));
+    let token = service
+        .posix_startup_token_for_tests(&worker_turn.pane_id)
         .unwrap()
-        .pending_input_payload = None;
-    service
-        .observe_agent_shell_transaction_start(
-            &worker_turn.pane_id,
-            &bootstrap_marker,
-            &bootstrap_turn_id,
-            &worker_turn.agent_id,
-            &worker_turn.pane_id,
-        )
-        .unwrap();
-    let transaction = service
-        .running_shell_transactions_mut_for_tests()
-        .get_mut(&bootstrap_marker)
-        .unwrap();
-    transaction.observed_output_bytes = bootstrap_output.len();
-    transaction.observed_output_preview = bootstrap_output;
-    let mut worker_process = service
-        .take_running_pane_process_for_adapter(&worker_turn.pane_id)
-        .unwrap();
-    service
-        .observe_agent_shell_transaction_end(
-            &worker_turn.pane_id,
-            &bootstrap_marker,
-            &bootstrap_turn_id,
-            &worker_turn.agent_id,
-            &worker_turn.pane_id,
-            0,
-        )
-        .unwrap();
-    assert!(service.pane_agent_subshell_certification_is_pending(&worker_turn.pane_id));
-    let frame_context = service.terminal_frame_context();
-    let pane_context = frame_context
-        .panes
-        .get(&worker_turn.pane_id)
-        .expect("routed certification pane context should exist");
-    assert_eq!(
-        pane_context.agent_status.as_deref(),
-        Some("certifying_sandbox")
-    );
-    assert!(
-        pane_context
-            .agent_display_lines
-            .iter()
-            .any(|line| line.starts_with("certifying sandbox (")
-                && line.contains(" • esc to interrupt")),
-        "{pane_context:?}"
-    );
-
-    let certification_timer = service
-        .running_shell_transaction_timers()
-        .into_iter()
-        .find(|timer| {
-            timer.kind == crate::runtime::RuntimeShellTransactionTimerKind::Bootstrap
-                && timer
-                    .marker
-                    .starts_with(&format!("{bootstrap_marker}:foreground:"))
-        })
-        .expect("pending routed certification should own a bootstrap timer");
-    let deadline = certification_timer
-        .started_at_unix_ms
-        .saturating_add(certification_timer.timeout_ms);
-    assert!(
-        service
-            .apply_shell_transaction_timer_event(deadline)
-            .unwrap()
-            >= 1
-    );
-    assert!(!service.pane_bootstrap_is_pending_for_tests(&worker_turn.pane_id));
-    assert_eq!(
-        service.pane_agent_subshell_certification_rejection(&worker_turn.pane_id),
-        Some("foreground_observation_timed_out")
-    );
-
-    assert!(
-        service
-            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
-            .unwrap()
-            .is_none()
-    );
-    assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
+        .to_string();
     assert_eq!(
         service
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == worker_turn.turn_id)
-            .map(|turn| turn.state),
-        Some(AgentTurnState::Failed)
-    );
-    assert_ne!(
-        service
-            .routed_workflow_for_tests(&parent_turn_id)
-            .map(|workflow| workflow.phase.clone()),
-        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult)
-    );
-
-    let _ = worker_process.terminate(std::time::Duration::from_millis(10));
-    service.terminate_all_pane_processes().unwrap();
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// Verifies provider deferral refuses a bare bootstrap-pending flag when no
-/// bounded transaction or certification owns eventual settlement.
-///
-/// This covers the earlier lifecycle form of the deadlock: an ownerless pane
-/// gate must fail the worker and release its routed parent rather than count the
-/// retained provider task itself as proof of progress.
-#[test]
-fn runtime_routed_worker_provider_rejects_ownerless_bootstrap_gate() {
-    let root = temp_root("runtime-routed-worker-provider-ownerless-bootstrap");
-    fs::create_dir_all(&root).unwrap();
-    let (mut service, parent_turn_id, worker_turn) =
-        selected_routed_loop("/loop --limit 3 reject ownerless routed bootstrap");
-    configure_routed_path_resolution_bubblewrap(&mut service, &root);
-    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
-    let bootstrap_marker = service
-        .running_shell_transactions_for_tests()
-        .iter()
-        .find_map(|(marker, transaction)| {
-            (transaction.pane_id == worker_turn.pane_id
-                && transaction.kind == RunningShellTransactionKind::Bootstrap)
-                .then(|| marker.clone())
-        })
-        .expect("fresh routed worker should begin with a bounded bootstrap");
-    service
-        .running_shell_transactions_mut_for_tests()
-        .remove(&bootstrap_marker);
-
-    assert!(service.pane_bootstrap_is_pending_for_tests(&worker_turn.pane_id));
-    assert!(!service.pane_bootstrap_has_bounded_progress_owner(&worker_turn.pane_id));
-    assert!(
-        service
-            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
-            .unwrap()
-            .is_none()
-    );
-
-    assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
-    assert_eq!(
-        service
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == worker_turn.turn_id)
-            .map(|turn| turn.state),
-        Some(AgentTurnState::Failed)
-    );
-    assert_ne!(
-        service
-            .routed_workflow_for_tests(&parent_turn_id)
-            .map(|workflow| workflow.phase.clone()),
-        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult)
-    );
-
-    service.terminate_all_pane_processes().unwrap();
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// Verifies routed provider dispatch stays behind the bounded managed-zsh
-/// startup admission during the real pre-prompt ordering window.
-///
-/// A fresh zsh worker can be `Unknown` with a pending bootstrap before it can
-/// safely accept hidden input. The internal provider task must remain live but
-/// absent from actor-visible dispatch until prompt readiness installs the
-/// strict timed bootstrap owner required by provider claim.
-#[test]
-fn runtime_routed_worker_provider_waits_for_zsh_startup_before_dispatch() {
-    let root = temp_root("runtime-routed-worker-provider-zsh-startup");
-    fs::create_dir_all(&root).unwrap();
-    let (mut service, _parent_turn_id, worker_turn) =
-        selected_routed_loop("/loop --limit 3 wait for routed zsh startup");
-    configure_routed_path_resolution_bubblewrap(&mut service, &root);
-    let bootstrap_marker = service
-        .running_shell_transactions_for_tests()
-        .iter()
-        .find_map(|(marker, transaction)| {
-            (transaction.pane_id == worker_turn.pane_id
-                && transaction.kind == RunningShellTransactionKind::Bootstrap)
-                .then(|| marker.clone())
-        })
-        .expect("fresh routed worker should begin with a bounded bootstrap");
-    service
-        .running_shell_transactions_mut_for_tests()
-        .remove(&bootstrap_marker);
-    service.clear_shell_transaction_protocol_state(&bootstrap_marker);
-    service.set_pane_readiness(&worker_turn.pane_id, PaneReadinessState::Unknown);
-    service.set_pending_managed_zsh_admission_for_tests(&worker_turn.pane_id);
-
-    assert!(service.pane_bootstrap_is_pending_for_tests(&worker_turn.pane_id));
-    assert!(!service.pane_bootstrap_has_bounded_progress_owner(&worker_turn.pane_id));
-    assert!(service.pane_has_bounded_managed_shell_startup(&worker_turn.pane_id));
-    assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
-    assert!(service.pending_agent_provider_tasks().is_empty());
-    assert_eq!(
-        service
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == worker_turn.turn_id)
-            .map(|turn| turn.state),
-        Some(AgentTurnState::Running)
-    );
-
-    service.set_pane_readiness(&worker_turn.pane_id, PaneReadinessState::PromptCandidate);
-    let pending_tasks = service.pending_agent_provider_tasks();
-    assert_eq!(pending_tasks.len(), 1);
-    assert_eq!(pending_tasks[0].turn_id, worker_turn.turn_id);
-    assert_eq!(pending_tasks[0].agent_id, worker_turn.agent_id);
-    assert_eq!(pending_tasks[0].pane_id, worker_turn.pane_id);
-    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
-    assert!(
-        service
-            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
-            .unwrap()
-            .is_none()
-    );
-    assert!(service.pane_bootstrap_has_bounded_progress_owner(&worker_turn.pane_id));
-    assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
-
-    service.terminate_all_pane_processes().unwrap();
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// Verifies a timed managed-zsh startup admission cannot hide routed provider
-/// work after its bounded deadline expires.
-///
-/// Terminal startup settlement must re-expose the same internal provider task.
-/// With no strict bootstrap owner, the ordinary provider claim then fails the
-/// worker closed instead of treating the expired admission as authority.
-#[test]
-fn runtime_routed_worker_provider_fails_after_zsh_startup_timeout() {
-    let root = temp_root("runtime-routed-worker-provider-zsh-startup-timeout");
-    fs::create_dir_all(&root).unwrap();
-    let (mut service, parent_turn_id, worker_turn) =
-        selected_routed_loop("/loop --limit 3 bound routed zsh startup");
-    configure_routed_path_resolution_bubblewrap(&mut service, &root);
-    let bootstrap_marker = service
-        .running_shell_transactions_for_tests()
-        .iter()
-        .find_map(|(marker, transaction)| {
-            (transaction.pane_id == worker_turn.pane_id
-                && transaction.kind == RunningShellTransactionKind::Bootstrap)
-                .then(|| marker.clone())
-        })
-        .expect("fresh routed worker should begin with a bounded bootstrap");
-    service
-        .running_shell_transactions_mut_for_tests()
-        .remove(&bootstrap_marker);
-    service.clear_shell_transaction_protocol_state(&bootstrap_marker);
-    service.set_pane_readiness(&worker_turn.pane_id, PaneReadinessState::Unknown);
-    service.set_expired_managed_zsh_admission_for_tests(&worker_turn.pane_id);
-
-    assert!(service.pending_agent_provider_tasks().is_empty());
-    assert_eq!(
-        service
-            .recover_expired_managed_zsh_admissions_for_tests(u64::MAX)
+            .observe_managed_shell_protocol_event(
+                &worker_turn.pane_id,
+                mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                mez_terminal::ManagedShellAdapter::Posix,
+                &token,
+                &mez_terminal::ManagedShellProtocolEvent::AdapterAvailable { trigger: None },
+            )
             .unwrap(),
         1
     );
-    assert!(service.managed_zsh_admission_unavailable_for_tests(
-        &worker_turn.pane_id,
-        "startup-admission-timeout"
-    ));
-    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
-
-    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
-    assert!(
-        service
-            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
-            .unwrap()
-            .is_none()
-    );
-    assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
-    assert_eq!(
-        service
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == worker_turn.turn_id)
-            .map(|turn| turn.state),
-        Some(AgentTurnState::Failed)
-    );
-    assert_ne!(
-        service
-            .routed_workflow_for_tests(&parent_turn_id)
-            .map(|workflow| workflow.phase.clone()),
-        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult)
-    );
-
-    service.terminate_all_pane_processes().unwrap();
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// Verifies prompt-like readiness can replace an ownerless bootstrap flag with
-/// a fresh timed bootstrap before provider deferral.
-///
-/// The bounded-owner guard must not fail a recoverable readiness race: once the
-/// pane is safe for hidden input, claiming the provider task should create a new
-/// bootstrap transaction and retain the worker behind that concrete deadline.
-#[test]
-fn runtime_routed_worker_provider_restarts_prompt_ready_ownerless_bootstrap() {
-    let root = temp_root("runtime-routed-worker-provider-restart-bootstrap");
-    fs::create_dir_all(&root).unwrap();
-    let (mut service, _parent_turn_id, worker_turn) =
-        selected_routed_loop("/loop --limit 3 restart prompt-ready routed bootstrap");
-    configure_routed_path_resolution_bubblewrap(&mut service, &root);
-    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
-    let bootstrap_marker = service
+    let (marker, bootstrap_turn_id) = service
         .running_shell_transactions_for_tests()
         .iter()
         .find_map(|(marker, transaction)| {
             (transaction.pane_id == worker_turn.pane_id
                 && transaction.kind == RunningShellTransactionKind::Bootstrap)
-                .then(|| marker.clone())
+                .then(|| (marker.clone(), transaction.turn_id.clone()))
         })
-        .expect("fresh routed worker should begin with a bounded bootstrap");
+        .expect("admitted routed startup should own bootstrap");
     service
+        .observe_agent_shell_transaction_start(
+            &worker_turn.pane_id,
+            &marker,
+            &bootstrap_turn_id,
+            &worker_turn.agent_id,
+            &worker_turn.pane_id,
+        )
+        .unwrap();
+    let output = "env\tos\tLinux\nenv\tarch\tx86_64\nenv\thost\ttest-host\nenv\tuser\ttest-user\nenv\tshell_path\t/bin/sh\nenv\tshell_class\tposix-sh\nenv\tpath\t/usr/bin:/bin\nenv\tcwd\t/tmp\nenv\tgit_repo\t0\nbootstrap\tcomplete\t1714500000\n";
+    let transaction = service
         .running_shell_transactions_mut_for_tests()
-        .remove(&bootstrap_marker);
-    service.clear_shell_transaction_protocol_state(&bootstrap_marker);
-    service.set_pane_readiness(&worker_turn.pane_id, PaneReadinessState::Ready);
+        .get_mut(&marker)
+        .unwrap();
+    transaction.observed_output_bytes = output.len();
+    transaction.observed_output_preview = output.to_string();
+    service
+        .observe_agent_shell_transaction_end(
+            &worker_turn.pane_id,
+            &marker,
+            &bootstrap_turn_id,
+            &worker_turn.agent_id,
+            &worker_turn.pane_id,
+            0,
+        )
+        .unwrap();
 
-    assert!(
-        service
-            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
-            .unwrap()
-            .is_none()
+    assert_eq!(
+        service.runtime_agent_surface_startup_phase_for_tests(&worker_turn.pane_id),
+        Some("ready")
     );
-
-    assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
     assert_eq!(
         service
             .agent_turn_ledger()
@@ -1908,169 +1382,32 @@ fn runtime_routed_worker_provider_restarts_prompt_ready_ownerless_bootstrap() {
             .map(|turn| turn.state),
         Some(AgentTurnState::Running)
     );
-    assert!(service.pane_bootstrap_has_bounded_progress_owner(&worker_turn.pane_id));
-    assert!(
-        service
-            .running_shell_transactions_for_tests()
-            .iter()
-            .any(|(marker, transaction)| {
-                marker != &bootstrap_marker
-                    && transaction.pane_id == worker_turn.pane_id
-                    && transaction.kind == RunningShellTransactionKind::Bootstrap
-                    && transaction.timeout_ms.is_some()
-            })
-    );
-
-    service.terminate_all_pane_processes().unwrap();
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// Verifies a routed worker retained for pending bootstrap still fails closed
-/// after that one-shot bootstrap settles without a usable environment
-/// signature. The typed unavailable authority must fail provider preparation
-/// before path resolution instead of deferring forever or leaking a downstream
-/// missing-environment diagnostic.
-#[test]
-fn runtime_routed_worker_provider_fails_after_unparsed_bootstrap() {
-    let root = temp_root("runtime-routed-worker-provider-bootstrap-failure");
-    fs::create_dir_all(&root).unwrap();
-    let (mut service, _parent_turn_id, worker_turn) =
-        selected_routed_loop("/loop --limit 3 inspect failed routed worker bootstrap");
-    configure_routed_path_resolution_bubblewrap(&mut service, &root);
-    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
-
-    assert!(
-        service
-            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
-            .unwrap()
-            .is_none()
-    );
     assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
-    let (bootstrap_marker, bootstrap_turn_id) = service
-        .running_shell_transactions_for_tests()
-        .iter()
-        .find_map(|(marker, transaction)| {
-            (transaction.pane_id == worker_turn.pane_id
-                && transaction.kind == RunningShellTransactionKind::Bootstrap)
-                .then(|| (marker.clone(), transaction.turn_id.clone()))
-        })
-        .expect("fresh routed worker should retain its bootstrap transaction");
-    let transaction = service
-        .running_shell_transactions_mut_for_tests()
-        .get_mut(&bootstrap_marker)
-        .unwrap();
-    transaction.observed_output_bytes = 49;
-    transaction.observed_output_preview =
-        "bootstrap output without an environment signature".to_string();
-    transaction.pending_input_payload = None;
-    service
-        .observe_agent_shell_transaction_start(
-            &worker_turn.pane_id,
-            &bootstrap_marker,
-            &bootstrap_turn_id,
-            &worker_turn.agent_id,
-            &worker_turn.pane_id,
-        )
-        .unwrap();
-    service
-        .observe_agent_shell_transaction_end(
-            &worker_turn.pane_id,
-            &bootstrap_marker,
-            &bootstrap_turn_id,
-            &worker_turn.agent_id,
-            &worker_turn.pane_id,
-            0,
-        )
-        .unwrap();
-    assert_eq!(
-        service.pane_environment_authority(&worker_turn.pane_id),
-        crate::runtime::processes::RuntimePaneEnvironmentAuthority::Unavailable(
-            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::AgentSubshellCertification(
-                crate::runtime::processes::RuntimeAgentSubshellCertificationRejection::EnvironmentSignatureMissing,
-            ),
-        )
-    );
-    assert!(
-        service
-            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
-            .unwrap()
-            .is_none()
-    );
-    assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
     assert_eq!(
         service
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == worker_turn.turn_id)
-            .map(|turn| turn.state),
-        Some(AgentTurnState::Failed)
-    );
-    assert!(
-        service
-            .running_shell_transactions_for_tests()
-            .values()
-            .all(|transaction| !matches!(
-                transaction.kind,
-                RunningShellTransactionKind::PathResolution { .. }
-            ))
+            .routed_workflow_for_tests(&parent_turn_id)
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult)
     );
 
     service.terminate_all_pane_processes().unwrap();
-    fs::remove_dir_all(root).unwrap();
 }
 
-/// Verifies a routed worker whose bounded bootstrap expires retains a typed
-/// timeout authority failure and never reaches signature-keyed path resolution.
-/// The provider task must settle once instead of leaking the downstream generic
-/// missing-environment error or remaining deferred behind a cleared pending flag.
+/// Verifies routed pane startup timeout fails the queued worker and releases
+/// the parent workflow instead of leaving either side bootstrapping.
 #[test]
-fn runtime_routed_worker_provider_fails_after_bootstrap_timeout() {
-    let root = temp_root("runtime-routed-worker-provider-bootstrap-timeout");
-    fs::create_dir_all(&root).unwrap();
-    let (mut service, _parent_turn_id, worker_turn) =
-        selected_routed_loop("/loop --limit 3 inspect timed out routed worker bootstrap");
-    configure_routed_path_resolution_bubblewrap(&mut service, &root);
-    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
-
-    assert!(
-        service
-            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
-            .unwrap()
-            .is_none()
+fn runtime_routed_worker_startup_timeout_releases_parent() {
+    let (mut service, parent_turn_id, worker_turn) = selected_routed_loop_with_mode(
+        "/loop --limit 3 bound routed startup",
+        crate::runtime::config::ShellMode::Pane,
     );
-    let bootstrap = service
-        .running_shell_transactions_for_tests()
-        .values()
-        .find(|transaction| {
-            transaction.pane_id == worker_turn.pane_id
-                && transaction.kind == RunningShellTransactionKind::Bootstrap
-        })
-        .cloned()
-        .expect("fresh routed worker should retain its bounded bootstrap");
-    let deadline = bootstrap
-        .started_at_unix_ms
-        .saturating_add(bootstrap.timeout_ms.unwrap());
 
-    assert!(
-        service
-            .expire_timed_out_shell_transactions(deadline)
-            .unwrap()
-            >= 1
-    );
     assert_eq!(
-        service.pane_environment_authority(&worker_turn.pane_id),
-        crate::runtime::processes::RuntimePaneEnvironmentAuthority::Unavailable(
-            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapTimedOut,
-        )
-    );
-    assert!(
         service
-            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
-            .unwrap()
-            .is_none()
+            .recover_expired_runtime_agent_surface_startups(u64::MAX)
+            .unwrap(),
+        1
     );
-    assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
     assert_eq!(
         service
             .agent_turn_ledger()
@@ -2080,18 +1417,15 @@ fn runtime_routed_worker_provider_fails_after_bootstrap_timeout() {
             .map(|turn| turn.state),
         Some(AgentTurnState::Failed)
     );
-    assert!(
+    assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
+    assert_ne!(
         service
-            .running_shell_transactions_for_tests()
-            .values()
-            .all(|transaction| !matches!(
-                transaction.kind,
-                RunningShellTransactionKind::PathResolution { .. }
-            ))
+            .routed_workflow_for_tests(&parent_turn_id)
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult)
     );
 
     service.terminate_all_pane_processes().unwrap();
-    fs::remove_dir_all(root).unwrap();
 }
 
 /// Verifies malformed automatic-compaction completion fails a routed worker

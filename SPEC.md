@@ -4101,6 +4101,16 @@ explicitly shown, the pane shell and its startup sequence remain user-owned;
 terminal parsing and passive process metadata observation MAY continue, but
 Mezzanine MUST NOT write discovery or bootstrap input to the pane.
 
+The previous ordinary-pane restriction does not apply to a pane created
+specifically as a runtime-owned agent execution surface. Before such a process
+is launched, Mezzanine MUST select its effective `agents.shell_mode` and create
+a bounded mode-specific startup owner. Native mode MUST validate only live
+root-process metadata and MUST NOT install pane startup integration. Pane mode
+MUST launch with a pane-scoped authenticated managed startup contract for Bash,
+Fish, Zsh, or POSIX `sh`; unknown shell classifications MUST fail closed and
+recommend native mode. These startup artifacts MUST be owner-only and removed
+with the pane.
+
 When pane-shell agent mode is explicitly shown, the harness MUST create a
 fresh shell-interaction epoch and use the current prompt boundary to begin
 bounded identity discovery. If prompt ownership is not yet available, entry
@@ -5938,6 +5948,15 @@ Subagent spawn actions MUST be submitted to the Mezzanine control endpoint.
 The control endpoint MUST create a pane shell for the subagent in a same-group
 dedicated subagent window before the subagent begins work.
 
+Runtime-created subagent and restored-agent panes MUST converge on a common
+agent-surface-ready boundary. A child turn MAY be recorded as queued while its
+surface starts, but it MUST NOT become running, claim provider capacity, or
+create a provider-task owner until its visible agent prompt exists and its
+mode-specific backend is ready. Managed pane admission and bootstrap MUST have
+bounded deadlines. Failure or cancellation MUST terminally settle queued child
+work and any joined or routed parent instead of leaving either side in a
+bootstrapping state.
+
 Configuration change actions MUST go through the same validation path as the
 configuration shell.
 
@@ -6357,6 +6376,15 @@ subagent into the controlling pane's existing window.
 Each spawned subagent pane MUST enter pane-local agent mode immediately after
 creation, and its agent prompt MUST be visible inside the spawned pane before
 the child turn begins executing.
+
+The child process launch mode MUST be selected before process creation. Native
+children MUST satisfy agent-surface readiness from live root-process metadata
+without prompt, readiness, identity, bootstrap, or path-resolution
+transactions. Pane-mode children MUST use authenticated agent-owned startup
+admission and root-shell environment bootstrap without creating a foreign
+`AwaitingPrompt` boundary. The foreign-shell loader remains reserved for
+explicit entry into an existing user-owned SSH, container, chroot, or similar
+nested environment.
 
 Spawned agents MUST inherit applicable session, policy, configuration, and
 project instruction context unless the user or configuration specifies a
@@ -6825,7 +6853,7 @@ The baseline command capabilities are:
   persisted configuration and live-reload path. A global change MUST affect
   panes without overrides and MUST NOT clear an existing pane override.
   A newly spawned subagent pane MUST receive a snapshot of its parent's
-  explicit pane shell mode override before entering agent mode. This copied
+  explicit pane shell mode override before its process is launched. This copied
   override is child-local: it affects neither siblings nor existing children,
   is cleared when its pane is removed, and does not survive daemon restart.
   A parent that follows the persisted global default MUST NOT create a copied

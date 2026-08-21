@@ -1603,6 +1603,11 @@ impl RuntimeSessionService {
 
     /// Returns the pane-frame status for an agent turn.
     fn runtime_agent_frame_status(&self, turn: &AgentTurnRecord) -> &'static str {
+        if turn.state == AgentTurnState::Queued
+            && !self.agent_surface_allows_scheduler_start(&turn.pane_id)
+        {
+            return "bootstrapping";
+        }
         if turn.state == AgentTurnState::Blocked {
             return if self.agent_turn_has_blocked_approval(&turn.turn_id) {
                 "waiting_approval"

@@ -1994,7 +1994,11 @@ impl RuntimeSessionService {
                             },
                         );
                         observed = observed.saturating_add(1);
-                        observed = observed.saturating_add(self.maybe_bootstrap_ready_panes()?);
+                        if self.begin_managed_agent_surface_bootstrap(output_pane_id)? {
+                            observed = observed.saturating_add(1);
+                        } else {
+                            observed = observed.saturating_add(self.maybe_bootstrap_ready_panes()?);
+                        }
                     }
                     if !observed_harness_transaction_end {
                         observed =

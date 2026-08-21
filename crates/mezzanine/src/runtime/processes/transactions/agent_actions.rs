@@ -57,7 +57,8 @@ impl RuntimeSessionService {
                         match shell {
                             mez_terminal::ManagedShellAdapter::Fish => ManagedShellKind::Fish,
                             mez_terminal::ManagedShellAdapter::Zsh => ManagedShellKind::Zsh,
-                            mez_terminal::ManagedShellAdapter::Bash => return Ok(0),
+                            mez_terminal::ManagedShellAdapter::Bash
+                            | mez_terminal::ManagedShellAdapter::Posix => return Ok(0),
                         },
                         marker.as_deref(),
                     )
@@ -70,7 +71,8 @@ impl RuntimeSessionService {
                         match shell {
                             mez_terminal::ManagedShellAdapter::Fish => ManagedShellKind::Fish,
                             mez_terminal::ManagedShellAdapter::Zsh => ManagedShellKind::Zsh,
-                            mez_terminal::ManagedShellAdapter::Bash => return Ok(0),
+                            mez_terminal::ManagedShellAdapter::Bash
+                            | mez_terminal::ManagedShellAdapter::Posix => return Ok(0),
                         },
                         marker.as_deref(),
                     )
@@ -83,7 +85,8 @@ impl RuntimeSessionService {
                         match shell {
                             mez_terminal::ManagedShellAdapter::Fish => ManagedShellKind::Fish,
                             mez_terminal::ManagedShellAdapter::Zsh => ManagedShellKind::Zsh,
-                            mez_terminal::ManagedShellAdapter::Bash => return Ok(0),
+                            mez_terminal::ManagedShellAdapter::Bash
+                            | mez_terminal::ManagedShellAdapter::Posix => return Ok(0),
                         },
                         token,
                         marker,
@@ -105,7 +108,8 @@ impl RuntimeSessionService {
                         match shell {
                             mez_terminal::ManagedShellAdapter::Fish => ManagedShellKind::Fish,
                             mez_terminal::ManagedShellAdapter::Zsh => ManagedShellKind::Zsh,
-                            mez_terminal::ManagedShellAdapter::Bash => return Ok(0),
+                            mez_terminal::ManagedShellAdapter::Bash
+                            | mez_terminal::ManagedShellAdapter::Posix => return Ok(0),
                         },
                         token,
                     )
@@ -209,6 +213,21 @@ impl RuntimeSessionService {
                 _ => Ok(0),
             };
         }
+        if shell == mez_terminal::ManagedShellAdapter::Posix {
+            if !self.active_managed_shell_token_matches(output_pane_id, shell, token) {
+                return Ok(0);
+            }
+            return match event {
+                mez_terminal::ManagedShellProtocolEvent::AdapterAvailable { trigger: None } => Ok(
+                    usize::from(self.begin_managed_agent_surface_bootstrap(output_pane_id)?),
+                ),
+                mez_terminal::ManagedShellProtocolEvent::AdapterUnavailable { reason } => {
+                    self.fail_runtime_agent_surface_startup(output_pane_id, reason)?;
+                    Ok(1)
+                }
+                _ => Ok(0),
+            };
+        }
         let managed_shell = match shell {
             mez_terminal::ManagedShellAdapter::Bash
                 if self
@@ -306,6 +325,9 @@ impl RuntimeSessionService {
                         version,
                     },
                 );
+                if self.begin_managed_agent_surface_bootstrap(output_pane_id)? {
+                    return Ok(1);
+                }
                 if self.agent_subshell_entry_is_deferred(output_pane_id) {
                     let _ = self.enter_agent_subshell_if_needed(output_pane_id)?;
                 }
@@ -518,7 +540,9 @@ impl RuntimeSessionService {
         let shell = match shell {
             mez_terminal::ManagedShellAdapter::Fish => ManagedShellKind::Fish,
             mez_terminal::ManagedShellAdapter::Zsh => ManagedShellKind::Zsh,
-            mez_terminal::ManagedShellAdapter::Bash => return Ok(0),
+            mez_terminal::ManagedShellAdapter::Bash | mez_terminal::ManagedShellAdapter::Posix => {
+                return Ok(0);
+            }
         };
         self.observe_managed_shell_parent_ready(pane_id, shell, token, marker, None)
     }
@@ -1089,6 +1113,9 @@ impl RuntimeSessionService {
                 trigger,
             },
         );
+        if self.begin_managed_agent_surface_bootstrap(output_pane_id)? {
+            return Ok(1);
+        }
         let _ =
             self.observe_passive_shell_prompt_candidate(output_pane_id, "managed-zsh-line-init")?;
         if self.agent_subshell_entry_is_deferred(output_pane_id)

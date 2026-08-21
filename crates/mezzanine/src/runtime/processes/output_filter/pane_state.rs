@@ -1136,6 +1136,8 @@ impl RuntimeSessionService {
                     self.recover_expired_managed_bash_admissions_at(current_unix_millis())?;
                 let zsh_admissions_recovered =
                     self.recover_expired_managed_zsh_admissions_at(current_unix_millis())?;
+                let agent_surface_startups_recovered =
+                    self.recover_expired_runtime_agent_surface_startups(current_unix_millis())?;
                 let reconciled = self.reconcile_agent_runtime_progress_paths_with_actor_progress(
                     actor_progress_turn_ids,
                 )?;
@@ -1143,6 +1145,7 @@ impl RuntimeSessionService {
                     .saturating_add(managed_shell_parent_restorations_recovered)
                     .saturating_add(bash_admissions_recovered)
                     .saturating_add(zsh_admissions_recovered)
+                    .saturating_add(agent_surface_startups_recovered)
                     .saturating_add(reconciled))
             }
         }
@@ -1185,6 +1188,7 @@ impl RuntimeSessionService {
         actor_progress_turn_ids: &BTreeSet<String>,
     ) -> bool {
         self.missing_pane_agent_turn_cleanup_needed()
+            || self.runtime_agent_surface_startup_timer_needed()
             || self.hidden_shell_render_retention_timer_needed()
             || self.stranded_agent_shell_dispatch_recovery_timer_needed()
             || self.unreachable_running_agent_turn_timer_needed_with_actor_progress(

@@ -7,7 +7,7 @@
 
 use super::{
     AgentShellSession, AgentShellVisibility, AgentTurnRecord, AgentTurnState, EventKind, MezError,
-    Result, RuntimeSessionService, json_escape, runtime_agent_finished_footer_line,
+    Result, RuntimeSessionService, TaskState, json_escape, runtime_agent_finished_footer_line,
     runtime_agent_pane_id, runtime_agent_turn_state_name, runtime_pane_by_id,
     runtime_unrecovered_failure_reason,
 };
@@ -410,7 +410,12 @@ impl RuntimeSessionService {
         suppressed_turn_id: Option<&str>,
     ) -> Result<usize> {
         let mut started = 0usize;
-        while let Some(running) = self.agent.agent_scheduler.start_ready() {
+        let startup_blocked_panes = self.runtime_agent_surface_blocked_panes();
+        while let Some(running) = self.agent.agent_scheduler.start_ready_where(|work| {
+            work.pane_id
+                .as_ref()
+                .is_none_or(|pane_id| !startup_blocked_panes.contains(pane_id))
+        }) {
             let turn = self
                 .agent_turn_ledger()
                 .turns()
@@ -481,6 +486,14 @@ impl RuntimeSessionService {
                     "scheduler_start"
                 },
             )?;
+            if previous_state == AgentTurnState::Queued {
+                self.emit_subagent_task_status(
+                    &turn,
+                    TaskState::Running,
+                    Some(0),
+                    "subagent task started",
+                )?;
+            }
             if suppressed_turn_id != Some(running.turn_id.as_str()) {
                 self.append_lifecycle_event(
                     EventKind::AgentStatus,

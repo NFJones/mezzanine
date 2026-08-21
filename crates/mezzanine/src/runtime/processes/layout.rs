@@ -8,9 +8,9 @@
 
 use super::{
     EventKind, MezError, PaneDescriptor, PaneId, PaneProcessStart, PaneResizeUpdate, PaneSizeSpec,
-    PaneSpawnDirectoryPolicy, PaneSpawnViewPolicy, Path, PathBuf, Result, RuntimeSessionService,
-    RuntimeSideEffect, Size, SplitDirection, WindowId, current_unix_seconds, json_escape,
-    new_window_pane_size, validate_pane_size,
+    PaneSpawnDirectoryPolicy, PaneSpawnViewPolicy, Path, PathBuf, Result,
+    RuntimePaneProcessPurpose, RuntimeSessionService, RuntimeSideEffect, Size, SplitDirection,
+    WindowId, current_unix_seconds, json_escape, new_window_pane_size, validate_pane_size,
 };
 use crate::runtime::PaneProcessIoEffect;
 
@@ -158,6 +158,7 @@ impl RuntimeSessionService {
         name: impl Into<String>,
         layout_policy: mez_mux::layout::LayoutPolicy,
         start_directory: Option<&Path>,
+        purpose: RuntimePaneProcessPurpose,
     ) -> Result<PaneProcessStart> {
         self.require_live()?;
         if self.session.primary_client_id() != Some(primary_client_id) {
@@ -169,6 +170,7 @@ impl RuntimeSessionService {
             name,
             layout_policy,
             start_directory,
+            purpose,
         )
     }
 
@@ -179,6 +181,7 @@ impl RuntimeSessionService {
         name: impl Into<String>,
         layout_policy: mez_mux::layout::LayoutPolicy,
         start_directory: Option<&Path>,
+        purpose: RuntimePaneProcessPurpose,
     ) -> Result<PaneProcessStart> {
         self.require_live()?;
         self.create_unfocused_window_in_group_with_pane_process_internal(
@@ -187,6 +190,7 @@ impl RuntimeSessionService {
             name,
             layout_policy,
             start_directory,
+            purpose,
         )
     }
 
@@ -198,6 +202,7 @@ impl RuntimeSessionService {
         name: impl Into<String>,
         layout_policy: mez_mux::layout::LayoutPolicy,
         start_directory: Option<&Path>,
+        purpose: RuntimePaneProcessPurpose,
     ) -> Result<PaneProcessStart> {
         validate_runtime_start_directory(start_directory)?;
         let previous_session = self.session.clone();
@@ -238,14 +243,18 @@ impl RuntimeSessionService {
             pane_id: pane.id.clone(),
             size,
         };
-        let started =
-            match self.start_pane_process_with_start_directory(descriptor, None, start_directory) {
-                Ok(started) => started,
-                Err(error) => {
-                    self.session = previous_session;
-                    return Err(error);
-                }
-            };
+        let started = match self.start_pane_process_with_start_directory_and_purpose(
+            descriptor,
+            None,
+            start_directory,
+            purpose,
+        ) {
+            Ok(started) => started,
+            Err(error) => {
+                self.session = previous_session;
+                return Err(error);
+            }
+        };
         self.append_lifecycle_event(
             EventKind::WindowChanged,
             format!(
@@ -453,8 +462,8 @@ impl RuntimeSessionService {
         window_id: &WindowId,
         direction: SplitDirection,
         select_new: bool,
-        explicit_command: Option<&str>,
         start_directory: Option<&Path>,
+        purpose: RuntimePaneProcessPurpose,
     ) -> Result<PaneProcessStart> {
         self.require_live()?;
         if self.session.primary_client_id() != Some(primary_client_id) {
@@ -465,8 +474,8 @@ impl RuntimeSessionService {
             window_id,
             direction,
             select_new,
-            explicit_command,
             start_directory,
+            purpose,
         )
     }
 
@@ -476,8 +485,8 @@ impl RuntimeSessionService {
         window_id: &WindowId,
         direction: SplitDirection,
         select_new: bool,
-        explicit_command: Option<&str>,
         start_directory: Option<&Path>,
+        purpose: RuntimePaneProcessPurpose,
     ) -> Result<PaneProcessStart> {
         self.require_live()?;
         self.split_pane_in_window_with_process_internal(
@@ -485,8 +494,8 @@ impl RuntimeSessionService {
             window_id,
             direction,
             select_new,
-            explicit_command,
             start_directory,
+            purpose,
         )
     }
 
@@ -497,8 +506,8 @@ impl RuntimeSessionService {
         window_id: &WindowId,
         direction: SplitDirection,
         select_new: bool,
-        explicit_command: Option<&str>,
         start_directory: Option<&Path>,
+        purpose: RuntimePaneProcessPurpose,
     ) -> Result<PaneProcessStart> {
         validate_runtime_start_directory(start_directory)?;
         let previous_session = self.session.clone();
@@ -529,10 +538,11 @@ impl RuntimeSessionService {
                 ));
             }
         };
-        match self.start_pane_process_with_start_directory(
+        match self.start_pane_process_with_start_directory_and_purpose(
             descriptor,
-            explicit_command,
+            None,
             start_directory,
+            purpose,
         ) {
             Ok(started) => Ok(started),
             Err(error) => {

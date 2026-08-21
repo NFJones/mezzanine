@@ -587,6 +587,11 @@ impl RuntimeSessionService {
                 mez_terminal::ManagedShellAdapter::Bash => super::super::ManagedShellKind::Bash,
                 mez_terminal::ManagedShellAdapter::Fish => super::super::ManagedShellKind::Fish,
                 mez_terminal::ManagedShellAdapter::Zsh => super::super::ManagedShellKind::Zsh,
+                mez_terminal::ManagedShellAdapter::Posix => {
+                    return Err(MezError::invalid_state(
+                        "POSIX startup admission cannot own a managed child handoff",
+                    ));
+                }
             };
             self.register_managed_shell_handoff(&marker, managed_shell, None);
         }
@@ -794,6 +799,9 @@ impl RuntimeSessionService {
                 self.process.pane_bootstrap_pending.remove(pane_id);
                 self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
             }
+        }
+        if self.settle_managed_agent_surface_bootstrap(pane_id)? {
+            return Ok(1);
         }
         self.resume_after_bootstrap_settlement(pane_id)?;
         Ok(1)

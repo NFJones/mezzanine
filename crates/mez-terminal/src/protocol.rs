@@ -250,6 +250,8 @@ pub enum ManagedShellAdapter {
     Bash,
     /// Fish command-line editor adapter.
     Fish,
+    /// POSIX interactive prompt startup adapter.
+    Posix,
     /// Zsh ZLE adapter.
     Zsh,
 }

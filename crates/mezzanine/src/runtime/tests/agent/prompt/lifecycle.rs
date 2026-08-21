@@ -24,6 +24,271 @@ fn runtime_cooperation_mode_accepts_prompt_shorthand_scope_words() {
     );
 }
 
+/// Verifies native runtime-owned subagent startup validates only root-process
+/// context and permits the child turn to start without pane bootstrap state.
+///
+/// This protects native mode from accidentally inheriting the foreign-shell
+/// prompt gate introduced for pane-mode compatibility startup.
+#[test]
+fn runtime_native_subagent_startup_bypasses_pane_bootstrap() {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                task_prompt: "inspect native startup".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    let pane_id = spawned["pane"]["pane_id"].as_str().unwrap();
+    let turn_id = spawned["turn"]["id"].as_str().unwrap();
+
+    assert_eq!(
+        service.runtime_agent_surface_startup_phase_for_tests(pane_id),
+        Some("ready")
+    );
+    assert!(!service.pane_bootstrap_is_pending_for_tests(pane_id));
+    assert!(!service.pane_has_uncertified_foreign_shell_boundary(pane_id));
+    assert!(service.agent_provider_task_is_pending(turn_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Running)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a POSIX pane-mode subagent remains queued until authenticated
+/// prompt admission and environment bootstrap settle, without creating a
+/// foreign-shell boundary or claiming provider capacity early.
+#[test]
+fn runtime_posix_subagent_startup_releases_queued_turn_after_bootstrap() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                task_prompt: "inspect managed startup".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    let pane_id = spawned["pane"]["pane_id"].as_str().unwrap().to_string();
+    let turn_id = spawned["turn"]["id"].as_str().unwrap().to_string();
+
+    assert_eq!(
+        service.runtime_agent_surface_startup_phase_for_tests(&pane_id),
+        Some("managed-admitting")
+    );
+    assert_eq!(service.agent_scheduler().snapshot().queued, 1);
+    assert_eq!(service.agent_scheduler().snapshot().running, 0);
+    assert!(!service.agent_provider_task_is_pending(&turn_id));
+    assert!(!service.pane_has_uncertified_foreign_shell_boundary(&pane_id));
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| transaction.pane_id != pane_id)
+    );
+
+    let token = service
+        .posix_startup_token_for_tests(&pane_id)
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        service
+            .observe_managed_shell_protocol_event(
+                &pane_id,
+                mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                mez_terminal::ManagedShellAdapter::Posix,
+                &token,
+                &mez_terminal::ManagedShellProtocolEvent::AdapterAvailable { trigger: None },
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service.runtime_agent_surface_startup_phase_for_tests(&pane_id),
+        Some("managed-bootstrapping")
+    );
+    assert_eq!(service.agent_scheduler().snapshot().queued, 1);
+
+    let (marker, bootstrap_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.pane_id == pane_id
+                && transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &marker,
+            &bootstrap_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+        )
+        .unwrap();
+    let output = "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\ttest-host\n\
+env\tuser\ttest-user\n\
+env\tshell_path\t/bin/sh\n\
+env\tshell_class\tposix-sh\n\
+env\tpath\t/usr/bin:/bin\n\
+env\tcwd\t/tmp\n\
+env\tgit_repo\t0\n\
+bootstrap\tcomplete\t1714500000\n";
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
+    transaction.observed_output_bytes = output.len();
+    transaction.observed_output_preview = output.to_string();
+    service
+        .observe_agent_shell_transaction_end(
+            &pane_id,
+            &marker,
+            &bootstrap_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+            0,
+        )
+        .unwrap();
+
+    assert_eq!(
+        service.runtime_agent_surface_startup_phase_for_tests(&pane_id),
+        Some("ready")
+    );
+    assert_eq!(service.agent_scheduler().snapshot().queued, 0);
+    assert_eq!(service.agent_scheduler().snapshot().running, 1);
+    assert!(service.agent_provider_task_is_pending(&turn_id));
+    assert!(!service.pane_bootstrap_is_pending_for_tests(&pane_id));
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a managed pane startup admission timeout fails the queued child
+/// turn and releases scheduler ownership instead of leaving it bootstrapping.
+#[test]
+fn runtime_subagent_startup_timeout_settles_queued_turn() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                task_prompt: "inspect startup timeout".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    let pane_id = spawned["pane"]["pane_id"].as_str().unwrap();
+    let turn_id = spawned["turn"]["id"].as_str().unwrap();
+
+    assert_eq!(
+        service
+            .recover_expired_runtime_agent_surface_startups(u64::MAX)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service.runtime_agent_surface_startup_phase_for_tests(pane_id),
+        Some("failed")
+    );
+    assert_eq!(service.agent_scheduler().snapshot().queued, 0);
+    assert_eq!(service.agent_scheduler().snapshot().running, 0);
+    assert!(!service.agent_provider_task_is_pending(turn_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a spawned subagent pane records the exact parent prompt before the
 /// child turn starts.
 ///

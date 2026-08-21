@@ -126,11 +126,24 @@ impl AgentScheduler {
     /// agent is preferred when available, and pane-conflicted turns are skipped
     /// without preventing later runnable work from starting.
     pub fn start_ready(&mut self) -> Option<RunningWork> {
+        self.start_ready_where(|_| true)
+    }
+
+    /// Starts the next queued turn accepted by runtime-specific readiness.
+    ///
+    /// Scheduler fairness and pane claims remain owned here, while callers may
+    /// impose a transient execution-surface gate without removing or rotating
+    /// rejected queue entries. A rejected candidate does not prevent a later
+    /// independent agent from starting.
+    pub fn start_ready_where(
+        &mut self,
+        mut predicate: impl FnMut(&ScheduledWork) -> bool,
+    ) -> Option<RunningWork> {
         if self.active_capacity_used() >= self.max_concurrent_agents {
             return None;
         }
-        self.start_ready_candidate(true)
-            .or_else(|| self.start_ready_candidate(false))
+        self.start_ready_candidate_where(true, &mut predicate)
+            .or_else(|| self.start_ready_candidate_where(false, &mut predicate))
     }
 
     /// Marks a running turn complete and removes it from active scheduler state.
@@ -376,13 +389,21 @@ impl AgentScheduler {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn start_ready_candidate(&mut self, prefer_new_agent: bool) -> Option<RunningWork> {
+    fn start_ready_candidate_where(
+        &mut self,
+        prefer_new_agent: bool,
+        predicate: &mut impl FnMut(&ScheduledWork) -> bool,
+    ) -> Option<RunningWork> {
         let candidate = self
             .ready_order
             .iter()
-            .find(|(_, agent_id, _)| {
-                !prefer_new_agent
-                    || self.last_started_agent_id.as_deref() != Some(agent_id.as_str())
+            .find(|(_, agent_id, turn_id)| {
+                (!prefer_new_agent
+                    || self.last_started_agent_id.as_deref() != Some(agent_id.as_str()))
+                    && self
+                        .queued
+                        .get(turn_id.as_str())
+                        .is_some_and(|queued| predicate(&queued.work))
             })?
             .clone();
         let work = self.remove_queued(&candidate.2)?;

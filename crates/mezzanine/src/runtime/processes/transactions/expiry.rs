@@ -367,6 +367,10 @@ impl RuntimeSessionService {
                 transaction.observed_output_truncated
             ),
         )?;
+        self.fail_runtime_agent_surface_startup(
+            &transaction.pane_id,
+            "managed pane bootstrap timed out",
+        )?;
         Ok(())
     }
 

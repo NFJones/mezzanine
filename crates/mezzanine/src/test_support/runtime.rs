@@ -88,6 +88,10 @@ impl RuntimeServiceFixture {
 
     /// Builds the runtime service.
     pub(crate) fn build(self) -> RuntimeSessionService {
+        if let Some(parent) = self.control_socket.parent() {
+            std::fs::create_dir_all(parent)
+                .expect("runtime fixture control socket parent should be creatable");
+        }
         let mut service = RuntimeSessionService::with_event_log(
             SessionFixture::new().size(self.size).build(),
             self.control_socket,

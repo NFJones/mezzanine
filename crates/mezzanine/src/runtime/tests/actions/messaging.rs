@@ -447,6 +447,7 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
     )
     .unwrap();
     let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
     let primary = service
         .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
         .unwrap();

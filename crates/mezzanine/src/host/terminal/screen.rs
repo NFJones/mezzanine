@@ -105,6 +105,7 @@ fn parse_managed_shell_protocol_event(values: &BTreeMap<&str, &str>) -> Option<T
     let shell = match values.get("mez_shell").copied()? {
         "bash" => ManagedShellAdapter::Bash,
         "fish" => ManagedShellAdapter::Fish,
+        "posix" => ManagedShellAdapter::Posix,
         "zsh" => ManagedShellAdapter::Zsh,
         _ => return None,
     };

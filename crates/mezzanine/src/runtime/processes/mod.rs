@@ -11,6 +11,7 @@ mod native_bubblewrap;
 mod native_shell_inference;
 pub(crate) mod output_filter;
 mod pane_pipes;
+mod posix_compat;
 mod spawned_shell;
 mod startup;
 mod transactions;
@@ -365,14 +366,32 @@ impl RuntimeForeignShellBootstrapPhase {
     }
 }
 
-/// Startup-installed compatibility retained only by historical protocol tests.
-#[cfg(test)]
+/// Selects startup behavior for a newly created pane process.
+///
+/// Ordinary user panes remain unmanaged. Runtime-owned agent panes select
+/// their shell execution mode before process launch so native startup never
+/// acquires pane-bootstrap state and pane mode can install authenticated
+/// process-local compatibility before any agent work is scheduled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimePaneProcessPurpose {
+    /// Launch the configured interactive shell without agent-owned adapters.
+    UserShell,
+    /// Launch a runtime-owned agent pane for the selected shell mode.
+    AgentOwned {
+        /// Effective mode selected before the child process starts.
+        shell_mode: crate::runtime::config::ShellMode,
+    },
+}
+
+/// Startup-installed compatibility retained for one managed pane process.
 #[derive(Debug)]
-struct LegacyManagedStartupFixture {
+struct ManagedPaneStartup {
     /// Resolved shell dialect used to select the historical adapter.
     classification: ShellClassification,
     /// Process-local Fish startup integration, when selected.
     fish: Option<fish_compat::ManagedFishCompatibility>,
+    /// Process-local POSIX startup integration, when selected.
+    posix: Option<posix_compat::ManagedPosixCompatibility>,
     /// Process-local Bash startup receiver, when selected.
     bash: Option<bash_compat::ManagedBashCompatibility>,
     /// Bash startup failure retained for legacy admission assertions.
@@ -733,6 +752,9 @@ pub(crate) struct RuntimeProcessComponent {
         std::collections::BTreeMap<String, fish_compat::ManagedFishCompatibility>,
     /// Authenticated managed-Fish receiver readiness keyed by pane id.
     pane_fish_admissions: std::collections::BTreeMap<String, RuntimeManagedFishAdmission>,
+    /// Managed POSIX prompt admission state keyed by pane id.
+    pane_posix_compatibility:
+        std::collections::BTreeMap<String, posix_compat::ManagedPosixCompatibility>,
     /// Managed Bash private receiver state keyed by pane id.
     pane_bash_compatibility:
         std::collections::BTreeMap<String, bash_compat::ManagedBashCompatibility>,
@@ -2513,21 +2535,6 @@ impl RuntimeSessionService {
         );
     }
 
-    /// Installs a live bounded managed-zsh startup admission for ordering
-    /// regressions that exercise the interval before the first prompt.
-    pub(crate) fn set_pending_managed_zsh_admission_for_tests(&mut self, pane_id: &str) {
-        let primary_process_id = self
-            .primary_pid_for_live_pane_process(pane_id)
-            .expect("the test pane must have a primary process");
-        self.process.pane_zsh_admissions.insert(
-            pane_id.to_string(),
-            RuntimeManagedZshAdmission::Pending {
-                primary_process_id,
-                started_at_unix_ms: Some(current_unix_millis()),
-            },
-        );
-    }
-
     /// Reports whether managed-zsh admission settled to one unavailable reason.
     pub(crate) fn managed_zsh_admission_unavailable_for_tests(
         &self,
@@ -2639,6 +2646,15 @@ impl RuntimeSessionService {
         self.managed_fish_adapter_is_ready_for_pane(pane_id)
     }
 
+    /// Returns the token authenticating managed POSIX startup admission.
+    pub(crate) fn posix_startup_token_for_tests(&self, pane_id: &str) -> Option<&str> {
+        self.process
+            .pane_posix_compatibility
+            .get(pane_id)
+            .map(posix_compat::ManagedPosixCompatibility::token)
+            .map(mez_agent::MarkerToken::as_str)
+    }
+
     /// Returns the process manager for integration-test observation.
     pub(crate) fn pane_processes(&self) -> &PaneProcessManager {
         &self.process.pane_processes
@@ -2710,19 +2726,19 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Builds historical startup-installed shell adapters for protocol tests.
-    #[cfg(test)]
-    fn legacy_managed_startup_fixture(
+    /// Builds startup-installed shell adapters for one explicitly managed pane.
+    fn managed_pane_startup_fixture(
         &self,
         descriptor: &PaneDescriptor,
         explicit_command: Option<&str>,
+        managed_startup_requested: bool,
     ) -> Result<(
         mez_mux::process::PaneProcessLaunch,
-        Option<LegacyManagedStartupFixture>,
+        Option<ManagedPaneStartup>,
     )> {
         let mut launch =
             mez_mux::process::PaneProcessLaunch::new(self.session.shell.path().to_path_buf());
-        if !self.process.legacy_managed_startup_for_tests || explicit_command.is_some() {
+        if !managed_startup_requested || explicit_command.is_some() {
             return Ok((launch, None));
         }
         let classification = ShellClassification::classify_with_probe(
@@ -2738,6 +2754,24 @@ impl RuntimeSessionService {
         } else {
             None
         };
+        let posix = if classification == ShellClassification::PosixSh {
+            let token = runtime_random_marker_token(&format!(
+                "posix-prompt\0{}\0{}",
+                self.session.id, descriptor.pane_id
+            ))?;
+            Some(posix_compat::ManagedPosixCompatibility::create(
+                self.session.socket_path(),
+                descriptor.pane_id.as_str(),
+                token,
+            )?)
+        } else {
+            None
+        };
+        if classification == ShellClassification::UnknownUnix {
+            return Err(MezError::invalid_state(
+                "pane-mode agent-owned startup does not support the resolved shell; select native shell mode",
+            ));
+        }
         let (bash, bash_diagnostic) = if classification == ShellClassification::Bash {
             let token = runtime_random_marker_token(&format!(
                 "bash-receiver\0{}\0{}",
@@ -2777,14 +2811,18 @@ impl RuntimeSessionService {
         if let Some(compatibility) = bash.as_ref() {
             launch = compatibility.configure_launch(launch);
         }
+        if let Some(compatibility) = posix.as_ref() {
+            launch = compatibility.configure_launch(launch);
+        }
         if let Some(compatibility) = zsh.as_ref() {
             launch = compatibility.configure_launch(launch);
         }
         Ok((
             launch,
-            Some(LegacyManagedStartupFixture {
+            Some(ManagedPaneStartup {
                 classification,
                 fish,
+                posix,
                 bash,
                 bash_diagnostic,
                 zsh,
@@ -3143,6 +3181,11 @@ impl RuntimeSessionService {
             mez_terminal::ManagedShellAdapter::Fish => self
                 .fish_receiver_token_for_pane(pane_id)
                 .is_some_and(|expected| expected.as_str() == token),
+            mez_terminal::ManagedShellAdapter::Posix => self
+                .process
+                .pane_posix_compatibility
+                .get(pane_id)
+                .is_some_and(|compatibility| compatibility.token().as_str() == token),
             mez_terminal::ManagedShellAdapter::Zsh => self
                 .zsh_history_token_for_pane(pane_id)
                 .is_some_and(|expected| expected.as_str() == token),
@@ -3880,6 +3923,22 @@ impl RuntimeSessionService {
         explicit_command: Option<&str>,
         start_directory: Option<&Path>,
     ) -> Result<PaneProcessStart> {
+        self.start_pane_process_with_start_directory_and_purpose(
+            descriptor,
+            explicit_command,
+            start_directory,
+            RuntimePaneProcessPurpose::UserShell,
+        )
+    }
+
+    /// Starts one pane process under an explicit user-shell or agent-owned contract.
+    pub(super) fn start_pane_process_with_start_directory_and_purpose(
+        &mut self,
+        descriptor: PaneDescriptor,
+        explicit_command: Option<&str>,
+        start_directory: Option<&Path>,
+        purpose: RuntimePaneProcessPurpose,
+    ) -> Result<PaneProcessStart> {
         self.process
             .pane_terminal_progress
             .remove(descriptor.pane_id.as_str());
@@ -3890,12 +3949,22 @@ impl RuntimeSessionService {
             &descriptor.pane_id,
             &self.process.settings.terminal_term,
         )?;
+        let runtime_managed_pane = matches!(
+            purpose,
+            RuntimePaneProcessPurpose::AgentOwned {
+                shell_mode: crate::runtime::config::ShellMode::Pane
+            }
+        );
+        let managed_admission_started_at = runtime_managed_pane.then(current_unix_millis);
         #[cfg(test)]
-        let (launch, legacy_startup) =
-            self.legacy_managed_startup_fixture(&descriptor, explicit_command)?;
+        let legacy_managed_startup = self.process.legacy_managed_startup_for_tests;
         #[cfg(not(test))]
-        let launch =
-            mez_mux::process::PaneProcessLaunch::new(self.session.shell.path().to_path_buf());
+        let legacy_managed_startup = false;
+        let (launch, managed_startup) = self.managed_pane_startup_fixture(
+            &descriptor,
+            explicit_command,
+            runtime_managed_pane || legacy_managed_startup,
+        )?;
         let launch = launch.with_environment_variable(
             "TERM_FEATURES",
             terminal_features_with_progress(std::env::var_os("TERM_FEATURES")),
@@ -3911,9 +3980,8 @@ impl RuntimeSessionService {
                 descriptor.size,
                 start_directory,
             )?;
-        #[cfg(test)]
-        if let Some(legacy) = legacy_startup {
-            if let Some(compatibility) = legacy.fish {
+        if let Some(managed) = managed_startup {
+            if let Some(compatibility) = managed.fish {
                 self.process
                     .pane_fish_compatibility
                     .insert(descriptor.pane_id.to_string(), compatibility);
@@ -3924,7 +3992,12 @@ impl RuntimeSessionService {
                     },
                 );
             }
-            if let Some(compatibility) = legacy.bash {
+            if let Some(compatibility) = managed.posix {
+                self.process
+                    .pane_posix_compatibility
+                    .insert(descriptor.pane_id.to_string(), compatibility);
+            }
+            if let Some(compatibility) = managed.bash {
                 self.process
                     .pane_bash_compatibility
                     .insert(descriptor.pane_id.to_string(), compatibility);
@@ -3932,20 +4005,20 @@ impl RuntimeSessionService {
                     descriptor.pane_id.to_string(),
                     RuntimeManagedBashAdmission::Pending {
                         primary_process_id: primary_pid,
-                        started_at_unix_ms: None,
+                        started_at_unix_ms: managed_admission_started_at,
                     },
                 );
-            } else if legacy.classification == ShellClassification::Bash {
+            } else if managed.classification == ShellClassification::Bash {
                 self.process.pane_bash_admissions.insert(
                     descriptor.pane_id.to_string(),
                     RuntimeManagedBashAdmission::Unavailable {
-                        reason: legacy
+                        reason: managed
                             .bash_diagnostic
                             .unwrap_or_else(|| "managed-startup-unavailable".to_string()),
                     },
                 );
             }
-            if let Some(compatibility) = legacy.zsh {
+            if let Some(compatibility) = managed.zsh {
                 self.process
                     .pane_zsh_compatibility
                     .insert(descriptor.pane_id.to_string(), compatibility);
@@ -3953,14 +4026,14 @@ impl RuntimeSessionService {
                     descriptor.pane_id.to_string(),
                     RuntimeManagedZshAdmission::Pending {
                         primary_process_id: primary_pid,
-                        started_at_unix_ms: None,
+                        started_at_unix_ms: managed_admission_started_at,
                     },
                 );
-            } else if legacy.classification == ShellClassification::Zsh {
+            } else if managed.classification == ShellClassification::Zsh {
                 self.process.pane_zsh_admissions.insert(
                     descriptor.pane_id.to_string(),
                     RuntimeManagedZshAdmission::Unavailable {
-                        reason: legacy
+                        reason: managed
                             .zsh_diagnostic
                             .unwrap_or_else(|| "managed-startup-unavailable".to_string()),
                     },
@@ -3989,6 +4062,18 @@ impl RuntimeSessionService {
         self.process
             .pane_readiness_states
             .insert(descriptor.pane_id.to_string(), PaneReadinessState::Unknown);
+        if let RuntimePaneProcessPurpose::AgentOwned { shell_mode } = purpose {
+            self.begin_runtime_agent_surface_startup(
+                descriptor.pane_id.as_str(),
+                shell_mode,
+                primary_pid,
+            );
+            if shell_mode == crate::runtime::config::ShellMode::Pane {
+                self.process
+                    .pane_bootstrap_pending
+                    .insert(descriptor.pane_id.to_string());
+            }
+        }
         #[cfg(test)]
         if self.process.legacy_managed_startup_for_tests
             && self.effective_agent_shell_mode_for_pane(descriptor.pane_id.as_str())
@@ -4470,6 +4555,7 @@ impl RuntimeSessionService {
             .remove(pane_id);
         self.clear_agent_routing_override(pane_id);
         self.clear_agent_shell_mode_override(pane_id);
+        self.clear_runtime_agent_surface_startup(pane_id);
         self.clear_agent_pane_artifacts(pane_id);
         self.clear_copy_state_for_pane(pane_id);
         self.process
@@ -4477,6 +4563,7 @@ impl RuntimeSessionService {
             .remove(pane_id);
         self.process.pane_fish_compatibility.remove(pane_id);
         self.process.pane_fish_admissions.remove(pane_id);
+        self.process.pane_posix_compatibility.remove(pane_id);
         self.process.pane_bash_compatibility.remove(pane_id);
         self.process.pane_bash_admissions.remove(pane_id);
         self.process.pane_zsh_compatibility.remove(pane_id);

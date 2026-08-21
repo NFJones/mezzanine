@@ -788,13 +788,17 @@ impl RuntimeSessionService {
             .next()
             .map(ToOwned::to_owned)
             .unwrap_or_else(Self::runtime_new_agent_conversation_id);
+        let copied_shell_mode = self.agent_shell_mode_override(pane_id);
+        let startup_mode = copied_shell_mode.unwrap_or_else(|| self.agent_default_shell_mode());
         let started = self.split_pane_in_window_with_process(
             primary_client_id,
             &source_descriptor.window_id,
             SplitDirection::Vertical,
             true,
-            None,
             source_start_directory.as_deref(),
+            crate::runtime::processes::RuntimePaneProcessPurpose::AgentOwned {
+                shell_mode: startup_mode,
+            },
         )?;
         let setup_result = (|| -> Result<_> {
             let summary = store.fork(&source, &target, current_unix_seconds().max(1))?;
@@ -825,7 +829,10 @@ impl RuntimeSessionService {
                 &started.pane_id,
                 format!("transcript:{}:{session_id}", started.pane_id),
             )?;
-            self.enter_agent_mode_for_pane(&started.pane_id)?;
+            if let Some(shell_mode) = copied_shell_mode {
+                self.set_agent_shell_mode_override(&started.pane_id, Some(shell_mode));
+            }
+            self.enter_runtime_owned_agent_mode_for_pane(&started.pane_id)?;
             if let Some(seed) = prompt_seed
                 && let Some(prompt_input) = self.agent_prompt_input_mut(&started.pane_id)
             {

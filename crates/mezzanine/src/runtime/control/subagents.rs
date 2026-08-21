@@ -422,11 +422,14 @@ impl RuntimeSessionService {
         };
         spawn.placement = "new-window".to_string();
         let child_start_directory = self.subagent_parent_working_directory(&spawn.parent_agent_id);
+        let child_startup_mode =
+            inherited_shell_mode.unwrap_or_else(|| self.agent_default_shell_mode());
         let started = self.spawn_subagent_pane_in_parent_group(
             controller,
             &spawn,
             requested_window_name,
             child_start_directory.as_deref(),
+            child_startup_mode,
         )?;
         let child_agent_id = format!("agent-{}", started.pane_id);
         if let Err(error) = self.apply_subagent_display_titles(
@@ -479,16 +482,9 @@ impl RuntimeSessionService {
                     .unwrap_or(&spawn.parent_agent_id),
             ),
         );
-        if let Err(error) = self.enter_agent_mode_for_pane(&started.pane_id) {
-            self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
-            return Err(error);
-        }
         let child_conversation_id = self
-            .agent_shell_store()
-            .get(&started.pane_id)
-            .ok_or_else(|| {
-                MezError::invalid_state("spawned subagent shell session is unavailable")
-            })?
+            .agent_shell_store_mut()
+            .enter_or_resume(&started.pane_id)?
             .session_id
             .clone();
         self.agent_shell_store_mut()
@@ -498,6 +494,10 @@ impl RuntimeSessionService {
                 0,
                 None,
             )?;
+        if let Err(error) = self.enter_runtime_owned_agent_mode_for_pane(&started.pane_id) {
+            self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
+            return Err(error);
+        }
         if let Some(profile_name) = profile.model_profile.as_deref() {
             self.provider_registry().resolve_profile(profile_name)?;
             self.integration
@@ -672,6 +672,7 @@ impl RuntimeSessionService {
         spawn: &SubagentSpawnRequest,
         requested_window_name: Option<&str>,
         start_directory: Option<&Path>,
+        startup_mode: crate::runtime::config::ShellMode,
     ) -> Result<PaneProcessStart> {
         self.prune_subagent_window_ids();
         let group_id = self.subagent_parent_group_id(&spawn.parent_agent_id)?;
@@ -684,8 +685,10 @@ impl RuntimeSessionService {
                     &window_id,
                     layout.split_direction,
                     true,
-                    None,
                     start_directory,
+                    crate::runtime::processes::RuntimePaneProcessPurpose::AgentOwned {
+                        shell_mode: startup_mode,
+                    },
                 );
             }
             self.session
@@ -694,8 +697,10 @@ impl RuntimeSessionService {
                 &window_id,
                 layout.split_direction,
                 true,
-                None,
                 start_directory,
+                crate::runtime::processes::RuntimePaneProcessPurpose::AgentOwned {
+                    shell_mode: startup_mode,
+                },
             );
         }
 
@@ -716,6 +721,9 @@ impl RuntimeSessionService {
                 name,
                 layout.policy,
                 start_directory,
+                crate::runtime::processes::RuntimePaneProcessPurpose::AgentOwned {
+                    shell_mode: startup_mode,
+                },
             )?
         } else {
             self.create_unfocused_window_in_group_with_pane_process_session_owned(
@@ -723,6 +731,9 @@ impl RuntimeSessionService {
                 name,
                 layout.policy,
                 start_directory,
+                crate::runtime::processes::RuntimePaneProcessPurpose::AgentOwned {
+                    shell_mode: startup_mode,
+                },
             )?
         };
         if generated_window_name {
@@ -1069,15 +1080,37 @@ impl RuntimeSessionService {
             &["agent-harness", "subagent", initial_status.cooperation_mode],
             now_ms,
         )?;
+        let state = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == initial_status.turn_id)
+            .map(|turn| match turn.state {
+                crate::runtime::AgentTurnState::Queued => TaskState::Queued,
+                _ => TaskState::Running,
+            })
+            .unwrap_or(TaskState::Queued);
         let task_status = TaskStatusPayload {
             task_id: initial_status.turn_id.to_string(),
-            state: TaskState::Running,
+            state,
             progress_percent: Some(0),
-            summary: "subagent task started".to_string(),
+            summary: if state == TaskState::Queued {
+                "subagent task queued for agent surface startup".to_string()
+            } else {
+                "subagent task started".to_string()
+            },
         };
         let envelope = Envelope {
             protocol: "mmp/1",
-            id: format!("{}:task_status:started", initial_status.turn_id),
+            id: format!(
+                "{}:task_status:{}",
+                initial_status.turn_id,
+                if state == TaskState::Queued {
+                    "queued"
+                } else {
+                    "started"
+                }
+            ),
             message_type: "task_status".to_string(),
             time: format!("runtime:{now_ms}"),
             sender: child_identity.clone(),

@@ -208,13 +208,39 @@ impl RuntimeSessionService {
     /// history, scoped child shell, and tracked PTY size in sync before agent
     /// work can run in the pane.
     pub(crate) fn enter_agent_mode_for_pane(&mut self, pane_id: &str) -> Result<String> {
+        self.enter_agent_mode_for_pane_with_origin(pane_id, false)
+    }
+
+    /// Shows agent mode for a pane whose execution backend was selected before launch.
+    pub(crate) fn enter_runtime_owned_agent_mode_for_pane(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<String> {
+        self.enter_agent_mode_for_pane_with_origin(pane_id, true)
+    }
+
+    /// Applies common agent presentation while keeping foreign-shell entry
+    /// exclusive to existing user-owned panes.
+    fn enter_agent_mode_for_pane_with_origin(
+        &mut self,
+        pane_id: &str,
+        runtime_owned: bool,
+    ) -> Result<String> {
         let conversation_id = self
             .agent_shell_store_mut()
             .enter_or_resume(pane_id)?
             .session_id
             .clone();
         self.reload_agent_prompt_history_for_pane(pane_id)?;
-        self.enter_agent_subshell_if_needed(pane_id)?;
+        if runtime_owned {
+            if self.runtime_agent_surface_startup(pane_id).is_none() {
+                return Err(MezError::invalid_state(
+                    "runtime-owned agent pane is missing its startup owner",
+                ));
+            }
+        } else {
+            self.enter_agent_subshell_if_needed(pane_id)?;
+        }
         self.sync_tracked_pty_sizes()?;
         let size = self
             .tracked_pane_descriptors()
@@ -228,6 +254,17 @@ impl RuntimeSessionService {
             .or_else(|| self.find_pane_descriptor(pane_id).map(|pane| pane.size))
             .ok_or_else(|| MezError::invalid_state("agent pane screen size is unavailable"))?;
         self.ensure_agent_pane_screen(pane_id, &conversation_id, size)?;
+        if runtime_owned
+            && self.effective_agent_shell_mode_for_pane(pane_id)
+                == crate::runtime::config::ShellMode::Native
+        {
+            self.native_shell_context_for_pane(pane_id)?;
+            if !self.complete_native_agent_surface_startup(pane_id) {
+                return Err(MezError::invalid_state(
+                    "native runtime-owned agent startup is not awaiting validation",
+                ));
+            }
+        }
         self.checkpoint_agent_session_metadata()?;
         self.request_agent_prompt_selector_extra_candidates_refresh(pane_id);
         Ok(conversation_id)

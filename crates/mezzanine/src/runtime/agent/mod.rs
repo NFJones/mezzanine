@@ -130,6 +130,7 @@ mod scheduler_state;
 mod shell_dispatch;
 mod shell_state;
 mod skills;
+mod startup;
 mod subagents;
 mod trace;
 mod turn_state;
@@ -202,6 +203,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_shell_mode: ShellMode,
     /// Explicit pane-local shell execution mode overrides.
     agent_shell_mode_overrides: BTreeMap<String, ShellMode>,
+    /// Mode-specific startup state for runtime-created agent panes.
+    agent_surface_startups: BTreeMap<String, startup::RuntimeAgentSurfaceStartup>,
     /// User-controlled host power policy for active agent turns.
     active_turn_sleep_inhibition: ActiveTurnSleepInhibition,
     /// Daemon-wide host power lease retained while canonical turns are running.

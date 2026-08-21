@@ -242,6 +242,7 @@ fn runtime_agent_macro_routed_loop_resolves_after_in_place_execution() {
     )
     .unwrap();
     let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
     service
         .agent_scheduler_mut()
         .set_max_concurrent_agents(1)

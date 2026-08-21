@@ -408,3 +408,34 @@ fn scheduler_multiple_dependency_waits_do_not_consume_active_capacity() {
     assert_eq!(scheduler.start_ready().unwrap().turn_id, "child");
     assert_eq!(scheduler.snapshot().active_capacity_used, 1);
 }
+
+/// Verifies a transient runtime readiness gate leaves rejected work queued
+/// while allowing an independent later agent to use available capacity.
+#[test]
+fn scheduler_runtime_gate_skips_unready_work_without_dequeuing_it() {
+    let mut scheduler = AgentScheduler::new(1).unwrap();
+    scheduler
+        .enqueue(work("gated", "gated-agent", "%1"))
+        .unwrap();
+    scheduler
+        .enqueue(work("ready", "ready-agent", "%2"))
+        .unwrap();
+
+    let started = scheduler
+        .start_ready_where(|work| work.turn_id != "gated")
+        .unwrap();
+
+    assert_eq!(started.turn_id, "ready");
+    assert_eq!(
+        scheduler
+            .queued_turns()
+            .map(|work| work.turn_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["gated"]
+    );
+    scheduler.complete("ready").unwrap();
+    assert_eq!(
+        scheduler.start_ready_where(|_| true).unwrap().turn_id,
+        "gated"
+    );
+}

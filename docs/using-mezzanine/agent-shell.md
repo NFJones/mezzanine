@@ -39,6 +39,14 @@ it applies to subsequent turns until `/plan off` (or `/plan toggle`) disables
 it. While enabled, the pane has no write sandbox scopes. Use `/plan status` to
 inspect the current mode.
 
+Runtime-created subagent and restored-agent panes select their effective shell
+mode before launching. Native mode validates the pane root process and starts
+agent work without writing bootstrap input to the pane. Pane mode launches an
+agent-owned Bash, Fish, Zsh, or POSIX `sh` startup adapter, then keeps the child
+task queued until authenticated admission and environment bootstrap complete.
+If that bounded startup fails, the child and its joined or routed parent are
+settled with a copyable diagnostic instead of remaining in `bootstrapping`.
+
 ## Work inside SSH and container shells
 
 When the pane enters SSH, a container shell, a chroot, or another nested
@@ -50,6 +58,10 @@ child through a one-command `/bin/sh` loader. No Mezzanine executable,
 startup-file modification, or preinstalled compatibility shim is required
 inside the nested environment, and host-side Bash, Fish, or Zsh tokens and
 startup files are never reused across this boundary.
+
+This explicit empty-prompt assertion applies only to an existing user-owned
+foreign environment. Runtime-created agent panes use their mode-specific
+startup contract and never enter this foreign-shell discovery path.
 
 Agent work waits for that dependency-free bootstrap to certify the foreign
 shell before generated input is released. Mezzanine never silently edits remote
