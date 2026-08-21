@@ -487,14 +487,11 @@ impl RuntimeSessionService {
                 }
                 if let Some(ansi_text) = entry.ansi_text.as_deref() {
                     self.ensure_current_agent_presentation_screen(pane_id)?;
-                    self.clear_agent_shell_output_status_line(pane_id)?;
-                    let screen = self.agent_pane_screen_mut(pane_id).ok_or_else(|| {
-                        MezError::invalid_state(
-                            "agent terminal presentation screen was not initialized",
-                        )
-                    })?;
+                    self.retire_agent_streaming_say_before_pane_write(pane_id)?;
+                    let (conversation_id, mut screen, preview_presentation) =
+                        self.agent_shell_preview_write_base(pane_id)?;
                     Self::feed_agent_terminal_screen(
-                        screen,
+                        &mut screen,
                         ansi_text.as_bytes(),
                         "replaying persisted agent presentation",
                     )?;
@@ -502,6 +499,12 @@ impl RuntimeSessionService {
                         screen
                             .set_recent_normal_copy_texts(&entry.copy_lines, AGENT_COPY_SKIP_LINE);
                     }
+                    self.install_agent_shell_preview_write(
+                        pane_id,
+                        &conversation_id,
+                        screen,
+                        preview_presentation,
+                    )?;
                     continue;
                 }
                 let styled_lines = entry
@@ -599,20 +602,113 @@ impl RuntimeSessionService {
         if !entries.iter().any(|entry| entry.source_text.is_some()) {
             return Ok(false);
         }
-        let previous = self.agent_pane_screen(pane_id).cloned();
-        let rebuilt = TerminalScreen::new_with_history_config(
-            size,
-            self.terminal_history_limit(),
-            self.terminal_history_rotate_lines(),
-        )?;
-        self.set_agent_pane_screen(pane_id.to_string(), session_id.clone(), rebuilt);
-        if let Err(error) =
-            self.replay_agent_presentation_entries_to_terminal_buffer(pane_id, &entries)
-        {
-            if let Some(previous) = previous {
+        let previous_screen = self.agent_pane_screen(pane_id).cloned();
+        let previous_preview = self
+            .presentation
+            .agent_shell_output_previews
+            .remove(pane_id);
+        let previous_streaming = self
+            .presentation
+            .agent_streaming_say_presentations
+            .remove(pane_id);
+        let preview_to_restore = previous_preview.clone().filter(|preview| {
+            preview.conversation_id == session_id
+                && previous_screen.as_ref() == Some(preview.installed_screen.as_ref())
+        });
+        let streaming_to_restore = previous_streaming.clone().filter(|streaming| {
+            streaming.conversation_id == session_id
+                && previous_screen.as_ref() == Some(streaming.installed_screen.as_ref())
+        });
+        let rebuild_result = (|| -> Result<()> {
+            let rebuilt = TerminalScreen::new_with_history_config(
+                size,
+                self.terminal_history_limit(),
+                self.terminal_history_rotate_lines(),
+            )?;
+            self.set_agent_pane_screen(pane_id.to_string(), session_id.clone(), rebuilt);
+            self.replay_agent_presentation_entries_to_terminal_buffer(pane_id, &entries)?;
+            let durable_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
+                MezError::invalid_state("resized agent presentation screen disappeared")
+            })?;
+            if let Some(mut preview) = preview_to_restore {
+                let content_columns = usize::from(size.columns)
+                    .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
+                    .max(1);
+                for state in preview.previews.values_mut() {
+                    state.lines = state
+                        .lines
+                        .iter()
+                        .map(|line| fit_agent_terminal_text_width(line, content_columns))
+                        .collect();
+                }
+                preview.baseline_screen = std::sync::Arc::new(durable_screen.clone());
+                preview.installed_screen = std::sync::Arc::new(durable_screen.clone());
+                self.presentation
+                    .agent_shell_output_previews
+                    .insert(pane_id.to_string(), preview);
+            }
+            if let Some(mut streaming) = streaming_to_restore {
+                streaming.baseline_screen = std::sync::Arc::new(durable_screen.clone());
+                streaming.provider_screen = std::sync::Arc::new(durable_screen.clone());
+                streaming.installed_screen = std::sync::Arc::new(durable_screen.clone());
+                streaming.projected_revision = None;
+                streaming.projected_context = None;
+                streaming.projected_actions = None;
+                streaming.projected_rationale = None;
+                streaming.projected_screen = None;
+                self.presentation
+                    .agent_streaming_say_presentations
+                    .insert(pane_id.to_string(), streaming);
+            }
+            if self
+                .presentation
+                .agent_shell_output_previews
+                .contains_key(pane_id)
+                || self
+                    .presentation
+                    .agent_streaming_say_presentations
+                    .contains_key(pane_id)
+            {
+                self.update_agent_streaming_screen(pane_id, &session_id, durable_screen.clone())?;
+            }
+            if let Some(work) = self.take_agent_streaming_say_projection_work(
+                pane_id,
+                self.presentation
+                    .agent_streaming_say_presentations
+                    .get(pane_id)
+                    .map(|streaming| streaming.turn_id.as_str())
+                    .unwrap_or(""),
+            )? {
+                let projection = Self::build_agent_streaming_say_projection(work)?;
+                if !self.apply_agent_streaming_say_projection_result(projection)? {
+                    return Err(MezError::invalid_state(
+                        "resized streaming presentation projection was rejected",
+                    ));
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = rebuild_result {
+            self.presentation
+                .agent_shell_output_previews
+                .remove(pane_id);
+            self.presentation
+                .agent_streaming_say_presentations
+                .remove(pane_id);
+            if let Some(previous) = previous_screen {
                 self.set_agent_pane_screen(pane_id.to_string(), session_id.clone(), previous);
             } else {
                 self.remove_agent_pane_screen(pane_id);
+            }
+            if let Some(preview) = previous_preview {
+                self.presentation
+                    .agent_shell_output_previews
+                    .insert(pane_id.to_string(), preview);
+            }
+            if let Some(streaming) = previous_streaming {
+                self.presentation
+                    .agent_streaming_say_presentations
+                    .insert(pane_id.to_string(), streaming);
             }
             return Err(error);
         }
@@ -1209,7 +1305,6 @@ impl RuntimeSessionService {
         match event {
             mez_agent::StreamingSayEvent::ResponseStarted { response_index } => {
                 self.ensure_current_agent_presentation_screen(pane_id)?;
-                self.clear_agent_shell_output_status_line(pane_id)?;
                 let conversation_id = self
                     .agent_shell_store()
                     .get(pane_id)
@@ -1239,13 +1334,8 @@ impl RuntimeSessionService {
                 {
                     return Ok(());
                 }
-                let baseline_screen =
-                    self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
-                        MezError::invalid_state(
-                            "streaming response presentation screen was not initialized",
-                        )
-                    })?;
-                let installed_screen = std::sync::Arc::new(baseline_screen.clone());
+                let (baseline_screen, installed_screen) =
+                    self.agent_streaming_base_and_installed_screens(pane_id, &conversation_id)?;
                 self.presentation
                     .agent_promoted_streaming_say_actions
                     .remove(&(pane_id.to_string(), turn_id.to_string()));
@@ -1255,8 +1345,9 @@ impl RuntimeSessionService {
                         turn_id: turn_id.to_string(),
                         response_index: *response_index,
                         conversation_id,
-                        baseline_screen: std::sync::Arc::new(baseline_screen),
-                        installed_screen,
+                        baseline_screen: std::sync::Arc::new(baseline_screen.clone()),
+                        provider_screen: std::sync::Arc::new(baseline_screen),
+                        installed_screen: std::sync::Arc::new(installed_screen),
                         rationale: None,
                         actions: std::collections::BTreeMap::new(),
                         shell_commands: std::collections::BTreeMap::new(),
@@ -1275,7 +1366,6 @@ impl RuntimeSessionService {
                 content_type,
             } => {
                 self.ensure_current_agent_presentation_screen(pane_id)?;
-                self.clear_agent_shell_output_status_line(pane_id)?;
                 let conversation_id = self
                     .agent_shell_store()
                     .get(pane_id)
@@ -1301,12 +1391,8 @@ impl RuntimeSessionService {
                     .agent_streaming_say_presentations
                     .contains_key(pane_id)
                 {
-                    let baseline_screen =
-                        self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
-                            MezError::invalid_state(
-                                "streaming say presentation screen was not initialized",
-                            )
-                        })?;
+                    let (baseline_screen, installed_screen) =
+                        self.agent_streaming_base_and_installed_screens(pane_id, &conversation_id)?;
                     self.presentation
                         .agent_promoted_streaming_say_actions
                         .remove(&(pane_id.to_string(), turn_id.to_string()));
@@ -1316,14 +1402,9 @@ impl RuntimeSessionService {
                             turn_id: turn_id.to_string(),
                             response_index: 0,
                             conversation_id,
-                            baseline_screen: std::sync::Arc::new(baseline_screen),
-                            installed_screen: std::sync::Arc::new(
-                                self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
-                                    MezError::invalid_state(
-                                        "streaming say presentation screen was not initialized",
-                                    )
-                                })?,
-                            ),
+                            baseline_screen: std::sync::Arc::new(baseline_screen.clone()),
+                            provider_screen: std::sync::Arc::new(baseline_screen),
+                            installed_screen: std::sync::Arc::new(installed_screen),
                             rationale: None,
                             actions: std::collections::BTreeMap::new(),
                             shell_commands: std::collections::BTreeMap::new(),
@@ -1538,7 +1619,6 @@ impl RuntimeSessionService {
     /// Initializes response-scoped provisional presentation for any source kind.
     fn ensure_agent_streaming_presentation(&mut self, pane_id: &str, turn_id: &str) -> Result<()> {
         self.ensure_current_agent_presentation_screen(pane_id)?;
-        self.clear_agent_shell_output_status_line(pane_id)?;
         let conversation_id = self
             .agent_shell_store()
             .get(pane_id)
@@ -1561,9 +1641,8 @@ impl RuntimeSessionService {
             .agent_streaming_say_presentations
             .contains_key(pane_id)
         {
-            let baseline_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
-                MezError::invalid_state("streaming presentation screen was not initialized")
-            })?;
+            let (baseline_screen, installed_screen) =
+                self.agent_streaming_base_and_installed_screens(pane_id, &conversation_id)?;
             self.presentation
                 .agent_promoted_streaming_say_actions
                 .remove(&(pane_id.to_string(), turn_id.to_string()));
@@ -1573,14 +1652,9 @@ impl RuntimeSessionService {
                     turn_id: turn_id.to_string(),
                     response_index: 0,
                     conversation_id,
-                    baseline_screen: std::sync::Arc::new(baseline_screen),
-                    installed_screen: std::sync::Arc::new(
-                        self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
-                            MezError::invalid_state(
-                                "streaming presentation screen was not initialized",
-                            )
-                        })?,
-                    ),
+                    baseline_screen: std::sync::Arc::new(baseline_screen.clone()),
+                    provider_screen: std::sync::Arc::new(baseline_screen),
+                    installed_screen: std::sync::Arc::new(installed_screen),
                     rationale: None,
                     actions: std::collections::BTreeMap::new(),
                     shell_commands: std::collections::BTreeMap::new(),
@@ -1596,28 +1670,97 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Installs one same-conversation streaming screen without disturbing the reader's viewport.
+    /// Returns the provider-only base and current composite for a new stream.
+    ///
+    /// Active shell previews remain independently owned above the provider base.
+    /// Stale preview lineage is discarded without changing the current pane.
+    fn agent_streaming_base_and_installed_screens(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+    ) -> Result<(TerminalScreen, TerminalScreen)> {
+        let current_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
+            MezError::invalid_state("streaming presentation screen was not initialized")
+        })?;
+        let preview = self
+            .presentation
+            .agent_shell_output_previews
+            .get(pane_id)
+            .cloned();
+        if let Some(preview) = preview.as_ref()
+            && preview.conversation_id == conversation_id
+            && preview.installed_screen.as_ref() == &current_screen
+        {
+            return Ok((preview.baseline_screen.as_ref().clone(), current_screen));
+        }
+        if preview.is_some() {
+            self.presentation
+                .agent_shell_output_previews
+                .remove(pane_id);
+        }
+        Ok((current_screen.clone(), current_screen))
+    }
+
+    /// Installs one provider-only screen with active shell previews recomposed.
+    ///
+    /// The provider and shell-preview states record the same exact composite
+    /// generation so delayed updates from either owner are fenced atomically.
     fn update_agent_streaming_screen(
         &mut self,
         pane_id: &str,
         conversation_id: &str,
-        screen: TerminalScreen,
+        provider_screen: TerminalScreen,
     ) -> Result<()> {
-        let installed_screen = std::sync::Arc::new(screen.clone());
-        if self.update_agent_pane_screen_preserving_interaction(pane_id, conversation_id, screen) {
-            if let Some(presentation) = self
-                .presentation
-                .agent_streaming_say_presentations
-                .get_mut(pane_id)
-                .filter(|presentation| presentation.conversation_id == conversation_id)
-            {
-                presentation.installed_screen = installed_screen;
-            }
-            return Ok(());
+        let current_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
+            MezError::invalid_state("streaming presentation screen was not initialized")
+        })?;
+        let preview_presentation = self
+            .presentation
+            .agent_shell_output_previews
+            .get(pane_id)
+            .cloned()
+            .filter(|preview| {
+                preview.conversation_id == conversation_id
+                    && preview.installed_screen.as_ref() == &current_screen
+            });
+        let mut installed_screen = provider_screen.clone();
+        if let Some(preview) = preview_presentation.as_ref() {
+            let ui_theme = self.presentation.settings.ui_theme.clone();
+            Self::append_agent_shell_previews_to_screen(
+                &mut installed_screen,
+                &preview.previews,
+                &ui_theme,
+            )?;
         }
-        Err(MezError::invalid_state(
-            "streaming presentation screen conversation changed",
-        ))
+        if !self.update_agent_pane_screen_preserving_interaction(
+            pane_id,
+            conversation_id,
+            installed_screen.clone(),
+        ) {
+            return Err(MezError::invalid_state(
+                "streaming presentation screen conversation changed",
+            ));
+        }
+        self.presentation
+            .agent_shell_output_previews
+            .remove(pane_id);
+        if let Some(mut preview) = preview_presentation {
+            preview.baseline_screen = std::sync::Arc::new(provider_screen.clone());
+            preview.installed_screen = std::sync::Arc::new(installed_screen.clone());
+            self.presentation
+                .agent_shell_output_previews
+                .insert(pane_id.to_string(), preview);
+        }
+        if let Some(presentation) = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get_mut(pane_id)
+            .filter(|presentation| presentation.conversation_id == conversation_id)
+        {
+            presentation.provider_screen = std::sync::Arc::new(provider_screen);
+            presentation.installed_screen = std::sync::Arc::new(installed_screen);
+        }
+        Ok(())
     }
 
     /// Appends one existing styled prefix for a provisional plain-text source.
@@ -1634,9 +1777,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .ok_or_else(|| MezError::invalid_state("streaming presentation is unavailable"))?;
         let conversation_id = presentation.conversation_id.clone();
-        let mut candidate = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
-            MezError::invalid_state("streaming presentation screen was not initialized")
-        })?;
+        let mut candidate = presentation.provider_screen.as_ref().clone();
         let cursor = candidate.cursor_state();
         let current_line_has_content = candidate
             .visible_lines()
@@ -1665,9 +1806,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .ok_or_else(|| MezError::invalid_state("streaming say presentation is unavailable"))?;
         let conversation_id = presentation.conversation_id.clone();
-        let mut candidate = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
-            MezError::invalid_state("streaming say presentation screen was not initialized")
-        })?;
+        let mut candidate = presentation.provider_screen.as_ref().clone();
         let cursor = candidate.cursor_state();
         let current_line_has_content = candidate
             .visible_lines()
@@ -2375,7 +2514,8 @@ impl RuntimeSessionService {
         let current_projected_actions = presentation.projected_actions.as_ref().filter(|_| {
             presentation.projected_revision == Some(presentation.revision)
                 && projection_context_is_current
-                && presentation.projected_screen.as_deref() == self.agent_pane_screen(pane_id)
+                && presentation.projected_screen.as_deref()
+                    == Some(presentation.provider_screen.as_ref())
         });
         let command_can_promote = batch.is_some_and(|batch| {
             presentation.rationale.as_ref().is_some_and(|rationale| {
@@ -2671,7 +2811,6 @@ impl RuntimeSessionService {
             return Ok(());
         }
         self.ensure_current_agent_presentation_screen(pane_id)?;
-        self.retire_agent_streaming_say_before_pane_write(pane_id)?;
         let columns = usize::from(
             self.agent_pane_screen(pane_id)
                 .ok_or_else(|| {
@@ -2712,14 +2851,24 @@ impl RuntimeSessionService {
                 .agent_shell_output_previews
                 .remove(pane_id);
         }
+        let preview_baseline = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get(pane_id)
+            .filter(|streaming| {
+                streaming.conversation_id == conversation_id
+                    && streaming.installed_screen.as_ref() == &current_screen
+            })
+            .map(|streaming| streaming.provider_screen.as_ref().clone())
+            .unwrap_or_else(|| current_screen.clone());
         let mut presentation = self
             .presentation
             .agent_shell_output_previews
             .remove(pane_id)
             .unwrap_or_else(|| super::super::RuntimeAgentShellPreviewPresentation {
                 conversation_id: conversation_id.clone(),
-                baseline_screen: std::sync::Arc::new(current_screen.clone()),
-                installed_screen: std::sync::Arc::new(current_screen),
+                baseline_screen: std::sync::Arc::new(preview_baseline),
+                installed_screen: std::sync::Arc::new(current_screen.clone()),
                 next_order: 0,
                 previews: std::collections::BTreeMap::new(),
                 settled_owners: std::collections::BTreeSet::new(),
@@ -2768,6 +2917,17 @@ impl RuntimeSessionService {
             return Err(MezError::invalid_state(
                 "shell preview presentation conversation changed",
             ));
+        }
+        if let Some(streaming) = self
+            .presentation
+            .agent_streaming_say_presentations
+            .get_mut(pane_id)
+            .filter(|streaming| {
+                streaming.conversation_id == conversation_id
+                    && streaming.installed_screen.as_ref() == &current_screen
+            })
+        {
+            streaming.installed_screen = installed_screen.clone();
         }
         presentation.installed_screen = installed_screen;
         self.presentation

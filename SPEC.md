@@ -2235,6 +2235,17 @@ preview compositor; a lineage mismatch MUST discard stale preview metadata
 without changing the intervening pane content. A settled shell preview MAY keep
 its final bounded tail visible until the next durable pane append, but transient
 preview rows MUST NOT become durable presentation records or resume history.
+Provider streaming and shell previews MUST share one composite screen lineage:
+provider projections MUST update a preview-free provider base and then reapply
+active shell previews in stable owner order, while shell preview updates MUST
+preserve valid provisional provider output. Resize MUST rebuild durable source
+only, then reproject current provider source and active shell previews without
+persisting either transient layer. Durable replay and successful resume MUST
+exclude transient layers. Failed-transition rollback MAY restore transient
+ownership only when the active conversation and exact installed screen still
+match the captured snapshot; otherwise it MUST discard stale transient metadata
+without mutating intervening pane content. Conversation rebind and pane teardown
+MUST remove all transient provider and shell-preview ownership.
 While a provider response streams, Mezzanine MUST accept provisional visible
 source only from a structurally established supported `say.text`, the direct
 batch-level `rationale` string, or a direct `shell_command.command` string. A

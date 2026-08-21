@@ -413,7 +413,9 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     conversation_id: String,
     /// Exact pane state restored before each rich-source reprojection.
     baseline_screen: std::sync::Arc<TerminalScreen>,
-    /// Exact pane screen most recently installed by provisional streaming.
+    /// Latest provider-only screen before shell previews are composited.
+    provider_screen: std::sync::Arc<TerminalScreen>,
+    /// Exact composite screen most recently installed by provisional streaming.
     installed_screen: std::sync::Arc<TerminalScreen>,
     /// Direct batch rationale accumulated from the provider stream.
     rationale: Option<RuntimeStreamingTextSource>,
@@ -850,8 +852,27 @@ impl RuntimeSessionService {
     pub(crate) fn restore_agent_resume_presentation(
         &mut self,
         pane_id: &str,
-        snapshot: RuntimeAgentResumePresentationSnapshot,
+        mut snapshot: RuntimeAgentResumePresentationSnapshot,
     ) {
+        let current_screen = self.agent_pane_screen(pane_id).cloned();
+        let current_conversation = self
+            .agent_pane_screen_state(pane_id)
+            .map(|state| state.conversation_id().to_string());
+        snapshot.shell_output_previews = snapshot.shell_output_previews.take().filter(|preview| {
+            current_conversation.as_deref() == Some(preview.conversation_id.as_str())
+                && current_screen.as_ref() == Some(preview.installed_screen.as_ref())
+        });
+        snapshot.streaming_say_presentation =
+            snapshot
+                .streaming_say_presentation
+                .take()
+                .filter(|streaming| {
+                    current_conversation.as_deref() == Some(streaming.conversation_id.as_str())
+                        && current_screen.as_ref() == Some(streaming.installed_screen.as_ref())
+                });
+        if snapshot.streaming_say_presentation.is_none() {
+            snapshot.promoted_streaming_say_actions.clear();
+        }
         self.presentation.agent_prompt_inputs.remove(pane_id);
         self.presentation
             .agent_prompt_selector_refreshes
