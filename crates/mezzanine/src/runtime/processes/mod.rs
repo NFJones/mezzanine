@@ -3728,6 +3728,9 @@ impl RuntimeSessionService {
         self.process
             .pane_current_working_directories
             .remove(process.pane_id.as_str());
+        self.process
+            .pane_terminal_progress
+            .remove(process.pane_id.as_str());
         self.fail_agent_turns_for_pane_shutdown(
             std::slice::from_ref(&process.pane_id),
             "pane primary process exited",

@@ -265,6 +265,11 @@ impl RuntimeSessionService {
                 };
                 changed || event_changed
             });
+        let terminal_progress_before_shell_events = self
+            .process
+            .pane_terminal_progress
+            .get(output.pane_id.as_str())
+            .copied();
         self.apply_terminal_osc_events(&osc_events)?;
         if alternate_active {
             self.process.pane_readiness_overrides.revoke(
@@ -283,6 +288,12 @@ impl RuntimeSessionService {
         }
         self.record_running_shell_transaction_output(output.pane_id.as_str(), &transaction_bytes);
         self.observe_agent_shell_transaction_events(output.pane_id.as_str(), &osc_events)?;
+        let terminal_progress_changed_by_shell_event = terminal_progress_before_shell_events
+            != self
+                .process
+                .pane_terminal_progress
+                .get(output.pane_id.as_str())
+                .copied();
         if self.agent_subshell_input_clear_is_pending(output.pane_id.as_str())
             && transaction_bytes
                 .iter()
@@ -354,7 +365,8 @@ impl RuntimeSessionService {
             background,
             invalidate_output_frame: alternate_screen_switched
                 || synchronized_output.full_redraw
-                || progress_changed,
+                || progress_changed
+                || terminal_progress_changed_by_shell_event,
             defer_render,
         };
         self.append_pane_output_event(&update)?;

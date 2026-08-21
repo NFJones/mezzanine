@@ -1554,6 +1554,10 @@ fn runtime_service_ignores_late_pane_output_after_exit_event() {
         .session
         .split_active_pane(&primary, SplitDirection::Vertical)
         .unwrap();
+    service.process.pane_terminal_progress.insert(
+        started.pane_id.clone(),
+        mez_terminal::TerminalProgressState::Normal { percent: 42 },
+    );
 
     let update = service
         .apply_pane_process_exit_event(
@@ -1583,6 +1587,12 @@ fn runtime_service_ignores_late_pane_output_after_exit_event() {
             .iter()
             .flat_map(|window| window.panes())
             .any(|pane| pane.id.as_str() == second_pane.as_str())
+    );
+    assert!(
+        !service
+            .process
+            .pane_terminal_progress
+            .contains_key(started.pane_id.as_str())
     );
 
     let late_output = service
@@ -2279,6 +2289,22 @@ fn runtime_tracks_terminal_progress_per_pane() {
         Some(42)
     );
 
+    let update = service
+        .apply_pane_process_output(
+            mez_mux::process::PaneProcessOutput {
+                pane_id: "%1".to_string(),
+                primary_pid,
+                bytes: b"\x1b]133;D;0\x07".to_vec(),
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+    assert!(update.invalidate_output_frame);
+    assert_eq!(
+        service.terminal_frame_context().panes["%1"].terminal_progress_percent,
+        None
+    );
+
     service
         .apply_pane_process_output(
             mez_mux::process::PaneProcessOutput {
@@ -2299,11 +2325,14 @@ fn runtime_tracks_terminal_progress_per_pane() {
             mez_mux::process::PaneProcessOutput {
                 pane_id: "%1".to_string(),
                 primary_pid,
-                bytes: b"\x1b]9;4;0\x07".to_vec(),
+                // Cargo sends this terminal-progress clear record after its
+                // final determinate update.
+                bytes: b"\x1b]9;4;0;0\x07".to_vec(),
             },
             &mut std::collections::BTreeSet::new(),
         )
         .unwrap();
+    assert!(update.invalidate_output_frame);
     assert!(!service.process.pane_terminal_progress.contains_key("%1"));
     service.terminate_all_pane_processes().unwrap();
 }

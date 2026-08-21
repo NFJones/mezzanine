@@ -2000,7 +2000,16 @@ impl RuntimeSessionService {
                             )?);
                     }
                 }
-                TerminalOscEvent::ShellCommandFinished { .. } => {}
+                TerminalOscEvent::ShellCommandFinished { .. } => {
+                    if self
+                        .process
+                        .pane_terminal_progress
+                        .remove(output_pane_id)
+                        .is_some()
+                    {
+                        observed = observed.saturating_add(1);
+                    }
+                }
                 TerminalOscEvent::ShellCommandOutputStart => {
                     if !observed_harness_transaction_end {
                         observed =

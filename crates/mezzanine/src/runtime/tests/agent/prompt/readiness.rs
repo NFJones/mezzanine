@@ -60,14 +60,19 @@ fn runtime_passive_readiness_waits_for_prompt_end_marker() {
     );
 
     service.set_pane_readiness("%1", PaneReadinessState::Busy);
+    service.process.pane_terminal_progress.insert(
+        "%1".to_string(),
+        mez_terminal::TerminalProgressState::Normal { percent: 42 },
+    );
     let command_finished = service
         .observe_agent_shell_transaction_events(
             "%1",
             &[TerminalOscEvent::ShellCommandFinished { exit_code: Some(0) }],
         )
         .unwrap();
-    assert_eq!(command_finished, 0);
+    assert_eq!(command_finished, 1);
     assert_eq!(service.pane_readiness_state("%1"), PaneReadinessState::Busy);
+    assert!(!service.process.pane_terminal_progress.contains_key("%1"));
 
     let prompt_end = service
         .observe_agent_shell_transaction_events("%1", &[TerminalOscEvent::ShellPromptEnd])

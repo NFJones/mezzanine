@@ -259,18 +259,19 @@ pub(in crate::host::terminal::render) fn pane_frame_row_layout(
     fill: char,
 ) -> PaneFrameRowLayout<&'static str> {
     let mut text = render_pane_frame_template(window, pane, frame_context, template);
+    let title_width = fitted_text_width(&text, usize::MAX);
     let progress_segment = if template == DEFAULT_PANE_FRAME_TEMPLATE {
         frame_context
             .panes
             .get(pane.id.as_str())
             .and_then(|context| context.terminal_progress_percent)
             .map(|percent| {
-                let start = fitted_text_width(&text, usize::MAX).saturating_sub(1);
-                let display = format!("{percent}% ");
+                let start = title_width.saturating_add(1);
+                let display = format!("  {percent}% ");
                 text.push_str(&display);
                 FrameStatusSegment {
                     start,
-                    width: fitted_text_width(&display, usize::MAX).saturating_add(1),
+                    width: fitted_text_width(&display, usize::MAX).saturating_sub(1),
                     key: "pane.progress",
                     value: percent.to_string(),
                 }
@@ -283,6 +284,7 @@ pub(in crate::host::terminal::render) fn pane_frame_row_layout(
     if let Some(segment) = progress_segment
         && segment.start.saturating_add(segment.width) <= layout.left_text_width
     {
+        layout.left_text_width = title_width;
         layout.right_status_segments.push(segment);
     }
     layout

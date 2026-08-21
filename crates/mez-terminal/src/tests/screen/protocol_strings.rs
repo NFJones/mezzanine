@@ -36,7 +36,8 @@ fn terminal_screen_parses_osc_9_4_progress() {
     screen.feed(b"\x1b]9;4;2;80\x07");
     screen.feed(b"\x1b]9;4;3\x07");
     screen.feed(b"\x1b]9;4;4;12\x07");
-    screen.feed(b"\x1b]9;4;0\x07after");
+    // Cargo retains its percentage field when clearing, producing `0;0`.
+    screen.feed(b"\x1b]9;4;0;0\x07after");
 
     assert_eq!(
         screen.drain_osc_events(),
@@ -63,7 +64,7 @@ fn terminal_screen_rejects_malformed_osc_9_4_progress() {
         b"\x1b]9;4;1\x07".as_slice(),
         b"\x1b]9;4;1;101\x07".as_slice(),
         b"\x1b]9;4;3;20\x07".as_slice(),
-        b"\x1b]9;4;0;0\x07".as_slice(),
+        b"\x1b]9;4;0;1\x07".as_slice(),
         b"\x1b]9;4;1;20;extra\x07".as_slice(),
         b"\x1b]9;5;1;20\x07".as_slice(),
     ] {

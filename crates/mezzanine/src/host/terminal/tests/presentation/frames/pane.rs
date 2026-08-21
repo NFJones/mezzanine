@@ -220,7 +220,7 @@ fn render_default_pane_frame_shows_active_terminal_progress() {
         )
         .unwrap()
     };
-    assert!(render(&frame_context)[0].starts_with(" 0 shell 42% "));
+    assert!(render(&frame_context)[0].starts_with(" 0 shell   42% "));
     frame_context
         .panes
         .get_mut(&pane_id)
