@@ -62,6 +62,9 @@ pub(crate) fn runtime_mutating_method(method: &str) -> bool {
             | "agent/spawn"
             | "project/trust/decide"
             | "project/trust/revoke"
+            | "remote/invite"
+            | "remote/client/rename"
+            | "remote/client/revoke"
             | "mcp/retry"
             | "session/kill"
     )

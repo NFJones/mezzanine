@@ -2905,6 +2905,38 @@ daemon restart. The v66 to v67 primary-config migration MUST materialize the
 conservative disabled transport defaults in all supported formats without
 enabling network activity.
 
+An authenticated Iroh endpoint ID MUST be treated only as transport and device
+evidence; it MUST NOT directly grant a Mezzanine role, session visibility, or
+method authority. An Iroh control connection MUST begin with
+`control/initialize` and MUST authenticate as `primary` or `observer` with
+exactly one of `extension:iroh_invitation` or `extension:iroh_device`. Agent and
+automation roles MUST remain unavailable over this pairing contract.
+
+A pairing invitation MUST be cryptographically random, short-lived,
+single-use, bound to the current server endpoint identity and a role ceiling,
+and persisted only as a verifier. Invitation redemption MUST be transactional
+with ordinary control initialization: a failed initialization MUST NOT consume
+the invitation, create trust, bind a remote principal, or attach a session
+client. The successful first pairing response MAY include a one-time
+`device_credential`; later responses, status and list results, errors, debug
+output, and audit records MUST NOT disclose it. Durable trust MUST bind the
+server endpoint identity, authenticated client endpoint identity, stable trust
+record ID, role ceiling, revocation state, and a verifier for the device
+credential. Reconnects MUST fail closed for an unknown, revoked, mismatched, or
+role-exceeding record.
+
+`remote/status`, `remote/invite`, `remote/client/list`,
+`remote/client/rename`, and `remote/client/revoke` MUST require an initialized
+primary client over the authenticated local Unix control transport. A paired
+Iroh primary MUST NOT administer remote trust. Mutating administration MUST use
+normal control idempotency. Endpoint keys and trust state MUST be stored under
+private per-session paths with exclusive mutation or live-use locking,
+no-follow protected-file opens, atomic writes, bounded record and byte counts,
+and owner-only permissions. Audit records MUST identify invitation creation,
+pairing success or rejection, rename, and revocation without storing endpoint
+private keys, invitation tokens, device credentials, or persisted verifiers.
+Unix control MUST remain available as the recovery and revocation path.
+
 Mezzanine schema version 2 MUST NOT support `session.default_command`. The
 version 1 to version 2 primary-config migration MUST remove
 `session.default_command`. If a current-schema configuration layer still

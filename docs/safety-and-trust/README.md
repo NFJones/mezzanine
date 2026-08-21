@@ -17,6 +17,7 @@ This section owns the following safety guidance:
 - [Approvals and review](approvals-and-review.md)
 - [Sandboxing](sandboxing.md)
 - [Project trust and instructions](project-trust-and-instructions.md)
+- [Remote pairing and recovery](remote-pairing-and-recovery.md)
 - [Audit and diagnostics](audit-and-diagnostics.md)
 
 ## Related pages

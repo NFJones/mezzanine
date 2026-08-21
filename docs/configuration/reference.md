@@ -118,6 +118,7 @@ shown.
 | `model_profiles` | map | omitted on first launch; built-in catalog shown below | Model profile definitions. |
 | `model_presets` | map | omitted on first launch; built-in catalog shown below | Named default and automatic-sizing model-profile selections. |
 | `permissions` | table | see below | Approval, command, and authority policy. |
+| `transport` | table | see below | Primary-user-only, disabled-by-default remote transport policy. |
 | `providers` | map | omitted on first launch; built-in catalog shown below | Provider connection profiles. |
 | `subagents` | map | `{}` | Named subagent profiles. |
 | `personalities` | map | `{}` | User-defined agent personalities. |
@@ -128,9 +129,39 @@ shown.
 | `audit` | table | see below | Security audit logging. |
 | `extensions` | map | `{}` | Implementation-specific extension data. |
 
-Shell discovery, pane layout, local messaging, control-endpoint transport, and
-snapshot storage are runtime behavior rather than configurable schema tables.
-Use the relevant task and reference pages to inspect those live facilities.
+Shell discovery, pane layout, local messaging, and snapshot storage are runtime
+behavior rather than configurable schema tables. Use the relevant task and
+reference pages to inspect those live facilities.
+
+### `transport.iroh`
+
+This primary-user-only table is conservative and disabled by default. Project
+overlays and model-authored configuration changes cannot enable or retarget it.
+Unix sockets remain the default control and recovery transport. Network policy
+changes require a daemon restart.
+
+| Field | Type | Default declaration | Description |
+| --- | --- | --- | --- |
+| `transport.iroh.enabled` | boolean | `false` | Opt in to the Iroh transport when an Iroh listener is available. |
+| `transport.iroh.identity` | string | `"per_session"` | Persist a distinct protected endpoint identity for each session. |
+| `transport.iroh.address_lookup` | string | `"disabled"` | Endpoint-address lookup policy. |
+| `transport.iroh.address_lookup_domain` | string | `""` | Explicit lookup domain when lookup policy requires one. |
+| `transport.iroh.relay_mode` | string | `"disabled"` | Relay policy; relay use is independent from direct connectivity. |
+| `transport.iroh.relay_urls` | string array | `[]` | Explicit relay URLs. |
+| `transport.iroh.direct_connections` | boolean | `true` | Permit direct peer connections. |
+| `transport.iroh.port_mapping` | boolean | `false` | Permit automatic port mapping. |
+| `transport.iroh.proxy_from_env` | boolean | `false` | Inherit supported proxy settings from the process environment. |
+| `transport.iroh.system_ca_store` | boolean | `false` | Use the system CA store for applicable HTTPS infrastructure. |
+| `transport.iroh.invitation_ttl_seconds` | integer | `600` | Default invitation lifetime; valid values are 30 through 86400 seconds. |
+| `transport.iroh.max_connections` | integer | `16` | Maximum remote connections; valid values are 1 through 1024. |
+| `transport.iroh.max_streams_per_connection` | integer | `2` | Maximum accepted streams per connection; valid values are 1 through 16. |
+| `transport.iroh.setup_timeout_ms` | integer | `10000` | Bounded connection setup timeout. |
+| `transport.iroh.idle_timeout_ms` | integer | `300000` | Bounded idle timeout. |
+
+Running `mez remote status` through local Unix control ensures the protected
+per-session endpoint identity exists and reports its public endpoint ID. The
+private endpoint key and trust database are not configuration fields and must
+not be edited directly. See [Remote pairing and recovery](../safety-and-trust/remote-pairing-and-recovery.md).
 
 ### `runtime`
 

@@ -11,8 +11,8 @@ use super::{
     CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, MezError, OsString,
     PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, ensure_private_socket_directory, io,
     json_escape, prune_stale_socket_files_in_directory, run_attach, run_auth, run_config,
-    run_control_request, run_issue, run_list, run_mcp, run_memory, run_new, run_sandbox, run_serve,
-    run_snapshot,
+    run_control_request, run_issue, run_list, run_mcp, run_memory, run_new, run_remote,
+    run_sandbox, run_serve, run_snapshot,
 };
 
 // Top-level CLI run and command dispatch.
@@ -255,6 +255,9 @@ pub async fn run_with<W: Write, E: Write>(
         }
         Some(CliCommand::Memory(args)) => {
             run_memory(args, env, output_format, stdout)?;
+        }
+        Some(CliCommand::Remote(args)) => {
+            run_remote(args, &socket_selection, output_format, stdout)?;
         }
         Some(CliCommand::Sandbox(args)) => {
             exit_code = run_sandbox(args, env, interactive, output_format, stdout)?;

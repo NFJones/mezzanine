@@ -14,6 +14,7 @@ use super::{
 #[cfg(test)]
 use super::{decode_control_frame, encode_control_body};
 use crate::control::AuthenticatedPeer;
+use crate::security::remote::RemotePrincipal;
 /// Carries Control Connection State state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -25,6 +26,8 @@ pub struct ControlConnectionState {
     /// This identity is deliberately separate from the initialized client and
     /// its application role.
     pub(super) authenticated_peer: Option<AuthenticatedPeer>,
+    /// Application authority resolved from pairing or durable device proof.
+    pub(super) remote_principal: Option<RemotePrincipal>,
     /// Stores the initialized value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -63,6 +66,7 @@ impl ControlConnectionState {
     pub fn new(outer_authenticated: bool, trusted_interactive_assertion: bool) -> Self {
         Self {
             authenticated_peer: None,
+            remote_principal: None,
             initialized: false,
             outer_authenticated,
             trusted_interactive_assertion,
@@ -80,6 +84,7 @@ impl ControlConnectionState {
     pub fn trusted_existing_client(caller_client_id: ClientId) -> Self {
         Self {
             authenticated_peer: None,
+            remote_principal: None,
             initialized: true,
             outer_authenticated: true,
             trusted_interactive_assertion: true,
@@ -100,6 +105,11 @@ impl ControlConnectionState {
             )),
             Some(_) => Ok(()),
             None => {
+                if matches!(peer, AuthenticatedPeer::IrohEndpoint { .. }) {
+                    self.outer_authenticated = false;
+                    self.trusted_interactive_assertion = false;
+                    self.remote_principal = None;
+                }
                 self.authenticated_peer = Some(peer);
                 Ok(())
             }
@@ -107,9 +117,41 @@ impl ControlConnectionState {
     }
 
     /// Returns the identity established by the concrete transport adapter.
-    #[cfg(test)]
     pub fn authenticated_peer(&self) -> Option<&AuthenticatedPeer> {
         self.authenticated_peer.as_ref()
+    }
+
+    /// Binds application authority resolved from remote pairing or device proof.
+    pub fn bind_remote_principal(&mut self, principal: RemotePrincipal) -> Result<()> {
+        let endpoint_id = match self.authenticated_peer.as_ref() {
+            Some(AuthenticatedPeer::IrohEndpoint { endpoint_id }) => endpoint_id,
+            _ => {
+                return Err(MezError::invalid_state(
+                    "remote principal requires an authenticated Iroh peer",
+                ));
+            }
+        };
+        if endpoint_id != &principal.endpoint_id {
+            return Err(MezError::forbidden(
+                "remote principal endpoint does not match the transport peer",
+            ));
+        }
+        if let Some(existing) = self.remote_principal.as_ref()
+            && existing != &principal
+        {
+            return Err(MezError::invalid_state(
+                "control connection remote principal cannot change",
+            ));
+        }
+        self.outer_authenticated = true;
+        self.trusted_interactive_assertion = principal.requested_role == RequestedRole::Primary;
+        self.remote_principal = Some(principal);
+        Ok(())
+    }
+
+    /// Returns resolved remote application authority, when present.
+    pub fn remote_principal(&self) -> Option<&RemotePrincipal> {
+        self.remote_principal.as_ref()
     }
 
     /// Runs the caller client id operation for this subsystem.

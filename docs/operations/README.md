@@ -16,6 +16,7 @@ This section owns the following operational guidance:
 - [Lifecycle, detach, and recovery](lifecycle-detach-and-recovery.md)
 - [Cache status and diagnostics](cache-status-and-diagnostics.md)
 - [Troubleshooting](troubleshooting.md)
+- [Remote pairing and recovery](../safety-and-trust/remote-pairing-and-recovery.md)
 
 ## Related pages
 

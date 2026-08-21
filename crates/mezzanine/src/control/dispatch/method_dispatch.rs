@@ -865,6 +865,9 @@ pub(super) fn dispatch_parsed_request(
                 .ok_or_else(|| MezError::invalid_args("mcp/retry requires server_id"))?;
             Err(MezError::invalid_state("MCP runtime is not attached"))
         }
+        ControlDispatchKind::Remote => Err(MezError::invalid_state(
+            "remote administration requires the live runtime",
+        )),
         ControlDispatchKind::Config => dispatch_config_parsed_request(request, &[]),
     }
 }

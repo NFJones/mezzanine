@@ -2,6 +2,7 @@
 name = "mezzanine"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.91"
 
 [[bin]]
 name = "mez"
@@ -18,6 +19,7 @@ clap = { version = "4", default-features = false, features = ["std", "help", "us
 clap_complete = "4"
 futures-util = "0.3"
 include_dir = "0.7"
+iroh = { version = "=1.0.3", default-features = false, features = ["tls-ring"] }
 keyring-core = "1.0"
 merman = { version = "=0.7.0", default-features = false, features = ["ascii"] }
 merman-ascii = "=0.7.0"

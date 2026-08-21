@@ -16,6 +16,15 @@ configured. Unix clients should use peer credentials and the private socket
 path. TCP clients must authenticate with an unguessable bearer token or a
 stronger configured mechanism before receiving session data or mutating state.
 
+The opt-in Iroh adapter uses ALPN `mezzanine/transport/1` and carries the same
+bounded `mezctl/1` frames on one long-lived bidirectional control stream. An
+Iroh endpoint ID proves possession of a transport key only; it grants no
+Mezzanine authority by itself. Before any other method, the peer must call
+`control/initialize` for role `primary` or `observer` with either a single-use
+`extension:iroh_invitation` token or an endpoint-bound
+`extension:iroh_device` credential. Agent and automation initialization are
+rejected on this remote pairing path.
+
 Each stream frame is UTF-8 JSON preceded by this ASCII header block. The
 decimal `Content-Length` is the JSON body's octet length.
 
@@ -47,6 +56,15 @@ granted role, negotiated `capabilities`, `approval_pending`, and
 Capabilities list available methods, event types, roles, transports, limits,
 and feature flags. Treat this advertised set—not this page—as the available
 surface for the connection.
+
+A successful invitation redemption adds `device_credential` only to that first
+successful initialize result. The invitation is not consumed until ordinary
+initialization can succeed, so malformed client data, role conflicts, or
+version errors leave it reusable. Reconnect with the returned credential and
+the same authenticated endpoint ID. Credentials are bound to the current
+server endpoint identity and trust-record role ceiling; wrong endpoints, bad
+proofs, revocation, server identity replacement, and role escalation fail
+closed. Never log or copy invitation or device credentials into diagnostics.
 
 ## Roles, authorization, and idempotency
 
@@ -124,6 +142,7 @@ the [baseline method table in `SPEC.md`](../../../SPEC.md#13-control-endpoint).
 | Approval | `approval/list`, `approval/decide` | Inspect pending approvals (RO) or make a primary decision. |
 | Configuration | `config/get`, `config/set`, `config/unset`, `config/reload`, `config/validate` | Inspect or validate config (RO), or mutate/reload it. |
 | Project trust | `project/trust/list`, `project/trust/inspect`, `project/trust/decide`, `project/trust/revoke` | Inspect or decide project trust. |
+| Remote trust | `remote/status`, `remote/invite`, `remote/client/list`, `remote/client/rename`, `remote/client/revoke` | Inspect or mutate paired-device trust. These methods require an initialized primary over authenticated local Unix control; even a paired Iroh primary is rejected. Invite, rename, and revoke require idempotency keys. |
 | Snapshots | `snapshot/list`, `snapshot/create`, `snapshot/resume`, `snapshot/delete` | Inspect snapshots (RO) or persist, load, or delete layouts. |
 | MCP | `mcp/list`, `mcp/retry` | Inspect configured server/tool availability (RO) or retry a server. |
 | Events | `event/list` | Replay retained, authorized events after `after_event_id`; RO. |

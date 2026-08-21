@@ -14,6 +14,7 @@ mod live_snapshot;
 mod message;
 mod mutations;
 mod protocol;
+mod remote;
 mod snapshot;
 mod state;
 mod subagents;
@@ -839,6 +840,36 @@ impl RuntimeSessionService {
         };
 
         if !connection.initialized() || request.method == "control/initialize" {
+            let prepared = match self.prepare_remote_initialize_authority(&request, connection) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    let reason = match error.kind() {
+                        crate::error::MezErrorKind::InvalidArgs => "invalid_params",
+                        crate::error::MezErrorKind::InvalidState => "invalid_state",
+                        crate::error::MezErrorKind::Config => "config_error",
+                        crate::error::MezErrorKind::Io => "io_error",
+                        crate::error::MezErrorKind::Conflict => "conflict",
+                        crate::error::MezErrorKind::NotFound => "not_found",
+                        crate::error::MezErrorKind::Forbidden => "forbidden",
+                        crate::error::MezErrorKind::NotImplemented => "not_implemented",
+                    };
+                    if let Err(audit_error) = self.append_runtime_remote_initialize_rejection_audit(
+                        &request, connection, reason,
+                    ) {
+                        return runtime_json_rpc_error(
+                            &request.id,
+                            audit_error.kind(),
+                            audit_error.message(),
+                        );
+                    }
+                    return runtime_json_rpc_error(&request.id, error.kind(), error.message());
+                }
+            };
+            if let Some(prepared) = prepared {
+                return self
+                    .dispatch_prepared_remote_initialize(body, &request, connection, prepared);
+            }
+
             let primary_before = self.session.primary_client_id().cloned();
             let observer_count_before = self.session.observers().len();
             let response = dispatch_control_request_for_connection(
@@ -875,6 +906,16 @@ impl RuntimeSessionService {
 
         if request.method == "pane/capture" {
             return self.dispatch_runtime_pane_capture(body, &request.id, &caller_client_id);
+        }
+
+        if request.method.starts_with("remote/") {
+            return match self.dispatch_runtime_remote_request(&request, connection) {
+                Ok(result) => format!(
+                    r#"{{"jsonrpc":"2.0","id":{},"result":{result}}}"#,
+                    request.id
+                ),
+                Err(error) => runtime_json_rpc_error(&request.id, error.kind(), error.message()),
+            };
         }
 
         if request.method.starts_with("approval/") {

@@ -132,6 +132,8 @@ mod memory;
 /// The nested module owns direct-user inspection and persistence of project
 /// trust records beneath the sandbox CLI hierarchy.
 mod project_trust;
+/// Exposes local remote-transport administration through Unix control.
+mod remote;
 /// Exposes the sandbox module boundary.
 ///
 /// The nested module owns direct-user sandbox status and diagnostic workflows.
@@ -172,6 +174,7 @@ use json::{
 use mcp::{load_runtime_config_layers, run_mcp};
 use memory::run_memory;
 use project_trust::{ProjectTrustCliArgs, run_project_trust};
+use remote::run_remote;
 use sandbox::run_sandbox;
 use serve::{
     LoadedRuntimeConfig, ParsedServeOptions, RestoredSnapshotDaemonRequest, RuntimeDaemonStartup,

@@ -258,6 +258,7 @@ mod issues;
 mod mcp;
 mod memory;
 mod new_serve;
+mod remote;
 mod sandbox;
 mod snapshot;
 mod terminal_protocol;

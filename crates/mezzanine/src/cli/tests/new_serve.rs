@@ -271,30 +271,34 @@ fn serve_starts_foreground_control_daemon() {
     let (env, home) = test_env("serve-control");
     let socket = home.join("runtime").join("serve.sock");
     let socket_for_server = socket.clone();
-    let server = thread::spawn(move || {
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let result = run_with(
-            vec![
-                "mez".to_string(),
-                "-S".to_string(),
-                socket_for_server.to_string_lossy().to_string(),
-                "serve".to_string(),
-                "--no-aux-sockets".to_string(),
-                "--max-control-connections".to_string(),
-                "1".to_string(),
-            ],
-            env,
-            false,
-            &mut stdout,
-            &mut stderr,
-        );
-        (
-            result,
-            String::from_utf8(stdout).unwrap(),
-            String::from_utf8(stderr).unwrap(),
-        )
-    });
+    let server = thread::Builder::new()
+        .name("serve-control-daemon".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let result = run_with(
+                vec![
+                    "mez".to_string(),
+                    "-S".to_string(),
+                    socket_for_server.to_string_lossy().to_string(),
+                    "serve".to_string(),
+                    "--no-aux-sockets".to_string(),
+                    "--max-control-connections".to_string(),
+                    "1".to_string(),
+                ],
+                env,
+                false,
+                &mut stdout,
+                &mut stderr,
+            );
+            (
+                result,
+                String::from_utf8(stdout).unwrap(),
+                String::from_utf8(stderr).unwrap(),
+            )
+        })
+        .unwrap();
 
     let mut stream =
         connect_when_ready(&socket).expect("serve command did not accept socket connections");
@@ -482,34 +486,38 @@ fn serve_can_start_message_protocol_socket() {
     let message_socket = home.join("runtime").join("serve.message.sock");
     let control_for_server = control_socket.clone();
     let message_for_server = message_socket.clone();
-    let server = thread::spawn(move || {
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let result = run_with(
-            vec![
-                "mez".to_string(),
-                "-S".to_string(),
-                control_for_server.to_string_lossy().to_string(),
-                "serve".to_string(),
-                "--no-aux-sockets".to_string(),
-                "--message-socket".to_string(),
-                message_for_server.to_string_lossy().to_string(),
-                "--max-control-connections".to_string(),
-                "1".to_string(),
-                "--max-message-connections".to_string(),
-                "1".to_string(),
-            ],
-            env,
-            false,
-            &mut stdout,
-            &mut stderr,
-        );
-        (
-            result,
-            String::from_utf8(stdout).unwrap(),
-            String::from_utf8(stderr).unwrap(),
-        )
-    });
+    let server = thread::Builder::new()
+        .name("serve-message-daemon".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let result = run_with(
+                vec![
+                    "mez".to_string(),
+                    "-S".to_string(),
+                    control_for_server.to_string_lossy().to_string(),
+                    "serve".to_string(),
+                    "--no-aux-sockets".to_string(),
+                    "--message-socket".to_string(),
+                    message_for_server.to_string_lossy().to_string(),
+                    "--max-control-connections".to_string(),
+                    "1".to_string(),
+                    "--max-message-connections".to_string(),
+                    "1".to_string(),
+                ],
+                env,
+                false,
+                &mut stdout,
+                &mut stderr,
+            );
+            (
+                result,
+                String::from_utf8(stdout).unwrap(),
+                String::from_utf8(stderr).unwrap(),
+            )
+        })
+        .unwrap();
 
     assert!(wait_for_path(&control_socket));
     assert!(wait_for_path(&message_socket));
@@ -565,34 +573,38 @@ fn serve_can_start_event_stream_socket() {
     let event_socket = home.join("runtime").join("serve.event.sock");
     let control_for_server = control_socket.clone();
     let event_for_server = event_socket.clone();
-    let server = thread::spawn(move || {
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let result = run_with(
-            vec![
-                "mez".to_string(),
-                "-S".to_string(),
-                control_for_server.to_string_lossy().to_string(),
-                "serve".to_string(),
-                "--no-aux-sockets".to_string(),
-                "--event-socket".to_string(),
-                event_for_server.to_string_lossy().to_string(),
-                "--max-control-connections".to_string(),
-                "1".to_string(),
-                "--max-event-connections".to_string(),
-                "1".to_string(),
-            ],
-            env,
-            false,
-            &mut stdout,
-            &mut stderr,
-        );
-        (
-            result,
-            String::from_utf8(stdout).unwrap(),
-            String::from_utf8(stderr).unwrap(),
-        )
-    });
+    let server = thread::Builder::new()
+        .name("serve-event-daemon".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let result = run_with(
+                vec![
+                    "mez".to_string(),
+                    "-S".to_string(),
+                    control_for_server.to_string_lossy().to_string(),
+                    "serve".to_string(),
+                    "--no-aux-sockets".to_string(),
+                    "--event-socket".to_string(),
+                    event_for_server.to_string_lossy().to_string(),
+                    "--max-control-connections".to_string(),
+                    "1".to_string(),
+                    "--max-event-connections".to_string(),
+                    "1".to_string(),
+                ],
+                env,
+                false,
+                &mut stdout,
+                &mut stderr,
+            );
+            (
+                result,
+                String::from_utf8(stdout).unwrap(),
+                String::from_utf8(stderr).unwrap(),
+            )
+        })
+        .unwrap();
 
     assert!(wait_for_path(&control_socket));
     assert!(wait_for_path(&event_socket));
@@ -649,35 +661,39 @@ fn serve_derives_default_auxiliary_sockets() {
     let message_socket = home.join("runtime").join("serve.message.sock");
     let event_socket = home.join("runtime").join("serve.event.sock");
     let control_for_server = control_socket.clone();
-    let server = thread::spawn(move || {
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let result = run_with(
-            vec![
-                "mez".to_string(),
-                "-S".to_string(),
-                control_for_server.to_string_lossy().to_string(),
-                "serve".to_string(),
-                "--max-control-connections".to_string(),
-                "1".to_string(),
-                "--max-message-connections".to_string(),
-                "1".to_string(),
-                "--max-event-connections".to_string(),
-                "1".to_string(),
-                "--max-event-batches-per-connection".to_string(),
-                "1".to_string(),
-            ],
-            env,
-            false,
-            &mut stdout,
-            &mut stderr,
-        );
-        (
-            result,
-            String::from_utf8(stdout).unwrap(),
-            String::from_utf8(stderr).unwrap(),
-        )
-    });
+    let server = thread::Builder::new()
+        .name("serve-default-aux-daemon".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let result = run_with(
+                vec![
+                    "mez".to_string(),
+                    "-S".to_string(),
+                    control_for_server.to_string_lossy().to_string(),
+                    "serve".to_string(),
+                    "--max-control-connections".to_string(),
+                    "1".to_string(),
+                    "--max-message-connections".to_string(),
+                    "1".to_string(),
+                    "--max-event-connections".to_string(),
+                    "1".to_string(),
+                    "--max-event-batches-per-connection".to_string(),
+                    "1".to_string(),
+                ],
+                env,
+                false,
+                &mut stdout,
+                &mut stderr,
+            );
+            (
+                result,
+                String::from_utf8(stdout).unwrap(),
+                String::from_utf8(stderr).unwrap(),
+            )
+        })
+        .unwrap();
 
     assert!(wait_for_path(&control_socket));
     assert!(wait_for_path(&message_socket));

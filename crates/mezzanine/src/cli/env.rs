@@ -79,6 +79,8 @@ pub(super) enum CliCommand {
     Issue(super::issue::IssueCliArgs),
     /// Manages persistent agent memory.
     Memory(super::memory::MemoryCliArgs),
+    /// Manages remote transport pairing and trusted clients through local control.
+    Remote(super::remote::RemoteCliArgs),
     /// Inspects and manages sandbox workflows.
     Sandbox(super::sandbox::SandboxCliArgs),
     /// Generates shell completion definitions.

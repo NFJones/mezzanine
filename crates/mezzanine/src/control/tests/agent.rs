@@ -414,6 +414,21 @@ fn primary_control_method_fixture_request(
         "project/trust/revoke" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"project/trust/revoke","params":{"project_root":"/tmp/project","idempotency_key":"project-revoke"}}"#.to_string()
         }
+        "remote/status" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"remote/status","params":{}}"#.to_string()
+        }
+        "remote/invite" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"remote/invite","params":{"role":"observer","expires_seconds":600,"idempotency_key":"remote-invite"}}"#.to_string()
+        }
+        "remote/client/list" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"remote/client/list","params":{}}"#.to_string()
+        }
+        "remote/client/rename" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"remote/client/rename","params":{"client_id":"remote-missing","label":"missing","idempotency_key":"remote-rename"}}"#.to_string()
+        }
+        "remote/client/revoke" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"remote/client/revoke","params":{"client_id":"remote-missing","reason":"test","idempotency_key":"remote-revoke"}}"#.to_string()
+        }
         "mcp/list" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"mcp/list","params":{}}"#.to_string()
         }

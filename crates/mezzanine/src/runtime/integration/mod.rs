@@ -12,11 +12,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::config::ConfigLayer;
+use crate::error::{MezError, Result};
 use crate::host::async_runtime::AsyncRuntimeActorMetrics;
 use crate::integrations::hooks::{FocusedShellHookQueue, HookDefinition, HookExecutionResult};
 use crate::runtime::config::ConfiguredPermissions;
 use crate::security::auth::AuthStore;
 use crate::security::project::{ProjectTrustRevision, ProjectTrustStore};
+use crate::security::remote::RemoteEndpointIdentity;
 use mez_agent::ApprovalPolicy;
 use mez_agent::mcp::McpRegistry;
 use mez_agent::memory::SessionMemoryStore;
@@ -47,6 +49,7 @@ use security::{PanePermissionOverride, RuntimeSecurityState};
 pub(crate) struct RuntimeIntegrationComponent {
     config_layers: Vec<ConfigLayer>,
     config_root: Option<PathBuf>,
+    remote_endpoint_identity: Option<RemoteEndpointIdentity>,
     #[cfg(test)]
     config_reload_preparation_started: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
@@ -68,6 +71,7 @@ impl RuntimeIntegrationComponent {
         Self {
             config_layers: Vec::new(),
             config_root: None,
+            remote_endpoint_identity: None,
             #[cfg(test)]
             config_reload_preparation_started: None,
             #[cfg(test)]
@@ -129,6 +133,26 @@ impl RuntimeIntegrationComponent {
     /// Replaces the optional project configuration root.
     pub(crate) fn set_config_root(&mut self, root: Option<PathBuf>) {
         self.config_root = root;
+    }
+
+    /// Loads or creates and then retains the per-session remote endpoint lock.
+    pub(crate) fn ensure_remote_endpoint_identity(
+        &mut self,
+        session_id: &str,
+    ) -> Result<&RemoteEndpointIdentity> {
+        if self.remote_endpoint_identity.is_none() {
+            let config_root = self
+                .config_root
+                .as_deref()
+                .ok_or_else(|| MezError::invalid_state("remote identity requires a config root"))?;
+            self.remote_endpoint_identity = Some(RemoteEndpointIdentity::load_or_create(
+                config_root,
+                session_id,
+            )?);
+        }
+        self.remote_endpoint_identity
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("remote endpoint identity is unavailable"))
     }
 
     /// Returns the latest async-actor metrics snapshot.

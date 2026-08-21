@@ -329,7 +329,7 @@ async fn authenticated_control_loop_round_trips_over_duplex_stream() {
     let input = encode_control_body(
         r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
-    let expected_peer = AuthenticatedPeer::iroh_endpoint("endpoint-a");
+    let expected_peer = AuthenticatedPeer::unix_user(current_effective_uid());
 
     let client = async {
         client_stream.write_all(&input).await.unwrap();

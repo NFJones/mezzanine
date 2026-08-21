@@ -144,6 +144,8 @@ pub(super) enum ControlDispatchKind {
     ProjectTrustDecide,
     /// Revoke project trust state.
     ProjectTrustRevoke,
+    /// Delegate to the live runtime remote-administration owner.
+    Remote,
     /// List MCP servers and tools.
     McpList,
     /// Retry an MCP server.
@@ -652,6 +654,35 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         method: "project/trust/revoke",
         dispatch: ControlDispatchKind::ProjectTrustRevoke,
         params_schema: ControlParamsSchema::Allowed(&["project_root", "reason", "idempotency_key"]),
+    },
+    ControlMethodSpec {
+        method: "remote/status",
+        dispatch: ControlDispatchKind::Remote,
+        params_schema: ControlParamsSchema::Allowed(NO_PARAMS),
+    },
+    ControlMethodSpec {
+        method: "remote/invite",
+        dispatch: ControlDispatchKind::Remote,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "role",
+            "expires_seconds",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
+        method: "remote/client/list",
+        dispatch: ControlDispatchKind::Remote,
+        params_schema: ControlParamsSchema::Allowed(NO_PARAMS),
+    },
+    ControlMethodSpec {
+        method: "remote/client/rename",
+        dispatch: ControlDispatchKind::Remote,
+        params_schema: ControlParamsSchema::Allowed(&["client_id", "label", "idempotency_key"]),
+    },
+    ControlMethodSpec {
+        method: "remote/client/revoke",
+        dispatch: ControlDispatchKind::Remote,
+        params_schema: ControlParamsSchema::Allowed(&["client_id", "reason", "idempotency_key"]),
     },
     ControlMethodSpec {
         method: "mcp/list",
