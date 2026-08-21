@@ -60,8 +60,8 @@ run_suite runtime::processes::managed_shell_handoff::tests
 run_suite runtime::tests::actions::shell_protocol
 run_agent_exact shell::tests::shell_transport::managed_zsh_maximum_source_uses_bounded_acknowledgement_frames
 run_exact host::async_runtime::pane_io::delivery::tests::managed_zsh_physical_records_wait_only_at_logical_frame_boundaries
-run_exact host::async_runtime::tests::services::pane_service::async_fish_dirty_draft_no_prompt_exit_restores_responsive_parent
-run_exact host::async_runtime::tests::services::pane_service::async_zsh_dirty_draft_no_prompt_exit_restores_responsive_parent
+run_exact host::async_runtime::tests::services::pane_service::async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_responsive_parent
+run_exact host::async_runtime::tests::services::pane_service::async_zsh_dirty_draft_no_prompt_exit_discards_draft_and_restores_responsive_parent
 run_exact host::async_runtime::tests::services::pane_service::async_pane_process_service_aggregates_receiver_delivery_progress
 
 if [ "$(uname -s)" = Darwin ]; then
