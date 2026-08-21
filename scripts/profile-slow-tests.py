@@ -15,6 +15,7 @@ critical-duration budget.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import datetime as dt
 import json
 import os
@@ -32,6 +33,14 @@ TEST_START = re.compile(r"(?:^|\n)test (.*?) \.\.\. ")
 TEST_END = re.compile(r"(ok|FAILED|ignored)\r?\n")
 DEFAULT_REPORT = Path("target/slow-tests/report.json")
 OUTPUT_TAIL_BYTES = 128 * 1024
+
+
+@dataclass(frozen=True)
+class TestHarness:
+    """One Cargo test executable and its package-root working directory."""
+
+    executable: str
+    working_directory: str
 
 
 class PrettyOutputParser:
@@ -113,8 +122,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_test_executables(environment: dict[str, str]) -> list[str]:
-    """Build all workspace tests once and return unique executable paths."""
+def build_test_executables(environment: dict[str, str]) -> list[TestHarness]:
+    """Build all workspace tests once and return unique executable harnesses."""
+
+    metadata = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version=1"],
+        check=False,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if metadata.returncode != 0:
+        sys.stderr.write(metadata.stderr)
+        raise RuntimeError("Cargo failed to describe workspace packages")
+    package_roots = {
+        package["id"]: str(Path(package["manifest_path"]).parent)
+        for package in json.loads(metadata.stdout)["packages"]
+    }
 
     command = [
         "cargo",
@@ -137,7 +162,7 @@ def build_test_executables(environment: dict[str, str]) -> list[str]:
         sys.stderr.write(completed.stderr)
         raise RuntimeError("Cargo failed to build workspace test executables")
 
-    executables: list[str] = []
+    harnesses: list[TestHarness] = []
     seen: set[str] = set()
     for line in completed.stdout.splitlines():
         try:
@@ -145,16 +170,18 @@ def build_test_executables(environment: dict[str, str]) -> list[str]:
         except json.JSONDecodeError:
             continue
         executable = message.get("executable")
+        package_root = package_roots.get(message.get("package_id"))
         if (
             message.get("profile", {}).get("test")
             and executable
+            and package_root
             and executable not in seen
         ):
             seen.add(executable)
-            executables.append(executable)
-    if not executables:
+            harnesses.append(TestHarness(executable, package_root))
+    if not harnesses:
         raise RuntimeError("Cargo reported no workspace test executables")
-    return executables
+    return harnesses
 
 
 def terminate_process_group(process: subprocess.Popen[bytes]) -> None:
@@ -167,19 +194,21 @@ def terminate_process_group(process: subprocess.Popen[bytes]) -> None:
 
 
 def run_harness(
-    executable: str,
+    harness: TestHarness,
     test_filter: str | None,
     timeout_seconds: float,
     environment: dict[str, str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Run one direct libtest harness and return timings plus any failure."""
 
+    executable = harness.executable
     command = [executable, "--test-threads=1", "--format=pretty"]
     if test_filter:
         command.append(test_filter)
     parser = PrettyOutputParser(executable)
     process = subprocess.Popen(
         command,
+        cwd=harness.working_directory,
         env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -216,6 +245,7 @@ def run_harness(
     if timed_out or return_code != 0 or parser.current is not None:
         failure = {
             "executable": executable,
+            "working_directory": harness.working_directory,
             "return_code": return_code,
             "timed_out": timed_out,
             "unfinished_test": parser.current[0] if parser.current else None,
@@ -226,7 +256,7 @@ def run_harness(
 
 def write_report(
     args: argparse.Namespace,
-    executables: list[str],
+    harnesses: list[TestHarness],
     records: list[dict[str, Any]],
     failures: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -246,7 +276,7 @@ def write_report(
         "generated_at_utc": dt.datetime.now(dt.UTC).isoformat(),
         "warn_ms": args.warn_ms,
         "fail_ms": args.fail_ms,
-        "executables": executables,
+        "executables": [harness.executable for harness in harnesses],
         "tests_observed": len(records),
         "slow_tests": slow,
         "budget_violations": violations,
@@ -279,22 +309,25 @@ def main() -> int:
         raise ValueError("profiling thresholds must be non-negative and timeout positive")
     environment = os.environ.copy()
     environment["TMPDIR"] = str(Path("/tmp").resolve())
-    executables = build_test_executables(environment)
+    harnesses = build_test_executables(environment)
     if args.binary_filter:
-        executables = [
-            executable
-            for executable in executables
-            if args.binary_filter in Path(executable).name
+        harnesses = [
+            harness
+            for harness in harnesses
+            if args.binary_filter in Path(harness.executable).name
         ]
-    if not executables:
+    if not harnesses:
         raise RuntimeError("no test executable matched the requested binary filter")
 
     records: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
-    for index, executable in enumerate(executables, start=1):
-        print(f"[{index}/{len(executables)}] {Path(executable).name}", flush=True)
+    for index, harness in enumerate(harnesses, start=1):
+        print(
+            f"[{index}/{len(harnesses)}] {Path(harness.executable).name}",
+            flush=True,
+        )
         harness_records, failure = run_harness(
-            executable,
+            harness,
             args.test_filter,
             args.harness_timeout_seconds,
             environment,
@@ -303,7 +336,7 @@ def main() -> int:
         if failure is not None:
             failures.append(failure)
 
-    report = write_report(args, executables, records, failures)
+    report = write_report(args, harnesses, records, failures)
     print_summary(report, args.report)
     if failures:
         print(f"{len(failures)} test harness(es) failed or timed out", file=sys.stderr)
