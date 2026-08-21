@@ -36,8 +36,9 @@ fn terminal_screen_parses_osc_9_4_progress() {
     screen.feed(b"\x1b]9;4;2;80\x07");
     screen.feed(b"\x1b]9;4;3\x07");
     screen.feed(b"\x1b]9;4;4;12\x07");
-    // Cargo retains its percentage field when clearing, producing `0;0`.
-    screen.feed(b"\x1b]9;4;0;0\x07after");
+    // Cargo's anstyle-progress formatter always writes the separator, so its
+    // removal record is `0;` terminated by ST.
+    screen.feed(b"\x1b]9;4;0;\x1b\\after");
 
     assert_eq!(
         screen.drain_osc_events(),

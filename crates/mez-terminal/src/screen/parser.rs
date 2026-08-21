@@ -328,10 +328,11 @@ impl TerminalScreen {
         }
         let parse_percent = |value: &str| value.parse::<u8>().ok().filter(|value| *value <= 100);
         match (state, percent) {
-            // Cargo emits the state and percentage slots uniformly, including
-            // `OSC 9;4;0;0` when its progress reporter finishes. Accept that
-            // canonical trailing-zero clear form alongside the short form.
-            ("0", None | Some("0")) => Some(crate::TerminalProgressState::Clear),
+            // `anstyle-progress`, used by Cargo, always writes the percentage
+            // separator. Its removal record is therefore `OSC 9;4;0; ST`.
+            // Accept that empty slot alongside the abbreviated and trailing-
+            // zero forms emitted by other progress reporters.
+            ("0", None | Some("") | Some("0")) => Some(crate::TerminalProgressState::Clear),
             ("1", Some(percent)) => Some(crate::TerminalProgressState::Normal {
                 percent: parse_percent(percent)?,
             }),

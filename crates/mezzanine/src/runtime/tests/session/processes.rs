@@ -2320,14 +2320,14 @@ fn runtime_tracks_terminal_progress_per_pane() {
         None
     );
 
-    service
+    let update = service
         .apply_pane_process_output(
             mez_mux::process::PaneProcessOutput {
                 pane_id: "%1".to_string(),
                 primary_pid,
-                // Cargo sends this terminal-progress clear record after its
-                // final determinate update.
-                bytes: b"\x1b]9;4;0;0\x07".to_vec(),
+                // Cargo's anstyle-progress formatter terminates its removal
+                // record as `OSC 9;4;0; ST`.
+                bytes: b"\x1b]9;4;0;\x1b\\".to_vec(),
             },
             &mut std::collections::BTreeSet::new(),
         )
