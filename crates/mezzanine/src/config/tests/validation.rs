@@ -1119,3 +1119,65 @@ fn env_whitelist_is_structurally_validated_and_primary_only() {
         );
     }
 }
+
+/// Verifies schema-v67 Iroh policy is conservative, coherent, and primary-only.
+#[test]
+fn iroh_transport_policy_is_validated_and_primary_only() {
+    let primary = validate_config_text(
+        ConfigFormat::Toml,
+        DEFAULT_CONFIG_TOML,
+        ConfigScope::Primary,
+    );
+    assert!(primary.valid, "{:?}", primary.diagnostics);
+
+    let overlay = validate_config_text(
+        ConfigFormat::Toml,
+        &format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[transport.iroh]\nenabled = true\n"),
+        ConfigScope::ProjectOverlay,
+    );
+    assert!(overlay.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "transport.iroh.enabled"
+            && diagnostic
+                .message
+                .starts_with("primary_user_only_execution_authority:")
+    }));
+
+    for (body, path) in [
+        ("identity = \"shared\"", "transport.iroh.identity"),
+        (
+            "relay_mode = \"custom\"\nrelay_urls = []",
+            "transport.iroh.relay_urls",
+        ),
+        (
+            "relay_mode = \"disabled\"\nrelay_urls = [\"https://relay.example\"]",
+            "transport.iroh.relay_urls",
+        ),
+        (
+            "relay_mode = \"custom\"\nrelay_urls = [\"http://relay.example\"]",
+            "transport.iroh.relay_urls",
+        ),
+        (
+            "address_lookup = \"custom_dns\"\naddress_lookup_domain = \"\"",
+            "transport.iroh.address_lookup_domain",
+        ),
+        (
+            "relay_mode = \"disabled\"\ndirect_connections = false",
+            "transport.iroh.direct_connections",
+        ),
+        ("max_connections = 0", "transport.iroh.max_connections"),
+    ] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[transport.iroh]\n{body}\n"),
+            ConfigScope::Primary,
+        );
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.path == path),
+            "{body}: {:?}",
+            validation.diagnostics
+        );
+    }
+}

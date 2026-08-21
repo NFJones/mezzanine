@@ -20,7 +20,8 @@ use super::{
 };
 use crate::config::{
     compose_effective_config, config_change_path_is_user_only_host_power_policy,
-    config_change_path_is_user_only_sandbox_policy, contains_secret_material,
+    config_change_path_is_user_only_sandbox_policy,
+    config_change_path_is_user_only_transport_policy, contains_secret_material,
 };
 use crate::runtime::fs;
 
@@ -546,6 +547,15 @@ impl RuntimeSessionService {
                 ActionStatus::Denied,
                 "user_only_host_power_policy",
                 "host power policy can only be changed directly by the user",
+            )?);
+        }
+        if config_change_path_is_user_only_transport_policy(setting_path) {
+            return Ok(ActionResult::failed(
+                turn,
+                action,
+                ActionStatus::Denied,
+                "user_only_transport_policy",
+                "remote transport policy can only be changed directly by the user",
             )?);
         }
         if runtime_config_change_requests_host_access(setting_path, operation, value.as_deref()) {

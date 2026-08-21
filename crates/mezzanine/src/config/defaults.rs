@@ -137,12 +137,32 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 66
+version = 67
 
 # Process-wide runtime sizing. Changes require a restart.
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.
 cpu_count = 2
+
+# Remote client/server transport. Unix sockets remain the default and local
+# recovery path. Every network behavior is independently opt-in and changes
+# require a daemon restart.
+[transport.iroh]
+enabled = false
+identity = "per_session"
+address_lookup = "disabled"
+address_lookup_domain = ""
+relay_mode = "disabled"
+relay_urls = []
+direct_connections = true
+port_mapping = false
+proxy_from_env = false
+system_ca_store = false
+invitation_ttl_seconds = 600
+max_connections = 16
+max_streams_per_connection = 2
+setup_timeout_ms = 10000
+idle_timeout_ms = 300000
 
 # Terminal emulation, pane startup, clipboard, rendering, and cursor behavior.
 [terminal]

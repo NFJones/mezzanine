@@ -318,6 +318,63 @@ fn runtime_config_change_rejects_user_only_host_power_policy() {
     let _ = fs::remove_dir_all(config_root);
 }
 
+/// Verifies model-authored configuration changes cannot enable or retarget remote transport.
+#[test]
+fn runtime_config_change_rejects_user_only_transport_policy() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let config_root = temp_root("runtime-agent-config-change-transport-policy");
+    service.set_config_root(config_root.clone());
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "turn-config-transport-policy".to_string(),
+        conversation_id: "conversation-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 200,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        initial_capability: None,
+        state: AgentTurnState::Running,
+    };
+
+    for (index, setting_path) in [
+        "transport.iroh.enabled",
+        "transport.iroh.relay_mode",
+        "transport.iroh.relay_urls",
+        "transport.iroh.direct_connections",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let action = mez_agent::AgentAction {
+            id: format!("config-transport-policy-{index}"),
+            rationale: String::new(),
+            payload: mez_agent::AgentActionPayload::ConfigChange {
+                setting_path: setting_path.to_string(),
+                operation: "set".to_string(),
+                value: Some("true".to_string()),
+            },
+        };
+        let result = service
+            .execute_config_change_action_for_turn(&turn, &action, &primary, "approved")
+            .unwrap();
+        assert_eq!(result.status, ActionStatus::Denied, "{setting_path}");
+        assert_eq!(
+            result.error.as_ref().map(|error| error.code.as_str()),
+            Some("user_only_transport_policy")
+        );
+    }
+
+    assert!(!config_root.join("config.toml").exists());
+    let _ = fs::remove_dir_all(config_root);
+}
+
 /// Verifies direct configuration application updates the runtime-owned active
 /// turn sleep-inhibition policy without requiring a daemon restart. The power
 /// backend is separate, but it must observe the newly selected mode here.

@@ -309,6 +309,7 @@ pub fn validate_config_text(
     };
     let values = extract_config_values(format, text);
     diagnostics.extend(validate_agent_turn_timeout_config(format, text));
+    diagnostics.extend(validate_iroh_transport_config(format, text));
     diagnostics.extend(validate_group_whitelist_config(format, text));
     diagnostics.extend(validate_env_whitelist_config(format, text));
 
@@ -542,6 +543,177 @@ pub fn validate_config_text(
     ConfigValidation::from_diagnostics(diagnostics)
 }
 
+/// Validates schema-v67 Iroh transport policy with structured value types.
+fn validate_iroh_transport_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
+    let Ok(root) = parse_config_json_value(format, text) else {
+        return Vec::new();
+    };
+    let Some(iroh) = root
+        .get("transport")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|transport| transport.get("iroh"))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let mut diagnostics = Vec::new();
+    let mut reject = |path: &str, message: &str| {
+        diagnostics.push(ConfigDiagnostic {
+            path: path.to_string(),
+            message: message.to_string(),
+        });
+    };
+
+    for key in [
+        "enabled",
+        "direct_connections",
+        "port_mapping",
+        "proxy_from_env",
+        "system_ca_store",
+    ] {
+        if iroh.get(key).is_some_and(|value| !value.is_boolean()) {
+            reject(
+                &format!("transport.iroh.{key}"),
+                "Iroh transport flag must be true or false",
+            );
+        }
+    }
+    if iroh
+        .get("identity")
+        .is_some_and(|value| value.as_str() != Some("per_session"))
+    {
+        reject(
+            "transport.iroh.identity",
+            "transport.iroh.identity must be per_session",
+        );
+    }
+    let address_lookup = iroh
+        .get("address_lookup")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("disabled");
+    if !matches!(
+        address_lookup,
+        "disabled" | "n0_dns" | "custom_dns" | "local"
+    ) {
+        reject(
+            "transport.iroh.address_lookup",
+            "unsupported Iroh address lookup policy",
+        );
+    }
+    let lookup_domain = iroh
+        .get("address_lookup_domain")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if iroh
+        .get("address_lookup_domain")
+        .is_some_and(|value| !value.is_string())
+    {
+        reject(
+            "transport.iroh.address_lookup_domain",
+            "Iroh lookup domain must be a string",
+        );
+    } else if address_lookup == "custom_dns"
+        && (lookup_domain.is_empty()
+            || !lookup_domain
+                .chars()
+                .all(|character| !character.is_control() && !character.is_whitespace()))
+    {
+        reject(
+            "transport.iroh.address_lookup_domain",
+            "custom DNS lookup requires a printable domain",
+        );
+    } else if address_lookup != "custom_dns" && !lookup_domain.is_empty() {
+        reject(
+            "transport.iroh.address_lookup_domain",
+            "lookup domain is valid only with custom_dns",
+        );
+    }
+
+    let relay_mode = iroh
+        .get("relay_mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("disabled");
+    if !matches!(relay_mode, "disabled" | "public" | "custom") {
+        reject("transport.iroh.relay_mode", "unsupported Iroh relay mode");
+    }
+    let mut relay_urls = Vec::new();
+    if let Some(value) = iroh.get("relay_urls") {
+        if let Some(urls) = value.as_array() {
+            for url in urls {
+                match url.as_str() {
+                    Some(url) => relay_urls.push(url),
+                    None => reject(
+                        "transport.iroh.relay_urls",
+                        "relay_urls must contain only strings",
+                    ),
+                }
+            }
+        } else {
+            reject(
+                "transport.iroh.relay_urls",
+                "relay_urls must be a string array",
+            );
+        }
+    }
+    if relay_urls.len() > 8 {
+        reject(
+            "transport.iroh.relay_urls",
+            "relay_urls must contain at most eight URLs",
+        );
+    }
+    if relay_urls.iter().any(|url| {
+        !url.starts_with("https://")
+            || url.len() <= "https://".len()
+            || url.chars().any(char::is_control)
+    }) {
+        reject(
+            "transport.iroh.relay_urls",
+            "custom relay URLs must be printable HTTPS URLs",
+        );
+    }
+    if relay_mode == "custom" && relay_urls.is_empty() {
+        reject(
+            "transport.iroh.relay_urls",
+            "custom relay mode requires at least one relay URL",
+        );
+    } else if relay_mode != "custom" && !relay_urls.is_empty() {
+        reject(
+            "transport.iroh.relay_urls",
+            "relay URLs are valid only with custom relay mode",
+        );
+    }
+    if iroh
+        .get("direct_connections")
+        .and_then(serde_json::Value::as_bool)
+        == Some(false)
+        && relay_mode == "disabled"
+    {
+        reject(
+            "transport.iroh.direct_connections",
+            "disabling direct connections requires a relay mode",
+        );
+    }
+
+    for (key, minimum, maximum) in [
+        ("invitation_ttl_seconds", 30, 86_400),
+        ("max_connections", 1, 1_024),
+        ("max_streams_per_connection", 1, 16),
+        ("setup_timeout_ms", 100, 120_000),
+        ("idle_timeout_ms", 1_000, 86_400_000),
+    ] {
+        if let Some(value) = iroh.get(key) {
+            match value.as_u64() {
+                Some(value) if (minimum..=maximum).contains(&value) => {}
+                _ => reject(
+                    &format!("transport.iroh.{key}"),
+                    &format!("transport.iroh.{key} must be an integer from {minimum} to {maximum}"),
+                ),
+            }
+        }
+    }
+    diagnostics
+}
+
 /// Validates the agent-turn timeout with its structured scalar type intact.
 fn validate_agent_turn_timeout_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
     let Ok(root) = parse_config_json_value(format, text) else {
@@ -722,6 +894,8 @@ fn project_overlay_path_changes_execution_authority(path: &str) -> bool {
             | "permissions.bypass_mode"
             | "permissions.bubblewrap"
     ) || path.starts_with("permissions.bubblewrap.")
+        || path == "transport"
+        || path.starts_with("transport.")
         || is_model_profile_approval_policy_path(path)
 }
 

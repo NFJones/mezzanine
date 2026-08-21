@@ -2152,6 +2152,48 @@ fn migrates_schema_65_without_overwriting_explicit_agent_shell_mode() {
     }
 }
 
+/// Verifies schema v67 materializes a disabled, conservative Iroh policy.
+#[test]
+fn migrates_schema_66_with_disabled_iroh_transport() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 66\n[runtime]\ncpu_count = 3\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":66,"runtime":{"cpu_count":3}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 66\nruntime:\n  cpu_count: 3\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let values = extract_config_values(format, &plan.text);
+
+        assert_eq!(plan.from_version, 66);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            values.get("transport.iroh.enabled"),
+            Some(&"false".to_string())
+        );
+        assert_eq!(
+            values.get("transport.iroh.address_lookup"),
+            Some(&"disabled".to_string())
+        );
+        assert_eq!(
+            values.get("transport.iroh.relay_mode"),
+            Some(&"disabled".to_string())
+        );
+        assert_eq!(
+            values.get("transport.iroh.port_mapping"),
+            Some(&"false".to_string())
+        );
+        assert_eq!(values.get("runtime.cpu_count"), Some(&"3".to_string()));
+    }
+}
+
 /// Verifies that config validation refuses documents written for a newer
 /// schema version than the running binary understands. This prevents older
 /// binaries from silently interpreting keys whose migration or meaning belongs

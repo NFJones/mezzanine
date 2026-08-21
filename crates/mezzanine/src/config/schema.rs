@@ -20,6 +20,7 @@ pub const PRIMARY_CONFIG_FILENAMES: &[&str] =
 pub const BASELINE_TOP_LEVEL_KEYS: &[&str] = &[
     "version",
     "runtime",
+    "transport",
     "terminal",
     "keys",
     "key_preset",
@@ -394,6 +395,14 @@ pub(crate) fn config_change_path_is_user_only_host_power_policy(path: &str) -> b
     path == "agents.active_turn_sleep_inhibition"
 }
 
+/// Reports whether a configuration path controls a network listener.
+///
+/// Remote transport policy affects host networking and authenticated access,
+/// so model-authored changes must not enable or retarget it.
+pub(crate) fn config_change_path_is_user_only_transport_policy(path: &str) -> bool {
+    path == "transport" || path.starts_with("transport.")
+}
+
 /// Defines backend-neutral command-effect keys accepted by schema v21.
 pub(super) const COMMAND_RULE_EFFECT_KEYS: &[&str] = &[
     "completeness",
@@ -415,6 +424,25 @@ pub(super) const SESSION_KEYS: &[&str] = &["default_command"];
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub(super) const RUNTIME_KEYS: &[&str] = &["cpu_count"];
+
+/// Defines the schema-v67 Iroh transport keys.
+pub(super) const IROH_TRANSPORT_KEYS: &[&str] = &[
+    "enabled",
+    "identity",
+    "address_lookup",
+    "address_lookup_domain",
+    "relay_mode",
+    "relay_urls",
+    "direct_connections",
+    "port_mapping",
+    "proxy_from_env",
+    "system_ca_store",
+    "invitation_ttl_seconds",
+    "max_connections",
+    "max_streams_per_connection",
+    "setup_timeout_ms",
+    "idle_timeout_ms",
+];
 
 /// Defines the TERMINAL KEYS const used by this subsystem.
 ///

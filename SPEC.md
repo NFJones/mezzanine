@@ -2847,6 +2847,7 @@ The top-level configuration object MUST support the following keys:
 
 - `version`
 - `runtime`
+- `transport`
 - `terminal`
 - `keys`
 - `frames`
@@ -2869,7 +2870,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 63 is the current configuration schema version for this
+schema version 67 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -2889,6 +2890,20 @@ positive integer, MUST default to 2, and MUST select the Tokio worker-thread
 count when Mezzanine starts. Because the runtime is constructed before trusted
 project overlays can be discovered, this primary-user setting MUST NOT be
 overridden by project configuration and changes take effect on restart.
+
+The schema-v67 `transport.iroh` table MUST be primary-user-only and MUST default
+`enabled` to false. It MUST support `identity`, `address_lookup`,
+`address_lookup_domain`, `relay_mode`, `relay_urls`, `direct_connections`,
+`port_mapping`, `proxy_from_env`, `system_ca_store`,
+`invitation_ttl_seconds`, `max_connections`, `max_streams_per_connection`,
+`setup_timeout_ms`, and `idle_timeout_ms`. Unix sockets MUST remain the default
+and local recovery transport. Public lookup, public relays, port mapping,
+proxy inheritance, and system CA use MUST each require an explicit independent
+selection. Project overlays and model-authored configuration changes MUST NOT
+enable or retarget remote transport. Network-affecting changes MUST require a
+daemon restart. The v66 to v67 primary-config migration MUST materialize the
+conservative disabled transport defaults in all supported formats without
+enabling network activity.
 
 Mezzanine schema version 2 MUST NOT support `session.default_command`. The
 version 1 to version 2 primary-config migration MUST remove
