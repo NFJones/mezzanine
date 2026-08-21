@@ -2567,11 +2567,14 @@ impl RuntimeSessionService {
                 })
         });
 
-        // Thinking and non-promotable command rows have additional
-        // completion-time ordering rules. Restore the shared baseline and let
-        // the static pipeline settle every uncertain surface.
-        if (presentation.rationale.is_some() || !presentation.shell_commands.is_empty())
-            && !command_can_promote
+        // Shell commands and rationale-only responses have additional
+        // completion-time ordering rules. Exact rationale-plus-say projections
+        // already use the static renderers and can promote both components.
+        let rationale_requires_static = presentation.rationale.is_some()
+            && presentation.actions.is_empty()
+            && presentation.shell_commands.is_empty();
+        if rationale_requires_static
+            || (!presentation.shell_commands.is_empty() && !command_can_promote)
         {
             self.presentation
                 .agent_promoted_streaming_say_actions

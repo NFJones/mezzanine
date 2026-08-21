@@ -668,6 +668,176 @@ fn runtime_streaming_say_promotes_rich_output_without_replay() {
     );
 }
 
+/// Verifies validated provider completion finalizes streamed say rows in place.
+///
+/// Production MAAP batches carry a non-empty batch rationale and one result per
+/// action. Completion must preserve the streamed assistant block, persist it
+/// once, and apply the same final styling as the static renderer without
+/// appending a second copy below the provisional rows.
+#[tokio::test]
+async fn runtime_streaming_say_completion_does_not_append_final_duplicate() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("streaming-say-finalization"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .attach_primary("primary", true, Size::new(48, 12).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "stream the final response")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+
+    let rationale = "Report the completed result";
+    let source = "**streamed final** output";
+    for event in [
+        mez_agent::StreamingSayEvent::RationaleStarted,
+        mez_agent::StreamingSayEvent::RationaleTextDelta {
+            text: rationale.to_string(),
+        },
+        mez_agent::StreamingSayEvent::RationaleTextComplete,
+        mez_agent::StreamingSayEvent::Started {
+            action_index: 0,
+            status: mez_agent::SayStatus::Final,
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE.to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextDelta {
+            action_index: 0,
+            text: source.to_string(),
+        },
+        mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+    ] {
+        service
+            .apply_agent_streaming_say_event_to_terminal_buffer("%1", &turn.turn_id, &event)
+            .unwrap();
+    }
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(
+        service
+            .take_agent_streaming_say_projection_work("%1", &turn.turn_id)
+            .unwrap()
+            .expect("complete streamed source should project"),
+    )
+    .unwrap();
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let streamed_line = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines()
+        .into_iter()
+        .find(|line| line.text.contains("streamed final"))
+        .expect("streamed assistant row should be visible");
+
+    let action = mez_agent::AgentAction {
+        id: "say-streamed".to_string(),
+        rationale: String::new(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
+            text: source.to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: source.to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: rationale.to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![action.clone()],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &turn,
+            &action,
+            vec![source.to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+
+    let transition = service
+        .apply_agent_provider_completed_transition(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+
+    assert!(transition.applied);
+    assert!(transition.side_effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::RenderClient {
+            reason: RenderInvalidationReason::PaneOutput,
+            ..
+        }
+    )));
+    assert!(transition.side_effects.iter().all(|effect| !matches!(
+        effect,
+        RuntimeSideEffect::RenderClient {
+            reason: RenderInvalidationReason::FullRedraw,
+            ..
+        }
+    )));
+    let final_screen = service.agent_pane_screen("%1").unwrap();
+    let final_lines = final_screen.normal_content_lines();
+    assert_eq!(
+        final_lines
+            .iter()
+            .filter(|line| line.contains("streamed final"))
+            .count(),
+        1,
+        "{final_lines:?}"
+    );
+    let finalized_line = final_screen
+        .normal_styled_content_lines()
+        .into_iter()
+        .find(|line| line.text.contains("streamed final"))
+        .expect("finalized assistant row should remain visible");
+    assert_eq!(finalized_line, streamed_line);
+    let entries = transcript_store
+        .inspect_presentation(&conversation_id)
+        .unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.source_text.as_deref() == Some(source))
+            .count(),
+        1,
+        "{entries:?}"
+    );
+}
+
 /// Verifies interrupting a turn freezes already streamed output in the pane
 /// buffer rather than restoring the screen that existed before streaming.
 ///

@@ -150,21 +150,20 @@ impl RuntimeSessionService {
         };
 
         let visible_action_texts = runtime_agent_batch_visible_action_texts(batch);
-        let streamed_shell_command_was_promoted =
+        let streamed_response_was_promoted =
             batch
                 .actions
                 .iter()
                 .enumerate()
-                .any(|(action_index, action)| {
-                    matches!(action.payload, AgentActionPayload::ShellCommand { .. })
-                        && self.agent_streaming_say_action_is_promoted(
-                            pane_id,
-                            &execution.request.turn_id,
-                            action_index,
-                        )
+                .any(|(action_index, _action)| {
+                    self.agent_streaming_say_action_is_promoted(
+                        pane_id,
+                        &execution.request.turn_id,
+                        action_index,
+                    )
                 });
         let batch_rationale_was_presented = !batch.rationale.trim().is_empty()
-            && !streamed_shell_command_was_promoted
+            && !streamed_response_was_promoted
             && !runtime_agent_batch_rationale_repeats_visible_batch_text(
                 batch,
                 &visible_action_texts,

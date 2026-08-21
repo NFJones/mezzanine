@@ -2279,9 +2279,13 @@ or shell-classification change MUST be rejected.
 After provider completion, an exactly matching validated `say` action index,
 status, content type, and raw text MAY promote the matching atomically published
 generation in place, persist its semantic source once, and suppress ordinary
-immediate or deferred replay. A response containing provisional rationale or
-command source MUST first validate the complete raw source against the accepted
-batch, then restore the pre-stream pane and use the ordinary validated response
+immediate or deferred replay. Exactly matching provisional batch rationale MAY
+be promoted with one or more matching `say` actions when the current atomic
+projection contains every promoted component; completion MUST retain the
+existing rows and MUST NOT append the rationale or `say` output again. A
+response containing rationale without a promotable `say`, or containing command
+source, MUST first validate the complete raw source against the accepted batch,
+then restore the pre-stream pane and use the ordinary validated response
 presentation and shell-dispatch paths. This restoration MUST ensure the settled
 pane has exactly the same ordering, prefixes, styling, wrapping, command bounds,
 persistence, approval behavior, and execution behavior as a non-streamed
