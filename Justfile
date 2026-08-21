@@ -42,6 +42,12 @@ test:
 test-managed-shells:
     canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" sh scripts/test-managed-shell-reliability.sh
 
+# Build test binaries once, execute their libtest harnesses serially, and write
+# a report of slow tests under target/. Tests above the conservative critical
+# budget fail this explicitly requested profiling run, not ordinary test runs.
+profile-slow-tests *args:
+    python3 scripts/profile-slow-tests.py {{args}}
+
 # Run the strict routed lifecycle acceptance with genuine Bubblewrap confinement
 test-real-bubblewrap:
     test "$(uname -s)" = Linux
