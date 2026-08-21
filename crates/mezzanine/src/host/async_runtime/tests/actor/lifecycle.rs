@@ -1627,3 +1627,158 @@ async fn async_actor_rejects_requests_after_shutdown() {
 
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
 }
+
+/// Verifies an unterminated synchronized pane update schedules a
+/// pane-epoch recovery timer, force-releases on its typed event, and ignores
+/// the stale epoch after a repeated begin.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_synchronized_output_timer_force_releases_and_ignores_stale_epoch() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let mut begin = RuntimeEventBatch::new();
+        begin.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"\x1b[?2026hrepaint".to_vec(),
+        }));
+        assert_eq!(
+            handle.submit_runtime_events(begin).await.unwrap().applied,
+            1
+        );
+
+        let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        let first_key = timers
+            .iter()
+            .filter_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, delay_ms }
+                    if key.kind == RuntimeTimerKind::SynchronizedOutput && *delay_ms == 1_000 =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .next()
+            .expect("missing synchronized output timer");
+        assert_eq!(first_key.generation, 1);
+
+        let mut repeat = RuntimeEventBatch::new();
+        repeat.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"\x1b[?2026h".to_vec(),
+        }));
+        handle.submit_runtime_events(repeat).await.unwrap();
+        let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        let second_key = timers
+            .iter()
+            .filter_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::SynchronizedOutput =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .next()
+            .expect("missing rearmed synchronized output timer");
+        assert_eq!(second_key.generation, 2);
+
+        let mut stale = RuntimeEventBatch::new();
+        stale.push(RuntimeEvent::Timer(TimerEvent {
+            key: first_key,
+            now_ms: 1_000,
+        }));
+        assert_eq!(
+            handle.submit_runtime_events(stale).await.unwrap().applied,
+            0
+        );
+
+        let mut timeout = RuntimeEventBatch::new();
+        timeout.push(RuntimeEvent::Timer(TimerEvent {
+            key: second_key,
+            now_ms: 2_000,
+        }));
+        assert_eq!(
+            handle.submit_runtime_events(timeout).await.unwrap().applied,
+            1
+        );
+        assert_eq!(
+            handle.drain_render_side_effects(8).await.unwrap(),
+            vec![RuntimeSideEffect::RenderClient {
+                client_id: primary,
+                reason: RenderInvalidationReason::FullRedraw,
+            }]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a normal synchronized-output end cancels its pane recovery timer
+/// and publishes only the compositor's ordinary release invalidation.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_synchronized_output_normal_release_cancels_timer() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let mut begin = RuntimeEventBatch::new();
+        begin.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"\x1b[?2026h\r\x1b[2Jpartial".to_vec(),
+        }));
+        handle.submit_runtime_events(begin).await.unwrap();
+        let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        let key = timers
+            .iter()
+            .filter_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::SynchronizedOutput =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .next()
+            .expect("missing synchronized-output timer");
+
+        let mut end = RuntimeEventBatch::new();
+        end.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"\x1b[?2026l".to_vec(),
+        }));
+        assert_eq!(handle.submit_runtime_events(end).await.unwrap().applied, 1);
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().iter().any(
+            |effect| matches!(effect, RuntimeSideEffect::CancelTimer { key: cancelled } if cancelled == &key)
+        ));
+        assert_eq!(
+            handle.drain_render_side_effects(8).await.unwrap(),
+            vec![RuntimeSideEffect::RenderClient {
+                client_id: primary,
+                reason: RenderInvalidationReason::PaneOutput,
+            }]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.terminate_all_pane_processes().unwrap();
+}

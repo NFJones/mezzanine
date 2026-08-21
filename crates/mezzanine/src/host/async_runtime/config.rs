@@ -381,6 +381,7 @@ pub(super) struct RuntimeTimerTracker {
     pub(super) provider_claim: HashMap<String, RuntimeTimerKey>,
     pub(super) next_provider_claim_generation: u64,
     pub(super) pane_pipe_health: HashMap<String, RuntimeTimerKey>,
+    pub(super) synchronized_output: HashMap<String, RuntimeTimerKey>,
     pub(super) next_pane_pipe_health_generation: u64,
     pub(super) idle_cleanup: Option<RuntimeTimerKey>,
 }

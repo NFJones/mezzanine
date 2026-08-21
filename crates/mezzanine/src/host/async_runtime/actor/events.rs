@@ -231,6 +231,11 @@ impl AsyncRuntimeSessionActor {
                             &pane_id_for_pipe_health,
                         )?,
                     );
+                    transition.side_effects.extend(
+                        self.synchronized_output_timer_side_effects_for_pane(
+                            &pane_id_for_pipe_health,
+                        ),
+                    );
                     transition
                         .side_effects
                         .extend(self.pending_provider_dispatch_side_effects()?);
@@ -303,9 +308,48 @@ impl AsyncRuntimeSessionActor {
             RuntimeEvent::Shutdown(shutdown) => self.apply_runtime_shutdown_event(shutdown),
             RuntimeEvent::Timer(timer) => self.apply_runtime_timer_event(timer),
             RuntimeEvent::Process(process_event) => {
-                self.service.apply_process_transition(process_event)
+                let pane_id = match &process_event {
+                    crate::runtime::ProcessEvent::Spawned { pane_id, .. }
+                    | crate::runtime::ProcessEvent::Exited { pane_id, .. }
+                    | crate::runtime::ProcessEvent::Failed { pane_id, .. } => pane_id.clone(),
+                };
+                let mut transition = self.service.apply_process_transition(process_event)?;
+                transition
+                    .side_effects
+                    .extend(self.synchronized_output_timer_side_effects_for_pane(&pane_id));
+                Ok(transition)
             }
         }
+    }
+
+    /// Builds timer effects for the active synchronized-output epoch of one pane.
+    pub(super) fn synchronized_output_timer_side_effects_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Vec<RuntimeSideEffect> {
+        const SYNCHRONIZED_OUTPUT_TIMEOUT_MS: u64 = 1_000;
+        let active = self
+            .service
+            .process_pane_screen(pane_id)
+            .and_then(|screen| screen.synchronized_output_begin_epoch())
+            .map(|epoch| {
+                RuntimeTimerKey::new(RuntimeTimerKind::SynchronizedOutput, pane_id, epoch)
+            });
+        let previous = self.timers.synchronized_output.get(pane_id).cloned();
+        if active == previous {
+            return Vec::new();
+        }
+        let mut side_effects = previous
+            .into_iter()
+            .map(|key| RuntimeSideEffect::CancelTimer { key })
+            .collect::<Vec<_>>();
+        if let Some(key) = active {
+            side_effects.push(RuntimeSideEffect::ScheduleTimer {
+                key,
+                delay_ms: SYNCHRONIZED_OUTPUT_TIMEOUT_MS,
+            });
+        }
+        side_effects
     }
 
     /// Runs the apply runtime timer event operation for this subsystem.
@@ -426,6 +470,24 @@ impl AsyncRuntimeSessionActor {
                     .provider_claim
                     .remove(timer.key.owner_id.as_str());
                 self.apply_provider_claim_timer_event(&timer.key)
+            }
+            RuntimeTimerKind::SynchronizedOutput => {
+                if self
+                    .timers
+                    .synchronized_output
+                    .get(timer.key.owner_id.as_str())
+                    != Some(&timer.key)
+                {
+                    self.record_ignored_timer_event();
+                    return Ok(RuntimeTransition::default());
+                }
+                self.timers
+                    .synchronized_output
+                    .remove(timer.key.owner_id.as_str());
+                Ok(self.service.apply_synchronized_output_timeout_transition(
+                    &timer.key.owner_id,
+                    timer.key.generation,
+                ))
             }
             RuntimeTimerKind::PanePipeHealth => {
                 if self
@@ -746,6 +808,18 @@ impl AsyncRuntimeSessionActor {
         })
     }
 
+    /// Reconciles pane-owned synchronized-output timers after a lifecycle mutation.
+    pub(super) fn synchronized_output_timer_reconciliation_side_effects(
+        &self,
+    ) -> Vec<RuntimeSideEffect> {
+        self.timers
+            .synchronized_output
+            .keys()
+            .cloned()
+            .flat_map(|pane_id| self.synchronized_output_timer_side_effects_for_pane(&pane_id))
+            .collect()
+    }
+
     /// Runs the apply runtime client event operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -757,7 +831,11 @@ impl AsyncRuntimeSessionActor {
     ) -> Result<RuntimeTransition> {
         match client_event {
             event @ (ClientEvent::Resize { .. } | ClientEvent::Disconnected { .. }) => {
-                self.service.apply_client_lifecycle_transition(event)
+                let mut transition = self.service.apply_client_lifecycle_transition(event)?;
+                transition
+                    .side_effects
+                    .extend(self.synchronized_output_timer_reconciliation_side_effects());
+                Ok(transition)
             }
             ClientEvent::ResizeSignal { client_id } => Ok(self
                 .apply_runtime_client_render_signal_event(

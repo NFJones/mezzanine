@@ -244,6 +244,9 @@ impl TerminalScreen {
             parser_state: ParserState::Ground,
             csi_buffer: String::new(),
             csi_buffer_truncated: false,
+            dcs_buffer: String::new(),
+            dcs_buffer_truncated: false,
+            dcs_enabled: false,
             osc_buffer: String::new(),
             osc_buffer_truncated: false,
             osc_events: Vec::new(),
@@ -267,6 +270,8 @@ impl TerminalScreen {
             history: HistoryBuffer::new_with_rotation(history_limit, history_rotate_lines)?,
             normal_viewport_detached_from_history: false,
             render_generation: next_render_generation(),
+            synchronized_output: SynchronizedOutputState::default(),
+            synchronized_output_outcome: SynchronizedOutputFeedOutcome::default(),
             activity_events: 0,
             bell_events: 0,
             g0_charset: TerminalCharset::Ascii,
@@ -295,7 +300,8 @@ impl TerminalScreen {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn feed(&mut self, input: &[u8]) {
+    pub fn feed(&mut self, input: &[u8]) -> SynchronizedOutputFeedOutcome {
+        self.synchronized_output_outcome = SynchronizedOutputFeedOutcome::default();
         if !input.is_empty() {
             self.activity_events = self.activity_events.saturating_add(1);
             self.mark_render_changed();
@@ -344,6 +350,7 @@ impl TerminalScreen {
                 }
             }
         }
+        self.synchronized_output_outcome
     }
 
     /// Applies terminal protocol bytes while preserving user-visible content.
@@ -352,11 +359,15 @@ impl TerminalScreen {
     /// OSC, and terminal-reply state, but its printable rows must not enter the
     /// retained process buffer. This method advances the complete incremental
     /// parser and then restores the prior normal or alternate display content.
-    pub fn feed_protocol_preserving_content(&mut self, input: &[u8]) {
+    pub fn feed_protocol_preserving_content(
+        &mut self,
+        input: &[u8],
+    ) -> SynchronizedOutputFeedOutcome {
         if input.is_empty() {
-            return;
+            return SynchronizedOutputFeedOutcome::default();
         }
         let was_alternate = self.alternate.active();
+        let synchronized_output_was_active = self.synchronized_output_active();
         let previous_display_metadata = RetainedDisplayMetadata::capture(self);
         let previous_content = RetainedScreenContent::take_current(self);
         let previous_saved_normal_metadata = self
@@ -374,7 +385,7 @@ impl TerminalScreen {
         let previous_activity_events = self.activity_events;
         let previous_bell_events = self.bell_events;
 
-        self.feed(input);
+        let outcome = self.feed(input);
 
         let is_alternate = self.alternate.active();
         if !was_alternate && !is_alternate {
@@ -410,6 +421,10 @@ impl TerminalScreen {
         self.history = previous_history;
         self.activity_events = previous_activity_events;
         self.bell_events = previous_bell_events;
+        if outcome.begin_epoch.is_some() && !synchronized_output_was_active {
+            self.refresh_synchronized_output_presentation();
+        }
+        outcome
     }
 
     /// Runs the resize operation for this subsystem.

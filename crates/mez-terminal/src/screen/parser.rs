@@ -82,7 +82,13 @@ impl TerminalScreen {
             self.parser_state = ParserState::EscapeCharsetG0;
         } else if ch == ')' {
             self.parser_state = ParserState::EscapeCharsetG1;
-        } else if matches!(ch, 'P' | 'X' | '^' | '_') {
+        } else if ch == 'P' {
+            self.dcs_buffer.clear();
+            self.dcs_buffer_truncated = false;
+            self.dcs_enabled = true;
+            self.parser_state = ParserState::Dcs;
+        } else if matches!(ch, 'X' | '^' | '_') {
+            self.dcs_enabled = false;
             self.parser_state = ParserState::Dcs;
         } else if ch == '7' {
             self.save_cursor();
@@ -196,19 +202,45 @@ impl TerminalScreen {
     pub(super) fn feed_dcs(&mut self, ch: char) {
         if ch == '\u{001b}' {
             self.parser_state = ParserState::DcsEscape;
+        } else if self.dcs_enabled {
+            self.push_dcs_char(ch);
         }
     }
 
-    /// Runs the feed dcs escape operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Runs the feed DCS escape operation for this subsystem.
     pub(super) fn feed_dcs_escape(&mut self, ch: char) {
         if ch == '\\' {
-            self.parser_state = ParserState::Ground;
+            self.finish_dcs();
         } else if ch != '\u{001b}' {
+            if self.dcs_enabled {
+                self.push_dcs_char('\u{001b}');
+                self.push_dcs_char(ch);
+            }
             self.parser_state = ParserState::Dcs;
+        }
+    }
+
+    /// Completes one bounded DCS sequence.
+    pub(super) fn finish_dcs(&mut self) {
+        let payload = std::mem::take(&mut self.dcs_buffer);
+        let truncated = std::mem::take(&mut self.dcs_buffer_truncated);
+        if self.dcs_enabled && !truncated {
+            if payload.starts_with("=1s") {
+                self.begin_synchronized_output();
+            } else if payload.starts_with("=2s") {
+                self.end_synchronized_output();
+            }
+        }
+        self.dcs_enabled = false;
+        self.parser_state = ParserState::Ground;
+    }
+
+    /// Retains one DCS character within the parser safety bound.
+    pub(super) fn push_dcs_char(&mut self, ch: char) {
+        if self.dcs_buffer.len().saturating_add(ch.len_utf8()) <= MAX_DCS_STRING_BYTES {
+            self.dcs_buffer.push(ch);
+        } else {
+            self.dcs_buffer_truncated = true;
         }
     }
 
@@ -497,10 +529,12 @@ impl TerminalScreen {
                     self.alternate.enter_with_saved_normal_screen(state);
                     self.alternate_screen_generation =
                         self.alternate_screen_generation.wrapping_add(1);
+                    self.mark_synchronized_output_full_redraw();
                     self.clear_screen();
                 } else if let Some(state) = self.alternate.leave() {
                     self.alternate_screen_generation =
                         self.alternate_screen_generation.wrapping_add(1);
+                    self.mark_synchronized_output_full_redraw();
                     self.restore_saved_normal_screen_state(state);
                     if mode == 1049 {
                         self.restore_cursor();
@@ -538,6 +572,13 @@ impl TerminalScreen {
             1004 => self.focus_events_enabled = enabled,
             1006 => self.sgr_mouse_enabled = enabled,
             2004 => self.bracketed_paste_enabled = enabled,
+            2026 => {
+                if enabled {
+                    self.begin_synchronized_output();
+                } else {
+                    self.end_synchronized_output();
+                }
+            }
             _ => {}
         }
     }

@@ -134,6 +134,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(crate) fn ensure_active_copy_mode(&mut self, pane_id: &str) -> Result<&mut CopyMode> {
+        self.force_release_pane_synchronized_output(pane_id);
         if self
             .active_copy_mode_for_presented_surface(pane_id)
             .is_none()

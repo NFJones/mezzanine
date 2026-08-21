@@ -573,6 +573,8 @@ pub enum RuntimeTimerKind {
     ProviderClaim,
     /// Short one-shot check for command-backed pane pipe completion or failure.
     PanePipeHealth,
+    /// Bounded recovery for an unterminated pane synchronized-output transaction.
+    SynchronizedOutput,
 }
 
 /// Event emitted when a runtime-owned timer fires.

@@ -178,6 +178,9 @@ pub struct PaneOutputUpdate {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub invalidate_output_frame: bool,
+    /// Whether this applied output must not invalidate attached-client rendering
+    /// because its pane remains inside a synchronized terminal update.
+    pub defer_render: bool,
 }
 
 /// Carries Active Pane Pipe state for this subsystem.

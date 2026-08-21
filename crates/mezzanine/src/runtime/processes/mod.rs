@@ -1844,6 +1844,25 @@ impl RuntimeSessionService {
         self.process.process_pane_screens.get_mut(pane_id)
     }
 
+    /// Force-releases one matching synchronized terminal transaction after its recovery timeout.
+    pub(crate) fn apply_synchronized_output_timeout_transition(
+        &mut self,
+        pane_id: &str,
+        begin_epoch: u64,
+    ) -> RuntimeTransition {
+        let released = self.process_pane_screen_mut(pane_id).is_some_and(|screen| {
+            screen.synchronized_output_begin_epoch() == Some(begin_epoch)
+                && screen.force_release_synchronized_output()
+        });
+        self.runtime_transition_with_render(released, Some(RenderInvalidationReason::FullRedraw))
+    }
+
+    /// Releases a pane synchronized-output transaction before a lifecycle mutation.
+    pub(crate) fn force_release_pane_synchronized_output(&mut self, pane_id: &str) -> bool {
+        self.process_pane_screen_mut(pane_id)
+            .is_some_and(TerminalScreen::force_release_synchronized_output)
+    }
+
     /// Replaces the authoritative process terminal screen for one pane.
     #[allow(
         dead_code,
@@ -3750,12 +3769,12 @@ impl RuntimeSessionService {
     ) -> Result<RuntimeTransition> {
         let update = self.apply_pane_output_bytes(pane_id, bytes)?;
         let applied = update.is_some();
-        let render_reason = update.map(|update| {
-            if update.invalidate_output_frame {
+        let render_reason = update.and_then(|update| {
+            (!update.defer_render).then_some(if update.invalidate_output_frame {
                 RenderInvalidationReason::FullRedraw
             } else {
                 RenderInvalidationReason::PaneOutput
-            }
+            })
         });
         Ok(self.runtime_transition_with_render(applied, render_reason))
     }

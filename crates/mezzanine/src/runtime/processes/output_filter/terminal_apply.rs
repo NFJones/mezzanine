@@ -316,6 +316,7 @@ impl RuntimeSessionService {
                 window.active_pane().id.as_str() == descriptor.pane_id.as_str()
             }),
             invalidate_output_frame: false,
+            defer_render: false,
         })
     }
 }

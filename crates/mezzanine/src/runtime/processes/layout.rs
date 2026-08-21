@@ -742,9 +742,11 @@ impl RuntimeSessionService {
                     },
                 );
             }
-            let process_presentation_geometry_changed = self
-                .process_pane_screen(pane_id)
-                .is_some_and(|screen| screen.size() != process_presentation_size);
+            let synchronized_output_released = self.force_release_pane_synchronized_output(pane_id);
+            let process_presentation_geometry_changed = synchronized_output_released
+                || self
+                    .process_pane_screen(pane_id)
+                    .is_some_and(|screen| screen.size() != process_presentation_size);
             if let Some(screen) = self
                 .process
                 .process_pane_screens

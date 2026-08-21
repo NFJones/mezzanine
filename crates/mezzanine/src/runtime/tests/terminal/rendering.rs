@@ -1303,3 +1303,99 @@ fn runtime_pane_agent_status_selector_scrolls_only_dropdown_contents() {
         Some(0)
     );
 }
+
+/// Verifies fragmented synchronized pane output mutates the live
+/// terminal while attached clients retain the pre-transaction frame
+/// until the final DEC reset publishes once.
+#[test]
+fn runtime_synchronized_output_defers_renders_and_publishes_atomically() {
+    let mut service = test_runtime_service();
+    let size = Size::new(80, 24).unwrap();
+    service.attach_primary("primary", true, size, 120).unwrap();
+
+    service
+        .apply_pane_output_transition("%1", b"before".to_vec())
+        .unwrap();
+
+    let deferred_begin = service
+        .apply_pane_output_transition("%1", b"\x1b[?2026h\r\x1b[2J\x1b[?25lapproach".to_vec())
+        .unwrap();
+    assert!(deferred_begin.applied);
+    assert!(
+        deferred_begin
+            .side_effects
+            .iter()
+            .all(|effect| !matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+    );
+
+    let config = TerminalClientLoopConfig {
+        window_frames_enabled: false,
+        pane_frames_enabled: false,
+        ..TerminalClientLoopConfig::default()
+    };
+    let frozen = service
+        .render_client_view(ClientViewRole::Primary, size, &config)
+        .unwrap()
+        .unwrap();
+    assert!(frozen.lines.join("\n").contains("before"));
+    assert!(!frozen.lines.join("\n").contains("approach"));
+    assert!(frozen.cursor_visible);
+
+    let deferred_repaint = service
+        .apply_pane_output_transition("%1", b"\x1b[1;1H partial".to_vec())
+        .unwrap();
+    assert!(
+        deferred_repaint
+            .side_effects
+            .iter()
+            .all(|effect| !matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+    );
+
+    let release = service
+        .apply_pane_output_transition("%1", b"\x1b[?2026l".to_vec())
+        .unwrap();
+    assert!(matches!(
+        release.side_effects.as_slice(),
+        [RuntimeSideEffect::RenderClient {
+            reason: crate::runtime::RenderInvalidationReason::PaneOutput,
+            ..
+        }]
+    ));
+    let completed = service
+        .render_client_view(ClientViewRole::Primary, size, &config)
+        .unwrap()
+        .unwrap();
+    assert!(completed.lines.join("\n").contains(" partial"));
+    assert!(!completed.cursor_visible);
+}
+
+/// Verifies an alternate-buffer switch inside synchronized output releases the
+/// frozen pane through a full redraw rather than a retained pane diff.
+#[test]
+fn runtime_synchronized_output_alternate_switch_requires_full_redraw() {
+    let mut service = test_runtime_service();
+    let size = Size::new(80, 24).unwrap();
+    service.attach_primary("primary", true, size, 120).unwrap();
+
+    let deferred = service
+        .apply_pane_output_transition("%1", b"\x1b[?2026h\x1b[?1049halt".to_vec())
+        .unwrap();
+    assert!(deferred.applied);
+    assert!(
+        deferred
+            .side_effects
+            .iter()
+            .all(|effect| !matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+    );
+
+    let release = service
+        .apply_pane_output_transition("%1", b"\x1b[?2026l".to_vec())
+        .unwrap();
+    assert!(matches!(
+        release.side_effects.as_slice(),
+        [RuntimeSideEffect::RenderClient {
+            reason: crate::runtime::RenderInvalidationReason::FullRedraw,
+            ..
+        }]
+    ));
+}
