@@ -38,6 +38,8 @@ pub(crate) fn runtime_mutating_method(method: &str) -> bool {
         method,
         "window/create"
             | "window/close"
+            | "window/layout"
+            | "window/rebalance"
             | "pane/create"
             | "pane/resize"
             | "pane/swap"
@@ -45,6 +47,7 @@ pub(crate) fn runtime_mutating_method(method: &str) -> bool {
             | "pane/join"
             | "pane/move"
             | "pane/close"
+            | "pane/zoom"
             | "pane/attention"
             | "observer/approve"
             | "observer/reject"

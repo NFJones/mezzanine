@@ -46,6 +46,10 @@ pub(super) enum ControlDispatchKind {
     WindowSelect,
     /// Close a window.
     WindowClose,
+    /// Select a window layout policy.
+    WindowLayout,
+    /// Reapply a window layout policy.
+    WindowRebalance,
     /// List panes.
     PaneList,
     /// Create a pane.
@@ -62,6 +66,12 @@ pub(super) enum ControlDispatchKind {
     PaneJoinMove,
     /// Close a pane.
     PaneClose,
+    /// Assign an explicit pane title.
+    PaneRename,
+    /// Explicitly set pane zoom state.
+    PaneZoom,
+    /// Set or inspect synchronized input for a pane's window.
+    PaneInputSync,
     /// Set or clear a pane's attention indicator.
     PaneAttention,
     /// Capture pane output.
@@ -312,6 +322,29 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         params_schema: ControlParamsSchema::Allowed(WINDOW_TARGET_MUTATION_PARAMS),
     },
     ControlMethodSpec {
+        method: "window/layout",
+        dispatch: ControlDispatchKind::WindowLayout,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "target",
+            "window_id",
+            "window_name",
+            "window_index",
+            "layout",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
+        method: "window/rebalance",
+        dispatch: ControlDispatchKind::WindowRebalance,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "target",
+            "window_id",
+            "window_name",
+            "window_index",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
         method: "pane/list",
         dispatch: ControlDispatchKind::PaneList,
         params_schema: ControlParamsSchema::Allowed(TARGET_PARAMS),
@@ -351,6 +384,35 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         method: "pane/close",
         dispatch: ControlDispatchKind::PaneClose,
         params_schema: ControlParamsSchema::Allowed(PANE_TARGET_MUTATION_PARAMS),
+    },
+    ControlMethodSpec {
+        method: "pane/rename",
+        dispatch: ControlDispatchKind::PaneRename,
+        params_schema: ControlParamsSchema::Allowed(PANE_TARGET_MUTATION_PARAMS),
+    },
+    ControlMethodSpec {
+        method: "pane/zoom",
+        dispatch: ControlDispatchKind::PaneZoom,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "target",
+            "pane_id",
+            "pane_title",
+            "pane_index",
+            "zoomed",
+            "idempotency_key",
+        ]),
+    },
+    ControlMethodSpec {
+        method: "pane/input-sync",
+        dispatch: ControlDispatchKind::PaneInputSync,
+        params_schema: ControlParamsSchema::Allowed(&[
+            "target",
+            "window_id",
+            "window_name",
+            "window_index",
+            "enabled",
+            "idempotency_key",
+        ]),
     },
     ControlMethodSpec {
         method: "pane/attention",

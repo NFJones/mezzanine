@@ -115,8 +115,8 @@ the [baseline method table in `SPEC.md`](../../../SPEC.md#13-control-endpoint).
 | Session | `session/list`, `session/get`, `session/attach`, `session/rename`, `session/kill` | List/get sessions (RO), attach as primary/observer, rename a session, or terminate it; termination requires `force` while live panes remain. Observer attach creates pending metadata only. |
 | Client | `client/list`, `client/detach`, `client/select_primary` | Inspect clients, detach a client, or atomically transfer primary ownership. |
 | Observer | `observer/list`, `observer/inspect`, `observer/approve`, `observer/reject`, `observer/revoke` | Inspect and primary-manage observer requests. Pending/approved observers can inspect only their own request-local status. |
-| Window | `window/list`, `window/create`, `window/rename`, `window/select`, `window/close` | Inspect, create, name, select, or close windows. List is RO; rename is naturally idempotent when unchanged. |
-| Pane | `pane/list`, `pane/create`, `pane/select`, `pane/resize`, `pane/move`, `pane/swap`, `pane/break`, `pane/join`, `pane/close`, `pane/attention`, `pane/capture` | Inspect, mutate layout, control a pane's completion-attention pill, or capture pane content. List is RO; capture is RO when policy permits. |
+| Window | `window/list`, `window/create`, `window/rename`, `window/select`, `window/close`, `window/layout`, `window/rebalance` | Inspect, create, name, select, close, or arrange windows. List is RO; rename is naturally idempotent when unchanged. Layout and rebalance are primary-only presentation mutations. |
+| Pane | `pane/list`, `pane/create`, `pane/select`, `pane/resize`, `pane/move`, `pane/swap`, `pane/break`, `pane/join`, `pane/close`, `pane/rename`, `pane/zoom`, `pane/input-sync`, `pane/attention`, `pane/capture` | Inspect panes, mutate layout and presentation, control synchronized input or completion attention, or capture pane content. List is RO; capture is RO when policy permits. Rename, zoom, and input synchronization are primary-only. |
 | Frame | `frame/read` | Read rendered frame fields and text (RO). |
 | Terminal | `terminal/view`, `terminal/step`, `terminal/command` | Render a client view, submit bytes/resize, or invoke a terminal command. Primary-only mutation applies to step and command. |
 | Agent | `agent/list`, `agent/task/list`, `agent/spawn`, `agent/shell/show`, `agent/shell/hide`, `agent/shell/command` | Inspect agents/tasks (RO), manage an agent shell, start prompt work, or spawn an agent. |
@@ -168,6 +168,14 @@ agent-harness hooks that need to signal completion without moving focus. Omit
 ```json
 {"jsonrpc":"2.0","id":5,"method":"pane/attention","params":{"target":{"pane_id":"%2"},"attention":true,"idempotency_key":"hook-attention-0001"}}
 ```
+
+Primary clients can also use explicit presentation controls instead of
+synthesizing command-prompt input. `pane/rename` pins a pane title,
+`pane/zoom` accepts the desired boolean state, and `pane/input-sync` enables or
+disables synchronized input for a target window. `window/layout` selects one
+of `tiled`, `even-vertical`, `even-horizontal`, or `even-grid`, while
+`window/rebalance` reapplies the selected policy. Targets default to the active
+pane or window, and targeted operations do not change focus.
 
 The recommended loop is initialize, fetch a view, render it, pass physical
 input and size updates via `terminal/step`, then apply the returned view or

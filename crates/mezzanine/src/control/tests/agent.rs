@@ -281,6 +281,12 @@ fn primary_control_method_fixture_request(
         "window/close" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"window/close","params":{"target":{"window_id":"@1"},"force":true,"idempotency_key":"window-close"}}"#.to_string()
         }
+        "window/layout" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"window/layout","params":{"target":{"window_id":"@1"},"layout":"even-vertical","idempotency_key":"window-layout"}}"#.to_string()
+        }
+        "window/rebalance" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"window/rebalance","params":{"target":{"window_id":"@1"},"idempotency_key":"window-rebalance"}}"#.to_string()
+        }
         "pane/list" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"pane/list","params":{}}"#.to_string()
         }
@@ -314,6 +320,15 @@ fn primary_control_method_fixture_request(
         }
         "pane/close" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"pane/close","params":{"target":{"pane_id":"%1"},"force":true,"idempotency_key":"pane-close"}}"#.to_string()
+        }
+        "pane/rename" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"pane/rename","params":{"target":{"pane_id":"%1"},"name":"renamed","idempotency_key":"pane-rename"}}"#.to_string()
+        }
+        "pane/zoom" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"pane/zoom","params":{"target":{"pane_id":"%1"},"zoomed":true,"idempotency_key":"pane-zoom"}}"#.to_string()
+        }
+        "pane/input-sync" => {
+            r#"{"jsonrpc":"2.0","id":1,"method":"pane/input-sync","params":{"target":{"window_id":"@1"},"enabled":true,"idempotency_key":"pane-input-sync"}}"#.to_string()
         }
         "pane/attention" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"pane/attention","params":{"target":{"pane_id":"%1"},"attention":true,"idempotency_key":"pane-attention"}}"#.to_string()
