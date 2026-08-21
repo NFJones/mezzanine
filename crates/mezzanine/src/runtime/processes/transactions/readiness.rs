@@ -53,6 +53,7 @@ impl RuntimeSessionService {
                     }
                 }
                 TerminalOscEvent::TitleChanged { .. }
+                | TerminalOscEvent::Progress(_)
                 | TerminalOscEvent::ShellIntegration { .. }
                 | TerminalOscEvent::ManagedShell { .. }
                 | TerminalOscEvent::ShellPromptStart

@@ -343,6 +343,7 @@ pub(in crate::host::terminal::render) fn pane_frame_right_status_rendition(
 ) -> GraphicRendition {
     match segment.key {
         "history.position" => ui_theme.colors.scroll_indicator.rendition(),
+        "pane.progress" => ui_theme.colors.pane_progress.rendition(),
         "pane.pwd" => ui_theme.colors.pane_pwd.rendition(),
         "agent.model" => ui_theme.colors.agent_model.rendition(),
         "agent.reasoning" => ui_theme.colors.agent_reasoning.rendition(),

@@ -240,6 +240,31 @@ impl RuntimeSessionService {
         if terminal_title.is_some() {
             terminal_title_panes.insert(output.pane_id.clone());
         }
+        let progress_changed = osc_events
+            .iter()
+            .filter_map(|event| match event {
+                TerminalOscEvent::Progress(progress) => Some(*progress),
+                _ => None,
+            })
+            .fold(false, |changed, progress| {
+                let pane_id = output.pane_id.as_str();
+                let event_changed = match progress {
+                    mez_terminal::TerminalProgressState::Clear => self
+                        .process
+                        .pane_terminal_progress
+                        .remove(pane_id)
+                        .is_some(),
+                    progress => {
+                        self.process.pane_terminal_progress.get(pane_id) != Some(&progress) && {
+                            self.process
+                                .pane_terminal_progress
+                                .insert(pane_id.to_string(), progress);
+                            true
+                        }
+                    }
+                };
+                changed || event_changed
+            });
         self.apply_terminal_osc_events(&osc_events)?;
         if alternate_active {
             self.process.pane_readiness_overrides.revoke(
@@ -327,7 +352,9 @@ impl RuntimeSessionService {
             activity_events,
             bell_events,
             background,
-            invalidate_output_frame: alternate_screen_switched || synchronized_output.full_redraw,
+            invalidate_output_frame: alternate_screen_switched
+                || synchronized_output.full_redraw
+                || progress_changed,
             defer_render,
         };
         self.append_pane_output_event(&update)?;

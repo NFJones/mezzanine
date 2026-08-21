@@ -291,6 +291,10 @@ impl TerminalScreen {
             self.osc_events.push(TerminalOscEvent::TitleChanged {
                 title: text.to_string(),
             });
+        } else if command == "9" {
+            if let Some(progress) = Self::parse_terminal_progress(text) {
+                self.osc_events.push(TerminalOscEvent::Progress(progress));
+            }
         } else if command == "52"
             && let Some((selection, encoded)) = text.split_once(';')
         {
@@ -308,6 +312,35 @@ impl TerminalScreen {
             if let Some(request) = request {
                 self.osc_events.push(TerminalOscEvent::Clipboard(request));
             }
+        }
+    }
+
+    /// Parses one strictly shaped OSC 9;4 terminal progress payload.
+    fn parse_terminal_progress(text: &str) -> Option<crate::TerminalProgressState> {
+        let mut fields = text.split(';');
+        if fields.next()? != "4" {
+            return None;
+        }
+        let state = fields.next()?;
+        let percent = fields.next();
+        if fields.next().is_some() {
+            return None;
+        }
+        let parse_percent = |value: &str| value.parse::<u8>().ok().filter(|value| *value <= 100);
+        match (state, percent) {
+            ("0", None) => Some(crate::TerminalProgressState::Clear),
+            ("1", Some(percent)) => Some(crate::TerminalProgressState::Normal {
+                percent: parse_percent(percent)?,
+            }),
+            ("2", None) => Some(crate::TerminalProgressState::Error { percent: None }),
+            ("2", Some(percent)) => Some(crate::TerminalProgressState::Error {
+                percent: Some(parse_percent(percent)?),
+            }),
+            ("3", None) => Some(crate::TerminalProgressState::Indeterminate),
+            ("4", Some(percent)) => Some(crate::TerminalProgressState::Warning {
+                percent: parse_percent(percent)?,
+            }),
+            _ => None,
         }
     }
 

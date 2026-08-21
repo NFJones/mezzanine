@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::runtime::PaneSurfaceKind;
+use crate::runtime::processes::terminal_features_with_progress;
 
 /// Verifies process and agent surfaces retain independent rows and that agent
 /// visibility selects only the screen bound to the active conversation.
@@ -2253,4 +2254,74 @@ fn runtime_pane_write_failure_fails_running_file_action() {
     }));
 
     let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies OSC progress updates are pane-scoped, invalidate OSC-only frames,
+/// project only normal percentages, and disappear on an explicit clear.
+#[test]
+fn runtime_tracks_terminal_progress_per_pane() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    let update = service
+        .apply_pane_process_output(
+            mez_mux::process::PaneProcessOutput {
+                pane_id: "%1".to_string(),
+                primary_pid,
+                bytes: b"\x1b]9;4;1;42\x07".to_vec(),
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+    assert!(update.invalidate_output_frame);
+    assert_eq!(
+        service.terminal_frame_context().panes["%1"].terminal_progress_percent,
+        Some(42)
+    );
+
+    service
+        .apply_pane_process_output(
+            mez_mux::process::PaneProcessOutput {
+                pane_id: "%1".to_string(),
+                primary_pid,
+                bytes: b"\x1b]9;4;3\x07".to_vec(),
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        service.terminal_frame_context().panes["%1"].terminal_progress_percent,
+        None
+    );
+
+    service
+        .apply_pane_process_output(
+            mez_mux::process::PaneProcessOutput {
+                pane_id: "%1".to_string(),
+                primary_pid,
+                bytes: b"\x1b]9;4;0\x07".to_vec(),
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+    assert!(!service.process.pane_terminal_progress.contains_key("%1"));
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies progress capability advertising preserves existing TERM_FEATURES
+/// and avoids inserting a duplicate marker.
+#[test]
+fn runtime_terminal_features_progress_advertising_is_additive() {
+    assert_eq!(
+        terminal_features_with_progress(None),
+        std::ffi::OsString::from("P")
+    );
+    assert_eq!(
+        terminal_features_with_progress(Some("A".into())),
+        std::ffi::OsString::from("AP")
+    );
+    assert_eq!(
+        terminal_features_with_progress(Some("AP".into())),
+        std::ffi::OsString::from("AP")
+    );
 }

@@ -1530,6 +1530,16 @@ impl RuntimeSessionService {
                     pane_id.clone(),
                     TerminalPaneFrameContext {
                         completion_attention: attention_panes.contains(pane_id.as_str()),
+                        terminal_progress_percent: self
+                            .process
+                            .pane_terminal_progress
+                            .get(pane_id.as_str())
+                            .and_then(|progress| match progress {
+                                mez_terminal::TerminalProgressState::Normal { percent } => {
+                                    Some(*percent)
+                                }
+                                _ => None,
+                            }),
                         primary_pid: self.primary_pid_for_live_pane_process(pane_id.as_str()),
                         process_name: self.pane_process_name(pane_id.as_str()).or_else(|| {
                             self.primary_pid_for_live_pane_process(pane_id.as_str())

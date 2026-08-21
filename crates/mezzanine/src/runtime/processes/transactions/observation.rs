@@ -1959,7 +1959,9 @@ impl RuntimeSessionService {
                         event,
                     )?);
                 }
-                TerminalOscEvent::TitleChanged { .. } | TerminalOscEvent::Clipboard(_) => {}
+                TerminalOscEvent::TitleChanged { .. }
+                | TerminalOscEvent::Clipboard(_)
+                | TerminalOscEvent::Progress(_) => {}
                 TerminalOscEvent::ShellPromptStart => {}
                 TerminalOscEvent::ShellPromptEnd => {
                     let current_primary_process_id =

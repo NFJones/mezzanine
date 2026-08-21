@@ -33,7 +33,7 @@ pub use geometry::{TerminalSize, TerminalSizeError};
 pub use protocol::{
     MANAGED_SHELL_PROTOCOL_VERSION, MAX_OSC_STRING_BYTES, ManagedShellAdapter,
     ManagedShellParentOutcome, ManagedShellProtocolEvent, TerminalClipboardContent,
-    TerminalClipboardRequest, TerminalClipboardSelection, TerminalOscEvent,
+    TerminalClipboardRequest, TerminalClipboardSelection, TerminalOscEvent, TerminalProgressState,
 };
 
 pub use screen::{AlternateScreenState, SynchronizedOutputFeedOutcome, TerminalScreen};

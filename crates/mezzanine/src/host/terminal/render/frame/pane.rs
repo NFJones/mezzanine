@@ -7,7 +7,7 @@ use super::super::{
     FrameStatusSegment, FrameStatusValue, RenderedFrameStatus, TerminalFrameContext,
     TerminalFramePosition, TerminalFrameRenderOptions, TerminalPaneFrameContext,
     TerminalStyledLine, UiTheme, Window, compose_pane_frame_row, fit_styled_width,
-    overlay_agent_display_lines, render_agent_prompt_block, render_frame_status,
+    fitted_text_width, overlay_agent_display_lines, render_agent_prompt_block, render_frame_status,
 };
 use super::{pane_frame_field_value, styled_pane_frame_line};
 use mez_mux::render::PaneFrameRowLayout;
@@ -258,9 +258,34 @@ pub(in crate::host::terminal::render) fn pane_frame_row_layout(
     width: usize,
     fill: char,
 ) -> PaneFrameRowLayout<&'static str> {
-    let text = render_pane_frame_template(window, pane, frame_context, template);
+    let mut text = render_pane_frame_template(window, pane, frame_context, template);
+    let progress_segment = if template == DEFAULT_PANE_FRAME_TEMPLATE {
+        frame_context
+            .panes
+            .get(pane.id.as_str())
+            .and_then(|context| context.terminal_progress_percent)
+            .map(|percent| {
+                let start = fitted_text_width(&text, usize::MAX).saturating_sub(1);
+                let display = format!("{percent}% ");
+                text.push_str(&display);
+                FrameStatusSegment {
+                    start,
+                    width: fitted_text_width(&display, usize::MAX).saturating_add(1),
+                    key: "pane.progress",
+                    value: percent.to_string(),
+                }
+            })
+    } else {
+        None
+    };
     let right_status = pane_frame_right_status(window, pane, frame_context, template);
-    compose_pane_frame_row(&text, right_status, width, fill)
+    let mut layout = compose_pane_frame_row(&text, right_status, width, fill);
+    if let Some(segment) = progress_segment
+        && segment.start.saturating_add(segment.width) <= layout.left_text_width
+    {
+        layout.right_status_segments.push(segment);
+    }
+    layout
 }
 
 /// Returns the background fill glyph for a pane frame template.

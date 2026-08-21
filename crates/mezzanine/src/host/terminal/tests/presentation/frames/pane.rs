@@ -184,6 +184,90 @@ fn render_default_pane_frame_omits_agent_info() {
     assert!(!rendered[0].contains("default"), "{}", rendered[0]);
 }
 
+/// Verifies active determinate terminal progress appears beside the default title pill.
+///
+/// The progress pill is pane-local presentation state and must disappear without
+/// leaving blank residue when that state is absent.
+#[test]
+fn render_default_pane_frame_shows_active_terminal_progress() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(32, 2).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+    let inputs = vec![PaneRenderInput {
+        pane_id: pane_id.clone(),
+        lines: vec!["body".to_string()],
+    }];
+    let mut frame_context = TerminalFrameContext::default();
+    frame_context.panes.insert(
+        pane_id.clone(),
+        TerminalPaneFrameContext {
+            terminal_progress_percent: Some(42),
+            ..TerminalPaneFrameContext::default()
+        },
+    );
+
+    let render = |context: &TerminalFrameContext| {
+        render_window_with_pane_frame_template(
+            &window,
+            &inputs,
+            context,
+            TerminalFrameRenderOptions::plain(false, "", TerminalFramePosition::Top),
+            TerminalFrameRenderOptions::plain(
+                true,
+                DEFAULT_PANE_FRAME_TEMPLATE,
+                TerminalFramePosition::Top,
+            ),
+        )
+        .unwrap()
+    };
+    assert!(render(&frame_context)[0].starts_with(" 0 shell 42% "));
+    frame_context
+        .panes
+        .get_mut(&pane_id)
+        .unwrap()
+        .terminal_progress_percent = None;
+    assert_eq!(
+        render(&frame_context)[0],
+        format!("{}{}", " 0 shell ", " ".repeat(23))
+    );
+}
+
+/// Verifies custom pane templates can opt into the progress scalar explicitly.
+///
+/// Custom templates remain stable by default while `pane.progress` exposes the
+/// active percentage without coupling template expansion to OSC protocol types.
+#[test]
+fn render_custom_pane_frame_can_show_terminal_progress() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(24, 2).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+    let inputs = vec![PaneRenderInput {
+        pane_id: pane_id.clone(),
+        lines: vec!["body".to_string()],
+    }];
+    let mut frame_context = TerminalFrameContext::default();
+    frame_context.panes.insert(
+        pane_id,
+        TerminalPaneFrameContext {
+            terminal_progress_percent: Some(7),
+            ..TerminalPaneFrameContext::default()
+        },
+    );
+    let rendered = render_window_with_pane_frame_template(
+        &window,
+        &inputs,
+        &frame_context,
+        TerminalFrameRenderOptions::plain(false, "", TerminalFramePosition::Top),
+        TerminalFrameRenderOptions::plain(
+            true,
+            "#{pane.title} #{pane.progress}",
+            TerminalFramePosition::Top,
+        ),
+    )
+    .unwrap();
+    assert_eq!(rendered[0].trim_end(), "shell 7%");
+}
+
 /// Verifies render explicit pane frame template can show agent info.
 ///
 /// This regression scenario documents the behavior being protected so a

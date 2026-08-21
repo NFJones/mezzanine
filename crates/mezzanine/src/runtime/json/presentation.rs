@@ -81,7 +81,7 @@ pub(super) fn ui_theme_json(theme: &UiTheme) -> String {
 /// on duplicated control-flow logic.
 fn ui_theme_colors_json(theme: &UiTheme) -> String {
     format!(
-        r#"{{"window_frame":{},"window_active":{},"window_inactive":{},"pane_frame_active":{},"pane_frame_inactive":{},"pane_border_active":{},"pane_border_inactive":{},"pane_divider":{},"frame_fill":{},"scroll_indicator":{},"pane_pwd":{},"window_status_uptime":{},"window_status_datetime":{},"prompt":{},"agent_prompt":{},"agent_transcript_user":{},"agent_transcript_assistant":{},"agent_transcript_status":{},"agent_transcript_error":{},"agent_transcript_command":{},"agent_model":{},"agent_reasoning":{},"agent_status_idle":{},"agent_status_running":{},"agent_status_blocked":{},"agent_approval_attention":{},"agent_status_failed":{},"display_overlay":{},"copy_selection":{}}}"#,
+        r#"{{"window_frame":{},"window_active":{},"window_inactive":{},"pane_frame_active":{},"pane_frame_inactive":{},"pane_border_active":{},"pane_border_inactive":{},"pane_divider":{},"frame_fill":{},"scroll_indicator":{},"pane_progress":{},"pane_pwd":{},"window_status_uptime":{},"window_status_datetime":{},"prompt":{},"agent_prompt":{},"agent_transcript_user":{},"agent_transcript_assistant":{},"agent_transcript_status":{},"agent_transcript_error":{},"agent_transcript_command":{},"agent_model":{},"agent_reasoning":{},"agent_status_idle":{},"agent_status_running":{},"agent_status_blocked":{},"agent_approval_attention":{},"agent_status_failed":{},"display_overlay":{},"copy_selection":{}}}"#,
         ui_color_pair_json(theme.colors.window_frame),
         ui_color_pair_json(theme.colors.window_active),
         ui_color_pair_json(theme.colors.window_inactive),
@@ -92,6 +92,7 @@ fn ui_theme_colors_json(theme: &UiTheme) -> String {
         ui_color_pair_json(theme.colors.pane_divider),
         ui_color_pair_json(theme.colors.frame_fill),
         ui_color_pair_json(theme.colors.scroll_indicator),
+        ui_color_pair_json(theme.colors.pane_progress),
         ui_color_pair_json(theme.colors.pane_pwd),
         ui_color_pair_json(theme.colors.window_status_uptime),
         ui_color_pair_json(theme.colors.window_status_datetime),

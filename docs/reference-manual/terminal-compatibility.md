@@ -19,6 +19,15 @@ focus, mouse, title, clipboard, and save/restore behaviors. Unimplemented
 capabilities, including DCS controls unless documented otherwise, are marked
 unsupported rather than assumed to work.
 
+Mezzanine also supports pane-local OSC 9;4 progress reports. Determinate
+normal progress appears as a percentage pill immediately to the right of the
+pane title and disappears on clear; warning, error, and indeterminate records
+remove any stale percentage. Child panes receive an additive `P` in
+`TERM_FEATURES` so tools such as Cargo can discover this support. The progress
+state belongs to its pane and is not passed through to the outer terminal.
+Custom pane-frame templates can display the active scalar with
+`#{pane.progress}`.
+
 Panes receive `TERM=xterm-256color` by default. Mez-specific terminfo entries
 can be selected when installed. If a selected Mezzanine-specific entry is not
 available, the safe fallback order is `screen-256color`, `screen`, `vt100`,

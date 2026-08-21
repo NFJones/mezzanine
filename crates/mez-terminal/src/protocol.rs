@@ -93,6 +93,33 @@ pub enum TerminalClipboardRequest {
     },
 }
 
+/// Pane-local progress state requested through the OSC 9;4 convention.
+///
+/// Consumers decide how to present this state. The terminal parser only
+/// validates the bounded protocol payload and emits a typed event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalProgressState {
+    /// Removes any currently presented progress state.
+    Clear,
+    /// Reports ordinary determinate progress.
+    Normal {
+        /// Completion percentage in the inclusive range 0 through 100.
+        percent: u8,
+    },
+    /// Reports a failed operation, optionally retaining its last percentage.
+    Error {
+        /// Last completion percentage, when supplied by the application.
+        percent: Option<u8>,
+    },
+    /// Reports progress whose completion percentage is not known.
+    Indeterminate,
+    /// Reports determinate progress that needs warning presentation.
+    Warning {
+        /// Completion percentage in the inclusive range 0 through 100.
+        percent: u8,
+    },
+}
+
 /// A structured event produced by an operating-system-command sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalOscEvent {
@@ -111,6 +138,8 @@ pub enum TerminalOscEvent {
     },
     /// OSC 52 supplied a typed clipboard write or query request.
     Clipboard(TerminalClipboardRequest),
+    /// OSC 9;4 supplied a pane-local terminal progress update.
+    Progress(TerminalProgressState),
     /// OSC 133 marked the start of a shell prompt.
     ShellPromptStart,
     /// OSC 133 marked the end of a shell prompt.

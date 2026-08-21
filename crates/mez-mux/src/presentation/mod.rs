@@ -601,6 +601,8 @@ pub fn plan_headless_attached_client_cycle<Action, ErrorRole: Copy>(
 pub struct TerminalPaneFrameContext<Prompt = (), DisplayLines = Vec<String>> {
     /// Whether this pane's visible title pill should request completion attention.
     pub completion_attention: bool,
+    /// Active determinate terminal progress shown beside the pane title.
+    pub terminal_progress_percent: Option<u8>,
     /// Primary process id shown by `pane.primary_pid`.
     pub primary_pid: Option<u32>,
     /// Primary process name shown by `pane.process_name` when known.
@@ -647,6 +649,7 @@ impl<Prompt, DisplayLines: Default> Default for TerminalPaneFrameContext<Prompt,
     fn default() -> Self {
         Self {
             completion_attention: false,
+            terminal_progress_percent: None,
             primary_pid: None,
             process_name: None,
             exit_status: None,

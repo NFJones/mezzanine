@@ -49,6 +49,10 @@ pub(in crate::host::terminal::render) fn pane_frame_field_value(
             "pane.id" => pane.id.to_string(),
             "pane.index" => pane.index.to_string(),
             "pane.title" => pane.title.clone(),
+            "pane.progress" => pane_context
+                .and_then(|context| context.terminal_progress_percent)
+                .map(|percent| format!("{percent}%"))
+                .unwrap_or_default(),
             "pane.active" => pane.active.to_string(),
             "pane.size" => format!("{}x{}", pane.size.columns, pane.size.rows),
             "pane.primary_pid" => {

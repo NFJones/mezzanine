@@ -113,6 +113,7 @@ pub const DEFAULT_PANE_FRAME_TEMPLATE: &str = " #{pane.index} #{pane.title} ";
 pub const DEFAULT_PANE_FRAME_VISIBLE_FIELDS: &[&str] = &[
     "pane.index",
     "pane.title",
+    "pane.progress",
     "pane.id",
     "history.position",
     "agent.model",

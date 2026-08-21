@@ -22,6 +22,57 @@ fn terminal_screen_tracks_osc_title_with_bel_and_st_terminators() {
     assert_eq!(screen.visible_lines()[0], "beforeafter");
 }
 
+/// Verifies OSC 9;4 progress states use typed events with BEL and ST terminators.
+///
+/// Progress is presentation metadata rather than terminal text, so all valid
+/// protocol states must be emitted without changing visible screen content.
+#[test]
+fn terminal_screen_parses_osc_9_4_progress() {
+    use crate::TerminalProgressState;
+
+    let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
+    screen.feed(b"\x1b]9;4;1;42\x07");
+    screen.feed(b"\x1b]9;4;2\x1b\\");
+    screen.feed(b"\x1b]9;4;2;80\x07");
+    screen.feed(b"\x1b]9;4;3\x07");
+    screen.feed(b"\x1b]9;4;4;12\x07");
+    screen.feed(b"\x1b]9;4;0\x07after");
+
+    assert_eq!(
+        screen.drain_osc_events(),
+        vec![
+            TerminalOscEvent::Progress(TerminalProgressState::Normal { percent: 42 }),
+            TerminalOscEvent::Progress(TerminalProgressState::Error { percent: None }),
+            TerminalOscEvent::Progress(TerminalProgressState::Error { percent: Some(80) }),
+            TerminalOscEvent::Progress(TerminalProgressState::Indeterminate),
+            TerminalOscEvent::Progress(TerminalProgressState::Warning { percent: 12 }),
+            TerminalOscEvent::Progress(TerminalProgressState::Clear),
+        ]
+    );
+    assert_eq!(screen.visible_lines()[0], "after");
+}
+
+/// Verifies malformed OSC 9;4 records do not alter the typed event stream.
+///
+/// Strict field counts and percentage bounds prevent ambiguous or corrupted
+/// application output from replacing a pane progress presentation.
+#[test]
+fn terminal_screen_rejects_malformed_osc_9_4_progress() {
+    let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
+    for sequence in [
+        b"\x1b]9;4;1\x07".as_slice(),
+        b"\x1b]9;4;1;101\x07".as_slice(),
+        b"\x1b]9;4;3;20\x07".as_slice(),
+        b"\x1b]9;4;0;0\x07".as_slice(),
+        b"\x1b]9;4;1;20;extra\x07".as_slice(),
+        b"\x1b]9;5;1;20\x07".as_slice(),
+    ] {
+        screen.feed(sequence);
+    }
+
+    assert_eq!(screen.drain_osc_events(), Vec::<TerminalOscEvent>::new());
+}
+
 /// Verifies terminal screen tracks mezzanine shell transaction osc events.
 ///
 /// This regression scenario documents the behavior being protected so a

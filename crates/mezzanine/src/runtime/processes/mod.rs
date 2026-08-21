@@ -771,6 +771,9 @@ pub(crate) struct RuntimeProcessComponent {
         std::collections::BTreeMap<String, RuntimePaneEnvironmentAuthorityUnavailableReason>,
     /// Authoritative process terminal screen state keyed by pane id.
     process_pane_screens: std::collections::BTreeMap<String, TerminalScreen>,
+    /// Latest active OSC 9;4 terminal progress state keyed by pane id.
+    pub(crate) pane_terminal_progress:
+        std::collections::BTreeMap<String, mez_terminal::TerminalProgressState>,
     /// Conversation-bound agent log screen state keyed by pane id.
     agent_pane_screens: std::collections::BTreeMap<String, AgentPaneScreen>,
     /// Live shell transactions keyed by their OSC marker.
@@ -941,6 +944,21 @@ impl RuntimeProcessComponent {
             ..Self::default()
         }
     }
+}
+
+/// Adds the terminal-progress capability without discarding inherited features.
+pub(crate) fn terminal_features_with_progress(
+    existing: Option<std::ffi::OsString>,
+) -> std::ffi::OsString {
+    let mut features = existing.unwrap_or_default();
+    if !features
+        .to_string_lossy()
+        .chars()
+        .any(|feature| feature == 'P')
+    {
+        features.push("P");
+    }
+    features
 }
 
 impl RuntimeSessionService {
@@ -3859,6 +3877,9 @@ impl RuntimeSessionService {
         explicit_command: Option<&str>,
         start_directory: Option<&Path>,
     ) -> Result<PaneProcessStart> {
+        self.process
+            .pane_terminal_progress
+            .remove(descriptor.pane_id.as_str());
         let environment = pane_environment_with_term(
             self.session.socket_path(),
             &self.session.id,
@@ -3872,6 +3893,10 @@ impl RuntimeSessionService {
         #[cfg(not(test))]
         let launch =
             mez_mux::process::PaneProcessLaunch::new(self.session.shell.path().to_path_buf());
+        let launch = launch.with_environment_variable(
+            "TERM_FEATURES",
+            terminal_features_with_progress(std::env::var_os("TERM_FEATURES")),
+        );
         let primary_pid = self
             .process
             .pane_processes
@@ -4458,6 +4483,7 @@ impl RuntimeSessionService {
         self.process.program_owned_pane_titles.remove(pane_id);
         self.persistence.cleanup_pane_io(pane_id);
         self.process.process_pane_screens.remove(pane_id);
+        self.process.pane_terminal_progress.remove(pane_id);
         self.process.agent_pane_screens.remove(pane_id);
         self.process.pane_transaction_osc_screens.remove(pane_id);
         self.process

@@ -1273,6 +1273,18 @@ emit only typed UTF-8 write or query requests. Malformed base64 writes and
 writes whose decoded bytes are not UTF-8 MUST be ignored. Clipboard payload
 contents MUST NOT be exposed through ordinary event diagnostics.
 
+Mezzanine MUST parse the OSC 9;4 terminal-progress convention as bounded,
+typed pane-local state. `OSC 9;4;1;<percent>` MUST accept only percentages from
+0 through 100, and `OSC 9;4;0` MUST clear the state. Warning, error, and
+indeterminate states MUST replace stale determinate state even when they have no
+visual treatment. The built-in pane frame MUST show active normal progress as a
+percentage pill immediately beside that pane's title pill and MUST remove it
+when progress clears or becomes non-normal. Custom pane-frame templates MAY opt
+in with `pane.progress`. Progress MUST be cleared when a pane process is
+replaced or the pane is removed, MUST NOT be forwarded to the outer terminal,
+and pane launches MUST advertise support by additively including `P` in
+`TERM_FEATURES`.
+
 `terminal.clipboard` MUST accept `external`, `internal`, and `disabled`.
 `external` MUST route an accepted OSC 52 write to the internal `osc52` paste
 buffer before attempting a best-effort host clipboard copy. `internal` MUST
