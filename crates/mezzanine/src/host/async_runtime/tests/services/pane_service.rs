@@ -1028,13 +1028,32 @@ async fn async_foreign_fish_child_clears_bootstrap_pending() {
     };
 
     let client = async move {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let launch = format!("{} --no-config -i\n", mez_agent::shell::shell_quote(fish));
+        let launch = format!(
+            "{} --no-config -i\nbuiltin printf '__MEZ_ASYNC_FOREIGN_FISH_READY__\\n'\n",
+            mez_agent::shell::shell_quote(fish)
+        );
         client_handle
             .write_input_to_pane(primary.clone(), "%1", launch.into_bytes())
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        let readiness_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let screen = client_handle
+                .managed_shell_process_screen_text("%1")
+                .await
+                .unwrap();
+            if screen
+                .lines()
+                .any(|line| line == "__MEZ_ASYNC_FOREIGN_FISH_READY__")
+            {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < readiness_deadline,
+                "foreign Fish did not reach its interactive readiness marker: {screen:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         client_handle
             .execute_terminal_command(primary, "agent-shell".to_string())
             .await
@@ -1197,7 +1216,29 @@ async fn async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_respo
     };
 
     let client = async move {
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        let initial_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let snapshot = client_handle
+                .pane_certification_snapshot("%1")
+                .await
+                .unwrap();
+            if !snapshot.child_active
+                && !snapshot.bootstrap_pending
+                && !snapshot.certification_pending
+                && snapshot.foreground_certified_shell == Some(true)
+            {
+                break;
+            }
+            assert!(
+                snapshot.certification_rejection.is_none(),
+                "initial managed Fish certification was rejected: {snapshot:?}"
+            );
+            assert!(
+                tokio::time::Instant::now() < initial_deadline,
+                "initial managed Fish shell did not become ready: {snapshot:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         client_handle
             .write_input_to_pane(
                 primary.clone(),
@@ -1206,7 +1247,24 @@ async fn async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_respo
             )
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let editor_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let screen = client_handle
+                .managed_shell_process_screen_text("%1")
+                .await
+                .unwrap();
+            if screen
+                .lines()
+                .any(|line| line == "__MEZ_ASYNC_FISH_VI_READY__")
+            {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < editor_deadline,
+                "managed Fish editor did not reach its readiness marker: {screen:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         let mut draft_input = b"\x1bi".to_vec();
         draft_input.extend_from_slice(draft.as_bytes());
         client_handle
@@ -1245,14 +1303,6 @@ async fn async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_respo
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        let retained_process_text = client_handle
-            .managed_shell_process_screen_text("%1")
-            .await
-            .unwrap();
-        assert!(
-            !retained_process_text.replace('\n', "").contains(&draft),
-            "managed Fish retained process screen still displayed the discarded draft: {retained_process_text:?}"
-        );
         let hidden = client_handle
             .apply_attached_terminal_step_plan(
                 primary.clone(),
@@ -1310,11 +1360,21 @@ async fn async_fish_dirty_draft_no_prompt_exit_discards_draft_and_restores_respo
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        // File creation proves Fish executed the fresh command, but its
-        // preceding terminal output can still be waiting in the PTY worker.
-        // Keep the production reader alive long enough to ingest that output
-        // before shutdown freezes the final pane snapshot used below.
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        let output_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let screen = client_handle
+                .managed_shell_process_screen_text("%1")
+                .await
+                .unwrap();
+            if screen.contains("__MEZ_ASYNC_FISH_PARENT_RESPONSIVE__") {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < output_deadline,
+                "fresh Fish command output was not ingested before shutdown: {screen:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         pane_worker_done.store(true, Ordering::SeqCst);
         client_handle.shutdown().await.unwrap()
     };

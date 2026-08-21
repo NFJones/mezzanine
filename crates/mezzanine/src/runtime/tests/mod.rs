@@ -1191,6 +1191,38 @@ fn wait_for_pane_process_activity_after(
     );
 }
 
+/// Waits until one pane remains output-idle for a complete quiet interval.
+///
+/// Each observed activity edge is drained before the quiet interval restarts,
+/// so physical-shell tests return as soon as delayed prompt output settles
+/// rather than paying a fixed worst-case delay on every successful run.
+fn wait_for_pane_output_quiet_period(
+    service: &mut RuntimeSessionService,
+    pane_id: &str,
+    quiet_interval: Duration,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let sequence = service
+            .pane_processes()
+            .output_activity_sequence(pane_id)
+            .expect("quiet-period pane process should remain tracked");
+        let activity = service
+            .pane_processes()
+            .wait_for_output_activity_after(pane_id, sequence, quiet_interval)
+            .unwrap_or(false);
+        if !activity {
+            return;
+        }
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        assert!(
+            Instant::now() < deadline,
+            "pane output did not settle before quiet-period timeout"
+        );
+    }
+}
+
 /// Runs the tracked pane activity sequences operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

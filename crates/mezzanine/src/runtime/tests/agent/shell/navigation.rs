@@ -931,10 +931,12 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
         service.process_pane_screen("%1").unwrap().visible_lines(),
         service.process_pane_screen("%1").unwrap().cursor_state()
     );
-    for _ in 0..50 {
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-        let _ = service.poll_pane_outputs(8192).unwrap();
-    }
+    wait_for_pane_output_quiet_period(
+        &mut service,
+        "%1",
+        Duration::from_millis(20),
+        Duration::from_secs(1),
+    );
     assert_eq!(
         service
             .process_pane_screen("%1")
