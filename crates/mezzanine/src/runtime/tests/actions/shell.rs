@@ -1041,6 +1041,107 @@ fn runtime_native_agent_shell_command_output_is_visible_in_shell_view() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies native `apply_patch` hunk failures leave recovery shadow text as
+/// their sole pane-visible failure presentation.
+///
+/// Native patch execution first snapshots the target, then dispatches a
+/// generated write phase. A failing write already queues the recovery shadow;
+/// the generic failed-action outcome must not add a second red error row.
+#[test]
+fn runtime_native_apply_patch_failure_shows_only_recovery_shadow_text() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service.set_agent_native_shell_mode_for_tests("%1");
+    service.permission_policy_mut().set_approval_bypass(true);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-native-patch-failure","input":"patch Cargo.toml"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "native patch failure".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "patch-1".to_string(),
+                    rationale: "apply a deliberately stale patch".to_string(),
+                    payload: mez_agent::AgentActionPayload::ApplyPatch {
+                        patch: "*** Begin Patch\n*** Update File: Cargo.toml\n@@\n-__MEZ_NATIVE_PATCH_MISSING_CONTEXT__\n+updated\n*** End Patch".to_string(),
+                        strip: None,
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+
+    let read_dispatch = service
+        .claim_native_shell_action("turn-1", "patch-1")
+        .unwrap()
+        .expect("native apply-patch read should be queued");
+    assert!(
+        service
+            .complete_native_shell_action(crate::runtime::execute_native_shell_dispatch(
+                read_dispatch
+            ))
+            .unwrap()
+    );
+    let write_dispatch = service
+        .claim_native_shell_action("turn-1", "patch-1")
+        .unwrap()
+        .expect("native apply-patch write should be queued");
+    assert!(
+        service
+            .complete_native_shell_action(crate::runtime::execute_native_shell_dispatch(
+                write_dispatch
+            ))
+            .unwrap()
+    );
+
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("agent: action failed; asking model to recover (patch hunk mismatch)"),
+        "{pane_text}"
+    );
+    assert!(
+        !pane_text.contains("agent: apply patch (apply_patch failed"),
+        "{pane_text}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that default agent command execution keeps one bounded command
 /// preview while routing decoded command output into provider context. Raw
 /// shell output may be base64-transported in the pane, but the model-facing

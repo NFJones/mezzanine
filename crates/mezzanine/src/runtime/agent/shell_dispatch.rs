@@ -544,7 +544,35 @@ impl RuntimeSessionService {
         settled_results: Vec<ActionResult>,
     ) -> Result<()> {
         self.record_runtime_agent_patch_results_for_turn(turn, &execution);
-        self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
+        let failed_native_apply_patch_ids = settled_results
+            .iter()
+            .filter(|result| result.is_error)
+            .filter_map(|result| {
+                execution
+                    .response
+                    .action_batch
+                    .as_ref()
+                    .filter(|batch| {
+                        batch.actions.iter().any(|action| {
+                            action.id == result.action_id
+                                && matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
+                        })
+                    })
+                    .map(|_| result.action_id.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        if failed_native_apply_patch_ids.is_empty() {
+            self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
+        } else {
+            let mut presentation_execution = execution.clone();
+            presentation_execution
+                .action_results
+                .retain(|result| !failed_native_apply_patch_ids.contains(&result.action_id));
+            self.present_agent_action_outcomes_to_terminal_buffer(
+                &turn.pane_id,
+                &presentation_execution,
+            )?;
+        }
         if matches!(
             execution.terminal_state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
