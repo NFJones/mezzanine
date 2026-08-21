@@ -768,6 +768,12 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
+    let release_path = std::env::temp_dir().join(format!(
+        "mez-native-live-output-release-{}-{}",
+        std::process::id(),
+        crate::runtime::current_unix_millis()
+    ));
+    let _ = fs::remove_file(&release_path);
     let provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -787,9 +793,10 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
                     rationale: "print native progress".to_string(),
                     payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Print native progress".to_string(),
-                        command:
-                            "printf \"%s%s\\n\" \"native-live-\" \"first\"; sleep 1; printf \"%s%s\\n\" \"native-live-\" \"last\""
-                                .to_string(),
+                        command: format!(
+                            "printf \"%s%s\\n\" \"native-live-\" \"first\"; while [ ! -e \"{}\" ]; do sleep 0.01; done; printf \"%s%s\\n\" \"native-live-\" \"last\"",
+                            release_path.display()
+                        ),
                         interactive: false,
                         stateful: false,
                         timeout_ms: Some(5_000),
@@ -902,6 +909,7 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         .join("\n");
     assert!(!pane_text.contains("stale-native-tail"), "{pane_text}");
 
+    fs::write(&release_path, b"release").unwrap();
     let outcome = worker.join().unwrap();
     assert!(service.complete_native_shell_action(outcome).unwrap());
     let pane_text = service
@@ -932,6 +940,7 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         "{settled_text}"
     );
     service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_file(release_path);
 }
 
 /// Verifies native shell execution bypasses occupied-pane readiness and presents

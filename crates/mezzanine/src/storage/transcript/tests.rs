@@ -14,6 +14,7 @@ use std::{
 use super::encoding::{
     decode_transcript_entry, encode_prompt_history_entry, encode_transcript_entry,
 };
+use super::store::PRESENTATION_CLEAR_TAIL_COMPACT_BYTES;
 use super::{AgentPresentationEntry, AgentTranscriptStore};
 use mez_agent::transcript::{AgentSessionMetadata, TranscriptEntry, TranscriptRole};
 
@@ -64,14 +65,20 @@ fn presentation(conversation_id: &str, sequence: u64) -> AgentPresentationEntry 
     }
 }
 
-/// Builds one presentation entry large enough to force cleartext tail compaction.
-fn large_presentation(conversation_id: &str, sequence: u64) -> AgentPresentationEntry {
+/// Builds one modest presentation entry for a test-owned compaction threshold.
+fn compacting_presentation(conversation_id: &str, sequence: u64) -> AgentPresentationEntry {
     let mut entry = presentation(conversation_id, sequence);
-    entry.display_lines = vec![format!("mez> {}", "x".repeat(300 * 1024))];
+    entry.display_lines = vec![format!("mez> {}", "x".repeat(2 * 1024))];
     entry.style_names = vec!["assistant".to_string()];
     entry.copy_lines = entry.display_lines.clone();
     entry.ansi_text = None;
     entry
+}
+
+/// Verifies production stores retain the documented 256 KiB cleartext tail.
+#[test]
+fn transcript_store_uses_production_presentation_compaction_threshold() {
+    assert_eq!(PRESENTATION_CLEAR_TAIL_COMPACT_BYTES, 256 * 1024);
 }
 
 /// Verifies that the store can append, list, inspect, and delete one
@@ -110,9 +117,11 @@ fn transcript_store_appends_lists_inspects_and_deletes_conversations() {
 fn transcript_store_compacts_presentation_tail_into_zstd_history() {
     let root = temp_root("presentation-zstd");
     let _ = fs::remove_dir_all(&root);
-    let store = AgentTranscriptStore::new(root.clone());
-    let first = large_presentation("conv1", 1);
-    let second = large_presentation("conv1", 2);
+    let store = AgentTranscriptStore::new(root.clone())
+        .with_presentation_compaction_threshold(1024)
+        .unwrap();
+    let first = compacting_presentation("conv1", 1);
+    let second = compacting_presentation("conv1", 2);
     let third = presentation("conv1", 3);
 
     store.append_presentation(&first).unwrap();
@@ -337,10 +346,12 @@ fn transcript_store_list_uses_summary_sidecar_without_full_decode() {
 fn transcript_store_presentation_index_and_recent_replay_skip_compressed_history() {
     let root = temp_root("presentation-index");
     let _ = fs::remove_dir_all(&root);
-    let store = AgentTranscriptStore::new(root.clone());
+    let store = AgentTranscriptStore::new(root.clone())
+        .with_presentation_compaction_threshold(1024)
+        .unwrap();
 
     store
-        .append_presentation(&large_presentation("conv1", 1))
+        .append_presentation(&compacting_presentation("conv1", 1))
         .unwrap();
     fs::write(
         store.presentation_compressed_path("conv1").unwrap(),

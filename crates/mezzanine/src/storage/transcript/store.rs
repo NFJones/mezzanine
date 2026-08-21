@@ -109,7 +109,7 @@ const DEFAULT_PRESENTATION_TAIL_READ_BYTES: u64 = 2 * 1024 * 1024;
 ///
 /// Keeping recent rows cleartext makes ordinary appends simple, while moving
 /// larger historical tails into concatenated zstd frames bounds disk usage.
-const PRESENTATION_CLEAR_TAIL_COMPACT_BYTES: u64 = 256 * 1024;
+pub(super) const PRESENTATION_CLEAR_TAIL_COMPACT_BYTES: u64 = 256 * 1024;
 
 /// Maximum saved agent conversations retained by default for `/resume`.
 pub const DEFAULT_SAVED_AGENT_SESSION_LIMIT: usize = 100;
@@ -120,6 +120,7 @@ impl AgentTranscriptStore {
         Self {
             root: config_root.into().join("agent-sessions"),
             saved_sessions_limit: DEFAULT_SAVED_AGENT_SESSION_LIMIT,
+            presentation_compaction_threshold: PRESENTATION_CLEAR_TAIL_COMPACT_BYTES,
         }
     }
 
@@ -129,6 +130,7 @@ impl AgentTranscriptStore {
         Self {
             root: root.into(),
             saved_sessions_limit: DEFAULT_SAVED_AGENT_SESSION_LIMIT,
+            presentation_compaction_threshold: PRESENTATION_CLEAR_TAIL_COMPACT_BYTES,
         }
     }
 
@@ -141,6 +143,18 @@ impl AgentTranscriptStore {
             ));
         }
         self.saved_sessions_limit = limit;
+        Ok(self)
+    }
+
+    /// Returns this test store with a smaller presentation compaction threshold.
+    #[cfg(test)]
+    pub fn with_presentation_compaction_threshold(mut self, threshold: u64) -> Result<Self> {
+        if threshold == 0 {
+            return Err(MezError::invalid_args(
+                "presentation compaction threshold must be greater than zero",
+            ));
+        }
+        self.presentation_compaction_threshold = threshold;
         Ok(self)
     }
 
@@ -357,7 +371,7 @@ impl AgentTranscriptStore {
             return Ok(());
         }
         let metadata = std_fs::metadata(&path)?;
-        if metadata.len() < PRESENTATION_CLEAR_TAIL_COMPACT_BYTES {
+        if metadata.len() < self.presentation_compaction_threshold {
             return Ok(());
         }
         let data = std_fs::read(&path)?;

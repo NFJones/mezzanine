@@ -328,9 +328,11 @@ async fn async_native_shell_worker_keeps_runtime_actor_responsive() {
         std::process::id(),
         crate::runtime::current_unix_millis()
     ));
+    let release = sentinel.with_extension("release");
     let command = format!(
-        "printf started > '{}'; sleep 1; printf finished",
-        sentinel.display()
+        "printf started > '{}'; while [ ! -e '{}' ]; do sleep 0.01; done; printf finished",
+        sentinel.display(),
+        release.display()
     );
     let execution = native_shell_provider_execution(&task, command);
     let turn = service
@@ -390,6 +392,7 @@ async fn async_native_shell_worker_keeps_runtime_actor_responsive() {
     };
     let probe_handle = handle.clone();
     let sentinel_for_probe = sentinel.clone();
+    let release_for_probe = release.clone();
     let probe = async move {
         for _ in 0..200 {
             if sentinel_for_probe.exists() {
@@ -407,6 +410,7 @@ async fn async_native_shell_worker_keeps_runtime_actor_responsive() {
                 .expect("runtime actor was blocked by native shell execution")
                 .unwrap();
         assert_eq!(state, RuntimeLifecycleState::Running);
+        std::fs::write(&release_for_probe, b"release").unwrap();
         for _ in 0..400 {
             if !probe_handle.agent_turn_is_running(&turn_id).await.unwrap() {
                 return;
@@ -436,6 +440,7 @@ async fn async_native_shell_worker_keeps_runtime_actor_responsive() {
     assert!(!exit.service.agent_turn_is_running("turn-1"));
     exit.service.terminate_all_pane_processes().unwrap();
     let _ = std::fs::remove_file(sentinel);
+    let _ = std::fs::remove_file(release);
 }
 
 /// Verifies that a provider-completed shell action whose pane cannot accept

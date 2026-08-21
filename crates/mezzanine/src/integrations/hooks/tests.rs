@@ -526,36 +526,72 @@ fn program_hook_execution_can_emit_audit_record() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies program hook execution enforces timeout.
+/// Verifies synchronous hook timeouts terminate descendants without waiting
+/// for inherited output pipes to close naturally.
 ///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
+/// The child publishes its pid before blocking so a successful timeout proves
+/// both bounded return and process-group termination rather than only a timeout
+/// status from the direct shell process.
+#[cfg(unix)]
 #[test]
 fn program_hook_execution_enforces_timeout() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-hook-process-group-sync-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let pid_path = root.join("descendant.pid");
     let hook = HookDefinition {
         id: "slow".to_string(),
         event: HookEvent::SessionDetach,
         invocation: HookInvocation::Program {
             command: "/bin/sh".to_string(),
-            args: vec!["-c".to_string(), "sleep 1".to_string()],
+            args: vec![
+                "-c".to_string(),
+                "sleep 30 & child=$!; printf %s \"$child\" > \"$1\"; wait \"$child\"".to_string(),
+                "hook".to_string(),
+                pid_path.display().to_string(),
+            ],
         },
         enabled: true,
         required: false,
         agent_hook: false,
         matcher_groups: Vec::new(),
-        timeout_ms: Some(1),
+        timeout_ms: Some(100),
         on_failure: None,
     };
     let plan = plan_hook(&hook).unwrap().unwrap();
+    let started = std::time::Instant::now();
 
     let result = execute_program_hook(&plan).unwrap();
+    let descendant_pid = fs::read_to_string(&pid_path)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
 
     assert_eq!(result.status, HookExecutionStatus::TimedOut);
     assert_eq!(
         result.failure.as_ref().unwrap().kind,
         HookFailureKind::Timeout
     );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "synchronous hook timeout waited for descendant-held pipes: {:?}",
+        started.elapsed()
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        // SAFETY: signal zero only checks the pid published by the test child.
+        let alive = unsafe { libc::kill(descendant_pid, 0) } == 0;
+        if !alive || std::time::Instant::now() >= deadline {
+            assert!(!alive, "hook descendant {descendant_pid} survived timeout");
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let _ = fs::remove_dir_all(root);
 }
 
 /// Verifies focused shell hook blocks on shell availability.

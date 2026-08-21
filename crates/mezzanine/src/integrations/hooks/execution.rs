@@ -39,10 +39,10 @@ struct ProgramHookProcessGroupGuard {
 
 impl ProgramHookProcessGroupGuard {
     /// Arms a guard for the spawned child process group.
-    fn new(child: &tokio::process::Child) -> Self {
+    fn new(process_id: Option<u32>) -> Self {
         Self {
             #[cfg(unix)]
-            process_group_id: child.id().and_then(|id| i32::try_from(id).ok()),
+            process_group_id: process_id.and_then(|id| i32::try_from(id).ok()),
             armed: true,
         }
     }
@@ -89,18 +89,24 @@ pub fn execute_program_hook(plan: &HookExecutionPlan) -> Result<HookExecutionRes
         .program
         .as_deref()
         .ok_or_else(|| MezError::invalid_args("program hook plan is missing program"))?;
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(&plan.args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            MezError::new(
-                crate::error::MezErrorKind::Io,
-                format!("failed to spawn hook `{}`: {error}", plan.hook_id),
-            )
-        })?;
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command.spawn().map_err(|error| {
+        MezError::new(
+            crate::error::MezErrorKind::Io,
+            format!("failed to spawn hook `{}`: {error}", plan.hook_id),
+        )
+    })?;
+    let mut process_group = ProgramHookProcessGroupGuard::new(Some(child.id()));
     if let Some(mut stdin) = child.stdin.take() {
         match stdin.write_all(plan.event_payload_json.as_bytes()) {
             Ok(()) => {}
@@ -115,8 +121,11 @@ pub fn execute_program_hook(plan: &HookExecutionPlan) -> Result<HookExecutionRes
     let stderr_reader = std::thread::spawn(move || read_child_pipe(stderr));
     let status = wait_for_child_with_timeout(&mut child, Duration::from_millis(plan.timeout_ms))?;
     if status.is_none() {
+        process_group.terminate();
         let _ = child.kill();
         let _ = child.wait();
+    } else {
+        process_group.disarm();
     }
     let stdout = join_child_pipe_reader(stdout_reader)?;
     let stderr = join_child_pipe_reader(stderr_reader)?;
@@ -233,7 +242,7 @@ where
             format!("failed to spawn hook `{}`: {error}", plan.hook_id),
         )
     })?;
-    let mut process_group = ProgramHookProcessGroupGuard::new(&child);
+    let mut process_group = ProgramHookProcessGroupGuard::new(child.id());
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();

@@ -74,4 +74,6 @@ pub struct AgentTranscriptStore {
     pub(super) root: PathBuf,
     /// Maximum saved conversations retained for resume listing and loading.
     pub(super) saved_sessions_limit: usize,
+    /// Cleartext presentation bytes retained before compaction.
+    pub(super) presentation_compaction_threshold: u64,
 }

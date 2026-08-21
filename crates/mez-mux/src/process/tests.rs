@@ -553,7 +553,7 @@ fn pane_process_manager_rejects_removing_running_process() {
         .spawn_for_pane(
             pane_id,
             &test_shell(),
-            Some("sleep 1"),
+            Some("sleep 30"),
             &test_environment(),
             Size::new(80, 24).unwrap(),
         )
@@ -562,8 +562,11 @@ fn pane_process_manager_rejects_removing_running_process() {
     let error = manager.remove_exited(pane_id).unwrap_err();
     assert_eq!(error.kind(), crate::MuxErrorKind::InvalidState);
 
-    let status = manager.wait_and_remove(pane_id).unwrap();
-    assert!(status.success());
+    let terminated = manager
+        .terminate_pane_with_grace(pane_id, Duration::from_millis(10))
+        .unwrap();
+    assert!(terminated.is_some());
+    assert!(manager.is_empty());
 }
 
 /// Verifies that live pane processes can be removed from manager ownership and

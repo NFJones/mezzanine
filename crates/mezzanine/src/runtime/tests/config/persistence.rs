@@ -133,6 +133,7 @@ fn runtime_applies_host_clipboard_pipe_commands_from_config_layers() {
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
     let copy_path = root.join("copied.txt");
+    let release_path = root.join("release-copy");
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -142,7 +143,8 @@ fn runtime_applies_host_clipboard_pipe_commands_from_config_layers() {
             scope: ConfigScope::Primary,
             trusted: true,
             text: format!(
-                "[terminal]\nclipboard_copy_command = [\"sh\", \"-c\", \"sleep 1; cat > '{}'\"]\nclipboard_paste_command = [\"sh\", \"-c\", \"printf configured-paste\"]\nclipboard_read_timeout_ms = 700\nclipboard_read_max_bytes = 64\n",
+                "[terminal]\nclipboard_copy_command = [\"sh\", \"-c\", \"while [ ! -e '{}' ]; do sleep 0.01; done; cat > '{}'\"]\nclipboard_paste_command = [\"sh\", \"-c\", \"printf configured-paste\"]\nclipboard_read_timeout_ms = 700\nclipboard_read_max_bytes = 64\n",
+                release_path.display(),
                 copy_path.display()
             ),
         }])
@@ -155,6 +157,7 @@ fn runtime_applies_host_clipboard_pipe_commands_from_config_layers() {
         "clipboard copy blocked for {:?}",
         started.elapsed()
     );
+    fs::write(&release_path, b"release").unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut copied = String::new();
     while Instant::now() < deadline {
