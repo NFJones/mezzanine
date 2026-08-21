@@ -287,6 +287,19 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
         .join("\n");
     assert!(first_text.contains("first output"), "{first_text}");
 
+    service
+        .append_agent_shell_output_status_lines_to_terminal_buffer(
+            "%1",
+            &["first output".to_string()],
+        )
+        .unwrap();
+    let unchanged_preview_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(unchanged_preview_text, first_text);
+
     service.record_running_shell_transaction_output("%1", b"second output\n");
     let styled_lines = service
         .pane_screen("%1")

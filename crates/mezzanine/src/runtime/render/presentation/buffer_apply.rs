@@ -2519,6 +2519,14 @@ impl RuntimeSessionService {
         if lines.is_empty() {
             return Ok(());
         }
+        if self
+            .presentation
+            .agent_shell_output_status_lines
+            .get(pane_id)
+            .is_some_and(|previous_lines| previous_lines == &lines)
+        {
+            return Ok(());
+        }
         let previous_line_count = self
             .presentation
             .agent_shell_output_status_lines
