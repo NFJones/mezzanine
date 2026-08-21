@@ -2379,6 +2379,33 @@ fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
         })
         .unwrap();
 
+    let failed_owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-1".to_string(),
+        action_id: "shell-1".to_string(),
+        marker: marker.clone(),
+    };
+    let unrelated_owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-unrelated".to_string(),
+        action_id: "shell-unrelated".to_string(),
+        marker: "marker-unrelated".to_string(),
+    };
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            failed_owner,
+            1,
+            &["failed owner output".to_string()],
+        )
+        .unwrap();
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            unrelated_owner.clone(),
+            1,
+            &["unrelated owner output".to_string()],
+        )
+        .unwrap();
+
     let observed = service
         .observe_agent_shell_transaction_end("%2", &marker, "turn-1", "agent-%1", "%1", 0)
         .unwrap();
@@ -2408,6 +2435,11 @@ fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
             .contains("shell transaction marker metadata does not match runtime dispatch state"),
         "{pane_text}"
     );
+    assert!(!pane_text.contains("failed owner output"), "{pane_text}");
+    assert!(pane_text.contains("unrelated owner output"), "{pane_text}");
+    let previews = service.agent_shell_output_previews_for_tests("%1");
+    assert_eq!(previews.len(), 1, "{previews:?}");
+    assert_eq!(previews[0].0, unrelated_owner);
     service.terminate_all_pane_processes().unwrap();
 }
 

@@ -68,26 +68,38 @@ fn status_pipe() -> Result<(OwnedFd, OwnedFd)> {
     Ok((reader, writer))
 }
 
+/// Mutable cumulative preview and revision shared by output reader threads.
+struct SpawnedChildProgressState {
+    /// Bounded cumulative output retained for the next publication.
+    preview: Vec<u8>,
+    /// Strictly increasing revision assigned under the same output lock.
+    revision: u64,
+}
+
 /// Shared latest-value relay used by stdout and stderr reader threads.
 #[derive(Clone)]
 struct SpawnedChildProgressReporter {
-    preview: Arc<Mutex<Vec<u8>>>,
-    sender: tokio::sync::watch::Sender<Option<String>>,
+    state: Arc<Mutex<SpawnedChildProgressState>>,
+    sender: tokio::sync::watch::Sender<Option<(u64, String)>>,
 }
 
 impl SpawnedChildProgressReporter {
-    /// Appends one observed chunk and publishes the newest bounded preview.
+    /// Appends one observed chunk and publishes the newest revisioned preview.
     fn report(&self, bytes: &[u8]) {
-        let Ok(mut preview) = self.preview.lock() else {
+        let Ok(mut state) = self.state.lock() else {
             return;
         };
-        preview.extend_from_slice(bytes);
-        if preview.len() > SPAWNED_CHILD_PROGRESS_PREVIEW_LIMIT {
-            let excess = preview.len() - SPAWNED_CHILD_PROGRESS_PREVIEW_LIMIT;
-            preview.drain(..excess);
+        state.preview.extend_from_slice(bytes);
+        if state.preview.len() > SPAWNED_CHILD_PROGRESS_PREVIEW_LIMIT {
+            let excess = state.preview.len() - SPAWNED_CHILD_PROGRESS_PREVIEW_LIMIT;
+            state.preview.drain(..excess);
         }
-        self.sender
-            .send_replace(Some(String::from_utf8_lossy(&preview).into_owned()));
+        state.revision = state.revision.saturating_add(1);
+        let snapshot = (
+            state.revision,
+            String::from_utf8_lossy(&state.preview).into_owned(),
+        );
+        self.sender.send_replace(Some(snapshot));
     }
 }
 
@@ -453,10 +465,13 @@ pub(crate) fn execute_native_shell_dispatch(
 /// Executes a native shell dispatch while publishing bounded output previews.
 pub(crate) fn execute_native_shell_dispatch_with_progress(
     dispatch: crate::runtime::RuntimeNativeShellDispatch,
-    progress_sender: tokio::sync::watch::Sender<Option<String>>,
+    progress_sender: tokio::sync::watch::Sender<Option<(u64, String)>>,
 ) -> crate::runtime::RuntimeNativeShellOutcome {
     let progress = SpawnedChildProgressReporter {
-        preview: Arc::new(Mutex::new(Vec::new())),
+        state: Arc::new(Mutex::new(SpawnedChildProgressState {
+            preview: Vec::new(),
+            revision: 0,
+        })),
         sender: progress_sender,
     };
     execute_native_shell_dispatch_inner(dispatch, Some(progress))
@@ -781,6 +796,31 @@ mod tests {
             interactive: false,
             stateful: false,
         }
+    }
+
+    /// Verifies native progress publications carry strictly increasing revisions.
+    ///
+    /// Stdout and stderr readers share one reporter. Each accepted chunk must
+    /// advance the revision under the same lock that updates cumulative output
+    /// so watch-channel coalescing can never make an older snapshot look newer.
+    #[test]
+    fn spawned_child_progress_revisions_increase_with_each_snapshot() {
+        let (sender, mut receiver) = tokio::sync::watch::channel(None);
+        let reporter = SpawnedChildProgressReporter {
+            state: Arc::new(Mutex::new(SpawnedChildProgressState {
+                preview: Vec::new(),
+                revision: 0,
+            })),
+            sender,
+        };
+
+        reporter.report(b"first");
+        let first = receiver.borrow_and_update().clone().unwrap();
+        reporter.report(b"-second");
+        let second = receiver.borrow_and_update().clone().unwrap();
+
+        assert_eq!(first, (1, "first".to_string()));
+        assert_eq!(second, (2, "first-second".to_string()));
     }
 
     /// Verifies exit codes and stream separation arrive intact from the

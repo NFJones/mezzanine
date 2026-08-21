@@ -537,6 +537,65 @@ fn runtime_shell_previews_preserve_owner_order_and_durable_output() {
     assert!(diff_index < preview_index, "{pane_text}");
 }
 
+/// Verifies aggregate turn cancellation retires only the matching owners.
+///
+/// Cancellation may cover managed or native work and therefore operates at the
+/// turn scope. Other turns sharing the pane must remain projected in their
+/// original first-seen order, and durable rows must remain untouched.
+#[test]
+fn runtime_shell_preview_turn_retirement_preserves_other_turns() {
+    let mut service = test_runtime_service();
+    let screen = TerminalScreen::new(Size::new(100, 20).unwrap(), 40).unwrap();
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "durable sentinel")
+        .unwrap();
+    let owner_a = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-a".to_string(),
+        action_id: "action-a".to_string(),
+        marker: "marker-a".to_string(),
+    };
+    let owner_b = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-b".to_string(),
+        action_id: "action-b".to_string(),
+        marker: "marker-b".to_string(),
+    };
+    service
+        .update_agent_shell_output_preview("%1", owner_a, 1, &["cancelled turn output".to_string()])
+        .unwrap();
+    service
+        .update_agent_shell_output_preview(
+            "%1",
+            owner_b.clone(),
+            1,
+            &["surviving turn output".to_string()],
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .retire_agent_shell_output_previews_for_turn("turn-a")
+            .unwrap(),
+        1
+    );
+
+    let previews = service.agent_shell_output_previews_for_tests("%1");
+    assert_eq!(previews.len(), 1, "{previews:?}");
+    assert_eq!(previews[0].0, owner_b);
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains("durable sentinel"), "{pane_text}");
+    assert!(!pane_text.contains("cancelled turn output"), "{pane_text}");
+    assert!(pane_text.contains("surviving turn output"), "{pane_text}");
+}
+
 /// Verifies stale preview cleanup cannot erase an intervening pane generation.
 ///
 /// If a write outside the preview compositor changes the retained screen, the
@@ -766,9 +825,9 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         crate::runtime::execute_native_shell_dispatch_with_progress(dispatch, progress_sender)
     });
     let progress_deadline = std::time::Instant::now() + Duration::from_secs(2);
-    let output_preview = loop {
-        if let Some(output_preview) = progress_receiver.borrow_and_update().clone() {
-            break output_preview;
+    let (revision, output_preview) = loop {
+        if let Some(progress) = progress_receiver.borrow_and_update().clone() {
+            break progress;
         }
         assert!(
             std::time::Instant::now() < progress_deadline,
@@ -787,6 +846,7 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
                 turn_id: "turn-1".to_string(),
                 action_id: "shell-1".to_string(),
                 marker: marker.clone(),
+                revision,
                 output_preview,
             })
             .unwrap()
@@ -797,6 +857,32 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         .normal_content_lines()
         .join("\n");
     assert!(pane_text.contains("native-live-first"), "{pane_text}");
+    let accepted = service.agent_shell_output_previews_for_tests("%1");
+    assert_eq!(accepted.len(), 1, "{accepted:?}");
+    assert_eq!(accepted[0].2, revision);
+
+    service
+        .apply_native_shell_progress(crate::runtime::RuntimeNativeShellProgress {
+            turn_id: "turn-1".to_string(),
+            action_id: "shell-1".to_string(),
+            marker: marker.clone(),
+            revision: revision.saturating_sub(1),
+            output_preview: "older-native-tail".to_string(),
+        })
+        .unwrap();
+    let stale_revision_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        !stale_revision_text.contains("older-native-tail"),
+        "{stale_revision_text}"
+    );
+    assert_eq!(
+        service.agent_shell_output_previews_for_tests("%1")[0].2,
+        revision
+    );
 
     assert!(
         !service
@@ -804,6 +890,7 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
                 turn_id: "turn-1".to_string(),
                 action_id: "shell-1".to_string(),
                 marker: format!("{marker}-stale"),
+                revision: revision.saturating_add(1),
                 output_preview: "stale-native-tail".to_string(),
             })
             .unwrap()
@@ -824,6 +911,26 @@ fn runtime_native_agent_shell_command_shows_transient_output_before_completion()
         .join("\n");
     assert!(pane_text.contains("native-live-first"), "{pane_text}");
     assert!(pane_text.contains("native-live-last"), "{pane_text}");
+    assert!(
+        !service
+            .apply_native_shell_progress(crate::runtime::RuntimeNativeShellProgress {
+                turn_id: "turn-1".to_string(),
+                action_id: "shell-1".to_string(),
+                marker,
+                revision: revision.saturating_add(1),
+                output_preview: "post-completion-native-tail".to_string(),
+            })
+            .unwrap()
+    );
+    let settled_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        !settled_text.contains("post-completion-native-tail"),
+        "{settled_text}"
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 

@@ -5,6 +5,8 @@
 //! cleanup, transcript persistence, subagent result emission, and status display
 //! decisions grouped around failure handling.
 
+use crate::runtime::render::RuntimeAgentShellPreviewOwner;
+
 use super::{
     ActionResult, ActionStatus, AgentTurnExecution, AgentTurnRecord, AgentTurnState, EventKind,
     MezError, ModelProfile, ModelResponse, Result, RunningShellTransactionRef,
@@ -332,6 +334,14 @@ impl RuntimeSessionService {
         else {
             return Ok(0);
         };
+        self.settle_agent_shell_output_preview(
+            &turn.pane_id,
+            &RuntimeAgentShellPreviewOwner {
+                turn_id: turn.turn_id.clone(),
+                action_id: observed_result.action_id.clone(),
+                marker: marker.to_string(),
+            },
+        );
 
         self.append_agent_trace_turn_event(&turn.pane_id, &turn.turn_id, &transition_trace)?;
         self.append_agent_trace_maap_action_results(
@@ -494,6 +504,16 @@ impl RuntimeSessionService {
             (execution.clone(), observed_results, transition_traces)
         };
         let terminal_state = execution.terminal_state;
+        for result in &observed_results {
+            self.settle_agent_shell_output_preview(
+                &turn.pane_id,
+                &RuntimeAgentShellPreviewOwner {
+                    turn_id: turn.turn_id.clone(),
+                    action_id: result.action_id.clone(),
+                    marker: marker.to_string(),
+                },
+            );
+        }
         for transition_trace in transition_traces {
             self.append_agent_trace_turn_event(
                 &turn.pane_id,

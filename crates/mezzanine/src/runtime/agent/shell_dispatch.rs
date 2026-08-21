@@ -111,7 +111,6 @@ impl RuntimeSessionService {
         if lines.is_empty() {
             return Ok(false);
         }
-        let revision = u64::try_from(progress.output_preview.len()).unwrap_or(u64::MAX);
         self.update_agent_shell_output_preview(
             &turn.pane_id,
             RuntimeAgentShellPreviewOwner {
@@ -119,7 +118,7 @@ impl RuntimeSessionService {
                 action_id: progress.action_id,
                 marker: progress.marker,
             },
-            revision,
+            progress.revision,
             &lines,
         )?;
         Ok(true)

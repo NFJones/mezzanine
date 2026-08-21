@@ -746,6 +746,7 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Result<usize> {
         let cancelled = self.running_shell_transaction_targets_for_turn(turn_id);
+        self.retire_agent_shell_output_previews_for_turn(turn_id)?;
         if cancelled.is_empty() {
             return Ok(0);
         }

@@ -489,6 +489,7 @@ async fn execute_native_shell_action(
     let progress_action_id = action_id.clone();
     let progress_marker = marker.clone();
     let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
+    let mut last_progress_revision = 0_u64;
     let mut worker = tokio::task::spawn_blocking(move || {
         crate::runtime::execute_native_shell_dispatch_with_progress(dispatch, progress_sender)
     });
@@ -499,15 +500,22 @@ async fn execute_native_shell_action(
                 if changed.is_err() {
                     break worker.await;
                 }
-                let Some(output_preview) = progress_receiver.borrow_and_update().clone() else {
+                let Some((revision, output_preview)) =
+                    progress_receiver.borrow_and_update().clone()
+                else {
                     continue;
                 };
+                if revision <= last_progress_revision {
+                    continue;
+                }
+                last_progress_revision = revision;
                 let mut batch = RuntimeEventBatch::new();
                 batch.push(RuntimeEvent::NativeShellProgress(
                     crate::runtime::RuntimeNativeShellProgress {
                         turn_id: progress_turn_id.clone(),
                         action_id: progress_action_id.clone(),
                         marker: progress_marker.clone(),
+                        revision,
                         output_preview,
                     },
                 ));
@@ -516,13 +524,16 @@ async fn execute_native_shell_action(
         }
     };
     let final_output_preview = { progress_receiver.borrow_and_update().clone() };
-    if let Some(output_preview) = final_output_preview {
+    if let Some((revision, output_preview)) = final_output_preview
+        && revision > last_progress_revision
+    {
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::NativeShellProgress(
             crate::runtime::RuntimeNativeShellProgress {
                 turn_id: progress_turn_id,
                 action_id: progress_action_id,
                 marker: progress_marker,
+                revision,
                 output_preview,
             },
         ));

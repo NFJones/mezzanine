@@ -124,6 +124,8 @@ pub(crate) struct RuntimeNativeShellProgress {
     pub(crate) action_id: String,
     /// Exact marker copied from the claimed dispatch.
     pub(crate) marker: String,
+    /// Strictly increasing worker publication revision.
+    pub(crate) revision: u64,
     /// Bounded cumulative stdout/stderr preview observed by pipe readers.
     pub(crate) output_preview: String,
 }

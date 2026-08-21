@@ -2799,6 +2799,84 @@ impl RuntimeSessionService {
         presentation.settled_owners.insert(owner.clone())
     }
 
+    /// Retires every preview owned by one turn without disturbing other owners.
+    ///
+    /// Exact installed-screen lineage is required before the remaining owners
+    /// are reprojected. A lineage mismatch discards stale projection metadata
+    /// without mutating intervening pane content.
+    pub(crate) fn retire_agent_shell_output_previews_for_turn(
+        &mut self,
+        turn_id: &str,
+    ) -> Result<usize> {
+        let pane_ids = self
+            .presentation
+            .agent_shell_output_previews
+            .iter()
+            .filter(|(_pane_id, presentation)| {
+                presentation
+                    .previews
+                    .keys()
+                    .any(|owner| owner.turn_id == turn_id)
+            })
+            .map(|(pane_id, _presentation)| pane_id.clone())
+            .collect::<Vec<_>>();
+        let mut retired = 0usize;
+        for pane_id in pane_ids {
+            let Some(mut presentation) = self
+                .presentation
+                .agent_shell_output_previews
+                .remove(&pane_id)
+            else {
+                continue;
+            };
+            let owners = presentation
+                .previews
+                .keys()
+                .filter(|owner| owner.turn_id == turn_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            retired = retired.saturating_add(owners.len());
+            let owns_live_screen = self.agent_pane_screen(&pane_id).is_some_and(|screen| {
+                screen == presentation.installed_screen.as_ref()
+                    && self.agent_pane_screen_state(&pane_id).is_some_and(|state| {
+                        state.conversation_id() == presentation.conversation_id
+                    })
+            });
+            if !owns_live_screen {
+                continue;
+            }
+            for owner in owners {
+                presentation.previews.remove(&owner);
+                presentation.settled_owners.remove(&owner);
+            }
+            let mut candidate = presentation.baseline_screen.as_ref().clone();
+            if !presentation.previews.is_empty() {
+                let ui_theme = self.presentation.settings.ui_theme.clone();
+                Self::append_agent_shell_previews_to_screen(
+                    &mut candidate,
+                    &presentation.previews,
+                    &ui_theme,
+                )?;
+            }
+            if !self.update_agent_pane_screen_preserving_interaction(
+                &pane_id,
+                &presentation.conversation_id,
+                candidate.clone(),
+            ) {
+                return Err(MezError::invalid_state(
+                    "shell preview turn retirement conversation changed",
+                ));
+            }
+            if !presentation.previews.is_empty() {
+                presentation.installed_screen = std::sync::Arc::new(candidate);
+                self.presentation
+                    .agent_shell_output_previews
+                    .insert(pane_id, presentation);
+            }
+        }
+        Ok(retired)
+    }
+
     /// Returns structured shell preview state for chronology regressions.
     #[cfg(test)]
     pub(crate) fn agent_shell_output_previews_for_tests(
