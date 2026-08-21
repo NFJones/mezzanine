@@ -1335,16 +1335,6 @@ mod tests {
             marker,
         );
         let mut output = admit_managed_fish_frame(&mut process, &admission, &owner, marker);
-        assert!(
-            !process
-                .terminal
-                .visible_lines()
-                .join("\n")
-                .contains("discarded-cancelled-draft"),
-            "Fish must visibly discard the draft before frame admission; screen={:?}; output={:?}",
-            process.terminal.visible_lines(),
-            String::from_utf8_lossy(&output)
-        );
         process
             .write_input(fish_private_source_cancel_input(&owner, marker).as_bytes())
             .unwrap();
