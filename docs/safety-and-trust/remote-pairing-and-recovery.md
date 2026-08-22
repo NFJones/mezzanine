@@ -115,6 +115,12 @@ relationships, and relayed byte counts even though they cannot read encrypted
 application data. Select lookup, relay, direct connection, port mapping, proxy,
 and CA policies independently and deliberately.
 
+Public n0 relay and lookup services are development dependencies, not an
+approved Mezzanine production service. A supported deployment requires named
+relay and lookup ownership, metadata retention and incident policy, controlled
+network evidence, staged stop thresholds, and a tested Unix-only rollback. See
+[Iroh production operations and rollout](../operations/iroh-production-operations-and-rollout.md).
+
 ## Related pages
 
 - [Configuration reference](../configuration/reference.md)

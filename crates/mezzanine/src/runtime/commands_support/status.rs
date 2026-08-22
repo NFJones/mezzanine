@@ -191,8 +191,42 @@ fn runtime_provider_token_usage_by_model_lines(
 /// on duplicated control-flow logic.
 pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> String {
     let runtime_metrics = service.runtime_metrics();
+    let iroh_metrics = service.integration.remote_iroh_diagnostics();
     let mut lines = vec![
         "metrics source=runtime-service status=available".to_string(),
+        "".to_string(),
+        "[iroh transport]".to_string(),
+        format!("listener_active = {}", iroh_metrics.listener_active),
+        format!("active_connections = {}", iroh_metrics.active_connections),
+        format!(
+            "connections_accepted = {}",
+            iroh_metrics.connections_accepted
+        ),
+        format!(
+            "connections_rejected = {}",
+            iroh_metrics.connections_rejected
+        ),
+        format!("setup_successes = {}", iroh_metrics.setup_successes),
+        format!("setup_failures = {}", iroh_metrics.setup_failures),
+        format!(
+            "setup_latency_average_millis = {}",
+            iroh_metrics.average_setup_latency_millis()
+        ),
+        format!(
+            "setup_latency_max_millis = {}",
+            iroh_metrics.setup_latency_max_millis
+        ),
+        format!(
+            "connections_completed = {}",
+            iroh_metrics.connections_completed
+        ),
+        format!("connections_failed = {}", iroh_metrics.connections_failed),
+        format!("shutdown_aborts = {}", iroh_metrics.shutdown_aborts),
+        format!("last_connection_path = {}", iroh_metrics.last_path_name()),
+        format!("direct_connections = {}", iroh_metrics.direct_connections),
+        format!("relay_connections = {}", iroh_metrics.relay_connections),
+        format!("custom_connections = {}", iroh_metrics.custom_connections),
+        format!("unknown_connections = {}", iroh_metrics.unknown_connections),
         "".to_string(),
         "[runtime counts]".to_string(),
         format!(

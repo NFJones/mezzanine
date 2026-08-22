@@ -449,13 +449,35 @@ impl RuntimeSessionService {
                 )?;
                 let policy =
                     crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
+                let diagnostics = self.integration.remote_iroh_diagnostics();
                 Ok(serde_json::json!({
                     "enabled": policy.enabled,
+                    "listener_active": diagnostics.listener_active,
                     "endpoint_id": endpoint_id,
                     "endpoint_addr": self.integration.remote_endpoint_addr(),
                     "address_lookup": policy.address_lookup.as_str(),
                     "relay_mode": policy.relay.as_str(),
-                    "active_remote_connections": 0,
+                    "direct_connections": policy.direct_connections,
+                    "port_mapping": policy.port_mapping,
+                    "proxy_from_env": policy.proxy_from_env,
+                    "system_ca_store": policy.system_ca_store,
+                    "active_remote_connections": diagnostics.active_connections,
+                    "connections_accepted": diagnostics.connections_accepted,
+                    "connections_rejected": diagnostics.connections_rejected,
+                    "setup_successes": diagnostics.setup_successes,
+                    "setup_failures": diagnostics.setup_failures,
+                    "setup_latency_average_millis": diagnostics.average_setup_latency_millis(),
+                    "setup_latency_max_millis": diagnostics.setup_latency_max_millis,
+                    "connections_completed": diagnostics.connections_completed,
+                    "connections_failed": diagnostics.connections_failed,
+                    "shutdown_aborts": diagnostics.shutdown_aborts,
+                    "last_connection_path": diagnostics.last_path_name(),
+                    "path_counts": {
+                        "direct": diagnostics.direct_connections,
+                        "relay": diagnostics.relay_connections,
+                        "custom": diagnostics.custom_connections,
+                        "unknown": diagnostics.unknown_connections,
+                    },
                 })
                 .to_string())
             }

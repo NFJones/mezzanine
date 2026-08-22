@@ -151,6 +151,43 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
     );
 }
 
+/// Verifies operator metrics expose only aggregate Iroh transport diagnostics.
+#[test]
+fn runtime_show_metrics_reports_privacy_safe_iroh_diagnostics() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let body = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"show-iroh-metrics","method":"terminal/command","params":{"idempotency_key":"show-iroh-metrics","input":"show-metrics"}}"#,
+        &primary,
+    );
+
+    for expected in [
+        "[iroh transport]",
+        "listener_active = false",
+        "active_connections = 0",
+        "connections_accepted = 0",
+        "connections_rejected = 0",
+        "setup_latency_average_millis = 0",
+        "last_connection_path = unknown",
+    ] {
+        assert!(body.contains(expected), "missing {expected:?} in {body}");
+    }
+    for forbidden in [
+        "endpoint_id",
+        "endpoint_addr",
+        "invitation",
+        "credential",
+        "peer_address",
+    ] {
+        assert!(
+            !body.contains(forbidden),
+            "unexpected {forbidden:?} in {body}"
+        );
+    }
+}
+
 /// Verifies `/plan` changes only the issuing pane, supports idempotent modes,
 /// and reports the resulting read-only state through the live command path.
 #[test]

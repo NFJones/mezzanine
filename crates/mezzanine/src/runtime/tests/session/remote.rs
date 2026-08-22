@@ -489,7 +489,39 @@ fn runtime_remote_device_proof_rejects_escalation_revocation_and_unsupported_rol
         &mut local,
         r#"{"jsonrpc":"2.0","id":"status","method":"remote/status","params":{}}"#,
     );
-    assert!(status.get("result").is_some(), "{status}");
+    let result = status.get("result").unwrap();
+    assert_eq!(
+        result.get("listener_active"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        result.get("active_remote_connections"),
+        Some(&serde_json::json!(0))
+    );
+    assert_eq!(
+        result.get("connections_accepted"),
+        Some(&serde_json::json!(0))
+    );
+    assert_eq!(
+        result.get("connections_rejected"),
+        Some(&serde_json::json!(0))
+    );
+    assert_eq!(result.get("setup_successes"), Some(&serde_json::json!(0)));
+    assert_eq!(result.get("setup_failures"), Some(&serde_json::json!(0)));
+    assert_eq!(result.get("shutdown_aborts"), Some(&serde_json::json!(0)));
+    assert_eq!(
+        result.get("last_connection_path"),
+        Some(&serde_json::json!("unknown"))
+    );
+    let serialized = status.to_string();
+    for forbidden in [
+        "device_credential",
+        "invitation_token",
+        "private_key",
+        "peer_address",
+    ] {
+        assert!(!serialized.contains(forbidden), "{serialized}");
+    }
 
     let _ = fs::remove_dir_all(root);
 }

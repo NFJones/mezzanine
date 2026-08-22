@@ -6,10 +6,7 @@ use serde_json::Value;
 
 use crate::error::{MezError, Result};
 
-use super::{
-    runtime_json_bool, runtime_json_object, runtime_json_string, runtime_json_string_array,
-    runtime_json_u64,
-};
+use super::{runtime_json_bool, runtime_json_object, runtime_json_string_array, runtime_json_u64};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeIrohIdentityPolicy {
@@ -100,7 +97,8 @@ pub(crate) fn runtime_iroh_transport_policy_from_config(
     };
     let defaults = RuntimeIrohTransportPolicy::default();
 
-    let identity = match runtime_json_string(iroh.get("identity")).unwrap_or("per_session") {
+    let identity_name = string_value(iroh, "identity", "per_session")?;
+    let identity = match identity_name.as_str() {
         "per_session" => RuntimeIrohIdentityPolicy::PerSession,
         _ => {
             return Err(MezError::config(
@@ -108,16 +106,28 @@ pub(crate) fn runtime_iroh_transport_policy_from_config(
             ));
         }
     };
-    let lookup_name = runtime_json_string(iroh.get("address_lookup")).unwrap_or("disabled");
-    let lookup_domain = iroh
-        .get("address_lookup_domain")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let address_lookup = match lookup_name {
+    let lookup_name = string_value(iroh, "address_lookup", "disabled")?;
+    let lookup_domain = string_value(iroh, "address_lookup_domain", "")?;
+    if lookup_name == "custom_dns"
+        && (lookup_domain.is_empty()
+            || !lookup_domain
+                .chars()
+                .all(|character| !character.is_control() && !character.is_whitespace()))
+    {
+        return Err(MezError::config(
+            "transport.iroh custom DNS lookup requires a printable domain",
+        ));
+    }
+    if lookup_name != "custom_dns" && !lookup_domain.is_empty() {
+        return Err(MezError::config(
+            "transport.iroh.address_lookup_domain is valid only with custom_dns",
+        ));
+    }
+    let address_lookup = match lookup_name.as_str() {
         "disabled" => RuntimeIrohAddressLookupPolicy::Disabled,
         "n0_dns" => RuntimeIrohAddressLookupPolicy::N0Dns,
         "custom_dns" if !lookup_domain.is_empty() => RuntimeIrohAddressLookupPolicy::CustomDns {
-            domain: lookup_domain.to_string(),
+            domain: lookup_domain.clone(),
         },
         "custom_dns" => {
             return Err(MezError::config(
@@ -132,9 +142,28 @@ pub(crate) fn runtime_iroh_transport_policy_from_config(
         }
     };
 
-    let relay_name = runtime_json_string(iroh.get("relay_mode")).unwrap_or("disabled");
+    let relay_name = string_value(iroh, "relay_mode", "disabled")?;
     let relay_urls = runtime_json_string_array(iroh.get("relay_urls"))?.unwrap_or_default();
-    let relay = match relay_name {
+    if relay_urls.len() > 8 {
+        return Err(MezError::config(
+            "transport.iroh.relay_urls must contain at most eight URLs",
+        ));
+    }
+    if relay_urls.iter().any(|url| {
+        !url.starts_with("https://")
+            || url.len() <= "https://".len()
+            || url.chars().any(char::is_control)
+    }) {
+        return Err(MezError::config(
+            "transport.iroh custom relay URLs must be printable HTTPS URLs",
+        ));
+    }
+    if relay_name != "custom" && !relay_urls.is_empty() {
+        return Err(MezError::config(
+            "transport.iroh.relay_urls are valid only with custom relay mode",
+        ));
+    }
+    let relay = match relay_name.as_str() {
         "disabled" => RuntimeIrohRelayPolicy::Disabled,
         "public" => RuntimeIrohRelayPolicy::Public,
         "custom" if !relay_urls.is_empty() => RuntimeIrohRelayPolicy::Custom { urls: relay_urls },
@@ -150,37 +179,71 @@ pub(crate) fn runtime_iroh_transport_policy_from_config(
         }
     };
 
+    let direct_connections = bool_value(iroh, "direct_connections", defaults.direct_connections)?;
+    if !direct_connections && matches!(relay, RuntimeIrohRelayPolicy::Disabled) {
+        return Err(MezError::config(
+            "transport.iroh disabling direct connections requires a relay mode",
+        ));
+    }
     Ok(RuntimeIrohTransportPolicy {
         enabled: bool_value(iroh, "enabled", defaults.enabled)?,
         identity,
         address_lookup,
         relay,
-        direct_connections: bool_value(iroh, "direct_connections", defaults.direct_connections)?,
+        direct_connections,
         port_mapping: bool_value(iroh, "port_mapping", defaults.port_mapping)?,
         proxy_from_env: bool_value(iroh, "proxy_from_env", defaults.proxy_from_env)?,
         system_ca_store: bool_value(iroh, "system_ca_store", defaults.system_ca_store)?,
-        invitation_ttl: Duration::from_secs(u64_value(
+        invitation_ttl: Duration::from_secs(bounded_u64_value(
             iroh,
             "invitation_ttl_seconds",
             defaults.invitation_ttl.as_secs(),
+            30,
+            86_400,
         )?),
-        max_connections: usize_value(iroh, "max_connections", defaults.max_connections)?,
-        max_streams_per_connection: usize_value(
+        max_connections: bounded_usize_value(
+            iroh,
+            "max_connections",
+            defaults.max_connections,
+            1,
+            1_024,
+        )?,
+        max_streams_per_connection: bounded_usize_value(
             iroh,
             "max_streams_per_connection",
             defaults.max_streams_per_connection,
+            1,
+            16,
         )?,
-        setup_timeout: Duration::from_millis(u64_value(
+        setup_timeout: Duration::from_millis(bounded_u64_value(
             iroh,
             "setup_timeout_ms",
             defaults.setup_timeout.as_millis() as u64,
+            100,
+            120_000,
         )?),
-        idle_timeout: Duration::from_millis(u64_value(
+        idle_timeout: Duration::from_millis(bounded_u64_value(
             iroh,
             "idle_timeout_ms",
             defaults.idle_timeout.as_millis() as u64,
+            1_000,
+            86_400_000,
         )?),
     })
+}
+
+fn string_value(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    default: &str,
+) -> Result<String> {
+    match object.get(key) {
+        None => Ok(default.to_string()),
+        Some(value) => value
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| MezError::config(format!("transport.iroh.{key} must be a string"))),
+    }
 }
 
 fn bool_value(object: &serde_json::Map<String, Value>, key: &str, default: bool) -> Result<bool> {
@@ -200,13 +263,37 @@ fn u64_value(object: &serde_json::Map<String, Value>, key: &str, default: u64) -
     }
 }
 
-fn usize_value(
+fn bounded_u64_value(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    default: u64,
+    minimum: u64,
+    maximum: u64,
+) -> Result<u64> {
+    let value = u64_value(object, key, default)?;
+    if !(minimum..=maximum).contains(&value) {
+        return Err(MezError::config(format!(
+            "transport.iroh.{key} must be an integer from {minimum} to {maximum}",
+        )));
+    }
+    Ok(value)
+}
+
+fn bounded_usize_value(
     object: &serde_json::Map<String, Value>,
     key: &str,
     default: usize,
+    minimum: u64,
+    maximum: u64,
 ) -> Result<usize> {
-    usize::try_from(u64_value(object, key, default as u64)?)
-        .map_err(|_| MezError::config(format!("transport.iroh.{key} is too large")))
+    usize::try_from(bounded_u64_value(
+        object,
+        key,
+        default as u64,
+        minimum,
+        maximum,
+    )?)
+    .map_err(|_| MezError::config(format!("transport.iroh.{key} is too large")))
 }
 
 #[cfg(test)]
@@ -258,5 +345,24 @@ mod tests {
         assert_eq!(policy.max_streams_per_connection, 1);
         assert_eq!(policy.setup_timeout, Duration::from_secs(5));
         assert_eq!(policy.idle_timeout, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn iroh_transport_runtime_policy_rejects_schema_invalid_network_combinations() {
+        for value in [
+            serde_json::json!({"transport":{"iroh":{"identity":7}}}),
+            serde_json::json!({"transport":{"iroh":{"address_lookup":"disabled","address_lookup_domain":"unused.example"}}}),
+            serde_json::json!({"transport":{"iroh":{"address_lookup":"custom_dns","address_lookup_domain":"bad domain"}}}),
+            serde_json::json!({"transport":{"iroh":{"relay_mode":"disabled","relay_urls":["https://relay.example"]}}}),
+            serde_json::json!({"transport":{"iroh":{"relay_mode":"custom","relay_urls":["http://relay.example"]}}}),
+            serde_json::json!({"transport":{"iroh":{"relay_mode":"disabled","direct_connections":false}}}),
+            serde_json::json!({"transport":{"iroh":{"max_connections":0}}}),
+            serde_json::json!({"transport":{"iroh":{"idle_timeout_ms":999}}}),
+        ] {
+            assert!(
+                runtime_iroh_transport_policy_from_config(&value).is_err(),
+                "{value}"
+            );
+        }
     }
 }

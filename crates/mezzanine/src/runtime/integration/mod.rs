@@ -16,6 +16,7 @@ use crate::error::{MezError, Result};
 use crate::host::async_runtime::AsyncRuntimeActorMetrics;
 use crate::integrations::hooks::{FocusedShellHookQueue, HookDefinition, HookExecutionResult};
 use crate::runtime::config::ConfiguredPermissions;
+use crate::runtime::{RuntimeIrohDiagnostics, RuntimeIrohDiagnosticsSnapshot};
 use crate::security::auth::AuthStore;
 use crate::security::project::{ProjectTrustRevision, ProjectTrustStore};
 use crate::security::remote::RemoteEndpointIdentity;
@@ -51,6 +52,7 @@ pub(crate) struct RuntimeIntegrationComponent {
     config_root: Option<PathBuf>,
     remote_endpoint_identity: Option<RemoteEndpointIdentity>,
     remote_endpoint_addr: Option<iroh::EndpointAddr>,
+    remote_iroh_diagnostics: Option<RuntimeIrohDiagnostics>,
     #[cfg(test)]
     config_reload_preparation_started: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
@@ -74,6 +76,7 @@ impl RuntimeIntegrationComponent {
             config_root: None,
             remote_endpoint_identity: None,
             remote_endpoint_addr: None,
+            remote_iroh_diagnostics: None,
             #[cfg(test)]
             config_reload_preparation_started: None,
             #[cfg(test)]
@@ -165,6 +168,22 @@ impl RuntimeIntegrationComponent {
     /// Returns the currently bound Iroh endpoint address, when remote transport is active.
     pub(crate) fn remote_endpoint_addr(&self) -> Option<&iroh::EndpointAddr> {
         self.remote_endpoint_addr.as_ref()
+    }
+
+    /// Replaces the shared privacy-safe Iroh listener diagnostics.
+    pub(crate) fn set_remote_iroh_diagnostics(
+        &mut self,
+        diagnostics: Option<RuntimeIrohDiagnostics>,
+    ) {
+        self.remote_iroh_diagnostics = diagnostics;
+    }
+
+    /// Returns the latest privacy-safe Iroh listener diagnostics snapshot.
+    pub(crate) fn remote_iroh_diagnostics(&self) -> RuntimeIrohDiagnosticsSnapshot {
+        self.remote_iroh_diagnostics
+            .as_ref()
+            .map(RuntimeIrohDiagnostics::snapshot)
+            .unwrap_or_default()
     }
 
     /// Returns the latest async-actor metrics snapshot.

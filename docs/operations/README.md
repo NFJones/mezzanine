@@ -17,6 +17,7 @@ This section owns the following operational guidance:
 - [Cache status and diagnostics](cache-status-and-diagnostics.md)
 - [Troubleshooting](troubleshooting.md)
 - [Remote pairing and recovery](../safety-and-trust/remote-pairing-and-recovery.md)
+- [Iroh production operations and rollout](iroh-production-operations-and-rollout.md)
 
 ## Related pages
 

@@ -173,6 +173,16 @@ endpoint key, protected profiles, device credentials, and trust database are
 not configuration fields and must not be edited directly. See [Remote pairing
 and recovery](../safety-and-trust/remote-pairing-and-recovery.md).
 
+Valid route shapes are direct-only, custom-relay-required, or controlled
+direct-plus-custom-relay. Disabling direct connections while relays are
+disabled is rejected. Custom relay URLs require printable HTTPS values; a
+custom lookup domain is valid only with `custom_dns`. Public relay and n0 DNS
+policies are development options until production service ownership and release
+gates are approved. Local `remote/status` and `show-metrics` expose aggregate
+listener, setup, connection, shutdown, and path diagnostics without credentials
+or unnecessary peer addresses. See [Iroh production operations and
+rollout](../operations/iroh-production-operations-and-rollout.md).
+
 ### `runtime`
 
 | Field | Type | Default declaration | Description |

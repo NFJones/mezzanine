@@ -4,6 +4,10 @@ use iroh::address_lookup::{DnsAddressLookup, PkarrPublisher};
 use iroh::endpoint::{IdleTimeout, PortmapperConfig, QuicTransportConfig, VarInt, presets};
 use iroh::tls::CaTlsConfig;
 use iroh::{Endpoint, RelayMap, RelayMode, SecretKey};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::time::Instant;
+
 use tokio::task::JoinSet;
 
 use crate::control::{AuthenticatedPeer, ControlConnectionState, encode_control_body};
@@ -27,11 +31,213 @@ pub(crate) const MEZZANINE_IROH_ALPN: &[u8] = b"mezzanine/transport/1";
 pub(crate) const MEZZANINE_IROH_EVENT_STREAM_PREFACE: &[u8] = b"mezzanine/events/1\n";
 const IROH_EVENT_BATCH_LIMIT: usize = 64;
 
+/// Privacy-safe aggregate diagnostics for one supervised Iroh listener.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RuntimeIrohDiagnostics {
+    inner: Arc<RuntimeIrohDiagnosticsInner>,
+}
+
+#[derive(Debug, Default)]
+struct RuntimeIrohDiagnosticsInner {
+    listener_active: AtomicBool,
+    active_connections: AtomicUsize,
+    connections_accepted: AtomicU64,
+    connections_rejected: AtomicU64,
+    setup_successes: AtomicU64,
+    setup_failures: AtomicU64,
+    setup_latency_total_millis: AtomicU64,
+    setup_latency_max_millis: AtomicU64,
+    connections_completed: AtomicU64,
+    connections_failed: AtomicU64,
+    direct_connections: AtomicU64,
+    relay_connections: AtomicU64,
+    custom_connections: AtomicU64,
+    unknown_connections: AtomicU64,
+    shutdown_aborts: AtomicU64,
+    last_path: AtomicU8,
+}
+
+/// Copyable status projection that contains no endpoint or peer identifiers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RuntimeIrohDiagnosticsSnapshot {
+    pub(crate) listener_active: bool,
+    pub(crate) active_connections: usize,
+    pub(crate) connections_accepted: u64,
+    pub(crate) connections_rejected: u64,
+    pub(crate) setup_successes: u64,
+    pub(crate) setup_failures: u64,
+    pub(crate) setup_latency_total_millis: u64,
+    pub(crate) setup_latency_max_millis: u64,
+    pub(crate) connections_completed: u64,
+    pub(crate) connections_failed: u64,
+    pub(crate) direct_connections: u64,
+    pub(crate) relay_connections: u64,
+    pub(crate) custom_connections: u64,
+    pub(crate) unknown_connections: u64,
+    pub(crate) shutdown_aborts: u64,
+    last_path: u8,
+}
+
+impl RuntimeIrohDiagnosticsSnapshot {
+    pub(crate) fn average_setup_latency_millis(self) -> u64 {
+        let attempts = self.setup_successes.saturating_add(self.setup_failures);
+        self.setup_latency_total_millis
+            .checked_div(attempts)
+            .unwrap_or(0)
+    }
+
+    pub(crate) const fn last_path_name(self) -> &'static str {
+        match self.last_path {
+            1 => "direct",
+            2 => "relay",
+            3 => "custom",
+            _ => "unknown",
+        }
+    }
+}
+
+impl RuntimeIrohDiagnostics {
+    pub(crate) fn snapshot(&self) -> RuntimeIrohDiagnosticsSnapshot {
+        RuntimeIrohDiagnosticsSnapshot {
+            listener_active: self.inner.listener_active.load(Ordering::Relaxed),
+            active_connections: self.inner.active_connections.load(Ordering::Relaxed),
+            connections_accepted: self.inner.connections_accepted.load(Ordering::Relaxed),
+            connections_rejected: self.inner.connections_rejected.load(Ordering::Relaxed),
+            setup_successes: self.inner.setup_successes.load(Ordering::Relaxed),
+            setup_failures: self.inner.setup_failures.load(Ordering::Relaxed),
+            setup_latency_total_millis: self
+                .inner
+                .setup_latency_total_millis
+                .load(Ordering::Relaxed),
+            setup_latency_max_millis: self.inner.setup_latency_max_millis.load(Ordering::Relaxed),
+            connections_completed: self.inner.connections_completed.load(Ordering::Relaxed),
+            connections_failed: self.inner.connections_failed.load(Ordering::Relaxed),
+            direct_connections: self.inner.direct_connections.load(Ordering::Relaxed),
+            relay_connections: self.inner.relay_connections.load(Ordering::Relaxed),
+            custom_connections: self.inner.custom_connections.load(Ordering::Relaxed),
+            unknown_connections: self.inner.unknown_connections.load(Ordering::Relaxed),
+            shutdown_aborts: self.inner.shutdown_aborts.load(Ordering::Relaxed),
+            last_path: self.inner.last_path.load(Ordering::Relaxed),
+        }
+    }
+
+    fn listener_started(&self) {
+        self.inner.listener_active.store(true, Ordering::Relaxed);
+    }
+
+    fn listener_stopped(&self) {
+        self.inner.listener_active.store(false, Ordering::Relaxed);
+    }
+
+    fn record_setup_latency(&self, elapsed: std::time::Duration) {
+        let millis = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+        self.inner
+            .setup_latency_total_millis
+            .fetch_add(millis, Ordering::Relaxed);
+        self.inner
+            .setup_latency_max_millis
+            .fetch_max(millis, Ordering::Relaxed);
+    }
+
+    fn record_rejected(&self, elapsed: std::time::Duration) {
+        self.inner
+            .connections_rejected
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner.setup_failures.fetch_add(1, Ordering::Relaxed);
+        self.record_setup_latency(elapsed);
+    }
+
+    fn connection_started(
+        &self,
+        connection: &iroh::endpoint::Connection,
+        setup_elapsed: std::time::Duration,
+    ) -> RuntimeIrohConnectionGuard {
+        self.inner
+            .connections_accepted
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner.setup_successes.fetch_add(1, Ordering::Relaxed);
+        self.record_setup_latency(setup_elapsed);
+        self.inner
+            .active_connections
+            .fetch_add(1, Ordering::Relaxed);
+        self.record_path(connection);
+        RuntimeIrohConnectionGuard {
+            diagnostics: self.clone(),
+        }
+    }
+
+    fn record_result(&self, result: &Result<u64>) {
+        if result.is_ok() {
+            self.inner
+                .connections_completed
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.inner
+                .connections_failed
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn record_path(&self, connection: &iroh::endpoint::Connection) {
+        let paths = connection.paths();
+        let path = paths.iter().find(|path| path.is_selected());
+        let code = match path {
+            Some(path) if path.is_ip() => {
+                self.inner
+                    .direct_connections
+                    .fetch_add(1, Ordering::Relaxed);
+                1
+            }
+            Some(path) if path.is_relay() => {
+                self.inner.relay_connections.fetch_add(1, Ordering::Relaxed);
+                2
+            }
+            Some(_) => {
+                self.inner
+                    .custom_connections
+                    .fetch_add(1, Ordering::Relaxed);
+                3
+            }
+            None => {
+                self.inner
+                    .unknown_connections
+                    .fetch_add(1, Ordering::Relaxed);
+                0
+            }
+        };
+        self.inner.last_path.store(code, Ordering::Relaxed);
+    }
+}
+
+struct RuntimeIrohListenerGuard {
+    diagnostics: RuntimeIrohDiagnostics,
+}
+
+impl Drop for RuntimeIrohListenerGuard {
+    fn drop(&mut self) {
+        self.diagnostics.listener_stopped();
+    }
+}
+
+struct RuntimeIrohConnectionGuard {
+    diagnostics: RuntimeIrohDiagnostics,
+}
+
+impl Drop for RuntimeIrohConnectionGuard {
+    fn drop(&mut self) {
+        self.diagnostics
+            .inner
+            .active_connections
+            .fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// Bound endpoint plus the policy governing listener and connection limits.
 #[derive(Debug)]
 pub(crate) struct RuntimeIrohEndpoint {
     endpoint: Endpoint,
     policy: RuntimeIrohTransportPolicy,
+    diagnostics: RuntimeIrohDiagnostics,
 }
 
 impl RuntimeIrohEndpoint {
@@ -73,7 +279,11 @@ pub(crate) async fn bind_runtime_iroh_endpoint(
         "Iroh endpoint",
     )
     .await?;
-    Ok(Some(RuntimeIrohEndpoint { endpoint, policy }))
+    Ok(Some(RuntimeIrohEndpoint {
+        endpoint,
+        policy,
+        diagnostics: RuntimeIrohDiagnostics::default(),
+    }))
 }
 
 /// Binds a client-only endpoint with no remotely initiated streams.
@@ -146,6 +356,8 @@ impl super::RuntimeSessionService {
         let structured = super::runtime_effective_config_value(self.integration.config_layers())?;
         let policy = super::runtime_iroh_transport_policy_from_config(&structured)?;
         if !policy.enabled {
+            self.integration.set_remote_endpoint_addr(None);
+            self.integration.set_remote_iroh_diagnostics(None);
             return Ok(None);
         }
         let session_id = self.session.id.to_string();
@@ -157,6 +369,11 @@ impl super::RuntimeSessionService {
         let endpoint = bind_runtime_iroh_endpoint(policy, secret_key).await?;
         self.integration
             .set_remote_endpoint_addr(endpoint.as_ref().map(|endpoint| endpoint.endpoint.addr()));
+        self.integration.set_remote_iroh_diagnostics(
+            endpoint
+                .as_ref()
+                .map(|endpoint| endpoint.diagnostics.clone()),
+        );
         Ok(endpoint)
     }
 }
@@ -184,6 +401,10 @@ async fn serve_runtime_iroh_control_listener(
     control_config: AsyncRuntimeControlConnectionConfig,
     snapshots: Option<SnapshotRepository>,
 ) -> Result<u64> {
+    endpoint.diagnostics.listener_started();
+    let _listener_guard = RuntimeIrohListenerGuard {
+        diagnostics: endpoint.diagnostics.clone(),
+    };
     let mut accepted = 0u64;
     let mut tasks = JoinSet::new();
     let mut lifecycle = handle.lifecycle_state_watcher();
@@ -197,28 +418,49 @@ async fn serve_runtime_iroh_control_listener(
                 let Some(incoming) = incoming else {
                     break;
                 };
+                let setup_started = Instant::now();
                 let Ok(mut accepting) = incoming.accept() else {
+                    endpoint
+                        .diagnostics
+                        .record_rejected(setup_started.elapsed());
                     continue;
                 };
                 let alpn = match tokio::time::timeout(endpoint.policy.setup_timeout, accepting.alpn()).await {
                     Ok(Ok(alpn)) => alpn,
-                    _ => continue,
+                    _ => {
+                        endpoint
+                            .diagnostics
+                            .record_rejected(setup_started.elapsed());
+                        continue;
+                    }
                 };
                 if alpn != MEZZANINE_IROH_ALPN {
+                    endpoint
+                        .diagnostics
+                        .record_rejected(setup_started.elapsed());
                     continue;
                 }
                 let connection = match tokio::time::timeout(endpoint.policy.setup_timeout, accepting).await {
                     Ok(Ok(connection)) => connection,
-                    _ => continue,
+                    _ => {
+                        endpoint
+                            .diagnostics
+                            .record_rejected(setup_started.elapsed());
+                        continue;
+                    }
                 };
                 connection.set_max_concurrent_bi_streams(VarInt::from_u32(1));
                 connection.set_max_concurrent_uni_streams(VarInt::from_u32(0));
                 let connection_handle = handle.clone();
                 let connection_snapshots = snapshots.clone();
+                let diagnostics = endpoint.diagnostics.clone();
+                let connection_guard =
+                    diagnostics.connection_started(&connection, setup_started.elapsed());
                 let setup_timeout = endpoint.policy.setup_timeout;
                 let idle_timeout = endpoint.policy.idle_timeout;
                 tasks.spawn(async move {
-                    serve_runtime_iroh_control_connection(
+                    let _connection_guard = connection_guard;
+                    let result = serve_runtime_iroh_control_connection(
                         connection,
                         &connection_handle,
                         control_config,
@@ -226,7 +468,9 @@ async fn serve_runtime_iroh_control_listener(
                         setup_timeout,
                         idle_timeout,
                     )
-                    .await
+                    .await;
+                    diagnostics.record_result(&result);
+                    result
                 });
                 accepted = accepted.saturating_add(1);
             }
@@ -253,6 +497,11 @@ async fn serve_runtime_iroh_control_listener(
     .await
     .is_err()
     {
+        endpoint
+            .diagnostics
+            .inner
+            .shutdown_aborts
+            .fetch_add(tasks.len() as u64, Ordering::Relaxed);
         tasks.abort_all();
         while let Some(joined) = tasks.join_next().await {
             if let Err(error) = joined
@@ -857,6 +1106,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let server_addr = server.endpoint().addr();
+        let diagnostics = server.diagnostics.clone();
         let listener_handle = handle.clone();
         let listener = tokio::spawn(async move {
             let result = serve_runtime_iroh_control_listener(
@@ -892,6 +1142,14 @@ mod tests {
         let _ = handle.shutdown().await.unwrap();
         drop(handle);
         assert_eq!(listener.await.unwrap().unwrap(), 0);
+        let snapshot = diagnostics.snapshot();
+        assert!(!snapshot.listener_active);
+        assert_eq!(snapshot.active_connections, 0);
+        assert_eq!(snapshot.connections_accepted, 0);
+        assert!(snapshot.connections_rejected >= 1, "{snapshot:?}");
+        assert_eq!(snapshot.setup_failures, snapshot.connections_rejected);
+        assert_eq!(snapshot.setup_successes, 0);
+        assert_eq!(snapshot.shutdown_aborts, 0);
         client.close().await;
         actor_task.abort();
         let _ = actor_task.await;
