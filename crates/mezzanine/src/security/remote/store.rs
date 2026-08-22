@@ -8,7 +8,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
@@ -44,10 +44,6 @@ const REDEMPTION_ROLLBACK_GRACE_SECONDS: u64 = 60;
 /// Persistent Iroh endpoint key with an exclusive live-use lock.
 #[derive(Debug)]
 pub(crate) struct RemoteEndpointIdentity {
-    #[allow(
-        dead_code,
-        reason = "the pinned key is consumed by the follow-up Iroh listener issue"
-    )]
     secret_key: SecretKey,
     endpoint_id: String,
     _lock: fs::File,
@@ -105,10 +101,6 @@ impl RemoteEndpointIdentity {
     }
 
     /// Returns the secret key for constructing the Iroh endpoint.
-    #[allow(
-        dead_code,
-        reason = "the accessor is consumed by the follow-up Iroh listener issue"
-    )]
     pub(crate) fn secret_key(&self) -> &SecretKey {
         &self.secret_key
     }
@@ -705,12 +697,17 @@ fn ensure_remote_directory_chain(directory: &Path) -> Result<()> {
     ensure_private_directory(directory)
 }
 
-fn ensure_private_directory(path: &Path) -> Result<()> {
+pub(super) fn ensure_private_directory(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => validate_private_directory_metadata(path, &metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir_all(path)?;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true).mode(0o700);
+            match builder.create(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
             let metadata = fs::symlink_metadata(path)?;
             validate_private_directory_metadata(path, &metadata)
         }
@@ -743,7 +740,7 @@ fn validate_private_file_metadata(path: &Path, metadata: &fs::Metadata) -> Resul
     validate_owner_and_mode(path, metadata, false)
 }
 
-fn open_private_file_read(path: &Path) -> Result<fs::File> {
+pub(super) fn open_private_file_read(path: &Path) -> Result<fs::File> {
     let descriptor = open(
         path,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -772,7 +769,7 @@ fn validate_owner_and_mode(path: &Path, metadata: &fs::Metadata, directory: bool
     Ok(())
 }
 
-fn open_private_lock(path: &Path) -> Result<fs::File> {
+pub(super) fn open_private_lock(path: &Path) -> Result<fs::File> {
     let descriptor = open(
         path,
         OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -784,7 +781,7 @@ fn open_private_lock(path: &Path) -> Result<fs::File> {
     Ok(file)
 }
 
-fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(super) fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| MezError::invalid_args("remote security path has no parent"))?;

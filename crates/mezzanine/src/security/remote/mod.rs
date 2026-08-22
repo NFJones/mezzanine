@@ -6,9 +6,14 @@
 //! non-revoked trust record with an explicit role ceiling. Endpoint key and
 //! trust persistence remain usable before the network listener is introduced.
 
+mod client;
 mod store;
 mod types;
 
+pub(crate) use client::{
+    RemoteClientIdentity, RemoteClientProfile, RemoteClientProfileStore,
+    read_remote_invitation_file,
+};
 pub(crate) use store::{RemoteEndpointIdentity, RemotePairingPreparation, RemoteTrustStore};
 pub(crate) use types::{
     RemotePairingRedemption, RemotePrincipal, RemoteRoleCeiling, RemoteTrustRecord,

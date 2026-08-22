@@ -38,11 +38,13 @@ pub use attached::{
     AsyncAttachedTerminalStepRequest, plan_and_apply_async_attached_terminal_client_step,
     plan_async_attached_terminal_client_step,
 };
-pub use control::serve_async_runtime_control_listener_with_snapshots;
 #[cfg(test)]
 pub use control::{
     serve_async_runtime_control_connection, serve_async_runtime_control_connection_loop,
     serve_async_runtime_control_listener,
+};
+pub use control::{
+    serve_async_runtime_control_listener_with_snapshots,
     serve_authenticated_async_runtime_control_connection_loop_with_snapshots,
 };
 pub use message::serve_async_runtime_message_listener_concurrent;

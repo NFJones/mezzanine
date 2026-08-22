@@ -17,13 +17,30 @@ path. TCP clients must authenticate with an unguessable bearer token or a
 stronger configured mechanism before receiving session data or mutating state.
 
 The opt-in Iroh adapter uses ALPN `mezzanine/transport/1` and carries the same
-bounded `mezctl/1` frames on one long-lived bidirectional control stream. An
-Iroh endpoint ID proves possession of a transport key only; it grants no
+bounded `mezctl/1` frames on exactly one long-lived, client-opened bidirectional
+control stream. The server accepts no unidirectional streams and lowers each
+accepted connection to one concurrent bidirectional stream. Setup and idle
+operation are bounded; wrong ALPNs, excess streams, malformed frames, stalled
+setup, and one failed connection are isolated from later clients and from the
+Unix listener.
+
+An Iroh endpoint ID proves possession of a transport key only; it grants no
 Mezzanine authority by itself. Before any other method, the peer must call
 `control/initialize` for role `primary` or `observer` with either a single-use
 `extension:iroh_invitation` token or an endpoint-bound
 `extension:iroh_device` credential. Agent and automation initialization are
-rejected on this remote pairing path.
+rejected on this remote pairing path. Invitation initialization may return a
+one-time `device_credential`; the client persists it only after successful
+initialization and uses `extension:iroh_device` on reconnect.
+
+For graceful one-shot control, the client finishes its send half after the
+final request, reads exactly the final framed response, drains response EOF,
+and waits boundedly for acknowledgement before closing. The server finishes its
+response half and likewise waits boundedly before connection teardown. Abrupt
+EOF, reset, decode, dispatch, write, and flush failures run the same idempotent
+connection-disconnect cleanup, so a detach-on-disconnect primary is removed at
+most once. Neither side silently replays an application request after an
+ambiguous failure.
 
 Each stream frame is UTF-8 JSON preceded by this ASCII header block. The
 decimal `Content-Length` is the JSON body's octet length.

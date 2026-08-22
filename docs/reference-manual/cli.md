@@ -98,6 +98,26 @@ processes that existed when the snapshot was taken.
 | `mez remote` | Use authenticated local Unix control for `status`, `invite --role observer|primary --expires SECONDS`, `clients`, `rename CLIENT_ID LABEL`, and `revoke CLIENT_ID [--reason TEXT]`. Paired Iroh clients cannot use these administration methods. |
 | `mez completion <shell>` | Generate a completion definition for `bash`, `elvish`, `fish`, `powershell`, or `zsh`. |
 
+Direct control commands keep Unix as their default target. `--iroh-invite-file
+PATH` explicitly performs first-use pairing from an owner-only, bounded JSON
+invitation file, while `--iroh-profile NAME` explicitly uses a protected paired
+profile. These selectors conflict with `-S` and `-L`, never fall back to Unix,
+and currently apply only to `mez kill --force` and `mez detach`. Supplying a
+session argument to `kill` is invalid with an explicit Iroh target because the
+profile or invitation already selects the remote session. Interactive remote
+attach is a separate feature and is not implied by these one-shot controls.
+
+Create invitation files without exposing the token through shell arguments or
+world-readable output, for example:
+
+```console
+umask 077
+mez --json remote invite --role primary --expires 600 > mez-invite.json
+mez --iroh-invite-file mez-invite.json kill --force
+# Later, after successful pairing persisted the profile named by the invitation:
+mez --iroh-profile SESSION_PROFILE kill --force
+```
+
 `mez version` prints version information. `mez help` and `mez <command> --help`
 show the generated command contract. Human-readable output is the default;
 scripts should request `--json` and handle errors explicitly.

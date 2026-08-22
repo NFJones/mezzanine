@@ -2905,6 +2905,17 @@ daemon restart. The v66 to v67 primary-config migration MUST materialize the
 conservative disabled transport defaults in all supported formats without
 enabling network activity.
 
+When `transport.iroh.enabled` is true, daemon startup MUST bind the protected
+per-session endpoint and supervise it alongside the unchanged Unix control
+listener. Explicit enablement is startup-critical: endpoint construction failure
+MUST fail startup rather than silently continue as Unix-only. The Iroh adapter
+MUST negotiate ALPN `mezzanine/transport/1`, accept exactly one client-opened
+bidirectional control stream per connection, accept no unidirectional streams,
+and carry unchanged bounded `mezctl/1` frames. Connection setup, stream setup,
+idle operation, final-response delivery, and endpoint teardown MUST remain
+bounded. Malformed clients, wrong ALPNs, excess streams, stalled setup, and one
+connection task failure MUST NOT stop either the Iroh listener or Unix recovery.
+
 An authenticated Iroh endpoint ID MUST be treated only as transport and device
 evidence; it MUST NOT directly grant a Mezzanine role, session visibility, or
 method authority. An Iroh control connection MUST begin with
@@ -2923,7 +2934,24 @@ output, and audit records MUST NOT disclose it. Durable trust MUST bind the
 server endpoint identity, authenticated client endpoint identity, stable trust
 record ID, role ceiling, revocation state, and a verifier for the device
 credential. Reconnects MUST fail closed for an unknown, revoked, mismatched, or
-role-exceeding record.
+role-exceeding record. The client MUST persist its endpoint key, server profile,
+and device credential under owner-only protected paths. A live client endpoint
+identity MUST retain an exclusive lock, and profile database reads and writes
+MUST be serialized under a protected lock. The client MUST publish a profile
+only after successful invitation initialization. Explicit
+`--iroh-invite-file` and `--iroh-profile` selections MUST NOT fall back to a Unix
+socket after any remote failure. Invitation files MUST be bounded, owner-only,
+and validated for pinned server-identity/address consistency before network use.
+The initial direct CLI surface MAY restrict Iroh selection to `kill` and
+`detach`; other command paths MUST reject the remote selector before local Unix
+access rather than silently changing transports.
+
+Abrupt EOF, reset, decode, dispatch, write, and flush failures MUST consume a
+connection-owned primary disconnect at most once. Graceful completion MUST
+finish the response stream and wait boundedly for peer acknowledgement before
+closing the QUIC connection. Reconnect MUST create a new connection and one new
+control stream; application requests MUST NOT be replayed automatically after
+an ambiguous transport failure.
 
 `remote/status`, `remote/invite`, `remote/client/list`,
 `remote/client/rename`, and `remote/client/revoke` MUST require an initialized

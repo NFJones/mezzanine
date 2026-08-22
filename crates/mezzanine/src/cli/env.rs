@@ -89,6 +89,24 @@ pub(super) enum CliCommand {
     Version,
 }
 
+/// Explicit transport target for direct control requests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ControlTargetSelection {
+    /// Uses the selected Unix-domain control socket.
+    Unix,
+    /// Uses one protected, previously paired Iroh profile.
+    IrohProfile(String),
+    /// Uses one protected first-pairing invitation file.
+    IrohInvitation(PathBuf),
+}
+
+impl ControlTargetSelection {
+    /// Returns whether this target preserves the local Unix control path.
+    pub(super) fn is_unix(&self) -> bool {
+        matches!(self, Self::Unix)
+    }
+}
+
 /// Carries Cli Invocation state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -105,6 +123,8 @@ pub(super) struct CliInvocation {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) socket_selection: SocketSelection,
+    /// Explicit direct-control transport target. Unix remains the default.
+    pub(super) control_target: ControlTargetSelection,
     /// Stores the output format value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -151,6 +171,24 @@ pub(super) struct CliArgv {
         help_heading = "Global Options"
     )]
     pub(super) socket_name: Option<String>,
+    /// Selects a protected, previously paired Iroh profile.
+    #[arg(
+        long = "iroh-profile",
+        value_name = "NAME",
+        global = true,
+        conflicts_with_all = ["socket", "socket_name", "iroh_invite_file"],
+        help_heading = "Global Options"
+    )]
+    pub(super) iroh_profile: Option<String>,
+    /// Selects a protected first-pairing Iroh invitation file.
+    #[arg(
+        long = "iroh-invite-file",
+        value_name = "PATH",
+        global = true,
+        conflicts_with_all = ["socket", "socket_name", "iroh_profile"],
+        help_heading = "Global Options"
+    )]
+    pub(super) iroh_invite_file: Option<PathBuf>,
     /// Emits machine-readable JSON for structured command output.
     #[arg(long, global = true, help_heading = "Global Options")]
     pub(super) json: bool,
@@ -249,6 +287,16 @@ impl CliInvocation {
             )?);
         }
 
+        let control_target = match (parsed.iroh_profile, parsed.iroh_invite_file) {
+            (Some(profile), None) => ControlTargetSelection::IrohProfile(profile),
+            (None, Some(path)) => ControlTargetSelection::IrohInvitation(path),
+            (None, None) => ControlTargetSelection::Unix,
+            (Some(_), Some(_)) => {
+                return Err(MezError::invalid_args(
+                    "only one Iroh control target may be provided",
+                ));
+            }
+        };
         let socket_selection = match socket_selection {
             Some(selection) => selection,
             None => match socket_selection_from_mez(mez)? {
@@ -260,6 +308,7 @@ impl CliInvocation {
         Ok(CliInvocationParse::Invocation(Box::new(Self {
             command: parsed.command,
             socket_selection,
+            control_target,
             output_format: CliOutputFormat::from_json_flag(parsed.json),
         })))
     }

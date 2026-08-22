@@ -954,6 +954,7 @@ pub(super) async fn run_foreground_control_daemon(
     service
         .initialize_config_layers_async(config.layers)
         .await?;
+    let iroh_endpoint = service.bind_configured_iroh_endpoint().await?;
     if let Some(auth_store) = service.auth_store().cloned() {
         spawn_openai_auth_refresh_if_needed(
             auth_store,
@@ -1010,9 +1011,19 @@ pub(super) async fn run_foreground_control_daemon(
             event: event_listener,
         };
         let attached_primary_client_id = options.attached_primary_client_id.clone();
+        let iroh_control_config = config.control;
+        let iroh_snapshots = config.snapshots.clone();
         let daemon = async move {
             let mut services =
                 build_async_runtime_daemon_services(handle.clone(), listeners, config)?;
+            if let Some(iroh_endpoint) = iroh_endpoint {
+                services.push(crate::runtime::build_runtime_iroh_control_service(
+                    iroh_endpoint,
+                    handle.clone(),
+                    iroh_control_config,
+                    iroh_snapshots,
+                ));
+            }
             services.push(build_startup_provider_info_refresh_service(handle.clone()));
             if let Some(primary_client_id) = attached_primary_client_id {
                 let resize_client_id = primary_client_id.clone();

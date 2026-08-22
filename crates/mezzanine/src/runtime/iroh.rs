@@ -1,0 +1,1242 @@
+//! Iroh endpoint construction and lifecycle for optional remote control.
+
+use iroh::address_lookup::{DnsAddressLookup, PkarrPublisher};
+use iroh::endpoint::{IdleTimeout, PortmapperConfig, QuicTransportConfig, VarInt, presets};
+use iroh::tls::CaTlsConfig;
+use iroh::{Endpoint, RelayMap, RelayMode, SecretKey};
+use tokio::task::JoinSet;
+
+use crate::control::{AuthenticatedPeer, ControlConnectionState};
+use crate::error::{MezError, Result};
+use crate::host::async_runtime::{
+    AsyncRuntimeControlConnectionConfig, AsyncRuntimeService, AsyncRuntimeServiceExit,
+    AsyncRuntimeSessionHandle,
+    serve_authenticated_async_runtime_control_connection_loop_with_snapshots,
+};
+use crate::storage::snapshot::SnapshotRepository;
+
+use super::config::{
+    RuntimeIrohAddressLookupPolicy, RuntimeIrohRelayPolicy, RuntimeIrohTransportPolicy,
+};
+
+/// ALPN identity for the first Mezzanine Iroh transport contract.
+pub(crate) const MEZZANINE_IROH_ALPN: &[u8] = b"mezzanine/transport/1";
+
+/// Bound endpoint plus the policy governing listener and connection limits.
+#[derive(Debug)]
+pub(crate) struct RuntimeIrohEndpoint {
+    endpoint: Endpoint,
+    policy: RuntimeIrohTransportPolicy,
+}
+
+impl RuntimeIrohEndpoint {
+    /// Returns the bound Iroh endpoint.
+    #[cfg(test)]
+    pub(crate) fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+
+    /// Returns the policy applied to this endpoint.
+    #[cfg(test)]
+    pub(crate) fn policy(&self) -> &RuntimeIrohTransportPolicy {
+        &self.policy
+    }
+
+    /// Closes the endpoint and waits for its I/O tasks to finish.
+    pub(crate) async fn close(&self) {
+        self.endpoint.close().await;
+    }
+}
+
+/// Binds a protected endpoint only when remote transport is explicitly enabled.
+pub(crate) async fn bind_runtime_iroh_endpoint(
+    policy: RuntimeIrohTransportPolicy,
+    secret_key: SecretKey,
+) -> Result<Option<RuntimeIrohEndpoint>> {
+    if !policy.enabled {
+        return Ok(None);
+    }
+
+    let stream_limit = u32::try_from(policy.max_streams_per_connection)
+        .map_err(|_| MezError::config("transport.iroh.max_streams_per_connection is too large"))?;
+    let endpoint = bind_policy_iroh_endpoint(
+        &policy,
+        secret_key,
+        stream_limit,
+        vec![MEZZANINE_IROH_ALPN.to_vec()],
+        "Iroh endpoint",
+    )
+    .await?;
+    Ok(Some(RuntimeIrohEndpoint { endpoint, policy }))
+}
+
+/// Binds a client-only endpoint with no remotely initiated streams.
+pub(crate) async fn bind_runtime_iroh_client_endpoint(
+    policy: &RuntimeIrohTransportPolicy,
+    secret_key: SecretKey,
+) -> Result<Endpoint> {
+    bind_policy_iroh_endpoint(policy, secret_key, 0, Vec::new(), "Iroh client endpoint").await
+}
+
+async fn bind_policy_iroh_endpoint(
+    policy: &RuntimeIrohTransportPolicy,
+    secret_key: SecretKey,
+    incoming_bidi_streams: u32,
+    alpns: Vec<Vec<u8>>,
+    diagnostic_name: &str,
+) -> Result<Endpoint> {
+    let idle_timeout = IdleTimeout::try_from(policy.idle_timeout)
+        .map_err(|_| MezError::config("transport.iroh.idle_timeout_ms is too large"))?;
+    let transport = QuicTransportConfig::builder()
+        .max_concurrent_bidi_streams(VarInt::from_u32(incoming_bidi_streams))
+        .max_concurrent_uni_streams(VarInt::from_u32(0))
+        .max_idle_timeout(Some(idle_timeout))
+        .build();
+
+    let mut builder = Endpoint::builder(presets::Minimal)
+        .secret_key(secret_key)
+        .alpns(alpns)
+        .transport_config(transport)
+        .relay_mode(relay_mode(&policy.relay)?);
+
+    if !policy.port_mapping {
+        builder = builder.portmapper_config(PortmapperConfig::Disabled);
+    }
+    if !policy.direct_connections {
+        builder = builder.clear_ip_transports();
+    }
+    if policy.proxy_from_env {
+        builder = builder.proxy_from_env();
+    }
+    if policy.system_ca_store {
+        builder = builder.ca_tls_config(CaTlsConfig::system());
+    }
+    builder = match &policy.address_lookup {
+        RuntimeIrohAddressLookupPolicy::Disabled | RuntimeIrohAddressLookupPolicy::Local => {
+            builder.clear_address_lookup()
+        }
+        RuntimeIrohAddressLookupPolicy::N0Dns => builder
+            .address_lookup(PkarrPublisher::n0_dns())
+            .address_lookup(DnsAddressLookup::n0_dns()),
+        RuntimeIrohAddressLookupPolicy::CustomDns { domain } => builder
+            .clear_address_lookup()
+            .address_lookup(DnsAddressLookup::builder(domain.clone())),
+    };
+
+    tokio::time::timeout(policy.setup_timeout, builder.bind())
+        .await
+        .map_err(|_| MezError::invalid_state(format!("{diagnostic_name} setup timed out")))?
+        .map_err(|error| {
+            MezError::invalid_state(format!("failed to bind {diagnostic_name}: {error}"))
+        })
+}
+
+impl super::RuntimeSessionService {
+    /// Binds the configured endpoint while retaining the protected identity lock.
+    pub(crate) async fn bind_configured_iroh_endpoint(
+        &mut self,
+    ) -> Result<Option<RuntimeIrohEndpoint>> {
+        let structured = super::runtime_effective_config_value(self.integration.config_layers())?;
+        let policy = super::runtime_iroh_transport_policy_from_config(&structured)?;
+        if !policy.enabled {
+            return Ok(None);
+        }
+        let session_id = self.session.id.to_string();
+        let secret_key = self
+            .integration
+            .ensure_remote_endpoint_identity(&session_id)?
+            .secret_key()
+            .clone();
+        let endpoint = bind_runtime_iroh_endpoint(policy, secret_key).await?;
+        self.integration
+            .set_remote_endpoint_addr(endpoint.as_ref().map(|endpoint| endpoint.endpoint.addr()));
+        Ok(endpoint)
+    }
+}
+
+/// Builds one supervised Iroh control-listener service.
+pub(crate) fn build_runtime_iroh_control_service(
+    endpoint: RuntimeIrohEndpoint,
+    handle: AsyncRuntimeSessionHandle,
+    control_config: AsyncRuntimeControlConnectionConfig,
+    snapshots: Option<SnapshotRepository>,
+) -> AsyncRuntimeService {
+    AsyncRuntimeService::new("iroh-control", async move {
+        let served =
+            serve_runtime_iroh_control_listener(&endpoint, &handle, control_config, snapshots)
+                .await;
+        endpoint.close().await;
+        served.map(AsyncRuntimeServiceExit::completed)
+    })
+}
+
+/// Accepts bounded Iroh connections and delegates one bidirectional control stream.
+async fn serve_runtime_iroh_control_listener(
+    endpoint: &RuntimeIrohEndpoint,
+    handle: &AsyncRuntimeSessionHandle,
+    control_config: AsyncRuntimeControlConnectionConfig,
+    snapshots: Option<SnapshotRepository>,
+) -> Result<u64> {
+    let mut accepted = 0u64;
+    let mut tasks = JoinSet::new();
+    let mut lifecycle = handle.lifecycle_state_watcher();
+    loop {
+        let state = *lifecycle.borrow();
+        if terminal_daemon_state(state) {
+            break;
+        }
+        tokio::select! {
+            incoming = endpoint.endpoint.accept(), if tasks.len() < endpoint.policy.max_connections => {
+                let Some(incoming) = incoming else {
+                    break;
+                };
+                let Ok(mut accepting) = incoming.accept() else {
+                    continue;
+                };
+                let alpn = match tokio::time::timeout(endpoint.policy.setup_timeout, accepting.alpn()).await {
+                    Ok(Ok(alpn)) => alpn,
+                    _ => continue,
+                };
+                if alpn != MEZZANINE_IROH_ALPN {
+                    continue;
+                }
+                let connection = match tokio::time::timeout(endpoint.policy.setup_timeout, accepting).await {
+                    Ok(Ok(connection)) => connection,
+                    _ => continue,
+                };
+                connection.set_max_concurrent_bi_streams(VarInt::from_u32(1));
+                connection.set_max_concurrent_uni_streams(VarInt::from_u32(0));
+                let connection_handle = handle.clone();
+                let connection_snapshots = snapshots.clone();
+                let setup_timeout = endpoint.policy.setup_timeout;
+                tasks.spawn(async move {
+                    serve_runtime_iroh_control_connection(
+                        connection,
+                        &connection_handle,
+                        control_config,
+                        connection_snapshots.as_ref(),
+                        setup_timeout,
+                    )
+                    .await
+                });
+                accepted = accepted.saturating_add(1);
+            }
+            changed = lifecycle.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+            }
+            joined = tasks.join_next(), if !tasks.is_empty() => {
+                let Some(joined) = joined else {
+                    continue;
+                };
+                let _connection_result = joined.map_err(|error| {
+                    MezError::invalid_state(format!("Iroh control connection task failed: {error}"))
+                })?;
+            }
+        }
+    }
+
+    if tokio::time::timeout(
+        endpoint.policy.setup_timeout,
+        drain_iroh_control_tasks(&mut tasks),
+    )
+    .await
+    .is_err()
+    {
+        tasks.abort_all();
+        while let Some(joined) = tasks.join_next().await {
+            if let Err(error) = joined
+                && !error.is_cancelled()
+            {
+                return Err(MezError::invalid_state(format!(
+                    "Iroh control connection task failed: {error}"
+                )));
+            }
+        }
+    }
+    Ok(accepted)
+}
+
+async fn serve_runtime_iroh_control_connection(
+    connection: iroh::endpoint::Connection,
+    handle: &AsyncRuntimeSessionHandle,
+    control_config: AsyncRuntimeControlConnectionConfig,
+    snapshots: Option<&SnapshotRepository>,
+    setup_timeout: std::time::Duration,
+) -> Result<u64> {
+    let endpoint_id = connection.remote_id().to_string();
+    let (send, recv) = tokio::time::timeout(setup_timeout, connection.accept_bi())
+        .await
+        .map_err(|_| MezError::invalid_state("Iroh control stream setup timed out"))?
+        .map_err(|error| {
+            MezError::invalid_state(format!("failed to accept Iroh control stream: {error}"))
+        })?;
+    let mut stream = tokio::io::join(recv, send);
+    let mut connection_state = ControlConnectionState::new(false, false);
+    let result = serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
+        &mut stream,
+        AuthenticatedPeer::iroh_endpoint(endpoint_id),
+        handle,
+        &mut connection_state,
+        control_config,
+        snapshots,
+        |_, state| terminal_daemon_state(state),
+    )
+    .await;
+    let (_recv, mut send) = stream.into_inner();
+    let _ = send.finish();
+    let _ = tokio::time::timeout(setup_timeout, send.stopped()).await;
+    connection.close(
+        VarInt::from_u32(u32::from(result.is_err())),
+        if result.is_ok() {
+            b"control complete"
+        } else {
+            b"control failed"
+        },
+    );
+    result
+}
+
+async fn drain_iroh_control_tasks(tasks: &mut JoinSet<Result<u64>>) -> Result<()> {
+    while let Some(joined) = tasks.join_next().await {
+        let _connection_result = joined.map_err(|error| {
+            MezError::invalid_state(format!("Iroh control connection task failed: {error}"))
+        })?;
+    }
+    Ok(())
+}
+
+fn terminal_daemon_state(state: super::RuntimeLifecycleState) -> bool {
+    matches!(
+        state,
+        super::RuntimeLifecycleState::Stopping
+            | super::RuntimeLifecycleState::Killed
+            | super::RuntimeLifecycleState::Failed
+    )
+}
+
+fn relay_mode(policy: &RuntimeIrohRelayPolicy) -> Result<RelayMode> {
+    match policy {
+        RuntimeIrohRelayPolicy::Disabled => Ok(RelayMode::Disabled),
+        RuntimeIrohRelayPolicy::Public => Ok(RelayMode::Default),
+        RuntimeIrohRelayPolicy::Custom { urls } => {
+            RelayMap::try_from_iter(urls.iter().map(String::as_str))
+                .map(RelayMode::Custom)
+                .map_err(|error| {
+                    MezError::config(format!("invalid transport.iroh.relay_urls: {error}"))
+                })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_endpoint_construction_is_disabled_by_default() {
+        let endpoint = bind_runtime_iroh_endpoint(
+            RuntimeIrohTransportPolicy::default(),
+            SecretKey::generate(),
+        )
+        .await
+        .unwrap();
+        assert!(endpoint.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_endpoint_construction_uses_protected_identity_and_limits() {
+        let secret_key = SecretKey::generate();
+        let endpoint_id = secret_key.public();
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            setup_timeout: std::time::Duration::from_secs(10),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let endpoint = bind_runtime_iroh_endpoint(policy.clone(), secret_key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(endpoint.endpoint().id(), endpoint_id);
+        assert_eq!(endpoint.policy(), &policy);
+        endpoint.close().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn paired_iroh_control_round_trips_over_direct_listener() {
+        use secrecy::ExposeSecret;
+
+        use crate::control::{decode_control_frame, encode_control_body};
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::security::remote::{RemoteRoleCeiling, RemoteTrustStore};
+        use crate::test_support::runtime::RuntimeServiceFixture;
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-iroh-direct-listener-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut service = RuntimeServiceFixture::new().build();
+        service.set_config_root(root.clone());
+        let session_id = service.session().id.to_string();
+        let (server_secret, server_endpoint_id) = {
+            let identity = service
+                .integration
+                .ensure_remote_endpoint_identity(&session_id)
+                .unwrap();
+            (
+                identity.secret_key().clone(),
+                identity.endpoint_id().to_string(),
+            )
+        };
+        let store = RemoteTrustStore::under_config_root(&root, &session_id).unwrap();
+        let invitation = store
+            .create_invitation(
+                &server_endpoint_id,
+                RemoteRoleCeiling::Primary,
+                600,
+                crate::runtime::current_unix_seconds(),
+            )
+            .unwrap();
+
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            max_connections: 1,
+            max_streams_per_connection: 1,
+            setup_timeout: std::time::Duration::from_secs(10),
+            idle_timeout: std::time::Duration::from_secs(30),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let server_endpoint = bind_runtime_iroh_endpoint(policy, server_secret)
+            .await
+            .unwrap()
+            .unwrap();
+        let server_addr = server_endpoint.endpoint().addr();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+
+        let client_endpoint = Endpoint::builder(presets::Minimal)
+            .secret_key(SecretKey::generate())
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "init",
+            "method": "control/initialize",
+            "params": {
+                "requested_role": "primary",
+                "requested_version": 1,
+                "client_name": "remote-primary",
+                "client": {
+                    "name": "remote-primary",
+                    "interactive": true,
+                    "terminal": {
+                        "columns": 80,
+                        "rows": 24,
+                        "term": "xterm-256color"
+                    }
+                },
+                "authentication": {
+                    "mechanism": "extension:iroh_invitation",
+                    "token": invitation.token.expose_secret()
+                }
+            }
+        })
+        .to_string();
+        let kill = r#"{"jsonrpc":"2.0","id":"kill","method":"session/kill","params":{"force":true,"idempotency_key":"remote-kill"}}"#;
+        let mut input = encode_control_body(&initialize);
+        input.extend_from_slice(&encode_control_body(kill));
+
+        let listener_handle = handle.clone();
+        drop(handle);
+        let listener = async move {
+            let served = serve_runtime_iroh_control_listener(
+                &server_endpoint,
+                &listener_handle,
+                AsyncRuntimeControlConnectionConfig::new(1024 * 1024, 0).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(served, 1);
+            server_endpoint.close().await;
+        };
+        let client = async {
+            let connection = client_endpoint
+                .connect(server_addr, MEZZANINE_IROH_ALPN)
+                .await
+                .unwrap();
+            let (mut send, mut recv) = connection.open_bi().await.unwrap();
+            send.write_all(&input).await.unwrap();
+            send.finish().unwrap();
+            let output = recv.read_to_end(2 * 1024 * 1024).await.unwrap();
+            let (initialize_body, consumed) = decode_control_frame(&output, 1024 * 1024).unwrap();
+            let (kill_body, _) = decode_control_frame(&output[consumed..], 1024 * 1024).unwrap();
+            assert!(initialize_body.contains(r#""granted_role":"primary""#));
+            assert!(initialize_body.contains(r#""device_credential""#));
+            assert!(kill_body.contains(r#""killed":true"#), "{kill_body}");
+            connection.close(VarInt::from_u32(0), b"test complete");
+            client_endpoint.close().await;
+        };
+
+        let actor_task = tokio::spawn(actor.run());
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            let ((), ()) = tokio::join!(listener, client);
+        })
+        .await
+        .unwrap();
+        actor_task.abort();
+        let _ = actor_task.await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_client_connector_pairs_persists_and_reconnects_without_unix_fallback() {
+        use crate::cli::{IrohControlTarget, exchange_iroh_control_request};
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::security::remote::{
+            RemoteClientIdentity, RemoteClientProfileStore, RemoteRoleCeiling, RemoteTrustStore,
+        };
+        use crate::test_support::runtime::RuntimeServiceFixture;
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-iroh-client-connector-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let server_root = root.join("server");
+        let client_root = root.join("client");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&server_root).unwrap();
+        std::fs::create_dir_all(&client_root).unwrap();
+
+        let mut service = RuntimeServiceFixture::new().build();
+        service.set_config_root(server_root.clone());
+        let session_id = service.session().id.to_string();
+        let (server_secret, server_endpoint_id) = {
+            let identity = service
+                .integration
+                .ensure_remote_endpoint_identity(&session_id)
+                .unwrap();
+            (
+                identity.secret_key().clone(),
+                identity.endpoint_id().to_string(),
+            )
+        };
+        let trust = RemoteTrustStore::under_config_root(&server_root, &session_id).unwrap();
+        let invitation = trust
+            .create_invitation(
+                &server_endpoint_id,
+                RemoteRoleCeiling::Primary,
+                600,
+                crate::runtime::current_unix_seconds(),
+            )
+            .unwrap();
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            max_connections: 2,
+            max_streams_per_connection: 1,
+            setup_timeout: std::time::Duration::from_secs(10),
+            idle_timeout: std::time::Duration::from_secs(30),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let server_endpoint = bind_runtime_iroh_endpoint(policy.clone(), server_secret)
+            .await
+            .unwrap()
+            .unwrap();
+        let server_addr = server_endpoint.endpoint().addr();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let listener_handle = handle.clone();
+        drop(handle);
+
+        let listener = async move {
+            let served = serve_runtime_iroh_control_listener(
+                &server_endpoint,
+                &listener_handle,
+                AsyncRuntimeControlConnectionConfig::new(1024 * 1024, 0).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(served, 2);
+            server_endpoint.close().await;
+        };
+        let client = async {
+            let invitation_target = IrohControlTarget::Invitation {
+                profile_name: "workstation".to_string(),
+                server_addr: server_addr.clone(),
+                token: invitation.token.clone(),
+                role: RemoteRoleCeiling::Primary,
+                expires_at_unix_seconds: invitation.expires_at_unix_seconds,
+            };
+            let first = exchange_iroh_control_request(
+                &client_root,
+                &policy,
+                &invitation_target,
+                "window/list",
+                "{}",
+            )
+            .await
+            .unwrap();
+            assert!(first.contains(r#""result""#), "{first}");
+
+            let identity = RemoteClientIdentity::load_or_create(&client_root).unwrap();
+            let records = trust.list_records().unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].endpoint_id, identity.endpoint_id().to_string());
+            drop(identity);
+            let profile = RemoteClientProfileStore::under_config_root(&client_root)
+                .load("workstation")
+                .unwrap()
+                .unwrap();
+            assert_eq!(profile.server_addr.id, server_addr.id);
+
+            let second = exchange_iroh_control_request(
+                &client_root,
+                &policy,
+                &IrohControlTarget::Profile(profile),
+                "session/kill",
+                r#"{"force":true,"idempotency_key":"connector-kill"}"#,
+            )
+            .await
+            .unwrap();
+            assert!(second.contains(r#""killed":true"#), "{second}");
+        };
+
+        let actor_task = tokio::spawn(actor.run());
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            let ((), ()) = tokio::join!(listener, client);
+        })
+        .await
+        .unwrap();
+        actor_task.abort();
+        let _ = actor_task.await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_listener_rejects_wrong_alpn_without_runtime_authority() {
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::test_support::runtime::RuntimeServiceFixture;
+
+        let service = RuntimeServiceFixture::new().build();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            max_connections: 1,
+            setup_timeout: std::time::Duration::from_secs(2),
+            idle_timeout: std::time::Duration::from_secs(5),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let server = bind_runtime_iroh_endpoint(policy, SecretKey::generate())
+            .await
+            .unwrap()
+            .unwrap();
+        let server_addr = server.endpoint().addr();
+        let listener_handle = handle.clone();
+        let listener = tokio::spawn(async move {
+            let result = serve_runtime_iroh_control_listener(
+                &server,
+                &listener_handle,
+                AsyncRuntimeControlConnectionConfig::new(4096, 0).unwrap(),
+                None,
+            )
+            .await;
+            server.close().await;
+            result
+        });
+        let actor_task = tokio::spawn(actor.run());
+        let client = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            client.connect(server_addr, b"mezzanine/wrong/1"),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(!error.to_string().is_empty());
+        assert_eq!(
+            handle.lifecycle_state().await.unwrap(),
+            crate::runtime::RuntimeLifecycleState::Running
+        );
+        let _ = handle.shutdown().await.unwrap();
+        drop(handle);
+        assert_eq!(listener.await.unwrap().unwrap(), 0);
+        client.close().await;
+        actor_task.abort();
+        let _ = actor_task.await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn malformed_iroh_client_does_not_stop_later_authorized_control() {
+        use crate::cli::{IrohControlTarget, exchange_iroh_control_request};
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::security::remote::{RemoteRoleCeiling, RemoteTrustStore};
+        use crate::test_support::runtime::RuntimeServiceFixture;
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-iroh-malformed-isolation-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let server_root = root.join("server");
+        let client_root = root.join("client");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&server_root).unwrap();
+        std::fs::create_dir_all(&client_root).unwrap();
+        let mut service = RuntimeServiceFixture::new().build();
+        service.set_config_root(server_root.clone());
+        let session_id = service.session().id.to_string();
+        let (server_secret, server_endpoint_id) = {
+            let identity = service
+                .integration
+                .ensure_remote_endpoint_identity(&session_id)
+                .unwrap();
+            (
+                identity.secret_key().clone(),
+                identity.endpoint_id().to_string(),
+            )
+        };
+        let trust = RemoteTrustStore::under_config_root(&server_root, &session_id).unwrap();
+        let invitation = trust
+            .create_invitation(
+                &server_endpoint_id,
+                RemoteRoleCeiling::Primary,
+                600,
+                crate::runtime::current_unix_seconds(),
+            )
+            .unwrap();
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            max_connections: 2,
+            setup_timeout: std::time::Duration::from_secs(3),
+            idle_timeout: std::time::Duration::from_secs(5),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let server = bind_runtime_iroh_endpoint(policy.clone(), server_secret)
+            .await
+            .unwrap()
+            .unwrap();
+        let server_addr = server.endpoint().addr();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let listener_handle = handle.clone();
+        drop(handle);
+        let listener = async move {
+            let served = serve_runtime_iroh_control_listener(
+                &server,
+                &listener_handle,
+                AsyncRuntimeControlConnectionConfig::new(4096, 0).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(served, 2);
+            server.close().await;
+        };
+        let clients = async {
+            let malformed = Endpoint::builder(presets::Minimal)
+                .relay_mode(RelayMode::Disabled)
+                .clear_address_lookup()
+                .portmapper_config(PortmapperConfig::Disabled)
+                .bind()
+                .await
+                .unwrap();
+            let connection = malformed
+                .connect(server_addr.clone(), MEZZANINE_IROH_ALPN)
+                .await
+                .unwrap();
+            let (mut send, mut recv) = connection.open_bi().await.unwrap();
+            tokio::io::AsyncWriteExt::write_all(&mut send, b"Content-Length: 9999999\r\n\r\n")
+                .await
+                .unwrap();
+            send.finish().unwrap();
+            let _ = recv.read_to_end(4096).await;
+            connection.close(VarInt::from_u32(1), b"malformed test");
+            malformed.close().await;
+
+            let body = exchange_iroh_control_request(
+                &client_root,
+                &policy,
+                &IrohControlTarget::Invitation {
+                    profile_name: "authorized-after-malformed".to_string(),
+                    server_addr,
+                    token: invitation.token,
+                    role: RemoteRoleCeiling::Primary,
+                    expires_at_unix_seconds: invitation.expires_at_unix_seconds,
+                },
+                "session/kill",
+                r#"{"force":true,"idempotency_key":"malformed-isolation-kill"}"#,
+            )
+            .await
+            .unwrap();
+            assert!(body.contains(r#""killed":true"#), "{body}");
+        };
+        let actor_task = tokio::spawn(actor.run());
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            let ((), ()) = tokio::join!(listener, clients);
+        })
+        .await
+        .unwrap();
+        actor_task.abort();
+        let _ = actor_task.await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_setup_timeout_isolated_and_revoked_profile_rejected() {
+        use crate::cli::{IrohControlTarget, exchange_iroh_control_request};
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::security::remote::{
+            RemoteClientProfileStore, RemoteRoleCeiling, RemoteTrustStore,
+        };
+        use crate::test_support::runtime::RuntimeServiceFixture;
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-iroh-timeout-revocation-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let server_root = root.join("server");
+        let client_root = root.join("client");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&server_root).unwrap();
+        std::fs::create_dir_all(&client_root).unwrap();
+
+        let mut service = RuntimeServiceFixture::new().build();
+        service.set_config_root(server_root.clone());
+        let session_id = service.session().id.to_string();
+        let (server_secret, server_endpoint_id) = {
+            let identity = service
+                .integration
+                .ensure_remote_endpoint_identity(&session_id)
+                .unwrap();
+            (
+                identity.secret_key().clone(),
+                identity.endpoint_id().to_string(),
+            )
+        };
+        let trust = RemoteTrustStore::under_config_root(&server_root, &session_id).unwrap();
+        let invitation = trust
+            .create_invitation(
+                &server_endpoint_id,
+                RemoteRoleCeiling::Primary,
+                600,
+                crate::runtime::current_unix_seconds(),
+            )
+            .unwrap();
+        let mut policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            max_connections: 2,
+            max_streams_per_connection: 1,
+            setup_timeout: std::time::Duration::from_secs(3),
+            idle_timeout: std::time::Duration::from_secs(5),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let mut server = bind_runtime_iroh_endpoint(policy.clone(), server_secret)
+            .await
+            .unwrap()
+            .unwrap();
+        policy.setup_timeout = std::time::Duration::from_millis(500);
+        server.policy.setup_timeout = policy.setup_timeout;
+        let server_addr = server.endpoint().addr();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let listener_handle = handle.clone();
+        let listener = tokio::spawn(async move {
+            let served = serve_runtime_iroh_control_listener(
+                &server,
+                &listener_handle,
+                AsyncRuntimeControlConnectionConfig::new(4096, 0).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+            server.close().await;
+            served
+        });
+        let actor_task = tokio::spawn(actor.run());
+
+        let stalled = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let stalled_connection = stalled
+            .connect(server_addr.clone(), MEZZANINE_IROH_ALPN)
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+        stalled_connection.close(VarInt::from_u32(1), b"setup timeout test");
+        stalled.close().await;
+
+        let paired = exchange_iroh_control_request(
+            &client_root,
+            &policy,
+            &IrohControlTarget::Invitation {
+                profile_name: "revoked-client".to_string(),
+                server_addr,
+                token: invitation.token,
+                role: RemoteRoleCeiling::Primary,
+                expires_at_unix_seconds: invitation.expires_at_unix_seconds,
+            },
+            "window/list",
+            "{}",
+        )
+        .await
+        .unwrap();
+        assert!(paired.contains(r#""result""#), "{paired}");
+
+        let profile = RemoteClientProfileStore::under_config_root(&client_root)
+            .load("revoked-client")
+            .unwrap()
+            .unwrap();
+        let records = trust.list_records().unwrap();
+        assert_eq!(records.len(), 1);
+        trust
+            .revoke_record(
+                &records[0].id,
+                Some("revocation regression"),
+                crate::runtime::current_unix_seconds(),
+            )
+            .unwrap();
+        let error = exchange_iroh_control_request(
+            &client_root,
+            &policy,
+            &IrohControlTarget::Profile(profile),
+            "window/list",
+            "{}",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+        assert!(error.message().contains("trust initialization"), "{error}");
+
+        let _ = handle.shutdown().await.unwrap();
+        drop(handle);
+        assert_eq!(listener.await.unwrap(), 3);
+        actor_task.abort();
+        let _ = actor_task.await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_abrupt_loss_detaches_primary_and_blocks_extra_stream() {
+        use secrecy::ExposeSecret;
+
+        use crate::control::{decode_control_frame, encode_control_body};
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::security::remote::{RemoteRoleCeiling, RemoteTrustStore};
+        use crate::test_support::runtime::RuntimeServiceFixture;
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-iroh-abrupt-loss-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut service = RuntimeServiceFixture::new().build();
+        service.set_config_root(root.clone());
+        let session_id = service.session().id.to_string();
+        let (server_secret, server_endpoint_id) = {
+            let identity = service
+                .integration
+                .ensure_remote_endpoint_identity(&session_id)
+                .unwrap();
+            (
+                identity.secret_key().clone(),
+                identity.endpoint_id().to_string(),
+            )
+        };
+        let trust = RemoteTrustStore::under_config_root(&root, &session_id).unwrap();
+        let invitation = trust
+            .create_invitation(
+                &server_endpoint_id,
+                RemoteRoleCeiling::Primary,
+                600,
+                crate::runtime::current_unix_seconds(),
+            )
+            .unwrap();
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            max_connections: 1,
+            max_streams_per_connection: 1,
+            setup_timeout: std::time::Duration::from_secs(2),
+            idle_timeout: std::time::Duration::from_secs(5),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let server = bind_runtime_iroh_endpoint(policy, server_secret)
+            .await
+            .unwrap()
+            .unwrap();
+        let server_addr = server.endpoint().addr();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let listener_handle = handle.clone();
+        let listener = tokio::spawn(async move {
+            let served = serve_runtime_iroh_control_listener(
+                &server,
+                &listener_handle,
+                AsyncRuntimeControlConnectionConfig::new(4096, 0).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+            server.close().await;
+            served
+        });
+        let actor_task = tokio::spawn(actor.run());
+
+        let client = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let connection = client
+            .connect(server_addr, MEZZANINE_IROH_ALPN)
+            .await
+            .unwrap();
+        let (mut send, mut recv) = connection.open_bi().await.unwrap();
+        let second_stream =
+            tokio::time::timeout(std::time::Duration::from_millis(250), connection.open_bi()).await;
+        assert!(
+            second_stream.is_err(),
+            "a second concurrent control stream must be blocked"
+        );
+
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "init",
+            "method": "control/initialize",
+            "params": {
+                "client_name": "abrupt-primary",
+                "requested_version": 1,
+                "requested_role": "primary",
+                "detach_primary_on_disconnect": true,
+                "client": {
+                    "name": "abrupt-primary",
+                    "interactive": true,
+                    "terminal": {
+                        "columns": 80,
+                        "rows": 24,
+                        "term": "xterm-256color"
+                    }
+                },
+                "authentication": {
+                    "mechanism": "extension:iroh_invitation",
+                    "token": invitation.token.expose_secret()
+                }
+            }
+        })
+        .to_string();
+        tokio::io::AsyncWriteExt::write_all(&mut send, &encode_control_body(&initialize))
+            .await
+            .unwrap();
+        let initialize_body = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            let mut response = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                let read = tokio::io::AsyncReadExt::read(&mut recv, &mut buffer)
+                    .await
+                    .unwrap();
+                assert!(read > 0, "initialize response must precede stream closure");
+                response.extend_from_slice(&buffer[..read]);
+                if let Ok((body, _)) = decode_control_frame(&response, 1024 * 1024) {
+                    break body;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            initialize_body.contains(r#""granted_role":"primary""#),
+            "{initialize_body}"
+        );
+        connection.close(VarInt::from_u32(1), b"abrupt client loss");
+        client.close().await;
+
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if handle.lifecycle_state().await.unwrap()
+                    == crate::runtime::RuntimeLifecycleState::Detached
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let _ = handle.shutdown().await.unwrap();
+        drop(handle);
+        assert_eq!(listener.await.unwrap(), 1);
+        actor_task.abort();
+        let _ = actor_task.await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn unix_and_iroh_control_remain_simultaneously_available() {
+        use crate::cli::{IrohControlTarget, exchange_iroh_control_request};
+        use crate::control::{decode_control_frame, encode_control_body};
+        use crate::host::async_runtime::{
+            AsyncRuntimeActorConfig, AsyncRuntimeSessionActor,
+            serve_async_runtime_control_listener_with_snapshots,
+        };
+        use crate::security::remote::{RemoteRoleCeiling, RemoteTrustStore};
+        use crate::test_support::runtime::RuntimeServiceFixture;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-iroh-unix-coexistence-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let server_root = root.join("server");
+        let client_root = root.join("client");
+        let unix_path = root.join("control.sock");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&server_root).unwrap();
+        std::fs::create_dir_all(&client_root).unwrap();
+
+        let mut service = RuntimeServiceFixture::new().build();
+        service.set_config_root(server_root.clone());
+        let session_id = service.session().id.to_string();
+        let (server_secret, server_endpoint_id) = {
+            let identity = service
+                .integration
+                .ensure_remote_endpoint_identity(&session_id)
+                .unwrap();
+            (
+                identity.secret_key().clone(),
+                identity.endpoint_id().to_string(),
+            )
+        };
+        let trust = RemoteTrustStore::under_config_root(&server_root, &session_id).unwrap();
+        let invitation = trust
+            .create_invitation(
+                &server_endpoint_id,
+                RemoteRoleCeiling::Primary,
+                600,
+                crate::runtime::current_unix_seconds(),
+            )
+            .unwrap();
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            max_connections: 1,
+            max_streams_per_connection: 1,
+            setup_timeout: std::time::Duration::from_secs(3),
+            idle_timeout: std::time::Duration::from_secs(5),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let iroh_server = bind_runtime_iroh_endpoint(policy.clone(), server_secret)
+            .await
+            .unwrap()
+            .unwrap();
+        let server_addr = iroh_server.endpoint().addr();
+        let unix_listener = tokio::net::UnixListener::bind(&unix_path).unwrap();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let actor_task = tokio::spawn(actor.run());
+
+        let unix_handle = handle.clone();
+        let unix_server = async {
+            let served = serve_async_runtime_control_listener_with_snapshots(
+                &unix_listener,
+                &unix_handle,
+                AsyncRuntimeControlConnectionConfig::new(
+                    1024 * 1024,
+                    crate::runtime::current_effective_uid(),
+                )
+                .unwrap(),
+                None,
+                |accepted, _| accepted >= 1,
+            )
+            .await
+            .unwrap();
+            assert_eq!(served, 1);
+        };
+        let unix_client = async {
+            let mut stream = tokio::net::UnixStream::connect(&unix_path).await.unwrap();
+            let initialize = encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"unix-init","method":"control/initialize","params":{"client_name":"local-recovery","requested_version":1,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"local-recovery","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+            );
+            let status = encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"unix-status","method":"remote/status","params":{}}"#,
+            );
+            stream.write_all(&initialize).await.unwrap();
+            stream.write_all(&status).await.unwrap();
+            stream.shutdown().await.unwrap();
+            let mut output = Vec::new();
+            stream.read_to_end(&mut output).await.unwrap();
+            let (initialize_body, consumed) = decode_control_frame(&output, 1024 * 1024).unwrap();
+            let (status_body, _) = decode_control_frame(&output[consumed..], 1024 * 1024).unwrap();
+            assert!(initialize_body.contains(r#""granted_role":"primary""#));
+            assert!(status_body.contains(r#""endpoint_id""#), "{status_body}");
+        };
+
+        let iroh_handle = handle.clone();
+        let iroh_server_task = tokio::spawn(async move {
+            let served = serve_runtime_iroh_control_listener(
+                &iroh_server,
+                &iroh_handle,
+                AsyncRuntimeControlConnectionConfig::new(1024 * 1024, 0).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+            iroh_server.close().await;
+            served
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let ((), ()) = tokio::join!(unix_server, unix_client);
+        })
+        .await
+        .unwrap();
+        let remote_body = exchange_iroh_control_request(
+            &client_root,
+            &policy,
+            &IrohControlTarget::Invitation {
+                profile_name: "coexisting-remote".to_string(),
+                server_addr,
+                token: invitation.token,
+                role: RemoteRoleCeiling::Primary,
+                expires_at_unix_seconds: invitation.expires_at_unix_seconds,
+            },
+            "session/kill",
+            r#"{"force":true,"idempotency_key":"coexistence-kill"}"#,
+        )
+        .await
+        .unwrap();
+        assert!(remote_body.contains(r#""killed":true"#), "{remote_body}");
+
+        drop(handle);
+        assert_eq!(iroh_server_task.await.unwrap(), 1);
+        actor_task.abort();
+        let _ = actor_task.await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+}

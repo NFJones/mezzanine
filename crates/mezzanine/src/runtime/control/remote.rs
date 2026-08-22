@@ -447,25 +447,14 @@ impl RuntimeSessionService {
                 let structured = crate::runtime::runtime_effective_config_value(
                     self.integration.config_layers(),
                 )?;
-                let iroh = structured
-                    .get("transport")
-                    .and_then(serde_json::Value::as_object)
-                    .and_then(|transport| transport.get("iroh"))
-                    .and_then(serde_json::Value::as_object);
+                let policy =
+                    crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
                 Ok(serde_json::json!({
-                    "enabled": iroh
-                        .and_then(|config| config.get("enabled"))
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false),
+                    "enabled": policy.enabled,
                     "endpoint_id": endpoint_id,
-                    "address_lookup": iroh
-                        .and_then(|config| config.get("address_lookup"))
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("disabled"),
-                    "relay_mode": iroh
-                        .and_then(|config| config.get("relay_mode"))
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("disabled"),
+                    "endpoint_addr": self.integration.remote_endpoint_addr(),
+                    "address_lookup": policy.address_lookup.as_str(),
+                    "relay_mode": policy.relay.as_str(),
                     "active_remote_connections": 0,
                 })
                 .to_string())
@@ -494,6 +483,14 @@ impl RuntimeSessionService {
                     .ensure_remote_endpoint_identity(&session_id)?
                     .endpoint_id()
                     .to_string();
+                let endpoint_addr = self.integration.remote_endpoint_addr().cloned();
+                if let Some(endpoint_addr) = endpoint_addr.as_ref()
+                    && endpoint_addr.id.to_string() != endpoint_id
+                {
+                    return Err(MezError::invalid_state(
+                        "bound Iroh listener identity does not match remote trust identity",
+                    ));
+                }
                 let invitation = RemoteTrustStore::under_config_root(&config_root, &session_id)?
                     .create_invitation(
                         &endpoint_id,
@@ -505,6 +502,8 @@ impl RuntimeSessionService {
                     "invitation_id": invitation.invitation_id,
                     "token": invitation.token.expose_secret(),
                     "server_endpoint_id": invitation.server_endpoint_id,
+                    "server_addr": endpoint_addr,
+                    "profile_name": session_id,
                     "role": invitation.role_ceiling.as_str(),
                     "expires_at_unix_seconds": invitation.expires_at_unix_seconds,
                 })

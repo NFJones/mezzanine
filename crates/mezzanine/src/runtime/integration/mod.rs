@@ -50,6 +50,7 @@ pub(crate) struct RuntimeIntegrationComponent {
     config_layers: Vec<ConfigLayer>,
     config_root: Option<PathBuf>,
     remote_endpoint_identity: Option<RemoteEndpointIdentity>,
+    remote_endpoint_addr: Option<iroh::EndpointAddr>,
     #[cfg(test)]
     config_reload_preparation_started: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
@@ -72,6 +73,7 @@ impl RuntimeIntegrationComponent {
             config_layers: Vec::new(),
             config_root: None,
             remote_endpoint_identity: None,
+            remote_endpoint_addr: None,
             #[cfg(test)]
             config_reload_preparation_started: None,
             #[cfg(test)]
@@ -153,6 +155,16 @@ impl RuntimeIntegrationComponent {
         self.remote_endpoint_identity
             .as_ref()
             .ok_or_else(|| MezError::invalid_state("remote endpoint identity is unavailable"))
+    }
+
+    /// Publishes the currently bound Iroh endpoint address for local invitation creation.
+    pub(crate) fn set_remote_endpoint_addr(&mut self, addr: Option<iroh::EndpointAddr>) {
+        self.remote_endpoint_addr = addr;
+    }
+
+    /// Returns the currently bound Iroh endpoint address, when remote transport is active.
+    pub(crate) fn remote_endpoint_addr(&self) -> Option<&iroh::EndpointAddr> {
+        self.remote_endpoint_addr.as_ref()
     }
 
     /// Returns the latest async-actor metrics snapshot.

@@ -9,8 +9,10 @@ is lost.
 ## Prerequisites
 
 Keep the user-private Unix control socket available. Iroh transport is disabled
-by default, and the listener and connector are a separate rollout surface from
-the pairing foundation described here.
+by default. Enable `[transport.iroh]` only in primary-user configuration and
+restart the daemon. The enabled listener runs alongside Unix control; failure
+to bind an explicitly enabled endpoint fails startup rather than silently
+removing remote service. Unix remains the administration and recovery path.
 
 ## Understand the identities
 
@@ -20,10 +22,13 @@ record that binds the current server endpoint ID, the authenticated client
 endpoint ID, a stable record ID, a maximum `observer` or `primary` role,
 revocation state, and a verifier for a device credential.
 
-Endpoint keys and `trust.json` live below the primary configuration root under
-a hashed `remote/sessions` directory. Files are owner-only, bounded, opened
-without following symlinks, and updated under locks with atomic replacement.
-Do not edit these files directly.
+Server endpoint keys and `trust.json` live below the primary configuration
+root under a hashed `remote/sessions` directory. The client endpoint key,
+profile metadata, and separate device-credential files live under
+`remote/client`. Files are owner-only, bounded, opened without following
+symlinks, and updated with atomic replacement. Live server and client endpoint
+keys retain exclusive locks, and client profile database access is serialized
+under a protected lock. Do not edit these files directly.
 
 ## Pair a device
 
@@ -34,16 +39,30 @@ mez remote status
 mez remote invite --role observer --expires 600
 ```
 
-`status` ensures the per-session endpoint identity exists and prints only its
-public endpoint ID. `invite` prints a short-lived bearer token once. Transfer
-it through a confidential channel. The invitation is server-bound,
-role-limited, and single-use. It is consumed only after the remote
-`control/initialize` request succeeds. The successful first response returns a
-device credential once; later reconnects use that credential with the same
-Iroh endpoint ID.
+`status` reports the public per-session endpoint identity and, while the listener
+is bound, its current dialable endpoint address. `invite` returns a short-lived
+bearer token once together with that pinned address, role, expiry, and profile
+name. Transfer the JSON through a confidential channel and store it in an
+owner-only file:
+
+```console
+umask 077
+mez --json remote invite --role primary --expires 600 > mez-invite.json
+```
+
+The invitation is server-bound, role-limited, and single-use. A remote client
+selects it explicitly with `--iroh-invite-file`; no failed remote attempt falls
+back to Unix. The invitation is consumed only after remote
+`control/initialize` succeeds. The successful response returns a device
+credential once, and the client atomically publishes a protected profile only
+after receiving that success. Later one-shot control uses
+`--iroh-profile PROFILE`. The initial direct CLI surface supports `kill` and
+`detach`; interactive remote attach is handled separately.
 
 Invitations, device credentials, private endpoint keys, and persisted verifiers
-are omitted from client lists, status, errors, debug output, and audit records.
+are omitted from client lists, diagnostics, debug output, and audit records.
+Only the explicitly requested invitation response/file and successful pairing
+response contain their respective one-time secret.
 
 ## Inspect, rename, and revoke
 
@@ -56,7 +75,8 @@ mez remote revoke remote-RECORD-ID --reason "device retired"
 These commands are primary-only and local-Unix-only. A paired Iroh primary
 cannot create invitations or inspect, rename, or revoke trust. Revocation makes
 future device-proof initialization fail closed. Existing Unix control remains
-the recovery path after revocation or remote transport failure.
+available concurrently and is the recovery path after revocation, malformed
+remote traffic, setup timeout, ALPN failure, abrupt loss, or listener failure.
 
 ## Back up or recover identity
 

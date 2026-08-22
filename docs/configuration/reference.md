@@ -158,10 +158,20 @@ changes require a daemon restart.
 | `transport.iroh.setup_timeout_ms` | integer | `10000` | Bounded connection setup timeout. |
 | `transport.iroh.idle_timeout_ms` | integer | `300000` | Bounded idle timeout. |
 
+When enabled, daemon startup binds the protected per-session endpoint and runs
+Iroh control alongside Unix control. A configured endpoint failure is a startup
+error; Mezzanine does not silently weaken explicit enablement into Unix-only
+operation. The endpoint applies the selected lookup, relay, direct-IP, port
+mapping, proxy, and CA policies to both listening and explicit clients. It
+negotiates only `mezzanine/transport/1`, accepts one client-opened control stream
+per connection, and bounds setup, idle, connection, frame, and shutdown work.
+
 Running `mez remote status` through local Unix control ensures the protected
-per-session endpoint identity exists and reports its public endpoint ID. The
-private endpoint key and trust database are not configuration fields and must
-not be edited directly. See [Remote pairing and recovery](../safety-and-trust/remote-pairing-and-recovery.md).
+per-session endpoint identity exists and reports its public endpoint ID and the
+current bound endpoint address when available. The private endpoint key, client
+endpoint key, protected profiles, device credentials, and trust database are
+not configuration fields and must not be edited directly. See [Remote pairing
+and recovery](../safety-and-trust/remote-pairing-and-recovery.md).
 
 ### `runtime`
 

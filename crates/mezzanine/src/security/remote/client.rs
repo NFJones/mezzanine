@@ -1,0 +1,466 @@
+//! Protected persistent identity and profiles for Iroh clients.
+
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+use iroh::{EndpointAddr, SecretKey};
+use rustix::fs::{FlockOperation, flock};
+use secrecy::{ExposeSecret, SecretString};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::error::{MezError, Result};
+
+use super::RemoteRoleCeiling;
+use super::store::{
+    ensure_private_directory, open_private_file_read, open_private_lock, write_private_atomic,
+};
+
+const REMOTE_DIRECTORY_NAME: &str = "remote";
+const CLIENT_DIRECTORY_NAME: &str = "client";
+const CLIENT_KEY_FILE_NAME: &str = "endpoint.key";
+const CLIENT_KEY_LOCK_FILE_NAME: &str = "endpoint.lock";
+const PROFILES_FILE_NAME: &str = "profiles.json";
+const PROFILES_LOCK_FILE_NAME: &str = "profiles.lock";
+const CREDENTIALS_DIRECTORY_NAME: &str = "credentials";
+const ENDPOINT_KEY_BYTES: usize = 32;
+const MAX_PROFILE_NAME_BYTES: usize = 128;
+const MAX_PROFILE_RECORDS: usize = 256;
+const MAX_PROFILE_DATABASE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Reads one protected invitation file with an explicit size bound.
+pub(crate) fn read_remote_invitation_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "Iroh invitation file not found",
+            )
+        } else {
+            error.into()
+        }
+    })?;
+    if metadata.len() > max_bytes {
+        return Err(MezError::invalid_args(
+            "Iroh invitation file exceeds size limit",
+        ));
+    }
+    let file = open_private_file_read(path)?;
+    let mut bytes = Vec::new();
+    file.take(max_bytes + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(MezError::invalid_args(
+            "Iroh invitation file exceeds size limit",
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Persistent endpoint identity shared by explicit remote client targets.
+#[derive(Debug)]
+pub(crate) struct RemoteClientIdentity {
+    secret_key: SecretKey,
+    _lock: fs::File,
+}
+
+impl RemoteClientIdentity {
+    /// Loads or atomically creates the protected client endpoint key.
+    pub(crate) fn load_or_create(config_root: &Path) -> Result<Self> {
+        let directory = client_directory(config_root);
+        ensure_client_directory_chain(&directory)?;
+        let lock = open_private_lock(&directory.join(CLIENT_KEY_LOCK_FILE_NAME))?;
+        match flock(&lock, FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => {}
+            Err(error) if error == rustix::io::Errno::WOULDBLOCK => {
+                return Err(MezError::conflict(
+                    "Iroh client endpoint identity is already in use by another live process",
+                ));
+            }
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        }
+        let key_path = directory.join(CLIENT_KEY_FILE_NAME);
+        let secret_key = match fs::symlink_metadata(&key_path) {
+            Ok(_) => {
+                let mut file = open_private_file_read(&key_path)?;
+                let mut bytes = Vec::new();
+                file.read_to_end(&mut bytes)?;
+                let bytes: [u8; ENDPOINT_KEY_BYTES] = bytes.try_into().map_err(
+                    |bytes: Vec<u8>| {
+                        MezError::invalid_state(format!(
+                            "Iroh client endpoint key must contain exactly {ENDPOINT_KEY_BYTES} bytes, found {}",
+                            bytes.len()
+                        ))
+                    },
+                )?;
+                SecretKey::from_bytes(&bytes)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let key = SecretKey::generate();
+                write_private_atomic(&key_path, &key.to_bytes())?;
+                key
+            }
+            Err(error) => return Err(error.into()),
+        };
+        Ok(Self {
+            secret_key,
+            _lock: lock,
+        })
+    }
+
+    /// Returns the protected key used to bind the client endpoint.
+    pub(crate) fn secret_key(&self) -> &SecretKey {
+        &self.secret_key
+    }
+
+    /// Returns the stable client endpoint identity.
+    #[cfg(test)]
+    pub(crate) fn endpoint_id(&self) -> iroh::EndpointId {
+        self.secret_key.public()
+    }
+}
+
+/// One durable endpoint-bound remote server profile.
+#[derive(Clone)]
+pub(crate) struct RemoteClientProfile {
+    pub name: String,
+    pub server_addr: EndpointAddr,
+    pub role: RemoteRoleCeiling,
+    pub device_credential: SecretString,
+}
+
+impl std::fmt::Debug for RemoteClientProfile {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter
+            .debug_struct("RemoteClientProfile")
+            .field("name", &self.name)
+            .field("server_addr", &self.server_addr)
+            .field("role", &self.role)
+            .field("device_credential", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Private profile metadata and separate credential-file persistence.
+#[derive(Debug, Clone)]
+pub(crate) struct RemoteClientProfileStore {
+    directory: PathBuf,
+}
+
+impl RemoteClientProfileStore {
+    /// Creates the client profile store below the primary config root.
+    pub(crate) fn under_config_root(config_root: &Path) -> Self {
+        Self {
+            directory: client_directory(config_root),
+        }
+    }
+
+    /// Loads one named profile without exposing its credential in diagnostics.
+    pub(crate) fn load(&self, name: &str) -> Result<Option<RemoteClientProfile>> {
+        validate_profile_name(name)?;
+        ensure_client_directory_chain(&self.directory)?;
+        let lock = open_private_lock(&self.directory.join(PROFILES_LOCK_FILE_NAME))?;
+        flock(&lock, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        let database = self.load_database()?;
+        let Some(stored) = database
+            .profiles
+            .into_iter()
+            .find(|profile| profile.name == name)
+        else {
+            return Ok(None);
+        };
+        validate_credential_file_name(&stored.credential_file)?;
+        let credential_path = self
+            .directory
+            .join(CREDENTIALS_DIRECTORY_NAME)
+            .join(&stored.credential_file);
+        let mut file = open_private_file_read(&credential_path)?;
+        let mut credential = String::new();
+        file.read_to_string(&mut credential)?;
+        if credential.is_empty() {
+            return Err(MezError::invalid_state(
+                "remote client device credential must not be empty",
+            ));
+        }
+        Ok(Some(RemoteClientProfile {
+            name: stored.name,
+            server_addr: stored.server_addr,
+            role: stored.role,
+            device_credential: SecretString::from(credential),
+        }))
+    }
+
+    /// Atomically publishes a profile after its credential is safely persisted.
+    pub(crate) fn save(&self, profile: &RemoteClientProfile) -> Result<()> {
+        validate_profile_name(&profile.name)?;
+        if profile.device_credential.expose_secret().is_empty() {
+            return Err(MezError::invalid_args(
+                "remote client device credential must not be empty",
+            ));
+        }
+        ensure_client_directory_chain(&self.directory)?;
+        let lock = open_private_lock(&self.directory.join(PROFILES_LOCK_FILE_NAME))?;
+        flock(&lock, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        let credentials = self.directory.join(CREDENTIALS_DIRECTORY_NAME);
+        ensure_private_directory(&credentials)?;
+
+        let mut database = self.load_database()?;
+        let existing_index = database
+            .profiles
+            .iter()
+            .position(|stored| stored.name == profile.name);
+        if existing_index.is_none() && database.profiles.len() >= MAX_PROFILE_RECORDS {
+            return Err(MezError::conflict(
+                "remote client profile record limit has been reached",
+            ));
+        }
+
+        let credential_file = format!(
+            "{}-{:016x}.secret",
+            profile_storage_key(&profile.name),
+            rand::random::<u64>()
+        );
+        write_private_atomic(
+            &credentials.join(&credential_file),
+            profile.device_credential.expose_secret().as_bytes(),
+        )?;
+        let stored = StoredRemoteClientProfile {
+            name: profile.name.clone(),
+            server_addr: profile.server_addr.clone(),
+            role: profile.role,
+            credential_file: credential_file.clone(),
+        };
+        let replaced_credential = if let Some(index) = existing_index {
+            Some(std::mem::replace(&mut database.profiles[index], stored).credential_file)
+        } else {
+            database.profiles.push(stored);
+            None
+        };
+        database
+            .profiles
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        if let Err(error) = self.write_database(&database) {
+            let _ = fs::remove_file(credentials.join(&credential_file));
+            return Err(error);
+        }
+        if let Some(replaced) = replaced_credential {
+            validate_credential_file_name(&replaced)?;
+            let _ = fs::remove_file(credentials.join(replaced));
+        }
+        Ok(())
+    }
+
+    fn load_database(&self) -> Result<RemoteClientProfileDatabase> {
+        let path = self.directory.join(PROFILES_FILE_NAME);
+        let file = match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if metadata.len() > MAX_PROFILE_DATABASE_BYTES {
+                    return Err(MezError::invalid_state(
+                        "remote client profile database exceeds size limit",
+                    ));
+                }
+                open_private_file_read(&path)?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(RemoteClientProfileDatabase::default());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let mut bytes = Vec::new();
+        file.take(MAX_PROFILE_DATABASE_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_PROFILE_DATABASE_BYTES {
+            return Err(MezError::invalid_state(
+                "remote client profile database exceeds size limit",
+            ));
+        }
+        let database: RemoteClientProfileDatabase =
+            serde_json::from_slice(&bytes).map_err(|error| {
+                MezError::invalid_state(format!("invalid remote client profile database: {error}"))
+            })?;
+        if database.version != 1 || database.profiles.len() > MAX_PROFILE_RECORDS {
+            return Err(MezError::invalid_state(
+                "unsupported or oversized remote client profile database",
+            ));
+        }
+        for profile in &database.profiles {
+            validate_profile_name(&profile.name)?;
+            validate_credential_file_name(&profile.credential_file)?;
+        }
+        Ok(database)
+    }
+
+    fn write_database(&self, database: &RemoteClientProfileDatabase) -> Result<()> {
+        let bytes = serde_json::to_vec_pretty(database).map_err(|error| {
+            MezError::invalid_state(format!("failed to encode remote client profiles: {error}"))
+        })?;
+        if bytes.len() as u64 > MAX_PROFILE_DATABASE_BYTES {
+            return Err(MezError::invalid_state(
+                "remote client profile database exceeds size limit",
+            ));
+        }
+        write_private_atomic(&self.directory.join(PROFILES_FILE_NAME), &bytes)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn directory(&self) -> &Path {
+        &self.directory
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredRemoteClientProfile {
+    name: String,
+    server_addr: EndpointAddr,
+    role: RemoteRoleCeiling,
+    credential_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RemoteClientProfileDatabase {
+    version: u32,
+    profiles: Vec<StoredRemoteClientProfile>,
+}
+
+impl Default for RemoteClientProfileDatabase {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            profiles: Vec::new(),
+        }
+    }
+}
+
+fn client_directory(config_root: &Path) -> PathBuf {
+    config_root
+        .join(REMOTE_DIRECTORY_NAME)
+        .join(CLIENT_DIRECTORY_NAME)
+}
+
+fn ensure_client_directory_chain(directory: &Path) -> Result<()> {
+    let remote = directory
+        .parent()
+        .ok_or_else(|| MezError::invalid_args("remote client path has no parent"))?;
+    ensure_private_directory(remote)?;
+    ensure_private_directory(directory)
+}
+
+fn validate_profile_name(name: &str) -> Result<()> {
+    if name.trim().is_empty()
+        || name.len() > MAX_PROFILE_NAME_BYTES
+        || name.chars().any(char::is_control)
+    {
+        return Err(MezError::invalid_args(
+            "remote client profile name must be printable text up to 128 bytes",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_credential_file_name(name: &str) -> Result<()> {
+    let path = Path::new(name);
+    if name.is_empty()
+        || name.len() > 192
+        || name.chars().any(char::is_control)
+        || path.file_name().and_then(|value| value.to_str()) != Some(name)
+    {
+        return Err(MezError::forbidden(
+            "remote client credential reference is unsafe",
+        ));
+    }
+    Ok(())
+}
+
+fn profile_storage_key(name: &str) -> String {
+    Sha256::digest(name.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    fn test_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "mez-remote-client-{label}-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ))
+    }
+
+    #[test]
+    fn client_identity_and_profile_are_private_stable_and_redacted() {
+        let root = test_root("persistence");
+        let first = RemoteClientIdentity::load_or_create(&root).unwrap();
+        let endpoint_id = first.endpoint_id();
+        let conflict = RemoteClientIdentity::load_or_create(&root).unwrap_err();
+        assert_eq!(conflict.kind(), crate::error::MezErrorKind::Conflict);
+        drop(first);
+        let second = RemoteClientIdentity::load_or_create(&root).unwrap();
+        assert_eq!(second.endpoint_id(), endpoint_id);
+
+        let credential = "durable-device-secret";
+        let profile = RemoteClientProfile {
+            name: "workstation".to_string(),
+            server_addr: EndpointAddr::new(SecretKey::generate().public())
+                .with_ip_addr("127.0.0.1:45678".parse().unwrap()),
+            role: RemoteRoleCeiling::Primary,
+            device_credential: SecretString::from(credential.to_string()),
+        };
+        let store = RemoteClientProfileStore::under_config_root(&root);
+        store.save(&profile).unwrap();
+        let loaded = store.load("workstation").unwrap().unwrap();
+        assert_eq!(loaded.server_addr, profile.server_addr);
+        assert_eq!(loaded.role, RemoteRoleCeiling::Primary);
+        assert_eq!(loaded.device_credential.expose_secret(), credential);
+        assert!(!format!("{loaded:?}").contains(credential));
+        let metadata = fs::metadata(store.directory().join(PROFILES_FILE_NAME)).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o077, 0);
+        let persisted = fs::read_to_string(store.directory().join(PROFILES_FILE_NAME)).unwrap();
+        assert!(!persisted.contains(credential));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn concurrent_profile_saves_preserve_every_record() {
+        use std::sync::{Arc, Barrier};
+
+        let root = test_root("concurrent-profiles");
+        let barrier = Arc::new(Barrier::new(8));
+        let handles = (0..8)
+            .map(|index| {
+                let root = root.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let profile = RemoteClientProfile {
+                        name: format!("profile-{index}"),
+                        server_addr: EndpointAddr::new(SecretKey::generate().public())
+                            .with_ip_addr(format!("127.0.0.1:{}", 46000 + index).parse().unwrap()),
+                        role: RemoteRoleCeiling::Observer,
+                        device_credential: SecretString::from(format!("credential-{index}")),
+                    };
+                    barrier.wait();
+                    RemoteClientProfileStore::under_config_root(&root)
+                        .save(&profile)
+                        .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        let store = RemoteClientProfileStore::under_config_root(&root);
+        for index in 0..8 {
+            let profile = store.load(&format!("profile-{index}")).unwrap().unwrap();
+            assert_eq!(
+                profile.device_credential.expose_secret(),
+                &format!("credential-{index}")
+            );
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+}

@@ -474,3 +474,46 @@ fn explicit_socket_selector_overrides_in_pane_mez_socket() {
         SocketSelection::Explicit(_)
     ));
 }
+
+/// Verifies explicit Iroh targets are mutually exclusive with Unix selectors.
+#[test]
+fn invocation_parses_explicit_iroh_target_without_unix_fallback() {
+    let runtime = RuntimeEnv {
+        mez_tmpdir: Some(OsString::from("/tmp")),
+        xdg_runtime_dir: None,
+        tmpdir: None,
+        uid: 1000,
+    };
+    let invocation = CliInvocation::parse(
+        &[
+            "mez".to_string(),
+            "--iroh-profile".to_string(),
+            "workstation".to_string(),
+            "kill".to_string(),
+            "--force".to_string(),
+        ],
+        &runtime,
+        None,
+    )
+    .unwrap();
+    assert!(matches!(
+        invocation.control_target,
+        ControlTargetSelection::IrohProfile(ref profile) if profile == "workstation"
+    ));
+
+    let error = CliInvocation::parse(
+        &[
+            "mez".to_string(),
+            "-S".to_string(),
+            "/tmp/local.sock".to_string(),
+            "--iroh-profile".to_string(),
+            "workstation".to_string(),
+            "kill".to_string(),
+            "--force".to_string(),
+        ],
+        &runtime,
+        None,
+    )
+    .unwrap_err();
+    assert!(error.message().contains("cannot be used with"), "{error}");
+}

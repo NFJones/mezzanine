@@ -11,7 +11,7 @@ use super::{
     CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, MezError, OsString,
     PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, ensure_private_socket_directory, io,
     json_escape, prune_stale_socket_files_in_directory, run_attach, run_auth, run_config,
-    run_control_request, run_issue, run_list, run_mcp, run_memory, run_new, run_remote,
+    run_control_request_for_target, run_issue, run_list, run_mcp, run_memory, run_new, run_remote,
     run_sandbox, run_serve, run_snapshot,
 };
 
@@ -109,10 +109,23 @@ pub async fn run_with<W: Write, E: Write>(
             return Ok(0);
         }
     };
-    if !matches!(invocation.command.as_ref(), Some(CliCommand::Sandbox(_))) {
+    if !invocation.control_target.is_unix()
+        && !matches!(
+            invocation.command.as_ref(),
+            Some(CliCommand::Kill(_) | CliCommand::Detach(_))
+        )
+    {
+        return Err(MezError::invalid_args(
+            "explicit Iroh targets currently support only kill and detach",
+        ));
+    }
+    if invocation.control_target.is_unix()
+        && !matches!(invocation.command.as_ref(), Some(CliCommand::Sandbox(_)))
+    {
         cleanup_startup_stale_socket_files(&invocation, env.runtime.uid)?;
     }
     let socket_selection = invocation.socket_selection;
+    let control_target = invocation.control_target;
     let command = invocation.command;
     let output_format = invocation.output_format;
     let mut exit_code = 0;
@@ -203,16 +216,24 @@ pub async fn run_with<W: Write, E: Write>(
                     cli_idempotency_key("client-detach")
                 ),
             };
-            run_control_request(
+            run_control_request_for_target(
+                &control_target,
                 &socket_selection,
+                &env,
                 "client/detach",
                 &params,
                 output_format,
                 stdout,
-            )?;
+            )
+            .await?;
         }
         Some(CliCommand::Kill(args)) => {
             let force = args.force;
+            if !control_target.is_unix() && args.session_id.is_some() {
+                return Err(MezError::invalid_args(
+                    "an explicit Iroh target already selects the remote session",
+                ));
+            }
             let socket_selection = match args.session_id.as_deref() {
                 Some(session_id) => super::attach::socket_selection_for_registry_session(
                     &socket_selection,
@@ -225,13 +246,16 @@ pub async fn run_with<W: Write, E: Write>(
                 r#"{{"idempotency_key":"{}","force":{force}}}"#,
                 cli_idempotency_key("session-kill")
             );
-            run_control_request(
+            run_control_request_for_target(
+                &control_target,
                 &socket_selection,
+                &env,
                 "session/kill",
                 &params,
                 output_format,
                 stdout,
-            )?;
+            )
+            .await?;
         }
         Some(CliCommand::Snapshot(args)) => {
             run_snapshot(

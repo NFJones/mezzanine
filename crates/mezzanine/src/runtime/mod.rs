@@ -290,6 +290,8 @@ mod hook_support;
 mod hooks;
 /// Exposes concrete product integration state ownership.
 mod integration;
+/// Owns optional Iroh endpoint construction and lifecycle.
+mod iroh;
 /// Exposes the json module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -513,6 +515,7 @@ use config::{
     runtime_window_frame_template_from_config, runtime_window_frame_visible_fields_from_config,
     runtime_window_frames_enabled_from_config,
 };
+pub(crate) use config::{RuntimeIrohTransportPolicy, runtime_iroh_transport_policy_from_config};
 pub use config::{runtime_effective_config_value, runtime_ui_theme_from_config};
 #[cfg(test)]
 use hook_support::run_external_shell_hook_command;
@@ -520,6 +523,9 @@ use hook_support::{
     RuntimeFocusedShellPaneExecutor, RuntimeMcpActionExecutor,
     focused_shell_pre_action_failed_result, focused_shell_pre_action_timeout_result,
     runtime_hook_event_for_lifecycle, runtime_hook_event_name,
+};
+pub(crate) use iroh::{
+    MEZZANINE_IROH_ALPN, bind_runtime_iroh_client_endpoint, build_runtime_iroh_control_service,
 };
 pub(crate) use json::current_unix_millis;
 use json::{

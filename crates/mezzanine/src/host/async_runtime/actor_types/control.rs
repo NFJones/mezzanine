@@ -180,18 +180,38 @@ where
                     submit_control_connection_disconnect_event(handle, connection).await?;
                     return Ok(served);
                 };
-                let input = encode_frame(&frame?);
-                let result = handle_control_input_with_optional_snapshots(
+                let frame = match frame {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        submit_control_connection_disconnect_event(handle, connection).await?;
+                        return Err(error);
+                    }
+                };
+                let input = encode_frame(&frame);
+                let result = match handle_control_input_with_optional_snapshots(
                     handle,
                     input,
                     config.max_content_length,
                     connection,
                     snapshots,
                 )
-                .await?;
+                .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        submit_control_connection_disconnect_event(handle, connection).await?;
+                        return Err(error);
+                    }
+                };
                 *connection = result.connection;
-                framed.get_mut().write_all(&result.output).await?;
-                framed.get_mut().flush().await?;
+                if let Err(error) = framed.get_mut().write_all(&result.output).await {
+                    submit_control_connection_disconnect_event(handle, connection).await?;
+                    return Err(error.into());
+                }
+                if let Err(error) = framed.get_mut().flush().await {
+                    submit_control_connection_disconnect_event(handle, connection).await?;
+                    return Err(error.into());
+                }
                 served = served.saturating_add(1);
             }
             changed = lifecycle.changed() => {
