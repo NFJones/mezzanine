@@ -1014,6 +1014,9 @@ pub(super) async fn run_foreground_control_daemon(
         let attached_primary_client_id = options.attached_primary_client_id.clone();
         let iroh_control_config = config.control;
         let iroh_snapshots = config.snapshots.clone();
+        let iroh_shutdown = iroh_endpoint
+            .as_ref()
+            .map(|endpoint| endpoint.shutdown_handle());
         let daemon = async move {
             let mut services =
                 build_async_runtime_daemon_services(handle.clone(), listeners, config)?;
@@ -1038,8 +1041,13 @@ pub(super) async fn run_foreground_control_daemon(
                     resize_client_id,
                 )?);
             }
-            let result =
-                supervise_async_runtime_services(services, foreground_shutdown_signal()).await;
+            let foreground_shutdown = async move {
+                foreground_shutdown_signal().await;
+                if let Some(iroh_shutdown) = iroh_shutdown {
+                    let _ = iroh_shutdown.close().await;
+                }
+            };
+            let result = supervise_async_runtime_services(services, foreground_shutdown).await;
             let _ = shutdown_handle.shutdown().await;
             result
         };

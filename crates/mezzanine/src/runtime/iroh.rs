@@ -238,6 +238,34 @@ pub(crate) struct RuntimeIrohEndpoint {
     endpoint: Endpoint,
     policy: RuntimeIrohTransportPolicy,
     diagnostics: RuntimeIrohDiagnostics,
+    intentional_close: Arc<AtomicBool>,
+}
+
+/// Cloneable handle for bounded, intentional endpoint shutdown.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeIrohShutdownHandle {
+    endpoint: Endpoint,
+    timeout: std::time::Duration,
+    diagnostics: RuntimeIrohDiagnostics,
+    intentional_close: Arc<AtomicBool>,
+}
+
+impl RuntimeIrohShutdownHandle {
+    /// Notifies peers of endpoint shutdown and bounds QUIC close draining.
+    pub(crate) async fn close(&self) -> bool {
+        self.intentional_close.store(true, Ordering::Release);
+        if tokio::time::timeout(self.timeout, self.endpoint.close())
+            .await
+            .is_err()
+        {
+            self.diagnostics
+                .inner
+                .shutdown_aborts
+                .fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
 }
 
 impl RuntimeIrohEndpoint {
@@ -253,9 +281,19 @@ impl RuntimeIrohEndpoint {
         &self.policy
     }
 
-    /// Closes the endpoint and waits for its I/O tasks to finish.
-    pub(crate) async fn close(&self) {
-        self.endpoint.close().await;
+    /// Returns a cloneable handle for intentional endpoint shutdown.
+    pub(crate) fn shutdown_handle(&self) -> RuntimeIrohShutdownHandle {
+        RuntimeIrohShutdownHandle {
+            endpoint: self.endpoint.clone(),
+            timeout: self.policy.setup_timeout,
+            diagnostics: self.diagnostics.clone(),
+            intentional_close: self.intentional_close.clone(),
+        }
+    }
+
+    /// Closes the endpoint and bounds the wait for its I/O tasks to finish.
+    pub(crate) async fn close(&self) -> bool {
+        self.shutdown_handle().close().await
     }
 }
 
@@ -283,6 +321,7 @@ pub(crate) async fn bind_runtime_iroh_endpoint(
         endpoint,
         policy,
         diagnostics: RuntimeIrohDiagnostics::default(),
+        intentional_close: Arc::new(AtomicBool::new(false)),
     }))
 }
 
@@ -418,7 +457,8 @@ async fn serve_runtime_iroh_control_listener(
             incoming = endpoint.endpoint.accept(), if tasks.len() < endpoint.policy.max_connections => {
                 let Some(incoming) = incoming else {
                     endpoint_closed_unexpectedly =
-                        !terminal_daemon_state(*lifecycle.borrow());
+                        !endpoint.intentional_close.load(Ordering::Acquire)
+                            && !terminal_daemon_state(*lifecycle.borrow());
                     break;
                 };
                 let setup_started = Instant::now();
@@ -842,6 +882,88 @@ mod tests {
         );
         assert!(!diagnostics.snapshot().listener_active);
 
+        let _ = handle.shutdown().await.unwrap();
+        drop(handle);
+        actor_task.abort();
+        let _ = actor_task.await;
+    }
+
+    /// Verifies intentional shutdown notifies an active peer and lets the
+    /// listener finish without reporting endpoint loss as a service failure.
+    ///
+    /// Foreground cancellation awaits this bounded close path before the
+    /// supervisor aborts any remaining services.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_shutdown_handle_notifies_active_peer_before_listener_exit() {
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::test_support::runtime::RuntimeServiceFixture;
+
+        let service = RuntimeServiceFixture::new().build();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            max_connections: 1,
+            setup_timeout: std::time::Duration::from_secs(2),
+            idle_timeout: std::time::Duration::from_secs(5),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let server = bind_runtime_iroh_endpoint(policy, SecretKey::generate())
+            .await
+            .unwrap()
+            .unwrap();
+        let server_addr = server.endpoint().addr();
+        let shutdown = server.shutdown_handle();
+        let diagnostics = server.diagnostics.clone();
+        let listener_handle = handle.clone();
+        let listener = tokio::spawn(async move {
+            serve_runtime_iroh_control_listener(
+                &server,
+                &listener_handle,
+                AsyncRuntimeControlConnectionConfig::new(4096, 0).unwrap(),
+                None,
+            )
+            .await
+        });
+        let actor_task = tokio::spawn(actor.run());
+        let client = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let connection = client
+            .connect(server_addr, MEZZANINE_IROH_ALPN)
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while diagnostics.snapshot().active_connections != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let (closed_cleanly, _peer_close) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                tokio::join!(shutdown.close(), connection.closed())
+            })
+            .await
+            .unwrap();
+        assert!(closed_cleanly);
+        assert_eq!(listener.await.unwrap().unwrap(), 1);
+
+        let snapshot = diagnostics.snapshot();
+        assert!(!snapshot.listener_active);
+        assert_eq!(snapshot.active_connections, 0);
+        assert_eq!(snapshot.shutdown_aborts, 0);
+        assert_eq!(
+            handle.lifecycle_state().await.unwrap(),
+            crate::runtime::RuntimeLifecycleState::Running
+        );
+
+        client.close().await;
         let _ = handle.shutdown().await.unwrap();
         drop(handle);
         actor_task.abort();
