@@ -1046,10 +1046,14 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies an already-successful apply-patch command remains suppressed while
-/// still producing one concise pane-visible status.
+/// Verifies a successful apply-patch snapshot read is not treated as a file
+/// mutation and suppressed when the same read needs to run again.
+///
+/// Snapshot commands repeat when an action retries transport recovery or a
+/// later patch in the same logical turn targets the same path. Only a completed
+/// write phase proves that a mutation already succeeded.
 #[test]
-fn runtime_duplicate_apply_patch_skip_is_visible_without_redispatch() {
+fn runtime_successful_apply_patch_read_is_not_suppressed_as_duplicate_mutation() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
@@ -1122,21 +1126,20 @@ fn runtime_duplicate_apply_patch_skip_is_visible_without_redispatch() {
         .clone();
     service.running_shell_transactions_mut_for_tests().clear();
     service.record_shell_dispatch_success("turn-1", &command);
+    mark_test_pane_ready(&mut service, "%1");
 
-    let duplicate = service
+    let resumed = service
         .dispatch_stored_running_shell_actions("turn-1")
         .unwrap()
         .unwrap();
 
-    assert!(service.running_shell_transactions_for_tests().is_empty());
-    assert_eq!(duplicate.action_results[0].status, ActionStatus::Succeeded);
-    let structured = duplicate.action_results[0]
-        .structured_content_json
-        .as_deref()
-        .unwrap();
+    assert_eq!(resumed.action_results[0].status, ActionStatus::Running);
     assert!(
-        structured.contains("repeated_successful_file_mutation"),
-        "{structured}"
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| transaction.command == command),
+        "the repeated snapshot read should be dispatched"
     );
     let pane_text = service
         .pane_screen("%1")
@@ -1145,7 +1148,6 @@ fn runtime_duplicate_apply_patch_skip_is_visible_without_redispatch() {
         .join("\n");
     let status =
         "agent: duplicate file mutation skipped because the same mutation already succeeded";
-    assert!(pane_text.contains(status), "{pane_text}");
-    assert_eq!(pane_text.matches(status).count(), 1, "{pane_text}");
+    assert!(!pane_text.contains(status), "{pane_text}");
     service.terminate_all_pane_processes().unwrap();
 }

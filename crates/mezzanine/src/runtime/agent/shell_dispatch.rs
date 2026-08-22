@@ -818,8 +818,9 @@ impl RuntimeSessionService {
             .unwrap_or_default();
         let dispatched_count = history.dispatched_count();
         let successful_duplicate_count = history.exact_success_count(command);
-        if runtime_agent_action_rejects_duplicate_success(action) && successful_duplicate_count > 0
-        {
+        let is_file_mutation = runtime_agent_action_rejects_duplicate_success(action)
+            && apply_patch_transaction_phase(command) == Some(ApplyPatchTransactionPhase::Write);
+        if is_file_mutation && successful_duplicate_count > 0 {
             let context_command = runtime_agent_context_command(action, command);
             return Ok(Some(ActionResult::succeeded(
                 turn,
