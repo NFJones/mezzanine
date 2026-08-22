@@ -140,7 +140,7 @@ impl Default for RuntimePresentationSettings {
             terminal_cursor_blink: false,
             terminal_cursor_blink_interval_ms: 500,
             terminal_resize_debounce_ms: 200,
-            terminal_render_rate_limit_fps: 5,
+            terminal_render_rate_limit_fps: 30,
             terminal_agent_wrap_column_cap: crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
             terminal_reduced_motion: false,
             terminal_streaming_output: true,

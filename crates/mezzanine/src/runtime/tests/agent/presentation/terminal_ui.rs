@@ -3,6 +3,29 @@
 use super::*;
 use crate::runtime::{RenderInvalidationReason, RuntimeTransition};
 
+/// Verifies partial terminal configuration retains the product's 30 FPS
+/// default instead of falling back to the obsolete 5 FPS render cadence.
+#[test]
+fn runtime_uses_product_render_rate_default_when_config_key_is_absent() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\ncursor_blink = false\n".to_string(),
+        }])
+        .unwrap();
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+
+    assert_eq!(config.render_rate_limit_fps, 30);
+}
+
 /// Verifies that terminal cursor presentation settings are parsed from runtime
 /// configuration layers and applied to attached-terminal render configuration.
 #[test]

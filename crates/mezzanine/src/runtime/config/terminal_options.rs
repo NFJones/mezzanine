@@ -315,10 +315,10 @@ pub(crate) fn runtime_terminal_resize_debounce_ms_from_config(root: &Value) -> R
 /// Returns the configured attached-terminal render rate limit in frames per second.
 pub(crate) fn runtime_terminal_render_rate_limit_fps_from_config(root: &Value) -> Result<u64> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
-        return Ok(5);
+        return Ok(30);
     };
     let Some(value) = terminal.get("render_rate_limit_fps") else {
-        return Ok(5);
+        return Ok(30);
     };
     value.as_u64().ok_or_else(|| {
         MezError::config("terminal.render_rate_limit_fps must be a non-negative integer")
