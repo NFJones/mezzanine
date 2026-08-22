@@ -58,7 +58,7 @@ pub(super) fn exchange_control_request<S: Read + Write>(
     method: &str,
     params: &str,
 ) -> Result<String> {
-    let initialize = r#"{"jsonrpc":"2.0","id":"cli-init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
+    let initialize = r#"{"jsonrpc":"2.0","id":"cli-init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
     let request = format!(
         r#"{{"jsonrpc":"2.0","id":"cli","method":"{}","params":{}}}"#,
         json_escape(method),

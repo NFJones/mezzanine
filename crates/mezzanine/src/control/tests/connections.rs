@@ -435,3 +435,37 @@ fn primary_disconnect_client_is_taken_once() {
     assert!(connection.take_disconnect_client_id().is_some());
     assert!(connection.take_disconnect_client_id().is_none());
 }
+
+/// Verifies request-local initialization cannot acquire disconnect ownership
+/// over a same-named interactive primary that existed before the connection.
+///
+/// Administrative requests may reuse the primary's authority for one RPC, but
+/// their EOF must not detach an independently owned foreground attachment.
+#[test]
+fn request_local_primary_reuse_preserves_existing_primary_on_disconnect() {
+    let mut session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let existing_primary = session.attach_primary("primary", true).unwrap();
+    let mut connection = ControlConnectionState::new(true, true);
+    let mut cache = ControlIdempotencyCache::default();
+    let input = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+    );
+
+    let (output, consumed) = handle_control_frames_for_connection(
+        &input,
+        4096,
+        &mut session,
+        &mut connection,
+        &mut cache,
+    )
+    .unwrap();
+    let (body, _) = decode_control_frame(&output, 4096).unwrap();
+
+    assert_eq!(consumed, input.len());
+    assert!(body.contains(r#""granted_role":"primary""#), "{body}");
+    assert_eq!(session.primary_client_id(), Some(&existing_primary));
+    assert!(connection.take_disconnect_client_id().is_none());
+}

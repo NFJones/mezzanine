@@ -424,7 +424,7 @@ pub(super) fn initialize_control_connection(
                     "primary initialization requires a verified interactive terminal",
                 ));
             }
-            let client_id = match session.primary_client_id().cloned() {
+            let (client_id, created_primary) = match session.primary_client_id().cloned() {
                 Some(existing_primary) => {
                     let existing = session
                         .clients()
@@ -438,17 +438,21 @@ pub(super) fn initialize_control_connection(
                             "session already has an attached primary client",
                         ));
                     }
-                    existing_primary
+                    (existing_primary, false)
                 }
-                None => session.attach_primary_with_terminal(
-                    init.client_name.clone(),
-                    client.interactive,
-                    client_terminal_descriptor_from_control(client.terminal.as_ref()),
-                )?,
+                None => (
+                    session.attach_primary_with_terminal(
+                        init.client_name.clone(),
+                        client.interactive,
+                        client_terminal_descriptor_from_control(client.terminal.as_ref()),
+                    )?,
+                    true,
+                ),
             };
             connection.initialized = true;
             connection.caller_client_id = Some(client_id);
-            connection.detach_primary_on_disconnect = init.detach_primary_on_disconnect;
+            connection.detach_primary_on_disconnect =
+                created_primary && init.detach_primary_on_disconnect;
             connection.event_stream_version = init.event_stream_version;
             Ok(InitializeResult {
                 selected_version,

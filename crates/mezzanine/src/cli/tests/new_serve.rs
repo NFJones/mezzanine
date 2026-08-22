@@ -351,11 +351,12 @@ fn read_control_response_frames_rejects_eof_before_complete_frame() {
     );
 }
 
-/// Verifies direct control framing is reusable over an established non-Unix stream.
+/// Verifies direct control framing is reusable and releases request-local ownership.
 ///
 /// The scripted stream has no socket path or peer-credential API. Successful
-/// initialization and follow-up exchange therefore prove the client protocol
-/// boundary no longer owns Unix connection setup.
+/// initialization and follow-up exchange prove the client protocol boundary no
+/// longer owns Unix connection setup. Its initialize request must also ask the
+/// server to release a newly created primary when the one-shot stream closes.
 #[test]
 fn control_request_exchange_uses_generic_read_write_stream() {
     struct ScriptedControlStream {
@@ -402,6 +403,10 @@ fn control_request_exchange_uses_generic_read_write_stream() {
         decode_control_frame(&stream.written[consumed..], 1024 * 1024).unwrap();
 
     assert!(initialize.contains(r#""method":"control/initialize""#));
+    assert!(
+        initialize.contains(r#""detach_primary_on_disconnect":true"#),
+        "{initialize}"
+    );
     assert!(request.contains(r#""method":"session/get""#));
     assert_eq!(consumed + request_len, stream.written.len());
     assert!(response.contains(r#""session_id":"$1""#));

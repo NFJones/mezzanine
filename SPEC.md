@@ -3010,11 +3010,16 @@ client MUST report that the input outcome is unknown, close boundedly, and
 require an explicit reattach without reconnecting or retrying buffered input.
 
 Abrupt EOF, reset, decode, dispatch, write, and flush failures MUST consume a
-connection-owned primary disconnect at most once. Graceful completion MUST
-finish the response stream and wait boundedly for peer acknowledgement before
-closing the QUIC connection. Reconnect MUST create a new connection and one new
-control stream; application requests MUST NOT be replayed automatically after
-an ambiguous transport failure.
+connection-owned primary disconnect at most once. A connection MAY own that
+disconnect only when its initialization created the primary; reusing an
+existing same-named primary MUST NOT transfer disconnect ownership. One-shot
+administrative clients that create a primary MUST request this cleanup so EOF
+releases request-local ownership before a differently named remote primary
+redeems an invitation. Graceful completion MUST finish the response stream and
+wait boundedly for peer acknowledgement before closing the QUIC connection.
+Reconnect MUST create a new connection and one new control stream; application
+requests MUST NOT be replayed automatically after an ambiguous transport
+failure.
 
 `remote/status`, `remote/invite`, `remote/client/list`,
 `remote/client/rename`, and `remote/client/revoke` MUST require an initialized
@@ -7761,7 +7766,7 @@ The baseline control methods are:
 
 | Method | Params | Result | Notes |
 | --- | --- | --- | --- |
-| `control/initialize` | `{ "client_name": string, "requested_version": integer, "requested_role": string, "client_version": string \| null, "session_target": SessionTarget \| null, "detach_primary_on_disconnect": boolean \| null, "client": ClientDescriptor \| null, "authentication": AuthenticationMaterial \| null }` | `{ "selected_version": integer, "server": ServerIdentity, "session": SessionSummary \| null, "granted_role": string, "capabilities": Capabilities, "approval_pending": boolean, "observer_request": ObserverState \| null }` | First request on a connection unless negotiated externally. Pending observers receive no session data beyond request-local status. Foreground primary attach clients set `detach_primary_on_disconnect` so an EOF clears their primary ownership; request-local clients leave it false. |
+| `control/initialize` | `{ "client_name": string, "requested_version": integer, "requested_role": string, "client_version": string \| null, "session_target": SessionTarget \| null, "detach_primary_on_disconnect": boolean \| null, "client": ClientDescriptor \| null, "authentication": AuthenticationMaterial \| null }` | `{ "selected_version": integer, "server": ServerIdentity, "session": SessionSummary \| null, "granted_role": string, "capabilities": Capabilities, "approval_pending": boolean, "observer_request": ObserverState \| null }` | First request on a connection unless negotiated externally. Pending observers receive no session data beyond request-local status. Foreground primary attach clients and one-shot administrative clients set `detach_primary_on_disconnect` when they may create the primary. Cleanup is armed only when that connection actually creates the primary; same-name reuse preserves the existing owner. |
 | `control/shutdown` | `{}` | `{ "closed": boolean }` | Orderly client disconnect. Naturally idempotent. |
 | `control/cancel` | `{ "request_id": string }` | `{ "cancel_requested": boolean }` | May cancel only requests owned by the caller unless primary policy permits broader cancellation. |
 | `session/list` | `{}` | `{ "sessions": [SessionSummary] }` | Read-only and naturally idempotent. |

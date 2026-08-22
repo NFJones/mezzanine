@@ -52,6 +52,12 @@ umask 077
 mez --json remote invite --role primary > mez-invite.json
 ```
 
+The one-shot local administration connection releases a primary that it
+created when the request completes, so the invited remote primary can redeem
+without a manual detach. If an interactive primary already existed, the
+administration request may reuse its authority but does not detach or replace
+that primary when the request closes.
+
 The invitation is server-bound, role-limited, and claimable by one authenticated
 client endpoint. A remote client selects it explicitly with
 `--iroh-invite-file`; no failed remote attempt falls back to Unix. The

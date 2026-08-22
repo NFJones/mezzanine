@@ -46,8 +46,11 @@ and waits boundedly for acknowledgement before closing. The server finishes its
 response half and likewise waits boundedly before connection teardown. Abrupt
 EOF, reset, decode, dispatch, write, and flush failures run the same idempotent
 connection-disconnect cleanup, so a detach-on-disconnect primary is removed at
-most once. Neither side silently replays an application request after an
-ambiguous failure.
+most once. One-shot administrative clients request that cleanup, but the server
+arms it only when the connection creates the primary. Reusing a same-named
+interactive primary does not transfer its ownership to the one-shot request.
+Neither side silently replays an application request after an ambiguous
+failure.
 
 Interactive Iroh attach retains that initialized stream instead of opening a
 stream per request. The client serializes each resize, `terminal/step`, and

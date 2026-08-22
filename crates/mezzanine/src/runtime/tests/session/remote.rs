@@ -271,7 +271,31 @@ fn runtime_remote_administration_rejects_iroh_transport() {
     let root = temp_root("remote-local-only-runtime");
     let mut service = test_runtime_service();
     service.set_config_root(root.clone());
-    let mut local = local_owner_connection(&mut service);
+    let mut local = ControlConnectionState::new(true, true);
+    local
+        .bind_authenticated_peer(AuthenticatedPeer::unix_user(effective_uid()))
+        .unwrap();
+    let initialized = request(
+        &mut service,
+        &mut local,
+        r#"{"jsonrpc":"2.0","id":"local-init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+    );
+    assert_eq!(
+        initialized
+            .pointer("/result/granted_role")
+            .and_then(serde_json::Value::as_str),
+        Some("primary")
+    );
+    let session_id = service.session().id.to_string();
+    let server_endpoint_id = service
+        .integration
+        .ensure_remote_endpoint_identity(&session_id)
+        .unwrap()
+        .secret_key()
+        .public();
+    service.integration.set_remote_endpoint_addr(Some(
+        iroh::EndpointAddr::new(server_endpoint_id).with_ip_addr("127.0.0.1:1".parse().unwrap()),
+    ));
     let invite = request(
         &mut service,
         &mut local,
@@ -281,10 +305,13 @@ fn runtime_remote_administration_rejects_iroh_transport() {
         .pointer("/result/token")
         .and_then(serde_json::Value::as_str)
         .unwrap();
-    let primary = service.session().primary_client_id().cloned().unwrap();
+    let request_local_primary = local
+        .take_disconnect_client_id()
+        .expect("one-shot owner must release the primary on EOF");
     service
-        .detach_primary(&primary, Size::new(80, 24).unwrap())
+        .detach_primary(&request_local_primary, Size::new(80, 24).unwrap())
         .unwrap();
+    assert!(service.session().primary_client_id().is_none());
 
     let endpoint_id = SecretKey::generate().public().to_string();
     let mut remote = ControlConnectionState::new(true, true);
