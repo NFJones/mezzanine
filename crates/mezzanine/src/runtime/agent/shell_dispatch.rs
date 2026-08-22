@@ -1281,6 +1281,10 @@ impl RuntimeSessionService {
                     ),
                 )?;
                 if suppressed_duplicate {
+                    self.append_agent_status_text_to_terminal_buffer(
+                        &turn.pane_id,
+                        "agent: duplicate file mutation skipped because the same mutation already succeeded",
+                    )?;
                     self.append_action_result_context_if_absent(&turn.turn_id, &result)?;
                     self.append_agent_trace_turn_event(
                         &turn.pane_id,

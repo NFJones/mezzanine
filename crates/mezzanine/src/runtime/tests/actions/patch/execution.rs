@@ -1045,3 +1045,107 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
     }));
     service.terminate_all_pane_processes().unwrap();
 }
+
+/// Verifies an already-successful apply-patch command remains suppressed while
+/// still producing one concise pane-visible status.
+#[test]
+fn runtime_duplicate_apply_patch_skip_is_visible_without_redispatch() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service.permission_policy_mut().set_approval_bypass(true);
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"duplicate-patch-status","input":"create a note"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let action = mez_agent::AgentAction {
+        id: "patch-duplicate".to_string(),
+        rationale: "create a note".to_string(),
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Add File: target/duplicate-patch-status.txt\n+visible\n*** End Patch"
+                .to_string(),
+            strip: None,
+        },
+    };
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "duplicate patch fixture".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "exercise duplicate patch suppression".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![action],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service.remove_pending_agent_provider_task("turn-1");
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+
+    let command = service
+        .running_shell_transactions_for_tests()
+        .values()
+        .find(|transaction| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::AgentAction { ref action_id }
+                    if action_id == "patch-duplicate"
+            )
+        })
+        .expect("initial apply_patch transaction should be running")
+        .command
+        .clone();
+    service.running_shell_transactions_mut_for_tests().clear();
+    service.record_shell_dispatch_success("turn-1", &command);
+
+    let duplicate = service
+        .dispatch_stored_running_shell_actions("turn-1")
+        .unwrap()
+        .unwrap();
+
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    assert_eq!(duplicate.action_results[0].status, ActionStatus::Succeeded);
+    let structured = duplicate.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(
+        structured.contains("repeated_successful_file_mutation"),
+        "{structured}"
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let status =
+        "agent: duplicate file mutation skipped because the same mutation already succeeded";
+    assert!(pane_text.contains(status), "{pane_text}");
+    assert_eq!(pane_text.matches(status).count(), 1, "{pane_text}");
+    service.terminate_all_pane_processes().unwrap();
+}
