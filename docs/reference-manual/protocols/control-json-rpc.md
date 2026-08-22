@@ -42,6 +42,16 @@ connection-disconnect cleanup, so a detach-on-disconnect primary is removed at
 most once. Neither side silently replays an application request after an
 ambiguous failure.
 
+Interactive Iroh attach retains that initialized stream instead of opening a
+stream per request. The client serializes each resize, `terminal/step`, and
+`terminal/view` operation behind exactly one response before sending the next
+operation. The initial implementation is eventless and uses bounded polling;
+a separately authorized remote event stream is not implied by transport
+authentication. Terminal input is non-replayable: after a write, read, timeout,
+reset, or connection failure that leaves its outcome ambiguous, the client must
+fail visibly, close the channel, and require reattach without retrying buffered
+input.
+
 Each stream frame is UTF-8 JSON preceded by this ASCII header block. The
 decimal `Content-Length` is the JSON body's octet length.
 
@@ -229,8 +239,10 @@ host clipboard.
 
 The recommended loop is initialize, fetch a view, render it, pass physical
 input and size updates via `terminal/step`, then apply the returned view or
-request a fresh `terminal/view`. Use events to trigger refreshes rather than a
-fixed polling redraw loop. This is rendered-view/input-step control, not raw
+request a fresh `terminal/view`. Local clients should use events to trigger
+refreshes rather than a fixed polling redraw loop. The initial remote Iroh
+attach implementation uses bounded eventless polling until an authorized remote
+event-stream contract exists. This is rendered-view/input-step control, not raw
 PTY export; specialized frontends should design around the supplied view model.
 
 ## Events and replay

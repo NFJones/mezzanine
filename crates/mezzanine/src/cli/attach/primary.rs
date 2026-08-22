@@ -1,6 +1,5 @@
 //! Primary control-socket attach setup and interactive loop.
 
-#[cfg(test)]
 use super::event_stream::read_attached_client_input_or_deadline;
 use super::event_stream::{
     AttachRenderAction, AttachedRuntimeEventStream,
@@ -8,15 +7,16 @@ use super::event_stream::{
     read_attached_client_input_or_runtime_event,
 };
 use super::requests::{
-    read_async_control_response_frames_or_disconnected, refresh_attached_client_size_async,
-    request_and_render_primary_view_async, request_primary_resize_async,
-    terminal_step_control_request, write_async_control_body_or_disconnected,
+    read_async_control_response_frames, read_async_control_response_frames_or_disconnected,
+    refresh_attached_client_size_async, request_and_render_primary_view_async,
+    request_primary_resize_async, terminal_step_control_request,
+    write_async_control_body_or_disconnected,
 };
 use super::responses::{control_response_forbidden, terminal_step_response_refresh_requirement};
 use super::{
     AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
-    AttachAnimationRefresh, AttachTerminalSizeRefresh, ClientId, Result, Size, UnixStream,
-    decode_control_frame, io,
+    AttachAnimationRefresh, AttachTerminalSizeRefresh, ClientId, MezError, Result, Size,
+    UnixStream, decode_control_frame, io,
 };
 
 /// Runs the run control socket attached primary client operation for this subsystem.
@@ -53,6 +53,186 @@ pub(in crate::cli) async fn run_control_socket_attached_primary_client(
             let _ = restore_result;
             Err(error)
         }
+    }
+}
+
+/// Runs a primary attach over one persistent Iroh control stream.
+pub(in crate::cli) async fn run_iroh_attached_primary_client<S>(
+    stream: &mut S,
+    primary_client_id: ClientId,
+    client_size: Size,
+    request_timeout: std::time::Duration,
+) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let input_fd = io::stdin().as_raw_fd();
+    let output_fd = io::stdout().as_raw_fd();
+    let mut terminal_guard =
+        AsyncAttachedTerminalPresentationGuard::new(input_fd, output_fd, None)?;
+    let run_result = run_iroh_attached_primary_client_loop_async(
+        stream,
+        terminal_guard.io_mut(),
+        primary_client_id,
+        client_size,
+        request_timeout,
+    )
+    .await;
+    let restore_result = terminal_guard.restore().await;
+    match run_result {
+        Ok(()) => restore_result,
+        Err(error) => {
+            let _ = restore_result;
+            Err(error)
+        }
+    }
+}
+
+/// Runs eventless remote primary attach without replaying ambiguous input.
+pub(in crate::cli) async fn run_iroh_attached_primary_client_loop_async<I, S>(
+    stream: &mut S,
+    terminal_io: &mut I,
+    primary_client_id: ClientId,
+    mut client_size: Size,
+    request_timeout: std::time::Duration,
+) -> Result<()>
+where
+    I: AsyncAttachedTerminalIo,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    terminal_io.enter_presentation().await?;
+    let mut iteration = 0u64;
+    let cursor_blink_epoch = std::time::Instant::now();
+    let mut render_requested = true;
+    let mut size_refresh = AttachTerminalSizeRefresh::default();
+    loop {
+        if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
+            terminal_io.invalidate_output_frame().await?;
+            let outcome = tokio::time::timeout(
+                request_timeout,
+                request_primary_resize_async(stream, &primary_client_id, client_size, iteration),
+            )
+            .await
+            .map_err(|_| {
+                MezError::invalid_state(
+                    "Iroh terminal resize acknowledgement timed out; reattach required",
+                )
+            })??;
+            if !outcome.connected {
+                return Err(MezError::invalid_state(
+                    "Iroh attach disconnected during terminal resize; reattach required",
+                ));
+            }
+            render_requested = true;
+        }
+        let input = read_attached_client_input_or_deadline(
+            terminal_io,
+            4096,
+            None,
+            size_refresh.deadline(),
+        )
+        .await?;
+        size_refresh.reschedule();
+        if input.eof {
+            return Ok(());
+        }
+        if input.bytes.is_empty() {
+            let outcome = tokio::time::timeout(
+                request_timeout,
+                request_and_render_primary_view_async(
+                    stream,
+                    terminal_io,
+                    client_size,
+                    iteration,
+                    cursor_blink_epoch,
+                ),
+            )
+            .await
+            .map_err(|_| {
+                MezError::invalid_state(
+                    "Iroh terminal view acknowledgement timed out; reattach required",
+                )
+            })??;
+            if !outcome.connected {
+                return Err(MezError::invalid_state(
+                    "Iroh attach disconnected while reading a terminal view; reattach required",
+                ));
+            }
+            render_requested = false;
+            iteration = iteration.saturating_add(1);
+            continue;
+        }
+
+        let request = terminal_step_control_request(
+            iteration,
+            &primary_client_id,
+            client_size,
+            input.bytes.as_slice(),
+            false,
+        );
+        let write_result = tokio::time::timeout(request_timeout, async {
+            tokio::io::AsyncWriteExt::write_all(stream, &super::encode_control_body(&request))
+                .await?;
+            tokio::io::AsyncWriteExt::flush(stream).await
+        })
+        .await;
+        match write_result {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) | Err(_) => {
+                return Err(MezError::invalid_state(
+                    "Iroh terminal input outcome is unknown; reattach required; input was not replayed",
+                ));
+            }
+        }
+        let response = match tokio::time::timeout(
+            request_timeout,
+            read_async_control_response_frames(stream, 1024 * 1024, 1),
+        )
+        .await
+        {
+            Ok(Ok(response)) => response,
+            Ok(Err(_)) | Err(_) => {
+                return Err(MezError::invalid_state(
+                    "Iroh terminal input outcome is unknown; reattach required; input was not replayed",
+                ));
+            }
+        };
+        let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
+        if control_response_forbidden(body.as_str())? {
+            return Err(MezError::forbidden("Iroh terminal input was rejected"));
+        }
+        let refresh_requirement = terminal_step_response_refresh_requirement(body.as_str())?;
+        if refresh_requirement.session_terminated {
+            return Ok(());
+        }
+        if refresh_requirement.full_redraw_required {
+            terminal_io.invalidate_output_frame().await?;
+        }
+        if render_requested || refresh_requirement.view_refresh_required {
+            let outcome = tokio::time::timeout(
+                request_timeout,
+                request_and_render_primary_view_async(
+                    stream,
+                    terminal_io,
+                    client_size,
+                    iteration,
+                    cursor_blink_epoch,
+                ),
+            )
+            .await
+            .map_err(|_| {
+                MezError::invalid_state(
+                    "Iroh terminal view acknowledgement timed out; reattach required",
+                )
+            })??;
+            if !outcome.connected {
+                return Err(MezError::invalid_state(
+                    "Iroh attach disconnected while reading a terminal view; reattach required",
+                ));
+            }
+        }
+        render_requested = false;
+        iteration = iteration.saturating_add(1);
     }
 }
 

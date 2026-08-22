@@ -52,20 +52,51 @@ pub(in crate::cli) async fn run_control_socket_attached_observer_client(
     }
 }
 
+/// Runs an observer attach over one persistent Iroh control stream.
+pub(in crate::cli) async fn run_iroh_attached_observer_client<S>(
+    stream: &mut S,
+    observer_request_id: String,
+    client_size: Size,
+) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let input_fd = io::stdin().as_raw_fd();
+    let output_fd = io::stdout().as_raw_fd();
+    let mut terminal_guard =
+        AsyncAttachedTerminalPresentationGuard::new(input_fd, output_fd, None)?;
+    let run_result = run_control_socket_attached_observer_client_loop_async(
+        stream,
+        terminal_guard.io_mut(),
+        observer_request_id,
+        client_size,
+    )
+    .await;
+    let restore_result = terminal_guard.restore().await;
+    match run_result {
+        Ok(()) => restore_result,
+        Err(error) => {
+            let _ = restore_result;
+            Err(error)
+        }
+    }
+}
+
 /// Runs the observer control-socket attach terminal loop over async terminal I/O.
 ///
 /// Observers ignore local input after draining it from the terminal, but they
 /// still use the async terminal boundary for readiness, resize, presentation,
 /// and styled output so observer attachment follows the same terminal ownership
 /// model as primary attachment.
-pub(in crate::cli) async fn run_control_socket_attached_observer_client_loop_async<I>(
-    stream: &mut tokio::net::UnixStream,
+pub(in crate::cli) async fn run_control_socket_attached_observer_client_loop_async<I, S>(
+    stream: &mut S,
     terminal_io: &mut I,
     observer_request_id: String,
     mut client_size: Size,
 ) -> Result<()>
 where
     I: AsyncAttachedTerminalIo,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     terminal_io.enter_presentation().await?;
     let mut iteration = 0u64;

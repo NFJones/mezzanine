@@ -11,8 +11,9 @@ use super::attach::{
     run_control_socket_attached_observer_client_loop_async,
     run_control_socket_attached_primary_client_loop_async,
     run_control_socket_attached_primary_client_loop_async_with_runtime_events,
-    terminal_step_control_request, terminal_step_response_line_style_spans,
-    terminal_step_response_output_modes, terminal_step_response_refresh_requirement,
+    run_iroh_attached_primary_client_loop_async, terminal_step_control_request,
+    terminal_step_response_line_style_spans, terminal_step_response_output_modes,
+    terminal_step_response_refresh_requirement,
 };
 use super::env::KillSessionCliArgs;
 use super::mcp::load_runtime_config_layers_for_directory;

@@ -1,7 +1,12 @@
 //! Session listing, attach argument resolution, and registry selection.
 
-use super::observer::run_control_socket_attached_observer_client;
-use super::primary::run_control_socket_attached_primary_client;
+use super::super::{ControlTargetSelection, open_persistent_iroh_control_channel};
+use super::observer::{
+    run_control_socket_attached_observer_client, run_iroh_attached_observer_client,
+};
+use super::primary::{
+    run_control_socket_attached_primary_client, run_iroh_attached_primary_client,
+};
 use super::responses::{
     ensure_control_response_success, observer_request_id_from_initialize_response,
     primary_client_id_from_initialize_response,
@@ -39,13 +44,31 @@ pub(in crate::cli) fn run_list<W: Write>(
 /// on duplicated control-flow logic.
 pub(in crate::cli) async fn run_attach<W: Write>(
     socket_selection: &SocketSelection,
+    control_target: &ControlTargetSelection,
     parsed: AttachCliArgs,
     env: CliEnv,
     interactive: bool,
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
-    let request = attach_request(socket_selection, parsed, env.runtime.uid)?;
+    let requested_role = if parsed.observer {
+        "observer"
+    } else {
+        "primary"
+    };
+    if !control_target.is_unix() && parsed.session_id.is_some() {
+        return Err(MezError::invalid_args(
+            "an explicit Iroh target already selects the remote session",
+        ));
+    }
+    let request = if control_target.is_unix() {
+        attach_request(socket_selection, parsed, env.runtime.uid)?
+    } else {
+        AttachRequest {
+            socket_selection: socket_selection.clone(),
+            requested_role,
+        }
+    };
     if !interactive {
         let message = if request.requested_role == "observer" {
             "attaching as an observer client requires an interactive terminal"
@@ -54,10 +77,45 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         };
         return Err(MezError::forbidden(message));
     }
-    let socket_path = selected_socket_path(&request.socket_selection);
-    let mut stream = UnixStream::connect(socket_path)?;
     let terminal_size_fd = io::stdout().is_terminal().then(|| io::stdout().as_raw_fd());
     let (columns, rows) = terminal_size_from_fd_or_environment(terminal_size_fd);
+    let terminal_size = Size::new(columns, rows)?;
+    let term = std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string());
+    if !control_target.is_unix() {
+        let (mut channel, initialize_body) = open_persistent_iroh_control_channel(
+            control_target,
+            &env,
+            request.requested_role,
+            columns,
+            rows,
+            &term,
+        )
+        .await?;
+        ensure_control_response_success(&initialize_body)?;
+        let run_result = if request.requested_role == "observer" {
+            let observer_request_id =
+                observer_request_id_from_initialize_response(&initialize_body)?;
+            run_iroh_attached_observer_client(
+                channel.stream_mut(),
+                observer_request_id,
+                terminal_size,
+            )
+            .await
+        } else {
+            let primary_client_id = primary_client_id_from_initialize_response(&initialize_body)?;
+            run_iroh_attached_primary_client(
+                channel.stream_mut(),
+                primary_client_id,
+                terminal_size,
+                std::time::Duration::from_secs(30),
+            )
+            .await
+        };
+        channel.close().await;
+        return run_result;
+    }
+    let socket_path = selected_socket_path(&request.socket_selection);
+    let mut stream = UnixStream::connect(socket_path)?;
     let detach_primary_on_disconnect = request.requested_role == "primary";
     let initialize = format!(
         r#"{{"jsonrpc":"2.0","id":"cli-init","method":"control/initialize","params":{{"requested_role":"{}","requested_version":1,"client_name":"mez-cli","detach_primary_on_disconnect":{},"client":{{"name":"mez-cli","interactive":true,"terminal":{{"columns":{},"rows":{},"term":"{}"}}}}}}}}"#,
@@ -65,7 +123,7 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         detach_primary_on_disconnect,
         columns,
         rows,
-        json_escape(&std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string()))
+        json_escape(&term)
     );
     if request.requested_role == "observer" {
         stream.write_all(&encode_control_body(&initialize))?;

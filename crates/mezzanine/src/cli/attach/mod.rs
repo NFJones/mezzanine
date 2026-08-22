@@ -143,7 +143,9 @@ pub(super) use observer::run_control_socket_attached_observer_client_loop_async;
 pub(super) use primary::{
     run_control_socket_attached_primary_client_loop_async,
     run_control_socket_attached_primary_client_loop_async_with_runtime_events,
+    run_iroh_attached_primary_client_loop_async,
 };
+pub(in crate::cli) use requests::read_async_control_response_frames;
 #[cfg(test)]
 pub(super) use requests::terminal_step_control_request;
 #[cfg(test)]

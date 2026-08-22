@@ -25,6 +25,20 @@ retains stderr and panic diagnostics beside its control socket in a private
 `<control-socket>.diagnostics.log`; a foreground `mez serve` reports directly
 to its invoking terminal.
 
+
+For an explicitly paired remote session, use `mez --iroh-profile PROFILE
+attach` or first pair and attach with `mez --iroh-invite-file PATH attach`. Add
+`--observer` to request pending observer access. These selectors do not inspect
+the local session registry and never fall back to a Unix socket. A role ceiling
+of `observer` cannot be elevated to primary attachment.
+
+Remote terminal input is not retried after an ambiguous connection failure. If
+Mez reports that an input outcome is unknown, treat the command as possibly
+applied, inspect the session through a new explicit attach, and do not assume
+that the lost input is safe to repeat. The local Unix socket remains available
+for administration, revocation, and recovery independently of the failed remote
+channel.
+
 ## Snapshot and resume deliberately
 
 Use `mez snapshot create` to save layout state, and `mez snapshot` to list

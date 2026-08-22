@@ -242,6 +242,205 @@ impl IrohControlTarget {
     }
 }
 
+/// One initialized, long-lived Iroh control stream for interactive attach.
+pub(super) struct PersistentIrohControlChannel {
+    _identity: RemoteClientIdentity,
+    endpoint: iroh::Endpoint,
+    connection: iroh::endpoint::Connection,
+    stream: tokio::io::Join<iroh::endpoint::RecvStream, iroh::endpoint::SendStream>,
+    setup_timeout: std::time::Duration,
+}
+
+impl PersistentIrohControlChannel {
+    /// Returns the initialized byte stream used by the shared attach protocol.
+    pub(super) fn stream_mut(
+        &mut self,
+    ) -> &mut tokio::io::Join<iroh::endpoint::RecvStream, iroh::endpoint::SendStream> {
+        &mut self.stream
+    }
+
+    /// Finishes the control stream and closes the connection and endpoint boundedly.
+    pub(super) async fn close(self) {
+        let Self {
+            _identity,
+            endpoint,
+            connection,
+            stream,
+            setup_timeout,
+        } = self;
+        let (_recv, mut send) = stream.into_inner();
+        let _ = send.finish();
+        let _ = tokio::time::timeout(setup_timeout, send.stopped()).await;
+        connection.close(iroh::endpoint::VarInt::from_u32(0), b"attach complete");
+        let _ = tokio::time::timeout(setup_timeout, endpoint.close()).await;
+    }
+}
+
+/// Opens and initializes one persistent Iroh control stream for interactive attach.
+pub(super) async fn open_persistent_iroh_control_channel(
+    control_target: &super::ControlTargetSelection,
+    env: &super::CliEnv,
+    requested_role: &str,
+    columns: u16,
+    rows: u16,
+    term: &str,
+) -> Result<(PersistentIrohControlChannel, String)> {
+    let paths = env.config_paths()?;
+    let layers = super::load_runtime_config_layers(&paths)?;
+    let structured = crate::runtime::runtime_effective_config_value(&layers)?;
+    let policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
+    if !policy.enabled {
+        return Err(MezError::config(
+            "Iroh client transport is disabled; enable transport.iroh explicitly",
+        ));
+    }
+    let target = resolve_iroh_control_target(control_target, paths.root())?;
+    ensure_iroh_attach_role_allowed(target.role(), requested_role)?;
+    if let IrohControlTarget::Invitation {
+        expires_at_unix_seconds,
+        ..
+    } = &target
+        && current_unix_seconds_for_iroh_client()? > *expires_at_unix_seconds
+    {
+        return Err(MezError::forbidden(
+            "Iroh pairing invitation expired before connection setup",
+        ));
+    }
+
+    let identity = RemoteClientIdentity::load_or_create(paths.root())?;
+    let endpoint =
+        bind_runtime_iroh_client_endpoint(&policy, identity.secret_key().clone()).await?;
+    let connection = tokio::time::timeout(
+        policy.setup_timeout,
+        endpoint.connect(target.server_addr().clone(), MEZZANINE_IROH_ALPN),
+    )
+    .await
+    .map_err(|_| MezError::invalid_state("Iroh connection setup timed out"))?
+    .map_err(iroh_connect_error)?;
+    if connection.remote_id() != target.server_addr().id {
+        return Err(MezError::forbidden(
+            "Iroh connection authenticated an unexpected server identity",
+        ));
+    }
+    let (send, recv) = tokio::time::timeout(policy.setup_timeout, connection.open_bi())
+        .await
+        .map_err(|_| MezError::invalid_state("Iroh control stream setup timed out"))?
+        .map_err(|_| MezError::invalid_state("failed to open Iroh control stream"))?;
+    let mut stream = tokio::io::join(recv, send);
+    let (mechanism, credential) = target.authentication();
+    let initialize = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "cli-init",
+        "method": "control/initialize",
+        "params": {
+            "client_name": "remote-cli",
+            "requested_version": 1,
+            "requested_role": requested_role,
+            "detach_primary_on_disconnect": requested_role == "primary",
+            "client": {
+                "name": "remote-cli",
+                "interactive": true,
+                "terminal": {
+                    "columns": columns,
+                    "rows": rows,
+                    "term": term
+                }
+            },
+            "authentication": {
+                "mechanism": mechanism,
+                "token": credential.expose_secret()
+            }
+        }
+    })
+    .to_string();
+    tokio::time::timeout(
+        policy.idle_timeout,
+        tokio::io::AsyncWriteExt::write_all(&mut stream, &encode_control_body(&initialize)),
+    )
+    .await
+    .map_err(|_| MezError::invalid_state("Iroh attach initialization write timed out"))?
+    .map_err(|_| MezError::invalid_state("Iroh attach initialization write failed"))?;
+    tokio::time::timeout(
+        policy.idle_timeout,
+        tokio::io::AsyncWriteExt::flush(&mut stream),
+    )
+    .await
+    .map_err(|_| MezError::invalid_state("Iroh attach initialization flush timed out"))?
+    .map_err(|_| MezError::invalid_state("Iroh attach initialization flush failed"))?;
+    let response = read_persistent_iroh_control_frame(&mut stream, policy.idle_timeout).await?;
+    let issued_credential = validate_iroh_initialize_response(&response, requested_role)?;
+    if let IrohControlTarget::Invitation {
+        profile_name,
+        server_addr,
+        role,
+        ..
+    } = &target
+    {
+        let issued_credential = issued_credential.ok_or_else(|| {
+            MezError::invalid_state("successful Iroh pairing response omitted device credential")
+        })?;
+        RemoteClientProfileStore::under_config_root(paths.root()).save(&RemoteClientProfile {
+            name: profile_name.clone(),
+            server_addr: server_addr.clone(),
+            role: *role,
+            device_credential: issued_credential,
+        })?;
+    }
+    Ok((
+        PersistentIrohControlChannel {
+            _identity: identity,
+            endpoint,
+            connection,
+            stream,
+            setup_timeout: policy.setup_timeout,
+        },
+        response,
+    ))
+}
+
+fn resolve_iroh_control_target(
+    control_target: &super::ControlTargetSelection,
+    config_root: &Path,
+) -> Result<IrohControlTarget> {
+    match control_target {
+        super::ControlTargetSelection::Unix => Err(MezError::invalid_args(
+            "persistent Iroh control requires an explicit remote target",
+        )),
+        super::ControlTargetSelection::IrohProfile(name) => {
+            RemoteClientProfileStore::under_config_root(config_root)
+                .load(name)?
+                .map(IrohControlTarget::Profile)
+                .ok_or_else(|| {
+                    MezError::new(
+                        crate::error::MezErrorKind::NotFound,
+                        "Iroh client profile not found",
+                    )
+                })
+        }
+        super::ControlTargetSelection::IrohInvitation(path) => parse_iroh_invitation_file(path),
+    }
+}
+
+async fn read_persistent_iroh_control_frame<S>(
+    stream: &mut S,
+    timeout: std::time::Duration,
+) -> Result<String>
+where
+    S: tokio::io::AsyncRead + Unpin,
+{
+    let response = tokio::time::timeout(
+        timeout,
+        super::attach::read_async_control_response_frames(
+            stream,
+            CLI_CONTROL_MAX_CONTENT_LENGTH,
+            1,
+        ),
+    )
+    .await
+    .map_err(|_| MezError::invalid_state("Iroh attach response timed out"))??;
+    decode_control_frame(&response, CLI_CONTROL_MAX_CONTENT_LENGTH).map(|(body, _)| body)
+}
+
 /// Exchanges initialization and one request over one client-opened Iroh stream.
 pub(crate) async fn exchange_iroh_control_request(
     config_root: &Path,
@@ -337,7 +536,7 @@ async fn exchange_bound_iroh_control_request(
     .to_string();
     write_iroh_control_frame(&mut send, &initialize, policy.idle_timeout).await?;
     let initialize_body = read_iroh_control_frame(&mut recv, policy.idle_timeout).await?;
-    let issued_credential = validate_iroh_initialize_response(&initialize_body)?;
+    let issued_credential = validate_iroh_initialize_response(&initialize_body, role)?;
 
     if let IrohControlTarget::Invitation {
         profile_name,
@@ -437,7 +636,23 @@ async fn read_iroh_control_frame(
     .map_err(|_| MezError::invalid_state("Iroh control read timed out"))?
 }
 
-fn validate_iroh_initialize_response(body: &str) -> Result<Option<SecretString>> {
+fn ensure_iroh_attach_role_allowed(
+    role_ceiling: RemoteRoleCeiling,
+    requested_role: &str,
+) -> Result<()> {
+    match (role_ceiling, requested_role) {
+        (RemoteRoleCeiling::Observer, "observer")
+        | (RemoteRoleCeiling::Primary, "observer" | "primary") => Ok(()),
+        _ => Err(MezError::forbidden(
+            "Iroh profile role ceiling does not permit the requested attach role",
+        )),
+    }
+}
+
+fn validate_iroh_initialize_response(
+    body: &str,
+    requested_role: &str,
+) -> Result<Option<SecretString>> {
     let value: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_state("invalid Iroh initialize response"))?;
     if value.get("error").is_some() {
@@ -449,6 +664,20 @@ fn validate_iroh_initialize_response(body: &str) -> Result<Option<SecretString>>
         .get("result")
         .and_then(serde_json::Value::as_object)
         .ok_or_else(|| MezError::invalid_state("Iroh initialize response omitted result"))?;
+    let expected_grant = match requested_role {
+        "primary" => "primary",
+        "observer" => "pending_observer",
+        _ => return Err(MezError::invalid_args("unsupported Iroh requested role")),
+    };
+    if result
+        .get("granted_role")
+        .and_then(serde_json::Value::as_str)
+        != Some(expected_grant)
+    {
+        return Err(MezError::forbidden(
+            "Iroh initialization granted an unexpected remote role",
+        ));
+    }
     Ok(result
         .get("device_credential")
         .and_then(serde_json::Value::as_str)
@@ -545,4 +774,46 @@ pub(super) fn incomplete_control_response_error(
     MezError::invalid_state(format!(
         "control socket closed before complete response frame ({complete_frames}/{expected_frames})"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        RemoteRoleCeiling, ensure_iroh_attach_role_allowed, validate_iroh_initialize_response,
+    };
+
+    #[test]
+    fn iroh_attach_role_ceiling_allows_observer_and_blocks_primary_escalation() {
+        ensure_iroh_attach_role_allowed(RemoteRoleCeiling::Observer, "observer").unwrap();
+        ensure_iroh_attach_role_allowed(RemoteRoleCeiling::Primary, "observer").unwrap();
+        ensure_iroh_attach_role_allowed(RemoteRoleCeiling::Primary, "primary").unwrap();
+
+        let error = ensure_iroh_attach_role_allowed(RemoteRoleCeiling::Observer, "primary")
+            .expect_err("observer authority must not attach as primary");
+        assert!(error.message().contains("role ceiling"), "{error:?}");
+    }
+
+    #[test]
+    fn iroh_initialize_requires_the_requested_attach_grant() {
+        validate_iroh_initialize_response(
+            r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary"}}"#,
+            "primary",
+        )
+        .unwrap();
+        validate_iroh_initialize_response(
+            r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"pending_observer"}}"#,
+            "observer",
+        )
+        .unwrap();
+
+        let error = validate_iroh_initialize_response(
+            r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"pending_observer"}}"#,
+            "primary",
+        )
+        .expect_err("primary attach must reject a downgraded grant");
+        assert!(
+            error.message().contains("unexpected remote role"),
+            "{error:?}"
+        );
+    }
 }

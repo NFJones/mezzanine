@@ -16,13 +16,15 @@ primary client.
 mez [GLOBAL OPTIONS] [COMMAND [ARGUMENTS...]]
 ```
 
-Global options are `--json`, `-S PATH`, and `-L NAME`; they may appear before
-or after a command. `--json` selects machine-readable output. `-S` selects an
-explicit control socket and `-L` selects a named socket in the Mez runtime
-directory. Without a subcommand, `mez` attaches to the first session that
-accepts a primary client; when none is available, it starts a new session. Use
-`mez new` to always start a new session, or `mez attach` to select an existing
-one.
+Global options are `--json`, `-S PATH`, `-L NAME`, `--iroh-profile NAME`,
+and `--iroh-invite-file PATH`; they may appear before or after a command.
+`--json` selects machine-readable output. `-S` selects an explicit control
+socket and `-L` selects a named socket in the Mez runtime directory. The Iroh
+selectors are explicit remote targets, conflict with Unix socket selectors,
+and never fall back to Unix after a remote failure. Without a subcommand, `mez`
+attaches to the first local session that accepts a primary client; when none is
+available, it starts a new session. Use `mez new` to always start a new session,
+or `mez attach` to select an existing one.
 
 ## Session commands
 
@@ -102,10 +104,17 @@ Direct control commands keep Unix as their default target. `--iroh-invite-file
 PATH` explicitly performs first-use pairing from an owner-only, bounded JSON
 invitation file, while `--iroh-profile NAME` explicitly uses a protected paired
 profile. These selectors conflict with `-S` and `-L`, never fall back to Unix,
-and currently apply only to `mez kill --force` and `mez detach`. Supplying a
-session argument to `kill` is invalid with an explicit Iroh target because the
-profile or invitation already selects the remote session. Interactive remote
-attach is a separate feature and is not implied by these one-shot controls.
+and apply to `mez attach`, `mez kill --force`, and `mez detach`. Supplying a
+session argument is invalid with an explicit Iroh target because the profile or
+invitation already selects the remote session.
+
+Interactive remote attach requires a terminal and keeps one initialized Iroh
+control stream open for its lifetime. A `primary` profile may attach as primary
+or request observer access; an `observer` profile cannot attach as primary.
+Terminal resize, input, and view requests are ordered one at a time behind their
+responses. If the connection fails after terminal input may have been sent, Mez
+reports that the outcome is unknown, does not reconnect or replay the input,
+and requires an explicit reattach.
 
 Create invitation files without exposing the token through shell arguments or
 world-readable output, for example:
@@ -113,8 +122,9 @@ world-readable output, for example:
 ```console
 umask 077
 mez --json remote invite --role primary --expires 600 > mez-invite.json
-mez --iroh-invite-file mez-invite.json kill --force
+mez --iroh-invite-file mez-invite.json attach
 # Later, after successful pairing persisted the profile named by the invitation:
+mez --iroh-profile SESSION_PROFILE attach
 mez --iroh-profile SESSION_PROFILE kill --force
 ```
 

@@ -94,13 +94,17 @@ pub(super) async fn write_styled_output_or_disconnected_async<I: AsyncAttachedTe
 }
 
 /// Requests an explicit terminal view and writes the rendered frame locally.
-pub(super) async fn request_and_render_primary_view_async<I: AsyncAttachedTerminalIo>(
-    stream: &mut tokio::net::UnixStream,
+pub(super) async fn request_and_render_primary_view_async<I, S>(
+    stream: &mut S,
     terminal_io: &mut I,
     client_size: Size,
     iteration: u64,
     cursor_blink_epoch: std::time::Instant,
-) -> Result<PrimaryViewRenderOutcome> {
+) -> Result<PrimaryViewRenderOutcome>
+where
+    I: AsyncAttachedTerminalIo,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let request = terminal_view_control_request(iteration, client_size);
     if !write_async_control_body_or_disconnected(stream, &request).await? {
         return Ok(PrimaryViewRenderOutcome::disconnected());
@@ -117,12 +121,15 @@ pub(super) async fn request_and_render_primary_view_async<I: AsyncAttachedTermin
     render_primary_view_response_async(terminal_io, body.as_str(), cursor_blink_epoch).await
 }
 /// Notifies the runtime that the attached primary terminal size changed.
-pub(super) async fn request_primary_resize_async(
-    stream: &mut tokio::net::UnixStream,
+pub(super) async fn request_primary_resize_async<S>(
+    stream: &mut S,
     primary_client_id: &ClientId,
     client_size: Size,
     iteration: u64,
-) -> Result<PrimaryResizeRequestOutcome> {
+) -> Result<PrimaryResizeRequestOutcome>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let request = terminal_resize_control_request(iteration, primary_client_id, client_size);
     if !write_async_control_body_or_disconnected(stream, &request).await? {
         return Ok(PrimaryResizeRequestOutcome::disconnected());
@@ -175,10 +182,13 @@ pub(super) async fn render_primary_view_response_async<I: AsyncAttachedTerminalI
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) async fn write_async_control_body_or_disconnected(
-    stream: &mut tokio::net::UnixStream,
+pub(super) async fn write_async_control_body_or_disconnected<S>(
+    stream: &mut S,
     body: &str,
-) -> Result<bool> {
+) -> Result<bool>
+where
+    S: tokio::io::AsyncWrite + Unpin,
+{
     let result = async {
         stream.write_all(&encode_control_body(body)).await?;
         stream.flush().await?;
@@ -197,11 +207,14 @@ pub(super) async fn write_async_control_body_or_disconnected(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) async fn read_async_control_response_frames(
-    stream: &mut tokio::net::UnixStream,
+pub(in crate::cli) async fn read_async_control_response_frames<S>(
+    stream: &mut S,
     max_content_length: usize,
     expected_frames: usize,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<u8>>
+where
+    S: tokio::io::AsyncRead + Unpin,
+{
     let mut response = Vec::new();
     let mut buffer = vec![0; 8192];
     loop {
@@ -230,11 +243,14 @@ pub(super) async fn read_async_control_response_frames(
 /// - `stream`: The attached control socket.
 /// - `max_content_length`: The maximum control frame body length.
 /// - `expected_frames`: The number of response frames expected by the caller.
-pub(super) async fn read_async_control_response_frames_or_disconnected(
-    stream: &mut tokio::net::UnixStream,
+pub(super) async fn read_async_control_response_frames_or_disconnected<S>(
+    stream: &mut S,
     max_content_length: usize,
     expected_frames: usize,
-) -> Result<Option<Vec<u8>>> {
+) -> Result<Option<Vec<u8>>>
+where
+    S: tokio::io::AsyncRead + Unpin,
+{
     match read_async_control_response_frames(stream, max_content_length, expected_frames).await {
         Ok(response) => Ok(Some(response)),
         Err(error) if control_response_socket_closed_before_complete_frame(&error) => {

@@ -500,6 +500,46 @@ fn invocation_parses_explicit_iroh_target_without_unix_fallback() {
         invocation.control_target,
         ControlTargetSelection::IrohProfile(ref profile) if profile == "workstation"
     ));
+    assert!(!matches!(invocation.command, Some(CliCommand::Attach(_))));
+
+    let invitation = CliInvocation::parse(
+        &[
+            "mez".to_string(),
+            "--iroh-invite-file".to_string(),
+            "/tmp/pairing.json".to_string(),
+            "attach".to_string(),
+            "--observer".to_string(),
+        ],
+        &runtime,
+        None,
+    )
+    .unwrap();
+    assert!(matches!(
+        invitation.control_target,
+        ControlTargetSelection::IrohInvitation(ref path)
+            if path == &PathBuf::from("/tmp/pairing.json")
+    ));
+    assert!(matches!(invitation.command, Some(CliCommand::Attach(_))));
+
+    let profile_attach = CliInvocation::parse(
+        &[
+            "mez".to_string(),
+            "--iroh-profile".to_string(),
+            "workstation".to_string(),
+            "attach".to_string(),
+        ],
+        &runtime,
+        None,
+    )
+    .unwrap();
+    assert!(matches!(
+        profile_attach.control_target,
+        ControlTargetSelection::IrohProfile(ref profile) if profile == "workstation"
+    ));
+    assert!(matches!(
+        profile_attach.command,
+        Some(CliCommand::Attach(_))
+    ));
 
     let error = CliInvocation::parse(
         &[

@@ -161,8 +161,8 @@ use config::{json_string_array, run_config};
 #[cfg(test)]
 pub(crate) use control_client::{IrohControlTarget, exchange_iroh_control_request};
 use control_client::{
-    incomplete_control_response_error, read_control_response_frames, run_control_request,
-    run_control_request_for_target,
+    incomplete_control_response_error, open_persistent_iroh_control_channel,
+    read_control_response_frames, run_control_request, run_control_request_for_target,
 };
 use env::{
     CliCommand, CliInvocation, CliInvocationParse, ControlTargetSelection, SocketSelection,

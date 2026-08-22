@@ -55,9 +55,18 @@ selects it explicitly with `--iroh-invite-file`; no failed remote attempt falls
 back to Unix. The invitation is consumed only after remote
 `control/initialize` succeeds. The successful response returns a device
 credential once, and the client atomically publishes a protected profile only
-after receiving that success. Later one-shot control uses
-`--iroh-profile PROFILE`. The initial direct CLI surface supports `kill` and
-`detach`; interactive remote attach is handled separately.
+after receiving that success. Later control and interactive attach use
+`--iroh-profile PROFILE`. The direct Iroh CLI surface supports `attach`, `kill`,
+and `detach`. For example, use `mez --iroh-invite-file mez-invite.json attach`
+for first pairing or `mez --iroh-profile PROFILE attach` for reconnect; add
+`--observer` to request observer access. An observer-limited invitation or
+profile cannot attach as primary.
+
+Interactive attach retains one initialized control stream and orders each
+resize, terminal-input, and view request behind its response. If terminal input
+may have been written when the connection fails, the client reports an unknown
+outcome, does not replay the input or reconnect automatically, and requires a
+new explicit attach. Unix control remains available concurrently for recovery.
 
 Invitations, device credentials, private endpoint keys, and persisted verifiers
 are omitted from client lists, diagnostics, debug output, and audit records.

@@ -112,7 +112,7 @@ pub async fn run_with<W: Write, E: Write>(
     if !invocation.control_target.is_unix()
         && !matches!(
             invocation.command.as_ref(),
-            Some(CliCommand::Kill(_) | CliCommand::Detach(_))
+            Some(CliCommand::Attach(_) | CliCommand::Kill(_) | CliCommand::Detach(_))
         )
     {
         return Err(MezError::invalid_args(
@@ -142,6 +142,7 @@ pub async fn run_with<W: Write, E: Write>(
             if let Some(session) = sessions.iter().find(|record| record.primary_available) {
                 return run_attach(
                     &super::SocketSelection::Explicit(session.socket_path.clone()),
+                    &control_target,
                     super::attach::AttachCliArgs {
                         observer: false,
                         session_id: None,
@@ -196,6 +197,7 @@ pub async fn run_with<W: Write, E: Write>(
         Some(CliCommand::Attach(args)) => {
             run_attach(
                 &socket_selection,
+                &control_target,
                 args,
                 env,
                 interactive,

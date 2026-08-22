@@ -2942,9 +2942,23 @@ only after successful invitation initialization. Explicit
 `--iroh-invite-file` and `--iroh-profile` selections MUST NOT fall back to a Unix
 socket after any remote failure. Invitation files MUST be bounded, owner-only,
 and validated for pinned server-identity/address consistency before network use.
-The initial direct CLI surface MAY restrict Iroh selection to `kill` and
-`detach`; other command paths MUST reject the remote selector before local Unix
-access rather than silently changing transports.
+The direct Iroh CLI surface MUST support explicit `attach`, `kill`, and
+`detach` selection; other command paths MUST reject the remote selector before
+local Unix access rather than silently changing transports. Explicit Iroh
+attach MUST NOT resolve a session through the local registry or consult a Unix
+socket. A primary role ceiling MAY request primary or observer attachment; an
+observer ceiling MUST NOT request primary attachment. The granted initialize
+role MUST match the requested attach role before the client begins interactive
+traffic or publishes invitation-issued profile authority.
+
+Interactive Iroh attach MUST retain one initialized bidirectional control
+stream for its lifetime and MUST preserve request/response ordering across
+terminal resize, input, and view operations. The initial client MAY use bounded
+eventless polling; transport authentication MUST NOT imply access to an
+unauthorized event stream. Terminal input MUST NOT be replayed after an
+ambiguous write, response, timeout, reset, or connection failure. The client
+MUST report that the input outcome is unknown, close boundedly, and require an
+explicit reattach without reconnecting or retrying buffered input.
 
 Abrupt EOF, reset, decode, dispatch, write, and flush failures MUST consume a
 connection-owned primary disconnect at most once. Graceful completion MUST

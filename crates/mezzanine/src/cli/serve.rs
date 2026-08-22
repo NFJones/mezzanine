@@ -100,6 +100,7 @@ pub(super) async fn run_new<W: Write>(
         wait_for_background_control_daemon(socket_path.as_path(), &mut daemon).await?;
         return super::run_attach(
             &new_socket_selection,
+            &super::ControlTargetSelection::Unix,
             super::attach::AttachCliArgs {
                 observer: false,
                 session_id: None,

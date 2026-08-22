@@ -1195,3 +1195,199 @@ async fn control_socket_observer_attach_loop_waits_for_approval_before_view() {
     );
     assert_eq!(io.written_frames[1].lines, vec!["observer live view"]);
 }
+
+/// Verifies remote primary attach serializes resize, input, and view requests
+/// behind one response each on the same persistent byte stream.
+#[tokio::test(flavor = "current_thread")]
+async fn iroh_primary_attach_loop_orders_resize_input_and_view() {
+    let (mut client_stream, mut server_stream) = tokio::io::duplex(64 * 1024);
+    let server = tokio::spawn(async move {
+        let mut methods = Vec::new();
+        for expected in ["resize", "input", "view"] {
+            let request = crate::cli::attach::read_async_control_response_frames(
+                &mut server_stream,
+                1024 * 1024,
+                1,
+            )
+            .await
+            .unwrap();
+            let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let method = parsed
+                .get("method")
+                .and_then(serde_json::Value::as_str)
+                .unwrap();
+            let expected_method = if expected == "view" {
+                "terminal/view"
+            } else {
+                "terminal/step"
+            };
+            assert_eq!(method, expected_method);
+            methods.push(expected.to_string());
+            if expected == "resize" {
+                assert!(
+                    parsed
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|id| id.starts_with("cli-terminal-resize-"))
+                );
+                assert_eq!(
+                    parsed
+                        .get("params")
+                        .and_then(|params| params.get("input_bytes"))
+                        .and_then(serde_json::Value::as_array)
+                        .map(Vec::is_empty),
+                    Some(true)
+                );
+                assert_eq!(
+                    parsed
+                        .get("params")
+                        .and_then(|params| params.get("client_size"))
+                        .and_then(|size| size.get("columns"))
+                        .and_then(serde_json::Value::as_u64),
+                    Some(100)
+                );
+            }
+            if expected == "input" {
+                assert_eq!(
+                    parsed
+                        .get("params")
+                        .and_then(|params| params.get("input_bytes"))
+                        .and_then(serde_json::Value::as_array)
+                        .and_then(|bytes| bytes.first())
+                        .and_then(serde_json::Value::as_u64),
+                    Some(u64::from(b'x'))
+                );
+            }
+            let id = parsed.get("id").cloned().unwrap();
+            let result = if expected == "view" {
+                serde_json::json!({
+                    "view": {
+                        "lines": ["remote ordered"],
+                        "line_style_spans": [[]],
+                        "cursor": {
+                            "row": 0,
+                            "column": 14,
+                            "visible": true,
+                            "style": "bar",
+                            "blink": false
+                        },
+                        "output_modes": {"application_keypad": false}
+                    }
+                })
+            } else {
+                serde_json::json!({
+                    "input_bytes": 0,
+                    "application": {
+                        "forwarded_bytes": 0,
+                        "mux_actions_applied": 0,
+                        "mouse_actions_reported": 0,
+                        "agent_prompt_inputs_applied": 0,
+                        "view_refresh_required": expected == "input",
+                        "full_redraw_required": false,
+                        "unsupported_actions": []
+                    },
+                    "view": null,
+                    "ui_theme": null,
+                    "session_terminated": false
+                })
+            };
+            let response = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": result
+            })
+            .to_string();
+            tokio::io::AsyncWriteExt::write_all(
+                &mut server_stream,
+                &encode_control_body(&response),
+            )
+            .await
+            .unwrap();
+            tokio::io::AsyncWriteExt::flush(&mut server_stream)
+                .await
+                .unwrap();
+        }
+        methods
+    });
+
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_terminal_size(Some(Size::new(100, 30).unwrap()));
+    io.push_input(b"x".to_vec());
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    run_iroh_attached_primary_client_loop_async(
+        &mut client_stream,
+        &mut io,
+        primary_client_id,
+        Size::new(80, 24).unwrap(),
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        server.await.unwrap(),
+        vec![
+            "resize".to_string(),
+            "input".to_string(),
+            "view".to_string(),
+        ]
+    );
+    assert_eq!(io.presentation_entries, 1);
+    assert_eq!(io.invalidated_output_frames, 1);
+    assert_eq!(io.written_frames.len(), 1);
+    assert_eq!(io.written_frames[0].lines, vec!["remote ordered"]);
+}
+
+/// Verifies a lost acknowledgement after remote terminal input is visible and
+/// never causes the client to reconnect or replay the buffered input.
+#[tokio::test(flavor = "current_thread")]
+async fn iroh_primary_attach_loop_reports_ambiguous_input_without_replay() {
+    let (mut client_stream, mut server_stream) = tokio::io::duplex(64 * 1024);
+    let server = tokio::spawn(async move {
+        let request = crate::cli::attach::read_async_control_response_frames(
+            &mut server_stream,
+            1024 * 1024,
+            1,
+        )
+        .await
+        .unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/step")
+        );
+        assert_eq!(
+            parsed
+                .get("params")
+                .and_then(|params| params.get("input_bytes"))
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    });
+
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_input(b"x".to_vec());
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    let error = run_iroh_attached_primary_client_loop_async(
+        &mut client_stream,
+        &mut io,
+        primary_client_id,
+        Size::new(80, 24).unwrap(),
+        Duration::from_secs(1),
+    )
+    .await
+    .expect_err("lost remote input acknowledgement must require reattach");
+    server.await.unwrap();
+
+    assert!(error.message().contains("outcome is unknown"), "{error:?}");
+    assert!(error.message().contains("reattach required"), "{error:?}");
+    assert!(
+        error.message().contains("input was not replayed"),
+        "{error:?}"
+    );
+    assert_eq!(io.presentation_entries, 1);
+    assert!(io.written_frames.is_empty());
+}
