@@ -1722,6 +1722,153 @@ fn runtime_routed_worker_joined_child_failure_recovers_parent() {
     );
 }
 
+/// Verifies a routed worker retains sibling native-shell ownership while joined.
+///
+/// Provider batches may spawn several joined children and dispatch an independent
+/// shell action together. The worker releases provider capacity and becomes
+/// scheduler `Waiting` while those children run, but that dependency wait must
+/// not invalidate the already-authorized native-shell action. After the shell
+/// and every child settle, the routed worker must resume for model evaluation
+/// instead of remaining visibly waiting forever.
+#[test]
+fn runtime_routed_worker_native_shell_survives_joined_child_wait() {
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 inspect with parallel descendants");
+    service.configure_subagent_policy(4, 4, 3, 2, SubagentWaitPolicy::Join);
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(4)
+        .unwrap();
+    let shell = mez_agent::AgentAction {
+        id: "shell-with-descendants".to_string(),
+        rationale: "inspect while descendants run".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect alongside descendants.".to_string(),
+            command: "printf routed-shell-result".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "spawn three descendants and inspect locally".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "collect parallel evidence".to_string(),
+                thought: None,
+                turn_id: worker_turn.turn_id.clone(),
+                agent_id: worker_turn.agent_id.clone(),
+                actions: vec![
+                    runtime_spawn_agent_action("spawn-one", "descendant one"),
+                    runtime_spawn_agent_action("spawn-two", "descendant two"),
+                    runtime_spawn_agent_action("spawn-three", "descendant three"),
+                    shell,
+                ],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+
+    service
+        .execute_agent_turn_with_provider(
+            &worker_turn.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert!(
+        service
+            .agent_scheduler()
+            .waiting_turns()
+            .any(|work| work.turn_id == worker_turn.turn_id)
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Blocked)
+    );
+    let descendants = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .filter(|turn| {
+            service.subagent_task_parent(&turn.turn_id).as_deref()
+                == Some(worker_turn.agent_id.as_str())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(descendants.len(), 3, "{descendants:#?}");
+    for descendant in descendants {
+        service
+            .complete_running_agent_turn_and_start_ready(
+                &descendant,
+                AgentTurnState::Completed,
+                "routed_descendant_completed",
+            )
+            .unwrap();
+    }
+
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    assert!(
+        service
+            .agent_scheduler()
+            .waiting_turns()
+            .any(|work| work.turn_id == worker_turn.turn_id)
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Blocked)
+    );
+
+    let dispatch = service
+        .claim_native_shell_action(&worker_turn.turn_id, "shell-with-descendants")
+        .unwrap()
+        .expect("dependency-waiting worker must retain its native shell action");
+    let outcome = crate::runtime::execute_native_shell_dispatch(dispatch);
+    assert!(service.complete_native_shell_action(outcome).unwrap());
+
+    assert!(
+        !service
+            .agent_scheduler()
+            .waiting_turns()
+            .any(|work| work.turn_id == worker_turn.turn_id)
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Running)
+    );
+    assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
+    assert_eq!(
+        service
+            .routed_workflow_for_tests(&parent_turn_id)
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies routed loop continuation queue failure terminates the controller
 /// and resumes the blocked parent through one bounded explanation.
 ///

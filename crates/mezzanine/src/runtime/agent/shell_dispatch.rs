@@ -64,6 +64,35 @@ fn apply_patch_read_transport_failure_message(
 }
 
 impl RuntimeSessionService {
+    /// Reports whether a native action still belongs to a live turn execution.
+    ///
+    /// Joined parents release provider capacity by moving to ledger `Blocked`
+    /// and scheduler `Waiting`, but sibling native actions from the same batch
+    /// remain authorized and must continue to accept worker ownership/results.
+    /// Approval-blocked and terminal turns are excluded because they do not own
+    /// a dependency wait capable of preserving the in-flight execution.
+    fn native_shell_action_turn_is_current(&self, turn_id: &str, action_id: &str) -> bool {
+        let turn_is_live = self.agent_turn_ledger().turns().iter().any(|turn| {
+            turn.turn_id == turn_id
+                && (turn.state == AgentTurnState::Running
+                    || (turn.state == AgentTurnState::Blocked
+                        && self
+                            .agent
+                            .agent_scheduler
+                            .waiting_turns()
+                            .any(|work| work.turn_id == turn_id)))
+        });
+        turn_is_live
+            && self
+                .agent_turn_executions()
+                .get(turn_id)
+                .is_some_and(|execution| {
+                    execution.action_results.iter().any(|result| {
+                        result.action_id == action_id && result.status == ActionStatus::Running
+                    })
+                })
+    }
+
     /// Applies one fenced native-shell output preview to the transient pane tail.
     pub(crate) fn apply_native_shell_progress(
         &mut self,
@@ -79,29 +108,22 @@ impl RuntimeSessionService {
         if claimed != Some(&progress.marker) || pending != Some(&progress.marker) {
             return Ok(false);
         }
+        if !self.native_shell_action_turn_is_current(&progress.turn_id, &progress.action_id) {
+            return Ok(false);
+        }
         let Some(turn) = self
             .agent_turn_ledger()
             .turns()
             .iter()
-            .find(|turn| turn.turn_id == progress.turn_id && turn.state == AgentTurnState::Running)
+            .find(|turn| turn.turn_id == progress.turn_id)
             .cloned()
         else {
             return Ok(false);
         };
-        let running = self
-            .agent_turn_executions()
-            .get(&progress.turn_id)
-            .is_some_and(|execution| {
-                execution.action_results.iter().any(|result| {
-                    result.action_id == progress.action_id && result.status == ActionStatus::Running
-                })
-            });
-        if !running
-            || !self.agent_shell_transaction_action_shows_live_output(
-                &progress.turn_id,
-                &progress.action_id,
-            )
-        {
+        if !self.agent_shell_transaction_action_shows_live_output(
+            &progress.turn_id,
+            &progress.action_id,
+        ) {
             return Ok(false);
         }
         let lines = latest_agent_shell_transaction_output_lines(
@@ -163,20 +185,7 @@ impl RuntimeSessionService {
         {
             return Ok(None);
         }
-        let current = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .any(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Running)
-            && self
-                .agent_turn_executions()
-                .get(turn_id)
-                .is_some_and(|execution| {
-                    execution.action_results.iter().any(|result| {
-                        result.action_id == action_id && result.status == ActionStatus::Running
-                    })
-                });
-        if !current {
+        if !self.native_shell_action_turn_is_current(turn_id, action_id) {
             self.agent.pending_native_shell_dispatches.remove(&identity);
             return Ok(None);
         }
@@ -222,14 +231,18 @@ impl RuntimeSessionService {
             }
             return Ok(false);
         }
+        let current =
+            self.native_shell_action_turn_is_current(&outcome.turn_id, &outcome.action_id);
         self.agent.pending_native_shell_dispatches.remove(&identity);
         self.agent.claimed_native_shell_dispatches.remove(&identity);
-
+        if !current {
+            return Ok(false);
+        }
         let Some(turn) = self
             .agent_turn_ledger()
             .turns()
             .iter()
-            .find(|turn| turn.turn_id == outcome.turn_id && turn.state == AgentTurnState::Running)
+            .find(|turn| turn.turn_id == outcome.turn_id)
             .cloned()
         else {
             return Ok(false);
