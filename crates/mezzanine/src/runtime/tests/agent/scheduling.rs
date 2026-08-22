@@ -1876,6 +1876,251 @@ async fn runtime_four_terminal_subagents_recover_missed_final_handoff() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Creates one waiting parent whose only child is terminal before join handoff.
+///
+/// The fixture deliberately stops after scheduler and ledger terminalization so
+/// reconciliation tests can mutate the volatile correlation and exactly-once
+/// ownership records that may diverge at asynchronous callback boundaries.
+fn runtime_terminal_join_recovery_fixture() -> (
+    RuntimeSessionService,
+    crate::runtime::RuntimeAgentPromptTurnStart,
+    AgentTurnRecord,
+) {
+    let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(2)
+        .unwrap();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let parent = service.start_agent_prompt_turn("%1", "parent").unwrap();
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "spawn one child".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "exercise terminal join reconciliation".to_string(),
+                thought: None,
+                turn_id: parent.turn_id.clone(),
+                agent_id: parent.agent_id.clone(),
+                actions: vec![runtime_spawn_agent_action("spawn-one", "child one")],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &parent.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    let child = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id != parent.turn_id)
+        .cloned()
+        .unwrap();
+    service
+        .agent_scheduler_mut()
+        .complete(&child.turn_id)
+        .unwrap();
+    service
+        .agent_turn_ledger_mut()
+        .finish_turn(&child.turn_id, AgentTurnState::Completed)
+        .unwrap();
+
+    (service, parent, child)
+}
+
+/// Verifies reconciliation derives a lost join from the waiting parent.
+///
+/// Child-pane cleanup may erase the volatile child-keyed dependency after the
+/// child is terminal. The parent's persisted running spawn result still owns
+/// exact child correlation, so recovery must rebuild the index, attach the
+/// result, and queue provider evaluation instead of waiting indefinitely.
+#[test]
+fn runtime_terminal_join_recovery_rebuilds_lost_child_index() {
+    let (mut service, parent, child) = runtime_terminal_join_recovery_fixture();
+    service.remove_joined_subagent_dependencies_for_agent(&child.agent_id);
+
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    assert!(service.terminal_joined_subagent_result_recovery_needed());
+    assert_eq!(
+        service
+            .reconcile_agent_runtime_progress_paths_with_actor_progress(
+                &std::collections::BTreeSet::new(),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 0);
+    assert!(
+        service.agent_turn_ledger().turns().iter().any(|turn| {
+            turn.turn_id == parent.turn_id && turn.state == AgentTurnState::Running
+        })
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent.turn_id)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a stale execution-owned terminal claim cannot suppress join repair.
+///
+/// Generic terminal replay intentionally ignores turns already claimed by a
+/// loop or routed execution. A retained running spawn result proves the logical
+/// parent handoff is still outstanding, so reconciliation must settle that join
+/// directly and resume the parent despite the stale child claim.
+#[test]
+fn runtime_terminal_join_recovery_ignores_stale_execution_claim() {
+    let (mut service, parent, child) = runtime_terminal_join_recovery_fixture();
+    service.mark_terminal_result_claimed_for_tests(&child.turn_id);
+
+    assert_eq!(service.joined_subagent_dependency_count(), 1);
+    assert!(service.terminal_joined_subagent_result_recovery_needed());
+    assert_eq!(
+        service
+            .reconcile_agent_runtime_progress_paths_with_actor_progress(
+                &std::collections::BTreeSet::new(),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 0);
+    assert!(
+        service.agent_turn_ledger().turns().iter().any(|turn| {
+            turn.turn_id == parent.turn_id && turn.state == AgentTurnState::Running
+        })
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent.turn_id)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies unrelated work from the same child agent cannot mask a terminal join.
+///
+/// Persistent child agents may own later independent turns. Join liveness must
+/// remain tied to the exact spawned turn or its correlated logical loop, so
+/// unrelated same-agent work cannot leave a completed parent action waiting.
+#[test]
+fn runtime_terminal_join_recovery_ignores_unrelated_same_agent_work() {
+    let (mut service, parent, child) = runtime_terminal_join_recovery_fixture();
+    let mut unrelated = child.clone();
+    unrelated.turn_id = "unrelated-child-turn".to_string();
+    unrelated.state = AgentTurnState::Queued;
+    service
+        .agent_turn_ledger_mut()
+        .start_turn(unrelated)
+        .unwrap();
+
+    let dependency = service
+        .joined_subagent_dependency(&child.turn_id)
+        .cloned()
+        .unwrap();
+    assert!(!service.joined_subagent_dependency_has_live_child(&dependency));
+    assert_eq!(
+        service.recover_terminal_joined_subagent_results().unwrap(),
+        1
+    );
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 0);
+    assert!(
+        service.agent_turn_ledger().turns().iter().any(|turn| {
+            turn.turn_id == parent.turn_id && turn.state == AgentTurnState::Running
+        })
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent.turn_id)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a durable waiting action overrides stale child correlation.
+///
+/// If the volatile join index still names a terminal child but the parent
+/// action names a child whose retained ledger state was lost, reconciliation
+/// must trust the parent action, settle it as a failed child result, remove both
+/// correlations, and resume provider evaluation instead of waiting forever.
+#[test]
+fn runtime_terminal_join_recovery_settles_orphaned_parent_action() {
+    let (mut service, parent, _child) = runtime_terminal_join_recovery_fixture();
+    let result = service
+        .agent_turn_executions_mut()
+        .get_mut(&parent.turn_id)
+        .and_then(|execution| execution.action_results.first_mut())
+        .unwrap();
+    let mut structured = serde_json::from_str::<serde_json::Value>(
+        result.structured_content_json.as_deref().unwrap(),
+    )
+    .unwrap();
+    structured["child_turn_id"] = serde_json::json!("missing-child-turn");
+    structured["child_agent_id"] = serde_json::json!("agent-%missing-child");
+    result.structured_content_json = Some(structured.to_string());
+
+    assert_eq!(service.joined_subagent_dependency_count(), 1);
+    assert!(service.terminal_joined_subagent_result_recovery_needed());
+    assert_eq!(
+        service
+            .reconcile_agent_runtime_progress_paths_with_actor_progress(
+                &std::collections::BTreeSet::new(),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 0);
+    assert!(
+        service.agent_turn_ledger().turns().iter().any(|turn| {
+            turn.turn_id == parent.turn_id && turn.state == AgentTurnState::Running
+        })
+    );
+    assert!(
+        service
+            .agent_turn_contexts()
+            .get(&parent.turn_id)
+            .unwrap()
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("subagent task state was lost"))
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent.turn_id)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a late shell result resumes a parent after three joined children.
 ///
 /// All child results intentionally settle while a sibling shell action is

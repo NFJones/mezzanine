@@ -734,6 +734,15 @@ impl RuntimeSessionService {
         self.agent.joined_subagent_dependencies.len()
     }
 
+    /// Marks a terminal child as already claimed by execution-aware settlement.
+    #[cfg(test)]
+    pub(crate) fn mark_terminal_result_claimed_for_tests(&mut self, turn_id: &str) {
+        self.agent.terminal_result_dispositions.insert(
+            turn_id.to_string(),
+            TerminalResultDisposition::RetainedByLoop,
+        );
+    }
+
     /// Reports whether one turn is waiting for an approval decision.
     pub(crate) fn agent_turn_has_blocked_approval(&self, turn_id: &str) -> bool {
         self.agent
