@@ -209,6 +209,14 @@ impl RemoteClientProfileStore {
             .profiles
             .iter()
             .position(|stored| stored.name == profile.name);
+        if let Some(index) = existing_index
+            && database.profiles[index].server_addr.id != profile.server_addr.id
+        {
+            return Err(MezError::conflict(format!(
+                "remote client profile `{}` is pinned to a different server identity; the existing profile was preserved, use an invitation with a distinct profile name",
+                profile.name
+            )));
+        }
         if existing_index.is_none() && database.profiles.len() >= MAX_PROFILE_RECORDS {
             return Err(MezError::conflict(
                 "remote client profile record limit has been reached",
@@ -422,6 +430,102 @@ mod tests {
         assert_eq!(metadata.permissions().mode() & 0o077, 0);
         let persisted = fs::read_to_string(store.directory().join(PROFILES_FILE_NAME)).unwrap();
         assert!(!persisted.contains(credential));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies a successful pairing cannot replace an unrelated same-named
+    /// profile after the profile has been pinned to another server identity.
+    ///
+    /// The collision must fail before credential publication so the original
+    /// route, role, credential, and credential-file set remain unchanged.
+    #[test]
+    fn profile_save_rejects_cross_server_name_collision_without_mutation() {
+        let root = test_root("cross-server-profile-collision");
+        let store = RemoteClientProfileStore::under_config_root(&root);
+        let original = RemoteClientProfile {
+            name: "shared-session".to_string(),
+            server_addr: EndpointAddr::new(SecretKey::generate().public())
+                .with_ip_addr("127.0.0.1:47001".parse().unwrap()),
+            role: RemoteRoleCeiling::Observer,
+            device_credential: SecretString::from("original-credential".to_string()),
+        };
+        store.save(&original).unwrap();
+        let credentials = store.directory().join(CREDENTIALS_DIRECTORY_NAME);
+        let mut credential_files_before = fs::read_dir(&credentials)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        credential_files_before.sort();
+
+        let replacement = RemoteClientProfile {
+            name: original.name.clone(),
+            server_addr: EndpointAddr::new(SecretKey::generate().public())
+                .with_ip_addr("127.0.0.1:47002".parse().unwrap()),
+            role: RemoteRoleCeiling::Primary,
+            device_credential: SecretString::from("replacement-credential".to_string()),
+        };
+        let conflict = store.save(&replacement).unwrap_err();
+        assert_eq!(conflict.kind(), crate::error::MezErrorKind::Conflict);
+        assert!(conflict.message().contains("shared-session"));
+        assert!(conflict.message().contains("different server identity"));
+
+        let loaded = store.load(&original.name).unwrap().unwrap();
+        assert_eq!(loaded.server_addr, original.server_addr);
+        assert_eq!(loaded.role, original.role);
+        assert_eq!(
+            loaded.device_credential.expose_secret(),
+            original.device_credential.expose_secret()
+        );
+        let mut credential_files_after = fs::read_dir(&credentials)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        credential_files_after.sort();
+        assert_eq!(credential_files_after, credential_files_before);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies retrying or refreshing a pairing for the same pinned server
+    /// identity can update mutable route, role, and credential information.
+    ///
+    /// Publishing the refresh must replace the obsolete credential file only
+    /// after the profile database points at the newly persisted credential.
+    #[test]
+    fn profile_save_refreshes_same_server_and_removes_old_credential() {
+        let root = test_root("same-server-profile-refresh");
+        let store = RemoteClientProfileStore::under_config_root(&root);
+        let server_endpoint_id = SecretKey::generate().public();
+        let original = RemoteClientProfile {
+            name: "stable-session".to_string(),
+            server_addr: EndpointAddr::new(server_endpoint_id)
+                .with_ip_addr("127.0.0.1:47101".parse().unwrap()),
+            role: RemoteRoleCeiling::Observer,
+            device_credential: SecretString::from("old-credential".to_string()),
+        };
+        store.save(&original).unwrap();
+
+        let refreshed = RemoteClientProfile {
+            name: original.name.clone(),
+            server_addr: EndpointAddr::new(server_endpoint_id)
+                .with_ip_addr("127.0.0.1:47102".parse().unwrap()),
+            role: RemoteRoleCeiling::Primary,
+            device_credential: SecretString::from("new-credential".to_string()),
+        };
+        store.save(&refreshed).unwrap();
+
+        let loaded = store.load(&refreshed.name).unwrap().unwrap();
+        assert_eq!(loaded.server_addr, refreshed.server_addr);
+        assert_eq!(loaded.role, refreshed.role);
+        assert_eq!(
+            loaded.device_credential.expose_secret(),
+            refreshed.device_credential.expose_secret()
+        );
+        let credentials = store.directory().join(CREDENTIALS_DIRECTORY_NAME);
+        let credential_files = fs::read_dir(&credentials).unwrap().collect::<Vec<_>>();
+        assert_eq!(credential_files.len(), 1);
+        let persisted_credential =
+            fs::read_to_string(credential_files[0].as_ref().unwrap().path()).unwrap();
+        assert_eq!(persisted_credential, "new-credential");
         let _ = fs::remove_dir_all(root);
     }
 

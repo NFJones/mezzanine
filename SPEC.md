@@ -2954,6 +2954,10 @@ only after successful invitation initialization. Explicit
 `--iroh-invite-file` and `--iroh-profile` selections MUST NOT fall back to a Unix
 socket after any remote failure. Invitation files MUST be bounded, owner-only,
 and validated for pinned server-identity/address consistency before network use.
+Publishing a same-named client profile MAY refresh its route, role ceiling, and
+credential only when the existing and incoming profiles are pinned to the same
+server endpoint identity. A different-server name collision MUST fail before
+credential publication and MUST preserve the existing profile and credential.
 The direct Iroh CLI surface MUST support explicit `attach`, `kill`, and
 `detach` selection; other command paths MUST reject the remote selector before
 local Unix access rather than silently changing transports. Explicit Iroh

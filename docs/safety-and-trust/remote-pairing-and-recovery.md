@@ -62,6 +62,11 @@ response is lost or local profile persistence fails, retry the same invitation
 from the same client endpoint before it expires. The server returns the same
 credential and reuses the existing trust record; another endpoint cannot claim
 or resume it. This retry does not replay a later control or terminal request.
+If the invitation's profile name already belongs to a different server endpoint,
+profile publication fails without replacing its route or credential. Issue a
+new invitation with a distinct profile name rather than deleting or rewriting
+the protected profile database by hand. A retry for the same server identity may
+refresh that profile after successful initialization.
 Later control and interactive attach use `--iroh-profile PROFILE`. The direct
 Iroh CLI surface supports `attach`, `kill`, and `detach`. For example, use `mez
 --iroh-invite-file mez-invite.json attach` for first pairing or `mez
