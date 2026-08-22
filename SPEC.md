@@ -2974,7 +2974,10 @@ stream version 1 during `control/initialize`. The server MUST NOT open an event
 stream before the successful initialize response is flushed, and then MUST open
 at most one unidirectional stream on that same QUIC connection with the exact
 preface `mezzanine/events/1\n`. Client-opened unidirectional streams remain
-forbidden.
+forbidden. The client MUST apply one configured Iroh setup deadline to both
+accepting the negotiated event stream and receiving its complete preface. If
+that deadline expires, the client MUST close the QUIC connection and fail the
+attach visibly rather than wait indefinitely.
 
 Every remote event batch MUST re-resolve the current initialized session client
 and project retained events through the existing audience policy. Pending

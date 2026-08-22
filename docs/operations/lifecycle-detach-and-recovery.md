@@ -32,7 +32,9 @@ the local session registry and never fall back to a Unix socket. A role ceiling
 of `observer` cannot be elevated to primary attachment. Remote attach also
 negotiates an authorized event stream for redraw wakeups. Pending observers do
 not receive it until approval; revocation, detach, or stream failure terminates
-the remote attach and requires an explicit reconnect.
+the remote attach and requires an explicit reconnect. The configured Iroh setup
+timeout bounds both waiting for that stream and receiving its preface; timeout
+closes the connection instead of leaving attach waiting indefinitely.
 
 Remote terminal input is not retried after an ambiguous connection failure. If
 Mez reports that an input outcome is unknown, treat the command as possibly

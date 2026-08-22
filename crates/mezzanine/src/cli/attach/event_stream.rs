@@ -213,26 +213,41 @@ async fn receive_iroh_runtime_events(
     setup_timeout: std::time::Duration,
     sender: &tokio::sync::mpsc::Sender<Result<AttachRenderAction>>,
 ) -> Result<()> {
-    let mut stream = tokio::select! {
-        accepted = connection.accept_uni() => accepted.map_err(|_| {
-            MezError::invalid_state("failed to accept negotiated Iroh event stream")
-        })?,
-        _ = connection.closed() => {
+    let setup = async {
+        let mut stream = tokio::select! {
+            accepted = connection.accept_uni() => accepted.map_err(|_| {
+                MezError::invalid_state("failed to accept negotiated Iroh event stream")
+            })?,
+            _ = connection.closed() => {
+                return Err(MezError::invalid_state(
+                    "Iroh connection closed before the negotiated event stream arrived",
+                ));
+            }
+        };
+        let mut preface = vec![0u8; crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE.len()];
+        stream
+            .read_exact(&mut preface)
+            .await
+            .map_err(|_| MezError::invalid_state("Iroh event stream preface was truncated"))?;
+        if preface != crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE {
             return Err(MezError::invalid_state(
-                "Iroh connection closed before the negotiated event stream arrived",
+                "Iroh event stream used an unsupported preface or version",
+            ));
+        }
+        Ok(stream)
+    };
+    let mut stream = match tokio::time::timeout(setup_timeout, setup).await {
+        Ok(result) => result?,
+        Err(_) => {
+            connection.close(
+                iroh::endpoint::VarInt::from_u32(1),
+                b"event stream setup timed out",
+            );
+            return Err(MezError::invalid_state(
+                "Iroh event stream setup timed out while awaiting the negotiated stream and preface",
             ));
         }
     };
-    let mut preface = vec![0u8; crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE.len()];
-    tokio::time::timeout(setup_timeout, stream.read_exact(&mut preface))
-        .await
-        .map_err(|_| MezError::invalid_state("Iroh event stream preface timed out"))?
-        .map_err(|_| MezError::invalid_state("Iroh event stream preface was truncated"))?;
-    if preface != crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE {
-        return Err(MezError::invalid_state(
-            "Iroh event stream used an unsupported preface or version",
-        ));
-    }
 
     let mut pending = Vec::new();
     let mut buffer = [0u8; ATTACH_EVENT_STREAM_READ_BUFFER_BYTES];
@@ -508,6 +523,130 @@ pub(super) fn attach_render_action_for_event_type(event_type: &str) -> AttachRen
         "agent_status" | "approval_changed" | "hook_failed" | "mcp_server_changed" | "message"
         | "observer_requested" | "pane_changed" => AttachRenderAction::View,
         _ => AttachRenderAction::View,
+    }
+}
+
+#[cfg(test)]
+mod iroh_setup_tests {
+    use iroh::endpoint::{QuicTransportConfig, VarInt};
+    use iroh::{Endpoint, RelayMode, SecretKey, endpoint::presets};
+    use tokio::io::AsyncWriteExt;
+
+    use super::*;
+
+    /// Creates one connected local Iroh pair with server-opened unidirectional
+    /// streams enabled on the attach-side client endpoint.
+    async fn connected_iroh_event_pair() -> (
+        Endpoint,
+        Endpoint,
+        iroh::endpoint::Connection,
+        iroh::endpoint::Connection,
+    ) {
+        let server = Endpoint::builder(presets::Minimal)
+            .secret_key(SecretKey::generate())
+            .alpns(vec![crate::runtime::MEZZANINE_IROH_ALPN.to_vec()])
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .bind()
+            .await
+            .unwrap();
+        let client = Endpoint::builder(presets::Minimal)
+            .secret_key(SecretKey::generate())
+            .transport_config(
+                QuicTransportConfig::builder()
+                    .max_concurrent_uni_streams(VarInt::from_u32(1))
+                    .build(),
+            )
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .bind()
+            .await
+            .unwrap();
+        let server_addr = server.addr();
+        let server_accept = tokio::spawn({
+            let server = server.clone();
+            async move {
+                server
+                    .accept()
+                    .await
+                    .unwrap()
+                    .accept()
+                    .unwrap()
+                    .await
+                    .unwrap()
+            }
+        });
+        let client_connection = client
+            .connect(server_addr, crate::runtime::MEZZANINE_IROH_ALPN)
+            .await
+            .unwrap();
+        let server_connection = server_accept.await.unwrap();
+        (server, client, server_connection, client_connection)
+    }
+
+    /// Verifies a peer that never opens the negotiated event stream is bounded
+    /// by setup timeout and the timed-out attach connection is closed.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_event_receiver_times_out_acceptance_and_closes_connection() {
+        let (server, client, server_connection, client_connection) =
+            connected_iroh_event_pair().await;
+        let (mut receiver, task) = spawn_iroh_runtime_event_receiver(
+            client_connection,
+            std::time::Duration::from_millis(50),
+        );
+
+        let error = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
+            .await
+            .expect("event receiver must settle within setup timeout")
+            .expect("event receiver must report setup failure")
+            .unwrap_err();
+        assert!(error.message().contains("setup timed out"), "{error}");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            server_connection.closed(),
+        )
+        .await
+        .expect("timed-out event setup must close the peer connection");
+
+        task.await.unwrap();
+        client.close().await;
+        server.close().await;
+    }
+
+    /// Verifies an event stream opened within setup timeout accepts the version
+    /// preface and continues delivering framed runtime notifications.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_event_receiver_accepts_preface_and_delivers_event() {
+        let (server, client, server_connection, client_connection) =
+            connected_iroh_event_pair().await;
+        let (mut receiver, task) = spawn_iroh_runtime_event_receiver(
+            client_connection.clone(),
+            std::time::Duration::from_secs(1),
+        );
+        let mut stream = server_connection.open_uni().await.unwrap();
+        stream
+            .write_all(crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE)
+            .await
+            .unwrap();
+        stream
+            .write_all(&crate::control::encode_control_body(
+                r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed"}}"#,
+            ))
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+
+        let action = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(action, AttachRenderAction::View);
+
+        client_connection.close(VarInt::from_u32(0), b"test complete");
+        task.await.unwrap();
+        client.close().await;
+        server.close().await;
     }
 }
 

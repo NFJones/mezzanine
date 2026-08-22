@@ -114,6 +114,8 @@ or request observer access; an `observer` profile cannot attach as primary.
 The client also negotiates one server-opened version 1 event stream. Authorized
 events wake a fresh `terminal/view`; a pending observer receives no event stream
 until approval, and revocation or event-stream failure ends the attach visibly.
+Acceptance and preface receipt share the configured Iroh setup timeout; expiry
+closes the connection and requires an explicit reattach.
 Terminal resize, input, and view requests remain ordered one at a time behind
 their responses. If the connection fails after terminal input may have been
 sent, Mez reports that the outcome is unknown, does not reconnect or replay the
