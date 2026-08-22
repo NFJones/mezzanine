@@ -7,8 +7,8 @@ use super::mcp_helpers::{
 use super::{
     BTreeMap, BTreeSet, ConfigFormat, ConfigLayer, ConfigScope, EventKind, McpRegistry, MezError,
     ModelProfile, Path, PathBuf, Result, RuntimeConfigApplyReport, RuntimePresentationSettings,
-    RuntimeProviderConfig, RuntimeSessionService, SnapshotRepository, TrustDecision,
-    compose_effective_config, current_unix_seconds, discover_existing_overlays,
+    RuntimeProviderConfig, RuntimeSessionService, RuntimeSideEffect, SnapshotRepository,
+    TrustDecision, compose_effective_config, current_unix_seconds, discover_existing_overlays,
     discover_project_root, fs, json_escape, runtime_active_turn_sleep_inhibition_from_config,
     runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
@@ -353,6 +353,7 @@ impl RuntimeSessionService {
         structured: serde_json::Value,
         affected: RuntimeConfigAffectedSubsystems,
     ) -> Result<RuntimeConfigApplyReport> {
+        let mut presentation_invalidation = None;
         let prepared_presentation = if affected.presentation {
             let settings = RuntimePresentationSettings::from_config(&structured, &effective)?;
             let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
@@ -392,7 +393,7 @@ impl RuntimeSessionService {
             )?;
         }
         if let Some((presentation_settings, host_clipboard)) = prepared_presentation {
-            self.presentation.apply_settings(presentation_settings);
+            presentation_invalidation = self.presentation.apply_settings(presentation_settings);
             self.set_host_clipboard(host_clipboard);
         }
         if affected.audit {
@@ -569,6 +570,19 @@ impl RuntimeSessionService {
             self.append_project_trust_prompt_events_for_pending_layers()?;
         let max_concurrent_agents = self.agent_scheduler().snapshot().max_concurrent_agents;
         let configured = self.integration.mcp_registry().list_servers().len();
+        if let Some(reason) = presentation_invalidation {
+            let render_effects = self
+                .session
+                .clients()
+                .iter()
+                .filter(|client| client.state == mez_mux::session::ClientState::Attached)
+                .map(|client| RuntimeSideEffect::RenderClient {
+                    client_id: client.id.clone(),
+                    reason,
+                })
+                .collect::<Vec<_>>();
+            self.presentation.defer_render_effects(render_effects);
+        }
         Ok(RuntimeConfigApplyReport {
             applied_layers: effective.applied_layers().to_vec(),
             skipped_layers: effective.skipped_layers().to_vec(),

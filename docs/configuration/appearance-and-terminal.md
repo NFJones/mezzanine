@@ -23,6 +23,12 @@ and pane status presentation; `theme`, `themes`, and aliases configure colors.
 Use `Ctrl+A ?` or the `list-keys` terminal command to inspect effective bindings
 before replacing one. Live-mutability is shown by configuration diagnostics.
 
+Changing the effective theme or another visual presentation setting queues an
+immediate full redraw for every attached client. The redraw restyles Mez-owned
+frames, prompts, overlays, and transcript surfaces without waiting for unrelated
+terminal activity. It cannot reinterpret ANSI or RGB colors already emitted by
+applications into pane history; those application-owned colors remain literal.
+
 ## Preserve history and clipboard expectations
 
 The `history` table controls bounded pane history and persistence. Clipboard

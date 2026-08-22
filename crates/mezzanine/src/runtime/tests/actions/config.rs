@@ -134,6 +134,66 @@ fn runtime_config_change_persists_generic_setting_and_applies_live() {
     let _ = fs::remove_dir_all(config_root);
 }
 
+/// Verifies an approved agent theme change uses the shared runtime repaint path.
+///
+/// Model-authored `theme.active` mutations materialize and persist the selected
+/// theme, but attached clients must also receive the same immediate full redraw
+/// as direct configuration and terminal-command changes.
+#[test]
+fn runtime_config_change_theme_queues_full_redraw() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let config_root = temp_root("runtime-agent-theme-redraw");
+    service.set_config_root(config_root.clone());
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "turn-config-theme-redraw".to_string(),
+        conversation_id: "conversation-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 200,
+        deadline_at_unix_millis: 0,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        initial_capability: None,
+        state: AgentTurnState::Running,
+    };
+    let action = mez_agent::AgentAction {
+        id: "config-theme-redraw".to_string(),
+        rationale: String::new(),
+        payload: mez_agent::AgentActionPayload::ConfigChange {
+            setting_path: "theme.active".to_string(),
+            operation: "set".to_string(),
+            value: Some("catppuccin_latte".to_string()),
+        },
+    };
+
+    let result = service
+        .execute_config_change_action_for_turn(&turn, &action, &primary, "approved")
+        .unwrap();
+
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    assert_eq!(service.ui_theme().name, "catppuccin_latte");
+    let render_effects = service
+        .drain_deferred_effects_transition()
+        .side_effects
+        .into_iter()
+        .filter(|effect| matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        render_effects,
+        vec![RuntimeSideEffect::RenderClient {
+            client_id: primary,
+            reason: crate::runtime::RenderInvalidationReason::FullRedraw,
+        }]
+    );
+    let _ = fs::remove_dir_all(config_root);
+}
+
 /// Verifies a live enhanced-keyboard opt-in takes effect while a primary
 /// command prompt already owns input, without requiring the prompt to reopen.
 ///

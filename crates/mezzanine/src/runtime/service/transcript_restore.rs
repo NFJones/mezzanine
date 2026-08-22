@@ -719,6 +719,7 @@ impl RuntimeSessionService {
     /// Drains all queued external work through one transport-neutral transition.
     pub(crate) fn drain_deferred_effects_transition(&mut self) -> RuntimeTransition {
         let mut side_effects = self.drain_pane_io_transition().side_effects;
+        side_effects.extend(self.presentation.take_deferred_render_effects());
         side_effects.extend(self.drain_audit_persistence_transition().side_effects);
         side_effects.extend(self.drain_transcript_persistence_transition().side_effects);
         side_effects.extend(self.drain_token_usage_persistence_transition().side_effects);

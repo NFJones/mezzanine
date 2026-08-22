@@ -3191,7 +3191,12 @@ slots into the live configuration layer, and MUST persist the same selected
 theme table into the primary user config so future launches see the same
 palette. `set-option theme.active <name>` MUST remain an equivalent lower-level
 live configuration mutation for immediate rendering, but it is not required to
-persist the selected theme to disk.
+persist the selected theme to disk. A successful change to the resolved theme
+or another retained-cell or layout-affecting presentation setting MUST queue an
+immediate full redraw for every attached client. Equivalent resolved settings
+MUST NOT queue a redraw. This redraw MUST restyle Mezzanine-owned surfaces and
+invalidate retained differential output, but it MUST NOT reinterpret literal
+ANSI or RGB colors already emitted by applications into pane history.
 
 The `history` table MUST support `lines`, `rotate_lines`,
 `saved_sessions_limit`, and `persist`.

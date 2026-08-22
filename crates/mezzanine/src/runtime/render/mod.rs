@@ -36,13 +36,14 @@ use super::{
     MouseResizeDragState, MouseSelectionDragState, MouseWindowActionFrameCell,
     ObserverDecisionState, PaneDescriptor, PaneInputDispatch, PaneNavigationDirection,
     PaneSurfaceKind, PasteBuffers, ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt,
-    ReadlinePromptKind, RenderedClientView, Result, RuntimeAgentPromptInput, RuntimeCommandBinding,
-    RuntimeSessionService, RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition,
-    RuntimeTransition, Size, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig,
-    TerminalFrameContext, TerminalScreen, WindowFrameAction, agent_prompt_reserved_line_count,
-    current_unix_millis, current_unix_seconds, json_escape, mouse_action_name,
-    mux_action_command_prompt_prefill, mux_action_name, pane_navigation_direction,
-    parse_command_sequence, render_attached_client_view_with_screen_and_row_resolvers,
+    ReadlinePromptKind, RenderInvalidationReason, RenderedClientView, Result,
+    RuntimeAgentPromptInput, RuntimeCommandBinding, RuntimeSessionService, RuntimeSideEffect,
+    RuntimeStatusPillCache, RuntimeStatusPillDefinition, RuntimeTransition, Size, SplitDirection,
+    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFrameContext, TerminalScreen,
+    WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis, current_unix_seconds,
+    json_escape, mouse_action_name, mux_action_command_prompt_prefill, mux_action_name,
+    pane_navigation_direction, parse_command_sequence,
+    render_attached_client_view_with_screen_and_row_resolvers,
     runtime_agent_shell_command_response_json, runtime_agent_turn_duration_display,
     runtime_agent_turn_state_name, runtime_approval_policy_name, runtime_copy_position_for_view,
     runtime_fit_status_line, runtime_paste_bytes, select_clipboard_paste_source,
@@ -58,7 +59,7 @@ const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 /// Parsing builds a complete value before the live component changes, so an
 /// invalid option cannot leave cursor, frame-status, or render pacing policy
 /// partially updated.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RuntimePresentationSettings {
     /// Whether window frame rows are rendered.
     window_frames_enabled: bool,
@@ -155,6 +156,43 @@ impl Default for RuntimePresentationSettings {
 }
 
 impl RuntimePresentationSettings {
+    /// Classifies the client repaint required by one resolved settings replacement.
+    pub(crate) fn invalidation_reason(
+        &self,
+        replacement: &Self,
+    ) -> Option<RenderInvalidationReason> {
+        if self == replacement {
+            None
+        } else if self.requires_full_redraw(replacement) {
+            Some(RenderInvalidationReason::FullRedraw)
+        } else {
+            Some(RenderInvalidationReason::Configuration)
+        }
+    }
+
+    /// Reports whether changed settings affect retained cells or presentation geometry.
+    fn requires_full_redraw(&self, replacement: &Self) -> bool {
+        self.window_frames_enabled != replacement.window_frames_enabled
+            || self.window_frame_template != replacement.window_frame_template
+            || self.window_frame_right_status_template
+                != replacement.window_frame_right_status_template
+            || self.window_status_pill_definitions != replacement.window_status_pill_definitions
+            || self.window_frame_position != replacement.window_frame_position
+            || self.window_frame_style != replacement.window_frame_style
+            || self.window_frame_visible_fields != replacement.window_frame_visible_fields
+            || self.pane_frames_enabled != replacement.pane_frames_enabled
+            || self.pane_frame_template != replacement.pane_frame_template
+            || self.pane_frame_position != replacement.pane_frame_position
+            || self.pane_frame_style != replacement.pane_frame_style
+            || self.pane_frame_visible_fields != replacement.pane_frame_visible_fields
+            || self.terminal_agent_wrap_column_cap != replacement.terminal_agent_wrap_column_cap
+            || self.terminal_reduced_motion != replacement.terminal_reduced_motion
+            || self.terminal_streaming_output != replacement.terminal_streaming_output
+            || self.terminal_completion_attention_flashing
+                != replacement.terminal_completion_attention_flashing
+            || self.ui_theme != replacement.ui_theme
+    }
+
     /// Reports whether live provider output is enabled after motion policy is applied.
     pub(crate) fn effective_agent_streaming_output(&self) -> bool {
         self.terminal_streaming_output && !self.terminal_reduced_motion
@@ -299,6 +337,8 @@ struct RuntimeAgentShellPreviewPresentation {
 pub(crate) struct RuntimePresentationComponent {
     /// Current atomically replaceable presentation configuration.
     settings: RuntimePresentationSettings,
+    /// Client renders deferred until the current runtime operation succeeds.
+    deferred_render_effects: Vec<RuntimeSideEffect>,
     /// Generation-keyed immutable visible rows for pane composition.
     pane_styled_row_cache: std::cell::RefCell<RuntimePaneStyledRowCache>,
     /// Bounded geometry-plan cache for the current window snapshot.
@@ -645,6 +685,22 @@ struct RuntimeRecordBrowserSaveCompletion {
     selected_index: usize,
 }
 
+/// Priority used to retain the strongest pending presentation invalidation.
+fn presentation_render_invalidation_priority(reason: RenderInvalidationReason) -> u8 {
+    match reason {
+        RenderInvalidationReason::CursorBlink => 0,
+        RenderInvalidationReason::StatusLine => 1,
+        RenderInvalidationReason::PaneOutput => 2,
+        RenderInvalidationReason::AgentPrompt => 3,
+        RenderInvalidationReason::Overlay => 4,
+        RenderInvalidationReason::Configuration => 5,
+        RenderInvalidationReason::ResizeDrag => 6,
+        RenderInvalidationReason::Resize => 7,
+        RenderInvalidationReason::Layout => 8,
+        RenderInvalidationReason::FullRedraw => 9,
+    }
+}
+
 impl RuntimePresentationComponent {
     /// Reports whether provisional provider output may be rendered live.
     pub(crate) fn effective_agent_streaming_output(&self) -> bool {
@@ -736,11 +792,64 @@ impl RuntimePresentationComponent {
                 .contains_key(pane_id)
     }
 
-    /// Replaces validated presentation settings and synchronizes global width policy.
-    pub(crate) fn apply_settings(&mut self, settings: RuntimePresentationSettings) {
+    /// Replaces validated settings and returns their required client invalidation.
+    pub(crate) fn apply_settings(
+        &mut self,
+        settings: RuntimePresentationSettings,
+    ) -> Option<RenderInvalidationReason> {
+        let invalidation_reason = self.settings.invalidation_reason(&settings);
         crate::host::terminal::set_agent_wrap_column_cap(settings.terminal_agent_wrap_column_cap);
         self.settings = settings;
         self.agent_presentation_projection_cache.clear();
+        invalidation_reason
+    }
+
+    /// Queues the strongest pending render effect per client after config succeeds.
+    pub(crate) fn defer_render_effects(
+        &mut self,
+        effects: impl IntoIterator<Item = RuntimeSideEffect>,
+    ) {
+        for effect in effects {
+            let RuntimeSideEffect::RenderClient {
+                client_id,
+                reason: incoming_reason,
+            } = effect
+            else {
+                debug_assert!(
+                    false,
+                    "presentation render queue received a non-render effect"
+                );
+                continue;
+            };
+            let existing_reason =
+                self.deferred_render_effects
+                    .iter_mut()
+                    .find_map(|effect| match effect {
+                        RuntimeSideEffect::RenderClient {
+                            client_id: existing_client_id,
+                            reason,
+                        } if existing_client_id == &client_id => Some(reason),
+                        _ => None,
+                    });
+            if let Some(existing_reason) = existing_reason {
+                if presentation_render_invalidation_priority(incoming_reason)
+                    > presentation_render_invalidation_priority(*existing_reason)
+                {
+                    *existing_reason = incoming_reason;
+                }
+            } else {
+                self.deferred_render_effects
+                    .push(RuntimeSideEffect::RenderClient {
+                        client_id,
+                        reason: incoming_reason,
+                    });
+            }
+        }
+    }
+
+    /// Drains render effects through the transport-neutral deferred-effect boundary.
+    pub(crate) fn take_deferred_render_effects(&mut self) -> Vec<RuntimeSideEffect> {
+        std::mem::take(&mut self.deferred_render_effects)
     }
 
     /// Clears an in-progress pane-resize gesture after layout mutation.

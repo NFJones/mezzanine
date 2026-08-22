@@ -242,6 +242,218 @@ fn runtime_applies_frame_display_options_from_config_layers() {
     );
 }
 
+/// Verifies a resolved theme change immediately requests a retained-frame
+/// invalidation for every attached client.
+///
+/// Theme colors are embedded in differential terminal output. Replacing the
+/// settings without a full redraw would leave previously emitted Mez-owned
+/// cells styled with the old palette until unrelated terminal activity.
+#[test]
+fn runtime_theme_change_queues_full_redraw_for_attached_clients() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[theme]\nactive = \"catppuccin_latte\"\n".to_string(),
+        }])
+        .unwrap();
+
+    let render_effects = service
+        .drain_deferred_effects_transition()
+        .side_effects
+        .into_iter()
+        .filter(|effect| matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        render_effects,
+        vec![RuntimeSideEffect::RenderClient {
+            client_id: primary,
+            reason: crate::runtime::RenderInvalidationReason::FullRedraw,
+        }]
+    );
+}
+
+/// Verifies reapplying equivalent resolved presentation settings is a render
+/// no-op rather than forcing an attached-client repaint.
+///
+/// Configuration layers may be reloaded without changing their effective
+/// values, so invalidation must compare resolved settings instead of broad
+/// affected-subsystem flags.
+#[test]
+fn runtime_equivalent_presentation_settings_do_not_queue_render() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let layers = vec![ConfigLayer {
+        name: "primary".to_string(),
+        path: None,
+        format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary,
+        trusted: true,
+        text: "[theme]\nactive = \"catppuccin_latte\"\n".to_string(),
+    }];
+    service.replace_config_layers(layers.clone()).unwrap();
+    let _ = service.drain_deferred_effects_transition();
+
+    service.replace_config_layers(layers).unwrap();
+
+    assert!(
+        service
+            .drain_deferred_effects_transition()
+            .side_effects
+            .into_iter()
+            .all(|effect| !matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+    );
+}
+
+/// Verifies nonvisual client-policy changes refresh attached configuration
+/// snapshots without invalidating retained terminal cells.
+///
+/// Render pacing is consumed by the attached client loop, but changing it does
+/// not alter already-rendered geometry, text, or ANSI styling.
+#[test]
+fn runtime_nonvisual_presentation_change_queues_configuration_refresh() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nrender_rate_limit_fps = 8\n".to_string(),
+        }])
+        .unwrap();
+
+    let render_effects = service
+        .drain_deferred_effects_transition()
+        .side_effects
+        .into_iter()
+        .filter(|effect| matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        render_effects,
+        vec![RuntimeSideEffect::RenderClient {
+            client_id: primary,
+            reason: crate::runtime::RenderInvalidationReason::Configuration,
+        }]
+    );
+}
+
+/// Verifies presentation changes do not target clients that have already
+/// detached from the session.
+///
+/// Deferred render fan-out must inspect current attachment state rather than
+/// retaining stale client identifiers from earlier lifecycle phases.
+#[test]
+fn runtime_presentation_change_excludes_detached_clients() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .detach_primary(&primary, Size::new(80, 24).unwrap())
+        .unwrap();
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[theme]\nactive = \"catppuccin_latte\"\n".to_string(),
+        }])
+        .unwrap();
+
+    assert!(
+        service
+            .drain_deferred_effects_transition()
+            .side_effects
+            .into_iter()
+            .all(|effect| !matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+    );
+}
+
+/// Verifies a rejected configuration candidate does not leak its theme redraw.
+///
+/// A later relationship validation can fail after candidate presentation state
+/// was installed. The rollback may repaint the restored theme, but the rejected
+/// candidate itself must never enqueue an externally visible render effect.
+#[test]
+fn runtime_rejected_theme_candidate_does_not_queue_candidate_redraw() {
+    let root = temp_root("runtime-rejected-theme-render");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    let previous_text = "[theme]\nactive = \"acid_lime\"\n";
+    fs::write(&path, previous_text).unwrap();
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: previous_text.to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let error = runtime_apply_persisted_config_mutation_batch(
+        &mut service,
+        path,
+        &[
+            ConfigMutation {
+                path: "theme.active".to_string(),
+                operation: ConfigMutationOperation::Set(ConfigMutationValue::String(
+                    "catppuccin_latte".to_string(),
+                )),
+            },
+            ConfigMutation {
+                path: "agents.default_personality".to_string(),
+                operation: ConfigMutationOperation::Set(ConfigMutationValue::String(
+                    "missing-profile".to_string(),
+                )),
+            },
+        ],
+        "test:rejected-theme-render",
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("is not defined"), "{error}");
+    assert_eq!(service.ui_theme().name, "acid_lime");
+    let render_effects = service
+        .drain_deferred_effects_transition()
+        .side_effects
+        .into_iter()
+        .filter(|effect| matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        render_effects,
+        vec![RuntimeSideEffect::RenderClient {
+            client_id: primary,
+            reason: crate::runtime::RenderInvalidationReason::FullRedraw,
+        }]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies that callers with an already-resolved terminal loop config can
 /// render the same primary view without rebuilding frame context and mouse hit
 /// regions. This protects the optimized hot path used by control requests that
