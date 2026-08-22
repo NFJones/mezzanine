@@ -1168,12 +1168,14 @@ impl RuntimeSessionService {
             return Ok(0);
         }
         let missing_pane_failures = self.fail_agent_turns_for_missing_panes()?;
+        let terminal_join_recoveries = self.recover_terminal_joined_subagent_results()?;
         let dependency_wait_recoveries = self.recover_ready_dependency_waits()?;
         let stranded_shell_recoveries = self
             .recover_stranded_agent_shell_dispatches_with_actor_progress(actor_progress_turn_ids)?;
         let unreachable_turn_failures =
             self.fail_unreachable_running_agent_turns_with_actor_progress(actor_progress_turn_ids)?;
         Ok(missing_pane_failures
+            .saturating_add(terminal_join_recoveries)
             .saturating_add(dependency_wait_recoveries)
             .saturating_add(stranded_shell_recoveries)
             .saturating_add(unreachable_turn_failures))
@@ -1193,6 +1195,7 @@ impl RuntimeSessionService {
             || self.runtime_agent_surface_startup_timer_needed()
             || self.hidden_shell_render_retention_timer_needed()
             || self.ready_dependency_wait_recovery_needed()
+            || self.terminal_joined_subagent_result_recovery_needed()
             || self.stranded_agent_shell_dispatch_recovery_timer_needed()
             || self.unreachable_running_agent_turn_timer_needed_with_actor_progress(
                 actor_progress_turn_ids,

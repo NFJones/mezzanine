@@ -1709,6 +1709,173 @@ async fn runtime_three_nonrouted_subagents_release_waiting_parent() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies reconciliation repairs a missed final handoff from four children.
+///
+/// Three children settle normally. The fourth reaches terminal ledger and
+/// scheduler state without committing its joined result, modeling interruption
+/// between child completion and parent handoff. Recovery must attach a bounded
+/// terminal result and resume the parent instead of leaving it waiting.
+#[tokio::test]
+async fn runtime_four_terminal_subagents_recover_missed_final_handoff() {
+    let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(4)
+        .unwrap();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let parent = service.start_agent_prompt_turn("%1", "parent").unwrap();
+    let actions = (1..=4)
+        .map(|index| {
+            runtime_spawn_agent_action(&format!("spawn-{index}"), &format!("child {index}"))
+        })
+        .collect::<Vec<_>>();
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "spawn four children".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "delegate four joined tasks at capacity".to_string(),
+                thought: None,
+                turn_id: parent.turn_id.clone(),
+                agent_id: parent.agent_id.clone(),
+                actions,
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &parent.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(service.joined_subagent_dependency_count(), 4);
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 1);
+    let children = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .filter(|turn| turn.turn_id != parent.turn_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(children.len(), 4, "{children:#?}");
+    assert_eq!(service.agent_scheduler().snapshot().running, 0);
+    for child in &children {
+        assert!(service.admit_managed_agent_surface_startup(&child.pane_id));
+        mark_test_pane_ready(&mut service, &child.pane_id);
+        assert!(service.complete_managed_agent_surface_startup(&child.pane_id));
+    }
+    assert_eq!(service.start_ready_agent_turns().unwrap(), 4);
+
+    for (index, child) in children.iter().rev().take(3).enumerate() {
+        let response = runtime_say_response_for_agent(
+            &child.turn_id,
+            &child.agent_id,
+            &format!("child {} done", index + 1),
+            true,
+        );
+        let action = response
+            .action_batch
+            .as_ref()
+            .and_then(|batch| batch.actions.first())
+            .cloned()
+            .unwrap();
+        let execution = mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&child.turn_id, &child.agent_id),
+            response,
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![mez_agent::ActionResult::succeeded(
+                child,
+                &action,
+                vec![format!("child {} done", index + 1)],
+                None,
+            )],
+            final_turn: true,
+            terminal_state: AgentTurnState::Completed,
+        };
+        assert!(
+            service
+                .apply_agent_provider_completed_event(
+                    &AgentId::opaque(child.agent_id.clone()).unwrap(),
+                    &child.turn_id,
+                    execution,
+                )
+                .await
+                .unwrap()
+        );
+    }
+
+    let terminal_child = children.first().unwrap();
+    service
+        .agent_scheduler_mut()
+        .complete(&terminal_child.turn_id)
+        .unwrap();
+    service
+        .agent_turn_ledger_mut()
+        .finish_turn(&terminal_child.turn_id, AgentTurnState::Completed)
+        .unwrap();
+
+    assert_eq!(service.joined_subagent_dependency_count(), 1);
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 1);
+    assert!(service.terminal_joined_subagent_result_recovery_needed());
+    assert!(
+        service.idle_cleanup_timer_needed_with_actor_progress(&std::collections::BTreeSet::new())
+    );
+    assert_eq!(
+        service
+            .reconcile_agent_runtime_progress_paths_with_actor_progress(
+                &std::collections::BTreeSet::new(),
+            )
+            .unwrap(),
+        1
+    );
+
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 0);
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Running)
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent.turn_id)
+    );
+    assert_eq!(
+        service
+            .terminal_frame_context()
+            .panes
+            .get("%1")
+            .and_then(|pane| pane.agent_status.as_deref()),
+        Some("thinking")
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a late shell result resumes a parent after three joined children.
 ///
 /// All child results intentionally settle while a sibling shell action is
@@ -1796,6 +1963,12 @@ async fn runtime_late_shell_result_resumes_parent_after_three_joined_children() 
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(children.len(), 3, "{children:#?}");
+    for child in &children {
+        assert!(service.admit_managed_agent_surface_startup(&child.pane_id));
+        mark_test_pane_ready(&mut service, &child.pane_id);
+        assert!(service.complete_managed_agent_surface_startup(&child.pane_id));
+    }
+    assert_eq!(service.start_ready_agent_turns().unwrap(), 3);
 
     for (index, child) in children.iter().enumerate() {
         let response = runtime_say_response_for_agent(
@@ -1900,6 +2073,7 @@ async fn runtime_late_shell_result_resumes_parent_after_three_joined_children() 
 #[tokio::test]
 async fn runtime_terminal_child_reconstructs_missing_join_dependency() {
     let mut service = test_runtime_service();
+    service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
     service
         .agent_scheduler_mut()
         .set_max_concurrent_agents(2)

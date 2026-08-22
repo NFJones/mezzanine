@@ -135,6 +135,79 @@ impl RuntimeSessionService {
         turn_is_live || loop_is_live
     }
 
+    /// Returns a terminal child whose retained join still owns a waiting parent.
+    fn terminal_joined_subagent_child(
+        &self,
+        dependency: &JoinedSubagentDependency,
+    ) -> Option<AgentTurnRecord> {
+        let parent_is_waiting = self.agent_turn_ledger().turns().iter().any(|turn| {
+            turn.turn_id == dependency.parent_turn_id && turn.state == AgentTurnState::Blocked
+        }) && self
+            .agent
+            .agent_scheduler
+            .waiting_turns()
+            .any(|work| work.turn_id == dependency.parent_turn_id);
+        if !parent_is_waiting || self.joined_subagent_dependency_has_live_child(dependency) {
+            return None;
+        }
+        self.agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| {
+                turn.turn_id == dependency.child_turn_id
+                    && matches!(
+                        turn.state,
+                        AgentTurnState::Completed
+                            | AgentTurnState::Failed
+                            | AgentTurnState::Interrupted
+                    )
+            })
+            .cloned()
+    }
+
+    /// Reports whether a terminal child result needs joined-parent recovery.
+    pub(crate) fn terminal_joined_subagent_result_recovery_needed(&self) -> bool {
+        self.agent
+            .joined_subagent_dependencies
+            .values()
+            .any(|dependency| self.terminal_joined_subagent_child(dependency).is_some())
+    }
+
+    /// Replays terminal child settlement when its original parent handoff was missed.
+    ///
+    /// A child may reach terminal ledger and scheduler state before its joined
+    /// result commits if completion handling is interrupted. Reusing ordinary
+    /// terminal delivery preserves correlation, idempotency, context shaping,
+    /// and scheduler reacquisition instead of synthesizing a second protocol.
+    pub(crate) fn recover_terminal_joined_subagent_results(&mut self) -> Result<usize> {
+        let candidates = self
+            .agent
+            .joined_subagent_dependencies
+            .values()
+            .filter_map(|dependency| self.terminal_joined_subagent_child(dependency))
+            .collect::<Vec<_>>();
+        let mut recovered = 0usize;
+        for child in candidates {
+            if !self
+                .agent
+                .joined_subagent_dependencies
+                .contains_key(&child.turn_id)
+            {
+                continue;
+            }
+            self.emit_subagent_task_result_for_state(&child, child.state)?;
+            if !self
+                .agent
+                .joined_subagent_dependencies
+                .contains_key(&child.turn_id)
+            {
+                self.close_terminal_subagent_pane_if_pending(&child)?;
+                recovered = recovered.saturating_add(1);
+            }
+        }
+        Ok(recovered)
+    }
+
     /// Reports whether a running parent execution is waiting on a live joined
     /// subagent dependency.
     ///
