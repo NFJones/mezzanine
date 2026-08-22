@@ -557,3 +557,38 @@ fn invocation_parses_explicit_iroh_target_without_unix_fallback() {
     .unwrap_err();
     assert!(error.message().contains("cannot be used with"), "{error}");
 }
+
+/// Verifies rejected commands name the complete command surface supported by
+/// explicit Iroh targets.
+///
+/// The guidance must include `attach` alongside the lifecycle commands so a
+/// rejected invocation does not incorrectly hide a working remote workflow.
+#[test]
+fn explicit_iroh_rejection_lists_every_supported_command() {
+    let (env, home) = test_env("explicit-iroh-supported-command-guidance");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let error = run_with(
+        vec![
+            "mez".to_string(),
+            "--iroh-profile".to_string(),
+            "workstation".to_string(),
+            "list".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error.message(),
+        "explicit Iroh targets currently support only attach, kill, and detach"
+    );
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}

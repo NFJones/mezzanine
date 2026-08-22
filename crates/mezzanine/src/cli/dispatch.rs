@@ -116,7 +116,7 @@ pub async fn run_with<W: Write, E: Write>(
         )
     {
         return Err(MezError::invalid_args(
-            "explicit Iroh targets currently support only kill and detach",
+            "explicit Iroh targets currently support only attach, kill, and detach",
         ));
     }
     if invocation.control_target.is_unix()
