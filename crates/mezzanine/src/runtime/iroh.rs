@@ -1330,10 +1330,35 @@ mod tests {
             )
             .await
             .unwrap();
-            assert_eq!(served, 2);
+            assert_eq!(served, 3);
             server_endpoint.close().await;
         };
         let client = async {
+            let invalid_profile_target = IrohControlTarget::Invitation {
+                profile_name: "x".repeat(129),
+                server_addr: server_addr.clone(),
+                token: invitation.token.clone(),
+                role: RemoteRoleCeiling::Primary,
+                expires_at_unix_seconds: invitation.expires_at_unix_seconds,
+            };
+            let save_error = exchange_iroh_control_request(
+                &client_root,
+                &policy,
+                &invalid_profile_target,
+                "window/list",
+                "{}",
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(save_error.kind(), crate::error::MezErrorKind::InvalidArgs);
+            assert_eq!(trust.list_records().unwrap().len(), 1);
+            assert!(
+                RemoteClientProfileStore::under_config_root(&client_root)
+                    .load("workstation")
+                    .unwrap()
+                    .is_none()
+            );
+
             let invitation_target = IrohControlTarget::Invitation {
                 profile_name: "workstation".to_string(),
                 server_addr: server_addr.clone(),

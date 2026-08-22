@@ -2924,18 +2924,24 @@ exactly one of `extension:iroh_invitation` or `extension:iroh_device`. Agent and
 automation roles MUST remain unavailable over this pairing contract.
 
 A pairing invitation MUST be cryptographically random, short-lived,
-single-use, bound to the current server endpoint identity and a role ceiling,
-and persisted only as a verifier. Invitation redemption MUST be transactional
-with ordinary control initialization: a failed initialization MUST NOT consume
-the invitation, create trust, bind a remote principal, or attach a session
-client. The successful first pairing response MAY include a one-time
-`device_credential`; later responses, status and list results, errors, debug
-output, and audit records MUST NOT disclose it. Durable trust MUST bind the
-server endpoint identity, authenticated client endpoint identity, stable trust
-record ID, role ceiling, revocation state, and a verifier for the device
-credential. Reconnects MUST fail closed for an unknown, revoked, mismatched, or
-role-exceeding record. The client MUST persist its endpoint key, server profile,
-and device credential under owner-only protected paths. A live client endpoint
+single-endpoint-use, bound to the current server endpoint identity and a role
+ceiling, and persisted only as a verifier. Invitation redemption MUST be
+transactional with ordinary control initialization: a failed initialization
+MUST NOT consume the invitation, create trust, bind a remote principal, or
+attach a session client. After successful redemption, the same authenticated
+client endpoint MAY retry that same invitation until expiry and MUST receive
+the same `device_credential` without creating duplicate trust; a different
+endpoint MUST NOT resume it. This recovery is limited to pairing initialization
+and MUST NOT replay later application requests. Status and list results,
+errors, debug output, and audit records MUST NOT disclose the credential.
+Durable trust MUST bind the server endpoint identity, authenticated client
+endpoint identity, stable trust record ID, role ceiling, revocation state, and
+a verifier for the device credential. Reconnects MUST resolve the presented
+credential against its exact trust record and fail closed for an unknown,
+revoked, mismatched, or role-exceeding record. Revoked history MUST NOT shadow a
+later active re-pair record, and the old revoked credential MUST remain denied.
+The client MUST persist its endpoint key, server profile, and device credential
+under owner-only protected paths. A live client endpoint
 identity MUST retain an exclusive lock, and profile database reads and writes
 MUST be serialized under a protected lock. The client MUST publish a profile
 only after successful invitation initialization. Explicit

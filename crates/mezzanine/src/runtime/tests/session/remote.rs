@@ -178,6 +178,24 @@ fn runtime_iroh_initialize_requires_pairing_then_accepts_device_proof() {
     assert!(!trust_text.contains(token));
     assert!(!trust_text.contains(&device_credential));
 
+    let mut resumed = ControlConnectionState::new(true, true);
+    resumed
+        .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint(&client_endpoint_id))
+        .unwrap();
+    let resumed_response = request(&mut service, &mut resumed, &initialize);
+    assert_eq!(
+        resumed_response
+            .pointer("/result/device_credential")
+            .and_then(serde_json::Value::as_str),
+        Some(device_credential.as_str())
+    );
+    let store = crate::security::remote::RemoteTrustStore::under_config_root(
+        &root,
+        service.session().id.as_str(),
+    )
+    .unwrap();
+    assert_eq!(store.list_records().unwrap().len(), 1);
+
     let mut reconnect = ControlConnectionState::new(true, true);
     reconnect
         .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint(&client_endpoint_id))

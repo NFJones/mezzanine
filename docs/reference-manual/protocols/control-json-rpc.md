@@ -29,12 +29,16 @@ connection are isolated from later clients and from the Unix listener.
 
 An Iroh endpoint ID proves possession of a transport key only; it grants no
 Mezzanine authority by itself. Before any other method, the peer must call
-`control/initialize` for role `primary` or `observer` with either a single-use
+`control/initialize` for role `primary` or `observer` with either a single-endpoint-use
 `extension:iroh_invitation` token or an endpoint-bound
 `extension:iroh_device` credential. Agent and automation initialization are
-rejected on this remote pairing path. Invitation initialization may return a
-one-time `device_credential`; the client persists it only after successful
-initialization and uses `extension:iroh_device` on reconnect.
+rejected on this remote pairing path. Invitation initialization returns an
+endpoint-bound `device_credential`; the client persists it only after
+successful initialization and uses `extension:iroh_device` on reconnect. If
+the initialize response or local profile save is lost, the same authenticated
+endpoint may retry that invitation until expiry and receives the same
+credential without creating another trust record. Another endpoint cannot
+resume the redemption.
 
 For graceful one-shot control, the client finishes its send half after the
 final request, reads exactly the final framed response, drains response EOF,
@@ -87,14 +91,20 @@ Capabilities list available methods, event types, roles, transports, limits,
 and feature flags. Treat this advertised set—not this page—as the available
 surface for the connection.
 
-A successful invitation redemption adds `device_credential` only to that first
-successful initialize result. The invitation is not consumed until ordinary
-initialization can succeed, so malformed client data, role conflicts, or
-version errors leave it reusable. Reconnect with the returned credential and
-the same authenticated endpoint ID. Credentials are bound to the current
-server endpoint identity and trust-record role ceiling; wrong endpoints, bad
-proofs, revocation, server identity replacement, and role escalation fail
-closed. Never log or copy invitation or device credentials into diagnostics.
+A successful invitation redemption adds `device_credential` to the initialize
+result. The invitation is not consumed until ordinary initialization can
+succeed, so malformed client data, role conflicts, or version errors leave it
+reusable. After redemption, only the same authenticated endpoint may repeat
+that initialize until invitation expiry; the server returns the same credential
+and reuses the same trust record so response loss or client profile-save failure
+is recoverable. This idempotency applies only to pairing initialization, not to
+subsequent application requests. Reconnect with the returned credential and
+the same authenticated endpoint ID. Credentials are matched to their exact
+trust record and bound to the current server endpoint identity and role ceiling;
+wrong endpoints, bad proofs, revoked historical credentials, server identity
+replacement, and role escalation fail closed. Re-pairing a revoked endpoint
+creates a new active record without allowing the old record to shadow it. Never
+log or copy invitation or device credentials into diagnostics.
 
 ## Roles, authorization, and idempotency
 

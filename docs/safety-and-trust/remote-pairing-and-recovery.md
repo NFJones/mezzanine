@@ -50,17 +50,22 @@ umask 077
 mez --json remote invite --role primary --expires 600 > mez-invite.json
 ```
 
-The invitation is server-bound, role-limited, and single-use. A remote client
-selects it explicitly with `--iroh-invite-file`; no failed remote attempt falls
-back to Unix. The invitation is consumed only after remote
-`control/initialize` succeeds. The successful response returns a device
-credential once, and the client atomically publishes a protected profile only
-after receiving that success. Later control and interactive attach use
-`--iroh-profile PROFILE`. The direct Iroh CLI surface supports `attach`, `kill`,
-and `detach`. For example, use `mez --iroh-invite-file mez-invite.json attach`
-for first pairing or `mez --iroh-profile PROFILE attach` for reconnect; add
-`--observer` to request observer access. An observer-limited invitation or
-profile cannot attach as primary.
+The invitation is server-bound, role-limited, and claimable by one authenticated
+client endpoint. A remote client selects it explicitly with
+`--iroh-invite-file`; no failed remote attempt falls back to Unix. The
+invitation is consumed only after remote `control/initialize` succeeds. The
+successful response returns a device credential, and the client atomically
+publishes a protected profile only after receiving that success. If the
+response is lost or local profile persistence fails, retry the same invitation
+from the same client endpoint before it expires. The server returns the same
+credential and reuses the existing trust record; another endpoint cannot claim
+or resume it. This retry does not replay a later control or terminal request.
+Later control and interactive attach use `--iroh-profile PROFILE`. The direct
+Iroh CLI surface supports `attach`, `kill`, and `detach`. For example, use `mez
+--iroh-invite-file mez-invite.json attach` for first pairing or `mez
+--iroh-profile PROFILE attach` for reconnect; add `--observer` to request
+observer access. An observer-limited invitation or profile cannot attach as
+primary.
 
 Interactive attach retains one initialized control stream and orders each
 resize, terminal-input, and view request behind its response. It explicitly
@@ -75,8 +80,8 @@ explicit attach. Unix control remains available concurrently for recovery.
 
 Invitations, device credentials, private endpoint keys, and persisted verifiers
 are omitted from client lists, diagnostics, debug output, and audit records.
-Only the explicitly requested invitation response/file and successful pairing
-response contain their respective one-time secret.
+Only the explicitly requested invitation response/file and successful or
+same-endpoint recovery pairing response contain their respective secret.
 
 ## Inspect, rename, and revoke
 
@@ -91,6 +96,10 @@ cannot create invitations or inspect, rename, or revoke trust. Revocation makes
 future device-proof initialization fail closed. Existing Unix control remains
 available concurrently and is the recovery path after revocation, malformed
 remote traffic, setup timeout, ALPN failure, abrupt loss, or listener failure.
+To pair the same persistent client endpoint again after revocation, create and
+transfer a new invitation. The new credential resolves against the new active
+trust record; the old credential remains rejected and the revoked record stays
+available as audit-safe history.
 
 ## Back up or recover identity
 

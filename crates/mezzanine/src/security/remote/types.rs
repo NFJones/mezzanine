@@ -129,6 +129,8 @@ pub(crate) struct RemotePairingRedemption {
     pub(super) invitation_id: String,
     /// Commit timestamp retained for exact rollback.
     pub(super) redeemed_at_unix_seconds: u64,
+    /// Whether this call created the trust record rather than resumed it.
+    pub(super) newly_committed: bool,
 }
 
 impl std::fmt::Debug for RemotePairingRedemption {
@@ -165,6 +167,8 @@ pub(super) struct RemoteInvitationRecord {
     pub expires_at_unix_seconds: u64,
     pub redeemed_at_unix_seconds: Option<u64>,
     pub redeemed_endpoint_id: Option<String>,
+    #[serde(default)]
+    pub redeemed_record_id: Option<String>,
 }
 
 /// Versioned trust database persisted as one private atomic document.

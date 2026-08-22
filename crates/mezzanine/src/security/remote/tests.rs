@@ -148,7 +148,7 @@ fn invitation_redemption_creates_role_limited_revocable_trust() {
     assert_eq!(record.role_ceiling, RemoteRoleCeiling::Observer);
     assert_eq!(record.endpoint_id, client_endpoint_id);
 
-    let replay = store
+    let resumed = store
         .redeem_invitation(
             &invitation.token,
             &server_endpoint_id,
@@ -157,8 +157,13 @@ fn invitation_redemption_creates_role_limited_revocable_trust() {
             RequestedRole::Observer,
             1_101,
         )
-        .unwrap_err();
-    assert_eq!(replay.kind(), crate::error::MezErrorKind::Conflict);
+        .unwrap();
+    assert_eq!(resumed.record, record);
+    assert_eq!(
+        resumed.device_credential.expose_secret(),
+        device_credential.expose_secret()
+    );
+    assert_eq!(store.list_records().unwrap().len(), 1);
 
     let principal = store
         .resolve_principal(
@@ -225,6 +230,73 @@ fn invitation_redemption_creates_role_limited_revocable_trust() {
             & 0o777,
         0o600
     );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a revoked endpoint can pair again and each credential resolves
+/// only against the trust record that issued it.
+///
+/// Historical revocation must reject the original credential without
+/// shadowing the later active record for the same persistent endpoint ID.
+#[test]
+fn revoked_endpoint_can_repair_with_new_credential() {
+    let root = test_root("repaired-endpoint");
+    let store = RemoteTrustStore::under_config_root(&root, "session-a").unwrap();
+    let server_endpoint_id = SecretKey::generate().public().to_string();
+    let client_endpoint_id = SecretKey::generate().public().to_string();
+    let first_invitation = store
+        .create_invitation(&server_endpoint_id, RemoteRoleCeiling::Observer, 600, 1_000)
+        .unwrap();
+    let first = store
+        .redeem_invitation(
+            &first_invitation.token,
+            &server_endpoint_id,
+            &client_endpoint_id,
+            "laptop",
+            RequestedRole::Observer,
+            1_001,
+        )
+        .unwrap();
+    store
+        .revoke_record(&first.record.id, Some("lost credential"), 1_002)
+        .unwrap();
+
+    let second_invitation = store
+        .create_invitation(&server_endpoint_id, RemoteRoleCeiling::Observer, 600, 1_003)
+        .unwrap();
+    let second = store
+        .redeem_invitation(
+            &second_invitation.token,
+            &server_endpoint_id,
+            &client_endpoint_id,
+            "replacement laptop",
+            RequestedRole::Observer,
+            1_004,
+        )
+        .unwrap();
+
+    let principal = store
+        .resolve_principal(
+            &server_endpoint_id,
+            &client_endpoint_id,
+            &second.device_credential,
+            RequestedRole::Observer,
+            1_005,
+        )
+        .unwrap();
+    assert_eq!(principal.trust_record_id, second.record.id);
+    let old = store
+        .resolve_principal(
+            &server_endpoint_id,
+            &client_endpoint_id,
+            &first.device_credential,
+            RequestedRole::Observer,
+            1_006,
+        )
+        .unwrap_err();
+    assert_eq!(old.kind(), crate::error::MezErrorKind::Forbidden);
+    assert_eq!(store.list_records().unwrap().len(), 2);
 
     let _ = fs::remove_dir_all(root);
 }
@@ -334,13 +406,12 @@ fn remote_trust_store_isolates_sessions_and_rejects_unsafe_state() {
     let _ = fs::remove_dir_all(outside_remote);
 }
 
-/// Verifies the advisory mutation lock makes one invitation redeem exactly once.
+/// Verifies concurrent claims let exactly one endpoint redeem an invitation.
 #[test]
-fn concurrent_invitation_redemption_succeeds_exactly_once() {
+fn concurrent_invitation_redemption_selects_one_endpoint() {
     let root = test_root("concurrent-redemption");
     let store = Arc::new(RemoteTrustStore::under_config_root(&root, "session-a").unwrap());
     let server_endpoint_id = SecretKey::generate().public().to_string();
-    let client_endpoint_id = SecretKey::generate().public().to_string();
     let invitation = store
         .create_invitation(&server_endpoint_id, RemoteRoleCeiling::Observer, 600, 3_000)
         .unwrap();
@@ -351,8 +422,8 @@ fn concurrent_invitation_redemption_succeeds_exactly_once() {
             let barrier = Arc::clone(&barrier);
             let token = invitation.token.clone();
             let server_endpoint_id = server_endpoint_id.clone();
-            let client_endpoint_id = client_endpoint_id.clone();
             thread::spawn(move || {
+                let client_endpoint_id = SecretKey::generate().public().to_string();
                 barrier.wait();
                 store.redeem_invitation(
                     &token,

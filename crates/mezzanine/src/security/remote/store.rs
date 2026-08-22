@@ -39,7 +39,6 @@ const MAX_REVOCATION_REASON_BYTES: usize = 512;
 const MAX_INVITATION_RECORDS: usize = 256;
 const MAX_TRUST_RECORDS: usize = 256;
 pub(super) const MAX_TRUST_DATABASE_BYTES: u64 = 2 * 1024 * 1024;
-const REDEMPTION_ROLLBACK_GRACE_SECONDS: u64 = 60;
 
 /// Persistent Iroh endpoint key with an exclusive live-use lock.
 #[derive(Debug)]
@@ -203,6 +202,7 @@ impl RemoteTrustStore {
                 expires_at_unix_seconds,
                 redeemed_at_unix_seconds: None,
                 redeemed_endpoint_id: None,
+                redeemed_record_id: None,
             });
             Ok(())
         })?;
@@ -215,7 +215,7 @@ impl RemoteTrustStore {
         })
     }
 
-    /// Validates an invitation and prepares trust material without mutating persistence.
+    /// Validates an invitation and prepares stable trust material without mutating persistence.
     pub(crate) fn prepare_invitation(
         &self,
         token: &SecretString,
@@ -228,7 +228,7 @@ impl RemoteTrustStore {
         validate_endpoint_id(server_endpoint_id)?;
         validate_endpoint_id(client_endpoint_id)?;
         validate_label(label)?;
-        let verifier_and_role = self.with_locked_database(|database| {
+        let prepared = self.with_locked_database(|database| {
             let invitation = database
                 .invitations
                 .iter()
@@ -241,52 +241,108 @@ impl RemoteTrustStore {
                                 invitation.role_ceiling,
                             )
                 })
+                .cloned()
                 .ok_or_else(|| MezError::forbidden("remote pairing invitation is invalid"))?;
-            validate_invitation_for_redemption(
-                invitation,
-                &database,
-                client_endpoint_id,
-                requested_role,
-                now_unix_seconds,
-            )?;
-            Ok((
-                invitation.id.clone(),
-                invitation.verifier.clone(),
-                invitation.role_ceiling,
-            ))
-        })?;
-        let (invitation_id, invitation_verifier, role_ceiling) = verifier_and_role;
-        let record_id = random_identifier("remote", 16);
-        let device_credential = random_token();
-        let record = RemoteTrustRecord {
-            id: record_id.clone(),
-            endpoint_id: client_endpoint_id.to_string(),
-            server_endpoint_id: server_endpoint_id.to_string(),
-            label: label.to_string(),
-            role_ceiling,
-            created_at_unix_seconds: now_unix_seconds,
-            last_used_at_unix_seconds: None,
-            revoked_at_unix_seconds: None,
-            revocation_reason: None,
-            credential_version: 1,
-            credential_verifier: device_credential_verifier(
-                device_credential.expose_secret(),
+            validate_invitation_request(&invitation, requested_role, now_unix_seconds)?;
+            let record_id = pairing_record_id(
+                token.expose_secret(),
                 server_endpoint_id,
                 client_endpoint_id,
-                &record_id,
-            ),
+                &invitation.id,
+            );
+            let device_credential = pairing_device_credential(
+                token.expose_secret(),
+                server_endpoint_id,
+                client_endpoint_id,
+                &invitation.id,
+            );
+            let resumed_record = if let Some(redeemed_at) = invitation.redeemed_at_unix_seconds {
+                if invitation.redeemed_endpoint_id.as_deref() != Some(client_endpoint_id) {
+                    return Err(MezError::conflict(
+                        "remote pairing invitation was already redeemed",
+                    ));
+                }
+                if invitation.redeemed_record_id.as_deref() != Some(record_id.as_str()) {
+                    return Err(MezError::conflict(
+                        "remote pairing invitation cannot resume a legacy redemption",
+                    ));
+                }
+                let record = database
+                    .records
+                    .iter()
+                    .find(|record| record.id == record_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("redeemed remote trust record is missing")
+                    })?;
+                validate_device_record(
+                    record,
+                    server_endpoint_id,
+                    client_endpoint_id,
+                    &device_credential,
+                    requested_role,
+                )?;
+                if record.role_ceiling != invitation.role_ceiling {
+                    return Err(MezError::invalid_state(
+                        "redeemed remote trust role does not match its invitation",
+                    ));
+                }
+                Some((record.clone(), redeemed_at))
+            } else {
+                validate_endpoint_available_for_pairing(&database, client_endpoint_id)?;
+                None
+            };
+            Ok((
+                invitation.id,
+                invitation.verifier,
+                invitation.role_ceiling,
+                record_id,
+                device_credential,
+                resumed_record,
+            ))
+        })?;
+        let (
+            invitation_id,
+            invitation_verifier,
+            role_ceiling,
+            record_id,
+            device_credential,
+            resumed_record,
+        ) = prepared;
+        let (record, redeemed_at_unix_seconds) = match resumed_record {
+            Some((record, redeemed_at)) => (record, redeemed_at),
+            None => {
+                let record = RemoteTrustRecord {
+                    id: record_id.clone(),
+                    endpoint_id: client_endpoint_id.to_string(),
+                    server_endpoint_id: server_endpoint_id.to_string(),
+                    label: label.to_string(),
+                    role_ceiling,
+                    created_at_unix_seconds: now_unix_seconds,
+                    last_used_at_unix_seconds: None,
+                    revoked_at_unix_seconds: None,
+                    revocation_reason: None,
+                    credential_version: 1,
+                    credential_verifier: device_credential_verifier(
+                        device_credential.expose_secret(),
+                        server_endpoint_id,
+                        client_endpoint_id,
+                        &record_id,
+                    ),
+                };
+                (record, now_unix_seconds)
+            }
         };
         Ok(RemotePairingPreparation {
             invitation_id,
             invitation_verifier,
             record,
             requested_role,
-            redeemed_at_unix_seconds: now_unix_seconds,
+            redeemed_at_unix_seconds,
             device_credential,
         })
     }
 
-    /// Atomically commits one previously validated invitation preparation.
+    /// Atomically commits a fresh invitation or resumes its same-endpoint redemption.
     pub(crate) fn commit_invitation(
         &self,
         preparation: RemotePairingPreparation,
@@ -302,21 +358,51 @@ impl RemoteTrustStore {
                         && invitation.server_endpoint_id == preparation.record.server_endpoint_id
                 })
                 .ok_or_else(|| MezError::forbidden("remote pairing invitation is invalid"))?;
-            {
-                let invitation = &database.invitations[invitation_index];
-                validate_invitation_for_redemption(
-                    invitation,
-                    database,
-                    &preparation.record.endpoint_id,
-                    preparation.requested_role,
-                    now_unix_seconds,
-                )?;
-                if invitation.role_ceiling != preparation.record.role_ceiling {
-                    return Err(MezError::forbidden(
-                        "remote pairing invitation role changed before redemption",
+            let invitation = database.invitations[invitation_index].clone();
+            validate_invitation_request(&invitation, preparation.requested_role, now_unix_seconds)?;
+            if invitation.role_ceiling != preparation.record.role_ceiling {
+                return Err(MezError::forbidden(
+                    "remote pairing invitation role changed before redemption",
+                ));
+            }
+            if let Some(redeemed_at) = invitation.redeemed_at_unix_seconds {
+                if invitation.redeemed_endpoint_id.as_deref()
+                    != Some(preparation.record.endpoint_id.as_str())
+                    || invitation.redeemed_record_id.as_deref()
+                        != Some(preparation.record.id.as_str())
+                {
+                    return Err(MezError::conflict(
+                        "remote pairing invitation was already redeemed",
                     ));
                 }
+                let record = database
+                    .records
+                    .iter()
+                    .find(|record| record.id == preparation.record.id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("redeemed remote trust record is missing")
+                    })?;
+                validate_device_record(
+                    record,
+                    &record.server_endpoint_id,
+                    &record.endpoint_id,
+                    &preparation.device_credential,
+                    preparation.requested_role,
+                )?;
+                if record.role_ceiling != invitation.role_ceiling {
+                    return Err(MezError::invalid_state(
+                        "redeemed remote trust role does not match its invitation",
+                    ));
+                }
+                return Ok(RemotePairingRedemption {
+                    record: record.clone(),
+                    device_credential: preparation.device_credential,
+                    invitation_id: preparation.invitation_id,
+                    redeemed_at_unix_seconds: redeemed_at,
+                    newly_committed: false,
+                });
             }
+            validate_endpoint_available_for_pairing(database, &preparation.record.endpoint_id)?;
             if database.records.len() >= MAX_TRUST_RECORDS {
                 return Err(MezError::conflict(
                     "remote trust record limit has been reached",
@@ -325,12 +411,14 @@ impl RemoteTrustStore {
             let invitation = &mut database.invitations[invitation_index];
             invitation.redeemed_at_unix_seconds = Some(now_unix_seconds);
             invitation.redeemed_endpoint_id = Some(preparation.record.endpoint_id.clone());
+            invitation.redeemed_record_id = Some(preparation.record.id.clone());
             database.records.push(preparation.record.clone());
             Ok(RemotePairingRedemption {
                 record: preparation.record,
                 device_credential: preparation.device_credential,
                 invitation_id: preparation.invitation_id,
                 redeemed_at_unix_seconds: now_unix_seconds,
+                newly_committed: true,
             })
         })
     }
@@ -357,11 +445,14 @@ impl RemoteTrustStore {
         self.commit_invitation(preparation, now_unix_seconds)
     }
 
-    /// Restores an invitation when later initialization side effects fail.
+    /// Restores a newly committed invitation when later initialization side effects fail.
     pub(crate) fn rollback_invitation_redemption(
         &self,
         redemption: &RemotePairingRedemption,
     ) -> Result<()> {
+        if !redemption.newly_committed {
+            return Ok(());
+        }
         self.mutate_database(|database| {
             let invitation = database
                 .invitations
@@ -371,6 +462,7 @@ impl RemoteTrustStore {
             if invitation.redeemed_at_unix_seconds != Some(redemption.redeemed_at_unix_seconds)
                 || invitation.redeemed_endpoint_id.as_deref()
                     != Some(redemption.record.endpoint_id.as_str())
+                || invitation.redeemed_record_id.as_deref() != Some(redemption.record.id.as_str())
             {
                 return Err(MezError::invalid_state(
                     "redeemed invitation changed before rollback",
@@ -386,6 +478,7 @@ impl RemoteTrustStore {
             database.records.remove(record_index);
             invitation.redeemed_at_unix_seconds = None;
             invitation.redeemed_endpoint_id = None;
+            invitation.redeemed_record_id = None;
             Ok(())
         })
     }
@@ -400,11 +493,13 @@ impl RemoteTrustStore {
     ) -> Result<RemotePrincipal> {
         validate_endpoint_id(endpoint_id)?;
         self.with_locked_database(|database| {
-            let record = database
-                .records
-                .iter()
-                .find(|record| record.endpoint_id == endpoint_id)
-                .ok_or_else(|| MezError::forbidden("remote endpoint is not paired"))?;
+            let record_index = find_record_index_for_device_credential(
+                &database.records,
+                server_endpoint_id,
+                endpoint_id,
+                device_credential,
+            )?;
+            let record = &database.records[record_index];
             validate_device_record(
                 record,
                 server_endpoint_id,
@@ -432,33 +527,20 @@ impl RemoteTrustStore {
     ) -> Result<RemotePrincipal> {
         validate_endpoint_id(endpoint_id)?;
         self.mutate_database(|database| {
-            let record = database
-                .records
-                .iter_mut()
-                .find(|record| record.endpoint_id == endpoint_id)
-                .ok_or_else(|| MezError::forbidden("remote endpoint is not paired"))?;
-            if record.revoked() {
-                return Err(MezError::forbidden("remote endpoint trust is revoked"));
-            }
-            if record.server_endpoint_id != server_endpoint_id {
-                return Err(MezError::forbidden(
-                    "remote device trust is bound to a different server identity",
-                ));
-            }
-            let verifier = device_credential_verifier(
-                device_credential.expose_secret(),
-                &record.server_endpoint_id,
+            let record_index = find_record_index_for_device_credential(
+                &database.records,
+                server_endpoint_id,
                 endpoint_id,
-                &record.id,
-            );
-            if !constant_time_equal(verifier.as_bytes(), record.credential_verifier.as_bytes()) {
-                return Err(MezError::forbidden("remote device credential is invalid"));
-            }
-            if !record.role_ceiling.permits(requested_role) {
-                return Err(MezError::forbidden(
-                    "remote endpoint requested a role above its trust ceiling",
-                ));
-            }
+                device_credential,
+            )?;
+            let record = &mut database.records[record_index];
+            validate_device_record(
+                record,
+                server_endpoint_id,
+                endpoint_id,
+                device_credential,
+                requested_role,
+            )?;
             record.last_used_at_unix_seconds = Some(now_unix_seconds);
             Ok(RemotePrincipal {
                 trust_record_id: record.id.clone(),
@@ -581,13 +663,9 @@ impl RemoteTrustStore {
 }
 
 fn prune_stale_invitations(database: &mut RemoteTrustDatabase, now_unix_seconds: u64) {
-    database.invitations.retain(|invitation| {
-        if let Some(redeemed_at) = invitation.redeemed_at_unix_seconds {
-            return now_unix_seconds.saturating_sub(redeemed_at)
-                <= REDEMPTION_ROLLBACK_GRACE_SECONDS;
-        }
-        now_unix_seconds <= invitation.expires_at_unix_seconds
-    });
+    database
+        .invitations
+        .retain(|invitation| now_unix_seconds <= invitation.expires_at_unix_seconds);
 }
 
 fn validate_device_record(
@@ -622,10 +700,8 @@ fn validate_device_record(
     Ok(())
 }
 
-fn validate_invitation_for_redemption(
+fn validate_invitation_request(
     invitation: &RemoteInvitationRecord,
-    database: &RemoteTrustDatabase,
-    client_endpoint_id: &str,
     requested_role: RequestedRole,
     now_unix_seconds: u64,
 ) -> Result<()> {
@@ -634,14 +710,16 @@ fn validate_invitation_for_redemption(
             "remote pairing invitation does not permit the requested role",
         ));
     }
-    if invitation.redeemed_at_unix_seconds.is_some() {
-        return Err(MezError::conflict(
-            "remote pairing invitation was already redeemed",
-        ));
-    }
     if now_unix_seconds > invitation.expires_at_unix_seconds {
         return Err(MezError::forbidden("remote pairing invitation has expired"));
     }
+    Ok(())
+}
+
+fn validate_endpoint_available_for_pairing(
+    database: &RemoteTrustDatabase,
+    client_endpoint_id: &str,
+) -> Result<()> {
     if database
         .records
         .iter()
@@ -652,6 +730,40 @@ fn validate_invitation_for_redemption(
         ));
     }
     Ok(())
+}
+
+fn find_record_index_for_device_credential(
+    records: &[RemoteTrustRecord],
+    server_endpoint_id: &str,
+    endpoint_id: &str,
+    device_credential: &SecretString,
+) -> Result<usize> {
+    let mut endpoint_seen = false;
+    for (index, record) in records.iter().enumerate() {
+        if record.endpoint_id != endpoint_id {
+            continue;
+        }
+        endpoint_seen = true;
+        let verifier = device_credential_verifier(
+            device_credential.expose_secret(),
+            &record.server_endpoint_id,
+            endpoint_id,
+            &record.id,
+        );
+        if constant_time_equal(verifier.as_bytes(), record.credential_verifier.as_bytes()) {
+            if record.server_endpoint_id != server_endpoint_id {
+                return Err(MezError::forbidden(
+                    "remote device trust is bound to a different server identity",
+                ));
+            }
+            return Ok(index);
+        }
+    }
+    if endpoint_seen {
+        Err(MezError::forbidden("remote device credential is invalid"))
+    } else {
+        Err(MezError::forbidden("remote endpoint is not paired"))
+    }
 }
 
 fn find_record_mut<'a>(
@@ -879,6 +991,58 @@ fn invitation_verifier(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn pairing_record_id(
+    invitation_token: &str,
+    server_endpoint_id: &str,
+    client_endpoint_id: &str,
+    invitation_id: &str,
+) -> String {
+    format!(
+        "remote-{}",
+        pairing_derivation(
+            b"mezzanine-iroh-pairing-record-v1\0",
+            invitation_token,
+            server_endpoint_id,
+            client_endpoint_id,
+            invitation_id,
+        )
+    )
+}
+
+fn pairing_device_credential(
+    invitation_token: &str,
+    server_endpoint_id: &str,
+    client_endpoint_id: &str,
+    invitation_id: &str,
+) -> SecretString {
+    SecretString::from(pairing_derivation(
+        b"mezzanine-iroh-pairing-credential-v1\0",
+        invitation_token,
+        server_endpoint_id,
+        client_endpoint_id,
+        invitation_id,
+    ))
+}
+
+fn pairing_derivation(
+    domain: &[u8],
+    invitation_token: &str,
+    server_endpoint_id: &str,
+    client_endpoint_id: &str,
+    invitation_id: &str,
+) -> String {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update(server_endpoint_id.as_bytes());
+    digest.update(b"\0");
+    digest.update(client_endpoint_id.as_bytes());
+    digest.update(b"\0");
+    digest.update(invitation_id.as_bytes());
+    digest.update(b"\0");
+    digest.update(invitation_token.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest.finalize())
 }
 
 fn device_credential_verifier(
