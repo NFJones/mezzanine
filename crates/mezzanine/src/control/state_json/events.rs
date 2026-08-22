@@ -2,16 +2,16 @@
 
 use super::mcp::event_kind_name;
 use super::{
-    ClientId, ClientRole, EventAudience, EventLog, JsonRpcRequest, MAX_EVENT_REPLAY_RETENTION,
-    MezError, Result, Session, VisibleEvent, json_escape, json_optional_string,
-    reject_unknown_json_fields,
+    ClientId, ClientRole, ClientState, EventAudience, EventLog, JsonRpcRequest,
+    MAX_EVENT_REPLAY_RETENTION, MezError, Result, Session, VisibleEvent, json_escape,
+    json_optional_string, reject_unknown_json_fields,
 };
 /// Runs the control event audience operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::control) fn control_event_audience(
+pub(crate) fn control_event_audience(
     session: &Session,
     caller_client_id: &ClientId,
 ) -> Result<EventAudience> {
@@ -20,6 +20,17 @@ pub(in crate::control) fn control_event_audience(
         .iter()
         .find(|client| client.id == *caller_client_id)
         .ok_or_else(|| MezError::forbidden("unknown control client"))?;
+    if client.role == ClientRole::PendingObserver {
+        if client.state != ClientState::Pending {
+            return Err(MezError::forbidden(
+                "detached or revoked control clients cannot receive events",
+            ));
+        }
+    } else if client.state != ClientState::Attached {
+        return Err(MezError::forbidden(
+            "detached or revoked control clients cannot receive events",
+        ));
+    }
     match client.role {
         ClientRole::Primary => Ok(EventAudience::Primary),
         ClientRole::Observer => {

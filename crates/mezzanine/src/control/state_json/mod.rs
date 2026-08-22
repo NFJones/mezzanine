@@ -58,7 +58,7 @@ pub(in crate::control) use approvals::{
 };
 pub(in crate::control) use clients::client_json;
 pub(crate) use clients::observers_json;
-pub(crate) use events::dispatch_event_list_request;
+pub(crate) use events::{control_event_audience, dispatch_event_list_request};
 pub(crate) use mcp::observer_json;
 pub(in crate::control) use mcp::{mcp_servers_json, mcp_tools_json};
 pub(in crate::control) use session::{

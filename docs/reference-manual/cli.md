@@ -111,10 +111,13 @@ invitation already selects the remote session.
 Interactive remote attach requires a terminal and keeps one initialized Iroh
 control stream open for its lifetime. A `primary` profile may attach as primary
 or request observer access; an `observer` profile cannot attach as primary.
-Terminal resize, input, and view requests are ordered one at a time behind their
-responses. If the connection fails after terminal input may have been sent, Mez
-reports that the outcome is unknown, does not reconnect or replay the input,
-and requires an explicit reattach.
+The client also negotiates one server-opened version 1 event stream. Authorized
+events wake a fresh `terminal/view`; a pending observer receives no event stream
+until approval, and revocation or event-stream failure ends the attach visibly.
+Terminal resize, input, and view requests remain ordered one at a time behind
+their responses. If the connection fails after terminal input may have been
+sent, Mez reports that the outcome is unknown, does not reconnect or replay the
+input, and requires an explicit reattach.
 
 Create invitation files without exposing the token through shell arguments or
 world-readable output, for example:

@@ -19,6 +19,7 @@ use super::protocol::{
     runtime_optional_timestamp_json, runtime_size_object_json, runtime_timestamp_json,
     runtime_validate_state_request_params,
 };
+use crate::control::control_event_audience;
 
 impl RuntimeSessionService {
     /// Runs the dispatch runtime read only state request operation for this subsystem.
@@ -186,6 +187,20 @@ impl RuntimeSessionService {
             .event_log()
             .ok_or_else(|| MezError::invalid_state("runtime event log is not configured"))?;
         dispatch_event_list_request(request, &self.session, caller_client_id, event_log)
+    }
+
+    /// Resolves the caller current event audience and returns one bounded batch.
+    pub(crate) fn authorized_event_wakeups(
+        &self,
+        caller_client_id: &mez_core::ids::ClientId,
+        connection_id: &str,
+        last_delivered_event_id: u64,
+        limit_per_connection: usize,
+    ) -> Result<Vec<crate::runtime::RuntimeEventWakeup>> {
+        let audience = control_event_audience(&self.session, caller_client_id)?;
+        let mut connections = crate::runtime::RuntimeEventConnectionTable::default();
+        connections.attach(connection_id, audience, true, last_delivered_event_id)?;
+        Ok(connections.wakeups(self.control.event_log(), limit_per_connection))
     }
 
     /// Runs the runtime session summary json operation for this subsystem.
@@ -644,5 +659,70 @@ impl RuntimeSessionService {
             }
         }
         profiles
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::protocol::event::EventKind;
+    use crate::test_support::runtime::RuntimeServiceFixture;
+    use mez_mux::layout::Size;
+
+    #[test]
+    fn authorized_event_wakeups_revalidates_observer_approval_and_revocation() {
+        let mut service = RuntimeServiceFixture::new().build();
+        let primary = service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        let (observer_client, observer_request) =
+            service.session.request_observer("remote-observer");
+        service
+            .append_lifecycle_event(
+                EventKind::PaneChanged,
+                r#"{"phase":"before-approval"}"#.to_string(),
+            )
+            .unwrap();
+
+        let pending = service
+            .authorized_event_wakeups(&observer_client, "remote-events", 0, 8)
+            .expect_err("pending observers must not receive a remote event stream");
+        assert!(pending.message().contains("pending observer event streams"));
+
+        service
+            .approve_observer_with_runtime_cutoff(&primary, observer_request.as_str())
+            .unwrap();
+        service
+            .append_lifecycle_event(
+                EventKind::PaneChanged,
+                r#"{"phase":"after-approval"}"#.to_string(),
+            )
+            .unwrap();
+        let wakeups = service
+            .authorized_event_wakeups(&observer_client, "remote-events", 0, 8)
+            .unwrap();
+        let payloads = wakeups
+            .iter()
+            .flat_map(|wakeup| wakeup.events.iter())
+            .map(|event| event.payload.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            payloads
+                .iter()
+                .any(|payload| payload.contains("after-approval"))
+        );
+        assert!(
+            !payloads
+                .iter()
+                .any(|payload| payload.contains("before-approval"))
+        );
+
+        service
+            .session
+            .revoke_observer_client(&primary, observer_client.as_str())
+            .unwrap();
+        let revoked = service
+            .authorized_event_wakeups(&observer_client, "remote-events", 0, 8)
+            .expect_err("revoked observers must stop receiving remote events");
+        assert!(revoked.message().contains("detached or revoked"));
     }
 }

@@ -136,7 +136,8 @@ mod responses;
 mod selection;
 
 #[cfg(test)]
-pub(super) use event_stream::{AttachRenderAction, AttachedRuntimeEventStream};
+pub(super) use event_stream::AttachedRuntimeEventStream;
+pub(in crate::cli) use event_stream::{AttachRenderAction, spawn_iroh_runtime_event_receiver};
 #[cfg(test)]
 pub(super) use observer::run_control_socket_attached_observer_client_loop_async;
 #[cfg(test)]

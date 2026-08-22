@@ -248,6 +248,8 @@ pub(super) struct PersistentIrohControlChannel {
     endpoint: iroh::Endpoint,
     connection: iroh::endpoint::Connection,
     stream: tokio::io::Join<iroh::endpoint::RecvStream, iroh::endpoint::SendStream>,
+    event_receiver: Option<tokio::sync::mpsc::Receiver<Result<super::attach::AttachRenderAction>>>,
+    event_task: tokio::task::JoinHandle<()>,
     setup_timeout: std::time::Duration,
 }
 
@@ -259,6 +261,15 @@ impl PersistentIrohControlChannel {
         &mut self.stream
     }
 
+    /// Takes the negotiated event receiver exactly once for the attach loop.
+    pub(super) fn take_event_receiver(
+        &mut self,
+    ) -> Result<tokio::sync::mpsc::Receiver<Result<super::attach::AttachRenderAction>>> {
+        self.event_receiver
+            .take()
+            .ok_or_else(|| MezError::invalid_state("Iroh event receiver was already taken"))
+    }
+
     /// Finishes the control stream and closes the connection and endpoint boundedly.
     pub(super) async fn close(self) {
         let Self {
@@ -266,12 +277,21 @@ impl PersistentIrohControlChannel {
             endpoint,
             connection,
             stream,
+            event_receiver: _,
+            mut event_task,
             setup_timeout,
         } = self;
         let (_recv, mut send) = stream.into_inner();
         let _ = send.finish();
         let _ = tokio::time::timeout(setup_timeout, send.stopped()).await;
         connection.close(iroh::endpoint::VarInt::from_u32(0), b"attach complete");
+        if tokio::time::timeout(setup_timeout, &mut event_task)
+            .await
+            .is_err()
+        {
+            event_task.abort();
+            let _ = event_task.await;
+        }
         let _ = tokio::time::timeout(setup_timeout, endpoint.close()).await;
     }
 }
@@ -337,6 +357,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
             "requested_version": 1,
             "requested_role": requested_role,
             "detach_primary_on_disconnect": requested_role == "primary",
+            "event_stream_version": 1,
             "client": {
                 "name": "remote-cli",
                 "interactive": true,
@@ -386,12 +407,16 @@ pub(super) async fn open_persistent_iroh_control_channel(
             device_credential: issued_credential,
         })?;
     }
+    let (event_receiver, event_task) =
+        super::attach::spawn_iroh_runtime_event_receiver(connection.clone(), policy.setup_timeout);
     Ok((
         PersistentIrohControlChannel {
             _identity: identity,
             endpoint,
             connection,
             stream,
+            event_receiver: Some(event_receiver),
+            event_task,
             setup_timeout: policy.setup_timeout,
         },
         response,

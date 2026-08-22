@@ -398,6 +398,24 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Returns one bounded event batch after revalidating the live session client.
+    pub async fn event_wakeups_for_client(
+        &self,
+        caller_client_id: ClientId,
+        connection_id: String,
+        last_delivered_event_id: u64,
+        limit_per_connection: usize,
+    ) -> Result<Vec<RuntimeEventWakeup>> {
+        self.request(|reply| AsyncRuntimeRequest::EventWakeupsForClient {
+            caller_client_id,
+            connection_id,
+            last_delivered_event_id,
+            limit_per_connection,
+            reply,
+        })
+        .await?
+    }
+
     /// Runs the apply attached terminal step plan operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

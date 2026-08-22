@@ -63,10 +63,15 @@ for first pairing or `mez --iroh-profile PROFILE attach` for reconnect; add
 profile cannot attach as primary.
 
 Interactive attach retains one initialized control stream and orders each
-resize, terminal-input, and view request behind its response. If terminal input
-may have been written when the connection fails, the client reports an unknown
-outcome, does not replay the input or reconnect automatically, and requires a
-new explicit attach. Unix control remains available concurrently for recovery.
+resize, terminal-input, and view request behind its response. It explicitly
+negotiates one server-opened event stream only after authenticated
+initialization. Event authorization is rechecked for every bounded batch:
+pending observers receive no stream before approval, approved observers receive
+only post-approval session-view events, and revocation or detach closes the
+stream. Endpoint identity alone cannot reveal events. If terminal input may have
+been written when the connection fails, the client reports an unknown outcome,
+does not replay the input or reconnect automatically, and requires a new
+explicit attach. Unix control remains available concurrently for recovery.
 
 Invitations, device credentials, private endpoint keys, and persisted verifiers
 are omitted from client lists, diagnostics, debug output, and audit records.

@@ -359,6 +359,8 @@ pub struct InitializeParams {
     /// socket. Short-lived administrative control clients leave it disabled so
     /// closing a request connection does not clear primary ownership.
     pub detach_primary_on_disconnect: bool,
+    /// Version of the server-opened event stream requested by this client.
+    pub event_stream_version: Option<u32>,
     /// Stores the client value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

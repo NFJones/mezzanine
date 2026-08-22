@@ -133,6 +133,7 @@ pub(super) fn initialize_params_from_json(params: &str) -> Result<InitializePara
             "client_version",
             "session_target",
             "detach_primary_on_disconnect",
+            "event_stream_version",
             "client",
             "authentication",
         ],
@@ -166,6 +167,11 @@ pub(super) fn initialize_params_from_json(params: &str) -> Result<InitializePara
             "control/initialize",
         )?
         .unwrap_or(false),
+        event_stream_version: optional_u32_member(
+            &object,
+            "event_stream_version",
+            "control/initialize",
+        )?,
         client,
         authentication: optional_object_member_json(
             &object,

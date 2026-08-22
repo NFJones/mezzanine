@@ -6,14 +6,17 @@ use iroh::tls::CaTlsConfig;
 use iroh::{Endpoint, RelayMap, RelayMode, SecretKey};
 use tokio::task::JoinSet;
 
-use crate::control::{AuthenticatedPeer, ControlConnectionState};
+use crate::control::{AuthenticatedPeer, ControlConnectionState, encode_control_body};
 use crate::error::{MezError, Result};
 use crate::host::async_runtime::{
     AsyncRuntimeControlConnectionConfig, AsyncRuntimeService, AsyncRuntimeServiceExit,
     AsyncRuntimeSessionHandle,
-    serve_authenticated_async_runtime_control_connection_loop_with_snapshots,
+    serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush,
 };
+use crate::protocol::event::encode_event_notification;
 use crate::storage::snapshot::SnapshotRepository;
+use mez_core::ids::ClientId;
+use tokio::io::AsyncWriteExt;
 
 use super::config::{
     RuntimeIrohAddressLookupPolicy, RuntimeIrohRelayPolicy, RuntimeIrohTransportPolicy,
@@ -21,6 +24,8 @@ use super::config::{
 
 /// ALPN identity for the first Mezzanine Iroh transport contract.
 pub(crate) const MEZZANINE_IROH_ALPN: &[u8] = b"mezzanine/transport/1";
+pub(crate) const MEZZANINE_IROH_EVENT_STREAM_PREFACE: &[u8] = b"mezzanine/events/1\n";
+const IROH_EVENT_BATCH_LIMIT: usize = 64;
 
 /// Bound endpoint plus the policy governing listener and connection limits.
 #[derive(Debug)]
@@ -63,6 +68,7 @@ pub(crate) async fn bind_runtime_iroh_endpoint(
         &policy,
         secret_key,
         stream_limit,
+        0,
         vec![MEZZANINE_IROH_ALPN.to_vec()],
         "Iroh endpoint",
     )
@@ -75,13 +81,14 @@ pub(crate) async fn bind_runtime_iroh_client_endpoint(
     policy: &RuntimeIrohTransportPolicy,
     secret_key: SecretKey,
 ) -> Result<Endpoint> {
-    bind_policy_iroh_endpoint(policy, secret_key, 0, Vec::new(), "Iroh client endpoint").await
+    bind_policy_iroh_endpoint(policy, secret_key, 0, 1, Vec::new(), "Iroh client endpoint").await
 }
 
 async fn bind_policy_iroh_endpoint(
     policy: &RuntimeIrohTransportPolicy,
     secret_key: SecretKey,
     incoming_bidi_streams: u32,
+    incoming_uni_streams: u32,
     alpns: Vec<Vec<u8>>,
     diagnostic_name: &str,
 ) -> Result<Endpoint> {
@@ -89,7 +96,7 @@ async fn bind_policy_iroh_endpoint(
         .map_err(|_| MezError::config("transport.iroh.idle_timeout_ms is too large"))?;
     let transport = QuicTransportConfig::builder()
         .max_concurrent_bidi_streams(VarInt::from_u32(incoming_bidi_streams))
-        .max_concurrent_uni_streams(VarInt::from_u32(0))
+        .max_concurrent_uni_streams(VarInt::from_u32(incoming_uni_streams))
         .max_idle_timeout(Some(idle_timeout))
         .build();
 
@@ -209,6 +216,7 @@ async fn serve_runtime_iroh_control_listener(
                 let connection_handle = handle.clone();
                 let connection_snapshots = snapshots.clone();
                 let setup_timeout = endpoint.policy.setup_timeout;
+                let idle_timeout = endpoint.policy.idle_timeout;
                 tasks.spawn(async move {
                     serve_runtime_iroh_control_connection(
                         connection,
@@ -216,6 +224,7 @@ async fn serve_runtime_iroh_control_listener(
                         control_config,
                         connection_snapshots.as_ref(),
                         setup_timeout,
+                        idle_timeout,
                     )
                     .await
                 });
@@ -264,6 +273,7 @@ async fn serve_runtime_iroh_control_connection(
     control_config: AsyncRuntimeControlConnectionConfig,
     snapshots: Option<&SnapshotRepository>,
     setup_timeout: std::time::Duration,
+    idle_timeout: std::time::Duration,
 ) -> Result<u64> {
     let endpoint_id = connection.remote_id().to_string();
     let (send, recv) = tokio::time::timeout(setup_timeout, connection.accept_bi())
@@ -274,16 +284,53 @@ async fn serve_runtime_iroh_control_connection(
         })?;
     let mut stream = tokio::io::join(recv, send);
     let mut connection_state = ControlConnectionState::new(false, false);
-    let result = serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
-        &mut stream,
-        AuthenticatedPeer::iroh_endpoint(endpoint_id),
-        handle,
-        &mut connection_state,
-        control_config,
-        snapshots,
-        |_, state| terminal_daemon_state(state),
-    )
-    .await;
+    let (event_start_tx, event_start_rx) = tokio::sync::oneshot::channel::<(ClientId, u32)>();
+    let mut event_start_tx = Some(event_start_tx);
+    let (event_stop_tx, event_stop_rx) = tokio::sync::watch::channel(false);
+    let event_connection = connection.clone();
+    let event_handle = handle.clone();
+    let mut event_task = tokio::spawn(async move {
+        let Ok((client_id, version)) = event_start_rx.await else {
+            return Ok(0);
+        };
+        serve_runtime_iroh_event_stream(
+            event_connection,
+            event_handle,
+            client_id,
+            version,
+            setup_timeout,
+            idle_timeout,
+            event_stop_rx,
+        )
+        .await
+    });
+    let result =
+        serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush(
+            &mut stream,
+            AuthenticatedPeer::iroh_endpoint(endpoint_id),
+            handle,
+            &mut connection_state,
+            control_config,
+            snapshots,
+            |_, state| terminal_daemon_state(state),
+            move |connection_state| {
+                if let Some(start) = connection_state.take_event_stream_start()
+                    && let Some(sender) = event_start_tx.take()
+                {
+                    let _ = sender.send(start);
+                }
+                Ok(())
+            },
+        )
+        .await;
+    let _ = event_stop_tx.send(true);
+    if tokio::time::timeout(setup_timeout, &mut event_task)
+        .await
+        .is_err()
+    {
+        event_task.abort();
+        let _ = event_task.await;
+    }
     let (_recv, mut send) = stream.into_inner();
     let _ = send.finish();
     let _ = tokio::time::timeout(setup_timeout, send.stopped()).await;
@@ -296,6 +343,119 @@ async fn serve_runtime_iroh_control_connection(
         },
     );
     result
+}
+
+async fn serve_runtime_iroh_event_stream(
+    connection: iroh::endpoint::Connection,
+    handle: AsyncRuntimeSessionHandle,
+    caller_client_id: ClientId,
+    version: u32,
+    setup_timeout: std::time::Duration,
+    idle_timeout: std::time::Duration,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+) -> Result<u64> {
+    if version != 1 {
+        return Err(MezError::invalid_args(
+            "unsupported Iroh event stream version",
+        ));
+    }
+    let connection_id = format!("iroh-events-{caller_client_id}");
+    let mut last_delivered_event_id = 0u64;
+    let mut pending = loop {
+        if *stop.borrow() {
+            return Ok(0);
+        }
+        match handle
+            .event_wakeups_for_client(
+                caller_client_id.clone(),
+                connection_id.clone(),
+                last_delivered_event_id,
+                IROH_EVENT_BATCH_LIMIT,
+            )
+            .await
+        {
+            Ok(wakeups) => break wakeups,
+            Err(error) if error.message().contains("pending observer event streams") => {
+                tokio::select! {
+                    _ = handle.wait_for_event_delivery() => {}
+                    changed = stop.changed() => {
+                        if changed.is_err() || *stop.borrow() {
+                            return Ok(0);
+                        }
+                    }
+                    _ = connection.closed() => return Ok(0),
+                }
+            }
+            Err(_) => return Ok(0),
+        }
+    };
+    let mut send = tokio::time::timeout(setup_timeout, connection.open_uni())
+        .await
+        .map_err(|_| MezError::invalid_state("Iroh event stream setup timed out"))?
+        .map_err(|_| MezError::invalid_state("failed to open Iroh event stream"))?;
+    tokio::time::timeout(
+        idle_timeout,
+        send.write_all(MEZZANINE_IROH_EVENT_STREAM_PREFACE),
+    )
+    .await
+    .map_err(|_| MezError::invalid_state("Iroh event stream preface timed out"))?
+    .map_err(|_| MezError::invalid_state("failed to write Iroh event stream preface"))?;
+    tokio::time::timeout(idle_timeout, send.flush())
+        .await
+        .map_err(|_| MezError::invalid_state("Iroh event stream preface flush timed out"))?
+        .map_err(|_| MezError::invalid_state("failed to flush Iroh event stream preface"))?;
+    let mut delivered = 0u64;
+    loop {
+        if *stop.borrow() {
+            break;
+        }
+        if pending.is_empty() {
+            pending = match handle
+                .event_wakeups_for_client(
+                    caller_client_id.clone(),
+                    connection_id.clone(),
+                    last_delivered_event_id,
+                    IROH_EVENT_BATCH_LIMIT,
+                )
+                .await
+            {
+                Ok(wakeups) => wakeups,
+                Err(_) => break,
+            };
+        }
+        let mut batch_last = None;
+        for wakeup in pending.drain(..) {
+            for event in wakeup.events {
+                let frame = encode_control_body(&encode_event_notification(&event));
+                tokio::time::timeout(idle_timeout, send.write_all(&frame))
+                    .await
+                    .map_err(|_| MezError::invalid_state("Iroh event stream write timed out"))?
+                    .map_err(|_| MezError::invalid_state("Iroh event stream write failed"))?;
+                batch_last = Some(event.id);
+                delivered = delivered.saturating_add(1);
+            }
+        }
+        if let Some(batch_last) = batch_last {
+            tokio::time::timeout(idle_timeout, send.flush())
+                .await
+                .map_err(|_| MezError::invalid_state("Iroh event stream flush timed out"))?
+                .map_err(|_| MezError::invalid_state("Iroh event stream flush failed"))?;
+            last_delivered_event_id = batch_last;
+            continue;
+        }
+        tokio::select! {
+            _ = handle.wait_for_event_delivery() => {}
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    break;
+                }
+            }
+            _ = connection.closed() => break,
+        }
+    }
+    let _ = send.finish();
+    let _ = tokio::time::timeout(setup_timeout, send.stopped()).await;
+    Ok(delivered)
 }
 
 async fn drain_iroh_control_tasks(tasks: &mut JoinSet<Result<u64>>) -> Result<()> {
@@ -363,11 +523,32 @@ mod tests {
         endpoint.close().await;
     }
 
+    async fn read_test_control_body<R>(stream: &mut R) -> String
+    where
+        R: tokio::io::AsyncRead + Unpin,
+    {
+        let mut response = Vec::new();
+        let mut buffer = [0u8; 4096];
+        loop {
+            let read = tokio::io::AsyncReadExt::read(stream, &mut buffer)
+                .await
+                .unwrap();
+            assert!(
+                read > 0,
+                "framed response must arrive before stream closure"
+            );
+            response.extend_from_slice(&buffer[..read]);
+            if let Ok((body, _)) = crate::control::decode_control_frame(&response, 1024 * 1024) {
+                return body;
+            }
+        }
+    }
+
     #[tokio::test(flavor = "current_thread")]
-    async fn paired_iroh_control_round_trips_over_direct_listener() {
+    async fn paired_iroh_control_and_events_round_trip_over_direct_listener() {
         use secrecy::ExposeSecret;
 
-        use crate::control::{decode_control_frame, encode_control_body};
+        use crate::control::encode_control_body;
         use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
         use crate::security::remote::{RemoteRoleCeiling, RemoteTrustStore};
         use crate::test_support::runtime::RuntimeServiceFixture;
@@ -421,6 +602,11 @@ mod tests {
 
         let client_endpoint = Endpoint::builder(presets::Minimal)
             .secret_key(SecretKey::generate())
+            .transport_config(
+                QuicTransportConfig::builder()
+                    .max_concurrent_uni_streams(VarInt::from_u32(1))
+                    .build(),
+            )
             .relay_mode(RelayMode::Disabled)
             .clear_address_lookup()
             .portmapper_config(PortmapperConfig::Disabled)
@@ -435,6 +621,7 @@ mod tests {
                 "requested_role": "primary",
                 "requested_version": 1,
                 "client_name": "remote-primary",
+                "event_stream_version": 1,
                 "client": {
                     "name": "remote-primary",
                     "interactive": true,
@@ -452,8 +639,6 @@ mod tests {
         })
         .to_string();
         let kill = r#"{"jsonrpc":"2.0","id":"kill","method":"session/kill","params":{"force":true,"idempotency_key":"remote-kill"}}"#;
-        let mut input = encode_control_body(&initialize);
-        input.extend_from_slice(&encode_control_body(kill));
 
         let listener_handle = handle.clone();
         drop(handle);
@@ -475,13 +660,42 @@ mod tests {
                 .await
                 .unwrap();
             let (mut send, mut recv) = connection.open_bi().await.unwrap();
-            send.write_all(&input).await.unwrap();
-            send.finish().unwrap();
-            let output = recv.read_to_end(2 * 1024 * 1024).await.unwrap();
-            let (initialize_body, consumed) = decode_control_frame(&output, 1024 * 1024).unwrap();
-            let (kill_body, _) = decode_control_frame(&output[consumed..], 1024 * 1024).unwrap();
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(100),
+                    connection.accept_uni(),
+                )
+                .await
+                .is_err(),
+                "the server must not open an event stream before initialization",
+            );
+            send.write_all(&encode_control_body(&initialize))
+                .await
+                .unwrap();
+            send.flush().await.unwrap();
+            let initialize_body = read_test_control_body(&mut recv).await;
             assert!(initialize_body.contains(r#""granted_role":"primary""#));
             assert!(initialize_body.contains(r#""device_credential""#));
+
+            let mut events =
+                tokio::time::timeout(std::time::Duration::from_secs(3), connection.accept_uni())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            let mut preface = vec![0u8; MEZZANINE_IROH_EVENT_STREAM_PREFACE.len()];
+            events.read_exact(&mut preface).await.unwrap();
+            assert_eq!(preface, MEZZANINE_IROH_EVENT_STREAM_PREFACE);
+            let event_body = read_test_control_body(&mut events).await;
+            assert!(event_body.contains(r#""method":"event/"#), "{event_body}");
+            assert!(!event_body.contains("device_credential"), "{event_body}");
+            assert!(
+                !event_body.contains(invitation.token.expose_secret()),
+                "{event_body}"
+            );
+
+            send.write_all(&encode_control_body(kill)).await.unwrap();
+            send.finish().unwrap();
+            let kill_body = read_test_control_body(&mut recv).await;
             assert!(kill_body.contains(r#""killed":true"#), "{kill_body}");
             connection.close(VarInt::from_u32(0), b"test complete");
             client_endpoint.close().await;

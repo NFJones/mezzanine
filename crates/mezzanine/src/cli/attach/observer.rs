@@ -1,6 +1,9 @@
 //! Observer control-socket attach setup and presentation loop.
 
-use super::event_stream::read_attached_client_input_or_deadline;
+use super::event_stream::{
+    AttachRenderAction, read_attached_client_input_or_deadline,
+    read_attached_client_input_or_iroh_event,
+};
 use super::requests::{
     control_socket_cursor_blink_elapsed, observer_inspect_control_request,
     read_async_control_response_frames_or_disconnected, refresh_attached_client_size_async,
@@ -14,7 +17,7 @@ use super::responses::{
 };
 use super::{
     AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
-    AttachTerminalSizeRefresh, AttachedTerminalOutputModes, Result, Size, UnixStream,
+    AttachTerminalSizeRefresh, AttachedTerminalOutputModes, MezError, Result, Size, UnixStream,
     decode_control_frame, io,
 };
 
@@ -57,6 +60,7 @@ pub(in crate::cli) async fn run_iroh_attached_observer_client<S>(
     stream: &mut S,
     observer_request_id: String,
     client_size: Size,
+    mut event_receiver: tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>,
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -65,11 +69,12 @@ where
     let output_fd = io::stdout().as_raw_fd();
     let mut terminal_guard =
         AsyncAttachedTerminalPresentationGuard::new(input_fd, output_fd, None)?;
-    let run_result = run_control_socket_attached_observer_client_loop_async(
+    let run_result = run_attached_observer_client_loop_async(
         stream,
         terminal_guard.io_mut(),
         observer_request_id,
         client_size,
+        Some(&mut event_receiver),
     )
     .await;
     let restore_result = terminal_guard.restore().await;
@@ -92,7 +97,28 @@ pub(in crate::cli) async fn run_control_socket_attached_observer_client_loop_asy
     stream: &mut S,
     terminal_io: &mut I,
     observer_request_id: String,
+    client_size: Size,
+) -> Result<()>
+where
+    I: AsyncAttachedTerminalIo,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    run_attached_observer_client_loop_async(
+        stream,
+        terminal_io,
+        observer_request_id,
+        client_size,
+        None,
+    )
+    .await
+}
+
+async fn run_attached_observer_client_loop_async<I, S>(
+    stream: &mut S,
+    terminal_io: &mut I,
+    observer_request_id: String,
     mut client_size: Size,
+    mut event_receiver: Option<&mut tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>>,
 ) -> Result<()>
 where
     I: AsyncAttachedTerminalIo,
@@ -108,14 +134,38 @@ where
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
         }
-        let input = read_attached_client_input_or_deadline(
-            terminal_io,
-            4096,
-            None,
-            size_refresh.deadline(),
-        )
-        .await?;
+        let input = match event_receiver.as_deref_mut() {
+            Some(event_receiver) => {
+                read_attached_client_input_or_iroh_event(
+                    terminal_io,
+                    event_receiver,
+                    4096,
+                    size_refresh.deadline(),
+                )
+                .await?
+            }
+            None => {
+                read_attached_client_input_or_deadline(
+                    terminal_io,
+                    4096,
+                    None,
+                    size_refresh.deadline(),
+                )
+                .await?
+            }
+        };
         size_refresh.reschedule();
+        match input.render_action {
+            AttachRenderAction::None | AttachRenderAction::View => {}
+            AttachRenderAction::InvalidateAndView => {
+                terminal_io.invalidate_output_frame().await?;
+            }
+            AttachRenderAction::Disconnect => {
+                return Err(MezError::invalid_state(
+                    "Iroh event stream disconnected; reattach required",
+                ));
+            }
+        }
         if input.eof {
             break Ok(());
         }

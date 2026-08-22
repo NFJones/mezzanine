@@ -92,6 +92,7 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         )
         .await?;
         ensure_control_response_success(&initialize_body)?;
+        let event_receiver = channel.take_event_receiver()?;
         let run_result = if request.requested_role == "observer" {
             let observer_request_id =
                 observer_request_id_from_initialize_response(&initialize_body)?;
@@ -99,6 +100,7 @@ pub(in crate::cli) async fn run_attach<W: Write>(
                 channel.stream_mut(),
                 observer_request_id,
                 terminal_size,
+                event_receiver,
             )
             .await
         } else {
@@ -108,6 +110,7 @@ pub(in crate::cli) async fn run_attach<W: Write>(
                 primary_client_id,
                 terminal_size,
                 std::time::Duration::from_secs(30),
+                event_receiver,
             )
             .await
         };

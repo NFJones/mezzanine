@@ -18,11 +18,14 @@ stronger configured mechanism before receiving session data or mutating state.
 
 The opt-in Iroh adapter uses ALPN `mezzanine/transport/1` and carries the same
 bounded `mezctl/1` frames on exactly one long-lived, client-opened bidirectional
-control stream. The server accepts no unidirectional streams and lowers each
-accepted connection to one concurrent bidirectional stream. Setup and idle
-operation are bounded; wrong ALPNs, excess streams, malformed frames, stalled
-setup, and one failed connection are isolated from later clients and from the
-Unix listener.
+control stream. The server accepts no client-opened unidirectional streams and
+lowers each connection to one concurrent bidirectional control stream. An
+interactive client may request `event_stream_version: 1` during
+`control/initialize`; only after that initialize response is flushed may the
+server open one unidirectional stream beginning with the exact preface
+`mezzanine/events/1\n`. Setup, idle operation, writes, and teardown are bounded;
+wrong ALPNs, excess streams, malformed frames, stalled setup, and one failed
+connection are isolated from later clients and from the Unix listener.
 
 An Iroh endpoint ID proves possession of a transport key only; it grants no
 Mezzanine authority by itself. Before any other method, the peer must call
@@ -45,12 +48,12 @@ ambiguous failure.
 Interactive Iroh attach retains that initialized stream instead of opening a
 stream per request. The client serializes each resize, `terminal/step`, and
 `terminal/view` operation behind exactly one response before sending the next
-operation. The initial implementation is eventless and uses bounded polling;
-a separately authorized remote event stream is not implied by transport
-authentication. Terminal input is non-replayable: after a write, read, timeout,
-reset, or connection failure that leaves its outcome ambiguous, the client must
-fail visibly, close the channel, and require reattach without retrying buffered
-input.
+operation. Its negotiated event stream carries only authorized `event/*`
+notifications and wakes the client to request a fresh rendered view; it never
+carries terminal input or control responses. Terminal input is non-replayable:
+after a write, read, timeout, reset, or connection failure that leaves its
+outcome ambiguous, the client must fail visibly, close the channel, and require
+reattach without retrying buffered input.
 
 Each stream frame is UTF-8 JSON preceded by this ASCII header block. The
 decimal `Content-Length` is the JSON body's octet length.
@@ -239,11 +242,11 @@ host clipboard.
 
 The recommended loop is initialize, fetch a view, render it, pass physical
 input and size updates via `terminal/step`, then apply the returned view or
-request a fresh `terminal/view`. Local clients should use events to trigger
-refreshes rather than a fixed polling redraw loop. The initial remote Iroh
-attach implementation uses bounded eventless polling until an authorized remote
-event-stream contract exists. This is rendered-view/input-step control, not raw
-PTY export; specialized frontends should design around the supplied view model.
+request a fresh `terminal/view`. Local clients use the Unix event socket; an
+Iroh attach negotiates the version 1 server-opened event stream. Both transports
+use events only as redraw wakeups and refetch authoritative rendered state over
+control. This is rendered-view/input-step control, not raw PTY export;
+specialized frontends should design around the supplied view model.
 
 ## Events and replay
 
@@ -253,10 +256,21 @@ to know it; state changes should include `previous` when available. Baseline
 events cover client and observer changes, window/pane changes, agent task
 changes, approvals, config, snapshots, and MCP availability.
 
-Per-connection event order is preserved. Reconnect with `event/list` and a
-known `after_event_id`; replay can be refused once retention has elapsed. The
-capabilities limits expose retention. Pending observers receive only their own
-request status and no session-bearing event data.
+Per-connection event order is preserved. The Iroh writer requests at most 64
+visible events per actor batch, advances its cursor only after a bounded stream
+flush, and uses QUIC flow control plus a bounded client wakeup channel. A slow
+receiver therefore backpressures or times out its own event task without
+blocking the serialized runtime actor or another connection. Reconnect with
+`event/list` and a known `after_event_id`; replay can be refused once retention
+has elapsed, so attach clients refetch the current rendered view after any gap.
+The capabilities limits expose retention.
+
+Every Iroh event batch re-resolves the live session client before projection.
+Pending observers receive no event stream until approval. Approved observers
+see only `SessionView` events at or after their approval marker; primary-only,
+other-observer, agent, automation, and pre-approval payloads are omitted.
+Revocation, detach, control completion, reset, or connection shutdown closes the
+event stream. Transport endpoint authentication alone never authorizes events.
 
 ## Related pages
 

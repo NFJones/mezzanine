@@ -2953,12 +2953,31 @@ traffic or publishes invitation-issued profile authority.
 
 Interactive Iroh attach MUST retain one initialized bidirectional control
 stream for its lifetime and MUST preserve request/response ordering across
-terminal resize, input, and view operations. The initial client MAY use bounded
-eventless polling; transport authentication MUST NOT imply access to an
-unauthorized event stream. Terminal input MUST NOT be replayed after an
-ambiguous write, response, timeout, reset, or connection failure. The client
-MUST report that the input outcome is unknown, close boundedly, and require an
-explicit reattach without reconnecting or retrying buffered input.
+terminal resize, input, and view operations. The client MUST negotiate event
+stream version 1 during `control/initialize`. The server MUST NOT open an event
+stream before the successful initialize response is flushed, and then MUST open
+at most one unidirectional stream on that same QUIC connection with the exact
+preface `mezzanine/events/1\n`. Client-opened unidirectional streams remain
+forbidden.
+
+Every remote event batch MUST re-resolve the current initialized session client
+and project retained events through the existing audience policy. Pending
+observers MUST receive no event stream before approval. Approved observers MUST
+receive only session-view events at or after their approval marker; primary-only,
+other-observer, agent, automation, pre-approval, and cross-session data MUST NOT
+be disclosed. Revoked, detached, unknown, or failed clients MUST terminate event
+delivery. Transport authentication MUST NOT imply event authority.
+
+Event framing, parsing, batches, queues, writes, waits, and teardown MUST be
+bounded. A slow receiver MUST backpressure or terminate only its own stream and
+MUST NOT block the runtime actor or another connection. Control completion,
+revocation, detach, reset, endpoint shutdown, and connection loss MUST close the
+event task idempotently. The client MUST reject missing, malformed, oversized,
+duplicate, unknown-version, or non-event server streams and MUST refetch the
+current rendered view after any event gap. Terminal input MUST NOT be replayed
+after an ambiguous write, response, timeout, reset, or connection failure. The
+client MUST report that the input outcome is unknown, close boundedly, and
+require an explicit reattach without reconnecting or retrying buffered input.
 
 Abrupt EOF, reset, decode, dispatch, write, and flush failures MUST consume a
 connection-owned primary disconnect at most once. Graceful completion MUST

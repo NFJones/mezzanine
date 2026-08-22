@@ -153,6 +153,34 @@ pub(super) async fn read_attached_client_input_or_runtime_event<I: AsyncAttached
     Ok(input)
 }
 
+/// Reads terminal input while accepting negotiated Iroh event wakeups.
+pub(super) async fn read_attached_client_input_or_iroh_event<I: AsyncAttachedTerminalIo>(
+    terminal_io: &mut I,
+    event_receiver: &mut tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>,
+    max_bytes: usize,
+    wake_deadline: tokio::time::Instant,
+) -> Result<AttachedClientInputPoll> {
+    let input = read_attached_client_input_or_deadline(terminal_io, max_bytes, None, wake_deadline);
+    tokio::pin!(input);
+    tokio::select! {
+        biased;
+        input = &mut input => input,
+        event = event_receiver.recv() => match event {
+            Some(Ok(render_action)) => Ok(AttachedClientInputPoll {
+                bytes: Vec::new(),
+                eof: false,
+                render_action,
+            }),
+            Some(Err(error)) => Err(error),
+            None => Ok(AttachedClientInputPoll {
+                bytes: Vec::new(),
+                eof: false,
+                render_action: AttachRenderAction::Disconnect,
+            }),
+        },
+    }
+}
+
 /// Builds the synthetic input poll produced by a local animation refresh tick.
 pub(super) fn animation_refresh_input_poll() -> AttachedClientInputPoll {
     AttachedClientInputPoll {
@@ -160,6 +188,118 @@ pub(super) fn animation_refresh_input_poll() -> AttachedClientInputPoll {
         eof: false,
         render_action: AttachRenderAction::View,
     }
+}
+
+/// Starts one bounded receiver for the negotiated Iroh event stream.
+pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
+    connection: iroh::endpoint::Connection,
+    setup_timeout: std::time::Duration,
+) -> (
+    tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (sender, receiver) = tokio::sync::mpsc::channel(8);
+    let task = tokio::spawn(async move {
+        let result = receive_iroh_runtime_events(connection, setup_timeout, &sender).await;
+        if let Err(error) = result {
+            let _ = sender.send(Err(error)).await;
+        }
+    });
+    (receiver, task)
+}
+
+async fn receive_iroh_runtime_events(
+    connection: iroh::endpoint::Connection,
+    setup_timeout: std::time::Duration,
+    sender: &tokio::sync::mpsc::Sender<Result<AttachRenderAction>>,
+) -> Result<()> {
+    let mut stream = tokio::select! {
+        accepted = connection.accept_uni() => accepted.map_err(|_| {
+            MezError::invalid_state("failed to accept negotiated Iroh event stream")
+        })?,
+        _ = connection.closed() => {
+            return Err(MezError::invalid_state(
+                "Iroh connection closed before the negotiated event stream arrived",
+            ));
+        }
+    };
+    let mut preface = vec![0u8; crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE.len()];
+    tokio::time::timeout(setup_timeout, stream.read_exact(&mut preface))
+        .await
+        .map_err(|_| MezError::invalid_state("Iroh event stream preface timed out"))?
+        .map_err(|_| MezError::invalid_state("Iroh event stream preface was truncated"))?;
+    if preface != crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE {
+        return Err(MezError::invalid_state(
+            "Iroh event stream used an unsupported preface or version",
+        ));
+    }
+
+    let mut pending = Vec::new();
+    let mut buffer = [0u8; ATTACH_EVENT_STREAM_READ_BUFFER_BYTES];
+    loop {
+        let read = tokio::select! {
+            read = stream.read(&mut buffer) => read.map_err(|_| {
+                MezError::invalid_state("Iroh event stream read failed")
+            })?,
+            _ = connection.closed() => None,
+        }
+        .unwrap_or(0);
+        if read == 0 {
+            if !pending.is_empty() {
+                return Err(MezError::invalid_state(
+                    "Iroh event stream closed with an incomplete frame",
+                ));
+            }
+            let _ = sender.send(Ok(AttachRenderAction::Disconnect)).await;
+            return Ok(());
+        }
+        pending.extend_from_slice(&buffer[..read]);
+        if pending.len() > ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024 {
+            return Err(MezError::invalid_state(
+                "Iroh event stream frame exceeds limit",
+            ));
+        }
+        let mut action = AttachRenderAction::None;
+        while let Ok((body, consumed)) =
+            decode_control_frame(pending.as_slice(), ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH)
+        {
+            if consumed == 0 {
+                break;
+            }
+            action = action.combine(strict_iroh_attach_render_action(body.as_str())?);
+            pending.drain(..consumed);
+        }
+        if action != AttachRenderAction::None && sender.send(Ok(action)).await.is_err() {
+            return Ok(());
+        }
+    }
+}
+
+fn strict_iroh_attach_render_action(body: &str) -> Result<AttachRenderAction> {
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_state("Iroh event stream contained invalid JSON"))?;
+    if value.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0") {
+        return Err(MezError::invalid_state(
+            "Iroh event stream notification omitted JSON-RPC 2.0",
+        ));
+    }
+    let method = value
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|method| method.strip_prefix("event/"))
+        .ok_or_else(|| MezError::invalid_state("Iroh event stream contained a non-event frame"))?;
+    let event_type = value
+        .get("params")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|params| params.get("event_type"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| MezError::invalid_state("Iroh event stream omitted event_type"))?;
+    if method != event_type {
+        return Err(MezError::invalid_state(
+            "Iroh event stream method and event_type did not match",
+        ));
+    }
+    Ok(attach_render_action_for_event_type(event_type))
 }
 
 /// Reads auxiliary runtime event notifications and returns the coalesced action.
@@ -416,5 +556,29 @@ pub(super) fn control_socket_disconnected_without_pending_response(
                 Err(error)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod iroh_tests {
+    use super::*;
+
+    #[test]
+    fn strict_iroh_event_frames_require_matching_event_notifications() {
+        let valid = strict_iroh_attach_render_action(
+            r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed"}}"#,
+        )
+        .unwrap();
+        assert_eq!(valid, AttachRenderAction::View);
+
+        let mismatch = strict_iroh_attach_render_action(
+            r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"window_changed"}}"#,
+        )
+        .expect_err("mismatched method and event_type must be rejected");
+        assert!(mismatch.message().contains("did not match"));
+
+        let response = strict_iroh_attach_render_action(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)
+            .expect_err("control responses must not be accepted on the event stream");
+        assert!(response.message().contains("non-event frame"));
     }
 }

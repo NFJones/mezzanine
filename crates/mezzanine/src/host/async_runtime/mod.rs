@@ -156,6 +156,8 @@ pub use crate::runtime::{
     TimerEvent,
 };
 #[cfg(test)]
+pub use actor_types::serve_authenticated_async_runtime_control_connection_loop_with_snapshots;
+#[cfg(test)]
 pub use actor_types::{
     AsyncAttachedTerminalStepRequest, plan_and_apply_async_attached_terminal_client_step,
     plan_async_attached_terminal_client_step, serve_async_runtime_control_connection,
@@ -167,7 +169,7 @@ pub use actor_types::{
     AsyncRenderedClientFlush, AsyncRenderedClientFrame, AsyncTerminalClientConfigSnapshot,
     serve_async_runtime_control_listener_with_snapshots,
     serve_async_runtime_message_listener_concurrent,
-    serve_authenticated_async_runtime_control_connection_loop_with_snapshots,
+    serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush,
 };
 #[cfg(test)]
 pub use client::build_async_attached_terminal_client_service;

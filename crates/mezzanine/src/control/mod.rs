@@ -189,10 +189,10 @@ use state_json::{
     string_array_json, validate_agent_task_list_params, window_state_json, windows_json_for_params,
 };
 pub(crate) use state_json::{
-    dispatch_event_list_request, frame_read_json_with_context, layout_state_json,
-    nullable_state_request_session_target_matches, observer_json, observers_json,
-    project_trust_state_filter_from_params, session_state_name, state_request_pane_list_window_ids,
-    state_request_session_target_matches,
+    control_event_audience, dispatch_event_list_request, frame_read_json_with_context,
+    layout_state_json, nullable_state_request_session_target_matches, observer_json,
+    observers_json, project_trust_state_filter_from_params, session_state_name,
+    state_request_pane_list_window_ids, state_request_session_target_matches,
 };
 use targets::{
     pane_by_id, parse_join_position, parse_json_object_value, parse_split_direction,

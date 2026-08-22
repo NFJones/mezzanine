@@ -4,7 +4,7 @@ use super::event_stream::read_attached_client_input_or_deadline;
 use super::event_stream::{
     AttachRenderAction, AttachedRuntimeEventStream,
     control_socket_disconnected_without_pending_response, optional_control_socket_event_stream,
-    read_attached_client_input_or_runtime_event,
+    read_attached_client_input_or_iroh_event, read_attached_client_input_or_runtime_event,
 };
 use super::requests::{
     read_async_control_response_frames, read_async_control_response_frames_or_disconnected,
@@ -62,6 +62,7 @@ pub(in crate::cli) async fn run_iroh_attached_primary_client<S>(
     primary_client_id: ClientId,
     client_size: Size,
     request_timeout: std::time::Duration,
+    mut event_receiver: tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>,
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -70,12 +71,13 @@ where
     let output_fd = io::stdout().as_raw_fd();
     let mut terminal_guard =
         AsyncAttachedTerminalPresentationGuard::new(input_fd, output_fd, None)?;
-    let run_result = run_iroh_attached_primary_client_loop_async(
+    let run_result = run_iroh_attached_primary_client_loop_async_with_events(
         stream,
         terminal_guard.io_mut(),
         primary_client_id,
         client_size,
         request_timeout,
+        Some(&mut event_receiver),
     )
     .await;
     let restore_result = terminal_guard.restore().await;
@@ -88,13 +90,37 @@ where
     }
 }
 
-/// Runs eventless remote primary attach without replaying ambiguous input.
+/// Runs remote primary attach without replaying ambiguous input.
+#[cfg(test)]
 pub(in crate::cli) async fn run_iroh_attached_primary_client_loop_async<I, S>(
+    stream: &mut S,
+    terminal_io: &mut I,
+    primary_client_id: ClientId,
+    client_size: Size,
+    request_timeout: std::time::Duration,
+) -> Result<()>
+where
+    I: AsyncAttachedTerminalIo,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    run_iroh_attached_primary_client_loop_async_with_events(
+        stream,
+        terminal_io,
+        primary_client_id,
+        client_size,
+        request_timeout,
+        None,
+    )
+    .await
+}
+
+async fn run_iroh_attached_primary_client_loop_async_with_events<I, S>(
     stream: &mut S,
     terminal_io: &mut I,
     primary_client_id: ClientId,
     mut client_size: Size,
     request_timeout: std::time::Duration,
+    mut event_receiver: Option<&mut tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>>,
 ) -> Result<()>
 where
     I: AsyncAttachedTerminalIo,
@@ -125,14 +151,40 @@ where
             }
             render_requested = true;
         }
-        let input = read_attached_client_input_or_deadline(
-            terminal_io,
-            4096,
-            None,
-            size_refresh.deadline(),
-        )
-        .await?;
+        let input = match event_receiver.as_deref_mut() {
+            Some(event_receiver) => {
+                read_attached_client_input_or_iroh_event(
+                    terminal_io,
+                    event_receiver,
+                    4096,
+                    size_refresh.deadline(),
+                )
+                .await?
+            }
+            None => {
+                read_attached_client_input_or_deadline(
+                    terminal_io,
+                    4096,
+                    None,
+                    size_refresh.deadline(),
+                )
+                .await?
+            }
+        };
         size_refresh.reschedule();
+        match input.render_action {
+            AttachRenderAction::None => {}
+            AttachRenderAction::View => render_requested = true,
+            AttachRenderAction::InvalidateAndView => {
+                terminal_io.invalidate_output_frame().await?;
+                render_requested = true;
+            }
+            AttachRenderAction::Disconnect => {
+                return Err(MezError::invalid_state(
+                    "Iroh event stream disconnected; reattach required",
+                ));
+            }
+        }
         if input.eof {
             return Ok(());
         }

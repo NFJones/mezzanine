@@ -25,12 +25,14 @@ retains stderr and panic diagnostics beside its control socket in a private
 `<control-socket>.diagnostics.log`; a foreground `mez serve` reports directly
 to its invoking terminal.
 
-
 For an explicitly paired remote session, use `mez --iroh-profile PROFILE
 attach` or first pair and attach with `mez --iroh-invite-file PATH attach`. Add
 `--observer` to request pending observer access. These selectors do not inspect
 the local session registry and never fall back to a Unix socket. A role ceiling
-of `observer` cannot be elevated to primary attachment.
+of `observer` cannot be elevated to primary attachment. Remote attach also
+negotiates an authorized event stream for redraw wakeups. Pending observers do
+not receive it until approval; revocation, detach, or stream failure terminates
+the remote attach and requires an explicit reconnect.
 
 Remote terminal input is not retried after an ambiguous connection failure. If
 Mez reports that an input outcome is unknown, treat the command as possibly

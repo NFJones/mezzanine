@@ -53,6 +53,10 @@ pub struct ControlConnectionState {
     /// This is opt-in for foreground attach sockets so request-scoped control
     /// clients can close without mutating primary ownership.
     pub(super) detach_primary_on_disconnect: bool,
+    /// Negotiated server-opened event stream version for this connection.
+    pub(super) event_stream_version: Option<u32>,
+    /// Whether the negotiated event stream start was already consumed.
+    pub(super) event_stream_started: bool,
     /// Whether this connection has already emitted its primary disconnect.
     pub(super) disconnect_submitted: bool,
 }
@@ -72,6 +76,8 @@ impl ControlConnectionState {
             trusted_interactive_assertion,
             caller_client_id: None,
             detach_primary_on_disconnect: false,
+            event_stream_version: None,
+            event_stream_started: false,
             disconnect_submitted: false,
         }
     }
@@ -90,6 +96,8 @@ impl ControlConnectionState {
             trusted_interactive_assertion: true,
             caller_client_id: Some(caller_client_id),
             detach_primary_on_disconnect: false,
+            event_stream_version: None,
+            event_stream_started: false,
             disconnect_submitted: false,
         }
     }
@@ -185,6 +193,17 @@ impl ControlConnectionState {
     /// on duplicated control-flow logic.
     pub fn initialized(&self) -> bool {
         self.initialized
+    }
+
+    /// Takes the negotiated event-stream start exactly once after initialization.
+    pub fn take_event_stream_start(&mut self) -> Option<(ClientId, u32)> {
+        if self.event_stream_started || !self.initialized {
+            return None;
+        }
+        let version = self.event_stream_version?;
+        let client_id = self.caller_client_id.clone()?;
+        self.event_stream_started = true;
+        Some((client_id, version))
     }
 
     /// Takes the primary client that should receive an EOF disconnect event.
@@ -380,6 +399,21 @@ pub(super) fn initialize_control_connection(
             })?;
         require_session_target_matches_value(session, &session_target)?;
     }
+    if let Some(version) = init.event_stream_version {
+        if version != 1 {
+            return Err(MezError::invalid_args(
+                "unsupported Iroh event stream version",
+            ));
+        }
+        if !matches!(
+            connection.authenticated_peer(),
+            Some(AuthenticatedPeer::IrohEndpoint { .. })
+        ) {
+            return Err(MezError::forbidden(
+                "server-opened event streams require an authenticated Iroh connection",
+            ));
+        }
+    }
     match init.requested_role {
         RequestedRole::Primary => {
             let client = init.client.as_ref().ok_or_else(|| {
@@ -415,6 +449,7 @@ pub(super) fn initialize_control_connection(
             connection.initialized = true;
             connection.caller_client_id = Some(client_id);
             connection.detach_primary_on_disconnect = init.detach_primary_on_disconnect;
+            connection.event_stream_version = init.event_stream_version;
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),
@@ -435,6 +470,7 @@ pub(super) fn initialize_control_connection(
             connection.initialized = true;
             connection.caller_client_id = Some(client_id);
             connection.detach_primary_on_disconnect = false;
+            connection.event_stream_version = init.event_stream_version;
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),

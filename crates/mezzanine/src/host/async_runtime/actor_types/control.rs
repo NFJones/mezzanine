@@ -158,11 +158,48 @@ pub async fn serve_authenticated_async_runtime_control_connection_loop_with_snap
     connection: &mut ControlConnectionState,
     config: AsyncRuntimeControlConnectionConfig,
     snapshots: Option<&SnapshotRepository>,
-    mut should_stop: F,
+    should_stop: F,
 ) -> Result<u64>
 where
     S: AsyncRead + AsyncWrite + Unpin,
     F: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush(
+        stream,
+        peer,
+        handle,
+        connection,
+        config,
+        snapshots,
+        should_stop,
+        |_| Ok(()),
+    )
+    .await
+}
+
+/// Serves authenticated control and observes state only after each response flush.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "transport authentication, actor ownership, framing, snapshots, lifecycle, and post-flush state are independent adapter inputs"
+)]
+pub async fn serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush<
+    S,
+    F,
+    H,
+>(
+    stream: &mut S,
+    peer: AuthenticatedPeer,
+    handle: &AsyncRuntimeSessionHandle,
+    connection: &mut ControlConnectionState,
+    config: AsyncRuntimeControlConnectionConfig,
+    snapshots: Option<&SnapshotRepository>,
+    mut should_stop: F,
+    mut post_flush: H,
+) -> Result<u64>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    F: FnMut(u64, RuntimeLifecycleState) -> bool,
+    H: FnMut(&mut ControlConnectionState) -> Result<()>,
 {
     connection.bind_authenticated_peer(peer)?;
     let mut framed = Framed::new(stream, ProtocolFrameCodec::new(config.max_content_length)?);
@@ -212,6 +249,7 @@ where
                     submit_control_connection_disconnect_event(handle, connection).await?;
                     return Err(error.into());
                 }
+                post_flush(connection)?;
                 served = served.saturating_add(1);
             }
             changed = lifecycle.changed() => {

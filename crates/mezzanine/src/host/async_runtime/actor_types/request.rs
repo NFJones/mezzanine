@@ -450,6 +450,19 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<Vec<RuntimeEventWakeup>>>,
     },
+    /// Resolves one live control client current event audience and bounded wakeups.
+    EventWakeupsForClient {
+        /// Initialized session client bound to the owning control connection.
+        caller_client_id: ClientId,
+        /// Stable event-stream identity within the owning QUIC connection.
+        connection_id: String,
+        /// Last event id acknowledged by the stream writer.
+        last_delivered_event_id: u64,
+        /// Maximum projected events returned in one actor response.
+        limit_per_connection: usize,
+        /// Authorized visible events or a current-role authorization failure.
+        reply: oneshot::Sender<Result<Vec<RuntimeEventWakeup>>>,
+    },
     /// Represents the Apply Attached Terminal Step case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1064,7 +1077,8 @@ impl AsyncRuntimeRequest {
             Self::HandleMessageInput { .. }
             | Self::MessageFanoutReadyFor { .. }
             | Self::AcknowledgeMessageFanout { .. }
-            | Self::EventWakeups { .. } => Family::Message,
+            | Self::EventWakeups { .. }
+            | Self::EventWakeupsForClient { .. } => Family::Message,
             #[cfg(test)]
             Self::WriteInputToPane { .. }
             | Self::ManagedShellLifecycleState { .. }

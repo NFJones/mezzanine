@@ -517,6 +517,22 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(Ok(wakeups));
                 false
             }
+            AsyncRuntimeRequest::EventWakeupsForClient {
+                caller_client_id,
+                connection_id,
+                last_delivered_event_id,
+                limit_per_connection,
+                reply,
+            } => {
+                let result = self.service.authorized_event_wakeups(
+                    &caller_client_id,
+                    &connection_id,
+                    last_delivered_event_id,
+                    limit_per_connection,
+                );
+                let _ = reply.send(result);
+                false
+            }
             AsyncRuntimeRequest::ApplyAttachedTerminalStep {
                 primary_client_id,
                 step,
