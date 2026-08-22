@@ -3,7 +3,7 @@
 use iroh::address_lookup::{DnsAddressLookup, PkarrPublisher};
 use iroh::endpoint::{IdleTimeout, PortmapperConfig, QuicTransportConfig, VarInt, presets};
 use iroh::tls::CaTlsConfig;
-use iroh::{Endpoint, RelayMap, RelayMode, SecretKey};
+use iroh::{Endpoint, RelayMap, RelayMode, SecretKey, Watcher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
@@ -211,10 +211,12 @@ impl RuntimeIrohDiagnostics {
 
 struct RuntimeIrohListenerGuard {
     diagnostics: RuntimeIrohDiagnostics,
+    endpoint_addr: tokio::sync::watch::Sender<Option<iroh::EndpointAddr>>,
 }
 
 impl Drop for RuntimeIrohListenerGuard {
     fn drop(&mut self) {
+        self.endpoint_addr.send_replace(None);
         self.diagnostics.listener_stopped();
     }
 }
@@ -239,6 +241,7 @@ pub(crate) struct RuntimeIrohEndpoint {
     policy: RuntimeIrohTransportPolicy,
     diagnostics: RuntimeIrohDiagnostics,
     intentional_close: Arc<AtomicBool>,
+    endpoint_addr: tokio::sync::watch::Sender<Option<iroh::EndpointAddr>>,
 }
 
 /// Cloneable handle for bounded, intentional endpoint shutdown.
@@ -317,12 +320,47 @@ pub(crate) async fn bind_runtime_iroh_endpoint(
         "Iroh endpoint",
     )
     .await?;
+    let initial_addr = wait_for_dialable_iroh_addr(&endpoint, &policy).await?;
+    let (endpoint_addr, _) = tokio::sync::watch::channel(Some(initial_addr));
     Ok(Some(RuntimeIrohEndpoint {
         endpoint,
         policy,
         diagnostics: RuntimeIrohDiagnostics::default(),
         intentional_close: Arc::new(AtomicBool::new(false)),
+        endpoint_addr,
     }))
+}
+
+/// Waits until the endpoint publishes at least one concrete transport route.
+async fn wait_for_dialable_iroh_addr(
+    endpoint: &Endpoint,
+    policy: &RuntimeIrohTransportPolicy,
+) -> Result<iroh::EndpointAddr> {
+    let readiness = async {
+        if !matches!(&policy.relay, RuntimeIrohRelayPolicy::Disabled) {
+            endpoint.online().await;
+        }
+        let mut watcher = endpoint.watch_addr();
+        loop {
+            let addr = watcher.get();
+            if !addr.is_empty() {
+                return Ok::<iroh::EndpointAddr, MezError>(addr);
+            }
+            watcher.updated().await.map_err(|_| {
+                MezError::invalid_state("Iroh endpoint address watcher disconnected")
+            })?;
+        }
+    };
+    tokio::time::timeout(policy.setup_timeout, readiness)
+        .await
+        .map_err(|_| MezError::invalid_state("Iroh endpoint address readiness timed out"))?
+}
+
+fn publish_iroh_endpoint_addr(
+    publisher: &tokio::sync::watch::Sender<Option<iroh::EndpointAddr>>,
+    addr: iroh::EndpointAddr,
+) {
+    publisher.send_replace((!addr.is_empty()).then_some(addr));
 }
 
 /// Binds a client-only endpoint with no remotely initiated streams.
@@ -406,8 +444,10 @@ impl super::RuntimeSessionService {
             .secret_key()
             .clone();
         let endpoint = bind_runtime_iroh_endpoint(policy, secret_key).await?;
-        self.integration
-            .set_remote_endpoint_addr(endpoint.as_ref().map(|endpoint| endpoint.endpoint.addr()));
+        if let Some(endpoint) = endpoint.as_ref() {
+            self.integration
+                .set_remote_endpoint_addr_publisher(endpoint.endpoint_addr.clone());
+        }
         self.integration.set_remote_iroh_diagnostics(
             endpoint
                 .as_ref()
@@ -443,10 +483,13 @@ async fn serve_runtime_iroh_control_listener(
     endpoint.diagnostics.listener_started();
     let _listener_guard = RuntimeIrohListenerGuard {
         diagnostics: endpoint.diagnostics.clone(),
+        endpoint_addr: endpoint.endpoint_addr.clone(),
     };
     let mut accepted = 0u64;
     let mut tasks = JoinSet::new();
     let mut lifecycle = handle.lifecycle_state_watcher();
+    let mut endpoint_addr = endpoint.endpoint.watch_addr();
+    publish_iroh_endpoint_addr(&endpoint.endpoint_addr, endpoint_addr.get());
     let mut endpoint_closed_unexpectedly = false;
     loop {
         let state = *lifecycle.borrow();
@@ -454,6 +497,18 @@ async fn serve_runtime_iroh_control_listener(
             break;
         }
         tokio::select! {
+            updated = endpoint_addr.updated() => {
+                match updated {
+                    Ok(addr) => publish_iroh_endpoint_addr(&endpoint.endpoint_addr, addr),
+                    Err(_) => {
+                        endpoint.endpoint_addr.send_replace(None);
+                        endpoint_closed_unexpectedly =
+                            !endpoint.intentional_close.load(Ordering::Acquire)
+                                && !terminal_daemon_state(*lifecycle.borrow());
+                        break;
+                    }
+                }
+            }
             incoming = endpoint.endpoint.accept(), if tasks.len() < endpoint.policy.max_connections => {
                 let Some(incoming) = incoming else {
                     endpoint_closed_unexpectedly =
@@ -800,6 +855,53 @@ mod tests {
         .await
         .unwrap();
         assert!(endpoint.is_none());
+    }
+
+    /// Verifies enabled transport startup fails within its setup bound when
+    /// neither direct nor relay networking can publish a concrete route.
+    ///
+    /// An endpoint-id-only address must never become invitation state because
+    /// clients without address lookup cannot dial it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_endpoint_construction_rejects_route_empty_transport() {
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            relay: RuntimeIrohRelayPolicy::Disabled,
+            direct_connections: false,
+            setup_timeout: std::time::Duration::from_millis(100),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+
+        let error = bind_runtime_iroh_endpoint(policy, SecretKey::generate())
+            .await
+            .unwrap_err();
+        assert!(
+            error.message().contains("failed to bind Iroh endpoint")
+                || error.message().contains("address readiness timed out"),
+            "{error:?}"
+        );
+    }
+
+    /// Verifies live address publication exposes concrete routes and removes
+    /// stale state when a watcher update becomes route-empty.
+    ///
+    /// Invitation creation reads this shared channel, so route loss must be
+    /// visible immediately rather than retaining a previously dialable value.
+    #[test]
+    fn iroh_address_publication_tracks_route_presence() {
+        let endpoint_id = SecretKey::generate().public();
+        let (publisher, receiver) = tokio::sync::watch::channel(None);
+
+        publish_iroh_endpoint_addr(&publisher, iroh::EndpointAddr::new(endpoint_id));
+        assert!(receiver.borrow().is_none());
+
+        let dialable =
+            iroh::EndpointAddr::new(endpoint_id).with_ip_addr("127.0.0.1:4242".parse().unwrap());
+        publish_iroh_endpoint_addr(&publisher, dialable.clone());
+        assert_eq!(receiver.borrow().as_ref(), Some(&dialable));
+
+        publish_iroh_endpoint_addr(&publisher, iroh::EndpointAddr::new(endpoint_id));
+        assert!(receiver.borrow().is_none());
     }
 
     #[tokio::test(flavor = "current_thread")]

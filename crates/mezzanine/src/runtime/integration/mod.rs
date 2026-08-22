@@ -51,7 +51,7 @@ pub(crate) struct RuntimeIntegrationComponent {
     config_layers: Vec<ConfigLayer>,
     config_root: Option<PathBuf>,
     remote_endpoint_identity: Option<RemoteEndpointIdentity>,
-    remote_endpoint_addr: Option<iroh::EndpointAddr>,
+    remote_endpoint_addr: tokio::sync::watch::Sender<Option<iroh::EndpointAddr>>,
     remote_iroh_diagnostics: Option<RuntimeIrohDiagnostics>,
     #[cfg(test)]
     config_reload_preparation_started: Option<Arc<tokio::sync::Notify>>,
@@ -71,11 +71,12 @@ impl RuntimeIntegrationComponent {
         provider_registry: RuntimeProviderRegistry,
         subagent_profiles: BTreeMap<String, SubagentProfile>,
     ) -> Self {
+        let (remote_endpoint_addr, _) = tokio::sync::watch::channel(None);
         Self {
             config_layers: Vec::new(),
             config_root: None,
             remote_endpoint_identity: None,
-            remote_endpoint_addr: None,
+            remote_endpoint_addr,
             remote_iroh_diagnostics: None,
             #[cfg(test)]
             config_reload_preparation_started: None,
@@ -162,12 +163,20 @@ impl RuntimeIntegrationComponent {
 
     /// Publishes the currently bound Iroh endpoint address for local invitation creation.
     pub(crate) fn set_remote_endpoint_addr(&mut self, addr: Option<iroh::EndpointAddr>) {
-        self.remote_endpoint_addr = addr;
+        self.remote_endpoint_addr.send_replace(addr);
     }
 
     /// Returns the currently bound Iroh endpoint address, when remote transport is active.
-    pub(crate) fn remote_endpoint_addr(&self) -> Option<&iroh::EndpointAddr> {
-        self.remote_endpoint_addr.as_ref()
+    pub(crate) fn remote_endpoint_addr(&self) -> Option<iroh::EndpointAddr> {
+        self.remote_endpoint_addr.borrow().clone()
+    }
+
+    /// Replaces the endpoint-address publication channel with a live listener source.
+    pub(crate) fn set_remote_endpoint_addr_publisher(
+        &mut self,
+        publisher: tokio::sync::watch::Sender<Option<iroh::EndpointAddr>>,
+    ) {
+        self.remote_endpoint_addr = publisher;
     }
 
     /// Replaces the shared privacy-safe Iroh listener diagnostics.

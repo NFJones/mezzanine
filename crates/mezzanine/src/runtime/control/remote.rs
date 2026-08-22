@@ -505,10 +505,16 @@ impl RuntimeSessionService {
                     .ensure_remote_endpoint_identity(&session_id)?
                     .endpoint_id()
                     .to_string();
-                let endpoint_addr = self.integration.remote_endpoint_addr().cloned();
-                if let Some(endpoint_addr) = endpoint_addr.as_ref()
-                    && endpoint_addr.id.to_string() != endpoint_id
-                {
+                let endpoint_addr = self
+                    .integration
+                    .remote_endpoint_addr()
+                    .filter(|endpoint_addr| !endpoint_addr.is_empty())
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "Iroh listener has no current dialable address for invitations",
+                        )
+                    })?;
+                if endpoint_addr.id.to_string() != endpoint_id {
                     return Err(MezError::invalid_state(
                         "bound Iroh listener identity does not match remote trust identity",
                     ));

@@ -14,6 +14,16 @@ fn local_owner_connection(service: &mut RuntimeSessionService) -> ControlConnect
     connection
         .bind_authenticated_peer(AuthenticatedPeer::unix_user(effective_uid()))
         .unwrap();
+    let session_id = service.session().id.to_string();
+    let endpoint_id = service
+        .integration
+        .ensure_remote_endpoint_identity(&session_id)
+        .unwrap()
+        .secret_key()
+        .public();
+    service.integration.set_remote_endpoint_addr(Some(
+        iroh::EndpointAddr::new(endpoint_id).with_ip_addr("127.0.0.1:1".parse().unwrap()),
+    ));
     connection
 }
 
@@ -31,6 +41,63 @@ fn request(
     let (body, frame_consumed) = decode_control_frame(&output, 1024 * 1024).unwrap();
     assert_eq!(frame_consumed, output.len());
     serde_json::from_str(&body).unwrap()
+}
+
+/// Verifies invitation creation requires a current concrete transport route
+/// and does not persist trust state when Iroh is inactive or not yet dialable.
+///
+/// A client cannot use an endpoint-id-only invitation without address lookup,
+/// so both absent and route-empty publication states must fail transactionally.
+#[test]
+fn runtime_remote_invite_rejects_undialable_addresses_without_persistence() {
+    let root = temp_root("remote-undialable-invite-runtime");
+    let mut service = test_runtime_service();
+    service.set_config_root(root.clone());
+    let mut local = local_owner_connection(&mut service);
+    let session_id = service.session().id.to_string();
+    let endpoint_id = service
+        .integration
+        .ensure_remote_endpoint_identity(&session_id)
+        .unwrap()
+        .secret_key()
+        .public();
+    let trust_path =
+        crate::security::remote::RemoteTrustStore::under_config_root(&root, &session_id)
+            .unwrap()
+            .directory()
+            .join("trust.json");
+
+    service.integration.set_remote_endpoint_addr(None);
+    let inactive = request(
+        &mut service,
+        &mut local,
+        r#"{"jsonrpc":"2.0","id":"inactive","method":"remote/invite","params":{"role":"observer","expires_seconds":600,"idempotency_key":"inactive-invite"}}"#,
+    );
+    assert_eq!(
+        inactive
+            .pointer("/error/data/mezzanine_code")
+            .and_then(serde_json::Value::as_str),
+        Some("invalid_state")
+    );
+    assert!(!trust_path.exists());
+
+    service
+        .integration
+        .set_remote_endpoint_addr(Some(iroh::EndpointAddr::new(endpoint_id)));
+    let route_empty = request(
+        &mut service,
+        &mut local,
+        r#"{"jsonrpc":"2.0","id":"route-empty","method":"remote/invite","params":{"role":"observer","expires_seconds":600,"idempotency_key":"route-empty-invite"}}"#,
+    );
+    assert_eq!(
+        route_empty
+            .pointer("/error/data/mezzanine_code")
+            .and_then(serde_json::Value::as_str),
+        Some("invalid_state")
+    );
+    assert!(!trust_path.exists());
+
+    let _ = fs::remove_dir_all(root);
 }
 
 /// Verifies endpoint identity alone cannot initialize and an invitation becomes
