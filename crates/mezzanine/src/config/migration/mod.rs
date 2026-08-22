@@ -62,6 +62,7 @@ mod v63_v64;
 mod v64_v65;
 mod v65_v66;
 mod v66_v67;
+mod v67_v68;
 
 #[cfg(test)]
 pub use driver::migrate_config_text;

@@ -2194,6 +2194,37 @@ fn migrates_schema_66_with_disabled_iroh_transport() {
     }
 }
 
+/// Verifies schema v68 normalizes the legacy configurable stream count to the
+/// single bidirectional control stream enforced by the v1 Iroh protocol.
+#[test]
+fn migrates_schema_67_to_fixed_iroh_stream_limit() {
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 68);
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 67\n[transport.iroh]\nmax_streams_per_connection = 2\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":67,"transport":{"iroh":{"max_streams_per_connection":16}}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 67\ntransport:\n  iroh:\n    max_streams_per_connection: 4\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let values = extract_config_values(format, &plan.text);
+
+        assert_eq!(plan.from_version, 67);
+        assert_eq!(plan.to_version, 68);
+        assert_eq!(
+            values.get("transport.iroh.max_streams_per_connection"),
+            Some(&"1".to_string())
+        );
+    }
+}
+
 /// Verifies that config validation refuses documents written for a newer
 /// schema version than the running binary understands. This prevents older
 /// binaries from silently interpreting keys whose migration or meaning belongs

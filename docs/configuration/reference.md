@@ -154,7 +154,7 @@ changes require a daemon restart.
 | `transport.iroh.system_ca_store` | boolean | `false` | Use the system CA store for applicable HTTPS infrastructure. |
 | `transport.iroh.invitation_ttl_seconds` | integer | `600` | Default invitation lifetime; valid values are 30 through 86400 seconds. |
 | `transport.iroh.max_connections` | integer | `16` | Maximum remote connections; valid values are 1 through 1024. |
-| `transport.iroh.max_streams_per_connection` | integer | `2` | Maximum accepted streams per connection; valid values are 1 through 16. |
+| `transport.iroh.max_streams_per_connection` | integer | `1` | Fixed v1 limit for the single client-opened bidirectional control stream; the only valid value is 1. |
 | `transport.iroh.setup_timeout_ms` | integer | `10000` | Bounded connection setup timeout. |
 | `transport.iroh.idle_timeout_ms` | integer | `300000` | Bounded idle timeout. |
 

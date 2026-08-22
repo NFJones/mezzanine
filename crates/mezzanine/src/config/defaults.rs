@@ -137,7 +137,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 67
+version = 68
 
 # Process-wide runtime sizing. Changes require a restart.
 [runtime]
@@ -160,7 +160,7 @@ proxy_from_env = false
 system_ca_store = false
 invitation_ttl_seconds = 600
 max_connections = 16
-max_streams_per_connection = 2
+max_streams_per_connection = 1
 setup_timeout_ms = 10000
 idle_timeout_ms = 300000
 

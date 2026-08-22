@@ -79,7 +79,7 @@ impl Default for RuntimeIrohTransportPolicy {
             system_ca_store: false,
             invitation_ttl: Duration::from_secs(600),
             max_connections: 16,
-            max_streams_per_connection: 2,
+            max_streams_per_connection: 1,
             setup_timeout: Duration::from_millis(10_000),
             idle_timeout: Duration::from_millis(300_000),
         }
@@ -213,7 +213,7 @@ pub(crate) fn runtime_iroh_transport_policy_from_config(
             "max_streams_per_connection",
             defaults.max_streams_per_connection,
             1,
-            16,
+            1,
         )?,
         setup_timeout: Duration::from_millis(bounded_u64_value(
             iroh,
@@ -304,6 +304,7 @@ mod tests {
     fn iroh_transport_policy_defaults_disabled_and_materializes_explicit_values() {
         let defaults = runtime_iroh_transport_policy_from_config(&serde_json::json!({})).unwrap();
         assert_eq!(defaults, RuntimeIrohTransportPolicy::default());
+        assert_eq!(defaults.max_streams_per_connection, 1);
 
         let policy = runtime_iroh_transport_policy_from_config(&serde_json::json!({
             "transport": { "iroh": {
@@ -357,6 +358,7 @@ mod tests {
             serde_json::json!({"transport":{"iroh":{"relay_mode":"custom","relay_urls":["http://relay.example"]}}}),
             serde_json::json!({"transport":{"iroh":{"relay_mode":"disabled","direct_connections":false}}}),
             serde_json::json!({"transport":{"iroh":{"max_connections":0}}}),
+            serde_json::json!({"transport":{"iroh":{"max_streams_per_connection":2}}}),
             serde_json::json!({"transport":{"iroh":{"idle_timeout_ms":999}}}),
         ] {
             assert!(

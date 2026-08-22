@@ -2891,7 +2891,7 @@ count when Mezzanine starts. Because the runtime is constructed before trusted
 project overlays can be discovered, this primary-user setting MUST NOT be
 overridden by project configuration and changes take effect on restart.
 
-The schema-v67 `transport.iroh` table MUST be primary-user-only and MUST default
+The schema-v68 `transport.iroh` table MUST be primary-user-only and MUST default
 `enabled` to false. It MUST support `identity`, `address_lookup`,
 `address_lookup_domain`, `relay_mode`, `relay_urls`, `direct_connections`,
 `port_mapping`, `proxy_from_env`, `system_ca_store`,
@@ -2903,7 +2903,10 @@ selection. Project overlays and model-authored configuration changes MUST NOT
 enable or retarget remote transport. Network-affecting changes MUST require a
 daemon restart. The v66 to v67 primary-config migration MUST materialize the
 conservative disabled transport defaults in all supported formats without
-enabling network activity.
+enabling network activity. The v67 to v68 migration MUST normalize
+`max_streams_per_connection` to 1 in all supported formats. Schema v68 MUST
+accept only 1 for that setting so configured and advertised limits match the
+single client-opened bidirectional control stream owned by protocol version 1.
 
 `remote/invite` MUST use `transport.iroh.invitation_ttl_seconds` when the
 request omits `expires_seconds`. The CLI `--expires SECONDS` option MUST remain
