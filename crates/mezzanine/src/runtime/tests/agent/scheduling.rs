@@ -1698,13 +1698,13 @@ async fn runtime_three_nonrouted_subagents_release_waiting_parent() {
             .iter()
             .any(|task| task.turn_id == parent.turn_id)
     );
-    assert_ne!(
+    assert_eq!(
         service
             .terminal_frame_context()
             .panes
             .get("%1")
             .and_then(|pane| pane.agent_status.as_deref()),
-        Some("waiting")
+        Some("thinking")
     );
     service.terminate_all_pane_processes().unwrap();
 }
