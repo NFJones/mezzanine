@@ -259,23 +259,77 @@ fn explicit_iroh_client_policy(
         .relay_urls()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    let relay = if relay_urls.is_empty() {
-        crate::runtime::RuntimeIrohRelayPolicy::Disabled
+    let profile_lookup = matches!(target, IrohControlTarget::Profile(_));
+    let address_lookup = if profile_lookup {
+        configured.address_lookup.clone()
     } else {
-        crate::runtime::RuntimeIrohRelayPolicy::Custom { urls: relay_urls }
+        crate::runtime::RuntimeIrohAddressLookupPolicy::Disabled
     };
-    if !direct_connections && matches!(relay, crate::runtime::RuntimeIrohRelayPolicy::Disabled) {
+    let lookup_enabled = !matches!(
+        address_lookup,
+        crate::runtime::RuntimeIrohAddressLookupPolicy::Disabled
+            | crate::runtime::RuntimeIrohAddressLookupPolicy::Local
+    );
+    let direct_connections =
+        configured.direct_connections && (direct_connections || profile_lookup && lookup_enabled);
+    let relay = if !relay_urls.is_empty() {
+        crate::runtime::RuntimeIrohRelayPolicy::Custom { urls: relay_urls }
+    } else if profile_lookup && lookup_enabled {
+        configured.relay.clone()
+    } else {
+        crate::runtime::RuntimeIrohRelayPolicy::Disabled
+    };
+    if !direct_connections
+        && matches!(relay, crate::runtime::RuntimeIrohRelayPolicy::Disabled)
+        && !lookup_enabled
+    {
         return Err(MezError::invalid_args(
             "explicit Iroh target has no supported pinned IP or relay route; address lookup is disabled for explicit targets",
         ));
     }
     Ok(RuntimeIrohTransportPolicy {
         enabled: false,
-        address_lookup: crate::runtime::RuntimeIrohAddressLookupPolicy::Disabled,
+        address_lookup,
         relay,
         direct_connections,
         port_mapping: false,
         ..configured.clone()
+    })
+}
+
+/// Returns active route information learned during an authenticated connection.
+async fn authenticated_remote_addr(
+    endpoint: &iroh::Endpoint,
+    endpoint_id: iroh::EndpointId,
+) -> Option<EndpointAddr> {
+    let info = endpoint.remote_info(endpoint_id).await?;
+    let addr = EndpointAddr::from_parts(
+        info.id(),
+        info.into_addrs()
+            .filter(|addr| matches!(addr.usage(), iroh::endpoint::TransportAddrUsage::Active))
+            .map(iroh::endpoint::TransportAddrInfo::into_addr),
+    );
+    (!addr.is_empty()).then_some(addr)
+}
+
+/// Refreshes a paired profile only after transport and device authentication succeed.
+async fn refresh_authenticated_profile_route(
+    config_root: &Path,
+    endpoint: &iroh::Endpoint,
+    target: &IrohControlTarget,
+) -> Result<()> {
+    let IrohControlTarget::Profile(profile) = target else {
+        return Ok(());
+    };
+    let Some(server_addr) = authenticated_remote_addr(endpoint, profile.server_addr.id).await
+    else {
+        return Ok(());
+    };
+    RemoteClientProfileStore::under_config_root(config_root).save(&RemoteClientProfile {
+        name: profile.name.clone(),
+        server_addr,
+        role: profile.role,
+        device_credential: profile.device_credential.clone(),
     })
 }
 
@@ -433,12 +487,17 @@ pub(super) async fn open_persistent_iroh_control_channel(
         let issued_credential = issued_credential.ok_or_else(|| {
             MezError::invalid_state("successful Iroh pairing response omitted device credential")
         })?;
+        let server_addr = authenticated_remote_addr(&endpoint, server_addr.id)
+            .await
+            .unwrap_or_else(|| server_addr.clone());
         RemoteClientProfileStore::under_config_root(paths.root()).save(&RemoteClientProfile {
             name: profile_name.clone(),
-            server_addr: server_addr.clone(),
+            server_addr,
             role: *role,
             device_credential: issued_credential,
         })?;
+    } else {
+        refresh_authenticated_profile_route(paths.root(), &endpoint, &target).await?;
     }
     let (event_receiver, event_task) =
         super::attach::spawn_iroh_runtime_event_receiver(connection.clone(), policy.setup_timeout);
@@ -621,6 +680,36 @@ mod outbound_policy_tests {
         assert_eq!(error.kind(), crate::error::MezErrorKind::Config);
         assert!(error.message().contains("outbound_enabled"));
     }
+
+    /// Verifies an explicitly configured lookup service remains available for
+    /// a paired profile so stale route hints can be refreshed by endpoint ID.
+    #[test]
+    fn explicit_profile_preserves_configured_address_lookup() {
+        let configured = RuntimeIrohTransportPolicy {
+            address_lookup: crate::runtime::RuntimeIrohAddressLookupPolicy::N0Dns,
+            relay: crate::runtime::RuntimeIrohRelayPolicy::Public,
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let profile = RemoteClientProfile {
+            name: "remote".to_string(),
+            server_addr: EndpointAddr::new(iroh::SecretKey::generate().public())
+                .with_ip_addr("192.0.2.10:4242".parse().unwrap()),
+            role: RemoteRoleCeiling::Observer,
+            device_credential: SecretString::from("credential".to_string()),
+        };
+
+        let policy =
+            explicit_iroh_client_policy(&configured, &IrohControlTarget::Profile(profile)).unwrap();
+
+        assert!(matches!(
+            policy.address_lookup,
+            crate::runtime::RuntimeIrohAddressLookupPolicy::N0Dns
+        ));
+        assert!(matches!(
+            policy.relay,
+            crate::runtime::RuntimeIrohRelayPolicy::Public
+        ));
+    }
 }
 
 async fn exchange_bound_iroh_control_request(
@@ -689,12 +778,17 @@ async fn exchange_bound_iroh_control_request(
         let issued_credential = issued_credential.ok_or_else(|| {
             MezError::invalid_state("successful Iroh pairing response omitted device credential")
         })?;
+        let server_addr = authenticated_remote_addr(endpoint, server_addr.id)
+            .await
+            .unwrap_or_else(|| server_addr.clone());
         RemoteClientProfileStore::under_config_root(config_root).save(&RemoteClientProfile {
             name: profile_name.clone(),
-            server_addr: server_addr.clone(),
+            server_addr,
             role: *role,
             device_credential: issued_credential,
         })?;
+    } else {
+        refresh_authenticated_profile_route(config_root, endpoint, target).await?;
     }
 
     let request = serde_json::json!({

@@ -144,6 +144,7 @@ changes require a daemon restart.
 | --- | --- | --- | --- |
 | `transport.iroh.enabled` | boolean | `false` | Start the inbound Iroh listener; this does not gate explicit outbound targets. |
 | `transport.iroh.outbound_enabled` | boolean | `true` | Permit explicit `--iroh-invite-file` and `--iroh-profile` connections; set false for an administrator-controlled outbound opt-out. |
+| `transport.iroh.bind_port` | integer | `0` | Server direct-transport port. `0` is ephemeral; configure 1 through 65535 for restart-stable direct invitations. |
 | `transport.iroh.identity` | string | `"per_session"` | Persist a distinct protected endpoint identity for each session. |
 | `transport.iroh.address_lookup` | string | `"disabled"` | Endpoint-address lookup policy. |
 | `transport.iroh.address_lookup_domain` | string | `""` | Explicit lookup domain when lookup policy requires one. |

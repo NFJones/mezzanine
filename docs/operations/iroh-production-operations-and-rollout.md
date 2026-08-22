@@ -42,16 +42,18 @@ overlays and model-authored changes cannot enable or retarget Iroh.
 ```toml
 [transport.iroh]
 enabled = true
+bind_port = 4242
 relay_mode = "disabled"
 address_lookup = "disabled"
 direct_connections = true
 port_mapping = false
 ```
 
-Use only where clients receive a pinned endpoint address through a confidential
-invitation or profile. Direct peers can observe each other IP addresses. Enable
-port mapping only after the controlled network plan measures the exposure and
-benefit.
+Replace `4242` with an approved, firewall-permitted UDP port. Direct-only
+foreign-machine invitations require a non-zero stable bind port and at least
+one non-loopback route; ephemeral or loopback-only routes are rejected. Direct
+peers can observe each other IP addresses. Enable port mapping only after the
+controlled network plan measures the exposure and benefit.
 
 ### Relay required
 
@@ -69,6 +71,10 @@ system_ca_store = true
 Replace example domains only with approved infrastructure. This mode fails
 closed if no relay route exists. Proxy and CA settings must match the approved
 relay and lookup deployment.
+
+Relay addresses are restart-safe route hints. Explicitly configured lookup may
+refresh a paired profile after a route change, but the authenticated server
+endpoint ID remains pinned and cannot be replaced by lookup results.
 
 ### Controlled direct plus relay
 

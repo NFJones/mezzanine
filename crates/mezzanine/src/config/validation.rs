@@ -543,7 +543,7 @@ pub fn validate_config_text(
     ConfigValidation::from_diagnostics(diagnostics)
 }
 
-/// Validates schema-v69 Iroh transport policy with structured value types.
+/// Validates schema-v70 Iroh transport policy with structured value types.
 fn validate_iroh_transport_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
     let Ok(root) = parse_config_json_value(format, text) else {
         return Vec::new();
@@ -696,6 +696,7 @@ fn validate_iroh_transport_config(format: ConfigFormat, text: &str) -> Vec<Confi
     }
 
     for (key, minimum, maximum) in [
+        ("bind_port", 0, 65_535),
         ("invitation_ttl_seconds", 30, 86_400),
         ("max_connections", 1, 1_024),
         ("max_streams_per_connection", 1, 1),

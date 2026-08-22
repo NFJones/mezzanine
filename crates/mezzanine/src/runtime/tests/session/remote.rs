@@ -22,7 +22,8 @@ fn local_owner_connection(service: &mut RuntimeSessionService) -> ControlConnect
         .secret_key()
         .public();
     service.integration.set_remote_endpoint_addr(Some(
-        iroh::EndpointAddr::new(endpoint_id).with_ip_addr("127.0.0.1:1".parse().unwrap()),
+        iroh::EndpointAddr::new(endpoint_id)
+            .with_relay_url("https://relay.example".parse().unwrap()),
     ));
     connection
 }
@@ -96,6 +97,54 @@ fn runtime_remote_invite_rejects_undialable_addresses_without_persistence() {
         Some("invalid_state")
     );
     assert!(!trust_path.exists());
+
+    service.integration.set_remote_endpoint_addr(Some(
+        iroh::EndpointAddr::new(endpoint_id).with_ip_addr("127.0.0.1:4242".parse().unwrap()),
+    ));
+    let loopback_only = request(
+        &mut service,
+        &mut local,
+        r#"{"jsonrpc":"2.0","id":"loopback-only","method":"remote/invite","params":{"role":"observer","expires_seconds":600,"idempotency_key":"loopback-only-invite"}}"#,
+    );
+    assert_eq!(
+        loopback_only
+            .pointer("/error/data/mezzanine_code")
+            .and_then(serde_json::Value::as_str),
+        Some("invalid_state")
+    );
+    assert!(!trust_path.exists());
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[transport.iroh]\nbind_port = 4242\n".to_string(),
+        }])
+        .unwrap();
+    service.integration.set_remote_endpoint_addr(Some(
+        iroh::EndpointAddr::new(endpoint_id)
+            .with_ip_addr("127.0.0.1:4242".parse().unwrap())
+            .with_ip_addr("192.0.2.10:4242".parse().unwrap()),
+    ));
+    let stable_direct = request(
+        &mut service,
+        &mut local,
+        r#"{"jsonrpc":"2.0","id":"stable-direct","method":"remote/invite","params":{"role":"observer","expires_seconds":600,"idempotency_key":"stable-direct-invite"}}"#,
+    );
+    let server_addr: iroh::EndpointAddr = serde_json::from_value(
+        stable_direct
+            .pointer("/result/server_addr")
+            .cloned()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        server_addr.ip_addrs().copied().collect::<Vec<_>>(),
+        vec!["192.0.2.10:4242".parse().unwrap()]
+    );
 
     let _ = fs::remove_dir_all(root);
 }
@@ -294,7 +343,8 @@ fn runtime_remote_administration_rejects_iroh_transport() {
         .secret_key()
         .public();
     service.integration.set_remote_endpoint_addr(Some(
-        iroh::EndpointAddr::new(server_endpoint_id).with_ip_addr("127.0.0.1:1".parse().unwrap()),
+        iroh::EndpointAddr::new(server_endpoint_id)
+            .with_relay_url("https://relay.example".parse().unwrap()),
     ));
     let invite = request(
         &mut service,

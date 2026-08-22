@@ -2891,8 +2891,9 @@ count when Mezzanine starts. Because the runtime is constructed before trusted
 project overlays can be discovered, this primary-user setting MUST NOT be
 overridden by project configuration and changes take effect on restart.
 
-The schema-v69 `transport.iroh` table MUST be primary-user-only and MUST default
-`enabled` to false and `outbound_enabled` to true. It MUST support `identity`, `address_lookup`,
+The schema-v70 `transport.iroh` table MUST be primary-user-only and MUST default
+`enabled` to false, `outbound_enabled` to true, and `bind_port` to 0. It MUST
+support `identity`, `address_lookup`,
 `address_lookup_domain`, `relay_mode`, `relay_urls`, `direct_connections`,
 `port_mapping`, `proxy_from_env`, `system_ca_store`,
 `invitation_ttl_seconds`, `max_connections`, `max_streams_per_connection`,
@@ -2909,6 +2910,9 @@ accept only 1 for that setting so configured and advertised limits match the
 single client-opened bidirectional control stream owned by protocol version 1.
 The v68 to v69 migration MUST add default-enabled explicit outbound Iroh
 permission without enabling the inbound listener.
+The v69 to v70 migration MUST add `bind_port = 0` without enabling network
+activity. A non-zero bind port MUST be applied to server IPv4 and available
+IPv6 sockets and MUST remain stable across restart when the port is available.
 
 `remote/invite` MUST use `transport.iroh.invitation_ttl_seconds` when the
 request omits `expires_seconds`. The CLI `--expires SECONDS` option MUST remain
@@ -2962,9 +2966,17 @@ and validated for pinned server-identity/address consistency before network use.
 Explicit targets MUST be allowed when listener-oriented `transport.iroh.enabled`
 is false unless `transport.iroh.outbound_enabled` is false. Their client-only
 endpoint MUST use only pinned IP or relay routes from the selected invitation or
-profile, MUST disable implicit address lookup and port mapping, and MUST NOT
-start an inbound listener. A target with no supported pinned route MUST fail
-before dialing with an actionable diagnostic.
+profile and MUST disable port mapping and inbound listening. Invitation targets
+MUST disable address lookup. Paired profiles MAY use only an explicitly
+configured address-lookup service to refresh stale routes for their pinned
+server endpoint ID. After successful transport and device authentication, the
+client MAY persist active refreshed route hints without changing that endpoint
+ID. A target with no pinned route and no explicitly configured profile lookup
+MUST fail before dialing with an actionable diagnostic.
+Remote invitations MUST contain a relay route or a non-loopback,
+non-unspecified direct route whose port equals a configured non-zero
+`bind_port`. Loopback-only, unspecified, or ephemeral-port direct routes MUST
+NOT be issued as foreign-machine invitations.
 Publishing a same-named client profile MAY refresh its route, role ceiling, and
 credential only when the existing and incoming profiles are pinned to the same
 server endpoint identity. A different-server name collision MUST fail before

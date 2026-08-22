@@ -77,6 +77,13 @@ profile publication fails without replacing its route or credential. Issue a
 new invitation with a distinct profile name rather than deleting or rewriting
 the protected profile database by hand. A retry for the same server identity may
 refresh that profile after successful initialization.
+Foreign-machine invitations include only a relay route or a non-loopback direct
+route on a configured non-zero `transport.iroh.bind_port`. Direct-only
+deployments must configure that stable port and the network must make it
+reachable. Relay-backed routes survive direct-port changes. If address lookup
+is explicitly configured, a paired profile may resolve and persist refreshed
+route hints only after the connection authenticates the same pinned server ID
+and device credential.
 Later control and interactive attach use `--iroh-profile PROFILE`. The direct
 Iroh CLI surface supports `attach`, `kill`, and `detach`. For example, use `mez
 --iroh-invite-file mez-invite.json attach` for first pairing or `mez

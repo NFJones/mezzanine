@@ -425,10 +425,11 @@ pub(super) const SESSION_KEYS: &[&str] = &["default_command"];
 /// boundary and avoids relying on call-site inference.
 pub(super) const RUNTIME_KEYS: &[&str] = &["cpu_count"];
 
-/// Defines the schema-v69 Iroh transport keys.
+/// Defines the schema-v70 Iroh transport keys.
 pub(super) const IROH_TRANSPORT_KEYS: &[&str] = &[
     "enabled",
     "outbound_enabled",
+    "bind_port",
     "identity",
     "address_lookup",
     "address_lookup_domain",

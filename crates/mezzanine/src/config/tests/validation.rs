@@ -1120,7 +1120,7 @@ fn env_whitelist_is_structurally_validated_and_primary_only() {
     }
 }
 
-/// Verifies schema-v69 Iroh policy is conservative, coherent, and primary-only.
+/// Verifies schema-v70 Iroh policy is conservative, coherent, and primary-only.
 #[test]
 fn iroh_transport_policy_is_validated_and_primary_only() {
     let primary = validate_config_text(
@@ -1173,6 +1173,7 @@ fn iroh_transport_policy_is_validated_and_primary_only() {
             "outbound_enabled = \"yes\"",
             "transport.iroh.outbound_enabled",
         ),
+        ("bind_port = 65536", "transport.iroh.bind_port"),
     ] {
         let validation = validate_config_text(
             ConfigFormat::Toml,

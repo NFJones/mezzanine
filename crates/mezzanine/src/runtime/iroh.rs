@@ -1,9 +1,12 @@
 //! Iroh endpoint construction and lifecycle for optional remote control.
 
 use iroh::address_lookup::{DnsAddressLookup, PkarrPublisher};
-use iroh::endpoint::{IdleTimeout, PortmapperConfig, QuicTransportConfig, VarInt, presets};
+use iroh::endpoint::{
+    BindOpts, IdleTimeout, PortmapperConfig, QuicTransportConfig, VarInt, presets,
+};
 use iroh::tls::CaTlsConfig;
 use iroh::{Endpoint, RelayMap, RelayMode, SecretKey, Watcher};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
@@ -316,6 +319,7 @@ pub(crate) async fn bind_runtime_iroh_endpoint(
         secret_key,
         stream_limit,
         0,
+        (policy.bind_port != 0).then_some(policy.bind_port),
         vec![MEZZANINE_IROH_ALPN.to_vec()],
         "Iroh endpoint",
     )
@@ -368,7 +372,16 @@ pub(crate) async fn bind_runtime_iroh_client_endpoint(
     policy: &RuntimeIrohTransportPolicy,
     secret_key: SecretKey,
 ) -> Result<Endpoint> {
-    bind_policy_iroh_endpoint(policy, secret_key, 0, 1, Vec::new(), "Iroh client endpoint").await
+    bind_policy_iroh_endpoint(
+        policy,
+        secret_key,
+        0,
+        1,
+        None,
+        Vec::new(),
+        "Iroh client endpoint",
+    )
+    .await
 }
 
 async fn bind_policy_iroh_endpoint(
@@ -376,6 +389,7 @@ async fn bind_policy_iroh_endpoint(
     secret_key: SecretKey,
     incoming_bidi_streams: u32,
     incoming_uni_streams: u32,
+    bind_port: Option<u16>,
     alpns: Vec<Vec<u8>>,
     diagnostic_name: &str,
 ) -> Result<Endpoint> {
@@ -392,6 +406,21 @@ async fn bind_policy_iroh_endpoint(
         .alpns(alpns)
         .transport_config(transport)
         .relay_mode(relay_mode(&policy.relay)?);
+
+    if let Some(bind_port) = bind_port {
+        builder = builder
+            .bind_addr((Ipv4Addr::UNSPECIFIED, bind_port))
+            .map_err(|error| {
+                MezError::config(format!("invalid transport.iroh.bind_port: {error}"))
+            })?
+            .bind_addr_with_opts(
+                (Ipv6Addr::UNSPECIFIED, bind_port),
+                BindOpts::default().set_is_required(false),
+            )
+            .map_err(|error| {
+                MezError::config(format!("invalid transport.iroh.bind_port: {error}"))
+            })?;
+    }
 
     if !policy.port_mapping {
         builder = builder.portmapper_config(PortmapperConfig::Disabled);
@@ -922,6 +951,52 @@ mod tests {
         endpoint.close().await;
     }
 
+    /// Verifies an explicitly configured direct port is reused across a clean
+    /// endpoint restart while the protected endpoint identity remains stable.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_endpoint_rebinds_stable_configured_port() {
+        let reservation = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let bind_port = reservation.local_addr().unwrap().port();
+        drop(reservation);
+        let secret_key = SecretKey::generate();
+        let endpoint_id = secret_key.public();
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            bind_port,
+            setup_timeout: std::time::Duration::from_secs(10),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+
+        let first = bind_runtime_iroh_endpoint(policy.clone(), secret_key.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.endpoint().id(), endpoint_id);
+        assert!(
+            first
+                .endpoint()
+                .bound_sockets()
+                .iter()
+                .all(|addr| addr.port() == bind_port)
+        );
+        first.close().await;
+        drop(first);
+
+        let second = bind_runtime_iroh_endpoint(policy, secret_key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.endpoint().id(), endpoint_id);
+        assert!(
+            second
+                .endpoint()
+                .bound_sockets()
+                .iter()
+                .all(|addr| addr.port() == bind_port)
+        );
+        second.close().await;
+    }
+
     /// Verifies endpoint loss while the daemon remains running is surfaced as
     /// a listener failure rather than a successful service completion.
     ///
@@ -1394,16 +1469,34 @@ mod tests {
                 .unwrap();
             assert_eq!(profile.server_addr.id, server_addr.id);
 
+            let stale_addr: std::net::SocketAddr = "192.0.2.55:9".parse().unwrap();
+            let mut stale_profile = profile.clone();
+            stale_profile.server_addr = stale_profile.server_addr.with_ip_addr(stale_addr);
+            RemoteClientProfileStore::under_config_root(&client_root)
+                .save(&stale_profile)
+                .unwrap();
+
             let second = exchange_iroh_control_request(
                 &client_root,
                 &client_policy,
-                &IrohControlTarget::Profile(profile),
+                &IrohControlTarget::Profile(stale_profile),
                 "session/kill",
                 r#"{"force":true,"idempotency_key":"connector-kill"}"#,
             )
             .await
             .unwrap();
             assert!(second.contains(r#""killed":true"#), "{second}");
+            let refreshed = RemoteClientProfileStore::under_config_root(&client_root)
+                .load("workstation")
+                .unwrap()
+                .unwrap();
+            assert_eq!(refreshed.server_addr.id, server_addr.id);
+            assert!(
+                !refreshed
+                    .server_addr
+                    .ip_addrs()
+                    .any(|addr| *addr == stale_addr)
+            );
         };
 
         let actor_task = tokio::spawn(actor.run());

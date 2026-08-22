@@ -483,6 +483,11 @@ impl RuntimeSessionService {
             }
             "remote/invite" => {
                 let params = remote_params(request)?;
+                let structured = crate::runtime::runtime_effective_config_value(
+                    self.integration.config_layers(),
+                )?;
+                let policy =
+                    crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
                 let role = match params
                     .get("role")
                     .and_then(serde_json::Value::as_str)
@@ -502,14 +507,7 @@ impl RuntimeSessionService {
                             "remote/invite expires_seconds must be an unsigned integer",
                         )
                     })?,
-                    None => {
-                        let structured = crate::runtime::runtime_effective_config_value(
-                            self.integration.config_layers(),
-                        )?;
-                        crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?
-                            .invitation_ttl
-                            .as_secs()
-                    }
+                    None => policy.invitation_ttl.as_secs(),
                 };
                 let endpoint_id = self
                     .integration
@@ -530,6 +528,7 @@ impl RuntimeSessionService {
                         "bound Iroh listener identity does not match remote trust identity",
                     ));
                 }
+                let endpoint_addr = foreign_machine_invitation_addr(endpoint_addr, &policy)?;
                 let invitation = RemoteTrustStore::under_config_root(&config_root, &session_id)?
                     .create_invitation(
                         &endpoint_id,
@@ -665,6 +664,29 @@ fn requested_role_name(role: RequestedRole) -> &'static str {
         RequestedRole::Agent => "agent",
         RequestedRole::Automation => "automation",
     }
+}
+
+/// Retains only routes suitable for an invitation transferred to another machine.
+fn foreign_machine_invitation_addr(
+    mut endpoint_addr: iroh::EndpointAddr,
+    policy: &crate::runtime::RuntimeIrohTransportPolicy,
+) -> Result<iroh::EndpointAddr> {
+    endpoint_addr.addrs.retain(|addr| match addr {
+        iroh::TransportAddr::Relay(_) => true,
+        iroh::TransportAddr::Ip(addr) => {
+            policy.bind_port != 0
+                && addr.port() == policy.bind_port
+                && !addr.ip().is_loopback()
+                && !addr.ip().is_unspecified()
+        }
+        _ => false,
+    });
+    if endpoint_addr.is_empty() {
+        return Err(MezError::invalid_state(
+            "Iroh listener has no foreign-machine route; configure a stable bind_port with a non-loopback address or enable a relay",
+        ));
+    }
+    Ok(endpoint_addr)
 }
 
 fn remote_administration_mutates(method: &str) -> bool {

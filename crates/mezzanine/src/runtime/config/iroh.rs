@@ -53,6 +53,7 @@ impl RuntimeIrohRelayPolicy {
 pub(crate) struct RuntimeIrohTransportPolicy {
     pub(crate) enabled: bool,
     pub(crate) outbound_enabled: bool,
+    pub(crate) bind_port: u16,
     pub(crate) identity: RuntimeIrohIdentityPolicy,
     pub(crate) address_lookup: RuntimeIrohAddressLookupPolicy,
     pub(crate) relay: RuntimeIrohRelayPolicy,
@@ -72,6 +73,7 @@ impl Default for RuntimeIrohTransportPolicy {
         Self {
             enabled: false,
             outbound_enabled: true,
+            bind_port: 0,
             identity: RuntimeIrohIdentityPolicy::PerSession,
             address_lookup: RuntimeIrohAddressLookupPolicy::Disabled,
             relay: RuntimeIrohRelayPolicy::Disabled,
@@ -190,6 +192,14 @@ pub(crate) fn runtime_iroh_transport_policy_from_config(
     Ok(RuntimeIrohTransportPolicy {
         enabled: bool_value(iroh, "enabled", defaults.enabled)?,
         outbound_enabled: bool_value(iroh, "outbound_enabled", defaults.outbound_enabled)?,
+        bind_port: u16::try_from(bounded_u64_value(
+            iroh,
+            "bind_port",
+            u64::from(defaults.bind_port),
+            0,
+            u64::from(u16::MAX),
+        )?)
+        .map_err(|_| MezError::config("transport.iroh.bind_port is too large"))?,
         identity,
         address_lookup,
         relay,
@@ -308,12 +318,14 @@ mod tests {
         let defaults = runtime_iroh_transport_policy_from_config(&serde_json::json!({})).unwrap();
         assert_eq!(defaults, RuntimeIrohTransportPolicy::default());
         assert!(defaults.outbound_enabled);
+        assert_eq!(defaults.bind_port, 0);
         assert_eq!(defaults.max_streams_per_connection, 1);
 
         let policy = runtime_iroh_transport_policy_from_config(&serde_json::json!({
             "transport": { "iroh": {
                 "enabled": true,
                 "outbound_enabled": false,
+                "bind_port": 4242,
                 "identity": "per_session",
                 "address_lookup": "custom_dns",
                 "address_lookup_domain": "iroh.example",
@@ -333,6 +345,7 @@ mod tests {
         .unwrap();
         assert!(policy.enabled);
         assert!(!policy.outbound_enabled);
+        assert_eq!(policy.bind_port, 4242);
         assert_eq!(
             policy.address_lookup,
             RuntimeIrohAddressLookupPolicy::CustomDns {
@@ -365,6 +378,7 @@ mod tests {
             serde_json::json!({"transport":{"iroh":{"relay_mode":"disabled","direct_connections":false}}}),
             serde_json::json!({"transport":{"iroh":{"max_connections":0}}}),
             serde_json::json!({"transport":{"iroh":{"max_streams_per_connection":2}}}),
+            serde_json::json!({"transport":{"iroh":{"bind_port":65536}}}),
             serde_json::json!({"transport":{"iroh":{"idle_timeout_ms":999}}}),
         ] {
             assert!(

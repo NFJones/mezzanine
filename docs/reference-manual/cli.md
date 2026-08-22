@@ -111,7 +111,10 @@ invitation already selects the remote session.
 Explicit Iroh targets work when listener-oriented `transport.iroh.enabled` is
 false. They require `transport.iroh.outbound_enabled = true` (the default) and
 derive a client-only direct or relay policy from the target's pinned address;
-they do not start a listener, enable port mapping, or perform address lookup.
+they do not start a listener or enable port mapping. Invitation targets perform
+no address lookup. Paired profiles may use an address-lookup service only when
+the user explicitly configured one; a successful endpoint-ID-pinned reconnect
+refreshes authenticated route hints in the protected profile.
 
 Interactive remote attach requires a terminal and keeps one initialized Iroh
 control stream open for its lifetime. A `primary` profile may attach as primary
