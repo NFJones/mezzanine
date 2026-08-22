@@ -1120,7 +1120,7 @@ fn env_whitelist_is_structurally_validated_and_primary_only() {
     }
 }
 
-/// Verifies schema-v68 Iroh policy is conservative, coherent, and primary-only.
+/// Verifies schema-v69 Iroh policy is conservative, coherent, and primary-only.
 #[test]
 fn iroh_transport_policy_is_validated_and_primary_only() {
     let primary = validate_config_text(
@@ -1168,6 +1168,10 @@ fn iroh_transport_policy_is_validated_and_primary_only() {
         (
             "max_streams_per_connection = 2",
             "transport.iroh.max_streams_per_connection",
+        ),
+        (
+            "outbound_enabled = \"yes\"",
+            "transport.iroh.outbound_enabled",
         ),
     ] {
         let validation = validate_config_text(

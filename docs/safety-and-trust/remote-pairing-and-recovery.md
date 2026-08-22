@@ -56,7 +56,11 @@ The invitation is server-bound, role-limited, and claimable by one authenticated
 client endpoint. A remote client selects it explicitly with
 `--iroh-invite-file`; no failed remote attempt falls back to Unix. The
 invitation is consumed only after remote `control/initialize` succeeds. The
-successful response returns a device credential, and the client atomically
+recipient does not need to enable an inbound Iroh listener: explicit outbound
+use is enabled separately by `transport.iroh.outbound_enabled` and uses only
+the invitation's pinned direct or relay routes without implicit lookup or port
+mapping. Administrators can set that field to false to block outbound Iroh.
+The successful response returns a device credential, and the client atomically
 publishes a protected profile only after receiving that success. If the
 response is lost or local profile persistence fails, retry the same invitation
 from the same client endpoint before it expires. The server returns the same

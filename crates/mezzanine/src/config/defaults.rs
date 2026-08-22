@@ -137,7 +137,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 68
+version = 69
 
 # Process-wide runtime sizing. Changes require a restart.
 [runtime]
@@ -149,6 +149,7 @@ cpu_count = 2
 # require a daemon restart.
 [transport.iroh]
 enabled = false
+outbound_enabled = true
 identity = "per_session"
 address_lookup = "disabled"
 address_lookup_domain = ""

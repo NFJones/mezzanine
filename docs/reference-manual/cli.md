@@ -108,6 +108,11 @@ and apply to `mez attach`, `mez kill --force`, and `mez detach`. Supplying a
 session argument is invalid with an explicit Iroh target because the profile or
 invitation already selects the remote session.
 
+Explicit Iroh targets work when listener-oriented `transport.iroh.enabled` is
+false. They require `transport.iroh.outbound_enabled = true` (the default) and
+derive a client-only direct or relay policy from the target's pinned address;
+they do not start a listener, enable port mapping, or perform address lookup.
+
 Interactive remote attach requires a terminal and keeps one initialized Iroh
 control stream open for its lifetime. A `primary` profile may attach as primary
 or request observer access; an `observer` profile cannot attach as primary.

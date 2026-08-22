@@ -142,7 +142,8 @@ changes require a daemon restart.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `transport.iroh.enabled` | boolean | `false` | Opt in to the Iroh transport when an Iroh listener is available. |
+| `transport.iroh.enabled` | boolean | `false` | Start the inbound Iroh listener; this does not gate explicit outbound targets. |
+| `transport.iroh.outbound_enabled` | boolean | `true` | Permit explicit `--iroh-invite-file` and `--iroh-profile` connections; set false for an administrator-controlled outbound opt-out. |
 | `transport.iroh.identity` | string | `"per_session"` | Persist a distinct protected endpoint identity for each session. |
 | `transport.iroh.address_lookup` | string | `"disabled"` | Endpoint-address lookup policy. |
 | `transport.iroh.address_lookup_domain` | string | `""` | Explicit lookup domain when lookup policy requires one. |

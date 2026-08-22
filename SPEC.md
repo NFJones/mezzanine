@@ -2891,8 +2891,8 @@ count when Mezzanine starts. Because the runtime is constructed before trusted
 project overlays can be discovered, this primary-user setting MUST NOT be
 overridden by project configuration and changes take effect on restart.
 
-The schema-v68 `transport.iroh` table MUST be primary-user-only and MUST default
-`enabled` to false. It MUST support `identity`, `address_lookup`,
+The schema-v69 `transport.iroh` table MUST be primary-user-only and MUST default
+`enabled` to false and `outbound_enabled` to true. It MUST support `identity`, `address_lookup`,
 `address_lookup_domain`, `relay_mode`, `relay_urls`, `direct_connections`,
 `port_mapping`, `proxy_from_env`, `system_ca_store`,
 `invitation_ttl_seconds`, `max_connections`, `max_streams_per_connection`,
@@ -2907,6 +2907,8 @@ enabling network activity. The v67 to v68 migration MUST normalize
 `max_streams_per_connection` to 1 in all supported formats. Schema v68 MUST
 accept only 1 for that setting so configured and advertised limits match the
 single client-opened bidirectional control stream owned by protocol version 1.
+The v68 to v69 migration MUST add default-enabled explicit outbound Iroh
+permission without enabling the inbound listener.
 
 `remote/invite` MUST use `transport.iroh.invitation_ttl_seconds` when the
 request omits `expires_seconds`. The CLI `--expires SECONDS` option MUST remain
@@ -2957,6 +2959,12 @@ only after successful invitation initialization. Explicit
 `--iroh-invite-file` and `--iroh-profile` selections MUST NOT fall back to a Unix
 socket after any remote failure. Invitation files MUST be bounded, owner-only,
 and validated for pinned server-identity/address consistency before network use.
+Explicit targets MUST be allowed when listener-oriented `transport.iroh.enabled`
+is false unless `transport.iroh.outbound_enabled` is false. Their client-only
+endpoint MUST use only pinned IP or relay routes from the selected invitation or
+profile, MUST disable implicit address lookup and port mapping, and MUST NOT
+start an inbound listener. A target with no supported pinned route MUST fail
+before dialing with an actionable diagnostic.
 Publishing a same-named client profile MAY refresh its route, role ceiling, and
 credential only when the existing and incoming profiles are pinned to the same
 server endpoint identity. A different-server name collision MUST fail before

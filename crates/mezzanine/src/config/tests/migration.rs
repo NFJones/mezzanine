@@ -2198,7 +2198,7 @@ fn migrates_schema_66_with_disabled_iroh_transport() {
 /// single bidirectional control stream enforced by the v1 Iroh protocol.
 #[test]
 fn migrates_schema_67_to_fixed_iroh_stream_limit() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 68);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 69);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2217,10 +2217,44 @@ fn migrates_schema_67_to_fixed_iroh_stream_limit() {
         let values = extract_config_values(format, &plan.text);
 
         assert_eq!(plan.from_version, 67);
-        assert_eq!(plan.to_version, 68);
+        assert_eq!(plan.to_version, 69);
         assert_eq!(
             values.get("transport.iroh.max_streams_per_connection"),
             Some(&"1".to_string())
+        );
+    }
+}
+
+/// Verifies schema v69 preserves explicit outbound Iroh target use while
+/// keeping listener enablement disabled for clean client configurations.
+#[test]
+fn migrates_schema_68_with_separate_outbound_iroh_permission() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 68\n[transport.iroh]\nenabled = false\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":68,"transport":{"iroh":{"enabled":false}}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 68\ntransport:\n  iroh:\n    enabled: false\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let values = extract_config_values(format, &plan.text);
+
+        assert_eq!(plan.from_version, 68);
+        assert_eq!(plan.to_version, 69);
+        assert_eq!(
+            values.get("transport.iroh.enabled"),
+            Some(&"false".to_string())
+        );
+        assert_eq!(
+            values.get("transport.iroh.outbound_enabled"),
+            Some(&"true".to_string())
         );
     }
 }

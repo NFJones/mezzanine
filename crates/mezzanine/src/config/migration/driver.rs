@@ -57,12 +57,13 @@ use super::v64_v65::migrate_v64_to_v65;
 use super::v65_v66::migrate_v65_to_v66;
 use super::v66_v67::migrate_v66_to_v67;
 use super::v67_v68::migrate_v67_to_v68;
+use super::v68_v69::migrate_v68_to_v69;
 use super::{
     ConfigFormat, MezError, Path, Result, extract_config_values, fs, write_private_config_file,
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 68;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 69;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -375,6 +376,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             67 => {
                 current_text = migrate_v67_to_v68(format, &current_text)?;
                 current_version = 68;
+            }
+            68 => {
+                current_text = migrate_v68_to_v69(format, &current_text)?;
+                current_version = 69;
             }
             unsupported => {
                 return Err(MezError::config(format!(

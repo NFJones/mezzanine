@@ -52,6 +52,7 @@ impl RuntimeIrohRelayPolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeIrohTransportPolicy {
     pub(crate) enabled: bool,
+    pub(crate) outbound_enabled: bool,
     pub(crate) identity: RuntimeIrohIdentityPolicy,
     pub(crate) address_lookup: RuntimeIrohAddressLookupPolicy,
     pub(crate) relay: RuntimeIrohRelayPolicy,
@@ -70,6 +71,7 @@ impl Default for RuntimeIrohTransportPolicy {
     fn default() -> Self {
         Self {
             enabled: false,
+            outbound_enabled: true,
             identity: RuntimeIrohIdentityPolicy::PerSession,
             address_lookup: RuntimeIrohAddressLookupPolicy::Disabled,
             relay: RuntimeIrohRelayPolicy::Disabled,
@@ -187,6 +189,7 @@ pub(crate) fn runtime_iroh_transport_policy_from_config(
     }
     Ok(RuntimeIrohTransportPolicy {
         enabled: bool_value(iroh, "enabled", defaults.enabled)?,
+        outbound_enabled: bool_value(iroh, "outbound_enabled", defaults.outbound_enabled)?,
         identity,
         address_lookup,
         relay,
@@ -304,11 +307,13 @@ mod tests {
     fn iroh_transport_policy_defaults_disabled_and_materializes_explicit_values() {
         let defaults = runtime_iroh_transport_policy_from_config(&serde_json::json!({})).unwrap();
         assert_eq!(defaults, RuntimeIrohTransportPolicy::default());
+        assert!(defaults.outbound_enabled);
         assert_eq!(defaults.max_streams_per_connection, 1);
 
         let policy = runtime_iroh_transport_policy_from_config(&serde_json::json!({
             "transport": { "iroh": {
                 "enabled": true,
+                "outbound_enabled": false,
                 "identity": "per_session",
                 "address_lookup": "custom_dns",
                 "address_lookup_domain": "iroh.example",
@@ -327,6 +332,7 @@ mod tests {
         }))
         .unwrap();
         assert!(policy.enabled);
+        assert!(!policy.outbound_enabled);
         assert_eq!(
             policy.address_lookup,
             RuntimeIrohAddressLookupPolicy::CustomDns {

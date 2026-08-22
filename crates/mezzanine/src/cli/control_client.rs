@@ -95,7 +95,7 @@ pub(super) async fn run_control_request_for_target<W: Write>(
     let paths = env.config_paths()?;
     let layers = super::load_runtime_config_layers(&paths)?;
     let structured = crate::runtime::runtime_effective_config_value(&layers)?;
-    let policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
+    let configured_policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
     let target = match control_target {
         super::ControlTargetSelection::Unix => unreachable!("Unix target returned above"),
         super::ControlTargetSelection::IrohProfile(name) => {
@@ -111,6 +111,7 @@ pub(super) async fn run_control_request_for_target<W: Write>(
         }
         super::ControlTargetSelection::IrohInvitation(path) => parse_iroh_invitation_file(path)?,
     };
+    let policy = explicit_iroh_client_policy(&configured_policy, &target)?;
     let body =
         exchange_iroh_control_request(paths.root(), &policy, &target, method, params).await?;
     write_control_response(stdout, output_format, &body)
@@ -242,6 +243,42 @@ impl IrohControlTarget {
     }
 }
 
+/// Derives a client-only network policy from one explicit pinned target.
+fn explicit_iroh_client_policy(
+    configured: &RuntimeIrohTransportPolicy,
+    target: &IrohControlTarget,
+) -> Result<RuntimeIrohTransportPolicy> {
+    if !configured.outbound_enabled {
+        return Err(MezError::config(
+            "outbound Iroh connections are disabled by transport.iroh.outbound_enabled",
+        ));
+    }
+    let server_addr = target.server_addr();
+    let direct_connections = server_addr.ip_addrs().next().is_some();
+    let relay_urls = server_addr
+        .relay_urls()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let relay = if relay_urls.is_empty() {
+        crate::runtime::RuntimeIrohRelayPolicy::Disabled
+    } else {
+        crate::runtime::RuntimeIrohRelayPolicy::Custom { urls: relay_urls }
+    };
+    if !direct_connections && matches!(relay, crate::runtime::RuntimeIrohRelayPolicy::Disabled) {
+        return Err(MezError::invalid_args(
+            "explicit Iroh target has no supported pinned IP or relay route; address lookup is disabled for explicit targets",
+        ));
+    }
+    Ok(RuntimeIrohTransportPolicy {
+        enabled: false,
+        address_lookup: crate::runtime::RuntimeIrohAddressLookupPolicy::Disabled,
+        relay,
+        direct_connections,
+        port_mapping: false,
+        ..configured.clone()
+    })
+}
+
 /// One initialized, long-lived Iroh control stream for interactive attach.
 pub(super) struct PersistentIrohControlChannel {
     _identity: RemoteClientIdentity,
@@ -308,13 +345,9 @@ pub(super) async fn open_persistent_iroh_control_channel(
     let paths = env.config_paths()?;
     let layers = super::load_runtime_config_layers(&paths)?;
     let structured = crate::runtime::runtime_effective_config_value(&layers)?;
-    let policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
-    if !policy.enabled {
-        return Err(MezError::config(
-            "Iroh client transport is disabled; enable transport.iroh explicitly",
-        ));
-    }
+    let configured_policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
     let target = resolve_iroh_control_target(control_target, paths.root())?;
+    let policy = explicit_iroh_client_policy(&configured_policy, &target)?;
     ensure_iroh_attach_role_allowed(target.role(), requested_role)?;
     if let IrohControlTarget::Invitation {
         expires_at_unix_seconds,
@@ -469,16 +502,12 @@ where
 /// Exchanges initialization and one request over one client-opened Iroh stream.
 pub(crate) async fn exchange_iroh_control_request(
     config_root: &Path,
-    policy: &RuntimeIrohTransportPolicy,
+    configured_policy: &RuntimeIrohTransportPolicy,
     target: &IrohControlTarget,
     method: &str,
     params: &str,
 ) -> Result<String> {
-    if !policy.enabled {
-        return Err(MezError::config(
-            "Iroh client transport is disabled; enable transport.iroh explicitly",
-        ));
-    }
+    let policy = explicit_iroh_client_policy(configured_policy, target)?;
     if let IrohControlTarget::Invitation {
         expires_at_unix_seconds,
         ..
@@ -493,10 +522,11 @@ pub(crate) async fn exchange_iroh_control_request(
         MezError::invalid_args(format!("invalid control request params: {error}"))
     })?;
     let identity = RemoteClientIdentity::load_or_create(config_root)?;
-    let endpoint = bind_runtime_iroh_client_endpoint(policy, identity.secret_key().clone()).await?;
+    let endpoint =
+        bind_runtime_iroh_client_endpoint(&policy, identity.secret_key().clone()).await?;
     let exchange = exchange_bound_iroh_control_request(
         config_root,
-        policy,
+        &policy,
         target,
         method,
         request_params,
@@ -505,6 +535,92 @@ pub(crate) async fn exchange_iroh_control_request(
     .await;
     let _ = tokio::time::timeout(policy.setup_timeout, endpoint.close()).await;
     exchange
+}
+
+#[cfg(test)]
+mod outbound_policy_tests {
+    use super::*;
+
+    fn invitation_target(server_addr: EndpointAddr) -> IrohControlTarget {
+        IrohControlTarget::Invitation {
+            profile_name: "remote".to_string(),
+            server_addr,
+            token: SecretString::from("secret".to_string()),
+            role: RemoteRoleCeiling::Observer,
+            expires_at_unix_seconds: u64::MAX,
+        }
+    }
+
+    /// Verifies an explicit direct target enables only its pinned IP route even
+    /// when the local listener remains disabled by default.
+    #[test]
+    fn explicit_direct_target_derives_client_only_policy() {
+        let configured = RuntimeIrohTransportPolicy::default();
+        let target = invitation_target(
+            EndpointAddr::new(iroh::SecretKey::generate().public())
+                .with_ip_addr("127.0.0.1:47000".parse().unwrap()),
+        );
+
+        let policy = explicit_iroh_client_policy(&configured, &target).unwrap();
+
+        assert!(!configured.enabled);
+        assert!(!policy.enabled);
+        assert!(policy.direct_connections);
+        assert!(matches!(
+            policy.relay,
+            crate::runtime::RuntimeIrohRelayPolicy::Disabled
+        ));
+        assert!(matches!(
+            policy.address_lookup,
+            crate::runtime::RuntimeIrohAddressLookupPolicy::Disabled
+        ));
+        assert!(!policy.port_mapping);
+    }
+
+    /// Verifies an explicit relay-only target enables exactly its pinned relay
+    /// without enabling direct IP paths or implicit endpoint lookup.
+    #[test]
+    fn explicit_relay_target_derives_relay_only_policy() {
+        let configured = RuntimeIrohTransportPolicy::default();
+        let target = invitation_target(
+            EndpointAddr::new(iroh::SecretKey::generate().public())
+                .with_relay_url("https://relay.example".parse().unwrap()),
+        );
+
+        let policy = explicit_iroh_client_policy(&configured, &target).unwrap();
+
+        assert!(!policy.direct_connections);
+        assert_eq!(
+            policy.relay,
+            crate::runtime::RuntimeIrohRelayPolicy::Custom {
+                urls: vec!["https://relay.example/".to_string()]
+            }
+        );
+        assert!(matches!(
+            policy.address_lookup,
+            crate::runtime::RuntimeIrohAddressLookupPolicy::Disabled
+        ));
+        assert!(!policy.port_mapping);
+    }
+
+    /// Verifies administrators can disable every explicit outbound Iroh target
+    /// independently of listener policy.
+    #[test]
+    fn explicit_target_respects_outbound_opt_out() {
+        let configured = RuntimeIrohTransportPolicy {
+            outbound_enabled: false,
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let target = invitation_target(
+            EndpointAddr::new(iroh::SecretKey::generate().public())
+                .with_ip_addr("127.0.0.1:47000".parse().unwrap()),
+        );
+
+        let error = explicit_iroh_client_policy(&configured, &target).unwrap_err();
+
+        assert_eq!(error.kind(), crate::error::MezErrorKind::Config);
+        assert!(error.message().contains("outbound_enabled"));
+    }
 }
 
 async fn exchange_bound_iroh_control_request(

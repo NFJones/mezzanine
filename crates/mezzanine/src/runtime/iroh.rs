@@ -1303,7 +1303,7 @@ mod tests {
                 crate::runtime::current_unix_seconds(),
             )
             .unwrap();
-        let policy = RuntimeIrohTransportPolicy {
+        let server_policy = RuntimeIrohTransportPolicy {
             enabled: true,
             max_connections: 2,
             max_streams_per_connection: 1,
@@ -1311,10 +1311,16 @@ mod tests {
             idle_timeout: std::time::Duration::from_secs(30),
             ..RuntimeIrohTransportPolicy::default()
         };
-        let server_endpoint = bind_runtime_iroh_endpoint(policy.clone(), server_secret)
+        let server_endpoint = bind_runtime_iroh_endpoint(server_policy, server_secret)
             .await
             .unwrap()
             .unwrap();
+        let client_policy = RuntimeIrohTransportPolicy {
+            setup_timeout: std::time::Duration::from_secs(10),
+            idle_timeout: std::time::Duration::from_secs(30),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        assert!(!client_policy.enabled);
         let server_addr = server_endpoint.endpoint().addr();
         let (handle, actor) =
             AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
@@ -1343,7 +1349,7 @@ mod tests {
             };
             let save_error = exchange_iroh_control_request(
                 &client_root,
-                &policy,
+                &client_policy,
                 &invalid_profile_target,
                 "window/list",
                 "{}",
@@ -1368,7 +1374,7 @@ mod tests {
             };
             let first = exchange_iroh_control_request(
                 &client_root,
-                &policy,
+                &client_policy,
                 &invitation_target,
                 "window/list",
                 "{}",
@@ -1390,7 +1396,7 @@ mod tests {
 
             let second = exchange_iroh_control_request(
                 &client_root,
-                &policy,
+                &client_policy,
                 &IrohControlTarget::Profile(profile),
                 "session/kill",
                 r#"{"force":true,"idempotency_key":"connector-kill"}"#,

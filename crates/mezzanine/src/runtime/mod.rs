@@ -515,7 +515,10 @@ use config::{
     runtime_window_frame_template_from_config, runtime_window_frame_visible_fields_from_config,
     runtime_window_frames_enabled_from_config,
 };
-pub(crate) use config::{RuntimeIrohTransportPolicy, runtime_iroh_transport_policy_from_config};
+pub(crate) use config::{
+    RuntimeIrohAddressLookupPolicy, RuntimeIrohRelayPolicy, RuntimeIrohTransportPolicy,
+    runtime_iroh_transport_policy_from_config,
+};
 pub use config::{runtime_effective_config_value, runtime_ui_theme_from_config};
 #[cfg(test)]
 use hook_support::run_external_shell_hook_command;
