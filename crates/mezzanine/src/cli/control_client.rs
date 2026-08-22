@@ -68,12 +68,31 @@ pub(super) fn exchange_control_request<S: Read + Write>(
     stream.flush()?;
     let initialize_response =
         read_control_response_frames(stream, CLI_CONTROL_MAX_CONTENT_LENGTH, 1)?;
-    let _ = decode_control_frame(&initialize_response, CLI_CONTROL_MAX_CONTENT_LENGTH)?;
+    let (initialize_body, _) =
+        decode_control_frame(&initialize_response, CLI_CONTROL_MAX_CONTENT_LENGTH)?;
+    ensure_one_shot_initialize_success(&initialize_body)?;
     stream.write_all(&encode_control_body(&request))?;
     stream.flush()?;
     let response = read_control_response_frames(stream, CLI_CONTROL_MAX_CONTENT_LENGTH, 1)?;
     let (body, _) = decode_control_frame(&response, CLI_CONTROL_MAX_CONTENT_LENGTH)?;
     Ok(body)
+}
+
+/// Rejects a failed one-shot initialization before a follow-up request can
+/// replace the causal JSON-RPC error with an uninitialized-connection error.
+fn ensure_one_shot_initialize_success(body: &str) -> Result<()> {
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_state("control initialize response is not valid JSON"))?;
+    let Some(error) = value.get("error") else {
+        return Ok(());
+    };
+    let message = error
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("control initialization was rejected");
+    Err(MezError::invalid_state(format!(
+        "control initialize failed: {message}"
+    )))
 }
 
 const MAX_IROH_INVITATION_FILE_BYTES: u64 = 64 * 1024;

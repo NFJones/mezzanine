@@ -412,6 +412,57 @@ fn control_request_exchange_uses_generic_read_write_stream() {
     assert!(response.contains(r#""session_id":"$1""#));
 }
 
+/// Verifies a rejected one-shot initialization stops before the requested
+/// method can hide the causal JSON-RPC error behind an uninitialized follow-up.
+#[test]
+fn control_request_exchange_stops_after_initialize_error() {
+    struct RejectingControlStream {
+        response: Option<Vec<u8>>,
+        written: Vec<u8>,
+    }
+
+    impl Read for RejectingControlStream {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let Some(response) = self.response.take() else {
+                return Ok(0);
+            };
+            assert!(response.len() <= buffer.len());
+            buffer[..response.len()].copy_from_slice(&response);
+            Ok(response.len())
+        }
+    }
+
+    impl Write for RejectingControlStream {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.written.extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut stream = RejectingControlStream {
+        response: Some(encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"cli-init","error":{"code":-32004,"message":"session already has an attached primary client","data":{"mezzanine_code":"conflict"}}}"#,
+        )),
+        written: Vec::new(),
+    };
+
+    let error = exchange_control_request(&mut stream, "remote/status", "{}").unwrap_err();
+    let (initialize, consumed) = decode_control_frame(&stream.written, 1024 * 1024).unwrap();
+
+    assert!(initialize.contains(r#""method":"control/initialize""#));
+    assert_eq!(consumed, stream.written.len());
+    assert!(
+        error
+            .message()
+            .contains("session already has an attached primary client"),
+        "{error}"
+    );
+}
+
 /// Verifies that daemon startup does not spawn an auth refresh worker when the
 /// persisted OpenAI access token is still well outside the refresh leeway
 /// window. This keeps the launch-time background refresh trigger conditional
