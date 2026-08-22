@@ -408,6 +408,7 @@ async fn serve_runtime_iroh_control_listener(
     let mut accepted = 0u64;
     let mut tasks = JoinSet::new();
     let mut lifecycle = handle.lifecycle_state_watcher();
+    let mut endpoint_closed_unexpectedly = false;
     loop {
         let state = *lifecycle.borrow();
         if terminal_daemon_state(state) {
@@ -416,6 +417,8 @@ async fn serve_runtime_iroh_control_listener(
         tokio::select! {
             incoming = endpoint.endpoint.accept(), if tasks.len() < endpoint.policy.max_connections => {
                 let Some(incoming) = incoming else {
+                    endpoint_closed_unexpectedly =
+                        !terminal_daemon_state(*lifecycle.borrow());
                     break;
                 };
                 let setup_started = Instant::now();
@@ -512,6 +515,11 @@ async fn serve_runtime_iroh_control_listener(
                 )));
             }
         }
+    }
+    if endpoint_closed_unexpectedly {
+        return Err(MezError::invalid_state(
+            "Iroh control listener closed unexpectedly while runtime remained active",
+        ));
     }
     Ok(accepted)
 }
@@ -770,6 +778,74 @@ mod tests {
         assert_eq!(endpoint.endpoint().id(), endpoint_id);
         assert_eq!(endpoint.policy(), &policy);
         endpoint.close().await;
+    }
+
+    /// Verifies endpoint loss while the daemon remains running is surfaced as
+    /// a listener failure rather than a successful service completion.
+    ///
+    /// An enabled transport must not silently degrade to Unix-only control if
+    /// its endpoint closes independently of the runtime lifecycle.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_listener_reports_unexpected_endpoint_closure() {
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::test_support::runtime::RuntimeServiceFixture;
+
+        let service = RuntimeServiceFixture::new().build();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            setup_timeout: std::time::Duration::from_secs(2),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let server = bind_runtime_iroh_endpoint(policy, SecretKey::generate())
+            .await
+            .unwrap()
+            .unwrap();
+        let endpoint = server.endpoint().clone();
+        let diagnostics = server.diagnostics.clone();
+        let listener_handle = handle.clone();
+        let listener = tokio::spawn(async move {
+            serve_runtime_iroh_control_listener(
+                &server,
+                &listener_handle,
+                AsyncRuntimeControlConnectionConfig::new(4096, 0).unwrap(),
+                None,
+            )
+            .await
+        });
+        let actor_task = tokio::spawn(actor.run());
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !diagnostics.snapshot().listener_active {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        endpoint.close().await;
+
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), listener)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            error
+                .message()
+                .contains("Iroh control listener closed unexpectedly"),
+            "{error:?}"
+        );
+        assert_eq!(
+            handle.lifecycle_state().await.unwrap(),
+            crate::runtime::RuntimeLifecycleState::Running
+        );
+        assert!(!diagnostics.snapshot().listener_active);
+
+        let _ = handle.shutdown().await.unwrap();
+        drop(handle);
+        actor_task.abort();
+        let _ = actor_task.await;
     }
 
     async fn read_test_control_body<R>(stream: &mut R) -> String
