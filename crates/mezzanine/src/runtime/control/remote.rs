@@ -496,10 +496,21 @@ impl RuntimeSessionService {
                         ));
                     }
                 };
-                let ttl_seconds = params
-                    .get("expires_seconds")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(600);
+                let ttl_seconds = match params.get("expires_seconds") {
+                    Some(value) => value.as_u64().ok_or_else(|| {
+                        MezError::invalid_args(
+                            "remote/invite expires_seconds must be an unsigned integer",
+                        )
+                    })?,
+                    None => {
+                        let structured = crate::runtime::runtime_effective_config_value(
+                            self.integration.config_layers(),
+                        )?;
+                        crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?
+                            .invitation_ttl
+                            .as_secs()
+                    }
+                };
                 let endpoint_id = self
                     .integration
                     .ensure_remote_endpoint_identity(&session_id)?

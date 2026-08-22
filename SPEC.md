@@ -2905,6 +2905,12 @@ daemon restart. The v66 to v67 primary-config migration MUST materialize the
 conservative disabled transport defaults in all supported formats without
 enabling network activity.
 
+`remote/invite` MUST use `transport.iroh.invitation_ttl_seconds` when the
+request omits `expires_seconds`. The CLI `--expires SECONDS` option MUST remain
+an explicit override rather than supplying a client-side default, and both the
+configured lifetime and explicit override MUST be constrained to 30 through
+86,400 seconds.
+
 When `transport.iroh.enabled` is true, daemon startup MUST bind the protected
 per-session endpoint and supervise it alongside the unchanged Unix control
 listener. Explicit enablement is startup-critical: endpoint construction failure

@@ -36,18 +36,20 @@ Use only the local Unix control path:
 
 ```console
 mez remote status
-mez remote invite --role observer --expires 600
+mez remote invite --role observer
 ```
 
 `status` reports the public per-session endpoint identity and, while the listener
 is bound, its current dialable endpoint address. `invite` returns a short-lived
 bearer token once together with that pinned address, role, expiry, and profile
-name. Transfer the JSON through a confidential channel and store it in an
-owner-only file:
+name. Its lifetime defaults to `transport.iroh.invitation_ttl_seconds` (600
+seconds by default); `--expires SECONDS` explicitly overrides that lifetime
+within the supported 30 through 86,400 second range. Transfer the JSON through
+a confidential channel and store it in an owner-only file:
 
 ```console
 umask 077
-mez --json remote invite --role primary --expires 600 > mez-invite.json
+mez --json remote invite --role primary > mez-invite.json
 ```
 
 The invitation is server-bound, role-limited, and claimable by one authenticated

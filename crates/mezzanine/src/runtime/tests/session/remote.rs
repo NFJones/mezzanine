@@ -100,6 +100,54 @@ fn runtime_remote_invite_rejects_undialable_addresses_without_persistence() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies invitation creation uses the configured Iroh lifetime only when
+/// the request does not provide an explicit expiration override.
+#[test]
+fn runtime_remote_invite_resolves_configured_and_explicit_ttl() {
+    let root = temp_root("remote-configured-invite-ttl-runtime");
+    let mut service = test_runtime_service();
+    service.set_config_root(root.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[transport.iroh]\ninvitation_ttl_seconds = 120\n".to_string(),
+        }])
+        .unwrap();
+    let mut local = local_owner_connection(&mut service);
+
+    let before_default = super::super::super::current_unix_seconds();
+    let configured = request(
+        &mut service,
+        &mut local,
+        r#"{"jsonrpc":"2.0","id":"configured","method":"remote/invite","params":{"role":"observer","idempotency_key":"configured-invite"}}"#,
+    );
+    let configured_expiry = configured
+        .pointer("/result/expires_at_unix_seconds")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap();
+    assert!(configured_expiry >= before_default + 120);
+    assert!(configured_expiry <= super::super::super::current_unix_seconds() + 120);
+
+    let before_override = super::super::super::current_unix_seconds();
+    let overridden = request(
+        &mut service,
+        &mut local,
+        r#"{"jsonrpc":"2.0","id":"overridden","method":"remote/invite","params":{"role":"observer","expires_seconds":45,"idempotency_key":"overridden-invite"}}"#,
+    );
+    let overridden_expiry = overridden
+        .pointer("/result/expires_at_unix_seconds")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap();
+    assert!(overridden_expiry >= before_override + 45);
+    assert!(overridden_expiry <= super::super::super::current_unix_seconds() + 45);
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies endpoint identity alone cannot initialize and an invitation becomes
 /// a durable endpoint-bound device proof without leaking the token to storage.
 #[test]

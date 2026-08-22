@@ -26,9 +26,9 @@ enum RemoteCliCommand {
         /// Maximum role granted by the invitation.
         #[arg(long, value_enum, default_value_t = RemoteInviteRole::Observer)]
         role: RemoteInviteRole,
-        /// Invitation lifetime in seconds.
-        #[arg(long = "expires", default_value_t = 600)]
-        expires_seconds: u64,
+        /// Optional invitation lifetime in seconds; the server policy supplies the default.
+        #[arg(long = "expires")]
+        expires_seconds: Option<u64>,
     },
     /// Lists paired remote clients without credentials or verifiers.
     Clients,
@@ -77,15 +77,20 @@ pub(super) fn run_remote<W: Write>(
         RemoteCliCommand::Invite {
             role,
             expires_seconds,
-        } => (
-            "remote/invite",
-            format!(
-                r#"{{"role":"{}","expires_seconds":{},"idempotency_key":"{}"}}"#,
-                role.as_str(),
-                expires_seconds,
-                cli_idempotency_key("remote-invite")
-            ),
-        ),
+        } => {
+            let expires = expires_seconds
+                .map(|seconds| format!(",\"expires_seconds\":{seconds}"))
+                .unwrap_or_default();
+            (
+                "remote/invite",
+                format!(
+                    r#"{{"role":"{}"{},"idempotency_key":"{}"}}"#,
+                    role.as_str(),
+                    expires,
+                    cli_idempotency_key("remote-invite")
+                ),
+            )
+        }
         RemoteCliCommand::Clients => ("remote/client/list", "{}".to_string()),
         RemoteCliCommand::Rename { client_id, label } => (
             "remote/client/rename",

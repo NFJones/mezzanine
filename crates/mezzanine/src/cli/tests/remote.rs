@@ -151,3 +151,60 @@ fn remote_invite_sends_bounded_params_and_renders_plain_output() {
     assert!(stderr.is_empty());
     let _ = fs::remove_dir_all(home);
 }
+
+/// Verifies an omitted CLI expiry remains absent so the server can apply its
+/// configured invitation lifetime instead of receiving a hard-coded default.
+#[test]
+fn remote_invite_omits_unspecified_expiry() {
+    let (env, home) = test_env("remote-invite-configured-expiry");
+    let Some((socket, listener)) = remote_control_listener(&env, &home) else {
+        let _ = fs::remove_dir_all(home);
+        return;
+    };
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_control_response_frames(&mut stream, 4096, 1).unwrap();
+        let (initialize, _) = decode_control_frame(&request, 4096).unwrap();
+        assert!(initialize.contains(r#""method":"control/initialize""#));
+        stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary"}}"#,
+            ))
+            .unwrap();
+        let request = read_control_response_frames(&mut stream, 4096, 1).unwrap();
+        let (invite, _) = decode_control_frame(&request, 4096).unwrap();
+        assert!(invite.contains(r#""method":"remote/invite""#), "{invite}");
+        assert!(invite.contains(r#""role":"observer""#), "{invite}");
+        assert!(!invite.contains("expires_seconds"), "{invite}");
+        assert!(invite.contains(r#""idempotency_key":""#), "{invite}");
+        stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli","result":{"invitation_id":"invite-1","token":"pairing-secret","role":"observer","expires_at_unix_seconds":999}}"#,
+            ))
+            .unwrap();
+    });
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    run_with_plain(
+        vec![
+            "mez".to_string(),
+            "-S".to_string(),
+            socket.to_string_lossy().into_owned(),
+            "remote".to_string(),
+            "invite".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    server.join().unwrap();
+
+    let output = String::from_utf8(stdout).unwrap();
+    assert!(output.contains("pairing-secret"), "{output}");
+    assert!(output.contains("observer"), "{output}");
+    assert!(stderr.is_empty());
+    let _ = fs::remove_dir_all(home);
+}

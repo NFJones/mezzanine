@@ -97,7 +97,7 @@ processes that existed when the snapshot was taken.
 | `mez sandbox` | Inspect, plan, enable, disable, manage presets, profiles, project trust, and Bubblewrap-home caches. `mez sandbox trust` supports `list`, `inspect PATH`, `add PATH`, `reject PATH`, and `revoke PATH`. |
 | `mez issue` | Add, show, update, query, and delete local project issues. |
 | `mez memory` | List, inspect, add, edit, delete, archive, mark stale, restore, record use or confirmation, supersede, prune, export, and search persistent memory records. |
-| `mez remote` | Use authenticated local Unix control for `status`, `invite --role observer|primary --expires SECONDS`, `clients`, `rename CLIENT_ID LABEL`, and `revoke CLIENT_ID [--reason TEXT]`. Paired Iroh clients cannot use these administration methods. |
+| `mez remote` | Use authenticated local Unix control for `status`, `invite --role observer|primary [--expires SECONDS]`, `clients`, `rename CLIENT_ID LABEL`, and `revoke CLIENT_ID [--reason TEXT]`. Paired Iroh clients cannot use these administration methods. |
 | `mez completion <shell>` | Generate a completion definition for `bash`, `elvish`, `fish`, `powershell`, or `zsh`. |
 
 Direct control commands keep Unix as their default target. `--iroh-invite-file
@@ -120,11 +120,13 @@ sent, Mez reports that the outcome is unknown, does not reconnect or replay the
 input, and requires an explicit reattach.
 
 Create invitation files without exposing the token through shell arguments or
-world-readable output, for example:
+world-readable output. Omitting `--expires` uses
+`transport.iroh.invitation_ttl_seconds`; an explicit override must be from 30
+through 86,400 seconds. For example:
 
 ```console
 umask 077
-mez --json remote invite --role primary --expires 600 > mez-invite.json
+mez --json remote invite --role primary > mez-invite.json
 mez --iroh-invite-file mez-invite.json attach
 # Later, after successful pairing persisted the profile named by the invitation:
 mez --iroh-profile SESSION_PROFILE attach
