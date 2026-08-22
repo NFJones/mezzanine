@@ -2732,6 +2732,7 @@ impl RuntimeSessionService {
         descriptor: &PaneDescriptor,
         explicit_command: Option<&str>,
         managed_startup_requested: bool,
+        runtime_managed_pane: bool,
     ) -> Result<(
         mez_mux::process::PaneProcessLaunch,
         Option<ManagedPaneStartup>,
@@ -2754,7 +2755,7 @@ impl RuntimeSessionService {
         } else {
             None
         };
-        let posix = if classification == ShellClassification::PosixSh {
+        let posix = if classification == ShellClassification::PosixSh && runtime_managed_pane {
             let token = runtime_random_marker_token(&format!(
                 "posix-prompt\0{}\0{}",
                 self.session.id, descriptor.pane_id
@@ -3964,6 +3965,7 @@ impl RuntimeSessionService {
             &descriptor,
             explicit_command,
             runtime_managed_pane || legacy_managed_startup,
+            runtime_managed_pane,
         )?;
         let launch = launch.with_environment_variable(
             "TERM_FEATURES",

@@ -1505,7 +1505,7 @@ fn runtime_fish_dirty_prompt_is_discarded_during_agent_subshell_admission() {
         // before the later authenticated Fish parent-restored event. This
         // deterministically exercises foreground input arriving while the
         // private callback is still unwinding.
-        let updates = service.poll_pane_outputs(8192).unwrap();
+        let updates = service.poll_pane_outputs(1).unwrap();
         if service.agent_subshell_exit_marker_for_tests("%1").is_none() {
             break;
         }
