@@ -1725,3 +1725,123 @@ fn detached_primary_navigation_is_rejected_without_mutation() {
     assert_eq!(retained, &navigation_before);
     assert_eq!(session.active_window().unwrap().id, second_window);
 }
+
+/// Verifies shared window removal reconciles every attached primary exactly once.
+///
+/// A caller may close the window viewed by another primary. The affected view
+/// must fall back through its own surviving history while an unrelated view
+/// retains its stable chain and revision. Passive repair must not add history.
+#[test]
+fn window_removal_reconciles_only_affected_primary_navigation() {
+    let mut session = test_session();
+    let first = session.attach_primary("first", true).unwrap();
+    let landing_window = session.windows()[0].id.clone();
+    let removed_window = session.new_window(&first, "removed", true).unwrap();
+    session
+        .select_window(&first, landing_window.as_str())
+        .unwrap();
+    session
+        .select_window(&first, removed_window.as_str())
+        .unwrap();
+
+    let second = session.ids.client();
+    session.clients.push(Client {
+        id: second.clone(),
+        name: "second".to_string(),
+        role: ClientRole::Primary,
+        state: ClientState::Attached,
+        interactive: true,
+        terminal: None,
+        attached_at_unix_seconds: Some(session.created_at_unix_seconds),
+        last_seen_at_unix_seconds: Some(session.created_at_unix_seconds),
+        navigation: Some(session.navigation_from_landing()),
+    });
+    let second_before = session.navigation(&second).unwrap().clone();
+    let first_history_before = session
+        .navigation(&first)
+        .unwrap()
+        .windows_by_group
+        .values()
+        .flat_map(|cursor| cursor.history.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+
+    session
+        .kill_window(&second, Some(removed_window.as_str()), true)
+        .unwrap();
+
+    assert_eq!(
+        session.active_window_for(&first).unwrap().id,
+        landing_window
+    );
+    assert_eq!(session.navigation(&second).unwrap(), &second_before);
+    assert_eq!(
+        session
+            .navigation(&first)
+            .unwrap()
+            .windows_by_group
+            .values()
+            .flat_map(|cursor| cursor.history.iter())
+            .filter(|window_id| **window_id != removed_window)
+            .cloned()
+            .collect::<Vec<_>>(),
+        first_history_before
+            .into_iter()
+            .filter(|window_id| window_id != &removed_window)
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Verifies reconciliation follows a stable pane moved to another window.
+///
+/// Reparenting must update the focused pane's window/group chain by identity,
+/// remove stale source-window zoom, and leave another primary's view intact.
+#[test]
+fn moved_pane_navigation_follows_stable_identity() {
+    let mut session = test_session();
+    let first = session.attach_primary("first", true).unwrap();
+    let source_window = session.active_window_for(&first).unwrap().id.clone();
+    let moved_pane = session
+        .split_active_pane(&first, SplitDirection::Vertical)
+        .unwrap();
+    session.toggle_active_pane_zoom(&first).unwrap();
+    let destination_window = session.new_window(&first, "destination", false).unwrap();
+
+    let second = session.ids.client();
+    session.clients.push(Client {
+        id: second.clone(),
+        name: "second".to_string(),
+        role: ClientRole::Primary,
+        state: ClientState::Attached,
+        interactive: true,
+        terminal: None,
+        attached_at_unix_seconds: Some(session.created_at_unix_seconds),
+        last_seen_at_unix_seconds: Some(session.created_at_unix_seconds),
+        navigation: Some(session.navigation_from_landing()),
+    });
+    let second_before = session.navigation(&second).unwrap().clone();
+
+    session
+        .join_pane(
+            &first,
+            Some(moved_pane.as_str()),
+            destination_window.as_str(),
+            SplitDirection::Vertical,
+            true,
+        )
+        .unwrap();
+
+    assert_eq!(
+        session.active_window_for(&first).unwrap().id,
+        destination_window
+    );
+    assert_eq!(session.active_pane_for(&first).unwrap().id, moved_pane);
+    assert!(
+        !session
+            .navigation(&first)
+            .unwrap()
+            .zoomed_panes_by_window
+            .contains_key(&source_window)
+    );
+    assert_eq!(session.navigation(&second).unwrap(), &second_before);
+}

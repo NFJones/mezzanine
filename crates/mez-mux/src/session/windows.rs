@@ -1404,6 +1404,7 @@ impl Session {
         target: &str,
     ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let (source_window_index, source_pane_index) = self.pane_location(source)?;
         let (target_window_index, target_pane_index) = self.pane_location(Some(target))?;
 
@@ -1427,6 +1428,8 @@ impl Session {
             );
         }
 
+        self.capture_client_navigation(primary_client_id)?;
+        let _ = self.reconcile_client_navigation();
         self.record_event();
         Ok(self
             .windows
@@ -1465,6 +1468,7 @@ impl Session {
         select_new_window: bool,
     ) -> Result<BreakPaneTransition> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let (source_window_index, source_pane_index) = self.pane_location(target)?;
         let source_window_id = self.windows[source_window_index].id.clone();
         let source_group_index = self.group_index_containing_window_id(&source_window_id);
@@ -1531,6 +1535,8 @@ impl Session {
             self.active_window_index = self.active_window_index.min(self.windows.len() - 1);
             self.sync_active_group_to_active_window();
         }
+        self.capture_client_navigation(primary_client_id)?;
+        let _ = self.reconcile_client_navigation();
         self.record_event();
         let effects = self
             .windows
@@ -1578,6 +1584,7 @@ impl Session {
         select_joined_pane: bool,
     ) -> Result<JoinPaneTransition> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let (source_window_index, source_pane_index) = self.pane_location(source)?;
         let destination = self.join_destination(target)?;
 
@@ -1624,6 +1631,8 @@ impl Session {
         if select_joined_pane {
             self.set_active_window_index(destination_window_index);
         }
+        self.capture_client_navigation(primary_client_id)?;
+        let _ = self.reconcile_client_navigation();
         self.record_event();
         let effects = self
             .windows
@@ -1664,7 +1673,10 @@ impl Session {
         force: bool,
     ) -> Result<RemovePaneTransition> {
         self.require_primary(primary_client_id)?;
-        self.kill_pane_session_owned(target, force)
+        self.activate_client_navigation(primary_client_id)?;
+        let transition = self.kill_pane_session_owned(target, force)?;
+        self.capture_client_navigation(primary_client_id)?;
+        Ok(transition)
     }
 
     /// Removes a pane for session-owned orchestration.
@@ -1709,6 +1721,7 @@ impl Session {
             Some(self.windows[window_index].kill_pane(Some(&target_id))?)
         };
 
+        let _ = self.reconcile_client_navigation();
         self.record_event();
         let effects = self
             .windows
@@ -1749,6 +1762,7 @@ impl Session {
         } else {
             Some(self.windows[window_index].kill_pane(Some(pane_id))?)
         };
+        let _ = self.reconcile_client_navigation();
         self.record_event();
         let effects = self
             .windows
@@ -1772,6 +1786,7 @@ impl Session {
     /// on duplicated control-flow logic.
     pub fn kill_session(&mut self, primary_client_id: &ClientId, force: bool) -> Result<()> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         if self
             .windows
             .iter()
@@ -1791,6 +1806,7 @@ impl Session {
         self.active_window_index = 0;
         self.last_active_window_index = None;
         self.state = SessionState::Empty;
+        let _ = self.reconcile_client_navigation();
         self.record_event();
         Ok(())
     }
@@ -1814,6 +1830,7 @@ impl Session {
         self.active_window_index = 0;
         self.last_active_window_index = None;
         self.state = SessionState::Empty;
+        let _ = self.reconcile_client_navigation();
         self.record_event();
     }
 
@@ -1841,6 +1858,7 @@ impl Session {
         force: bool,
     ) -> Result<KillWindowTransition> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let index = self.window_index_or_active(target)?;
         if self.windows[index].panes().iter().any(|pane| pane.live) && !force {
             return Err(MezError::forbidden(
@@ -1851,6 +1869,8 @@ impl Session {
         let removed = self.windows.remove(index);
         self.after_window_removed(index);
         self.restore_focus_after_window_removal(previous_focus.0, previous_focus.1);
+        self.capture_client_navigation(primary_client_id)?;
+        let _ = self.reconcile_client_navigation();
         let effects = self
             .windows
             .iter()
@@ -1887,6 +1907,7 @@ impl Session {
         force: bool,
     ) -> Result<KillGroupTransition> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         if self.window_groups.len() <= 1 {
             return Err(MezError::forbidden(
                 "killing the final window group requires kill-session",
@@ -1919,6 +1940,8 @@ impl Session {
         self.reindex_windows();
         self.reconcile_window_groups_after_window_removal();
         self.restore_focus_after_window_removal(previous_focus.0, previous_focus.1);
+        self.capture_client_navigation(primary_client_id)?;
+        let _ = self.reconcile_client_navigation();
         let effects = self
             .windows
             .iter()

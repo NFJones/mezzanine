@@ -219,6 +219,21 @@ impl Session {
         self.last_active_group_index = last_active_group_index;
         self.group_focus_history.clear();
         self.pane_state_metadata = pane_state_metadata;
+        self.landing_navigation = super::types::LandingNavigationState {
+            active_group_id: self
+                .window_groups
+                .get(self.active_group_index)
+                .map(|group| group.id.clone()),
+            active_window_id: self
+                .windows
+                .get(self.active_window_index)
+                .map(|window| window.id.clone()),
+            active_pane_id: self
+                .windows
+                .get(self.active_window_index)
+                .map(|window| window.active_pane().id.clone()),
+        };
+        let _ = self.reconcile_client_navigation();
         self.record_event();
         Ok(())
     }

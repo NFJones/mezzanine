@@ -6,6 +6,7 @@
 
 mod clients;
 mod lifecycle;
+mod reconciliation;
 mod snapshot;
 mod targets;
 #[cfg(test)]
@@ -14,6 +15,7 @@ mod time;
 mod types;
 mod windows;
 
+pub use reconciliation::TopologyReconciliation;
 pub use types::{
     Client, ClientNavigationState, ClientRole, ClientState, ClientTerminalDescriptor, FocusCursor,
     LandingNavigationState, ObserverDecisionState, ObserverRequest, RestoredPane,
