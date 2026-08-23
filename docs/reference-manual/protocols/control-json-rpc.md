@@ -137,9 +137,10 @@ the first request is `control/initialize`.
 {"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"example-ui","client_version":"1.0.0","requested_version":1,"requested_role":"primary","client":{"name":"example-ui","terminal":{"columns":120,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}
 ```
 
-The implemented direct-session endpoint accepts `mezctl/2`. The reserved
-`mezctl/3` persistent-host front door adds an explicit `session_intent` before
-any connection is bound to a session:
+The implemented direct-session endpoint accepts `mezctl/2`. The persistent
+host front door accepts `mezctl/3` and adds an explicit `session_intent` before
+any connection is bound to a session. Its `host_only` authentication path is
+implemented; session-routing intents are completed by the host router:
 
 | Intent | Target and idempotency contract |
 | --- | --- |
@@ -149,11 +150,12 @@ any connection is bound to a session:
 | `host_only` | Omit both fields and expose only authorized host methods; never resolve or create a session. |
 
 Every v3 initialize request includes one intent. V2 requests omit the v3
-fields, and a direct session endpoint rejects v3 until host routing is enabled.
-The host authenticates and authorizes the paired device before target lookup,
-lease reservation, runtime allocation, or session disclosure. After routing,
-the connection is permanently bound to one session actor and later targets
-must continue to match it.
+fields, and a direct session endpoint rejects v3. The host authenticates and
+authorizes the paired device before target lookup, lease reservation, runtime
+allocation, or session disclosure. `host_only` returns null `session` and
+`lease` and permits no session method. After future session routing, the
+connection is permanently bound to one session actor and later targets must
+continue to match it.
 
 Create idempotency is scoped to the authenticated host principal and normalized
 creation inputs. Replaying the same key returns the committed lease/session;

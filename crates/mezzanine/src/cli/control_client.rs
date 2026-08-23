@@ -20,8 +20,8 @@ use crate::runtime::{
     bind_runtime_iroh_client_endpoint,
 };
 use crate::security::remote::{
-    RemoteClientIdentity, RemoteClientProfile, RemoteClientProfileStore, RemoteRoleCeiling,
-    read_remote_invitation_file,
+    RemoteClientIdentity, RemoteClientProfile, RemoteClientProfileScope, RemoteClientProfileStore,
+    RemoteRoleCeiling, read_remote_invitation_file,
 };
 
 // Direct control request framing and response handling.
@@ -200,11 +200,24 @@ fn parse_iroh_invitation_file(path: &Path, save_as: Option<&str>) -> Result<Iroh
         .get("expires_at_unix_seconds")
         .and_then(serde_json::Value::as_u64)
         .ok_or_else(|| MezError::invalid_args("Iroh invitation omitted expiration"))?;
+    let scope = match object
+        .get("profile_scope")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("host") => RemoteClientProfileScope::Host,
+        None | Some("legacy_session") => RemoteClientProfileScope::LegacySession,
+        Some(_) => {
+            return Err(MezError::invalid_args(
+                "Iroh invitation profile_scope must be host or legacy_session",
+            ));
+        }
+    };
     Ok(IrohControlTarget::Invitation {
         profile_name,
         server_addr,
         token: SecretString::from(token),
         role,
+        scope,
         expires_at_unix_seconds,
     })
 }
@@ -220,6 +233,8 @@ pub(super) struct IrohInvitationSummary {
     pub server_fingerprint: String,
     /// Maximum role carried by the invitation.
     pub role: RemoteRoleCeiling,
+    /// Whether the invitation names a persistent host or one legacy session.
+    pub scope: RemoteClientProfileScope,
     /// Invitation expiration as Unix seconds.
     pub expires_at_unix_seconds: u64,
     /// Whether the invitation is already expired according to the local clock.
@@ -237,6 +252,7 @@ pub(super) fn inspect_iroh_invitation_file(path: &Path) -> Result<IrohInvitation
         profile_name,
         server_addr,
         role,
+        scope,
         expires_at_unix_seconds,
         ..
     } = target
@@ -260,6 +276,7 @@ pub(super) fn inspect_iroh_invitation_file(path: &Path) -> Result<IrohInvitation
             server_addr.id,
         ),
         role,
+        scope,
         expires_at_unix_seconds,
         expired: current_unix_seconds_for_iroh_client()? > expires_at_unix_seconds,
         direct_route_count,
@@ -272,13 +289,17 @@ fn preflight_iroh_invitation_profile(config_root: &Path, target: &IrohControlTar
     let IrohControlTarget::Invitation {
         profile_name,
         server_addr,
+        scope,
         ..
     } = target
     else {
         return Ok(());
     };
-    RemoteClientProfileStore::under_config_root(config_root)
-        .preflight_name_for_server(profile_name, server_addr.id)
+    RemoteClientProfileStore::under_config_root(config_root).preflight_name_for_server(
+        profile_name,
+        server_addr.id,
+        *scope,
+    )
 }
 
 fn invitation_string(
@@ -302,6 +323,7 @@ pub(crate) enum IrohControlTarget {
         server_addr: EndpointAddr,
         token: SecretString,
         role: RemoteRoleCeiling,
+        scope: RemoteClientProfileScope,
         expires_at_unix_seconds: u64,
     },
     /// Durable reconnect through one protected profile.
@@ -315,6 +337,7 @@ impl std::fmt::Debug for IrohControlTarget {
                 profile_name,
                 server_addr,
                 role,
+                scope,
                 expires_at_unix_seconds,
                 ..
             } => formatter
@@ -322,6 +345,7 @@ impl std::fmt::Debug for IrohControlTarget {
                 .field("profile_name", profile_name)
                 .field("server_address_count", &server_addr.addrs.len())
                 .field("role", role)
+                .field("scope", scope)
                 .field("expires_at_unix_seconds", expires_at_unix_seconds)
                 .field("token", &"[REDACTED]")
                 .finish(),
@@ -371,6 +395,13 @@ impl IrohControlTarget {
         match self {
             Self::Invitation { role, .. } => *role,
             Self::Profile(profile) => profile.role,
+        }
+    }
+
+    fn scope(&self) -> RemoteClientProfileScope {
+        match self {
+            Self::Invitation { scope, .. } => *scope,
+            Self::Profile(profile) => profile.scope,
         }
     }
 
@@ -468,6 +499,7 @@ async fn refresh_authenticated_profile_route(
         name: profile.name.clone(),
         server_addr,
         role: profile.role,
+        scope: profile.scope,
         device_credential: profile.device_credential.clone(),
     })
 }
@@ -626,6 +658,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
             name: profile_name.clone(),
             server_addr,
             role: *role,
+            scope: RemoteClientProfileScope::LegacySession,
             device_credential: issued_credential,
         })?;
     } else {
@@ -730,21 +763,25 @@ pub(super) async fn pair_iroh_invitation(
     let target = parse_iroh_invitation_file(path, save_as)?;
     preflight_iroh_invitation_profile(paths.root(), &target)?;
     let profile_name = target.profile_name().to_string();
-    let params = format!(
-        r#"{{"idempotency_key":"{}"}}"#,
-        super::cli_idempotency_key("remote-pair-detach")
-    );
-    let body = exchange_iroh_control_request_as(
-        paths.root(),
-        &configured_policy,
-        &target,
-        "observer",
-        false,
-        "client/detach",
-        &params,
-    )
-    .await?;
-    ensure_iroh_follow_up_success(&body, "pairing cleanup")?;
+    if target.scope() == RemoteClientProfileScope::Host {
+        exchange_iroh_host_only_initialize(paths.root(), &configured_policy, &target).await?;
+    } else {
+        let params = format!(
+            r#"{{"idempotency_key":"{}"}}"#,
+            super::cli_idempotency_key("remote-pair-detach")
+        );
+        let body = exchange_iroh_control_request_as(
+            paths.root(),
+            &configured_policy,
+            &target,
+            "observer",
+            false,
+            "client/detach",
+            &params,
+        )
+        .await?;
+        ensure_iroh_follow_up_success(&body, "pairing cleanup")?;
+    }
     RemoteClientProfileStore::under_config_root(paths.root())
         .summary(&profile_name)?
         .ok_or_else(|| MezError::invalid_state("successful Iroh pairing did not persist a profile"))
@@ -768,24 +805,133 @@ pub(super) async fn check_iroh_profile(
             )
         })?;
     let target = IrohControlTarget::Profile(profile);
-    let params = format!(
-        r#"{{"idempotency_key":"{}"}}"#,
-        super::cli_idempotency_key("remote-profile-check-detach")
-    );
-    let body = exchange_iroh_control_request_as(
-        paths.root(),
-        &configured_policy,
-        &target,
-        "observer",
-        false,
-        "client/detach",
-        &params,
-    )
-    .await?;
-    ensure_iroh_follow_up_success(&body, "profile check cleanup")?;
+    if target.scope() == RemoteClientProfileScope::Host {
+        exchange_iroh_host_only_initialize(paths.root(), &configured_policy, &target).await?;
+    } else {
+        let params = format!(
+            r#"{{"idempotency_key":"{}"}}"#,
+            super::cli_idempotency_key("remote-profile-check-detach")
+        );
+        let body = exchange_iroh_control_request_as(
+            paths.root(),
+            &configured_policy,
+            &target,
+            "observer",
+            false,
+            "client/detach",
+            &params,
+        )
+        .await?;
+        ensure_iroh_follow_up_success(&body, "profile check cleanup")?;
+    }
     RemoteClientProfileStore::under_config_root(paths.root())
         .summary(profile_name)?
         .ok_or_else(|| MezError::invalid_state("authenticated Iroh profile disappeared"))
+}
+
+/// Authenticates one host-scoped target without selecting or creating a session.
+async fn exchange_iroh_host_only_initialize(
+    config_root: &Path,
+    configured_policy: &RuntimeIrohTransportPolicy,
+    target: &IrohControlTarget,
+) -> Result<()> {
+    if target.scope() != RemoteClientProfileScope::Host {
+        return Err(MezError::invalid_args(
+            "host-only initialization requires a host-scoped Iroh target",
+        ));
+    }
+    let policy = explicit_iroh_client_policy(configured_policy, target)?;
+    if let IrohControlTarget::Invitation {
+        expires_at_unix_seconds,
+        ..
+    } = target
+        && current_unix_seconds_for_iroh_client()? > *expires_at_unix_seconds
+    {
+        return Err(MezError::forbidden(
+            "Iroh pairing invitation expired before connection setup",
+        ));
+    }
+    let identity = RemoteClientIdentity::load_or_create(config_root)?;
+    let endpoint =
+        bind_runtime_iroh_client_endpoint(&policy, identity.secret_key().clone()).await?;
+    let result =
+        exchange_bound_iroh_host_only_initialize(config_root, &policy, target, &endpoint).await;
+    let _ = tokio::time::timeout(policy.setup_timeout, endpoint.close()).await;
+    result
+}
+
+async fn exchange_bound_iroh_host_only_initialize(
+    config_root: &Path,
+    policy: &RuntimeIrohTransportPolicy,
+    target: &IrohControlTarget,
+    endpoint: &iroh::Endpoint,
+) -> Result<()> {
+    let (connection, compression) = connect_iroh_with_compression(endpoint, policy, target).await?;
+    if connection.remote_id() != target.server_addr().id {
+        return Err(MezError::forbidden(
+            "Iroh connection authenticated an unexpected server identity",
+        ));
+    }
+    let (send, recv) = tokio::time::timeout(policy.setup_timeout, connection.open_bi())
+        .await
+        .map_err(|_| MezError::invalid_state("Iroh host-only stream setup timed out"))?
+        .map_err(|_| MezError::invalid_state("failed to open Iroh host-only stream"))?;
+    let mut bridge =
+        IrohCompressionBridge::spawn(recv, send, compression, CLI_CONTROL_MAX_CONTENT_LENGTH)?;
+    let (mechanism, credential) = target.authentication();
+    let initialize = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "cli-init",
+        "method": "control/initialize",
+        "params": {
+            "client_name": "remote-cli",
+            "requested_version": 3,
+            "requested_role": "observer",
+            "session_intent": "host_only",
+            "client": {
+                "name": "remote-cli",
+                "interactive": false,
+                "purpose": "pairing-or-connectivity-check"
+            },
+            "authentication": {
+                "mechanism": mechanism,
+                "token": credential.expose_secret()
+            }
+        }
+    })
+    .to_string();
+    write_iroh_control_frame(bridge.stream_mut(), &initialize, policy.idle_timeout).await?;
+    tokio::io::AsyncWriteExt::shutdown(bridge.stream_mut())
+        .await
+        .map_err(|_| MezError::invalid_state("failed to finish Iroh host-only request"))?;
+    let response = read_iroh_control_frame(bridge.stream_mut(), policy.idle_timeout).await?;
+    let issued_credential = validate_iroh_host_only_initialize_response(&response)?;
+    if let IrohControlTarget::Invitation {
+        profile_name,
+        server_addr,
+        role,
+        ..
+    } = target
+    {
+        let issued_credential = issued_credential.ok_or_else(|| {
+            MezError::invalid_state("successful host pairing response omitted device credential")
+        })?;
+        let server_addr = authenticated_remote_addr(endpoint, server_addr.id)
+            .await
+            .unwrap_or_else(|| server_addr.clone());
+        RemoteClientProfileStore::under_config_root(config_root).save(&RemoteClientProfile {
+            name: profile_name.clone(),
+            server_addr,
+            role: *role,
+            scope: RemoteClientProfileScope::Host,
+            device_credential: issued_credential,
+        })?;
+    } else {
+        refresh_authenticated_profile_route(config_root, endpoint, target).await?;
+    }
+    bridge.shutdown(policy.setup_timeout).await?;
+    connection.close(iroh::endpoint::VarInt::from_u32(0), b"host-only complete");
+    Ok(())
 }
 
 /// Rejects a JSON-RPC follow-up error after successful Iroh authentication.
@@ -873,6 +1019,7 @@ mod outbound_policy_tests {
             server_addr,
             token: SecretString::from("secret".to_string()),
             role: RemoteRoleCeiling::Observer,
+            scope: RemoteClientProfileScope::LegacySession,
             expires_at_unix_seconds: u64::MAX,
         }
     }
@@ -1044,6 +1191,7 @@ mod outbound_policy_tests {
             server_addr: EndpointAddr::new(iroh::SecretKey::generate().public())
                 .with_ip_addr("192.0.2.10:4242".parse().unwrap()),
             role: RemoteRoleCeiling::Observer,
+            scope: RemoteClientProfileScope::LegacySession,
             device_credential: SecretString::from("credential".to_string()),
         };
 
@@ -1147,6 +1295,7 @@ async fn exchange_bound_iroh_control_request(
             name: profile_name.clone(),
             server_addr,
             role: *role,
+            scope: RemoteClientProfileScope::LegacySession,
             device_credential: issued_credential,
         })?;
     } else {
@@ -1328,6 +1477,38 @@ fn validate_iroh_initialize_response(
     {
         return Err(MezError::forbidden(
             "Iroh initialization granted an unexpected remote role",
+        ));
+    }
+    Ok(result
+        .get("device_credential")
+        .and_then(serde_json::Value::as_str)
+        .map(|credential| SecretString::from(credential.to_string())))
+}
+
+fn validate_iroh_host_only_initialize_response(body: &str) -> Result<Option<SecretString>> {
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_state("invalid host-only Iroh initialize response"))?;
+    if value.get("error").is_some() {
+        return Err(MezError::forbidden(
+            "Iroh transport connected, but host trust initialization was rejected",
+        ));
+    }
+    let result = value
+        .get("result")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| MezError::invalid_state("host-only response omitted result"))?;
+    if result
+        .get("granted_role")
+        .and_then(serde_json::Value::as_str)
+        != Some("observer")
+        || !result
+            .get("session")
+            .is_some_and(serde_json::Value::is_null)
+        || !result.get("lease").is_some_and(serde_json::Value::is_null)
+        || !result.get("host").is_some_and(serde_json::Value::is_object)
+    {
+        return Err(MezError::forbidden(
+            "host-only initialization returned session authority or an unexpected role",
         ));
     }
     Ok(result

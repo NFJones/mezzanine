@@ -134,11 +134,12 @@ no hidden downgrade when `none` is absent, and
 
 ### Persistent-host command contract
 
-Configuration schema 73 reserves a persistent-host mode above the existing
-per-session runtime. Until that mode is implemented and enabled, the current
-session-bound commands and `mezctl/2` behavior described above remain
-authoritative; a direct session endpoint does not interpret an omitted target
-as session creation.
+Configuration schema 73 defines a persistent-host mode above the existing
+per-session runtime. The host-scoped Iroh identity, trust store, and
+protocol-v3 host-only pairing/profile-check path are implemented. Until the
+local host and session-routing commands below are integrated and enabled, the
+current session-bound commands and `mezctl/2` behavior remain authoritative; a
+direct session endpoint does not interpret an omitted target as creation.
 
 The persistent-host command surface is:
 
@@ -178,8 +179,11 @@ mez --iroh-profile HOST kill <session-id|name> --force
 Omitted-target `attach` and `new` explicitly request idempotent creation. An
 explicit target attaches only an authorized existing lease; `--default`
 selects an existing default and never creates. Pairing and profile checks are
-host-only operations and cannot create or attach a session. Lease release,
-lease revocation, runtime kill, and client-trust revocation remain distinct.
+implemented as host-only operations and cannot create or attach a session.
+Protected profiles report scope `host` or `legacy_session`; old profiles
+without scope metadata remain legacy and are not granted host authority. Lease
+release, lease revocation, runtime kill, and client-trust revocation remain
+distinct.
 
 Interactive remote attach requires a terminal and keeps one initialized Iroh
 control stream open for its lifetime. A `primary` profile may attach as primary

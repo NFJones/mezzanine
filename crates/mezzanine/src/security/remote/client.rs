@@ -152,12 +152,24 @@ impl RemoteClientIdentity {
     }
 }
 
+/// Scope encoded by one protected remote server profile.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RemoteClientProfileScope {
+    /// Stable persistent-host profile used by protocol-v3 host routing.
+    Host,
+    /// Conservatively migrated profile that still names one direct session endpoint.
+    #[default]
+    LegacySession,
+}
+
 /// One durable endpoint-bound remote server profile.
 #[derive(Clone)]
 pub(crate) struct RemoteClientProfile {
     pub name: String,
     pub server_addr: EndpointAddr,
     pub role: RemoteRoleCeiling,
+    pub scope: RemoteClientProfileScope,
     pub device_credential: SecretString,
 }
 
@@ -170,6 +182,8 @@ pub(crate) struct RemoteClientProfileSummary {
     pub server_fingerprint: String,
     /// Maximum role granted by the protected device credential.
     pub role: RemoteRoleCeiling,
+    /// Whether this profile names a persistent host or one legacy session.
+    pub scope: RemoteClientProfileScope,
     /// Number of persisted direct IP route hints.
     pub direct_route_count: usize,
     /// Number of persisted relay route hints.
@@ -183,6 +197,7 @@ impl std::fmt::Debug for RemoteClientProfile {
             .field("name", &self.name)
             .field("server_addr", &self.server_addr)
             .field("role", &self.role)
+            .field("scope", &self.scope)
             .field("device_credential", &"[REDACTED]")
             .finish()
     }
@@ -233,6 +248,7 @@ impl RemoteClientProfileStore {
             name: stored.name,
             server_addr: stored.server_addr,
             role: stored.role,
+            scope: stored.scope,
             device_credential: SecretString::from(credential),
         }))
     }
@@ -272,6 +288,7 @@ impl RemoteClientProfileStore {
         &self,
         name: &str,
         server_endpoint_id: iroh::EndpointId,
+        scope: RemoteClientProfileScope,
     ) -> Result<()> {
         validate_profile_name(name)?;
         ensure_client_directory_chain(&self.directory)?;
@@ -282,10 +299,10 @@ impl RemoteClientProfileStore {
             .profiles
             .iter()
             .find(|profile| profile.name == name)
-            && existing.server_addr.id != server_endpoint_id
+            && (existing.server_addr.id != server_endpoint_id || existing.scope != scope)
         {
             return Err(MezError::conflict(format!(
-                "remote client profile `{name}` is pinned to a different server identity; choose a different --save-as name"
+                "remote client profile `{name}` is pinned to a different server identity or scope; choose a different --save-as name"
             )));
         }
         Ok(())
@@ -387,10 +404,11 @@ impl RemoteClientProfileStore {
             .iter()
             .position(|stored| stored.name == profile.name);
         if let Some(index) = existing_index
-            && database.profiles[index].server_addr.id != profile.server_addr.id
+            && (database.profiles[index].server_addr.id != profile.server_addr.id
+                || database.profiles[index].scope != profile.scope)
         {
             return Err(MezError::conflict(format!(
-                "remote client profile `{}` is pinned to a different server identity; the existing profile was preserved, use an invitation with a distinct profile name",
+                "remote client profile `{}` is pinned to a different server identity or scope; the existing profile was preserved, use an invitation with a distinct profile name",
                 profile.name
             )));
         }
@@ -413,6 +431,7 @@ impl RemoteClientProfileStore {
             name: profile.name.clone(),
             server_addr: profile.server_addr.clone(),
             role: profile.role,
+            scope: profile.scope,
             credential_file: credential_file.clone(),
         };
         let replaced_credential = if let Some(index) = existing_index {
@@ -498,6 +517,8 @@ struct StoredRemoteClientProfile {
     name: String,
     server_addr: EndpointAddr,
     role: RemoteRoleCeiling,
+    #[serde(default)]
+    scope: RemoteClientProfileScope,
     credential_file: String,
 }
 
@@ -588,6 +609,7 @@ fn remote_client_profile_summary(
         name: profile.name.clone(),
         server_fingerprint: abbreviated_endpoint_fingerprint(profile.server_addr.id),
         role: profile.role,
+        scope: profile.scope,
         direct_route_count,
         relay_route_count,
     }
@@ -624,6 +646,7 @@ mod tests {
             server_addr: EndpointAddr::new(SecretKey::generate().public())
                 .with_ip_addr("127.0.0.1:45678".parse().unwrap()),
             role: RemoteRoleCeiling::Primary,
+            scope: RemoteClientProfileScope::LegacySession,
             device_credential: SecretString::from(credential.to_string()),
         };
         let store = RemoteClientProfileStore::under_config_root(&root);
@@ -637,6 +660,35 @@ mod tests {
         assert_eq!(metadata.permissions().mode() & 0o077, 0);
         let persisted = fs::read_to_string(store.directory().join(PROFILES_FILE_NAME)).unwrap();
         assert!(!persisted.contains(credential));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Profiles written before scope metadata existed must remain legacy
+    /// session profiles instead of silently gaining host-wide authority.
+    #[test]
+    fn profile_database_without_scope_migrates_conservatively() {
+        let root = test_root("legacy-scope");
+        let store = RemoteClientProfileStore::under_config_root(&root);
+        let profile = RemoteClientProfile {
+            name: "legacy".to_string(),
+            server_addr: EndpointAddr::new(SecretKey::generate().public())
+                .with_ip_addr("127.0.0.1:45679".parse().unwrap()),
+            role: RemoteRoleCeiling::Observer,
+            scope: RemoteClientProfileScope::LegacySession,
+            device_credential: SecretString::from("legacy-secret".to_string()),
+        };
+        store.save(&profile).unwrap();
+        let path = store.directory().join(PROFILES_FILE_NAME);
+        let mut database: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        database["profiles"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("scope");
+        write_private_atomic(&path, &serde_json::to_vec_pretty(&database).unwrap()).unwrap();
+
+        let loaded = store.load("legacy").unwrap().unwrap();
+        assert_eq!(loaded.scope, RemoteClientProfileScope::LegacySession);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -654,6 +706,7 @@ mod tests {
             server_addr: EndpointAddr::new(SecretKey::generate().public())
                 .with_ip_addr("127.0.0.1:47001".parse().unwrap()),
             role: RemoteRoleCeiling::Observer,
+            scope: RemoteClientProfileScope::LegacySession,
             device_credential: SecretString::from("original-credential".to_string()),
         };
         store.save(&original).unwrap();
@@ -669,6 +722,7 @@ mod tests {
             server_addr: EndpointAddr::new(SecretKey::generate().public())
                 .with_ip_addr("127.0.0.1:47002".parse().unwrap()),
             role: RemoteRoleCeiling::Primary,
+            scope: RemoteClientProfileScope::LegacySession,
             device_credential: SecretString::from("replacement-credential".to_string()),
         };
         let conflict = store.save(&replacement).unwrap_err();
@@ -707,6 +761,7 @@ mod tests {
             server_addr: EndpointAddr::new(server_endpoint_id)
                 .with_ip_addr("127.0.0.1:47101".parse().unwrap()),
             role: RemoteRoleCeiling::Observer,
+            scope: RemoteClientProfileScope::LegacySession,
             device_credential: SecretString::from("old-credential".to_string()),
         };
         store.save(&original).unwrap();
@@ -716,6 +771,7 @@ mod tests {
             server_addr: EndpointAddr::new(server_endpoint_id)
                 .with_ip_addr("127.0.0.1:47102".parse().unwrap()),
             role: RemoteRoleCeiling::Primary,
+            scope: RemoteClientProfileScope::LegacySession,
             device_credential: SecretString::from("new-credential".to_string()),
         };
         store.save(&refreshed).unwrap();
@@ -752,6 +808,7 @@ mod tests {
                         server_addr: EndpointAddr::new(SecretKey::generate().public())
                             .with_ip_addr(format!("127.0.0.1:{}", 46000 + index).parse().unwrap()),
                         role: RemoteRoleCeiling::Observer,
+                        scope: RemoteClientProfileScope::LegacySession,
                         device_credential: SecretString::from(format!("credential-{index}")),
                     };
                     barrier.wait();
@@ -789,6 +846,7 @@ mod tests {
             server_addr: EndpointAddr::new(SecretKey::generate().public())
                 .with_ip_addr("127.0.0.1:47201".parse().unwrap()),
             role: RemoteRoleCeiling::Primary,
+            scope: RemoteClientProfileScope::LegacySession,
             device_credential: SecretString::from("home-secret".to_string()),
         };
         let second = RemoteClientProfile {
@@ -796,6 +854,7 @@ mod tests {
             server_addr: EndpointAddr::new(SecretKey::generate().public())
                 .with_relay_url("https://relay.example".parse().unwrap()),
             role: RemoteRoleCeiling::Observer,
+            scope: RemoteClientProfileScope::LegacySession,
             device_credential: SecretString::from("office-secret".to_string()),
         };
         store.save(&first).unwrap();

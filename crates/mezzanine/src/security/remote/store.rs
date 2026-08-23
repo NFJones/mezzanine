@@ -55,6 +55,19 @@ impl RemoteEndpointIdentity {
     /// process attempting to use the same key receives a conflict error.
     pub(crate) fn load_or_create(config_root: &Path, session_id: &str) -> Result<Self> {
         let directory = session_remote_directory(config_root, session_id)?;
+        Self::load_or_create_in(directory)
+    }
+
+    /// Loads or creates the single endpoint identity owned by the persistent host.
+    #[allow(
+        dead_code,
+        reason = "the persistent local host consumes the completed host identity owner in the next architecture phase"
+    )]
+    pub(crate) fn load_or_create_host(config_root: &Path) -> Result<Self> {
+        Self::load_or_create_in(host_remote_directory(config_root))
+    }
+
+    fn load_or_create_in(directory: PathBuf) -> Result<Self> {
         ensure_remote_directory_chain(&directory)?;
         let lock_path = directory.join(ENDPOINT_LOCK_FILE_NAME);
         let lock = open_private_lock(&lock_path)?;
@@ -158,6 +171,17 @@ impl RemoteTrustStore {
     pub(crate) fn under_config_root(config_root: &Path, session_id: &str) -> Result<Self> {
         Ok(Self {
             directory: session_remote_directory(config_root, session_id)?,
+        })
+    }
+
+    /// Creates the trust store shared by every session routed through one host.
+    #[allow(
+        dead_code,
+        reason = "the persistent local host consumes the completed host trust owner in the next architecture phase"
+    )]
+    pub(crate) fn under_host_config_root(config_root: &Path) -> Result<Self> {
+        Ok(Self {
+            directory: host_remote_directory(config_root),
         })
     }
 
@@ -797,15 +821,30 @@ fn session_remote_directory(config_root: &Path, session_id: &str) -> Result<Path
         .join(key))
 }
 
+#[allow(
+    dead_code,
+    reason = "the persistent local host consumes the completed host security root in the next architecture phase"
+)]
+fn host_remote_directory(config_root: &Path) -> PathBuf {
+    config_root.join(REMOTE_DIRECTORY_NAME).join("host")
+}
+
 fn ensure_remote_directory_chain(directory: &Path) -> Result<()> {
-    let sessions = directory
+    let scope_root = directory
         .parent()
-        .ok_or_else(|| MezError::invalid_args("remote session path has no sessions directory"))?;
-    let remote = sessions
-        .parent()
-        .ok_or_else(|| MezError::invalid_args("remote session path has no remote directory"))?;
+        .ok_or_else(|| MezError::invalid_args("remote security path has no scope directory"))?;
+    let remote =
+        if scope_root.file_name().and_then(|name| name.to_str()) == Some(REMOTE_DIRECTORY_NAME) {
+            scope_root
+        } else {
+            scope_root.parent().ok_or_else(|| {
+                MezError::invalid_args("remote security path has no remote directory")
+            })?
+        };
     ensure_private_directory(remote)?;
-    ensure_private_directory(sessions)?;
+    if scope_root != remote {
+        ensure_private_directory(scope_root)?;
+    }
     ensure_private_directory(directory)
 }
 

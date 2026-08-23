@@ -349,6 +349,7 @@ fn remote_profile_commands_are_redacted_and_local_only() {
             server_addr: iroh::EndpointAddr::new(iroh::SecretKey::generate().public())
                 .with_ip_addr("192.0.2.20:4242".parse().unwrap()),
             role: crate::security::remote::RemoteRoleCeiling::Primary,
+            scope: crate::security::remote::RemoteClientProfileScope::LegacySession,
             device_credential: secrecy::SecretString::from("device-secret".to_string()),
         })
         .unwrap();

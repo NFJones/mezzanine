@@ -533,8 +533,9 @@ use hook_support::{
 };
 pub(crate) use iroh::{
     MEZZANINE_IROH_ALPN, MEZZANINE_IROH_EVENT_STREAM_PREFACE, RuntimeIrohConnectionQualitySnapshot,
-    RuntimeIrohDiagnostics, RuntimeIrohDiagnosticsSnapshot, RuntimeIrohShutdownHandle,
-    bind_runtime_iroh_client_endpoint, build_runtime_iroh_control_service,
+    RuntimeIrohDiagnostics, RuntimeIrohDiagnosticsSnapshot, RuntimeIrohEndpoint,
+    RuntimeIrohShutdownHandle, bind_runtime_iroh_client_endpoint, bind_runtime_iroh_endpoint,
+    build_runtime_iroh_control_service,
 };
 pub(crate) use iroh_compression::{
     IrohCompressionBridge, IrohCompressionMetrics, IrohCompressionPolicy, IrohFrameCompressionMode,

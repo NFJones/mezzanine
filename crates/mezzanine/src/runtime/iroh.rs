@@ -572,15 +572,30 @@ impl RuntimeIrohShutdownHandle {
 
 impl RuntimeIrohEndpoint {
     /// Returns the bound Iroh endpoint.
-    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "the persistent local host consumes this host-Iroh endpoint accessor in the next architecture phase"
+    )]
     pub(crate) fn endpoint(&self) -> &Endpoint {
         &self.endpoint
     }
 
     /// Returns the policy applied to this endpoint.
-    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "the persistent local host consumes this host-Iroh policy accessor in the next architecture phase"
+    )]
     pub(crate) fn policy(&self) -> &RuntimeIrohTransportPolicy {
         &self.policy
+    }
+
+    /// Returns the latest dialable address published by this endpoint.
+    #[allow(
+        dead_code,
+        reason = "the persistent local host consumes this host-Iroh address accessor in the next architecture phase"
+    )]
+    pub(crate) fn endpoint_addr(&self) -> Option<iroh::EndpointAddr> {
+        self.endpoint_addr.borrow().clone()
     }
 
     /// Returns a cloneable handle for intentional endpoint shutdown.
@@ -2017,6 +2032,7 @@ mod tests {
                 server_addr: server_addr.clone(),
                 token: invitation.token.clone(),
                 role: RemoteRoleCeiling::Primary,
+                scope: crate::security::remote::RemoteClientProfileScope::LegacySession,
                 expires_at_unix_seconds: invitation.expires_at_unix_seconds,
             };
             let save_error = exchange_iroh_control_request(
@@ -2042,6 +2058,7 @@ mod tests {
                 server_addr: server_addr.clone(),
                 token: invitation.token.clone(),
                 role: RemoteRoleCeiling::Primary,
+                scope: crate::security::remote::RemoteClientProfileScope::LegacySession,
                 expires_at_unix_seconds: invitation.expires_at_unix_seconds,
             };
             let first = exchange_iroh_control_request(
@@ -2272,6 +2289,7 @@ mod tests {
                     server_addr,
                     token: invitation.token,
                     role: RemoteRoleCeiling::Primary,
+                    scope: crate::security::remote::RemoteClientProfileScope::LegacySession,
                     expires_at_unix_seconds: invitation.expires_at_unix_seconds,
                 },
                 "session/kill",
@@ -2389,6 +2407,7 @@ mod tests {
                 server_addr,
                 token: invitation.token,
                 role: RemoteRoleCeiling::Primary,
+                scope: crate::security::remote::RemoteClientProfileScope::LegacySession,
                 expires_at_unix_seconds: invitation.expires_at_unix_seconds,
             },
             "window/list",
@@ -2717,6 +2736,7 @@ mod tests {
                 server_addr,
                 token: invitation.token,
                 role: RemoteRoleCeiling::Primary,
+                scope: crate::security::remote::RemoteClientProfileScope::LegacySession,
                 expires_at_unix_seconds: invitation.expires_at_unix_seconds,
             },
             "session/kill",

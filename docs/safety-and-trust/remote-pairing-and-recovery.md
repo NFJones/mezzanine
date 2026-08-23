@@ -17,18 +17,20 @@ removing remote service. Unix remains the administration and recovery path.
 ## Understand the identities
 
 An Iroh endpoint ID proves possession of a network key. It does not grant a
-Mezzanine role. Mezzanine authority comes from a durable per-session trust
-record that binds the current server endpoint ID, the authenticated client
-endpoint ID, a stable record ID, a maximum `observer` or `primary` role,
-revocation state, and a verifier for a device credential.
+Mezzanine role. Mezzanine authority comes from a durable trust record that
+binds the current server endpoint ID, the authenticated client endpoint ID, a
+stable record ID, a maximum `observer` or `primary` role, revocation state, and
+a verifier for a device credential. Persistent-host trust is shared across the
+host; direct-session compatibility trust remains isolated to that session.
 
-Server endpoint keys and `trust.json` live below the primary configuration
-root under a hashed `remote/sessions` directory. The client endpoint key,
-profile metadata, and separate device-credential files live under
-`remote/client`. Files are owner-only, bounded, opened without following
-symlinks, and updated with atomic replacement. Live server and client endpoint
-keys retain exclusive locks, and client profile database access is serialized
-under a protected lock. Do not edit these files directly.
+The persistent host key and `trust.json` live below `remote/host` in the
+primary configuration root. Legacy direct-session keys and trust remain below
+hashed `remote/sessions` directories. The client endpoint key, profile
+metadata, and separate device-credential files live under `remote/client`.
+Files are owner-only, bounded, opened without following symlinks, and updated
+with atomic replacement. Live server and client endpoint keys retain exclusive
+locks, and client profile database access is serialized under a protected
+lock. Do not edit these files directly.
 
 ## Pair a device
 
@@ -120,22 +122,21 @@ Iroh CLI surface supports `attach`, `kill`, and `detach`. For example, use `mez
 observer access. An observer-limited invitation or profile cannot attach as
 primary.
 
-Configuration schema 73 reserves a persistent-host mode in which pairing and
-trust move from one session to one stable host. Pairing remains mandatory once
-per client device, but invitation redemption and profile checks use a
-host-only initialization intent and cannot create, select, or attach a
-session. After pairing, authorized create and attach operations do not repeat
-the pairing flow. A host endpoint ID remains transport evidence only; the
-host-scoped trust record carries role and session capabilities, quotas, and
-revocation state.
+Configuration schema 73 provides a persistent-host Iroh owner with one stable
+endpoint identity and host trust database. Pairing remains mandatory once per
+client device, but invitation redemption and profile checks use protocol-v3
+`host_only` initialization and cannot create, select, or attach a session.
+After pairing, authorized create and attach operations do not repeat the
+pairing flow. A host endpoint ID remains transport evidence only; the
+host-scoped trust record carries application authority and revocation state.
 
-In persistent-host mode, a profile names the host. Omitted-target `attach` and
-`new` request idempotent lease-backed creation, an explicit target attaches an
-authorized existing lease, and `attach --default` selects an existing default
-without creating. Runtime kill, lease release, lease revocation, and device
-trust revocation are separate operations. The currently implemented
-session-bound profile and `mezctl/2` behavior remains authoritative until the
-host front door is implemented and enabled.
+Protected client profiles now carry an explicit scope: `host` or
+`legacy_session`. Profiles written before scope metadata existed are loaded as
+`legacy_session`; they are never silently broadened to host authority. A host
+profile uses `host_only` for pairing and health checks. Omitted-target `attach`
+and `new`, explicit lease attachment, and `attach --default` remain part of the
+dependent host-routing integration. Runtime kill, lease release, lease
+revocation, and device trust revocation are separate operations.
 
 Setup timeout errors name the failed stage and deadline, summarize pinned
 direct/relay route counts, and state when no Mezzanine authentication occurred.
