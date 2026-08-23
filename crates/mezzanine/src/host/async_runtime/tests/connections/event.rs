@@ -1,6 +1,7 @@
 //! Async-runtime tests owned by event behavior.
 
 use super::super::*;
+use crate::host::async_runtime::serve_bound_async_runtime_event_listener;
 
 /// Verifies async event flush writes notifications and advances cursor.
 ///
@@ -535,4 +536,152 @@ async fn bound_unix_observer_stream_stops_after_revocation() {
     };
 
     let ((), (), (), _exit) = tokio::join!(client, producer, server, actor.run());
+}
+
+/// Verifies bound primary event streams are served concurrently.
+///
+/// Each attached primary has a separate long-lived event socket. A session
+/// event emitted after both streams initialize must reach both clients without
+/// either client needing to disconnect or change focus to wake its renderer.
+#[tokio::test(flavor = "current_thread")]
+async fn bound_unix_event_listener_delivers_refreshes_to_concurrent_primaries() {
+    use crate::control::{decode_control_frame, encode_control_body};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{UnixListener, UnixStream};
+    use tokio::time::{Duration, timeout};
+
+    let path = std::env::temp_dir().join(format!(
+        "mez-bound-concurrent-event-listener-{}-{}.sock",
+        std::process::id(),
+        "primaries"
+    ));
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path).unwrap();
+    let mut service = test_service_with_event_log();
+    let first_primary = service
+        .attach_primary("first-primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let second_primary = service
+        .attach_primary("second-primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let refresh_client = service
+        .attach_primary("refresh-primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let after_event_id = service.event_log().unwrap().latest_event_id();
+    let peer_uid = current_effective_uid();
+    let (first_token, _) = service.mint_unix_event_binding(first_primary, peer_uid);
+    let (second_token, _) = service.mint_unix_event_binding(second_primary, peer_uid);
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let (first_initialized_tx, first_initialized_rx) = tokio::sync::oneshot::channel();
+    let (second_initialized_tx, second_initialized_rx) = tokio::sync::oneshot::channel();
+    let (first_event_delivered_tx, first_event_delivered_rx) = tokio::sync::oneshot::channel();
+    let (second_event_delivered_tx, second_event_delivered_rx) = tokio::sync::oneshot::channel();
+
+    let first_path = path.clone();
+    let first_client = async move {
+        let mut stream = UnixStream::connect(first_path).await.unwrap();
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "first-event-init",
+            "method": "event/initialize",
+            "params": {"binding_token": first_token, "after_event_id": after_event_id}
+        })
+        .to_string();
+        stream
+            .write_all(&encode_control_body(&initialize))
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+        first_initialized_tx.send(()).unwrap();
+        let mut output = vec![0; 4096];
+        let read = timeout(Duration::from_secs(1), stream.read(&mut output))
+            .await
+            .unwrap()
+            .unwrap();
+        let (body, _) = decode_control_frame(&output[..read], 4096).unwrap();
+        assert!(
+            body.contains(r#""method":"event/client_detached""#),
+            "{body}"
+        );
+        first_event_delivered_tx.send(()).unwrap();
+        timeout(Duration::from_secs(1), second_event_delivered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+    };
+    let second_path = path.clone();
+    let second_client = async move {
+        let mut stream = UnixStream::connect(second_path).await.unwrap();
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "second-event-init",
+            "method": "event/initialize",
+            "params": {"binding_token": second_token, "after_event_id": after_event_id}
+        })
+        .to_string();
+        stream
+            .write_all(&encode_control_body(&initialize))
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+        second_initialized_tx.send(()).unwrap();
+        let mut output = vec![0; 4096];
+        let read = timeout(Duration::from_secs(1), stream.read(&mut output))
+            .await
+            .unwrap()
+            .unwrap();
+        let (body, _) = decode_control_frame(&output[..read], 4096).unwrap();
+        assert!(
+            body.contains(r#""method":"event/client_detached""#),
+            "{body}"
+        );
+        second_event_delivered_tx.send(()).unwrap();
+        first_event_delivered_rx.await.unwrap();
+    };
+    let producer_handle = handle.clone();
+    let producer = async move {
+        first_initialized_rx.await.unwrap();
+        second_initialized_rx.await.unwrap();
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Client(ClientEvent::Disconnected {
+            client_id: refresh_client,
+            reason: "concurrent-primary-refresh".to_string(),
+        }));
+        assert_eq!(
+            producer_handle
+                .submit_runtime_events(batch)
+                .await
+                .unwrap()
+                .applied,
+            1
+        );
+    };
+    let shutdown_handle = handle.clone();
+    let clients = async move {
+        let ((), (), ()) = tokio::join!(first_client, second_client, producer);
+        shutdown_handle.shutdown().await.unwrap();
+    };
+    let server = async {
+        let served = serve_bound_async_runtime_event_listener(
+            &listener,
+            &handle,
+            AsyncRuntimeEventConnectionConfig::new(10, peer_uid).unwrap(),
+            |_, _, state| {
+                matches!(
+                    state,
+                    RuntimeLifecycleState::Stopping
+                        | RuntimeLifecycleState::Killed
+                        | RuntimeLifecycleState::Failed
+                )
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(served, 2);
+    };
+
+    let ((), (), _exit) = tokio::join!(clients, server, actor.run());
+    let _ = std::fs::remove_file(&path);
 }

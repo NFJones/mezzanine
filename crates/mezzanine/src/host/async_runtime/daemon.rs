@@ -83,7 +83,7 @@ pub fn build_async_runtime_daemon_services(
                 &listener,
                 &handle,
                 event_config,
-                |served, delivered, state| {
+                move |served, delivered, state| {
                     served >= max_connections
                         || delivered >= max_batches
                         || is_terminal_daemon_state(state)

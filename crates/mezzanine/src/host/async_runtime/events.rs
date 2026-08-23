@@ -6,7 +6,7 @@
 
 use super::{
     AsRawFd, AsyncRuntimeEventConnectionConfig, AsyncRuntimeSessionHandle, AsyncWriteExt, Framed,
-    MezError, ProtocolFrameCodec, Result, RuntimeLifecycleState, StreamExt, UnixListener,
+    JoinSet, MezError, ProtocolFrameCodec, Result, RuntimeLifecycleState, StreamExt, UnixListener,
     UnixStream, authenticated_unix_peer_uid, encode_control_body, encode_event_notification,
 };
 #[cfg(test)]
@@ -14,6 +14,7 @@ use super::{EventAudience, authorize_unix_peer_raw_fd};
 #[cfg(test)]
 use crate::runtime::RuntimeEventConnectionTable;
 use std::io::ErrorKind;
+use std::sync::Arc;
 
 const UNIX_EVENT_INITIALIZE_MAX_CONTENT_LENGTH: usize = 64 * 1024;
 
@@ -298,46 +299,73 @@ pub async fn serve_bound_async_runtime_event_listener<F>(
     listener: &UnixListener,
     handle: &AsyncRuntimeSessionHandle,
     config: AsyncRuntimeEventConnectionConfig,
-    mut should_stop: F,
+    should_stop: F,
 ) -> Result<u64>
 where
-    F: FnMut(u64, u64, RuntimeLifecycleState) -> bool,
+    F: Fn(u64, u64, RuntimeLifecycleState) -> bool + Send + Sync + 'static,
 {
-    let mut served_connections = 0u64;
+    let mut accepted_connections = 0u64;
+    let mut tasks = JoinSet::new();
+    let should_stop = Arc::new(should_stop);
     let mut lifecycle = handle.lifecycle_state_watcher();
     loop {
         let state = *lifecycle.borrow();
-        if should_stop(served_connections, 0, state) {
-            return Ok(served_connections);
+        if should_stop(accepted_connections, 0, state) {
+            break;
         }
         let (mut stream, _addr) = tokio::select! {
             accepted = listener.accept() => accepted?,
             changed = lifecycle.changed() => {
                 if changed.is_err() {
-                    return Ok(served_connections);
+                    break;
                 }
                 continue;
             }
+            joined = tasks.join_next(), if !tasks.is_empty() => {
+                let Some(joined) = joined else {
+                    continue;
+                };
+                joined.map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "async event connection task failed: {error}"
+                    ))
+                })??;
+                continue;
+            }
         };
-        let connection_id = format!("unix-events-{served_connections}");
-        let connection_result = serve_bound_async_runtime_event_connection(
-            &mut stream,
-            handle,
-            config,
-            connection_id,
-            |delivered, state| should_stop(served_connections, delivered, state),
-        )
-        .await;
-        served_connections = served_connections.saturating_add(1);
-        if let Err(error) = connection_result
-            && !matches!(
-                error.kind(),
-                crate::error::MezErrorKind::Forbidden | crate::error::MezErrorKind::InvalidArgs
+        let connection_index = accepted_connections;
+        let connection_id = format!("unix-events-{connection_index}");
+        let connection_handle = handle.clone();
+        let connection_should_stop = should_stop.clone();
+        tasks.spawn(async move {
+            let connection_result = serve_bound_async_runtime_event_connection(
+                &mut stream,
+                &connection_handle,
+                config,
+                connection_id,
+                |delivered, state| connection_should_stop(connection_index, delivered, state),
             )
-        {
-            return Err(error);
-        }
+            .await;
+            if let Err(error) = connection_result
+                && !matches!(
+                    error.kind(),
+                    crate::error::MezErrorKind::Forbidden | crate::error::MezErrorKind::InvalidArgs
+                )
+            {
+                return Err(error);
+            }
+            Ok(())
+        });
+        accepted_connections = accepted_connections.saturating_add(1);
     }
+
+    while let Some(joined) = tasks.join_next().await {
+        joined.map_err(|error| {
+            MezError::invalid_state(format!("async event connection task failed: {error}"))
+        })??;
+    }
+
+    Ok(accepted_connections)
 }
 
 /// Runs the serve async runtime event listener operation for this subsystem.
