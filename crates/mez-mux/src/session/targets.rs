@@ -7,9 +7,131 @@ use crate::{MuxError as MezError, MuxErrorKind, Result};
 use mez_core::{PaneId, WindowGroupId, WindowId};
 
 use super::time::current_unix_seconds;
-use super::types::{Session, SessionState};
+use super::types::{ClientNavigationState, FocusCursor, Session, SessionState};
 
 impl Session {
+    /// Projects one attached primary's stable-id navigation into legacy focus owners.
+    pub(super) fn activate_client_navigation(
+        &mut self,
+        client_id: &mez_core::ClientId,
+    ) -> Result<()> {
+        self.require_primary(client_id)?;
+        let navigation = self.navigation(client_id)?.clone();
+        if let Some(group_id) = navigation.groups.active.as_ref()
+            && let Some(index) = self
+                .window_groups
+                .iter()
+                .position(|group| &group.id == group_id)
+        {
+            self.active_group_index = index;
+        }
+        self.last_active_group_index = navigation.groups.last.as_ref().and_then(|group_id| {
+            self.window_groups
+                .iter()
+                .position(|group| &group.id == group_id)
+        });
+        self.group_focus_history = navigation.groups.history.clone();
+
+        for group in &mut self.window_groups {
+            if let Some(cursor) = navigation.windows_by_group.get(&group.id) {
+                group.active_window_id = cursor.active.clone();
+                group.last_active_window_id = cursor.last.clone();
+                group.window_focus_history = cursor.history.clone();
+            }
+        }
+        let active_window_id = self
+            .window_groups
+            .get(self.active_group_index)
+            .and_then(|group| group.active_window_id.as_ref())
+            .or_else(|| {
+                navigation
+                    .groups
+                    .active
+                    .as_ref()
+                    .and(self.landing_navigation.active_window_id.as_ref())
+            })
+            .cloned();
+        if let Some(window_id) = active_window_id
+            && let Some(index) = self
+                .windows
+                .iter()
+                .position(|window| window.id == window_id)
+        {
+            self.active_window_index = index;
+        }
+        for window in &mut self.windows {
+            let cursor = navigation.panes_by_window.get(&window.id);
+            window.apply_client_navigation_state(
+                cursor.and_then(|cursor| cursor.active.as_ref()),
+                cursor.and_then(|cursor| cursor.last.as_ref()),
+                cursor
+                    .map(|cursor| cursor.history.as_slice())
+                    .unwrap_or(&[]),
+                navigation.zoomed_panes_by_window.get(&window.id),
+            );
+        }
+        Ok(())
+    }
+
+    /// Captures legacy focus owners back into one attached primary's navigation.
+    pub(super) fn capture_client_navigation(
+        &mut self,
+        client_id: &mez_core::ClientId,
+    ) -> Result<()> {
+        self.require_primary(client_id)?;
+        let previous = self.navigation(client_id)?.clone();
+        let mut next = ClientNavigationState {
+            groups: FocusCursor {
+                active: self
+                    .window_groups
+                    .get(self.active_group_index)
+                    .map(|group| group.id.clone()),
+                last: self
+                    .last_active_group_index
+                    .and_then(|index| self.window_groups.get(index))
+                    .map(|group| group.id.clone()),
+                history: self.group_focus_history.clone(),
+            },
+            ..ClientNavigationState::default()
+        };
+        for group in &self.window_groups {
+            next.windows_by_group.insert(
+                group.id.clone(),
+                FocusCursor {
+                    active: group.active_window_id.clone(),
+                    last: group.last_active_window_id.clone(),
+                    history: group.window_focus_history.clone(),
+                },
+            );
+        }
+        for window in &self.windows {
+            let (active, last, history, zoomed) = window.client_navigation_state();
+            next.panes_by_window.insert(
+                window.id.clone(),
+                FocusCursor {
+                    active,
+                    last,
+                    history,
+                },
+            );
+            if let Some(zoomed) = zoomed {
+                next.zoomed_panes_by_window
+                    .insert(window.id.clone(), zoomed);
+            }
+        }
+        next.revision = if next.groups != previous.groups
+            || next.windows_by_group != previous.windows_by_group
+            || next.panes_by_window != previous.panes_by_window
+            || next.zoomed_panes_by_window != previous.zoomed_panes_by_window
+        {
+            previous.revision.saturating_add(1)
+        } else {
+            previous.revision
+        };
+        *self.navigation_mut(client_id)? = next;
+        Ok(())
+    }
+
     /// Runs the record event operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

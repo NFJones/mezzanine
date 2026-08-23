@@ -4,8 +4,10 @@
 //! session container. Behavior is implemented in focused sibling modules.
 
 use crate::layout::{LayoutNode, LayoutPolicy, PaneGeometry, Size, Window};
-use mez_core::{ClientId, IdFactory, ObserverRequestId, SessionId, WindowGroupId, WindowId};
-use std::collections::{BTreeMap, BTreeSet};
+use mez_core::{
+    ClientId, IdFactory, ObserverRequestId, PaneId, SessionId, WindowGroupId, WindowId,
+};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 /// Shell launch metadata retained by the session domain.
@@ -248,6 +250,56 @@ pub struct ClientTerminalDescriptor {
     pub features: Vec<String>,
 }
 
+/// Stable-ID focus state for one caller-local navigation level.
+///
+/// History is stored oldest-to-newest and is bounded by navigation mutation
+/// helpers. Stable identities keep cursors independent of topology indexes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FocusCursor<T> {
+    /// Currently selected identity.
+    pub active: Option<T>,
+    /// Previously selected identity.
+    pub last: Option<T>,
+    /// Bounded deduplicated MRU history, oldest to newest.
+    pub history: Vec<T>,
+}
+
+impl<T> Default for FocusCursor<T> {
+    fn default() -> Self {
+        Self {
+            active: None,
+            last: None,
+            history: Vec::new(),
+        }
+    }
+}
+
+/// Caller-local group, window, pane, and zoom navigation for one primary.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ClientNavigationState {
+    /// Session group focus.
+    pub groups: FocusCursor<WindowGroupId>,
+    /// Window focus retained independently for each group.
+    pub windows_by_group: HashMap<WindowGroupId, FocusCursor<WindowId>>,
+    /// Pane focus retained independently for each window.
+    pub panes_by_window: HashMap<WindowId, FocusCursor<PaneId>>,
+    /// Caller-local zoomed pane for each window.
+    pub zoomed_panes_by_window: HashMap<WindowId, PaneId>,
+    /// Monotonic revision incremented only when this navigation changes.
+    pub revision: u64,
+}
+
+/// Client-independent landing focus used when no primary view is available.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LandingNavigationState {
+    /// Landing group identity.
+    pub active_group_id: Option<WindowGroupId>,
+    /// Landing window identity.
+    pub active_window_id: Option<WindowId>,
+    /// Landing pane identity.
+    pub active_pane_id: Option<PaneId>,
+}
+
 /// Carries Client state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -294,6 +346,11 @@ pub struct Client {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub last_seen_at_unix_seconds: Option<u64>,
+    /// Caller-local navigation for attached primary clients.
+    ///
+    /// Observer, agent, and automation records do not own independent primary
+    /// navigation and therefore retain `None`.
+    pub navigation: Option<ClientNavigationState>,
 }
 
 /// Carries Observer Decision State state for this subsystem.
@@ -596,6 +653,8 @@ pub struct Session {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) observers: Vec<ObserverRequest>,
+    /// Client-independent landing navigation used to seed primary views.
+    pub(super) landing_navigation: LandingNavigationState,
     /// Stores the primary client id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

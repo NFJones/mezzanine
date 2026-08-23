@@ -2,7 +2,7 @@
 
 use super::SessionShell;
 use super::{
-    ClientRole, ClientState, ClientTerminalDescriptor, ObserverDecisionState, RestoredPane,
+    Client, ClientRole, ClientState, ClientTerminalDescriptor, ObserverDecisionState, RestoredPane,
     RestoredSessionState, RestoredWindow, RestoredWindowGroup, Session, SessionRestoreInput,
     SessionState,
 };
@@ -1619,4 +1619,109 @@ fn client_self_detach_preserves_primary_and_observer_lifecycle() {
 
     assert!(session.primary_client_id().is_none());
     assert_eq!(session.state, SessionState::Detached);
+}
+
+/// Verifies synthetic primary views retain independent navigation and zoom.
+///
+/// This milestone keeps production ingress single-primary, but the mux domain
+/// must already isolate two attached-primary records so later protocol-v2
+/// attachment cannot make one caller's window, pane, no-select, or zoom
+/// mutation overwrite the other caller's view.
+#[test]
+fn synthetic_primary_views_keep_independent_navigation_and_zoom() {
+    let mut session = test_session();
+    let first = session.attach_primary("first", true).unwrap();
+    let landing_window = session.windows()[0].id.clone();
+    let landing_pane = session.windows()[0].panes()[0].id.clone();
+    let first_window = session.new_window(&first, "first-work", true).unwrap();
+    let first_pane = session
+        .split_active_pane(&first, SplitDirection::Vertical)
+        .unwrap();
+
+    let second = session.ids.client();
+    session.clients.push(Client {
+        id: second.clone(),
+        name: "second".to_string(),
+        role: ClientRole::Primary,
+        state: ClientState::Attached,
+        interactive: true,
+        terminal: None,
+        attached_at_unix_seconds: Some(session.created_at_unix_seconds),
+        last_seen_at_unix_seconds: Some(session.created_at_unix_seconds),
+        navigation: Some(session.navigation_from_landing()),
+    });
+
+    assert_eq!(session.attached_primaries().count(), 2);
+    assert_eq!(session.active_window_for(&first).unwrap().id, first_window);
+    assert_eq!(session.active_pane_for(&first).unwrap().id, first_pane);
+    assert_eq!(
+        session.active_window_for(&second).unwrap().id,
+        landing_window
+    );
+    assert_eq!(session.active_pane_for(&second).unwrap().id, landing_pane);
+
+    let second_pane = session
+        .split_active_pane(&second, SplitDirection::Horizontal)
+        .unwrap();
+    let unselected = session.new_window(&second, "background", false).unwrap();
+    session.toggle_active_pane_zoom(&second).unwrap();
+
+    assert_eq!(session.active_window_for(&first).unwrap().id, first_window);
+    assert_eq!(session.active_pane_for(&first).unwrap().id, first_pane);
+    assert_eq!(
+        session.active_window_for(&second).unwrap().id,
+        landing_window
+    );
+    assert_eq!(session.active_pane_for(&second).unwrap().id, second_pane);
+    assert_ne!(session.active_window_for(&second).unwrap().id, unselected);
+    assert_eq!(
+        session
+            .navigation(&second)
+            .unwrap()
+            .zoomed_panes_by_window
+            .get(&landing_window),
+        Some(&second_pane)
+    );
+    assert!(
+        !session
+            .navigation(&first)
+            .unwrap()
+            .zoomed_panes_by_window
+            .contains_key(&first_window)
+    );
+    assert!(session.navigation(&first).unwrap().revision > 0);
+    assert!(session.navigation(&second).unwrap().revision > 0);
+}
+
+/// Verifies detached synthetic primaries cannot mutate retained navigation.
+///
+/// A stale client id may still have a retained summary and navigation record,
+/// but caller-aware target resolution must reject it before projection or
+/// mutation so a later connection cannot resume that authority.
+#[test]
+fn detached_primary_navigation_is_rejected_without_mutation() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let second_window = session.new_window(&primary, "second", true).unwrap();
+    let navigation_before = session.navigation(&primary).unwrap().clone();
+    session
+        .clients
+        .iter_mut()
+        .find(|client| client.id == primary)
+        .unwrap()
+        .state = ClientState::Detached;
+
+    let error = session.select_window(&primary, "0").unwrap_err();
+
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Forbidden);
+    let retained = session
+        .clients()
+        .iter()
+        .find(|client| client.id == primary)
+        .unwrap()
+        .navigation
+        .as_ref()
+        .unwrap();
+    assert_eq!(retained, &navigation_before);
+    assert_eq!(session.active_window().unwrap().id, second_window);
 }

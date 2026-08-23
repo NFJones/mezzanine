@@ -149,6 +149,17 @@ impl Session {
         let active_group_index = active_group_index.ok_or_else(|| {
             MezError::invalid_args("restored session must contain exactly one active window group")
         })?;
+        let landing_navigation = super::types::LandingNavigationState {
+            active_group_id: window_groups
+                .get(active_group_index)
+                .map(|group| group.id.clone()),
+            active_window_id: windows
+                .get(active_window_index)
+                .map(|window| window.id.clone()),
+            active_pane_id: windows
+                .get(active_window_index)
+                .map(|window| window.active_pane().id.clone()),
+        };
 
         Ok(Self {
             ids: IdFactory::after_existing_ids(restored_ids.iter()),
@@ -178,6 +189,7 @@ impl Session {
             pane_state_metadata,
             clients: Vec::new(),
             observers: Vec::new(),
+            landing_navigation,
             primary_client_id: None,
             next_event_id: 1,
         })

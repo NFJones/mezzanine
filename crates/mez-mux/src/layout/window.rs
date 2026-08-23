@@ -107,6 +107,54 @@ impl Window {
         self.zoomed_pane_id.as_ref()
     }
 
+    /// Returns stable-id pane navigation stored by the legacy window adapter.
+    pub(crate) fn client_navigation_state(
+        &self,
+    ) -> (Option<PaneId>, Option<PaneId>, Vec<PaneId>, Option<PaneId>) {
+        let active = self
+            .panes
+            .get(self.active_pane_index)
+            .map(|pane| pane.id.clone());
+        let last = self
+            .last_active_pane_index
+            .and_then(|index| self.panes.get(index))
+            .map(|pane| pane.id.clone());
+        (
+            active,
+            last,
+            self.pane_focus_history.clone(),
+            self.zoomed_pane_id.clone(),
+        )
+    }
+
+    /// Projects one caller's stable-id pane navigation into legacy window state.
+    pub(crate) fn apply_client_navigation_state(
+        &mut self,
+        active: Option<&PaneId>,
+        last: Option<&PaneId>,
+        history: &[PaneId],
+        zoomed: Option<&PaneId>,
+    ) {
+        if self.panes.is_empty() {
+            return;
+        }
+        let active_index = active
+            .and_then(|pane_id| self.panes.iter().position(|pane| &pane.id == pane_id))
+            .unwrap_or(0);
+        self.set_active_pane_index_without_history(active_index);
+        self.last_active_pane_index =
+            last.and_then(|pane_id| self.panes.iter().position(|pane| &pane.id == pane_id));
+        self.pane_focus_history = history
+            .iter()
+            .filter(|pane_id| self.panes.iter().any(|pane| &pane.id == *pane_id))
+            .cloned()
+            .collect();
+        self.prune_pane_focus_history();
+        self.zoomed_pane_id = zoomed
+            .filter(|pane_id| self.panes.iter().any(|pane| &pane.id == *pane_id))
+            .cloned();
+    }
+
     /// Explicitly sets zoom for one pane without changing the active pane.
     ///
     /// Disabling zoom for a pane that is not currently zoomed is a no-op. The

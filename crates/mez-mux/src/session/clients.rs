@@ -62,6 +62,7 @@ impl Session {
             terminal,
             attached_at_unix_seconds: Some(attached_at),
             last_seen_at_unix_seconds: Some(attached_at),
+            navigation: Some(self.navigation_from_landing()),
         });
         self.primary_client_id = Some(client_id.clone());
         self.last_attached_at_unix_seconds = Some(attached_at);
@@ -107,6 +108,9 @@ impl Session {
         let selected_at = current_unix_seconds();
         self.clients[target_index].role = ClientRole::Primary;
         self.clients[target_index].state = ClientState::Attached;
+        if self.clients[target_index].navigation.is_none() {
+            self.clients[target_index].navigation = Some(self.navigation_from_landing());
+        }
         self.clients[target_index]
             .attached_at_unix_seconds
             .get_or_insert(selected_at);
@@ -149,6 +153,7 @@ impl Session {
             terminal: None,
             attached_at_unix_seconds: None,
             last_seen_at_unix_seconds: None,
+            navigation: None,
         });
         self.observers.push(ObserverRequest {
             id: observer_id.clone(),
@@ -198,6 +203,7 @@ impl Session {
             terminal: None,
             attached_at_unix_seconds: Some(attached_at),
             last_seen_at_unix_seconds: Some(attached_at),
+            navigation: None,
         });
         self.record_event();
         Ok(client_id)
@@ -569,11 +575,57 @@ impl Session {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn require_primary(&self, client_id: &ClientId) -> Result<()> {
-        if self.primary_client_id.as_ref() == Some(client_id) {
+        if self.is_attached_primary(client_id) {
             Ok(())
         } else {
             Err(MezError::forbidden("operation requires the primary client"))
         }
+    }
+
+    /// Returns whether an exact client is an attached interactive primary.
+    pub fn is_attached_primary(&self, client_id: &ClientId) -> bool {
+        self.clients.iter().any(|client| {
+            client.id == *client_id
+                && client.role == ClientRole::Primary
+                && client.state == ClientState::Attached
+                && client.interactive
+        })
+    }
+
+    /// Returns all attached primary records without enabling additional ingress.
+    pub fn attached_primaries(&self) -> impl Iterator<Item = &Client> {
+        self.clients.iter().filter(|client| {
+            client.role == ClientRole::Primary
+                && client.state == ClientState::Attached
+                && client.interactive
+        })
+    }
+
+    /// Returns caller-local navigation for an attached primary.
+    pub fn navigation(&self, client_id: &ClientId) -> Result<&super::types::ClientNavigationState> {
+        self.clients
+            .iter()
+            .find(|client| client.id == *client_id)
+            .filter(|client| {
+                client.role == ClientRole::Primary && client.state == ClientState::Attached
+            })
+            .and_then(|client| client.navigation.as_ref())
+            .ok_or_else(|| MezError::forbidden("client has no attached-primary navigation"))
+    }
+
+    /// Returns mutable caller-local navigation for an attached primary.
+    pub fn navigation_mut(
+        &mut self,
+        client_id: &ClientId,
+    ) -> Result<&mut super::types::ClientNavigationState> {
+        self.clients
+            .iter_mut()
+            .find(|client| client.id == *client_id)
+            .filter(|client| {
+                client.role == ClientRole::Primary && client.state == ClientState::Attached
+            })
+            .and_then(|client| client.navigation.as_mut())
+            .ok_or_else(|| MezError::forbidden("client has no attached-primary navigation"))
     }
 }
 

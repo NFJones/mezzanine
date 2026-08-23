@@ -97,6 +97,7 @@ impl Session {
         select: bool,
     ) -> Result<WindowId> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let index = self.windows.len();
         let mut window = Window::new(&mut self.ids, index, name, self.authoritative_size);
         window.created_at_unix_seconds = Some(current_unix_seconds());
@@ -126,6 +127,7 @@ impl Session {
         if select {
             self.set_active_window_index(index);
         }
+        self.capture_client_navigation(primary_client_id)?;
         self.record_event();
         Ok(id)
     }
@@ -143,7 +145,10 @@ impl Session {
         select: bool,
     ) -> Result<WindowId> {
         self.require_primary(primary_client_id)?;
-        self.new_window_in_group_session_owned(group_id, name, select)
+        self.activate_client_navigation(primary_client_id)?;
+        let id = self.new_window_in_group_session_owned(group_id, name, select)?;
+        self.capture_client_navigation(primary_client_id)?;
+        Ok(id)
     }
 
     /// Creates a window in an existing group for session-owned orchestration.
@@ -191,6 +196,7 @@ impl Session {
         select: bool,
     ) -> Result<(mez_core::WindowGroupId, WindowId)> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let name = name.into();
         let window_index = self.windows.len();
         let mut window = Window::new(
@@ -224,6 +230,7 @@ impl Session {
         if select || self.window_groups.len() == 1 {
             self.set_active_window_index(window_index);
         }
+        self.capture_client_navigation(primary_client_id)?;
         self.record_event();
         Ok((group_id, window_id))
     }
@@ -316,8 +323,10 @@ impl Session {
     /// on duplicated control-flow logic.
     pub fn select_window(&mut self, primary_client_id: &ClientId, target: &str) -> Result<()> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let index = self.window_index_or_active(Some(target))?;
         self.set_active_window_index(index);
+        self.capture_client_navigation(primary_client_id)?;
         self.record_event();
         Ok(())
     }
@@ -329,6 +338,7 @@ impl Session {
     /// on duplicated control-flow logic.
     pub fn next_window(&mut self, primary_client_id: &ClientId) -> Result<()> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         if self.windows.is_empty() {
             return Err(MezError::invalid_state("session has no windows"));
         }
@@ -342,6 +352,7 @@ impl Session {
             .unwrap_or(0);
         let index = group_indexes[(position + 1) % group_indexes.len()];
         self.set_active_window_index(index);
+        self.capture_client_navigation(primary_client_id)?;
         self.record_event();
         Ok(())
     }
@@ -353,6 +364,7 @@ impl Session {
     /// on duplicated control-flow logic.
     pub fn previous_window(&mut self, primary_client_id: &ClientId) -> Result<()> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         if self.windows.is_empty() {
             return Err(MezError::invalid_state("session has no windows"));
         }
@@ -370,6 +382,7 @@ impl Session {
             group_indexes[position - 1]
         };
         self.set_active_window_index(index);
+        self.capture_client_navigation(primary_client_id)?;
         self.record_event();
         Ok(())
     }
@@ -381,6 +394,7 @@ impl Session {
     /// on duplicated control-flow logic.
     pub fn last_window(&mut self, primary_client_id: &ClientId) -> Result<()> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let index = self
             .active_group()
             .and_then(|group| group.last_active_window_id.as_ref())
@@ -391,6 +405,7 @@ impl Session {
             })
             .ok_or_else(|| MezError::invalid_state("session has no last active window"))?;
         self.set_active_window_index(index);
+        self.capture_client_navigation(primary_client_id)?;
         self.record_event();
         Ok(())
     }
@@ -445,8 +460,10 @@ impl Session {
         target: &str,
     ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let group_index = self.group_index_or_active(Some(target))?;
         self.set_active_group_index(group_index)?;
+        self.capture_client_navigation(primary_client_id)?;
         let effects = self
             .windows
             .iter()
@@ -472,11 +489,13 @@ impl Session {
         primary_client_id: &ClientId,
     ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         if self.window_groups.is_empty() {
             return Err(MezError::invalid_state("session has no window groups"));
         }
         let index = (self.active_group_index + 1) % self.window_groups.len();
         self.set_active_group_index(index)?;
+        self.capture_client_navigation(primary_client_id)?;
         let effects = self
             .windows
             .iter()
@@ -502,6 +521,7 @@ impl Session {
         primary_client_id: &ClientId,
     ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         if self.window_groups.is_empty() {
             return Err(MezError::invalid_state("session has no window groups"));
         }
@@ -511,6 +531,7 @@ impl Session {
             self.active_group_index - 1
         };
         self.set_active_group_index(index)?;
+        self.capture_client_navigation(primary_client_id)?;
         let effects = self
             .windows
             .iter()
@@ -536,11 +557,13 @@ impl Session {
         primary_client_id: &ClientId,
     ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let index = self
             .last_active_group_index
             .filter(|index| *index < self.window_groups.len())
             .ok_or_else(|| MezError::invalid_state("session has no last active group"))?;
         self.set_active_group_index(index)?;
+        self.capture_client_navigation(primary_client_id)?;
         let effects = self
             .windows
             .iter()
@@ -645,6 +668,7 @@ impl Session {
         select_new: bool,
     ) -> Result<PaneId> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let window = self
             .windows
             .get_mut(self.active_window_index)
@@ -653,6 +677,7 @@ impl Session {
             .split_active_select(&mut self.ids, direction, select_new)?
             .id
             .clone();
+        self.capture_client_navigation(primary_client_id)?;
         self.record_event();
         Ok(pane_id)
     }
@@ -671,7 +696,11 @@ impl Session {
         select_new: bool,
     ) -> Result<PaneId> {
         self.require_primary(primary_client_id)?;
-        self.split_pane_in_window_select_session_owned(window_id, direction, select_new)
+        self.activate_client_navigation(primary_client_id)?;
+        let pane_id =
+            self.split_pane_in_window_select_session_owned(window_id, direction, select_new)?;
+        self.capture_client_navigation(primary_client_id)?;
+        Ok(pane_id)
     }
 
     /// Splits a pane in a target window for session-owned orchestration.
@@ -722,6 +751,7 @@ impl Session {
         select_new: bool,
     ) -> Result<PaneId> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let window = self
             .windows
             .get_mut(self.active_window_index)
@@ -735,6 +765,7 @@ impl Session {
             )?
             .id
             .clone();
+        self.capture_client_navigation(primary_client_id)?;
         self.record_event();
         Ok(pane_id)
     }
@@ -746,11 +777,13 @@ impl Session {
     /// on duplicated control-flow logic.
     pub fn select_pane(&mut self, primary_client_id: &ClientId, target: &str) -> Result<()> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let window = self
             .windows
             .get_mut(self.active_window_index)
             .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
         window.select_pane(target)?;
+        self.capture_client_navigation(primary_client_id)?;
         self.record_event();
         Ok(())
     }
@@ -762,6 +795,7 @@ impl Session {
     /// on duplicated control-flow logic.
     pub fn select_pane_global(&mut self, primary_client_id: &ClientId, target: &str) -> Result<()> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let (window_index, pane_index) = self.pane_location(Some(target))?;
         let pane_id = self.windows[window_index].panes()[pane_index].id.clone();
         self.set_active_window_index(window_index);
@@ -770,6 +804,7 @@ impl Session {
             .get_mut(self.active_window_index)
             .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
         window.select_pane(pane_id.as_str())?;
+        self.capture_client_navigation(primary_client_id)?;
         self.record_event();
         Ok(())
     }
@@ -785,12 +820,14 @@ impl Session {
         direction: PaneNavigationDirection,
     ) -> Result<PaneId> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let window = self
             .windows
             .get_mut(self.active_window_index)
             .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
         window.select_adjacent_pane(direction)?;
         let pane_id = window.active_pane().id.clone();
+        self.capture_client_navigation(primary_client_id)?;
         self.record_event();
         Ok(pane_id)
     }
@@ -802,12 +839,14 @@ impl Session {
     /// on duplicated control-flow logic.
     pub fn select_last_pane(&mut self, primary_client_id: &ClientId) -> Result<PaneId> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let window = self
             .windows
             .get_mut(self.active_window_index)
             .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
         window.select_last_pane()?;
         let pane_id = window.active_pane().id.clone();
+        self.capture_client_navigation(primary_client_id)?;
         self.record_event();
         Ok(pane_id)
     }
@@ -832,6 +871,7 @@ impl Session {
         primary_client_id: &ClientId,
     ) -> Result<(Option<PaneId>, Vec<PaneResizeEffect>)> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let window = self
             .windows
             .get_mut(self.active_window_index)
@@ -845,6 +885,7 @@ impl Session {
                 size: pane.size,
             })
             .collect();
+        self.capture_client_navigation(primary_client_id)?;
         self.record_event();
         Ok((zoomed, effects))
     }
@@ -857,6 +898,7 @@ impl Session {
         zoomed: bool,
     ) -> Result<(PaneId, bool, Vec<PaneResizeEffect>)> {
         self.require_primary(primary_client_id)?;
+        self.activate_client_navigation(primary_client_id)?;
         let (window_index, pane_index) = self.pane_location(target)?;
         let pane_id = self.windows[window_index].panes()[pane_index].id.clone();
         let window = &mut self.windows[window_index];
@@ -869,6 +911,7 @@ impl Session {
                 size: pane.size,
             })
             .collect();
+        self.capture_client_navigation(primary_client_id)?;
         self.record_event();
         Ok((pane_id, zoomed, effects))
     }

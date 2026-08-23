@@ -15,9 +15,10 @@ mod types;
 mod windows;
 
 pub use types::{
-    Client, ClientRole, ClientState, ClientTerminalDescriptor, ObserverDecisionState,
-    ObserverRequest, RestoredPane, RestoredSessionState, RestoredWindow, RestoredWindowGroup,
-    Session, SessionRestoreInput, SessionShell, SessionState, WindowGroup,
+    Client, ClientNavigationState, ClientRole, ClientState, ClientTerminalDescriptor, FocusCursor,
+    LandingNavigationState, ObserverDecisionState, ObserverRequest, RestoredPane,
+    RestoredSessionState, RestoredWindow, RestoredWindowGroup, Session, SessionRestoreInput,
+    SessionShell, SessionState, WindowGroup,
 };
 pub use windows::{
     BreakPaneTransition, JoinPaneTransition, KillGroupTransition, KillWindowTransition,
