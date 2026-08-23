@@ -536,6 +536,9 @@ pub(crate) use iroh::{
     RuntimeIrohDiagnostics, RuntimeIrohDiagnosticsSnapshot, bind_runtime_iroh_client_endpoint,
     build_runtime_iroh_control_service,
 };
+pub(crate) use iroh_compression::{
+    IrohCompressionBridge, IrohCompressionPolicy, IrohFrameCompressionMode,
+};
 pub(crate) use json::current_unix_millis;
 use json::{
     agent_shell_visibility_json_name, agent_state_control_method, current_unix_seconds,

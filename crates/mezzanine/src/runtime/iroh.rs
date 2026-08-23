@@ -27,8 +27,10 @@ use mez_core::ids::ClientId;
 use tokio::io::AsyncWriteExt;
 
 use super::config::{
-    RuntimeIrohAddressLookupPolicy, RuntimeIrohRelayPolicy, RuntimeIrohTransportPolicy,
+    RuntimeIrohAddressLookupPolicy, RuntimeIrohCompressionCodec, RuntimeIrohRelayPolicy,
+    RuntimeIrohTransportPolicy,
 };
+use super::{IrohCompressionBridge, IrohCompressionPolicy, IrohFrameCompressionMode};
 
 /// ALPN identity for the first Mezzanine Iroh transport contract.
 pub(crate) const MEZZANINE_IROH_ALPN: &[u8] = b"mezzanine/transport/1";
@@ -574,7 +576,7 @@ pub(crate) async fn bind_runtime_iroh_endpoint(
         stream_limit,
         0,
         (policy.bind_port != 0).then_some(policy.bind_port),
-        vec![MEZZANINE_IROH_ALPN.to_vec()],
+        IrohCompressionPolicy::ordered_alpns(&policy.compression_codecs),
         "Iroh endpoint",
     )
     .await?;
@@ -815,12 +817,38 @@ async fn serve_runtime_iroh_control_listener(
                         continue;
                     }
                 };
-                if alpn != MEZZANINE_IROH_ALPN {
-                    endpoint
-                        .diagnostics
-                        .record_rejected(setup_started.elapsed());
-                    continue;
-                }
+                let codec = match RuntimeIrohCompressionCodec::from_alpn(&alpn) {
+                    Ok(codec) if endpoint.policy.compression_codecs.contains(&codec) => codec,
+                    _ => {
+                        endpoint
+                            .diagnostics
+                            .record_rejected(setup_started.elapsed());
+                        continue;
+                    }
+                };
+                let max_decoded_bytes = match control_config.max_content_length.checked_add(1024) {
+                    Some(limit) => limit,
+                    None => {
+                        endpoint
+                            .diagnostics
+                            .record_rejected(setup_started.elapsed());
+                        continue;
+                    }
+                };
+                let compression = match IrohCompressionPolicy::new(
+                    codec,
+                    endpoint.policy.compression_min_bytes,
+                    endpoint.policy.compression_zstd_level,
+                    max_decoded_bytes,
+                ) {
+                    Ok(compression) => compression,
+                    Err(_) => {
+                        endpoint
+                            .diagnostics
+                            .record_rejected(setup_started.elapsed());
+                        continue;
+                    }
+                };
                 let connection = match tokio::time::timeout(endpoint.policy.setup_timeout, accepting).await {
                     Ok(Ok(connection)) => connection,
                     _ => {
@@ -846,6 +874,7 @@ async fn serve_runtime_iroh_control_listener(
                         &connection_handle,
                         control_config,
                         connection_snapshots.as_ref(),
+                        compression,
                         setup_timeout,
                         idle_timeout,
                     )
@@ -902,12 +931,17 @@ async fn serve_runtime_iroh_control_listener(
     Ok(accepted)
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "connection ownership, diagnostics, runtime state, framing, snapshots, compression, and timeouts are independent adapter inputs"
+)]
 async fn serve_runtime_iroh_control_connection(
     connection: iroh::endpoint::Connection,
     connection_guard: RuntimeIrohConnectionGuard,
     handle: &AsyncRuntimeSessionHandle,
     control_config: AsyncRuntimeControlConnectionConfig,
     snapshots: Option<&SnapshotRepository>,
+    compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
     idle_timeout: std::time::Duration,
 ) -> Result<u64> {
@@ -918,7 +952,8 @@ async fn serve_runtime_iroh_control_connection(
         .map_err(|error| {
             MezError::invalid_state(format!("failed to accept Iroh control stream: {error}"))
         })?;
-    let mut stream = tokio::io::join(recv, send);
+    let mut bridge =
+        IrohCompressionBridge::spawn(recv, send, compression, control_config.max_content_length)?;
     let mut connection_state = ControlConnectionState::new(false, false);
     let (event_start_tx, event_start_rx) = tokio::sync::oneshot::channel::<(ClientId, u32)>();
     let mut event_start_tx = Some(event_start_tx);
@@ -934,6 +969,7 @@ async fn serve_runtime_iroh_control_connection(
             event_handle,
             client_id,
             version,
+            compression,
             setup_timeout,
             idle_timeout,
             event_stop_rx,
@@ -957,7 +993,7 @@ async fn serve_runtime_iroh_control_connection(
     let response_sampler = sampler.clone();
     let result =
         serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush(
-            &mut stream,
+            bridge.stream_mut(),
             AuthenticatedPeer::iroh_endpoint(endpoint_id),
             handle,
             &mut connection_state,
@@ -989,9 +1025,7 @@ async fn serve_runtime_iroh_control_connection(
         event_task.abort();
         let _ = event_task.await;
     }
-    let (_recv, mut send) = stream.into_inner();
-    let _ = send.finish();
-    let _ = tokio::time::timeout(setup_timeout, send.stopped()).await;
+    let bridge_result = bridge.shutdown(setup_timeout).await;
     connection.close(
         VarInt::from_u32(u32::from(result.is_err())),
         if result.is_ok() {
@@ -1000,14 +1034,21 @@ async fn serve_runtime_iroh_control_connection(
             b"control failed"
         },
     );
-    result
+    let served = result?;
+    bridge_result?;
+    Ok(served)
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "connection ownership, client routing, framing, lifecycle, and bounded setup and idle behavior are independent event adapter inputs"
+)]
 async fn serve_runtime_iroh_event_stream(
     connection: iroh::endpoint::Connection,
     handle: AsyncRuntimeSessionHandle,
     caller_client_id: ClientId,
     version: u32,
+    compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
     idle_timeout: std::time::Duration,
     mut stop: tokio::sync::watch::Receiver<bool>,
@@ -1085,7 +1126,8 @@ async fn serve_runtime_iroh_event_stream(
         for wakeup in pending.drain(..) {
             for event in wakeup.events {
                 let frame = encode_control_body(&encode_event_notification(&event));
-                tokio::time::timeout(idle_timeout, send.write_all(&frame))
+                let frame = compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?;
+                tokio::time::timeout(idle_timeout, send.write_all(frame.as_bytes()))
                     .await
                     .map_err(|_| MezError::invalid_state("Iroh event stream write timed out"))?
                     .map_err(|_| MezError::invalid_state("Iroh event stream write failed"))?;

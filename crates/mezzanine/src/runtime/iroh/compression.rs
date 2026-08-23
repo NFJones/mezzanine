@@ -13,7 +13,12 @@
     reason = "the framing foundation is consumed by the dependent Iroh runtime integration task"
 )]
 
+use futures_util::StreamExt;
+use tokio::io::{AsyncWriteExt, DuplexStream};
+use tokio_util::codec::FramedRead;
+
 use crate::error::{MezError, Result};
+use crate::protocol::framing::{ProtocolFrameCodec, decode_frame, encode_frame};
 
 use super::RuntimeIrohCompressionCodec;
 
@@ -130,6 +135,16 @@ impl IrohCompressionPolicy {
     /// Returns ALPNs for configured codecs in exact preference order.
     pub(crate) fn ordered_alpns(codecs: &[RuntimeIrohCompressionCodec]) -> Vec<Vec<u8>> {
         codecs.iter().map(|codec| codec.alpn().to_vec()).collect()
+    }
+
+    /// Returns the fixed number of bytes required to inspect one v2 header.
+    pub(crate) const fn envelope_header_length() -> usize {
+        ENVELOPE_HEADER_LENGTH
+    }
+
+    /// Returns the immutable codec selected for this connection.
+    pub(crate) const fn codec(self) -> RuntimeIrohCompressionCodec {
+        self.codec
     }
 
     /// Encodes one complete existing frame according to the negotiated codec.
@@ -328,6 +343,147 @@ impl IrohCompressionPolicy {
             encoded_length,
             decoded_length,
         })
+    }
+}
+
+/// Iroh-only bridge between raw Mezzanine frames and negotiated wire frames.
+///
+/// Existing control and attach code continues to read and write the unchanged
+/// content-length frame stream through `stream_mut`. The bridge owns the Iroh
+/// stream pair and translates each complete frame independently. Its first
+/// outbound frame is always identity-only so initialization credentials and
+/// initialization responses cannot be compressed.
+pub(crate) struct IrohCompressionBridge {
+    stream: DuplexStream,
+    task: tokio::task::JoinHandle<Result<()>>,
+}
+
+impl IrohCompressionBridge {
+    /// Starts one connection-local frame bridge over an accepted Iroh stream.
+    pub(crate) fn spawn(
+        recv: iroh::endpoint::RecvStream,
+        send: iroh::endpoint::SendStream,
+        policy: IrohCompressionPolicy,
+        max_content_length: usize,
+    ) -> Result<Self> {
+        let codec = ProtocolFrameCodec::new(max_content_length)?;
+        let (stream, bridge_stream) = tokio::io::duplex(64 * 1024);
+        let (bridge_read, bridge_write) = tokio::io::split(bridge_stream);
+        let task = tokio::spawn(async move {
+            let outbound = pump_raw_frames_to_iroh(bridge_read, send, policy, codec);
+            let inbound = pump_iroh_frames_to_raw(recv, bridge_write, policy, max_content_length);
+            tokio::try_join!(outbound, inbound)?;
+            Ok(())
+        });
+        Ok(Self { stream, task })
+    }
+
+    /// Returns the unchanged raw frame stream consumed by existing adapters.
+    pub(crate) fn stream_mut(&mut self) -> &mut DuplexStream {
+        &mut self.stream
+    }
+
+    /// Stops the local stream and waits boundedly for the bridge task.
+    pub(crate) async fn shutdown(mut self, timeout: std::time::Duration) -> Result<()> {
+        self.stream.shutdown().await?;
+        match tokio::time::timeout(timeout, &mut self.task).await {
+            Ok(joined) => joined.map_err(|error| {
+                MezError::invalid_state(format!("Iroh compression bridge task failed: {error}"))
+            })?,
+            Err(_) => {
+                self.task.abort();
+                let _ = self.task.await;
+                Err(MezError::invalid_state(
+                    "Iroh compression bridge shutdown timed out",
+                ))
+            }
+        }
+    }
+}
+
+async fn pump_raw_frames_to_iroh<R>(
+    raw: R,
+    mut send: iroh::endpoint::SendStream,
+    policy: IrohCompressionPolicy,
+    codec: ProtocolFrameCodec,
+) -> Result<()>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut framed = FramedRead::new(raw, codec);
+    let mut first_frame = true;
+    while let Some(frame) = framed.next().await {
+        let frame = encode_frame(&frame?);
+        let mode = if first_frame {
+            IrohFrameCompressionMode::IdentityOnly
+        } else {
+            IrohFrameCompressionMode::Eligible
+        };
+        let encoded = policy.encode_frame(&frame, mode)?;
+        send.write_all(encoded.as_bytes()).await.map_err(|_| {
+            MezError::invalid_state("failed to write negotiated Iroh control frame")
+        })?;
+        send.flush().await.map_err(|_| {
+            MezError::invalid_state("failed to flush negotiated Iroh control frame")
+        })?;
+        first_frame = false;
+    }
+    send.finish()
+        .map_err(|_| MezError::invalid_state("failed to finish negotiated Iroh control stream"))?;
+    Ok(())
+}
+
+async fn pump_iroh_frames_to_raw<W>(
+    recv: iroh::endpoint::RecvStream,
+    mut raw: W,
+    policy: IrohCompressionPolicy,
+    max_content_length: usize,
+) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    if policy.codec() == RuntimeIrohCompressionCodec::None {
+        let codec = ProtocolFrameCodec::new(max_content_length)?;
+        let mut framed = FramedRead::new(recv, codec);
+        while let Some(frame) = framed.next().await {
+            raw.write_all(&encode_frame(&frame?)).await?;
+            raw.flush().await?;
+        }
+        raw.shutdown().await?;
+        return Ok(());
+    }
+
+    let mut recv = recv;
+    loop {
+        let mut header = [0u8; ENVELOPE_HEADER_LENGTH];
+        match tokio::io::AsyncReadExt::read_exact(&mut recv, &mut header).await {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                raw.shutdown().await?;
+                return Ok(());
+            }
+            Err(_) => {
+                return Err(MezError::invalid_state(
+                    "failed to read negotiated Iroh frame header",
+                ));
+            }
+        }
+        let envelope_length = policy.declared_envelope_length(&header)?;
+        let mut envelope = Vec::with_capacity(envelope_length);
+        envelope.extend_from_slice(&header);
+        envelope.resize(envelope_length, 0);
+        tokio::io::AsyncReadExt::read_exact(&mut recv, &mut envelope[ENVELOPE_HEADER_LENGTH..])
+            .await
+            .map_err(|_| MezError::invalid_state("negotiated Iroh frame was truncated"))?;
+        let decoded = policy.decode_frame(&envelope)?;
+        let (_, consumed) = decode_frame(&decoded, max_content_length)?;
+        if consumed != decoded.len() {
+            return Err(MezError::invalid_args(
+                "negotiated Iroh envelope must contain exactly one control frame",
+            ));
+        }
+        raw.write_all(&decoded).await?;
+        raw.flush().await?;
     }
 }
 

@@ -168,19 +168,20 @@ Iroh control alongside Unix control. A configured endpoint failure is a startup
 error; Mezzanine does not silently weaken explicit enablement into Unix-only
 operation. The endpoint applies the selected lookup, relay, direct-IP, port
 mapping, proxy, and CA policies to both listening and explicit clients. It
-negotiates only `mezzanine/transport/1`, accepts one client-opened control stream
-per connection, and bounds setup, idle, connection, frame, and shutdown work.
+advertises the configured compression ALPNs in order, accepts one client-opened
+control stream per connection, and bounds setup, idle, connection, frame, and
+shutdown work.
 
 Schema v71 also defines the ordered application-layer compression policy used
 by version 2 Iroh framing. This is compression of complete Mezzanine frames,
 not an Iroh or QUIC transport feature. `zstd` maps to
 `mezzanine/transport/2/zstd`, `lz4` maps to
 `mezzanine/transport/2/lz4`, and `none` retains the unchanged
-`mezzanine/transport/1` bytes. The bounded v2 envelope and codec adapters are
-available as the protocol foundation; the current connection runtime continues
-to negotiate v1 until version 2 negotiation is integrated. Setting
-`compression_codecs = ["none"]` is the restart-required compatibility and
-rollback policy.
+`mezzanine/transport/1` bytes. Clients try configured codecs in order only
+before opening a stream; no fallback occurs after initialization data may have
+been written. The selected codec then applies to eligible control and event
+frames for that connection. Setting `compression_codecs = ["none"]` is the
+restart-required compatibility and rollback policy.
 
 Running `mez remote status` through local Unix control ensures the protected
 per-session endpoint identity exists and reports its public endpoint ID and the

@@ -9,6 +9,8 @@ use super::{
 use std::io::Write;
 use tokio::io::AsyncReadExt;
 
+use crate::runtime::{IrohCompressionPolicy, RuntimeIrohCompressionCodec};
+
 /// Carries Attached Client Input Poll state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -194,6 +196,7 @@ pub(super) fn animation_refresh_input_poll() -> AttachedClientInputPoll {
 /// Starts one bounded receiver for the negotiated Iroh event stream.
 pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
     connection: iroh::endpoint::Connection,
+    compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
 ) -> (
     tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>,
@@ -201,7 +204,8 @@ pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
 ) {
     let (sender, receiver) = tokio::sync::mpsc::channel(8);
     let task = tokio::spawn(async move {
-        let result = receive_iroh_runtime_events(connection, setup_timeout, &sender).await;
+        let result =
+            receive_iroh_runtime_events(connection, compression, setup_timeout, &sender).await;
         if let Err(error) = result {
             let _ = sender.send(Err(error)).await;
         }
@@ -211,6 +215,7 @@ pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
 
 async fn receive_iroh_runtime_events(
     connection: iroh::endpoint::Connection,
+    compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
     sender: &tokio::sync::mpsc::Sender<Result<AttachRenderAction>>,
 ) -> Result<()> {
@@ -275,19 +280,51 @@ async fn receive_iroh_runtime_events(
                 "Iroh event stream frame exceeds limit",
             ));
         }
-        let mut action = AttachRenderAction::None;
-        while let Ok((body, consumed)) =
-            decode_control_frame(pending.as_slice(), ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH)
-        {
-            if consumed == 0 {
-                break;
-            }
-            action = action.combine(strict_iroh_attach_render_action(body.as_str())?);
-            pending.drain(..consumed);
-        }
+        let action = drain_negotiated_iroh_event_frames(&mut pending, compression)?;
         if action != AttachRenderAction::None && sender.send(Ok(action)).await.is_err() {
             return Ok(());
         }
+    }
+}
+
+/// Drains complete event frames under the immutable connection-local codec.
+fn drain_negotiated_iroh_event_frames(
+    pending: &mut Vec<u8>,
+    compression: IrohCompressionPolicy,
+) -> Result<AttachRenderAction> {
+    let mut action = AttachRenderAction::None;
+    loop {
+        let (decoded, consumed) = if compression.codec() == RuntimeIrohCompressionCodec::None {
+            let Ok((body, consumed)) =
+                decode_control_frame(pending, ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH)
+            else {
+                return Ok(action);
+            };
+            action = action.combine(strict_iroh_attach_render_action(body.as_str())?);
+            pending.drain(..consumed);
+            continue;
+        } else {
+            if pending.len() < IrohCompressionPolicy::envelope_header_length() {
+                return Ok(action);
+            }
+            let envelope_length = compression.declared_envelope_length(pending)?;
+            if pending.len() < envelope_length {
+                return Ok(action);
+            }
+            (
+                compression.decode_frame(&pending[..envelope_length])?,
+                envelope_length,
+            )
+        };
+        let (body, inner_consumed) =
+            decode_control_frame(&decoded, ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH)?;
+        if inner_consumed != decoded.len() {
+            return Err(MezError::invalid_args(
+                "negotiated Iroh event envelope must contain exactly one frame",
+            ));
+        }
+        action = action.combine(strict_iroh_attach_render_action(body.as_str())?);
+        pending.drain(..consumed);
     }
 }
 
@@ -593,6 +630,13 @@ mod iroh_setup_tests {
             connected_iroh_event_pair().await;
         let (mut receiver, task) = spawn_iroh_runtime_event_receiver(
             client_connection,
+            IrohCompressionPolicy::new(
+                RuntimeIrohCompressionCodec::None,
+                1,
+                3,
+                ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+            )
+            .unwrap(),
             std::time::Duration::from_millis(50),
         );
 
@@ -622,6 +666,13 @@ mod iroh_setup_tests {
             connected_iroh_event_pair().await;
         let (mut receiver, task) = spawn_iroh_runtime_event_receiver(
             client_connection.clone(),
+            IrohCompressionPolicy::new(
+                RuntimeIrohCompressionCodec::None,
+                1,
+                3,
+                ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+            )
+            .unwrap(),
             std::time::Duration::from_secs(1),
         );
         let mut stream = server_connection.open_uni().await.unwrap();
@@ -715,6 +766,42 @@ pub(super) fn control_socket_disconnected_without_pending_response(
 #[cfg(test)]
 mod iroh_tests {
     use super::*;
+
+    /// Verifies negotiated Zstandard and LZ4 event envelopes decode to the
+    /// same strict render action while incomplete envelopes remain buffered.
+    #[test]
+    fn compressed_iroh_event_frames_decode_incrementally() {
+        let frame = encode_control_body(
+            r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed","padding":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
+        );
+        for codec in [
+            RuntimeIrohCompressionCodec::Zstd,
+            RuntimeIrohCompressionCodec::Lz4,
+        ] {
+            let compression = IrohCompressionPolicy::new(
+                codec,
+                1,
+                3,
+                ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+            )
+            .unwrap();
+            let encoded = compression
+                .encode_frame(&frame, crate::runtime::IrohFrameCompressionMode::Eligible)
+                .unwrap();
+            let split = encoded.as_bytes().len() - 1;
+            let mut pending = encoded.as_bytes()[..split].to_vec();
+            assert_eq!(
+                drain_negotiated_iroh_event_frames(&mut pending, compression).unwrap(),
+                AttachRenderAction::None
+            );
+            pending.extend_from_slice(&encoded.as_bytes()[split..]);
+            assert_eq!(
+                drain_negotiated_iroh_event_frames(&mut pending, compression).unwrap(),
+                AttachRenderAction::View
+            );
+            assert!(pending.is_empty());
+        }
+    }
 
     #[test]
     fn strict_iroh_event_frames_require_matching_event_notifications() {

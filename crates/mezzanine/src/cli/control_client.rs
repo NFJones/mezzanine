@@ -16,7 +16,8 @@ use super::{
     write_control_response,
 };
 use crate::runtime::{
-    MEZZANINE_IROH_ALPN, RuntimeIrohTransportPolicy, bind_runtime_iroh_client_endpoint,
+    IrohCompressionBridge, IrohCompressionPolicy, RuntimeIrohTransportPolicy,
+    bind_runtime_iroh_client_endpoint,
 };
 use crate::security::remote::{
     RemoteClientIdentity, RemoteClientProfile, RemoteClientProfileStore, RemoteRoleCeiling,
@@ -476,7 +477,7 @@ pub(super) struct PersistentIrohControlChannel {
     _identity: RemoteClientIdentity,
     endpoint: iroh::Endpoint,
     connection: iroh::endpoint::Connection,
-    stream: tokio::io::Join<iroh::endpoint::RecvStream, iroh::endpoint::SendStream>,
+    bridge: IrohCompressionBridge,
     event_receiver: Option<tokio::sync::mpsc::Receiver<Result<super::attach::AttachRenderAction>>>,
     event_task: tokio::task::JoinHandle<()>,
     setup_timeout: std::time::Duration,
@@ -484,10 +485,8 @@ pub(super) struct PersistentIrohControlChannel {
 
 impl PersistentIrohControlChannel {
     /// Returns the initialized byte stream used by the shared attach protocol.
-    pub(super) fn stream_mut(
-        &mut self,
-    ) -> &mut tokio::io::Join<iroh::endpoint::RecvStream, iroh::endpoint::SendStream> {
-        &mut self.stream
+    pub(super) fn stream_mut(&mut self) -> &mut tokio::io::DuplexStream {
+        self.bridge.stream_mut()
     }
 
     /// Takes the negotiated event receiver exactly once for the attach loop.
@@ -505,14 +504,12 @@ impl PersistentIrohControlChannel {
             _identity,
             endpoint,
             connection,
-            stream,
+            bridge,
             event_receiver: _,
             mut event_task,
             setup_timeout,
         } = self;
-        let (_recv, mut send) = stream.into_inner();
-        let _ = send.finish();
-        let _ = tokio::time::timeout(setup_timeout, send.stopped()).await;
+        let _ = bridge.shutdown(setup_timeout).await;
         connection.close(iroh::endpoint::VarInt::from_u32(0), b"attach complete");
         if tokio::time::timeout(setup_timeout, &mut event_task)
             .await
@@ -555,13 +552,8 @@ pub(super) async fn open_persistent_iroh_control_channel(
     let identity = RemoteClientIdentity::load_or_create(paths.root())?;
     let endpoint =
         bind_runtime_iroh_client_endpoint(&policy, identity.secret_key().clone()).await?;
-    let connection = tokio::time::timeout(
-        policy.setup_timeout,
-        endpoint.connect(target.server_addr().clone(), MEZZANINE_IROH_ALPN),
-    )
-    .await
-    .map_err(|_| iroh_setup_timeout_error(&policy, &target, "connection setup"))?
-    .map_err(iroh_connect_error)?;
+    let (connection, compression) =
+        connect_iroh_with_compression(&endpoint, &policy, &target).await?;
     if connection.remote_id() != target.server_addr().id {
         return Err(MezError::forbidden(
             "Iroh connection authenticated an unexpected server identity",
@@ -571,7 +563,8 @@ pub(super) async fn open_persistent_iroh_control_channel(
         .await
         .map_err(|_| MezError::invalid_state("Iroh control stream setup timed out"))?
         .map_err(|_| MezError::invalid_state("failed to open Iroh control stream"))?;
-    let mut stream = tokio::io::join(recv, send);
+    let mut bridge =
+        IrohCompressionBridge::spawn(recv, send, compression, CLI_CONTROL_MAX_CONTENT_LENGTH)?;
     let (mechanism, credential) = target.authentication();
     let initialize = serde_json::json!({
         "jsonrpc": "2.0",
@@ -601,19 +594,20 @@ pub(super) async fn open_persistent_iroh_control_channel(
     .to_string();
     tokio::time::timeout(
         policy.idle_timeout,
-        tokio::io::AsyncWriteExt::write_all(&mut stream, &encode_control_body(&initialize)),
+        tokio::io::AsyncWriteExt::write_all(bridge.stream_mut(), &encode_control_body(&initialize)),
     )
     .await
     .map_err(|_| MezError::invalid_state("Iroh attach initialization write timed out"))?
     .map_err(|_| MezError::invalid_state("Iroh attach initialization write failed"))?;
     tokio::time::timeout(
         policy.idle_timeout,
-        tokio::io::AsyncWriteExt::flush(&mut stream),
+        tokio::io::AsyncWriteExt::flush(bridge.stream_mut()),
     )
     .await
     .map_err(|_| MezError::invalid_state("Iroh attach initialization flush timed out"))?
     .map_err(|_| MezError::invalid_state("Iroh attach initialization flush failed"))?;
-    let response = read_persistent_iroh_control_frame(&mut stream, policy.idle_timeout).await?;
+    let response =
+        read_persistent_iroh_control_frame(bridge.stream_mut(), policy.idle_timeout).await?;
     let issued_credential = validate_iroh_initialize_response(&response, requested_role)?;
     if let IrohControlTarget::Invitation {
         profile_name,
@@ -637,14 +631,17 @@ pub(super) async fn open_persistent_iroh_control_channel(
     } else {
         refresh_authenticated_profile_route(paths.root(), &endpoint, &target).await?;
     }
-    let (event_receiver, event_task) =
-        super::attach::spawn_iroh_runtime_event_receiver(connection.clone(), policy.setup_timeout);
+    let (event_receiver, event_task) = super::attach::spawn_iroh_runtime_event_receiver(
+        connection.clone(),
+        compression,
+        policy.setup_timeout,
+    );
     Ok((
         PersistentIrohControlChannel {
             _identity: identity,
             endpoint,
             connection,
-            stream,
+            bridge,
             event_receiver: Some(event_receiver),
             event_task,
             setup_timeout: policy.setup_timeout,
@@ -857,6 +854,19 @@ async fn exchange_iroh_control_request_as(
 mod outbound_policy_tests {
     use super::*;
 
+    async fn v1_only_server() -> (iroh::Endpoint, EndpointAddr) {
+        let server = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(iroh::SecretKey::generate())
+            .alpns(vec![crate::runtime::MEZZANINE_IROH_ALPN.to_vec()])
+            .relay_mode(iroh::RelayMode::Disabled)
+            .clear_address_lookup()
+            .bind()
+            .await
+            .unwrap();
+        let addr = server.addr();
+        (server, addr)
+    }
+
     fn invitation_target(server_addr: EndpointAddr) -> IrohControlTarget {
         IrohControlTarget::Invitation {
             profile_name: "remote".to_string(),
@@ -865,6 +875,88 @@ mod outbound_policy_tests {
             role: RemoteRoleCeiling::Observer,
             expires_at_unix_seconds: u64::MAX,
         }
+    }
+
+    /// Verifies a new client may try compressed ALPNs and then select the
+    /// explicitly configured v1 `none` route before any stream is opened.
+    #[tokio::test(flavor = "current_thread")]
+    async fn compression_connector_falls_back_to_v1_before_stream_open() {
+        let (server, server_addr) = v1_only_server().await;
+        let target = invitation_target(server_addr);
+        let policy = RuntimeIrohTransportPolicy {
+            setup_timeout: std::time::Duration::from_secs(2),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let client = bind_runtime_iroh_client_endpoint(&policy, iroh::SecretKey::generate())
+            .await
+            .unwrap();
+        let server_task = tokio::spawn({
+            let server = server.clone();
+            async move {
+                loop {
+                    let incoming = server.accept().await.unwrap();
+                    let Ok(accepting) = incoming.accept() else {
+                        continue;
+                    };
+                    if let Ok(connection) = accepting.await {
+                        return connection;
+                    }
+                }
+            }
+        });
+
+        let (connection, compression) = connect_iroh_with_compression(&client, &policy, &target)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            compression.codec(),
+            crate::runtime::RuntimeIrohCompressionCodec::None
+        );
+        connection.close(iroh::endpoint::VarInt::from_u32(0), b"test complete");
+        let server_connection =
+            tokio::time::timeout(std::time::Duration::from_secs(2), server_task)
+                .await
+                .unwrap()
+                .unwrap();
+        server_connection.close(iroh::endpoint::VarInt::from_u32(0), b"test complete");
+        client.close().await;
+        server.close().await;
+    }
+
+    /// Verifies a client without `none` fails closed against a v1-only peer
+    /// instead of inventing an unconfigured downgrade route.
+    #[tokio::test(flavor = "current_thread")]
+    async fn compression_connector_rejects_v1_without_none() {
+        let (server, server_addr) = v1_only_server().await;
+        let target = invitation_target(server_addr);
+        let policy = RuntimeIrohTransportPolicy {
+            compression_codecs: vec![crate::runtime::RuntimeIrohCompressionCodec::Zstd],
+            setup_timeout: std::time::Duration::from_secs(2),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let client = bind_runtime_iroh_client_endpoint(&policy, iroh::SecretKey::generate())
+            .await
+            .unwrap();
+        let server_task = tokio::spawn({
+            let server = server.clone();
+            async move {
+                let incoming = server.accept().await.unwrap();
+                match incoming.accept() {
+                    Ok(accepting) => accepting.await.is_err(),
+                    Err(_) => true,
+                }
+            }
+        });
+
+        let error = connect_iroh_with_compression(&client, &policy, &target)
+            .await
+            .unwrap_err();
+
+        assert!(error.message().contains("ALPN"), "{error:?}");
+        assert!(server_task.await.unwrap());
+        client.close().await;
+        server.close().await;
     }
 
     /// Verifies an explicit direct target enables only its pinned IP route even
@@ -985,22 +1077,18 @@ async fn exchange_bound_iroh_control_request(
     params: serde_json::Value,
     endpoint: &iroh::Endpoint,
 ) -> Result<String> {
-    let connection = tokio::time::timeout(
-        policy.setup_timeout,
-        endpoint.connect(target.server_addr().clone(), MEZZANINE_IROH_ALPN),
-    )
-    .await
-    .map_err(|_| iroh_setup_timeout_error(policy, target, "connection setup"))?
-    .map_err(iroh_connect_error)?;
+    let (connection, compression) = connect_iroh_with_compression(endpoint, policy, target).await?;
     if connection.remote_id() != target.server_addr().id {
         return Err(MezError::forbidden(
             "Iroh connection authenticated an unexpected server identity",
         ));
     }
-    let (mut send, mut recv) = tokio::time::timeout(policy.setup_timeout, connection.open_bi())
+    let (send, recv) = tokio::time::timeout(policy.setup_timeout, connection.open_bi())
         .await
         .map_err(|_| MezError::invalid_state("Iroh control stream setup timed out"))?
         .map_err(|_| MezError::invalid_state("failed to open Iroh control stream"))?;
+    let mut bridge =
+        IrohCompressionBridge::spawn(recv, send, compression, CLI_CONTROL_MAX_CONTENT_LENGTH)?;
 
     let (mechanism, credential) = target.authentication();
     let client = if initialization.interactive {
@@ -1037,8 +1125,8 @@ async fn exchange_bound_iroh_control_request(
         }
     })
     .to_string();
-    write_iroh_control_frame(&mut send, &initialize, policy.idle_timeout).await?;
-    let initialize_body = read_iroh_control_frame(&mut recv, policy.idle_timeout).await?;
+    write_iroh_control_frame(bridge.stream_mut(), &initialize, policy.idle_timeout).await?;
+    let initialize_body = read_iroh_control_frame(bridge.stream_mut(), policy.idle_timeout).await?;
     let issued_credential =
         validate_iroh_initialize_response(&initialize_body, initialization.requested_role)?;
 
@@ -1072,32 +1160,39 @@ async fn exchange_bound_iroh_control_request(
         "params": params,
     })
     .to_string();
-    write_iroh_control_frame(&mut send, &request, policy.idle_timeout).await?;
-    send.finish()
+    write_iroh_control_frame(bridge.stream_mut(), &request, policy.idle_timeout).await?;
+    tokio::io::AsyncWriteExt::shutdown(bridge.stream_mut())
+        .await
         .map_err(|_| MezError::invalid_state("failed to finish Iroh control request stream"))?;
-    let body = read_iroh_control_frame(&mut recv, policy.idle_timeout).await?;
+    let body = read_iroh_control_frame(bridge.stream_mut(), policy.idle_timeout).await?;
     let trailing = tokio::time::timeout(
         policy.setup_timeout,
-        recv.read_to_end(CLI_CONTROL_MAX_CONTENT_LENGTH),
+        tokio::io::AsyncReadExt::read_to_end(
+            bridge.stream_mut(),
+            &mut Vec::with_capacity(CLI_CONTROL_MAX_CONTENT_LENGTH),
+        ),
     )
     .await
     .map_err(|_| MezError::invalid_state("Iroh final response acknowledgement timed out"))?
     .map_err(|_| MezError::invalid_state("failed to drain Iroh control response stream"))?;
-    if !trailing.is_empty() {
+    if trailing != 0 {
         return Err(MezError::invalid_state(
             "Iroh server sent unexpected data after the final control response",
         ));
     }
-    let _ = tokio::time::timeout(policy.setup_timeout, send.stopped()).await;
+    bridge.shutdown(policy.setup_timeout).await?;
     connection.close(iroh::endpoint::VarInt::from_u32(0), b"control complete");
     Ok(body)
 }
 
-async fn write_iroh_control_frame(
-    send: &mut iroh::endpoint::SendStream,
+async fn write_iroh_control_frame<S>(
+    send: &mut S,
     body: &str,
     timeout: std::time::Duration,
-) -> Result<()> {
+) -> Result<()>
+where
+    S: tokio::io::AsyncWrite + Unpin,
+{
     tokio::time::timeout(
         timeout,
         tokio::io::AsyncWriteExt::write_all(send, &encode_control_body(body)),
@@ -1107,10 +1202,10 @@ async fn write_iroh_control_frame(
     .map_err(|_| MezError::invalid_state("Iroh control write failed"))
 }
 
-async fn read_iroh_control_frame(
-    recv: &mut iroh::endpoint::RecvStream,
-    timeout: std::time::Duration,
-) -> Result<String> {
+async fn read_iroh_control_frame<S>(recv: &mut S, timeout: std::time::Duration) -> Result<String>
+where
+    S: tokio::io::AsyncRead + Unpin,
+{
     tokio::time::timeout(timeout, async {
         let mut response = Vec::new();
         let mut buffer = [0u8; 8192];
@@ -1143,6 +1238,54 @@ async fn read_iroh_control_frame(
     })
     .await
     .map_err(|_| MezError::invalid_state("Iroh control read timed out"))?
+}
+
+/// Connects with configured codec preference before any application stream is opened.
+///
+/// A failed connection or ALPN attempt may advance to the next configured
+/// codec. Once this function returns a connection, callers must not downgrade
+/// because opening a stream or writing initialization data makes the outcome
+/// potentially ambiguous.
+async fn connect_iroh_with_compression(
+    endpoint: &iroh::Endpoint,
+    policy: &RuntimeIrohTransportPolicy,
+    target: &IrohControlTarget,
+) -> Result<(iroh::endpoint::Connection, IrohCompressionPolicy)> {
+    let max_decoded_bytes = CLI_CONTROL_MAX_CONTENT_LENGTH
+        .checked_add(1024)
+        .ok_or_else(|| MezError::invalid_state("Iroh control frame limit overflow"))?;
+    let mut last_error = None;
+    let mut timed_out = false;
+    for codec in &policy.compression_codecs {
+        match tokio::time::timeout(
+            policy.setup_timeout,
+            endpoint.connect(target.server_addr().clone(), codec.alpn()),
+        )
+        .await
+        {
+            Ok(Ok(connection)) => {
+                let compression = IrohCompressionPolicy::new(
+                    *codec,
+                    policy.compression_min_bytes,
+                    policy.compression_zstd_level,
+                    max_decoded_bytes,
+                )?;
+                return Ok((connection, compression));
+            }
+            Ok(Err(error)) => last_error = Some(error),
+            Err(_) => timed_out = true,
+        }
+    }
+    if timed_out {
+        return Err(iroh_setup_timeout_error(
+            policy,
+            target,
+            "codec negotiation and connection setup",
+        ));
+    }
+    Err(last_error.map(iroh_connect_error).unwrap_or_else(|| {
+        MezError::invalid_state("Iroh compression policy contains no usable codec")
+    }))
 }
 
 fn ensure_iroh_attach_role_allowed(

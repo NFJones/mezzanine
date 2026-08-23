@@ -101,14 +101,14 @@ programmatically.
 Schema v71 adds ordered `compression_codecs`, `compression_min_bytes`, and
 `compression_zstd_level` settings. Compression is applied to complete
 Mezzanine application frames, not by Iroh or QUIC. The v2 frame foundation
-supports bounded Zstandard and LZ4 payloads plus per-frame identity fallback;
-the current connection runtime remains on the unchanged v1 `none` route until
-negotiation and stream integration are enabled in a later runtime change.
+supports bounded Zstandard and LZ4 payloads plus per-frame identity fallback.
+The runtime advertises and attempts configured codecs in order before opening
+an application stream, then keeps the selected codec fixed for control and
+event traffic until that connection closes.
 
-Do not treat configuration presence as evidence that a live connection is
-compressed. During staged integration, retain `none` in canary preference
-lists for old-peer compatibility and verify negotiation before reviewing CPU
-or bandwidth effects. Immediate rollback is:
+During staged rollout, retain `none` in canary preference lists for old-peer
+compatibility and verify negotiation before reviewing CPU or bandwidth
+effects. Immediate rollback is:
 
 ```toml
 [transport.iroh]
