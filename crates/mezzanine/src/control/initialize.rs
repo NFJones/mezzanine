@@ -7,8 +7,8 @@
 use super::{
     AuthenticationMaterial, AuthenticationMechanism, Capabilities, ClientDescriptor, GrantedRole,
     InitializeContext, InitializeParams, InitializeResult, MezError, ObserverRequestSummary,
-    RequestedRole, Result, ServerIdentity, TerminalDescriptor, granted_role_name, json_escape,
-    json_optional_string, json_string_field, reject_unknown_json_fields,
+    RequestedRole, Result, ServerIdentity, SessionIntent, TerminalDescriptor, granted_role_name,
+    json_escape, json_optional_string, json_string_field, reject_unknown_json_fields,
 };
 
 // Control initialization parsing and serialization.
@@ -136,6 +136,8 @@ pub(super) fn initialize_params_from_json(params: &str) -> Result<InitializePara
             "requested_version",
             "requested_role",
             "client_version",
+            "session_intent",
+            "idempotency_key",
             "session_target",
             "detach_primary_on_disconnect",
             "event_stream_version",
@@ -160,12 +162,28 @@ pub(super) fn initialize_params_from_json(params: &str) -> Result<InitializePara
             "control/initialize client descriptor",
         )?;
     }
+    let requested_version =
+        required_u32_member(&object, "requested_version", "control/initialize")?;
+    let session_intent = optional_string_member(&object, "session_intent", "control/initialize")?
+        .as_deref()
+        .map(parse_session_intent)
+        .transpose()?;
+    let idempotency_key = optional_string_member(&object, "idempotency_key", "control/initialize")?;
+    let session_target_json = optional_session_target_member_json(&object)?;
+    validate_host_routing_fields(
+        requested_version,
+        session_intent,
+        idempotency_key.as_deref(),
+        session_target_json.as_deref(),
+    )?;
     Ok(InitializeParams {
         client_name: required_string_member(&object, "client_name", "control/initialize")?,
-        requested_version: required_u32_member(&object, "requested_version", "control/initialize")?,
+        requested_version,
         requested_role,
         client_version: optional_string_member(&object, "client_version", "control/initialize")?,
-        session_target_json: optional_session_target_member_json(&object)?,
+        session_intent,
+        idempotency_key,
+        session_target_json,
         detach_primary_on_disconnect: optional_bool_member(
             &object,
             "detach_primary_on_disconnect",
@@ -187,6 +205,91 @@ pub(super) fn initialize_params_from_json(params: &str) -> Result<InitializePara
         .map(authentication_from_json)
         .transpose()?,
     })
+}
+
+/// Parses one protocol-v3 host-routing intent.
+fn parse_session_intent(value: &str) -> Result<SessionIntent> {
+    match value {
+        "create" => Ok(SessionIntent::Create),
+        "attach" => Ok(SessionIntent::Attach),
+        "default" => Ok(SessionIntent::Default),
+        "host_only" => Ok(SessionIntent::HostOnly),
+        _ => Err(MezError::invalid_args(
+            "control/initialize session_intent must be create, attach, default, or host_only",
+        )),
+    }
+}
+
+/// Validates protocol-version and cross-field invariants before host routing.
+fn validate_host_routing_fields(
+    requested_version: u32,
+    session_intent: Option<SessionIntent>,
+    idempotency_key: Option<&str>,
+    session_target_json: Option<&str>,
+) -> Result<()> {
+    if requested_version != 3 {
+        if session_intent.is_some() || idempotency_key.is_some() {
+            return Err(MezError::invalid_args(
+                "session_intent requires control protocol version 3",
+            ));
+        }
+        return Ok(());
+    }
+
+    let session_intent = session_intent.ok_or_else(|| {
+        MezError::invalid_args("control protocol version 3 requires session_intent")
+    })?;
+    match session_intent {
+        SessionIntent::Create => {
+            if session_target_json.is_some() {
+                return Err(MezError::invalid_args(
+                    "create intent must omit session_target",
+                ));
+            }
+            if idempotency_key.is_none() {
+                return Err(MezError::invalid_args(
+                    "create intent requires idempotency_key",
+                ));
+            }
+        }
+        SessionIntent::Attach => {
+            if session_target_json.is_none() {
+                return Err(MezError::invalid_args(
+                    "attach intent requires session_target",
+                ));
+            }
+            if idempotency_key.is_some() {
+                return Err(MezError::invalid_args(
+                    "attach intent must omit idempotency_key",
+                ));
+            }
+        }
+        SessionIntent::Default => {
+            if session_target_json.is_some() {
+                return Err(MezError::invalid_args(
+                    "default intent must omit session_target",
+                ));
+            }
+            if idempotency_key.is_some() {
+                return Err(MezError::invalid_args(
+                    "default intent must omit idempotency_key",
+                ));
+            }
+        }
+        SessionIntent::HostOnly => {
+            if session_target_json.is_some() {
+                return Err(MezError::invalid_args(
+                    "host_only intent must omit session_target",
+                ));
+            }
+            if idempotency_key.is_some() {
+                return Err(MezError::invalid_args(
+                    "host_only intent must omit idempotency_key",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Runs the optional session target member json operation for this subsystem.

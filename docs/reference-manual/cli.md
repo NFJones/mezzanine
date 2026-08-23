@@ -132,6 +132,55 @@ client may try the next configured codec only before opening a stream. There is
 no hidden downgrade when `none` is absent, and
 `compression_codecs = ["none"]` is the restart-required rollback setting.
 
+### Persistent-host command contract
+
+Configuration schema 73 reserves a persistent-host mode above the existing
+per-session runtime. Until that mode is implemented and enabled, the current
+session-bound commands and `mezctl/2` behavior described above remain
+authoritative; a direct session endpoint does not interpret an omitted target
+as session creation.
+
+The persistent-host command surface is:
+
+```text
+mez host serve
+mez host status
+mez host stop [--timeout SECONDS]
+mez host reconcile
+
+mez lease list
+mez lease show <lease>
+mez lease checkpoint <lease>
+mez lease recover <lease>
+mez lease release <lease> [--terminate]
+mez lease revoke <lease> [--reason TEXT] [--terminate]
+mez lease gc [--older-than DURATION] [--dry-run]
+```
+
+In that mode, bare local `mez` uses the protected local host, attaches to an
+eligible session, or immediately creates and attaches when none is eligible.
+`mez new [--name NAME]` always creates. Local commands do not require Iroh or
+pairing. `mez serve` remains the foreground single-session compatibility path;
+`mez host serve` is the sshd-like foreground service for a service manager.
+
+An Iroh profile in persistent-host mode identifies one stable host rather than
+one session. The remote forms are:
+
+```text
+mez --iroh-profile HOST attach
+mez --iroh-profile HOST attach <session-id|name>
+mez --iroh-profile HOST attach --default
+mez --iroh-profile HOST new [--name NAME]
+mez --iroh-profile HOST list
+mez --iroh-profile HOST kill <session-id|name> --force
+```
+
+Omitted-target `attach` and `new` explicitly request idempotent creation. An
+explicit target attaches only an authorized existing lease; `--default`
+selects an existing default and never creates. Pairing and profile checks are
+host-only operations and cannot create or attach a session. Lease release,
+lease revocation, runtime kill, and client-trust revocation remain distinct.
+
 Interactive remote attach requires a terminal and keeps one initialized Iroh
 control stream open for its lifetime. A `primary` profile may attach as primary
 or request observer access; an `observer` profile cannot attach as primary.

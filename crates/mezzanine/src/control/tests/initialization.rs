@@ -147,6 +147,86 @@ fn control_initialize_validates_client_version_and_session_target_fields() {
     assert!(conflicting_target.contains("SessionTarget must use exactly one"));
 }
 
+/// Host-routed v3 initialization must represent creation, explicit attachment,
+/// default-existing selection, and host-only access as distinct typed intents.
+#[test]
+fn control_initialize_parses_host_routing_intents() {
+    let create = initialize_params_from_json(
+        r#"{"client_name":"remote","requested_version":3,"requested_role":"primary","session_intent":"create","idempotency_key":"create-1","client":{"name":"remote","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}"#,
+    )
+    .unwrap();
+    assert_eq!(create.session_intent, Some(SessionIntent::Create));
+    assert_eq!(create.session_target_json, None);
+    assert_eq!(create.idempotency_key.as_deref(), Some("create-1"));
+
+    let attach = initialize_params_from_json(
+        r#"{"client_name":"remote","requested_version":3,"requested_role":"observer","session_intent":"attach","session_target":{"session_id":"$9"}}"#,
+    )
+    .unwrap();
+    assert_eq!(attach.session_intent, Some(SessionIntent::Attach));
+    assert_eq!(
+        attach.session_target_json.as_deref(),
+        Some(r#"{"session_id":"$9"}"#)
+    );
+    assert_eq!(attach.idempotency_key, None);
+
+    let default_existing = initialize_params_from_json(
+        r#"{"client_name":"remote","requested_version":3,"requested_role":"observer","session_intent":"default"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        default_existing.session_intent,
+        Some(SessionIntent::Default)
+    );
+    assert_eq!(default_existing.session_target_json, None);
+
+    let host_only = initialize_params_from_json(
+        r#"{"client_name":"profile-check","requested_version":3,"requested_role":"observer","session_intent":"host_only"}"#,
+    )
+    .unwrap();
+    assert_eq!(host_only.session_intent, Some(SessionIntent::HostOnly));
+    assert_eq!(host_only.session_target_json, None);
+}
+
+/// V3 intent validation must reject ambiguous creation, attachment, default,
+/// and host-only requests before a host router allocates lease or runtime state.
+#[test]
+fn control_initialize_rejects_invalid_host_routing_intent_combinations() {
+    for (params, expected) in [
+        (
+            r#"{"client_name":"remote","requested_version":3,"requested_role":"primary","session_intent":"create"}"#,
+            "create intent requires idempotency_key",
+        ),
+        (
+            r#"{"client_name":"remote","requested_version":3,"requested_role":"primary","session_intent":"create","idempotency_key":"create-1","session_target":{"name":"existing"}}"#,
+            "create intent must omit session_target",
+        ),
+        (
+            r#"{"client_name":"remote","requested_version":3,"requested_role":"observer","session_intent":"attach"}"#,
+            "attach intent requires session_target",
+        ),
+        (
+            r#"{"client_name":"remote","requested_version":3,"requested_role":"observer","session_intent":"default","session_target":{"default":true}}"#,
+            "default intent must omit session_target",
+        ),
+        (
+            r#"{"client_name":"profile-check","requested_version":3,"requested_role":"observer","session_intent":"host_only","session_target":{"name":"existing"}}"#,
+            "host_only intent must omit session_target",
+        ),
+        (
+            r#"{"client_name":"remote","requested_version":3,"requested_role":"observer"}"#,
+            "version 3 requires session_intent",
+        ),
+        (
+            r#"{"client_name":"local","requested_version":2,"requested_role":"observer","session_intent":"host_only"}"#,
+            "session_intent requires control protocol version 3",
+        ),
+    ] {
+        let error = initialize_params_from_json(params).unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+}
+
 /// Rich client descriptors are part of the public handshake schema, so the
 /// parser must accept and validate each named optional descriptor field instead
 /// of forcing clients to hide conforming metadata under `extensions`.

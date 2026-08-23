@@ -49,6 +49,23 @@ pub enum RequestedRole {
     Automation,
 }
 
+/// Selects the host-level routing operation performed during initialization.
+///
+/// Protocol version 3 uses this value before a connection is bound to one
+/// session actor. Protocol version 2 remains directly session-bound and does
+/// not carry an intent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionIntent {
+    /// Creates one new lease-backed session and attaches to it.
+    Create,
+    /// Attaches to the existing session selected by `session_target`.
+    Attach,
+    /// Attaches to an existing session selected by host default policy.
+    Default,
+    /// Initializes only the host control surface without selecting a session.
+    HostOnly,
+}
+
 /// Carries Granted Role state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -348,6 +365,10 @@ pub struct InitializeParams {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub client_version: Option<String>,
+    /// Stores the protocol-v3 host routing intent, when present.
+    pub session_intent: Option<SessionIntent>,
+    /// Stores the durable idempotency key used by a create intent.
+    pub idempotency_key: Option<String>,
     /// Stores the session target json value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

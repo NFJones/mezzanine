@@ -137,6 +137,37 @@ the first request is `control/initialize`.
 {"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"example-ui","client_version":"1.0.0","requested_version":1,"requested_role":"primary","client":{"name":"example-ui","terminal":{"columns":120,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}
 ```
 
+The implemented direct-session endpoint accepts `mezctl/2`. The reserved
+`mezctl/3` persistent-host front door adds an explicit `session_intent` before
+any connection is bound to a session:
+
+| Intent | Target and idempotency contract |
+| --- | --- |
+| `create` | Omit `session_target`; require a non-empty client-generated `idempotency_key`. |
+| `attach` | Require exactly one `session_target`; omit `idempotency_key`. |
+| `default` | Omit both fields and select an existing attachable default; never create. |
+| `host_only` | Omit both fields and expose only authorized host methods; never resolve or create a session. |
+
+Every v3 initialize request includes one intent. V2 requests omit the v3
+fields, and a direct session endpoint rejects v3 until host routing is enabled.
+The host authenticates and authorizes the paired device before target lookup,
+lease reservation, runtime allocation, or session disclosure. After routing,
+the connection is permanently bound to one session actor and later targets
+must continue to match it.
+
+Create idempotency is scoped to the authenticated host principal and normalized
+creation inputs. Replaying the same key returns the committed lease/session;
+reusing it with different inputs is a conflict. Pairing, invitation redemption,
+profile checks, and host administration use `host_only`, so those operations
+cannot accidentally provision a session.
+
+The reserved host RPC catalog is `host/get`, `host/shutdown`,
+`host/reconcile`, `host/session/list`, `host/session/create`, and
+`host/session/resolve`. The lease catalog is `lease/list`, `lease/get`,
+`lease/checkpoint`, `lease/recover`, `lease/release`, `lease/revoke`, and
+`lease/gc`. Local Unix administration is authoritative by default; remote
+attach/create authority never implies lease administration.
+
 The result contains `selected_version`, a secret-free `server` identity, the
 granted role, negotiated `capabilities`, `approval_pending`, and
 `observer_request`; it includes `session` except for a pending observer.

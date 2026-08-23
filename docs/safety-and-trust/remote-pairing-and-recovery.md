@@ -120,6 +120,23 @@ Iroh CLI surface supports `attach`, `kill`, and `detach`. For example, use `mez
 observer access. An observer-limited invitation or profile cannot attach as
 primary.
 
+Configuration schema 73 reserves a persistent-host mode in which pairing and
+trust move from one session to one stable host. Pairing remains mandatory once
+per client device, but invitation redemption and profile checks use a
+host-only initialization intent and cannot create, select, or attach a
+session. After pairing, authorized create and attach operations do not repeat
+the pairing flow. A host endpoint ID remains transport evidence only; the
+host-scoped trust record carries role and session capabilities, quotas, and
+revocation state.
+
+In persistent-host mode, a profile names the host. Omitted-target `attach` and
+`new` request idempotent lease-backed creation, an explicit target attaches an
+authorized existing lease, and `attach --default` selects an existing default
+without creating. Runtime kill, lease release, lease revocation, and device
+trust revocation are separate operations. The currently implemented
+session-bound profile and `mezctl/2` behavior remains authoritative until the
+host front door is implemented and enabled.
+
 Setup timeout errors name the failed stage and deadline, summarize pinned
 direct/relay route counts, and state when no Mezzanine authentication occurred.
 This diagnostic is safe to share because it omits route addresses, tokens,

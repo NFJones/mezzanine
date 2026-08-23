@@ -147,7 +147,7 @@ pub use types::{
     AuthenticationMaterial, AuthenticationMechanism, CONTROL_CONTENT_TYPE, Capabilities,
     ClientDescriptor, ClientStdioDescriptor, GrantedRole, InitializeContext, InitializeParams,
     InitializeResult, MAX_EVENT_REPLAY_RETENTION, ObserverRequestSummary, PaneCaptureSource,
-    RequestedRole, ServerIdentity, TerminalDescriptor,
+    RequestedRole, ServerIdentity, SessionIntent, TerminalDescriptor,
 };
 
 use authz::require_idempotency_key;

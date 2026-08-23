@@ -270,6 +270,89 @@ graph and boundary checks.
 
 Mezzanine MUST support resumable sessions.
 
+### 5.1 Persistent Host and Session Supervision
+
+Mezzanine MUST support a persistent host mode that owns session discovery,
+creation, routing, and recovery above the existing per-session runtime. The
+architecture MUST preserve three distinct boundaries:
+
+1. Each live session owns exactly one session service and actor. Mutable pane,
+   window, client, terminal, agent, and presentation state remains isolated in
+   that actor.
+2. A session supervisor creates, indexes, observes, and stops multiple
+   independent session runtimes. Failure of one runtime MUST NOT terminate the
+   host or disclose state to another runtime.
+3. A persistent host owns the local control front door, stable remote endpoint,
+   host trust, routing policy, durable leases, and restart reconciliation. The
+   host MUST route a connection to at most one session actor and MUST NOT
+   reimplement session-bound methods.
+
+Bare local `mez` MUST contact the protected local host when persistent host mode
+is active. It MUST attach to the first eligible live session that accepts a
+primary, using deterministic host policy, or create and attach a new session
+immediately when none is eligible. `mez new` MUST always create a new session.
+An explicit local attach target MUST resolve an existing live or recoverable
+session and MUST NOT silently create one. If the host is absent, an ordinary
+local command MAY start it once under an exclusive process lock, MUST wait for
+a bounded readiness result, and MUST prevent concurrent callers from creating
+multiple hosts or accidental duplicate sessions. Local use MUST NOT require
+Iroh pairing or a remote lease.
+
+`mez serve` MUST remain a foreground, single-session compatibility command.
+The persistent foreground service command is `mez host serve`; it is the form
+intended for launchd, systemd, or another service manager. Host startup,
+readiness, draining, shutdown, stale-socket recovery, and reconciliation MUST
+remain bounded and MUST use portable host abstractions on Linux and macOS.
+
+### 5.2 Durable Remote Session Leases
+
+A remote session assignment MUST be represented by a durable
+`RemoteSessionLease`, distinct from a client profile, host trust record,
+endpoint-use lock, snapshot, and live socket registry record. A lease MUST have
+stable lease and session identities, an owning trust principal, explicit
+sharing policy, lifecycle state, timestamps, boot generation, optional name and
+default metadata, idempotent creation result, and an optional versioned
+checkpoint reference. Credentials and credential verifiers MUST NOT be stored
+in a lease.
+
+Lease states are `pending`, `active`, `recoverable`, `released`, `revoked`, and
+`failed`. Implementations MUST enforce these transitions:
+
+- creation reserves `pending` before allocating a runtime and commits `active`
+  only after that runtime is ready;
+- interruption or host restart MAY move `pending` to `failed` or a documented
+  retryable state, and MUST move a formerly `active` lease to `recoverable`
+  before accepting ordinary routing;
+- successful reconstruction moves `recoverable` to `active` using a fresh
+  runtime and a validated checkpoint;
+- `release` removes future reservation after any required live-runtime action,
+  while `revoke` permanently denies future attachment and recovery;
+- `released`, `revoked`, and `failed` records MAY become garbage-collection
+  candidates under explicit retention policy, but active or recoverable
+  authority MUST NOT be collected.
+
+Killing a session runtime, releasing a lease, revoking a lease, and revoking a
+client trust record are separate operations. Killing stops current processes
+without deleting the durable reservation. Releasing removes that reservation.
+Revoking a lease blocks only that lease. Revoking client trust blocks that
+device according to host policy across all leases and MUST NOT silently change
+lease ownership.
+
+The host MUST persist and advance a boot generation before restart
+reconciliation. Every runtime callback that mutates lease state MUST be fenced
+by lease and boot generation so a stale actor cannot modify a recovered lease.
+A host restart does not preserve its actor-owned PTYs or child processes.
+Recovery means durable assignment plus reconstruction into fresh processes from
+a compatible, integrity-checked checkpoint; user-visible documentation and
+status MUST NOT claim transparent process or PTY continuity.
+
+Remote creation MUST require a client-generated idempotency key scoped to the
+authenticated host principal and normalized creation request. A replay of the
+same key and request MUST return the original lease/session result. Reusing the
+key with different normalized inputs MUST fail with `conflict`. Failed creation
+MUST compensate or retain an administratively visible terminal state; it MUST
+NOT orphan a live runtime or usable authority.
+
 Every live session registered for discovery MUST have a stable session identity
 that is unique among concurrently registered live sessions.
 
@@ -2891,6 +2974,7 @@ MUST be treated as the project root.
 The top-level configuration object MUST support the following keys:
 
 - `version`
+- `host`
 - `runtime`
 - `transport`
 - `terminal`
@@ -2915,10 +2999,21 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 67 is the current configuration schema version for this
+schema version 72 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
+
+Persistent host support reserves schema version 73. The `72 -> 73` migration
+MUST add disabled-by-default host policy and lease-retention defaults, MUST
+preserve a disabled Iroh listener, and MUST NOT silently convert per-session
+endpoint key material or broaden any trust record. The migrated declaration
+MAY select host-scoped Iroh identity as a configuration mode, but missing or
+incompatible identity and profile material MUST produce an actionable migration
+or pairing requirement. Upgrade MUST remain local-only until the user opts in
+or runs `mez host serve`. A binary that does not understand schema 73 MUST fail
+closed rather than partially loading it; rollback requires restoring the schema
+72 configuration and any separately backed-up profile/state material.
 
 When a primary user configuration file declares an older supported schema
 version, Mezzanine MUST migrate that primary file on launch before validating or
@@ -7692,6 +7787,83 @@ mixed attachment mode: the server MUST accept `requested_version = 2` and MUST
 reject `requested_version = 1` with `-32003` and `mezzanine_code =
 "unsupported_version"`. The removed `mezctl/1` contract remains documented
 only as migration history and MUST NOT be advertised or accepted.
+
+Persistent host routing uses Mezzanine Control Protocol version 3,
+`mezctl/3`, at the host front door. A direct per-session endpoint MUST retain
+the version-2 contract during migration and MUST NOT interpret absent v3 fields
+as a request to create a session. A host front door MUST accept version 3 only
+after host routing is enabled and MUST reject it as `unsupported_version`
+otherwise. After a v3 connection is routed, its selected session actor MUST
+continue to enforce the version-2 session, client, and event-isolation
+invariants.
+
+Version 3 adds `session_intent` and `idempotency_key` to
+`control/initialize`. `session_intent` MUST be exactly one of:
+
+- `create`: `session_target` MUST be omitted and `idempotency_key` MUST be a
+  non-empty client-generated value. The host creates one authorized,
+  lease-backed session or returns the previously committed result for the same
+  principal, key, and normalized inputs.
+- `attach`: `session_target` MUST select one existing session or lease and
+  `idempotency_key` MUST be omitted. Missing, ambiguous, unauthorized,
+  released, or revoked targets MUST NOT cause creation.
+- `default`: `session_target` and `idempotency_key` MUST be omitted. The host
+  selects an existing attachable default under deterministic policy and MUST
+  return `not_found` when none exists.
+- `host_only`: `session_target` and `idempotency_key` MUST be omitted. No lease
+  or session may be resolved, created, or attached, and only advertised
+  host-scoped methods may follow.
+
+Every v3 initialize request MUST include `session_intent`; version-2 requests
+MUST omit both v3 fields. Remote interactive CLI commands MUST derive and send
+an explicit intent before serialization: omitted-target `attach` and `new`
+send `create`, explicit-target `attach` sends `attach`, `attach --default`
+sends `default`, and invitation redemption, profile checks, and host
+administration send `host_only`. Pairing or checking a profile MUST NOT create,
+select, or attach a session as a side effect.
+
+The host MUST authenticate the remote transport peer and resolve host trust
+before target lookup, lease reservation, runtime allocation, or session
+disclosure. Pairing is mandatory once per client device at host scope; a host
+endpoint ID alone grants no application authority. Host trust MUST express a
+maximum attach role, session-creation permission, session-list permission,
+attach scope (`own`, `shared`, or `all`), active-lease limit, concurrent-live
+session limit, and optional lease-lifetime ceiling. Global host limits,
+initialization deadlines, request-size limits, connection limits, and
+principal rate limits MUST also be checked before allocation. Remote lease
+administration requires a distinct capability and MUST NOT be implied by
+attach or create authority.
+
+The v3 host front door MUST process framing and size validation, transport
+identity, device or invitation authentication, authorization and quota checks,
+target resolution or transactional creation, and selected-actor
+initialization in that order. Once initialization succeeds, the connection is
+permanently bound to exactly one session actor. Later requests MUST NOT switch
+sessions, and any method-level session target MUST still match that bound
+session. The initialize result MUST add a secret-free `host` summary and MUST
+include `lease` and `session` summaries when session-bound. A `host_only`
+result MUST set both `lease` and `session` to null.
+
+The persistent-host CLI contract is:
+
+- `mez host serve`, `mez host status`, `mez host stop [--timeout SECONDS]`,
+  and `mez host reconcile` for local host lifecycle;
+- bare `mez`, `mez new [--name NAME]`, `mez list [--all]`, and explicit
+  `mez attach|kill TARGET` session operations;
+- `mez --iroh-profile HOST attach [TARGET|--default]`, `new [--name NAME]`,
+  `list`, and `kill TARGET --force` for host-profile remote operations; and
+- `mez lease list|show|checkpoint|recover|release|revoke|gc` for local durable
+  lease administration.
+
+The host-scoped JSON-RPC catalog MUST include `host/get`, `host/shutdown`,
+`host/reconcile`, `host/session/list`, `host/session/create`, and
+`host/session/resolve`. The lease catalog MUST include `lease/list`,
+`lease/get`, `lease/checkpoint`, `lease/recover`, `lease/release`,
+`lease/revoke`, and `lease/gc`. Local Unix administration is authoritative by
+default. Results and errors MUST be structured and secret-free, MUST not reveal
+unauthorized session existence, and MUST distinguish authentication,
+authorization, quota, conflict, not-found, lifecycle, recovery, timeout,
+rate-limit, and internal failures.
 
 Every successful v2 primary initialization MUST allocate and return a fresh
 exact `ClientState`; display-name equality MUST NOT reuse a live or detached

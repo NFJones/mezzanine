@@ -10,6 +10,7 @@ mod presentation_controls;
 
 use self::json_rpc_fixture::JsonRpcRequestBuilder;
 use self::temp_dir::TestTempDir;
+use super::SessionIntent;
 use super::registry::control_method_spec;
 use super::types::PRIMARY_CONTROL_METHODS;
 use super::{
@@ -28,7 +29,7 @@ use super::{
     dispatch_control_request_with_captures, dispatch_control_request_with_mcp,
     dispatch_control_request_with_snapshots, dispatch_project_trust_request, encode_control_body,
     handle_control_frame, handle_control_frames, handle_control_frames_for_connection, initialize,
-    initialize_result_json, json_escape, parse_json_rpc_request,
+    initialize_params_from_json, initialize_result_json, json_escape, parse_json_rpc_request,
 };
 use crate::host::shell::{ResolvedShell, ShellSource};
 use crate::protocol::event::{EventKind, EventLog, EventVisibility};
@@ -68,6 +69,8 @@ fn primary_params() -> InitializeParams {
         requested_version: 2,
         requested_role: RequestedRole::Primary,
         client_version: None,
+        session_intent: None,
+        idempotency_key: None,
         session_target_json: None,
         detach_primary_on_disconnect: false,
         event_stream_version: None,
