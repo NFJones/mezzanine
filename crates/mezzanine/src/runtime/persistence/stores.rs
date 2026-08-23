@@ -24,6 +24,11 @@ impl RuntimePersistenceComponent {
         self.audit_log = Some(audit_log);
     }
 
+    /// Replaces audit ownership after a staged control transaction.
+    pub(crate) fn replace_audit_log(&mut self, audit_log: Option<AuditLog>) {
+        self.audit_log = audit_log;
+    }
+
     /// Removes the attached security audit writer.
     pub(crate) fn clear_audit_log(&mut self) {
         self.audit_log = None;

@@ -145,6 +145,11 @@ impl RuntimeControlComponent {
         self.event_log.as_mut()
     }
 
+    /// Replaces the lifecycle event log after a staged control transaction.
+    pub(crate) fn replace_event_log(&mut self, event_log: Option<EventLog>) {
+        self.event_log = event_log;
+    }
+
     /// Retains runtime-owned facts observed when an approval was queued.
     pub(crate) fn insert_approval_binding(
         &mut self,

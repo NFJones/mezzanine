@@ -686,8 +686,11 @@ impl RuntimeSessionService {
 #[cfg(test)]
 mod tests {
     use crate::protocol::event::{EventAudience, EventKind};
+    use crate::security::audit::{AuditConfig, AuditLog};
     use crate::test_support::runtime::RuntimeServiceFixture;
     use mez_mux::layout::Size;
+    use mez_mux::session::{ClientRole, ClientState, ObserverDecisionState};
+    use std::path::PathBuf;
 
     #[test]
     fn authorized_event_wakeups_revalidates_observer_approval_and_revocation() {
@@ -836,5 +839,101 @@ mod tests {
                 && event.payload.contains(third_request.as_str())
                 && event.payload.contains(r#""decision":"rejected""#)
         }));
+    }
+
+    /// Verifies mandatory audit failures roll back every observer decision.
+    ///
+    /// Authority, visibility markers, client state, event retention, and the
+    /// cached retry response must agree when required audit publication fails.
+    /// Approve, reject, and revoke are exercised independently so no terminal
+    /// transition can survive behind an RPC error.
+    #[test]
+    fn observer_decision_audit_failures_leave_authority_and_events_unchanged() {
+        let mut service = RuntimeServiceFixture::new().build();
+        let primary = service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        let (approve_client, approve_request) = service.session.request_observer("approve");
+        let (reject_client, reject_request) = service.session.request_observer("reject");
+        let (revoke_client, revoke_request) = service.session.request_observer("revoke");
+        service
+            .approve_observer_with_runtime_cutoff(&primary, revoke_request.as_str())
+            .unwrap();
+        service.set_audit_log(AuditLog::new(AuditConfig {
+            enabled: false,
+            path: PathBuf::from("/tmp/unused-observer-decision-audit.jsonl"),
+            hash_chain: false,
+            required: true,
+        }));
+        let event_count_before = service.event_log().unwrap().len();
+
+        let approve = format!(
+            r#"{{"jsonrpc":"2.0","id":"approve","method":"observer/approve","params":{{"observer_request_id":"{approve_request}","idempotency_key":"audit-fail-approve"}}}}"#
+        );
+        let approve_response = service.dispatch_runtime_control_body(&approve, &primary);
+        assert!(approve_response.contains(r#""mezzanine_code":"forbidden""#));
+        assert_eq!(
+            service.dispatch_runtime_control_body(&approve, &primary),
+            approve_response
+        );
+
+        let reject = format!(
+            r#"{{"jsonrpc":"2.0","id":"reject","method":"observer/reject","params":{{"observer_request_id":"{reject_request}","reason":"denied","idempotency_key":"audit-fail-reject"}}}}"#
+        );
+        let reject_response = service.dispatch_runtime_control_body(&reject, &primary);
+        assert!(reject_response.contains(r#""mezzanine_code":"forbidden""#));
+        assert_eq!(
+            service.dispatch_runtime_control_body(&reject, &primary),
+            reject_response
+        );
+
+        let revoke = format!(
+            r#"{{"jsonrpc":"2.0","id":"revoke","method":"observer/revoke","params":{{"client_id":"{revoke_client}","reason":"done","idempotency_key":"audit-fail-revoke"}}}}"#
+        );
+        let revoke_response = service.dispatch_runtime_control_body(&revoke, &primary);
+        assert!(revoke_response.contains(r#""mezzanine_code":"forbidden""#));
+        assert_eq!(
+            service.dispatch_runtime_control_body(&revoke, &primary),
+            revoke_response
+        );
+
+        assert_eq!(service.event_log().unwrap().len(), event_count_before);
+        for request_id in [&approve_request, &reject_request] {
+            let observer = service
+                .session()
+                .observers()
+                .iter()
+                .find(|observer| observer.id == *request_id)
+                .unwrap();
+            assert_eq!(observer.state, ObserverDecisionState::Pending);
+            assert_eq!(observer.decided_at_unix_seconds, None);
+            assert_eq!(observer.decided_by_client_id, None);
+            assert_eq!(observer.visible_from_event_id, None);
+        }
+        for client_id in [&approve_client, &reject_client] {
+            let client = service
+                .session()
+                .clients()
+                .iter()
+                .find(|client| client.id == *client_id)
+                .unwrap();
+            assert_eq!(client.role, ClientRole::PendingObserver);
+            assert_eq!(client.state, ClientState::Pending);
+        }
+        let revoked_observer = service
+            .session()
+            .observers()
+            .iter()
+            .find(|observer| observer.id == revoke_request)
+            .unwrap();
+        assert_eq!(revoked_observer.state, ObserverDecisionState::Approved);
+        let revoked_client = service
+            .session()
+            .clients()
+            .iter()
+            .find(|client| client.id == revoke_client)
+            .unwrap();
+        assert_eq!(revoked_client.role, ClientRole::Observer);
+        assert_eq!(revoked_client.state, ClientState::Attached);
     }
 }

@@ -15,10 +15,10 @@ mod plan;
 mod status;
 
 use super::{
-    AuditActor, AuditRecord, CommandInvocation, CommandOutcome, ConfigMutation,
-    ConfigMutationOperation, ConfigMutationValue, CopyMode, EventAudience, EventKind,
-    HookExecutionStatus, KeyChord, KeyCode, MezError, ObserverDecisionState, PaneReadinessState,
-    PasteBuffer, PathBuf, Result, RuntimeSessionService, SearchDirection, Session, TerminalScreen,
+    CommandInvocation, CommandOutcome, ConfigMutation, ConfigMutationOperation,
+    ConfigMutationValue, CopyMode, EventAudience, EventKind, HookExecutionStatus, KeyChord,
+    KeyCode, MezError, ObserverDecisionState, PaneReadinessState, PasteBuffer, PathBuf, Result,
+    RuntimeSessionService, SearchDirection, Session, TerminalScreen,
     agent_shell_visibility_json_name, bind_key_args, binding_config_key, compose_effective_config,
     current_unix_seconds, event_type_name, execute_command, fs, json_escape, key_chord_input_bytes,
     key_chord_notation, parse_command_sequence, runtime_config_apply_event_payload,
@@ -304,21 +304,7 @@ pub(super) fn execute_runtime_live_terminal_command(
                 .or_else(|| runtime_positional_args(invocation).first().copied())
                 .ok_or_else(|| MezError::invalid_args("approve-observer requires a target"))?
                 .to_string();
-            service.approve_observer_with_runtime_cutoff(primary_client_id, &observer_id)?;
-            service.append_primary_lifecycle_event(
-                EventKind::ObserverDecided,
-                format!(
-                    r#"{{"observer_request_id":"{}","decision":"approved"}}"#,
-                    json_escape(&observer_id)
-                ),
-            )?;
-            runtime_append_observer_decision_audit(
-                service,
-                primary_client_id,
-                "observer_request",
-                &observer_id,
-                "approved",
-            )?;
+            let _ = service.apply_observer_approval_transaction(primary_client_id, observer_id)?;
             Ok(Some(CommandOutcome::Mutated {
                 command: invocation.name.clone(),
             }))
@@ -329,22 +315,10 @@ pub(super) fn execute_runtime_live_terminal_command(
                 .or_else(|| runtime_positional_args(invocation).first().copied())
                 .ok_or_else(|| MezError::invalid_args("reject-observer requires a target"))?
                 .to_string();
-            service
-                .session
-                .reject_observer_target(primary_client_id, &observer_id)?;
-            service.append_primary_lifecycle_event(
-                EventKind::ObserverDecided,
-                format!(
-                    r#"{{"observer_request_id":"{}","decision":"rejected"}}"#,
-                    json_escape(&observer_id)
-                ),
-            )?;
-            runtime_append_observer_decision_audit(
-                service,
+            let _ = service.apply_observer_rejection_transaction(
                 primary_client_id,
-                "observer_request",
-                &observer_id,
-                "rejected",
+                observer_id,
+                None,
             )?;
             Ok(Some(CommandOutcome::Mutated {
                 command: invocation.name.clone(),
@@ -356,22 +330,10 @@ pub(super) fn execute_runtime_live_terminal_command(
                 .or_else(|| runtime_positional_args(invocation).first().copied())
                 .ok_or_else(|| MezError::invalid_args("revoke-observer requires a client id"))?
                 .to_string();
-            service
-                .session
-                .revoke_observer_client(primary_client_id, &client_id)?;
-            service.append_primary_lifecycle_event(
-                EventKind::ObserverDecided,
-                format!(
-                    r#"{{"client_id":"{}","decision":"revoked"}}"#,
-                    json_escape(&client_id)
-                ),
-            )?;
-            runtime_append_observer_decision_audit(
-                service,
+            let _ = service.apply_observer_revocation_transaction(
                 primary_client_id,
-                "client",
-                &client_id,
-                "revoked",
+                client_id,
+                None,
             )?;
             Ok(Some(CommandOutcome::Mutated {
                 command: invocation.name.clone(),
@@ -815,36 +777,6 @@ pub(super) fn runtime_mark_pane_ready_positional_target(
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub(super) const TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER: &str = "terminal-command-live-override";
-
-/// Runs the runtime append observer decision audit operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_append_observer_decision_audit(
-    service: &mut RuntimeSessionService,
-    primary_client_id: &mez_core::ids::ClientId,
-    target_kind: &str,
-    target_id: &str,
-    decision: &str,
-) -> Result<()> {
-    let Some(audit_log) = service.persistence.audit_log_mut() else {
-        return Ok(());
-    };
-    let record = AuditRecord::observer_decision(
-        service.session.id.to_string(),
-        AuditActor {
-            kind: "client".to_string(),
-            id: primary_client_id.to_string(),
-        },
-        target_kind.to_string(),
-        target_id.to_string(),
-        decision.to_string(),
-        "succeeded",
-    );
-    let _ = audit_log.append(record)?;
-    Ok(())
-}
 
 /// Runs the runtime pipe pane command operation for this subsystem.
 ///

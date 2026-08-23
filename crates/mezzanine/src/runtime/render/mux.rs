@@ -249,6 +249,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub(crate) fn approve_observer_with_runtime_cutoff(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
