@@ -305,7 +305,7 @@ pub(super) fn execute_runtime_live_terminal_command(
                 .ok_or_else(|| MezError::invalid_args("approve-observer requires a target"))?
                 .to_string();
             service.approve_observer_with_runtime_cutoff(primary_client_id, &observer_id)?;
-            service.append_lifecycle_event(
+            service.append_primary_lifecycle_event(
                 EventKind::ObserverDecided,
                 format!(
                     r#"{{"observer_request_id":"{}","decision":"approved"}}"#,
@@ -332,7 +332,7 @@ pub(super) fn execute_runtime_live_terminal_command(
             service
                 .session
                 .reject_observer_target(primary_client_id, &observer_id)?;
-            service.append_lifecycle_event(
+            service.append_primary_lifecycle_event(
                 EventKind::ObserverDecided,
                 format!(
                     r#"{{"observer_request_id":"{}","decision":"rejected"}}"#,
@@ -359,7 +359,7 @@ pub(super) fn execute_runtime_live_terminal_command(
             service
                 .session
                 .revoke_observer_client(primary_client_id, &client_id)?;
-            service.append_lifecycle_event(
+            service.append_primary_lifecycle_event(
                 EventKind::ObserverDecided,
                 format!(
                     r#"{{"client_id":"{}","decision":"revoked"}}"#,

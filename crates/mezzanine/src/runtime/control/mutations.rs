@@ -546,7 +546,7 @@ impl RuntimeSessionService {
                 MezError::invalid_args("observer/approve requires observer_request_id")
             })?;
         self.approve_observer_with_runtime_cutoff(primary_client_id, &observer_id)?;
-        self.append_lifecycle_event(
+        self.append_primary_lifecycle_event(
             EventKind::ObserverDecided,
             format!(
                 r#"{{"observer_request_id":"{}","decision":"approved"}}"#,
@@ -583,7 +583,7 @@ impl RuntimeSessionService {
         let reason = runtime_json_string_field(params, "reason");
         self.session
             .reject_observer_target_with_reason(primary_client_id, &observer_id, reason)?;
-        self.append_lifecycle_event(
+        self.append_primary_lifecycle_event(
             EventKind::ObserverDecided,
             format!(
                 r#"{{"observer_request_id":"{}","decision":"rejected"}}"#,
@@ -618,7 +618,7 @@ impl RuntimeSessionService {
         let reason = runtime_json_string_field(params, "reason");
         self.session
             .revoke_observer_client_with_reason(primary_client_id, &client_id, reason)?;
-        self.append_lifecycle_event(
+        self.append_primary_lifecycle_event(
             EventKind::ObserverDecided,
             format!(
                 r#"{{"client_id":"{}","decision":"revoked"}}"#,

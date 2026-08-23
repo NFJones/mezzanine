@@ -664,7 +664,7 @@ impl RuntimeSessionService {
 
 #[cfg(test)]
 mod tests {
-    use crate::protocol::event::EventKind;
+    use crate::protocol::event::{EventAudience, EventKind};
     use crate::test_support::runtime::RuntimeServiceFixture;
     use mez_mux::layout::Size;
 
@@ -724,5 +724,96 @@ mod tests {
             .authorized_event_wakeups(&observer_client, "remote-events", 0, 8)
             .expect_err("revoked observers must stop receiving remote events");
         assert!(revoked.message().contains("detached or revoked"));
+    }
+
+    /// Verifies observer-management decisions remain visible only to primaries.
+    ///
+    /// An approved observer may receive later session-view events, but must not
+    /// learn another observer's request or client identifiers through approve,
+    /// reject, or revoke notifications emitted after its visibility marker.
+    #[test]
+    fn observer_decisions_do_not_leak_to_other_approved_observers() {
+        let mut service = RuntimeServiceFixture::new().build();
+        let primary = service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        let (first_client, first_request) = service.session.request_observer("first-observer");
+        let first_approval = service.dispatch_runtime_control_body(
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":"approve-first","method":"observer/approve","params":{{"observer_request_id":"{first_request}","idempotency_key":"approve-first"}}}}"#
+            ),
+            &primary,
+        );
+        assert!(
+            first_approval.contains(r#""state":"approved""#),
+            "{first_approval}"
+        );
+
+        let (second_client, second_request) = service.session.request_observer("second-observer");
+        let second_approval = service.dispatch_runtime_control_body(
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":"approve-second","method":"observer/approve","params":{{"observer_request_id":"{second_request}","idempotency_key":"approve-second"}}}}"#
+            ),
+            &primary,
+        );
+        assert!(
+            second_approval.contains(r#""state":"approved""#),
+            "{second_approval}"
+        );
+        let second_revocation = service.dispatch_runtime_control_body(
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":"revoke-second","method":"observer/revoke","params":{{"client_id":"{second_client}","reason":"done","idempotency_key":"revoke-second"}}}}"#
+            ),
+            &primary,
+        );
+        assert!(
+            second_revocation.contains(r#""revoked":true"#),
+            "{second_revocation}"
+        );
+
+        let (_third_client, third_request) = service.session.request_observer("third-observer");
+        let third_rejection = service.dispatch_runtime_control_body(
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":"reject-third","method":"observer/reject","params":{{"observer_request_id":"{third_request}","reason":"denied","idempotency_key":"reject-third"}}}}"#
+            ),
+            &primary,
+        );
+        assert!(
+            third_rejection.contains(r#""state":"rejected""#),
+            "{third_rejection}"
+        );
+
+        let observer_events = service
+            .authorized_event_wakeups(&first_client, "first-observer-events", 0, 64)
+            .unwrap()
+            .into_iter()
+            .flat_map(|wakeup| wakeup.events)
+            .collect::<Vec<_>>();
+        assert!(!observer_events.iter().any(|event| {
+            event.kind == EventKind::ObserverDecided
+                && (event.payload.contains(second_request.as_str())
+                    || event.payload.contains(second_client.as_str())
+                    || event.payload.contains(third_request.as_str()))
+        }));
+
+        let primary_events = service
+            .event_log()
+            .unwrap()
+            .replay_for(&EventAudience::Primary);
+        assert!(primary_events.iter().any(|event| {
+            event.kind == EventKind::ObserverDecided
+                && event.payload.contains(second_request.as_str())
+                && event.payload.contains(r#""decision":"approved""#)
+        }));
+        assert!(primary_events.iter().any(|event| {
+            event.kind == EventKind::ObserverDecided
+                && event.payload.contains(second_client.as_str())
+                && event.payload.contains(r#""decision":"revoked""#)
+        }));
+        assert!(primary_events.iter().any(|event| {
+            event.kind == EventKind::ObserverDecided
+                && event.payload.contains(third_request.as_str())
+                && event.payload.contains(r#""decision":"rejected""#)
+        }));
     }
 }
