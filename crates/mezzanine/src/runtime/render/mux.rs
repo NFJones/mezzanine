@@ -263,10 +263,11 @@ impl RuntimeSessionService {
         {
             Ok(self
                 .session
-                .approve_observer_target_with_visible_from_event_id(
+                .approve_observer_target_with_visible_from_event_id_and_source(
                     primary_client_id,
                     observer_id,
                     visible_from_event_id,
+                    primary_client_id,
                 )?)
         } else {
             Ok(self

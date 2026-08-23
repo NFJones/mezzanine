@@ -26,6 +26,7 @@ use super::{
 enum ObserverDecisionMutation {
     Approve {
         observer_id: String,
+        view_source_client_id: mez_core::ids::ClientId,
     },
     Reject {
         observer_id: String,
@@ -638,7 +639,19 @@ impl RuntimeSessionService {
             runtime_json_string_field(params, "observer_request_id").ok_or_else(|| {
                 MezError::invalid_args("observer/approve requires observer_request_id")
             })?;
-        self.apply_observer_approval_transaction(primary_client_id, observer_id)
+        let view_source_client_id = runtime_json_string_field(params, "view_source_client_id")
+            .map(|client_id| {
+                mez_core::ids::ClientId::parse('c', client_id).ok_or_else(|| {
+                    MezError::invalid_args("observer/approve view_source_client_id is invalid")
+                })
+            })
+            .transpose()?
+            .unwrap_or_else(|| primary_client_id.clone());
+        self.apply_observer_approval_transaction(
+            primary_client_id,
+            observer_id,
+            view_source_client_id,
+        )
     }
 
     /// Runs the dispatch runtime observer reject operation for this subsystem.
@@ -680,10 +693,14 @@ impl RuntimeSessionService {
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         observer_id: String,
+        view_source_client_id: mez_core::ids::ClientId,
     ) -> Result<String> {
         self.apply_observer_decision_transaction(
             primary_client_id,
-            ObserverDecisionMutation::Approve { observer_id },
+            ObserverDecisionMutation::Approve {
+                observer_id,
+                view_source_client_id,
+            },
         )
     }
 
@@ -730,18 +747,26 @@ impl RuntimeSessionService {
         let mut staged_audit_log = self.persistence.audit_log().cloned();
 
         let (event_payload, target_kind, target_id, decision, result) = match mutation {
-            ObserverDecisionMutation::Approve { observer_id } => {
+            ObserverDecisionMutation::Approve {
+                observer_id,
+                view_source_client_id,
+            } => {
                 if let Some(visible_from_event_id) = staged_event_log
                     .as_ref()
                     .map(|event_log| event_log.latest_event_id().saturating_add(1))
                 {
-                    staged_session.approve_observer_target_with_visible_from_event_id(
+                    staged_session.approve_observer_target_with_visible_from_event_id_and_source(
                         primary_client_id,
                         &observer_id,
                         visible_from_event_id,
+                        &view_source_client_id,
                     )?;
                 } else {
-                    staged_session.approve_observer_target(primary_client_id, &observer_id)?;
+                    staged_session.approve_observer_target_with_source(
+                        primary_client_id,
+                        &observer_id,
+                        &view_source_client_id,
+                    )?;
                 }
                 let result = format!(
                     r#"{{"observer":{}}}"#,
@@ -749,8 +774,9 @@ impl RuntimeSessionService {
                 );
                 (
                     format!(
-                        r#"{{"observer_request_id":"{}","decision":"approved"}}"#,
-                        json_escape(&observer_id)
+                        r#"{{"observer_request_id":"{}","decision":"approved","view_source_client_id":"{}"}}"#,
+                        json_escape(&observer_id),
+                        json_escape(view_source_client_id.as_str())
                     ),
                     "observer_request",
                     observer_id,
@@ -906,7 +932,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_terminal_view(
-        &self,
+        &mut self,
         caller_client_id: &mez_core::ids::ClientId,
         params: Option<&str>,
     ) -> Result<String> {
@@ -934,6 +960,7 @@ impl RuntimeSessionService {
                 .unwrap_or(self.session.authoritative_size),
             None => self.session.authoritative_size,
         };
+        self.prepare_client_render(caller_client_id, role)?;
         let terminal_config =
             self.terminal_client_loop_config(TerminalClientLoopConfig::default())?;
         let mut view =

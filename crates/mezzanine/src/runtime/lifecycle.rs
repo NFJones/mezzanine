@@ -7,8 +7,8 @@
 #[cfg(test)]
 use super::Path;
 use super::{
-    EventKind, EventLog, HookEvent, Result, RuntimeLifecycleState, RuntimeSessionService, Size,
-    json_escape,
+    AuditActor, AuditRecord, EventKind, EventLog, EventVisibility, HookEvent, Result,
+    RuntimeLifecycleState, RuntimeSessionService, Size, json_escape,
 };
 use crate::runtime::{
     ClientEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition, ShutdownEvent,
@@ -121,15 +121,53 @@ impl RuntimeSessionService {
         terminal_size: Size,
     ) -> Result<()> {
         self.require_live()?;
-        let terminal_resize_effects = self
-            .session
+        let mut staged_session = self.session.clone();
+        let terminal_resize_effects = staged_session
             .resize_authoritative_terminal_transition(primary_client_id, terminal_size)?;
+        let transition = staged_session.detach_primary_transition(primary_client_id)?;
+        let mut staged_event_log = self.control.event_log().cloned();
+        let mut staged_audit_log = self.persistence.audit_log().cloned();
+        for observer_client_id in &transition.revoked_observer_client_ids {
+            if let Some(event_log) = staged_event_log.as_mut() {
+                event_log.append(
+                    EventKind::ObserverDecided,
+                    Some(staged_session.id.to_string()),
+                    EventVisibility::AllPrimaries,
+                    format!(
+                        r#"{{"client_id":"{}","decision":"revoked","reason":"view source detached","view_source_client_id":"{}"}}"#,
+                        json_escape(observer_client_id.as_str()),
+                        json_escape(primary_client_id.as_str())
+                    ),
+                )?;
+            }
+            if let Some(audit_log) = staged_audit_log.as_mut() {
+                let record = AuditRecord::observer_decision(
+                    staged_session.id.to_string(),
+                    AuditActor {
+                        kind: "runtime".to_string(),
+                        id: "observer-view-source-detach".to_string(),
+                    },
+                    "client",
+                    observer_client_id.to_string(),
+                    "revoked",
+                    "succeeded",
+                );
+                let _ = audit_log.append(record)?;
+            }
+        }
+        self.session = staged_session;
+        self.control.replace_event_log(staged_event_log);
+        self.persistence.replace_audit_log(staged_audit_log);
         self.sync_pane_resize_effects(&terminal_resize_effects)?;
-        let transition = self.session.detach_primary_transition(primary_client_id)?;
         self.sync_pane_resize_effects(&transition.resize_effects)?;
         self.presentation.remove_client_state(primary_client_id);
         self.control
             .remove_unix_event_bindings_for_client(primary_client_id);
+        for observer_client_id in &transition.revoked_observer_client_ids {
+            self.presentation.remove_client_state(observer_client_id);
+            self.control
+                .remove_unix_event_bindings_for_client(observer_client_id);
+        }
         let protected_clients = self.presentation.pending_client_references();
         self.session
             .prune_detached_client_summaries(&protected_clients);

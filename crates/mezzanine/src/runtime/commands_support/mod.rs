@@ -304,7 +304,11 @@ pub(super) fn execute_runtime_live_terminal_command(
                 .or_else(|| runtime_positional_args(invocation).first().copied())
                 .ok_or_else(|| MezError::invalid_args("approve-observer requires a target"))?
                 .to_string();
-            let _ = service.apply_observer_approval_transaction(primary_client_id, observer_id)?;
+            let _ = service.apply_observer_approval_transaction(
+                primary_client_id,
+                observer_id,
+                primary_client_id.clone(),
+            )?;
             Ok(Some(CommandOutcome::Mutated {
                 command: invocation.name.clone(),
             }))

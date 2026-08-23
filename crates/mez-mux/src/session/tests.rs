@@ -673,6 +673,86 @@ fn detached_pending_observer_cannot_be_approved() {
     assert_eq!(session.updated_at_unix_seconds, updated_at);
 }
 
+/// Verifies observer approval binds one exact primary view source and source
+/// detach revokes only observers that depend on that primary.
+#[test]
+fn observer_view_source_is_exact_and_revoked_on_source_detach() {
+    let mut session = test_session();
+    let deciding_primary = session.attach_primary("decider", true).unwrap();
+    let source_primary = session.attach_primary("source", true).unwrap();
+    let (observer_client_id, observer_request_id) = session.request_observer("observer");
+
+    session
+        .approve_observer_target_with_source(
+            &deciding_primary,
+            observer_request_id.as_str(),
+            &source_primary,
+        )
+        .unwrap();
+
+    let observer = &session.observers()[0];
+    assert_eq!(observer.state, ObserverDecisionState::Approved);
+    assert_eq!(
+        observer.decided_by_client_id.as_deref(),
+        Some(deciding_primary.as_str())
+    );
+    assert_eq!(observer.view_source_client_id, Some(source_primary.clone()));
+
+    let deciding_detach = session
+        .detach_primary_transition(&deciding_primary)
+        .unwrap();
+    assert!(deciding_detach.revoked_observer_client_ids.is_empty());
+    assert_eq!(
+        session.observers()[0].state,
+        ObserverDecisionState::Approved
+    );
+
+    let source_detach = session.detach_primary_transition(&source_primary).unwrap();
+    assert_eq!(
+        source_detach.revoked_observer_client_ids,
+        vec![observer_client_id.clone()]
+    );
+    assert_eq!(session.observers()[0].state, ObserverDecisionState::Revoked);
+    assert_eq!(
+        session.observers()[0].reason.as_deref(),
+        Some("view source detached")
+    );
+    assert_eq!(
+        session
+            .clients()
+            .iter()
+            .find(|client| client.id == observer_client_id)
+            .unwrap()
+            .state,
+        ClientState::Revoked
+    );
+}
+
+/// Verifies approval rejects a detached view source without mutating the
+/// pending observer request or its event sequence.
+#[test]
+fn observer_approval_rejects_detached_view_source_without_mutation() {
+    let mut session = test_session();
+    let deciding_primary = session.attach_primary("decider", true).unwrap();
+    let detached_source = session.attach_primary("source", true).unwrap();
+    session.detach_primary(&detached_source).unwrap();
+    let (_observer_client_id, observer_request_id) = session.request_observer("observer");
+    let request_before = session.observers()[0].clone();
+    let next_event_id = session.next_event_id;
+
+    let error = session
+        .approve_observer_target_with_source(
+            &deciding_primary,
+            observer_request_id.as_str(),
+            &detached_source,
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Forbidden);
+    assert_eq!(session.observers()[0], request_before);
+    assert_eq!(session.next_event_id, next_event_id);
+}
+
 /// Verifies primary can create and select windows.
 ///
 /// This regression scenario documents the behavior being protected so a

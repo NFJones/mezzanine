@@ -162,8 +162,19 @@ impl RuntimeSessionService {
             ));
         }
         self.presentation.activate_client_state(client_id);
-        if role == ClientViewRole::Primary {
-            self.session.activate_client_navigation(client_id)?;
+        match role {
+            ClientViewRole::Primary => self.session.activate_client_navigation(client_id)?,
+            ClientViewRole::Observer => {
+                let source_client_id = self
+                    .session
+                    .observers()
+                    .iter()
+                    .find(|observer| observer.client_id == *client_id)
+                    .and_then(|observer| observer.view_source_client_id.clone())
+                    .ok_or_else(|| MezError::forbidden("observer has no attached view source"))?;
+                self.session.activate_client_navigation(&source_client_id)?;
+            }
+            ClientViewRole::PendingObserver => {}
         }
         Ok(())
     }

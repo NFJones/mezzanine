@@ -875,6 +875,107 @@ mod tests {
         assert!(revoked.message().contains("detached or revoked"));
     }
 
+    /// Verifies detaching an observer's exact primary view source revokes the
+    /// observer, invalidates unconsumed Unix event credentials, and publishes
+    /// one shared revocation notification for the remaining primaries.
+    #[test]
+    fn source_primary_detach_revokes_observer_and_event_authority() {
+        let mut service = RuntimeServiceFixture::new().build();
+        let decider = service
+            .attach_primary("decider", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        let source = service
+            .attach_primary("source", true, Size::new(100, 30).unwrap(), 121)
+            .unwrap();
+        let (observer_client, observer_request) = service.session.request_observer("observer");
+        service
+            .apply_observer_approval_transaction(
+                &decider,
+                observer_request.to_string(),
+                source.clone(),
+            )
+            .unwrap();
+        let peer_uid = 1000;
+        let (binding_token, _) = service.mint_unix_event_binding(observer_client.clone(), peer_uid);
+
+        service
+            .detach_primary(&source, Size::new(100, 30).unwrap())
+            .unwrap();
+
+        let observer = service
+            .session()
+            .observers()
+            .iter()
+            .find(|observer| observer.client_id == observer_client)
+            .unwrap();
+        assert_eq!(observer.state, ObserverDecisionState::Revoked);
+        assert_eq!(observer.reason.as_deref(), Some("view source detached"));
+        assert_eq!(observer.view_source_client_id, Some(source.clone()));
+        assert!(
+            service
+                .consume_unix_event_binding(&binding_token, peer_uid)
+                .is_err()
+        );
+        let revoked = service
+            .authorized_event_wakeups(&observer_client, "revoked-source-events", 0, 8)
+            .expect_err("source-detached observers must lose event authorization");
+        assert!(revoked.message().contains("detached or revoked"));
+        let primary_events = service
+            .event_log()
+            .unwrap()
+            .replay_for(&EventAudience::PrimaryClient(decider));
+        assert!(primary_events.iter().any(|event| {
+            event.kind == EventKind::ObserverDecided
+                && event.payload.contains(observer_client.as_str())
+                && event.payload.contains("view source detached")
+                && event.payload.contains(source.as_str())
+        }));
+    }
+
+    /// Verifies mandatory audit failure prevents source detach from committing
+    /// either primary membership or observer revocation authority.
+    #[test]
+    fn source_primary_detach_audit_failure_rolls_back_observer_revocation() {
+        let mut service = RuntimeServiceFixture::new().build();
+        let decider = service
+            .attach_primary("decider", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        let source = service
+            .attach_primary("source", true, Size::new(100, 30).unwrap(), 121)
+            .unwrap();
+        let (observer_client, observer_request) = service.session.request_observer("observer");
+        service
+            .apply_observer_approval_transaction(
+                &decider,
+                observer_request.to_string(),
+                source.clone(),
+            )
+            .unwrap();
+        service.set_audit_log(AuditLog::new(AuditConfig {
+            enabled: false,
+            path: PathBuf::from("/tmp/unused-source-detach-audit.jsonl"),
+            hash_chain: false,
+            required: true,
+        }));
+        let event_count_before = service.event_log().unwrap().len();
+
+        let error = service
+            .detach_primary(&source, Size::new(100, 30).unwrap())
+            .unwrap_err();
+
+        assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+        assert!(service.session().is_attached_primary(&source));
+        let observer = service
+            .session()
+            .observers()
+            .iter()
+            .find(|observer| observer.client_id == observer_client)
+            .unwrap();
+        assert_eq!(observer.state, ObserverDecisionState::Approved);
+        assert_eq!(observer.view_source_client_id, Some(source));
+        assert_eq!(service.event_log().unwrap().len(), event_count_before);
+    }
+
     /// Verifies observer-management decisions remain visible only to primaries.
     ///
     /// An approved observer may receive later session-view events, but must not

@@ -51,10 +51,11 @@ fn dispatches_client_and_observer_methods() {
     let inspect_response = dispatch_control_request(&inspect_request, &mut session, &primary);
     assert!(inspect_response.contains(r#""state":"pending""#));
     assert!(inspect_response.contains(&format!(r#""id":"{}""#, observer_request)));
-    assert!(inspect_response.contains(r#""version":1"#));
+    assert!(inspect_response.contains(r#""version":2"#));
     assert!(inspect_response.contains(r#""requested_at":""#));
     assert!(inspect_response.contains(r#""decided_at":null"#));
     assert!(inspect_response.contains(r#""decided_by_client_id":null"#));
+    assert!(inspect_response.contains(r#""view_source_client_id":null"#));
     assert!(inspect_response.contains(r#""visible_from_time":null"#));
     assert!(inspect_response.contains(r#""descriptor":{"name":"observer","interactive":false"#));
     assert!(inspect_response.contains(r#""reason":null"#));
@@ -68,6 +69,7 @@ fn dispatches_client_and_observer_methods() {
     assert!(approve_response.contains(r#""requested_at":""#));
     assert!(approve_response.contains(r#""decided_at":""#));
     assert!(approve_response.contains(&format!(r#""decided_by_client_id":"{}""#, primary)));
+    assert!(approve_response.contains(&format!(r#""view_source_client_id":"{}""#, primary)));
     assert!(approve_response.contains(r#""visible_from_time":""#));
     assert!(!approve_response.contains(r#""visible_from_time":"event:"#));
 

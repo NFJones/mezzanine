@@ -59,7 +59,7 @@ pub(in crate::control) fn observer_json_by_ref(
         .unwrap_or_else(|| "null".to_string());
     let visible_from_time = optional_rfc3339_timestamp_json(observer.visible_from_unix_seconds);
     format!(
-        r#"{{"id":"{}","version":1,"observer_request_id":"{}","client_id":"{}","state":"{}","requested_at":{},"decided_at":{},"decided_by_client_id":{},"visible_from_event_id":{},"visible_from_time":{},"descriptor":{{"name":"{}","interactive":{},"terminal":{}}},"reason":{}}}"#,
+        r#"{{"id":"{}","version":2,"observer_request_id":"{}","client_id":"{}","state":"{}","requested_at":{},"decided_at":{},"decided_by_client_id":{},"view_source_client_id":{},"visible_from_event_id":{},"visible_from_time":{},"descriptor":{{"name":"{}","interactive":{},"terminal":{}}},"reason":{}}}"#,
         json_escape(&observer.id.to_string()),
         json_escape(&observer.id.to_string()),
         json_escape(&observer.client_id.to_string()),
@@ -67,6 +67,12 @@ pub(in crate::control) fn observer_json_by_ref(
         optional_rfc3339_timestamp_json(observer.requested_at_unix_seconds),
         optional_rfc3339_timestamp_json(observer.decided_at_unix_seconds),
         json_optional_string(observer.decided_by_client_id.as_deref()),
+        json_optional_string(
+            observer
+                .view_source_client_id
+                .as_ref()
+                .map(|client_id| client_id.as_str()),
+        ),
         visible_from_event_id,
         visible_from_time,
         json_escape(&observer.descriptor_name),

@@ -389,6 +389,8 @@ pub struct PrimaryMembershipTransition {
     pub authoritative_size_after: Size,
     /// Pane sizes produced when the canonical terminal geometry changed.
     pub resize_effects: Vec<super::windows::PaneResizeEffect>,
+    /// Observer clients revoked because this primary was their exact view source.
+    pub revoked_observer_client_ids: Vec<ClientId>,
     /// Lifecycle edge produced by the membership count change.
     pub lifecycle_edge: PrimaryLifecycleEdge,
 }
@@ -472,6 +474,8 @@ pub struct ObserverRequest {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub decided_by_client_id: Option<String>,
+    /// Exact attached primary whose navigation and live pane content this observer follows.
+    pub view_source_client_id: Option<ClientId>,
     /// Stores the visible from event id value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

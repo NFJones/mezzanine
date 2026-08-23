@@ -23,6 +23,99 @@ fn runtime_exact_client_render_rejects_stale_identity() {
     assert!(error.to_string().contains("attached client"), "{error}");
 }
 
+/// Verifies an approved observer follows its exact source primary's
+/// caller-local navigation rather than the deciding primary or landing view.
+#[test]
+fn runtime_observer_render_follows_exact_source_navigation() {
+    let mut service = test_runtime_service();
+    let source = service
+        .attach_primary("source", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let source_window = service.session.new_window(&source, "source", true).unwrap();
+    let source_pane = service
+        .session()
+        .active_pane_for(&source)
+        .unwrap()
+        .id
+        .clone();
+    let decider = service
+        .attach_primary("decider", true, Size::new(80, 24).unwrap(), 121)
+        .unwrap();
+    let decider_window = service
+        .session()
+        .active_window_for(&decider)
+        .unwrap()
+        .id
+        .clone();
+    let landing_pane = service
+        .session()
+        .active_pane_for(&decider)
+        .unwrap()
+        .id
+        .clone();
+    assert_ne!(source_window, decider_window);
+    assert_ne!(source_pane, landing_pane);
+
+    let source_size = service
+        .session()
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes())
+        .find(|pane| pane.id == source_pane)
+        .unwrap()
+        .size;
+    let landing_size = service
+        .session()
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes())
+        .find(|pane| pane.id == landing_pane)
+        .unwrap()
+        .size;
+    let mut source_screen = TerminalScreen::new(source_size, 120).unwrap();
+    source_screen.feed(b"source-pane");
+    service.set_pane_screen(source_pane.to_string(), source_screen);
+    let mut landing_screen = TerminalScreen::new(landing_size, 120).unwrap();
+    landing_screen.feed(b"decider-pane");
+    service.set_pane_screen(landing_pane.to_string(), landing_screen);
+
+    let (observer_client, observer_request) = service.session.request_observer("observer");
+    service
+        .session
+        .approve_observer_target_with_source(&decider, observer_request.as_str(), &source)
+        .unwrap();
+    service
+        .prepare_client_render(&observer_client, ClientViewRole::Observer)
+        .unwrap();
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig {
+            window_frames_enabled: false,
+            pane_frames_enabled: false,
+            ..TerminalClientLoopConfig::default()
+        })
+        .unwrap();
+    let view = service
+        .render_client_view_for_client_with_resolved_config(
+            &observer_client,
+            ClientViewRole::Observer,
+            Size::new(80, 24).unwrap(),
+            &config,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(view.role, ClientViewRole::Observer);
+    assert_eq!(service.session().active_window().unwrap().id, source_window);
+    assert_ne!(
+        service.session().active_window().unwrap().id,
+        decider_window
+    );
+    assert_eq!(
+        service.session().observers()[0].view_source_client_id,
+        Some(source)
+    );
+}
+
 /// Verifies primary and observer frames render the visibility-selected screen
 /// without allowing hidden process application modes to affect agent input.
 #[test]

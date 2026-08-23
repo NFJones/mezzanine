@@ -275,7 +275,11 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
     ControlMethodSpec {
         method: "observer/approve",
         dispatch: ControlDispatchKind::ObserverApprove,
-        params_schema: ControlParamsSchema::Allowed(&["observer_request_id", "idempotency_key"]),
+        params_schema: ControlParamsSchema::Allowed(&[
+            "observer_request_id",
+            "view_source_client_id",
+            "idempotency_key",
+        ]),
     },
     ControlMethodSpec {
         method: "observer/reject",

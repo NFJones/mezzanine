@@ -106,6 +106,7 @@ impl Session {
             authoritative_size_before,
             authoritative_size_after: self.authoritative_size,
             resize_effects,
+            revoked_observer_client_ids: Vec::new(),
             lifecycle_edge: if primary_count_before == 0 {
                 PrimaryLifecycleEdge::Attached
             } else {
@@ -185,6 +186,7 @@ impl Session {
             authoritative_size_before,
             authoritative_size_after: self.authoritative_size,
             resize_effects,
+            revoked_observer_client_ids: Vec::new(),
             lifecycle_edge: PrimaryLifecycleEdge::None,
         })
     }
@@ -232,6 +234,7 @@ impl Session {
             requested_at_unix_seconds: Some(current_unix_seconds()),
             decided_at_unix_seconds: None,
             decided_by_client_id: None,
+            view_source_client_id: None,
             visible_from_event_id: None,
             visible_from_unix_seconds: None,
             reason: None,
@@ -299,7 +302,18 @@ impl Session {
         primary_client_id: &ClientId,
         observer_id: &str,
     ) -> Result<()> {
+        self.approve_observer_target_with_source(primary_client_id, observer_id, primary_client_id)
+    }
+
+    /// Approves an observer with one explicit attached-primary view source.
+    pub fn approve_observer_target_with_source(
+        &mut self,
+        primary_client_id: &ClientId,
+        observer_id: &str,
+        view_source_client_id: &ClientId,
+    ) -> Result<()> {
         self.require_primary(primary_client_id)?;
+        self.require_primary(view_source_client_id)?;
         let observer_index =
             self.require_observer_transition(observer_id, ObserverDecisionState::Approved)?;
         let visible_from_event_id = self.record_event();
@@ -307,6 +321,7 @@ impl Session {
             primary_client_id,
             observer_index,
             visible_from_event_id,
+            view_source_client_id,
         )
     }
 
@@ -321,7 +336,24 @@ impl Session {
         observer_id: &str,
         visible_from_event_id: u64,
     ) -> Result<()> {
+        self.approve_observer_target_with_visible_from_event_id_and_source(
+            primary_client_id,
+            observer_id,
+            visible_from_event_id,
+            primary_client_id,
+        )
+    }
+
+    /// Approves an observer with an explicit visibility marker and view source.
+    pub fn approve_observer_target_with_visible_from_event_id_and_source(
+        &mut self,
+        primary_client_id: &ClientId,
+        observer_id: &str,
+        visible_from_event_id: u64,
+        view_source_client_id: &ClientId,
+    ) -> Result<()> {
         self.require_primary(primary_client_id)?;
+        self.require_primary(view_source_client_id)?;
         let observer_index =
             self.require_observer_transition(observer_id, ObserverDecisionState::Approved)?;
         self.record_event();
@@ -329,6 +361,7 @@ impl Session {
             primary_client_id,
             observer_index,
             visible_from_event_id,
+            view_source_client_id,
         )
     }
 
@@ -342,6 +375,7 @@ impl Session {
         primary_client_id: &ClientId,
         observer_index: usize,
         visible_from_event_id: u64,
+        view_source_client_id: &ClientId,
     ) -> Result<()> {
         let observer = self
             .observers
@@ -352,6 +386,7 @@ impl Session {
         observer.state = ObserverDecisionState::Approved;
         observer.decided_at_unix_seconds = Some(decided_at);
         observer.decided_by_client_id = Some(primary_client_id.to_string());
+        observer.view_source_client_id = Some(view_source_client_id.clone());
         observer.visible_from_event_id = Some(visible_from_event_id);
         observer.visible_from_unix_seconds = Some(decided_at);
 
@@ -574,6 +609,32 @@ impl Session {
             client.state = ClientState::Detached;
             client.last_seen_at_unix_seconds = Some(current_unix_seconds());
         }
+        let revoked_at = current_unix_seconds();
+        let revoked_observer_client_ids = self
+            .observers
+            .iter_mut()
+            .filter(|observer| {
+                observer.state == ObserverDecisionState::Approved
+                    && observer.view_source_client_id.as_ref() == Some(primary_client_id)
+            })
+            .map(|observer| {
+                observer.state = ObserverDecisionState::Revoked;
+                observer.decided_at_unix_seconds = Some(revoked_at);
+                observer.decided_by_client_id = None;
+                observer.reason = Some("view source detached".to_string());
+                observer.client_id.clone()
+            })
+            .collect::<Vec<_>>();
+        for observer_client_id in &revoked_observer_client_ids {
+            if let Some(client) = self
+                .clients
+                .iter_mut()
+                .find(|client| client.id == *observer_client_id)
+            {
+                client.state = ClientState::Revoked;
+                client.last_seen_at_unix_seconds = Some(revoked_at);
+            }
+        }
         let primary_count_after = primary_count_before.saturating_sub(1);
         let resize_effects = if self.layout_owner_client_id.as_ref() == Some(primary_client_id) {
             self.layout_owner_client_id = self
@@ -612,6 +673,7 @@ impl Session {
             authoritative_size_before,
             authoritative_size_after: self.authoritative_size,
             resize_effects,
+            revoked_observer_client_ids,
             lifecycle_edge: if primary_count_after == 0 {
                 PrimaryLifecycleEdge::Detached
             } else {

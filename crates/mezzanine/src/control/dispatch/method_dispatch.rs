@@ -631,7 +631,19 @@ pub(super) fn dispatch_parsed_request(
                 json_string_field(params, "observer_request_id").ok_or_else(|| {
                     MezError::invalid_args("observer/approve requires observer_request_id")
                 })?;
-            session.approve_observer_target(primary_client_id, &observer_id)?;
+            let view_source_client_id = json_string_field(params, "view_source_client_id")
+                .map(|client_id| {
+                    ClientId::parse('c', client_id).ok_or_else(|| {
+                        MezError::invalid_args("observer/approve view_source_client_id is invalid")
+                    })
+                })
+                .transpose()?
+                .unwrap_or_else(|| primary_client_id.clone());
+            session.approve_observer_target_with_source(
+                primary_client_id,
+                &observer_id,
+                &view_source_client_id,
+            )?;
             Ok(format!(
                 r#"{{"observer":{}}}"#,
                 observer_json(session, &observer_id)?
