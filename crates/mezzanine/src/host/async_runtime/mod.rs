@@ -188,9 +188,9 @@ pub use config::{
     AsyncRuntimeMessageConnectionConfig, AsyncRuntimeRequestFamily, AsyncRuntimeSessionActor,
     AsyncRuntimeSessionHandle, RuntimeHistogram,
 };
-pub use daemon::build_async_runtime_daemon_services;
 #[cfg(test)]
 pub use daemon::run_async_runtime_daemon;
+pub use daemon::{build_async_runtime_daemon_services, build_async_runtime_session_services};
 #[cfg(test)]
 pub(crate) use events::serve_bound_async_runtime_event_connection;
 pub use events::serve_bound_async_runtime_event_listener;
@@ -223,7 +223,6 @@ pub use side_effects::{
     run_async_runtime_side_effect_service, run_async_runtime_timer_side_effect_service,
     run_async_status_pill_side_effect_service,
 };
-#[cfg(test)]
 pub use supervisor::AsyncRuntimeSupervisionReport;
 pub use supervisor::{
     AsyncRuntimeService, AsyncRuntimeServiceExit, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,

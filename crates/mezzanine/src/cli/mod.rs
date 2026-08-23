@@ -27,12 +27,9 @@ use crate::control::{decode_control_frame, encode_control_body};
 use crate::error::{MezError, Result};
 use crate::host::async_runtime::{
     AsyncAttachedTerminalClientServiceConfig, AsyncAttachedTerminalIo,
-    AsyncAttachedTerminalLoopRequest, AsyncAttachedTerminalPresentationGuard,
-    AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeDaemonConfig,
-    AsyncRuntimeDaemonListeners, AsyncRuntimeService, AsyncRuntimeServiceExit,
-    AsyncRuntimeSessionActor, ClientEvent, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
-    RuntimeEvent, RuntimeEventBatch, build_async_runtime_daemon_services,
-    run_async_attached_terminal_client_service, supervise_async_runtime_services,
+    AsyncAttachedTerminalLoopRequest, AsyncAttachedTerminalPresentationGuard, AsyncRuntimeService,
+    AsyncRuntimeServiceExit, ClientEvent, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
+    RuntimeEvent, RuntimeEventBatch, run_async_attached_terminal_client_service,
 };
 use crate::host::shell::resolve_shell;
 use crate::host::terminal::{
@@ -42,7 +39,7 @@ use crate::host::terminal::{
 use crate::runtime::{
     AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, RuntimeEnv,
     RuntimeLifecycleState, RuntimeSessionService, auxiliary_socket_path_for_control_socket,
-    bind_control_socket, default_socket_directory, ensure_private_socket_directory,
+    default_socket_directory, ensure_private_socket_directory,
     prune_stale_socket_files_in_directory, runtime_effective_config_value,
     runtime_ui_theme_from_config, socket_path_for_name,
 };
@@ -62,7 +59,6 @@ use crate::storage::snapshot::{
     LayoutLoadPlan, SessionSnapshotPayload, SnapshotKind, SnapshotRepository,
     SnapshotRestoreResult, SnapshotState,
 };
-use crate::storage::transcript::AgentTranscriptStore;
 use mez_agent::mcp::McpRegistry;
 use mez_agent::memory::{MemoryKind, MemoryRecord, MemoryScope, MemorySource, MemoryState};
 use mez_core::ids::ClientId;

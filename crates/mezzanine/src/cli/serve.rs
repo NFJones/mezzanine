@@ -5,23 +5,20 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AgentTranscriptStore, Args, AsRawFd, AsyncAttachedTerminalClientServiceConfig,
-    AsyncAttachedTerminalLoopRequest, AsyncAttachedTerminalPresentationGuard,
-    AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeDaemonConfig,
-    AsyncRuntimeDaemonListeners, AsyncRuntimeService, AsyncRuntimeServiceExit,
-    AsyncRuntimeSessionActor, AttachedTerminalClientLoopConfig, AuthPaths, AuthStore,
-    AuxiliarySocketKind, CliEnv, CliOutputFormat, ClientEvent, ClientId, ClientViewRole,
-    ConfigLayer, ConfigPaths, IsTerminal, MezError, PathBuf, ProjectTrustStore, Result,
-    RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState, RuntimeSessionService, Session,
-    SessionRegistry, SessionSnapshotPayload, Size, SnapshotRestoreResult, SocketSelection,
-    TerminalClientLoopConfig, Write, auxiliary_socket_path_for_control_socket, bind_control_socket,
-    build_async_runtime_daemon_services, current_unix_seconds, default_trust_database_path, fs, io,
-    json_escape, load_runtime_config_layers, resolve_shell,
-    run_async_attached_terminal_client_service, selected_socket_path,
-    supervise_async_runtime_services, terminal_size_from_fd_or_environment, write_json_or_plain,
+    Args, AsRawFd, AsyncAttachedTerminalClientServiceConfig, AsyncAttachedTerminalLoopRequest,
+    AsyncAttachedTerminalPresentationGuard, AsyncRuntimeService, AsyncRuntimeServiceExit,
+    AttachedTerminalClientLoopConfig, AuxiliarySocketKind, CliEnv, CliOutputFormat, ClientEvent,
+    ClientId, ClientViewRole, ConfigLayer, ConfigPaths, IsTerminal, MezError, PathBuf, Result,
+    RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState, Session, SessionSnapshotPayload, Size,
+    SnapshotRestoreResult, SocketSelection, TerminalClientLoopConfig, Write,
+    auxiliary_socket_path_for_control_socket, current_unix_seconds, io, json_escape,
+    load_runtime_config_layers, resolve_shell, run_async_attached_terminal_client_service,
+    selected_socket_path, terminal_size_from_fd_or_environment, write_json_or_plain,
 };
-use crate::storage::snapshot::SnapshotRepository;
-use crate::storage::token_usage::TokenUsageStore;
+use crate::host::session::{
+    SessionFactory, SessionFactoryRequest, SessionRuntimeConfig, SessionRuntimeLimits,
+    SessionRuntimeStartup, SessionSocketPublication,
+};
 use crate::{
     control::{CONTROL_CONTENT_TYPE, encode_control_body},
     protocol::framing::ProtocolFrameCodec,
@@ -907,203 +904,60 @@ pub(super) async fn run_foreground_control_daemon(
     options: ParsedServeOptions,
     startup: RuntimeDaemonStartup,
 ) -> Result<()> {
-    let registry = SessionRegistry::new(registry_root_for_socket_path(&socket_path)?, owner_uid);
-    let session_id = session.id.to_string();
-    let std_listener = bind_control_socket(&socket_path, owner_uid)?;
-    std_listener.set_nonblocking(true)?;
-    let std_message_listener = if let Some(path) = options.message_socket.as_ref() {
-        let listener = bind_control_socket(path, owner_uid)?;
-        listener.set_nonblocking(true)?;
-        Some(listener)
-    } else {
-        None
-    };
-    let std_event_listener = if let Some(path) = options.event_socket.as_ref() {
-        let listener = bind_control_socket(path, owner_uid)?;
-        listener.set_nonblocking(true)?;
-        Some(listener)
-    } else {
-        None
-    };
-    let message_socket_path = options.message_socket.clone();
-    let event_socket_path = options.event_socket.clone();
-    let message_enabled = std_message_listener.is_some();
-    let event_enabled = std_event_listener.is_some();
-    let mut service = RuntimeSessionService::with_event_log(
+    let attached_primary_client_id = options.attached_primary_client_id.clone();
+    let runtime = SessionFactory::create(SessionFactoryRequest {
         session,
-        socket_path.clone(),
+        owner_uid,
         created_at_unix_seconds,
-        1024,
-        4096,
-    )?;
-    service.set_session_registry(registry.clone());
-    service.set_config_root(config.root.clone());
-    let token_usage_store = TokenUsageStore::under_config_root(&config.root);
-    token_usage_store.initialize(current_unix_seconds()?)?;
-    service.set_token_usage_store(token_usage_store);
-    service
-        .set_agent_transcript_store(AgentTranscriptStore::under_config_root(config.root.clone()));
-    let auth_store = AuthStore::new(AuthPaths::under_config_root(&config.root));
-    service.set_auth_store(auth_store);
-    let trust_path = default_trust_database_path(&config.root);
-    service.set_project_trust_store(
-        ProjectTrustStore::load_from_file(&trust_path)?,
-        Some(trust_path),
-    );
-    let snapshot_repository = SnapshotRepository::new(config.root.join("layouts"));
-    service.set_snapshot_repository(snapshot_repository.clone());
-    service
-        .initialize_config_layers_async(config.layers)
-        .await?;
-    let iroh_endpoint = service.bind_configured_iroh_endpoint().await?;
-    if let Some(auth_store) = service.auth_store().cloned() {
-        spawn_openai_auth_refresh_if_needed(
-            auth_store,
-            service.provider_auth_refresh_leeway_seconds(),
-        );
-    }
-    match startup {
-        RuntimeDaemonStartup::Initial { explicit_command } => {
-            service.start_initial_pane_process(explicit_command.as_deref())?;
-            service.restore_agent_sessions_from_transcript_store()?;
-        }
-        RuntimeDaemonStartup::RestoredSnapshot {
-            payload,
-            restart_command,
-        } => {
-            service.seed_terminal_screens_from_snapshot_payload(&payload)?;
-            service.restart_restored_pane_processes(restart_command.as_deref())?;
-        }
-    }
-    service.persist_registry_update()?;
-    let attached_client_size = service.session().authoritative_size;
-
-    let daemon_result = async move {
-        let listener = tokio::net::UnixListener::from_std(std_listener)?;
-        let message_listener = std_message_listener
-            .map(tokio::net::UnixListener::from_std)
-            .transpose()?;
-        let event_listener = std_event_listener
-            .map(tokio::net::UnixListener::from_std)
-            .transpose()?;
-        let (handle, actor) =
-            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default())?;
-        let shutdown_handle = handle.clone();
-        let config = AsyncRuntimeDaemonConfig {
-            control: AsyncRuntimeControlConnectionConfig::new(1024 * 1024, owner_uid)?,
-            snapshots: Some(snapshot_repository),
+        config: SessionRuntimeConfig {
+            layers: config.layers,
+            root: config.root,
+        },
+        sockets: SessionSocketPublication {
+            control_path: socket_path,
+            publish_control: true,
+            message_path: options.message_socket,
+            event_path: options.event_socket,
+            publish_registry: true,
+        },
+        limits: SessionRuntimeLimits {
             max_control_connections: options.limits.max_control_connections,
-            max_message_connections: if message_enabled {
-                options.limits.max_message_connections
-            } else {
-                0
-            },
-            max_event_connections: if event_enabled {
-                options.limits.max_event_connections
-            } else {
-                0
-            },
+            max_message_connections: options.limits.max_message_connections,
+            max_event_connections: options.limits.max_event_connections,
             max_event_batches_per_connection: options.limits.max_event_batches_per_connection,
-            ..AsyncRuntimeDaemonConfig::default()
-        };
-        let listeners = AsyncRuntimeDaemonListeners {
-            control: Some(listener),
-            message: message_listener,
-            event: event_listener,
-        };
-        let attached_primary_client_id = options.attached_primary_client_id.clone();
-        let iroh_control_config = config.control;
-        let iroh_snapshots = config.snapshots.clone();
-        let iroh_shutdown = iroh_endpoint
-            .as_ref()
-            .map(|endpoint| endpoint.shutdown_handle());
-        let daemon = async move {
-            let mut services =
-                build_async_runtime_daemon_services(handle.clone(), listeners, config)?;
-            if let Some(iroh_endpoint) = iroh_endpoint {
-                services.push(crate::runtime::build_runtime_iroh_control_service(
-                    iroh_endpoint,
-                    handle.clone(),
-                    iroh_control_config,
-                    iroh_snapshots,
-                ));
+        },
+        startup: match startup {
+            RuntimeDaemonStartup::Initial { explicit_command } => {
+                SessionRuntimeStartup::Initial { explicit_command }
             }
-            services.push(build_startup_provider_info_refresh_service(handle.clone()));
-            if let Some(primary_client_id) = attached_primary_client_id {
-                let resize_client_id = primary_client_id.clone();
-                services.push(build_foreground_attached_primary_client_service(
-                    handle.clone(),
-                    primary_client_id,
-                    attached_client_size,
-                )?);
-                services.push(build_foreground_terminal_resize_signal_service(
-                    handle.clone(),
-                    resize_client_id,
-                )?);
-            }
-            let foreground_shutdown = async move {
-                foreground_shutdown_signal().await;
-                if let Some(iroh_shutdown) = iroh_shutdown {
-                    let _ = iroh_shutdown.close().await;
-                }
-            };
-            let result = supervise_async_runtime_services(services, foreground_shutdown).await;
-            let _ = shutdown_handle.shutdown().await;
-            result
-        };
-        let (daemon_result, mut actor_exit) = tokio::join!(daemon, actor.run());
-        actor_exit.service.terminate_all_pane_processes()?;
-        daemon_result.map(|report| (report, actor_exit.service))
-    }
-    .await;
-
-    let daemon_result = daemon_result.map(|(_, service)| service);
-    let _ = fs::remove_file(&socket_path);
-    if let Some(path) = message_socket_path {
-        let _ = fs::remove_file(path);
-    }
-    if let Some(path) = event_socket_path {
-        let _ = fs::remove_file(path);
-    }
-    let _ = registry.remove(&session_id);
-    daemon_result.map(|_| ())
-}
-
-/// Runs the spawn openai auth refresh if needed operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn spawn_openai_auth_refresh_if_needed(
-    auth_store: AuthStore,
-    leeway_seconds: u64,
-) -> bool {
-    match auth_store.openai_refresh_needed_with_leeway(leeway_seconds) {
-        Ok(true) => {
-            tokio::spawn(async move {
-                let _ = auth_store
-                    .refresh_openai_provider_credential_if_needed_with_leeway_async(leeway_seconds)
-                    .await;
-            });
-            true
-        }
-        Ok(false) | Err(_) => false,
-    }
-}
-/// Builds the startup provider-information refresh worker for the runtime daemon.
-///
-/// The worker preserves the provider metadata refresh behavior that helps model
-/// commands resolve provider details, but it runs after the actor starts so the
-/// foreground launch path can render the TUI without waiting for auth or network
-/// metadata refreshes. Refresh failures are intentionally ignored because the
-/// previous startup path also treated provider metadata refresh as best-effort.
-pub(super) fn build_startup_provider_info_refresh_service(
-    handle: crate::host::async_runtime::AsyncRuntimeSessionHandle,
-) -> AsyncRuntimeService {
-    AsyncRuntimeService::new_auxiliary("startup-provider-info-refresh", async move {
-        let _ = handle.refresh_provider_info().await;
-        Ok(AsyncRuntimeServiceExit::completed(1))
+            RuntimeDaemonStartup::RestoredSnapshot {
+                payload,
+                restart_command,
+            } => SessionRuntimeStartup::RestoredSnapshot {
+                payload,
+                restart_command,
+            },
+        },
     })
+    .await?;
+    let handle = runtime.handle();
+    let attached_client_size = runtime.attached_client_size();
+    let mut services = Vec::new();
+    if let Some(primary_client_id) = attached_primary_client_id {
+        let resize_client_id = primary_client_id.clone();
+        services.push(build_foreground_attached_primary_client_service(
+            handle.actor().clone(),
+            primary_client_id,
+            attached_client_size,
+        )?);
+        services.push(build_foreground_terminal_resize_signal_service(
+            handle.actor().clone(),
+            resize_client_id,
+        )?);
+    }
+    let completion = runtime.run(services, foreground_shutdown_signal()).await?;
+    let _ = (completion.service, completion.supervision);
+    Ok(())
 }
 
 /// Runs the build foreground attached primary client service operation for this subsystem.
@@ -1257,16 +1111,4 @@ async fn foreground_shutdown_signal() {
     }
 
     let _ = tokio::signal::ctrl_c().await;
-}
-
-/// Runs the registry root for socket path operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn registry_root_for_socket_path(socket_path: &std::path::Path) -> Result<PathBuf> {
-    socket_path
-        .parent()
-        .map(PathBuf::from)
-        .ok_or_else(|| MezError::invalid_args("control socket path must have a parent directory"))
 }

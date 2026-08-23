@@ -91,6 +91,16 @@ fn snapshot_id_from_json_params(params: &str) -> Option<String> {
 }
 
 impl AsyncRuntimeSessionActor {
+    /// Terminates pane processes still owned by an actor that has not started.
+    ///
+    /// Reusable session construction uses this during rollback and when a
+    /// ready runtime is dropped before its actor loop begins. Processes already
+    /// handed to supervised async workers remain owned by those workers.
+    pub(crate) fn terminate_owned_pane_processes(&mut self) -> Result<()> {
+        self.service.terminate_all_pane_processes()?;
+        Ok(())
+    }
+
     /// Runs the new operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

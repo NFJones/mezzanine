@@ -100,42 +100,51 @@ pub fn build_async_runtime_daemon_services(
         ));
     }
 
-    services.push(build_async_runtime_timer_side_effect_service(
-        "timer",
-        handle.clone(),
-        Default::default(),
-        config.timer_base_now_ms,
-    )?);
-    services.push(build_async_pane_process_supervisor_service(
-        "pane-process-supervisor",
-        handle.clone(),
-        Default::default(),
-    )?);
-    services.push(build_async_persistence_side_effect_service(
-        "persistence",
-        handle.clone(),
-        Default::default(),
-    )?);
-    services.push(build_async_hook_side_effect_service(
-        "hook",
-        handle.clone(),
-        Default::default(),
-    )?);
-    services.push(build_async_host_clipboard_side_effect_service(
-        "host-clipboard",
-        handle.clone(),
-        Default::default(),
-    )?);
-    services.push(build_async_status_pill_side_effect_service(
-        "status-pill",
-        handle.clone(),
-        Default::default(),
-    )?);
-    services.push(build_async_agent_provider_service(
-        "agent-provider",
-        handle,
-        Default::default(),
-    )?);
+    services.extend(build_async_runtime_session_services(handle, &config)?);
+    Ok(services)
+}
+
+/// Builds the listener-independent workers required by one session actor.
+///
+/// Persistent hosts can address a session directly through its actor handle,
+/// so Unix listener publication is optional. These workers remain per-session:
+/// timers, pane processes, persistence, hooks, clipboard, status, and provider
+/// work must never be shared across actors.
+pub fn build_async_runtime_session_services(
+    handle: AsyncRuntimeSessionHandle,
+    config: &AsyncRuntimeDaemonConfig,
+) -> Result<Vec<AsyncRuntimeService>> {
+    config.validate_session_services()?;
+    let services = vec![
+        build_async_runtime_timer_side_effect_service(
+            "timer",
+            handle.clone(),
+            Default::default(),
+            config.timer_base_now_ms,
+        )?,
+        build_async_pane_process_supervisor_service(
+            "pane-process-supervisor",
+            handle.clone(),
+            Default::default(),
+        )?,
+        build_async_persistence_side_effect_service(
+            "persistence",
+            handle.clone(),
+            Default::default(),
+        )?,
+        build_async_hook_side_effect_service("hook", handle.clone(), Default::default())?,
+        build_async_host_clipboard_side_effect_service(
+            "host-clipboard",
+            handle.clone(),
+            Default::default(),
+        )?,
+        build_async_status_pill_side_effect_service(
+            "status-pill",
+            handle.clone(),
+            Default::default(),
+        )?,
+        build_async_agent_provider_service("agent-provider", handle, Default::default())?,
+    ];
     Ok(services)
 }
 

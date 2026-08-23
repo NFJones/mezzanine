@@ -1026,6 +1026,24 @@ impl AsyncRuntimeDaemonConfig {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn validate(&self) -> Result<()> {
+        self.validate_session_services()?;
+        if self.max_control_connections == 0
+            && self.max_message_connections == 0
+            && self.max_event_connections == 0
+        {
+            return Err(MezError::invalid_args(
+                "async daemon requires at least one permitted listener connection",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validates limits used by listener-independent session workers.
+    ///
+    /// A persistent host may route directly to an actor without publishing a
+    /// per-session Unix listener. Such runtimes still require valid message and
+    /// event worker bounds, but they do not require a positive listener limit.
+    pub fn validate_session_services(&self) -> Result<()> {
         if self.message_max_content_length == 0 {
             return Err(MezError::invalid_args(
                 "async daemon message max content length must be greater than zero",
@@ -1034,14 +1052,6 @@ impl AsyncRuntimeDaemonConfig {
         if self.message_fanout_limit == 0 {
             return Err(MezError::invalid_args(
                 "async daemon message fanout limit must be greater than zero",
-            ));
-        }
-        if self.max_control_connections == 0
-            && self.max_message_connections == 0
-            && self.max_event_connections == 0
-        {
-            return Err(MezError::invalid_args(
-                "async daemon requires at least one permitted listener connection",
             ));
         }
         if self.max_event_batches_per_connection == 0 {

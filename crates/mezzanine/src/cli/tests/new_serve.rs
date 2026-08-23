@@ -487,7 +487,7 @@ fn serve_skips_background_auth_refresh_when_openai_token_is_still_fresh() {
         )
         .unwrap();
 
-    assert!(!super::super::serve::spawn_openai_auth_refresh_if_needed(
+    assert!(!crate::host::session::spawn_auth_store_refresh_if_needed(
         auth_store,
         crate::security::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS,
     ));
