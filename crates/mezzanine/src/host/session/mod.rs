@@ -38,6 +38,18 @@ use crate::storage::snapshot::{SessionSnapshotPayload, SnapshotRepository};
 use crate::storage::token_usage::TokenUsageStore;
 use crate::storage::transcript::AgentTranscriptStore;
 
+#[allow(
+    dead_code,
+    reason = "the persistent host consumes the completed supervisor in the next architecture phase"
+)]
+mod supervisor;
+
+#[allow(
+    unused_imports,
+    reason = "the persistent host consumes these supervisor contracts in the next architecture phase"
+)]
+pub(crate) use supervisor::{SessionSupervisor, SessionSupervisorSnapshot, SessionSupervisorState};
+
 /// Configuration layers and protected storage root used by one session.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionRuntimeConfig {
@@ -289,33 +301,29 @@ impl SessionRuntimeHandle {
     }
 
     /// Current actor-owned lifecycle state.
-    #[allow(
-        dead_code,
-        reason = "session supervisor consumes this typed lifecycle probe in the next architecture phase"
-    )]
     pub(crate) async fn lifecycle_state(&self) -> Result<RuntimeLifecycleState> {
         self.actor.lifecycle_state().await
     }
 
-    /// Requests orderly actor shutdown.
-    #[allow(
-        dead_code,
-        reason = "session supervisor consumes this graceful shutdown API in the next architecture phase"
-    )]
-    pub(crate) async fn shutdown(&self) -> Result<RuntimeLifecycleState> {
-        self.actor.shutdown().await
+    /// Requests graceful teardown through the typed supervisor event boundary.
+    pub(crate) async fn graceful_shutdown(&self, reason: impl Into<String>) -> Result<()> {
+        self.request_supervisor_shutdown(reason, false).await
     }
 
     /// Forces session teardown through the typed supervisor event boundary.
-    #[allow(
-        dead_code,
-        reason = "session supervisor consumes this forced shutdown API in the next architecture phase"
-    )]
     pub(crate) async fn force_shutdown(&self, reason: impl Into<String>) -> Result<()> {
+        self.request_supervisor_shutdown(reason, true).await
+    }
+
+    async fn request_supervisor_shutdown(
+        &self,
+        reason: impl Into<String>,
+        force: bool,
+    ) -> Result<()> {
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::Shutdown(ShutdownEvent {
             reason: reason.into(),
-            force: true,
+            force,
             failed: false,
         }));
         self.actor.submit_runtime_events(batch).await?;
