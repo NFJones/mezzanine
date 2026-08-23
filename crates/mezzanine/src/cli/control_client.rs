@@ -67,7 +67,7 @@ pub(super) fn exchange_control_request<S: Read + Write>(
     method: &str,
     params: &str,
 ) -> Result<String> {
-    let initialize = r#"{"jsonrpc":"2.0","id":"cli-init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
+    let initialize = r#"{"jsonrpc":"2.0","id":"cli-init","method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
     let request = format!(
         r#"{{"jsonrpc":"2.0","id":"cli","method":"{}","params":{}}}"#,
         json_escape(method),
@@ -579,7 +579,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
         "method": "control/initialize",
         "params": {
             "client_name": "remote-cli",
-            "requested_version": 1,
+            "requested_version": 2,
             "requested_role": requested_role,
             "detach_primary_on_disconnect": requested_role == "primary",
             "event_stream_version": 1,
@@ -1026,7 +1026,7 @@ async fn exchange_bound_iroh_control_request(
         "method": "control/initialize",
         "params": {
             "client_name": "remote-cli",
-            "requested_version": 1,
+            "requested_version": 2,
             "requested_role": initialization.requested_role,
             "detach_primary_on_disconnect": initialization.requested_role == "primary",
             "client": client,

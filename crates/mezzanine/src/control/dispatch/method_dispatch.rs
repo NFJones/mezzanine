@@ -2,8 +2,8 @@
 
 use super::connection::{ControlConnectionState, initialize_control_connection};
 use super::schema_validation::{
-    control_current_unix_seconds, control_pane_size_spec, dispatch_session_attach_parsed,
-    reject_runtime_required_creation_fields, validate_control_method_params_schema,
+    control_current_unix_seconds, control_pane_size_spec, reject_runtime_required_creation_fields,
+    validate_control_method_params_schema,
 };
 use super::{
     BlockedApprovalQueue, ClientId, ControlDispatchKind, EventLog, JsonRpcRequest,
@@ -77,6 +77,12 @@ pub(super) fn control_result_response(request: &JsonRpcRequest, result: Result<S
 
 /// Converts one parsed control error into a JSON-RPC error envelope.
 pub(super) fn control_error_response(request: &JsonRpcRequest, error: &MezError) -> String {
+    if error
+        .message()
+        .starts_with("unsupported control protocol version:")
+    {
+        return json_rpc_error(&request.id, -32003, error.message(), "unsupported_version");
+    }
     json_rpc_error(
         &request.id,
         error_code(error.kind()),
@@ -125,16 +131,13 @@ pub(super) fn dispatch_parsed_request(
                 .ok_or_else(|| MezError::invalid_args("control/cancel requires request_id"))?;
             Ok(r#"{"cancel_requested":false}"#.to_string())
         }
-        ControlDispatchKind::SessionAttach => {
-            dispatch_session_attach_parsed(request, session, primary_client_id)
-        }
         ControlDispatchKind::SessionList => Ok(format!(
             r#"{{"sessions":[{}]}}"#,
             session_summary_json(session)
         )),
         ControlDispatchKind::SessionGet => Ok(format!(
             r#"{{"session":{}}}"#,
-            session_state_json_for_params(session, request.params.as_deref())?
+            session_state_json_for_params(session, primary_client_id, request.params.as_deref())?
         )),
         ControlDispatchKind::WindowList => Ok(format!(
             r#"{{"windows":{}}}"#,
@@ -603,18 +606,20 @@ pub(super) fn dispatch_parsed_request(
             }
             Ok(r#"{"detached":true}"#.to_string())
         }
-        ControlDispatchKind::ClientSelectPrimary => {
+        ControlDispatchKind::ClientSetLayoutOwner => {
             let params = request.params.as_deref().ok_or_else(|| {
-                MezError::invalid_args("client/select_primary requires a params object")
+                MezError::invalid_args("client/set_layout_owner requires a params object")
             })?;
             require_idempotency_key(params)?;
             let client_id = json_string_field(params, "client_id").ok_or_else(|| {
-                MezError::invalid_args("client/select_primary requires client_id")
+                MezError::invalid_args("client/set_layout_owner requires client_id")
             })?;
-            let selected = session.select_primary_client(Some(primary_client_id), &client_id)?;
+            let selected =
+                session.select_layout_owner_transition(Some(primary_client_id), &client_id)?;
             Ok(format!(
-                r#"{{"primary_client_id":"{}"}}"#,
-                json_escape(&selected.to_string())
+                r#"{{"layout_owner_client_id":"{}","layout_revision":{}}}"#,
+                json_escape(selected.client_id.as_str()),
+                session.layout_revision()
             ))
         }
         ControlDispatchKind::ObserverApprove => {

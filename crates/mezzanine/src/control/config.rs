@@ -16,135 +16,13 @@ use super::{
 };
 #[cfg(test)]
 use super::{
-    RequestedRole, TrustDecision, client_descriptor_from_json, client_json,
-    ensure_client_descriptor_role_matches, parse_json_rpc_request, parse_trust_decision,
-    project_trust_json, project_trust_state_filter_from_params,
-    require_session_target_matches_value, validate_control_method_params_schema,
+    TrustDecision, parse_json_rpc_request, parse_trust_decision, project_trust_json,
+    project_trust_state_filter_from_params, validate_control_method_params_schema,
 };
 #[cfg(test)]
 use crate::security::project::ProjectTrustStore;
-#[cfg(test)]
-use mez_mux::session::ClientTerminalDescriptor;
 
 // Project-trust and configuration control methods.
-
-/// Runs the client terminal descriptor from control operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-#[cfg(test)]
-fn client_terminal_descriptor_from_control(
-    terminal: Option<&super::TerminalDescriptor>,
-) -> Option<ClientTerminalDescriptor> {
-    terminal.map(|terminal| ClientTerminalDescriptor {
-        columns: terminal.columns,
-        rows: terminal.rows,
-        term: terminal.term.clone(),
-        features: terminal.features.clone(),
-    })
-}
-
-/// Runs the dispatch session attach request operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-#[cfg(test)]
-pub fn dispatch_session_attach_request(body: &str, session: &mut Session) -> String {
-    let request = match parse_json_rpc_request(body) {
-        Ok(request) => request,
-        Err(error) => {
-            return json_rpc_error("null", -32600, error.message(), "invalid_request");
-        }
-    };
-    if request.method != "session/attach" {
-        return json_rpc_error(
-            &request.id,
-            -32601,
-            "session attach dispatcher accepts only session/attach",
-            "not_implemented",
-        );
-    }
-    let result = (|| {
-        let params = request
-            .params
-            .as_deref()
-            .ok_or_else(|| MezError::invalid_args("session/attach requires a params object"))?;
-        let target = json_raw_field(params, "target")
-            .ok_or_else(|| MezError::invalid_args("session/attach requires target"))?;
-        let target = serde_json::from_str::<serde_json::Value>(&target).map_err(|error| {
-            MezError::invalid_args(format!("session/attach target is invalid: {error}"))
-        })?;
-        require_session_target_matches_value(session, &target)?;
-        require_idempotency_key(params)?;
-        let role = json_string_field(params, "role").unwrap_or_else(|| "primary".to_string());
-        let client_descriptor = json_object_field(params, "client")
-            .as_deref()
-            .map(client_descriptor_from_json)
-            .transpose()?
-            .ok_or_else(|| MezError::invalid_args("session/attach requires client"))?;
-        match role.as_str() {
-            "primary" => {
-                ensure_client_descriptor_role_matches(
-                    &client_descriptor,
-                    RequestedRole::Primary,
-                    "session/attach client descriptor",
-                )?;
-                let client_id = session.attach_primary_with_terminal(
-                    &client_descriptor.name,
-                    client_descriptor.interactive,
-                    client_terminal_descriptor_from_control(client_descriptor.terminal.as_ref()),
-                )?;
-                let client = session
-                    .clients()
-                    .iter()
-                    .find(|client| client.id == client_id)
-                    .ok_or_else(|| {
-                        MezError::new(crate::error::MezErrorKind::NotFound, "client not found")
-                    })?;
-                Ok(format!(
-                    r#"{{"client":{},"approval_pending":false}}"#,
-                    client_json(session, client)
-                ))
-            }
-            "observer" => {
-                ensure_client_descriptor_role_matches(
-                    &client_descriptor,
-                    RequestedRole::Observer,
-                    "session/attach client descriptor",
-                )?;
-                let (client_id, _observer_id) = session.request_observer_with_terminal(
-                    &client_descriptor.name,
-                    client_terminal_descriptor_from_control(client_descriptor.terminal.as_ref()),
-                );
-                let client = session
-                    .clients()
-                    .iter()
-                    .find(|client| client.id == client_id)
-                    .ok_or_else(|| {
-                        MezError::new(crate::error::MezErrorKind::NotFound, "client not found")
-                    })?;
-                Ok(format!(
-                    r#"{{"client":{},"approval_pending":true}}"#,
-                    client_json(session, client)
-                ))
-            }
-            _ => Err(MezError::invalid_args(
-                "session/attach role must be primary or observer",
-            )),
-        }
-    })();
-    match result {
-        Ok(result) => json_rpc_success(&request.id, &result),
-        Err(error) => json_rpc_error(
-            &request.id,
-            error_code(error.kind()),
-            error.message(),
-            mezzanine_error_code(error.kind()),
-        ),
-    }
-}
 
 /// Runs the dispatch project trust request operation for this subsystem.
 ///

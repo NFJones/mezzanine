@@ -37,8 +37,13 @@ pub(in crate::control) fn client_json(
             columns: terminal.columns,
             rows: terminal.rows,
         });
+    let navigation_revision = client
+        .navigation
+        .as_ref()
+        .map(|navigation| navigation.revision.to_string())
+        .unwrap_or_else(|| "null".to_string());
     format!(
-        r#"{{"id":"{}","version":1,"client_id":"{}","name":"{}","role":"{}","requested_role":"{}","state":"{}","attached_at":{},"last_seen_at":{},"descriptor":{{"name":"{}","interactive":{},"terminal":{}}},"terminal_size":{},"interactive":{}}}"#,
+        r#"{{"id":"{}","version":2,"client_id":"{}","name":"{}","role":"{}","requested_role":"{}","state":"{}","attached_at":{},"last_seen_at":{},"descriptor":{{"name":"{}","interactive":{},"terminal":{}}},"terminal_size":{},"interactive":{},"navigation_revision":{}}}"#,
         json_escape(&client.id.to_string()),
         json_escape(&client.id.to_string()),
         json_escape(&client.name),
@@ -51,7 +56,8 @@ pub(in crate::control) fn client_json(
         client.interactive,
         generic_client_terminal_descriptor_json(terminal_descriptor.as_ref()),
         generic_size_object_json(terminal_size),
-        client.interactive
+        client.interactive,
+        navigation_revision
     )
 }
 
@@ -79,9 +85,7 @@ pub(super) fn generic_client_terminal_descriptor(
     if let Some(terminal) = client.terminal.as_ref() {
         return Some(terminal.clone());
     }
-    let is_primary = session
-        .primary_client_id()
-        .is_some_and(|primary| primary == &client.id);
+    let is_primary = session.is_attached_primary(&client.id);
     (is_primary && client.interactive && client.state == ClientState::Attached).then(|| {
         ClientTerminalDescriptor {
             columns: session.authoritative_size.columns,

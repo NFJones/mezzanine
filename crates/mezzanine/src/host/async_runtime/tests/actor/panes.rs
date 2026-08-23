@@ -482,7 +482,7 @@ async fn async_actor_control_initialize_resizes_worker_owned_initial_pane() {
         let (_pane_id, mut process) = processes.pop().unwrap();
         let mut connection = ControlConnectionState::new(true, true);
         let initialize = encode_control_body(
-            r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"primary","requested_version":1,"client_name":"mez-cli","client":{"name":"mez-cli","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}}}}"#,
+            r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"primary","requested_version":2,"client_name":"mez-cli","client":{"name":"mez-cli","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}}}}"#,
         );
 
         let result = handle

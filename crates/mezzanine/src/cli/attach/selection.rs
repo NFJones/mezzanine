@@ -121,7 +121,7 @@ pub(in crate::cli) async fn run_attach<W: Write>(
     let mut stream = UnixStream::connect(socket_path)?;
     let detach_primary_on_disconnect = request.requested_role == "primary";
     let initialize = format!(
-        r#"{{"jsonrpc":"2.0","id":"cli-init","method":"control/initialize","params":{{"requested_role":"{}","requested_version":1,"client_name":"mez-cli","detach_primary_on_disconnect":{},"event_stream_version":1,"client":{{"name":"mez-cli","interactive":true,"terminal":{{"columns":{},"rows":{},"term":"{}"}}}}}}}}"#,
+        r#"{{"jsonrpc":"2.0","id":"cli-init","method":"control/initialize","params":{{"requested_role":"{}","requested_version":2,"client_name":"mez-cli","detach_primary_on_disconnect":{},"event_stream_version":1,"client":{{"name":"mez-cli","interactive":true,"terminal":{{"columns":{},"rows":{},"term":"{}"}}}}}}}}"#,
         request.requested_role,
         detach_primary_on_disconnect,
         columns,
@@ -312,7 +312,7 @@ pub(super) fn attachable_record<'a>(
     requested_role: &str,
 ) -> Option<&'a SessionRecord> {
     if requested_role == "primary" {
-        records.iter().find(|record| record.primary_available)
+        records.iter().find(|record| record.accepts_primary)
     } else {
         records.first()
     }

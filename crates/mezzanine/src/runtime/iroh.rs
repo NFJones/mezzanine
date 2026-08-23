@@ -1243,7 +1243,7 @@ mod tests {
             "method": "control/initialize",
             "params": {
                 "requested_role": "primary",
-                "requested_version": 1,
+                "requested_version": 2,
                 "client_name": "remote-primary",
                 "event_stream_version": 1,
                 "client": {
@@ -1928,7 +1928,7 @@ mod tests {
             "method": "control/initialize",
             "params": {
                 "client_name": "abrupt-primary",
-                "requested_version": 1,
+                "requested_version": 2,
                 "requested_role": "primary",
                 "detach_primary_on_disconnect": true,
                 "client": {
@@ -2077,7 +2077,7 @@ mod tests {
         let unix_client = async {
             let mut stream = tokio::net::UnixStream::connect(&unix_path).await.unwrap();
             let initialize = encode_control_body(
-                r#"{"jsonrpc":"2.0","id":"unix-init","method":"control/initialize","params":{"client_name":"local-recovery","requested_version":1,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"local-recovery","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+                r#"{"jsonrpc":"2.0","id":"unix-init","method":"control/initialize","params":{"client_name":"local-recovery","requested_version":2,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"local-recovery","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
             );
             let status = encode_control_body(
                 r#"{"jsonrpc":"2.0","id":"unix-status","method":"remote/status","params":{}}"#,

@@ -374,7 +374,7 @@ impl RuntimeSessionService {
         )?;
         Ok(format!(
             r#"{{"session":{},"resumed":true,"resume_plan":{},"limitations":{},"terminated_panes":{},"restarted_panes":{},"seeded_terminal_screens":0,"interrupted_agent_turns":0,"primary_client_id":"{}"}}"#,
-            self.runtime_session_state_json(),
+            self.runtime_session_state_json(caller_client_id)?,
             runtime_snapshot_resume_plan_json(&resume_plan),
             runtime_string_array_json(&resume_plan.limitations),
             terminated_panes,

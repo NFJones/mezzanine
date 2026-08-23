@@ -139,7 +139,7 @@ pub async fn run_with<W: Write, E: Write>(
             );
             let _ = registry.prune_stale()?;
             let sessions = registry.list()?;
-            if let Some(session) = sessions.iter().find(|record| record.primary_available) {
+            if let Some(session) = sessions.iter().find(|record| record.accepts_primary) {
                 return run_attach(
                     &super::SocketSelection::Explicit(session.socket_path.clone()),
                     &control_target,

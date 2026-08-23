@@ -122,6 +122,8 @@ fn kill_routes_session_index_alias_to_registered_control_socket() {
     let registry = SessionRegistry::new(directory.path.clone(), env.runtime.uid);
     registry
         .upsert(SessionRecord {
+            record_version: 2,
+            control_version: 2,
             session_id: "$selected".to_string(),
             name: "selected".to_string(),
             state: RegistrySessionState::Running,
@@ -129,8 +131,11 @@ fn kill_routes_session_index_alias_to_registered_control_socket() {
             created_at_unix_seconds: 100,
             last_attach_at_unix_seconds: None,
             window_count: 1,
-            client_count: 0,
-            primary_available: true,
+            attached_client_count: 0,
+            attached_primary_count: 0,
+            max_attached_primaries: 16,
+            layout_owner_client_id: None,
+            accepts_primary: true,
             authoritative_columns: 80,
             authoritative_rows: 24,
         })

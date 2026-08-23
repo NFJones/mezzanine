@@ -37,6 +37,7 @@ pub fn initialize(
             selected_version,
             server: ServerIdentity::current(),
             session: None,
+            client: None,
             granted_role: match params.requested_role {
                 RequestedRole::Observer => GrantedRole::PendingObserver,
                 RequestedRole::Primary => GrantedRole::Automation,
@@ -63,6 +64,7 @@ pub fn initialize(
                 selected_version,
                 server: ServerIdentity::current(),
                 session: Some(default_initialize_session_summary_json()),
+                client: None,
                 granted_role: GrantedRole::Primary,
                 capabilities: Capabilities::primary(),
                 approval_pending: false,
@@ -73,6 +75,7 @@ pub fn initialize(
             selected_version,
             server: ServerIdentity::current(),
             session: None,
+            client: None,
             granted_role: GrantedRole::PendingObserver,
             capabilities: Capabilities::pending_observer(),
             approval_pending: true,
@@ -86,6 +89,7 @@ pub fn initialize(
             selected_version,
             server: ServerIdentity::current(),
             session: Some(default_initialize_session_summary_json()),
+            client: None,
             granted_role: GrantedRole::Agent,
             capabilities: Capabilities::agent(),
             approval_pending: false,
@@ -95,6 +99,7 @@ pub fn initialize(
             selected_version,
             server: ServerIdentity::current(),
             session: Some(default_initialize_session_summary_json()),
+            client: None,
             granted_role: GrantedRole::Automation,
             capabilities: Capabilities::automation(),
             approval_pending: false,
@@ -109,8 +114,8 @@ pub fn initialize(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn negotiate_protocol_version(requested_version: u32) -> Result<u32> {
-    if requested_version == 1 {
-        Ok(1)
+    if requested_version == 2 {
+        Ok(2)
     } else {
         Err(MezError::invalid_args(format!(
             "unsupported control protocol version: {requested_version}"
@@ -665,10 +670,11 @@ pub(super) fn authentication_from_json(body: &str) -> Result<AuthenticationMater
 /// on duplicated control-flow logic.
 pub(super) fn initialize_result_json(result: &InitializeResult) -> String {
     format!(
-        r#"{{"selected_version":{},"server":{},"session":{},"granted_role":"{}","capabilities":{},"approval_pending":{},"observer_request":{}}}"#,
+        r#"{{"selected_version":{},"server":{},"session":{},"client":{},"granted_role":"{}","capabilities":{},"approval_pending":{},"observer_request":{}}}"#,
         result.selected_version,
         server_identity_json(&result.server),
         result.session.as_deref().unwrap_or("null"),
+        result.client.as_deref().unwrap_or("null"),
         granted_role_name(result.granted_role),
         capabilities_json(&result.capabilities),
         result.approval_pending,
@@ -694,7 +700,7 @@ pub(super) fn initialize_result_json(result: &InitializeResult) -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn default_initialize_session_summary_json() -> String {
-    r#"{"id":"default","version":1,"name":"default","state":"running","created_at":null,"last_attached_at":null,"window_count":0,"attached_client_count":0,"has_primary":false,"active_window_id":null}"#
+    r#"{"id":"default","version":2,"name":"default","state":"running","created_at":null,"last_attached_at":null,"window_count":0,"attached_client_count":0,"primary_count":0,"primary_capacity":16,"accepts_primary":true,"layout_owner_client_id":null,"active_window_id":null}"#
         .to_string()
 }
 
@@ -730,7 +736,7 @@ pub(super) fn server_identity_json(server: &ServerIdentity) -> String {
 /// on duplicated control-flow logic.
 pub(super) fn capabilities_json(capabilities: &Capabilities) -> String {
     format!(
-        r#"{{"protocol_version":{},"methods":{},"event_types":{},"roles":{},"transports":{},"limits":{{"max_frame_size":{},"max_request_size":{},"max_event_replay_retention":{},"max_capture_payload_size":{}}},"features":{{"tcp":{},"event_replay":{},"observers":{},"mcp":{},"snapshots":{},"audit":{},"approval_bypass":{}}}}}"#,
+        r#"{{"protocol_version":{},"methods":{},"event_types":{},"roles":{},"transports":{},"limits":{{"max_frame_size":{},"max_request_size":{},"max_event_replay_retention":{},"max_capture_payload_size":{},"max_attached_primaries":{}}},"features":{{"tcp":{},"event_replay":{},"observers":{},"mcp":{},"snapshots":{},"audit":{},"approval_bypass":{},"multiple_primaries":{},"client_local_focus":{},"layout_owner":{},"client_bound_events":{}}}}}"#,
         capabilities.protocol_version,
         static_str_array_json(&capabilities.methods),
         static_str_array_json(&capabilities.event_types),
@@ -740,13 +746,18 @@ pub(super) fn capabilities_json(capabilities: &Capabilities) -> String {
         capabilities.limits.max_request_size,
         capabilities.limits.max_event_replay_retention,
         capabilities.limits.max_capture_payload_size,
+        capabilities.limits.max_attached_primaries,
         capabilities.features.tcp,
         capabilities.features.event_replay,
         capabilities.features.observers,
         capabilities.features.mcp,
         capabilities.features.snapshots,
         capabilities.features.audit,
-        capabilities.features.approval_bypass
+        capabilities.features.approval_bypass,
+        capabilities.features.multiple_primaries,
+        capabilities.features.client_local_focus,
+        capabilities.features.layout_owner,
+        capabilities.features.client_bound_events
     )
 }
 

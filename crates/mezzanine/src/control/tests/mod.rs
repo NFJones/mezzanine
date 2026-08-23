@@ -26,9 +26,8 @@ use super::{
     dispatch_control_request_for_client_with_events, dispatch_control_request_for_connection,
     dispatch_control_request_with_approvals, dispatch_control_request_with_approvals_and_audit,
     dispatch_control_request_with_captures, dispatch_control_request_with_mcp,
-    dispatch_control_request_with_snapshots, dispatch_project_trust_request,
-    dispatch_session_attach_request, encode_control_body, handle_control_frame,
-    handle_control_frames, handle_control_frames_for_connection, initialize,
+    dispatch_control_request_with_snapshots, dispatch_project_trust_request, encode_control_body,
+    handle_control_frame, handle_control_frames, handle_control_frames_for_connection, initialize,
     initialize_result_json, json_escape, parse_json_rpc_request,
 };
 use crate::host::shell::{ResolvedShell, ShellSource};
@@ -66,7 +65,7 @@ mod temp_dir;
 fn primary_params() -> InitializeParams {
     InitializeParams {
         client_name: "test".to_string(),
-        requested_version: 1,
+        requested_version: 2,
         requested_role: RequestedRole::Primary,
         client_version: None,
         session_target_json: None,

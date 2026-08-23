@@ -69,21 +69,6 @@ pub(super) fn authorize_observer_method(
         "client/detach" => authorize_client_self_detach(caller_client_id, request),
         "terminal/view" => Ok(()),
         "event/list" if client.role == ClientRole::Observer => Ok(()),
-        "session/attach" => {
-            let Some(params) = request.params.as_deref() else {
-                return Err(MezError::invalid_args(
-                    "session/attach requires a params object",
-                ));
-            };
-            let role = json_string_field(params, "role").unwrap_or_else(|| "primary".to_string());
-            if role == "observer" {
-                Ok(())
-            } else {
-                Err(MezError::forbidden(
-                    "observer clients may attach only as observers",
-                ))
-            }
-        }
         "observer/inspect" => {
             let Some(params) = request.params.as_deref() else {
                 return Ok(());
@@ -127,21 +112,6 @@ fn authorize_pending_observer_method(
     match request.method.as_str() {
         "control/initialize" | "control/shutdown" | "control/cancel" => Ok(()),
         "client/detach" => authorize_client_self_detach(caller_client_id, request),
-        "session/attach" => {
-            let Some(params) = request.params.as_deref() else {
-                return Err(MezError::invalid_args(
-                    "session/attach requires a params object",
-                ));
-            };
-            let role = json_string_field(params, "role").unwrap_or_else(|| "primary".to_string());
-            if role == "observer" {
-                Ok(())
-            } else {
-                Err(MezError::forbidden(
-                    "pending observer clients may attach only as observers",
-                ))
-            }
-        }
         "observer/inspect" => {
             let Some(params) = request.params.as_deref() else {
                 return Ok(());

@@ -12,7 +12,7 @@ fn none_authentication_gets_no_session_data() {
     let result = initialize(
         InitializeParams {
             client_name: "observer".to_string(),
-            requested_version: 1,
+            requested_version: 2,
             requested_role: RequestedRole::Observer,
             client_version: None,
             session_target_json: None,
@@ -42,7 +42,7 @@ fn pending_observer_receives_only_request_local_status() {
     let result = initialize(
         InitializeParams {
             client_name: "observer".to_string(),
-            requested_version: 1,
+            requested_version: 2,
             requested_role: RequestedRole::Observer,
             client_version: None,
             session_target_json: None,
@@ -107,7 +107,7 @@ fn primary_initializes_when_authenticated_and_interactive() {
     assert_eq!(result.granted_role, GrantedRole::Primary);
     assert!(result.session.is_some());
     assert_eq!(result.server.implementation_name, "mezzanine");
-    assert_eq!(result.server.protocol_versions, vec![1]);
+    assert_eq!(result.server.protocol_versions, vec![2]);
     assert!(result.server.started_at.ends_with('Z'));
 }
 
@@ -143,7 +143,7 @@ fn bearer_token_payload_without_validator_gets_no_session_data() {
 #[test]
 fn initialize_rejects_unsupported_protocol_version() {
     let mut params = primary_params();
-    params.requested_version = 2;
+    params.requested_version = 1;
 
     let error = initialize(
         params,
@@ -207,7 +207,6 @@ fn pending_observer_capabilities_exclude_session_and_terminal_view_methods() {
     }
     for method in [
         "control/initialize",
-        "session/attach",
         "observer/inspect",
         "client/detach",
         "control/cancel",
@@ -294,10 +293,10 @@ fn initialize_json_includes_required_server_and_capability_schema() {
 
     assert!(json.contains(r#""server":{"id":"mez-"#));
     assert!(json.contains(r#""implementation_name":"mezzanine""#));
-    assert!(json.contains(r#""protocol_versions":[1]"#));
+    assert!(json.contains(r#""protocol_versions":[2]"#));
     assert!(json.contains(r#""session":{"id":"default""#));
     assert!(json.contains(r#""window_count":0"#));
-    assert!(json.contains(r#""protocol_version":1"#));
+    assert!(json.contains(r#""protocol_version":2"#));
     assert!(json.contains(r#""event_types":["client_attached""#));
     assert!(json.contains(r#""mcp_server_changed""#));
     assert!(json.contains(r#""roles":["primary","pending_observer""#));

@@ -11,7 +11,7 @@ use super::*;
 fn dispatches_control_initialize_method() {
     let (mut session, primary) = test_session();
     let response = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
         &mut session,
         &primary,
     );
@@ -22,9 +22,10 @@ fn dispatches_control_initialize_method() {
     assert!(response.contains(r#""session":{"id":"$1""#), "{response}");
     assert!(response.contains(r#""window_count":1"#), "{response}");
     assert!(
-        response.contains(r#""active_window_id":"@1""#),
+        response.contains(r#""attached_primary_count":2"#),
         "{response}"
     );
+    assert!(!response.contains(r#""active_window_id""#), "{response}");
     assert!(
         !response.contains(r#""session":{"id":"default""#),
         "{response}"
@@ -40,13 +41,18 @@ fn dispatches_control_initialize_method() {
 fn dispatch_control_initialize_rejects_unsupported_protocol_version() {
     let (mut session, primary) = test_session();
     let response = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
         &mut session,
         &primary,
     );
 
     assert!(response.contains(r#""error""#));
     assert!(response.contains("unsupported control protocol version"));
+    assert!(response.contains(r#""code":-32003"#), "{response}");
+    assert!(
+        response.contains(r#""mezzanine_code":"unsupported_version""#),
+        "{response}"
+    );
 }
 
 /// Verifies dispatch control initialize rejects missing required fields.
@@ -59,9 +65,9 @@ fn dispatch_control_initialize_rejects_missing_required_fields() {
     let (mut session, primary) = test_session();
 
     for body in [
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"requested_version":1,"requested_role":"primary"}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"requested_version":2,"requested_role":"primary"}}"#,
         r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_role":"primary"}}"#,
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2}}"#,
     ] {
         let response = dispatch_control_request(body, &mut session, &primary);
         assert!(response.contains(r#""error""#), "{response}");
@@ -81,7 +87,7 @@ fn dispatch_control_initialize_rejects_missing_required_fields() {
 fn dispatch_control_initialize_rejects_zero_terminal_dimensions() {
     let (mut session, primary) = test_session();
     let response = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":0,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":0,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
         &mut session,
         &primary,
     );
@@ -98,7 +104,7 @@ fn control_initialize_validates_client_version_and_session_target_fields() {
     let (mut session, primary) = test_session();
 
     let accepted = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client_version":"1.2.3","session_target":{"default":true,"extensions":{"vendor":true}},"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client_version":"1.2.3","session_target":{"default":true,"extensions":{"vendor":true}},"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
         &mut session,
         &primary,
     );
@@ -108,7 +114,7 @@ fn control_initialize_validates_client_version_and_session_target_fields() {
     );
 
     let bad_client_version = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":2,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client_version":2,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client_version":2,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
         &mut session,
         &primary,
     );
@@ -119,7 +125,7 @@ fn control_initialize_validates_client_version_and_session_target_fields() {
     assert!(bad_client_version.contains("client_version must be a non-empty string"));
 
     let string_target = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":3,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","session_target":"default","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","session_target":"default","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
         &mut session,
         &primary,
     );
@@ -130,7 +136,7 @@ fn control_initialize_validates_client_version_and_session_target_fields() {
     assert!(string_target.contains("session_target must be an object or null"));
 
     let conflicting_target = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":4,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","session_target":{"default":true,"name":"default"},"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+        r#"{"jsonrpc":"2.0","id":4,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","session_target":{"default":true,"name":"default"},"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
         &mut session,
         &primary,
     );
@@ -148,7 +154,7 @@ fn control_initialize_validates_client_version_and_session_target_fields() {
 fn control_initialize_accepts_rich_client_descriptor_fields() {
     let (mut session, primary) = test_session();
     let response = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","version":"1.0.0","pid":1234,"host":"workstation","user":"tester","purpose":"foreground","requested_role":"primary","interactive":true,"stdio":{"stdin_is_tty":true,"stdout_is_tty":true,"stderr_is_tty":true,"controlling_tty":"/dev/pts/1","tty_device":"pts-1","extensions":{}},"metadata":{"vendor":"example"},"terminal":{"columns":80,"rows":24,"term":"xterm-256color","features":["mouse","bracketed_paste","truecolor"],"extensions":{}}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","version":"1.0.0","pid":1234,"host":"workstation","user":"tester","purpose":"foreground","requested_role":"primary","interactive":true,"stdio":{"stdin_is_tty":true,"stdout_is_tty":true,"stderr_is_tty":true,"controlling_tty":"/dev/pts/1","tty_device":"pts-1","extensions":{}},"metadata":{"vendor":"example"},"terminal":{"columns":80,"rows":24,"term":"xterm-256color","features":["mouse","bracketed_paste","truecolor"],"extensions":{}}},"authentication":{"mechanism":"peer_credentials"}}}"#,
         &mut session,
         &primary,
     );
@@ -166,7 +172,7 @@ fn control_initialize_accepts_rich_client_descriptor_fields() {
 fn control_initialize_rejects_descriptor_role_mismatch() {
     let (mut session, primary) = test_session();
     let response = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","requested_role":"observer","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","requested_role":"observer","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
         &mut session,
         &primary,
     );
@@ -186,7 +192,7 @@ fn control_initialize_rejects_incomplete_descriptors() {
     let (mut session, primary) = test_session();
 
     let missing_name = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
         &mut session,
         &primary,
     );
@@ -194,7 +200,7 @@ fn control_initialize_rejects_incomplete_descriptors() {
     assert!(missing_name.contains("client descriptor requires name"));
 
     let missing_term = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":2,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24}},"authentication":{"mechanism":"peer_credentials"}}}"#,
         &mut session,
         &primary,
     );
@@ -203,21 +209,18 @@ fn control_initialize_rejects_incomplete_descriptors() {
 }
 
 /// Terminal feature metadata supplied through a conforming client descriptor
-/// should survive attachment and state serialization, while descriptors without
-/// feature claims keep the existing compact JSON shape.
+/// survives v2 initialization and exact-client state serialization.
 #[test]
-fn session_attach_preserves_terminal_descriptor_features() {
-    let mut session = Session::new_default(
-        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
-        Size::new(80, 24).unwrap(),
-    );
-    let response = dispatch_session_attach_request(
-        r#"{"jsonrpc":"2.0","id":1,"method":"session/attach","params":{"target":{"default":true},"role":"primary","client":{"name":"feature-client","requested_role":"primary","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color","features":["mouse","truecolor"]}},"idempotency_key":"attach-features"}}"#,
+fn control_initialize_preserves_terminal_descriptor_features() {
+    let (mut session, primary) = test_session();
+    let response = dispatch_control_request(
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"feature-client","requested_version":2,"requested_role":"primary","client":{"name":"feature-client","requested_role":"primary","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color","features":["mouse","truecolor"]}},"authentication":{"mechanism":"peer_credentials"}}}"#,
         &mut session,
+        &primary,
     );
 
     assert!(
-        response.contains(r#""approval_pending":false"#),
+        response.contains(r#""granted_role":"primary""#),
         "{response}"
     );
     assert!(
@@ -236,7 +239,7 @@ fn control_initialize_rejects_unknown_fields_outside_extensions() {
     let (mut session, primary) = test_session();
 
     let unknown = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","unexpected":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","unexpected":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
         &mut session,
         &primary,
     );
@@ -244,14 +247,14 @@ fn control_initialize_rejects_unknown_fields_outside_extensions() {
     assert!(unknown.contains("unknown field"));
 
     let bad_extensions = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":2,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","extensions":1,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","extensions":1,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
         &mut session,
         &primary,
     );
     assert!(bad_extensions.contains("extensions must be an object"));
 
     let accepted = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":3,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","extensions":{"vendor":true},"client":{"name":"primary","interactive":true,"extensions":{},"terminal":{"columns":80,"rows":24,"term":"xterm-256color","extensions":{}}},"authentication":{"mechanism":"peer_credentials","extensions":{}}}}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","extensions":{"vendor":true},"client":{"name":"primary","interactive":true,"extensions":{},"terminal":{"columns":80,"rows":24,"term":"xterm-256color","extensions":{}}},"authentication":{"mechanism":"peer_credentials","extensions":{}}}}"#,
         &mut session,
         &primary,
     );

@@ -20,7 +20,7 @@ fn dispatches_client_and_observer_methods() {
     assert!(list_response.contains(r#""role":"primary""#));
     assert!(list_response.contains(r#""role":"pending_observer""#));
     assert!(list_response.contains(&format!(r#""id":"{}""#, primary)));
-    assert!(list_response.contains(r#""version":1"#));
+    assert!(list_response.contains(r#""version":2"#));
     assert!(list_response.contains(r#""requested_role":"primary""#));
     assert!(list_response.contains(r#""requested_role":"observer""#));
     assert!(
@@ -88,23 +88,23 @@ fn dispatches_client_and_observer_methods() {
     assert!(reject_response.contains(r#""reason":"not today""#));
 }
 
-/// Verifies dispatches primary client selection atomically.
+/// Verifies dispatches layout-owner transfer atomically.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn dispatches_primary_client_selection_atomically() {
+fn dispatches_layout_owner_transfer_atomically() {
     let (mut session, first) = test_session();
     let second = session.attach_primary("second", true).unwrap();
     let request = format!(
-        r#"{{"jsonrpc":"2.0","id":1,"method":"client/select_primary","params":{{"client_id":"{}","idempotency_key":"select-primary"}}}}"#,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"client/set_layout_owner","params":{{"client_id":"{}","idempotency_key":"set-layout-owner"}}}}"#,
         second
     );
 
     let response = dispatch_control_request(&request, &mut session, &first);
 
-    assert!(response.contains(&format!(r#""primary_client_id":"{}""#, second)));
+    assert!(response.contains(&format!(r#""layout_owner_client_id":"{}""#, second)));
     assert_eq!(session.layout_owner_client_id(), Some(&second));
     assert_eq!(session.attached_primaries().count(), 2);
 }

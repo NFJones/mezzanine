@@ -48,8 +48,8 @@ pub(super) fn primary_client_id_from_initialize_response(body: &str) -> Result<C
         .map_err(|_| MezError::invalid_args("control initialize response is not valid JSON"))?;
     let client_id = parsed
         .get("result")
-        .and_then(|result| result.get("session"))
-        .and_then(|session| session.get("primary_client_id"))
+        .and_then(|result| result.get("client"))
+        .and_then(|client| client.get("id"))
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| {
             MezError::invalid_state("control initialize did not return a primary client id")

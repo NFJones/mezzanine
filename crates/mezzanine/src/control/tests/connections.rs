@@ -14,7 +14,7 @@ fn handles_one_framed_control_request() {
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
     let mut request = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
     request.extend_from_slice(&encode_control_body(
         r#"{"jsonrpc":"2.0","id":2,"method":"window/list","params":{}}"#,
@@ -100,7 +100,7 @@ fn handles_multiple_framed_control_requests_with_idempotency_cache() {
     let (mut session, _primary) = test_session();
     let mut connection = ControlConnectionState::new(true, true);
     let initialize = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
     let first = encode_control_body(
         r#"{"jsonrpc":"2.0","id":1,"method":"window/create","params":{"name":"work","select":true,"idempotency_key":"same"}}"#,
@@ -162,7 +162,7 @@ fn initialized_connection_rejects_repeated_initialize() {
     let (mut session, _primary) = test_session();
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
-    let initialize = r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#;
+    let initialize = r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#;
     let mut input = encode_control_body(initialize);
     input.extend_from_slice(&encode_control_body(initialize));
 
@@ -197,7 +197,7 @@ fn connection_initialize_rejects_unsupported_protocol_version() {
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
     let input = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
 
     let (output, _) = handle_control_frames_for_connection(
@@ -212,6 +212,11 @@ fn connection_initialize_rejects_unsupported_protocol_version() {
 
     assert!(body.contains(r#""error""#));
     assert!(body.contains("unsupported control protocol version"));
+    assert!(body.contains(r#""code":-32003"#), "{body}");
+    assert!(
+        body.contains(r#""mezzanine_code":"unsupported_version""#),
+        "{body}"
+    );
     assert!(!connection.initialized());
 }
 
@@ -227,7 +232,7 @@ fn connection_initialize_validates_session_target_against_live_session() {
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
     let missing_target = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","session_target":{"name":"missing"},"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","session_target":{"name":"missing"},"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
 
     let (output, _) = handle_control_frames_for_connection(
@@ -247,7 +252,7 @@ fn connection_initialize_validates_session_target_against_live_session() {
 
     let mut connection = ControlConnectionState::new(true, true);
     let matching_target = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":2,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","session_target":{"default":true},"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","session_target":{"default":true},"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
 
     let (output, _) = handle_control_frames_for_connection(
@@ -278,7 +283,7 @@ fn connection_initialize_binds_primary_caller_for_followup_requests() {
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
     let mut input = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
     input.extend_from_slice(&encode_control_body(
         r#"{"jsonrpc":"2.0","id":2,"method":"window/list","params":{}}"#,
@@ -302,7 +307,8 @@ fn connection_initialize_binds_primary_caller_for_followup_requests() {
     assert!(init_body.contains(r#""granted_role":"primary""#));
     assert!(init_body.contains(r#""session":{"id":"$1""#));
     assert!(init_body.contains(r#""window_count":1"#));
-    assert!(init_body.contains(r#""has_primary":true"#));
+    assert!(init_body.contains(r#""attached_primary_count":1"#));
+    assert!(!init_body.contains(r#""has_primary""#));
     assert!(connection.caller_client_id().is_some());
     assert!(list_body.contains(r#""windows""#));
     assert!(
@@ -324,7 +330,7 @@ fn pending_observer_connection_gets_no_session_data_after_initialize() {
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
     let mut input = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"observer","requested_version":1,"requested_role":"observer","client":{"name":"observer","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"observer","requested_version":2,"requested_role":"observer","client":{"name":"observer","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
     input.extend_from_slice(&encode_control_body(
         r#"{"jsonrpc":"2.0","id":2,"method":"session/get","params":{}}"#,
@@ -391,7 +397,7 @@ fn observer_disconnect_client_is_taken_once() {
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
     let input = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"observer","requested_version":1,"requested_role":"observer","client":{"name":"observer","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"observer","requested_version":2,"requested_role":"observer","client":{"name":"observer","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
 
     handle_control_frames_for_connection(&input, 4096, &mut session, &mut connection, &mut cache)
@@ -444,7 +450,7 @@ fn primary_disconnect_client_is_taken_once() {
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
     let input = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
 
     let (_, consumed) = handle_control_frames_for_connection(
@@ -461,13 +467,10 @@ fn primary_disconnect_client_is_taken_once() {
     assert!(connection.take_disconnect_client_id().is_none());
 }
 
-/// Verifies request-local initialization cannot acquire disconnect ownership
-/// over a same-named interactive primary that existed before the connection.
-///
-/// Administrative requests may reuse the primary's authority for one RPC, but
-/// their EOF must not detach an independently owned foreground attachment.
+/// Verifies every primary initialization creates and owns a fresh exact client,
+/// even when another attached primary has the same display name.
 #[test]
-fn request_local_primary_reuse_preserves_existing_primary_on_disconnect() {
+fn same_named_primary_initialization_creates_independent_owned_client() {
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         Size::new(80, 24).unwrap(),
@@ -476,7 +479,7 @@ fn request_local_primary_reuse_preserves_existing_primary_on_disconnect() {
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
     let input = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
 
     let (output, consumed) = handle_control_frames_for_connection(
@@ -492,17 +495,16 @@ fn request_local_primary_reuse_preserves_existing_primary_on_disconnect() {
     assert_eq!(consumed, input.len());
     assert!(body.contains(r#""granted_role":"primary""#), "{body}");
     assert_eq!(session.primary_client_id(), Some(&existing_primary));
-    assert!(connection.take_disconnect_client_id().is_none());
+    let initialized_primary = connection.take_disconnect_client_id().unwrap();
+    assert_ne!(initialized_primary, existing_primary);
+    assert!(body.contains(&format!(r#""client":{{"id":"{initialized_primary}""#)));
+    assert_eq!(session.attached_primaries().count(), 2);
 }
 
-/// Verifies a distinct Iroh principal cannot take over a live primary by name.
-///
-/// Remote CLI clients commonly share one display name. Transport endpoint and
-/// trust-record identity, not that metadata, must determine whether a control
-/// connection can acquire primary authority. A conflicting connection must
-/// remain uninitialized and leave the original primary untouched.
+/// Verifies an authorized Iroh principal receives a fresh exact primary rather
+/// than reusing or taking over a same-named live primary.
 #[test]
-fn iroh_primary_cannot_reuse_live_primary_by_display_name() {
+fn iroh_primary_with_same_display_name_gets_independent_client() {
     use crate::security::remote::{RemotePrincipal, RemoteRoleCeiling};
 
     let mut session = Session::new_default(
@@ -524,7 +526,7 @@ fn iroh_primary_cannot_reuse_live_primary_by_display_name() {
         .unwrap();
     let mut cache = ControlIdempotencyCache::default();
     let input = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"remote-cli","requested_version":1,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"remote-cli","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"remote-cli","requested_version":2,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"remote-cli","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
     );
 
     let (output, consumed) = handle_control_frames_for_connection(
@@ -538,9 +540,11 @@ fn iroh_primary_cannot_reuse_live_primary_by_display_name() {
     let (body, _) = decode_control_frame(&output, 4096).unwrap();
 
     assert_eq!(consumed, input.len());
-    assert!(body.contains(r#""mezzanine_code":"conflict""#), "{body}");
-    assert!(!connection.initialized());
-    assert_eq!(connection.caller_client_id(), None);
+    assert!(body.contains(r#""granted_role":"primary""#), "{body}");
+    assert!(connection.initialized());
+    let remote_primary = connection.caller_client_id().unwrap();
+    assert_ne!(remote_primary, &existing_primary);
+    assert!(body.contains(&format!(r#""client":{{"id":"{remote_primary}""#)));
     assert_eq!(session.primary_client_id(), Some(&existing_primary));
-    assert_eq!(session.clients().len(), 1);
+    assert_eq!(session.attached_primaries().count(), 2);
 }

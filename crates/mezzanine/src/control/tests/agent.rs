@@ -203,7 +203,7 @@ fn generic_control_reports_runtime_required_methods_as_invalid_state() {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn primary_initialize_request() -> &'static str {
-    r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#
+    r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#
 }
 
 /// Runs the primary control method fixture request operation for this subsystem.
@@ -237,9 +237,6 @@ fn primary_control_method_fixture_request(
         "session/kill" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"session/kill","params":{"force":true,"idempotency_key":"session-kill"}}"#.to_string()
         }
-        "session/attach" => {
-            r#"{"jsonrpc":"2.0","id":1,"method":"session/attach","params":{"target":{"default":true},"role":"observer","client":{"name":"observer","requested_role":"observer","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"idempotency_key":"session-attach"}}"#.to_string()
-        }
         "client/list" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"client/list","params":{}}"#.to_string()
         }
@@ -247,8 +244,8 @@ fn primary_control_method_fixture_request(
             r#"{{"jsonrpc":"2.0","id":1,"method":"client/detach","params":{{"client_id":"{}","idempotency_key":"client-detach"}}}}"#,
             primary
         ),
-        "client/select_primary" => format!(
-            r#"{{"jsonrpc":"2.0","id":1,"method":"client/select_primary","params":{{"client_id":"{}","idempotency_key":"client-select-primary"}}}}"#,
+        "client/set_layout_owner" => format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"client/set_layout_owner","params":{{"client_id":"{}","idempotency_key":"client-set-layout-owner"}}}}"#,
             primary
         ),
         "observer/list" => {

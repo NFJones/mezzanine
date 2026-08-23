@@ -1,15 +1,10 @@
 //! Control-method parameter schema and pane-size validation.
 
-use super::entry::client_terminal_descriptor_from_control;
 use super::{
-    ClientId, ClientRole, ControlParamsSchema, JsonRpcRequest, MezError, PaneSizeSpec,
-    RequestedRole, ResizeAxis, ResizeDirection, Result, Session, client_descriptor_from_json,
-    client_json, control_method_spec, ensure_client_descriptor_role_matches, json_null_field,
-    json_object_field, json_raw_field, json_string_field, parse_json_object_value,
-    reject_unknown_json_fields, require_idempotency_key, require_session_target_matches_value,
-    validate_config_control_params_schema,
+    ControlParamsSchema, JsonRpcRequest, MezError, PaneSizeSpec, ResizeAxis, ResizeDirection,
+    Result, control_method_spec, json_null_field, json_raw_field, parse_json_object_value,
+    reject_unknown_json_fields, validate_config_control_params_schema,
 };
-use mez_mux::session::ObserverDecisionState;
 /// Returns the wall-clock timestamp supplied to lower approval state changes.
 pub(super) fn control_current_unix_seconds() -> u64 {
     std::time::SystemTime::now()
@@ -57,115 +52,6 @@ pub(super) fn reject_runtime_required_creation_fields(
         }
     }
     Ok(())
-}
-
-/// Runs the dispatch session attach parsed operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn dispatch_session_attach_parsed(
-    request: &JsonRpcRequest,
-    session: &mut Session,
-    caller_client_id: &ClientId,
-) -> Result<String> {
-    let params = request
-        .params
-        .as_deref()
-        .ok_or_else(|| MezError::invalid_args("session/attach requires a params object"))?;
-    let target = json_raw_field(params, "target")
-        .ok_or_else(|| MezError::invalid_args("session/attach requires target"))?;
-    let target = serde_json::from_str::<serde_json::Value>(&target).map_err(|error| {
-        MezError::invalid_args(format!("session/attach target is invalid: {error}"))
-    })?;
-    require_session_target_matches_value(session, &target)?;
-    require_idempotency_key(params)?;
-    let role = json_string_field(params, "role").unwrap_or_else(|| "primary".to_string());
-    let client_descriptor = json_object_field(params, "client")
-        .as_deref()
-        .map(client_descriptor_from_json)
-        .transpose()?
-        .ok_or_else(|| MezError::invalid_args("session/attach requires client"))?;
-    match role.as_str() {
-        "primary" => {
-            ensure_client_descriptor_role_matches(
-                &client_descriptor,
-                RequestedRole::Primary,
-                "session/attach client descriptor",
-            )?;
-            let client_id = session.attach_primary_with_terminal(
-                &client_descriptor.name,
-                client_descriptor.interactive,
-                client_terminal_descriptor_from_control(client_descriptor.terminal.as_ref()),
-            )?;
-            let client = session
-                .clients()
-                .iter()
-                .find(|client| client.id == client_id)
-                .ok_or_else(|| {
-                    MezError::new(crate::error::MezErrorKind::NotFound, "client not found")
-                })?;
-            Ok(format!(
-                r#"{{"client":{},"approval_pending":false}}"#,
-                client_json(session, client)
-            ))
-        }
-        "observer" => {
-            ensure_client_descriptor_role_matches(
-                &client_descriptor,
-                RequestedRole::Observer,
-                "session/attach client descriptor",
-            )?;
-            if matches!(
-                session
-                    .clients()
-                    .iter()
-                    .find(|client| client.id == *caller_client_id)
-                    .map(|client| client.role),
-                Some(ClientRole::PendingObserver | ClientRole::Observer)
-            ) {
-                let observer = session
-                    .observers()
-                    .iter()
-                    .find(|observer| observer.client_id == *caller_client_id)
-                    .ok_or_else(|| {
-                        MezError::invalid_state(
-                            "observer caller has no caller-bound observer request",
-                        )
-                    })?;
-                let approval_pending = observer.state == ObserverDecisionState::Pending;
-                let client = session
-                    .clients()
-                    .iter()
-                    .find(|client| client.id == *caller_client_id)
-                    .ok_or_else(|| {
-                        MezError::new(crate::error::MezErrorKind::NotFound, "client not found")
-                    })?;
-                return Ok(format!(
-                    r#"{{"client":{},"approval_pending":{approval_pending}}}"#,
-                    client_json(session, client)
-                ));
-            }
-            let (client_id, _observer_id) = session.request_observer_with_terminal(
-                &client_descriptor.name,
-                client_terminal_descriptor_from_control(client_descriptor.terminal.as_ref()),
-            );
-            let client = session
-                .clients()
-                .iter()
-                .find(|client| client.id == client_id)
-                .ok_or_else(|| {
-                    MezError::new(crate::error::MezErrorKind::NotFound, "client not found")
-                })?;
-            Ok(format!(
-                r#"{{"client":{},"approval_pending":true}}"#,
-                client_json(session, client)
-            ))
-        }
-        _ => Err(MezError::invalid_args(
-            "session/attach role must be primary or observer",
-        )),
-    }
 }
 
 /// Runs the control pane size spec operation for this subsystem.

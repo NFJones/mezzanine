@@ -54,7 +54,7 @@ pub(crate) fn runtime_mutating_method(method: &str) -> bool {
             | "buffer/create"
             | "buffer/delete"
             | "client/detach"
-            | "client/select_primary"
+            | "client/set_layout_owner"
             | "observer/approve"
             | "observer/reject"
             | "observer/revoke"

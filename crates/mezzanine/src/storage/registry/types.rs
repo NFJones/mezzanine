@@ -29,6 +29,10 @@ pub struct SessionRegistry {
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRecord {
+    /// Version of this persisted registry record shape.
+    pub record_version: u32,
+    /// Control protocol version accepted by the session endpoint.
+    pub control_version: u32,
     /// Stores the session id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -68,12 +72,18 @@ pub struct SessionRecord {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub client_count: usize,
+    pub attached_client_count: usize,
     /// Stores the primary available value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub primary_available: bool,
+    pub attached_primary_count: usize,
+    /// Maximum number of attached primary clients accepted by the session.
+    pub max_attached_primaries: usize,
+    /// Whether another protocol-v2 primary may currently attach.
+    pub accepts_primary: bool,
+    /// Exact primary currently owning canonical layout geometry.
+    pub layout_owner_client_id: Option<String>,
     /// Stores the authoritative columns value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

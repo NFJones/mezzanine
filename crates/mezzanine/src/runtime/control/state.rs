@@ -51,6 +51,7 @@ impl RuntimeSessionService {
     pub(super) fn dispatch_runtime_read_only_state_request(
         &self,
         request: &crate::control::JsonRpcRequest,
+        caller_client_id: &mez_core::ids::ClientId,
     ) -> Result<Option<String>> {
         match request.method.as_str() {
             "session/list" => {
@@ -77,7 +78,7 @@ impl RuntimeSessionService {
                 )?;
                 Ok(Some(format!(
                     r#"{{"session":{}}}"#,
-                    self.runtime_session_state_json()
+                    self.runtime_session_state_json(caller_client_id)?
                 )))
             }
             "client/list" => {
@@ -231,14 +232,15 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn runtime_session_summary_json(&self) -> String {
         let session = &self.session;
-        let active_window_id = session.active_window().map(|window| window.id.to_string());
         let attached_client_count = session
             .clients()
             .iter()
             .filter(|client| client.state == ClientState::Attached)
             .count();
+        let attached_primary_count = session.attached_primaries().count();
+        let layout_owner_client_id = session.layout_owner_client_id().map(ToString::to_string);
         format!(
-            r#"{{"id":"{}","version":1,"name":"{}","state":"{}","created_at":{},"last_attached_at":{},"window_count":{},"attached_client_count":{},"has_primary":{},"active_window_id":{}}}"#,
+            r#"{{"id":"{}","version":2,"name":"{}","state":"{}","created_at":{},"last_attached_at":{},"window_count":{},"attached_client_count":{},"attached_primary_count":{},"max_attached_primaries":{},"accepts_primary":{},"layout_owner_client_id":{},"authoritative_size":{{"columns":{},"rows":{}}}}}"#,
             json_escape(session.id.as_str()),
             json_escape(&session.name),
             session_state_name(session.state),
@@ -246,8 +248,12 @@ impl RuntimeSessionService {
             runtime_optional_timestamp_json(self.session.last_attach_at_unix_seconds()),
             session.windows().len(),
             attached_client_count,
-            session.primary_client_id().is_some(),
-            runtime_optional_string(active_window_id.as_deref())
+            attached_primary_count,
+            mez_mux::session::MAX_ATTACHED_PRIMARY_CLIENTS,
+            attached_primary_count < mez_mux::session::MAX_ATTACHED_PRIMARY_CLIENTS,
+            runtime_optional_string(layout_owner_client_id.as_deref()),
+            session.authoritative_size.columns,
+            session.authoritative_size.rows
         )
     }
 
@@ -256,35 +262,66 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn runtime_session_state_json(&self) -> String {
+    pub(super) fn runtime_session_state_json(
+        &self,
+        caller_client_id: &mez_core::ids::ClientId,
+    ) -> Result<String> {
         let session = &self.session;
-        let primary_client_id = session
-            .primary_client_id()
-            .map(|client_id| client_id.to_string());
-        let active_window_id = session.active_window().map(|window| window.id.to_string());
+        let primary_client_ids = session
+            .attached_primaries()
+            .map(|client| format!(r#""{}""#, json_escape(client.id.as_str())))
+            .collect::<Vec<_>>()
+            .join(",");
+        let attached_primary_count = session.attached_primaries().count();
+        let layout_owner_client_id = session.layout_owner_client_id().map(ToString::to_string);
+        let navigation = session.navigation(caller_client_id)?;
+        let active_group_id = navigation.groups.active.as_ref().map(ToString::to_string);
+        let active_window_id = navigation
+            .groups
+            .active
+            .as_ref()
+            .and_then(|group_id| navigation.windows_by_group.get(group_id))
+            .and_then(|cursor| cursor.active.as_ref())
+            .map(ToString::to_string);
+        let active_pane_id = active_window_id
+            .as_deref()
+            .and_then(|window_id| {
+                navigation
+                    .panes_by_window
+                    .iter()
+                    .find(|(id, _)| id.as_str() == window_id)
+            })
+            .and_then(|(_, cursor)| cursor.active.as_ref())
+            .map(ToString::to_string);
         let updated_at = self
             .session
             .last_attach_at_unix_seconds()
             .unwrap_or(self.session.created_at_unix_seconds());
-        format!(
-            r#"{{"id":"{}","version":1,"session_id":"{}","name":"{}","state":"{}","created_at":{},"updated_at":{},"primary_client_id":{},"authoritative_size":{{"columns":{},"rows":{}}},"active_window_id":{},"windows":{},"window_count":{},"clients":{},"observers":{},"config_generation":{},"permission_summary":{}}}"#,
+        Ok(format!(
+            r#"{{"id":"{}","version":2,"session_id":"{}","name":"{}","state":"{}","created_at":{},"updated_at":{},"primary_client_ids":[{}],"attached_primary_count":{},"max_attached_primaries":{},"layout_owner_client_id":{},"authoritative_size":{{"columns":{},"rows":{}}},"navigation":{{"active_group_id":{},"active_window_id":{},"active_pane_id":{},"revision":{}}},"windows":{},"window_count":{},"clients":{},"observers":{},"config_generation":{},"permission_summary":{}}}"#,
             json_escape(session.id.as_str()),
             json_escape(session.id.as_str()),
             json_escape(&session.name),
             session_state_name(session.state),
             runtime_timestamp_json(self.session.created_at_unix_seconds()),
             runtime_timestamp_json(updated_at),
-            runtime_optional_string(primary_client_id.as_deref()),
+            primary_client_ids,
+            attached_primary_count,
+            mez_mux::session::MAX_ATTACHED_PRIMARY_CLIENTS,
+            runtime_optional_string(layout_owner_client_id.as_deref()),
             session.authoritative_size.columns,
             session.authoritative_size.rows,
+            runtime_optional_string(active_group_id.as_deref()),
             runtime_optional_string(active_window_id.as_deref()),
+            runtime_optional_string(active_pane_id.as_deref()),
+            navigation.revision,
             self.runtime_windows_state_json(),
             session.windows().len(),
             self.runtime_clients_json(),
             observers_json(session),
             session.config_generation,
             self.runtime_permission_summary_json()
-        )
+        ))
     }
 
     /// Runs the runtime permission summary json operation for this subsystem.
@@ -385,10 +422,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn runtime_client_state_json(&self, client: &mez_mux::session::Client) -> String {
-        let is_primary = self
-            .session
-            .primary_client_id()
-            .is_some_and(|primary| primary == &client.id);
+        let is_primary = self.session.is_attached_primary(&client.id);
         let attached_at = if is_primary {
             self.session
                 .last_attach_at_unix_seconds()
@@ -403,10 +437,23 @@ impl RuntimeSessionService {
         } else {
             client.last_seen_at_unix_seconds
         };
-        let terminal_size =
-            (is_primary && client.interactive).then_some(self.session.authoritative_size);
+        let terminal_size = client
+            .terminal
+            .as_ref()
+            .map(|terminal| mez_mux::layout::Size {
+                columns: terminal.columns,
+                rows: terminal.rows,
+            })
+            .or_else(|| {
+                (is_primary && client.interactive).then_some(self.session.authoritative_size)
+            });
+        let navigation_revision = client
+            .navigation
+            .as_ref()
+            .map(|navigation| navigation.revision.to_string())
+            .unwrap_or_else(|| "null".to_string());
         format!(
-            r#"{{"id":"{}","version":1,"client_id":"{}","name":"{}","role":"{}","requested_role":"{}","state":"{}","attached_at":{},"last_seen_at":{},"descriptor":{{"name":"{}","interactive":{},"terminal":{}}},"terminal_size":{},"interactive":{}}}"#,
+            r#"{{"id":"{}","version":2,"client_id":"{}","name":"{}","role":"{}","requested_role":"{}","state":"{}","attached_at":{},"last_seen_at":{},"descriptor":{{"name":"{}","interactive":{},"terminal":{}}},"terminal_size":{},"interactive":{},"navigation_revision":{}}}"#,
             json_escape(client.id.as_str()),
             json_escape(client.id.as_str()),
             json_escape(&client.name),
@@ -419,7 +466,8 @@ impl RuntimeSessionService {
             client.interactive,
             runtime_client_terminal_descriptor_json(terminal_size, self.terminal_term()),
             runtime_size_object_json(terminal_size),
-            client.interactive
+            client.interactive,
+            navigation_revision
         )
     }
 

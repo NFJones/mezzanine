@@ -442,6 +442,8 @@ pub struct CapabilityLimits {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub max_capture_payload_size: usize,
+    /// Maximum number of concurrently attached interactive primary clients.
+    pub max_attached_primaries: usize,
 }
 
 /// Carries Capability Features state for this subsystem.
@@ -485,6 +487,14 @@ pub struct CapabilityFeatures {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub approval_bypass: bool,
+    /// Whether several independent primary clients may attach concurrently.
+    pub multiple_primaries: bool,
+    /// Whether group, window, pane, and presentation focus is caller-local.
+    pub client_local_focus: bool,
+    /// Whether one explicit primary owns canonical terminal geometry.
+    pub layout_owner: bool,
+    /// Whether event delivery is bound to one exact initialized client.
+    pub client_bound_events: bool,
 }
 
 /// Defines the PENDING OBSERVER CONTROL METHODS const used by this subsystem.
@@ -493,7 +503,6 @@ pub struct CapabilityFeatures {
 /// boundary and avoids relying on call-site inference.
 pub(crate) const PENDING_OBSERVER_CONTROL_METHODS: &[&str] = &[
     "control/initialize",
-    "session/attach",
     "observer/inspect",
     "client/detach",
     "control/cancel",
@@ -511,7 +520,6 @@ pub(crate) const OBSERVER_CONTROL_METHODS: &[&str] = &[
     "client/detach",
     "terminal/view",
     "event/list",
-    "session/attach",
     "observer/inspect",
 ];
 
@@ -601,7 +609,7 @@ pub(crate) const PRIMARY_CONTROL_METHODS: &[&str] = &[
     "agent/spawn",
     "client/list",
     "client/detach",
-    "client/select_primary",
+    "client/set_layout_owner",
     "observer/list",
     "observer/inspect",
     "observer/approve",
@@ -794,7 +802,7 @@ impl Capabilities {
     /// on duplicated control-flow logic.
     pub(super) fn with_methods(methods: Vec<&'static str>) -> Self {
         Self {
-            protocol_version: 1,
+            protocol_version: 2,
             methods,
             event_types: vec![
                 "client_attached",
@@ -825,6 +833,7 @@ impl Capabilities {
                 max_request_size: 1_048_576,
                 max_event_replay_retention: MAX_EVENT_REPLAY_RETENTION,
                 max_capture_payload_size: 1_048_576,
+                max_attached_primaries: mez_mux::session::MAX_ATTACHED_PRIMARY_CLIENTS,
             },
             features: CapabilityFeatures {
                 tcp: false,
@@ -834,6 +843,10 @@ impl Capabilities {
                 snapshots: true,
                 audit: true,
                 approval_bypass: true,
+                multiple_primaries: true,
+                client_local_focus: true,
+                layout_owner: true,
+                client_bound_events: true,
             },
         }
     }
@@ -995,7 +1008,7 @@ impl ServerIdentity {
             id: format!("mez-{pid}"),
             implementation_name: "mezzanine",
             version: env!("CARGO_PKG_VERSION"),
-            protocol_versions: vec![1],
+            protocol_versions: vec![2],
             started_at: current_rfc3339_seconds(),
             user_id: Some(effective_uid()),
             host: std::env::var("HOSTNAME")
@@ -1027,6 +1040,8 @@ pub struct InitializeResult {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub session: Option<String>,
+    /// Exact initialized client record returned to the connection owner.
+    pub client: Option<String>,
     /// Stores the granted role value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

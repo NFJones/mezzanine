@@ -107,7 +107,7 @@ mod types;
 
 pub use authz::authorize_control_request;
 #[cfg(test)]
-pub use config::{dispatch_project_trust_request, dispatch_session_attach_request};
+pub use config::dispatch_project_trust_request;
 pub(crate) use dispatch::AgentStateProjection;
 pub(crate) use dispatch::validate_control_method_params_schema;
 pub use dispatch::{
@@ -159,10 +159,7 @@ pub(crate) use config::{
     dispatch_config_parsed_to_response_cached, is_config_control_method, persist_target_from_json,
     validate_config_control_params_schema,
 };
-use initialize::{
-    client_descriptor_from_json, ensure_client_descriptor_role_matches,
-    initialize_params_from_json, initialize_result_json, negotiate_protocol_version,
-};
+use initialize::{initialize_params_from_json, initialize_result_json, negotiate_protocol_version};
 pub(crate) use json::unix_seconds_to_rfc3339;
 use json::{
     current_rfc3339_seconds, effective_uid, error_code, field_value, json_bool_field, json_escape,

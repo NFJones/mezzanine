@@ -126,7 +126,7 @@ impl RuntimeSessionService {
             "buffer/create" => self.dispatch_runtime_buffer_create(params),
             "buffer/delete" => self.dispatch_runtime_buffer_delete(params),
             "client/detach" => self.dispatch_runtime_client_detach(primary_client_id, params),
-            "client/select_primary" => {
+            "client/set_layout_owner" => {
                 self.dispatch_runtime_layout_owner_transfer(primary_client_id, params)
             }
             "window/close" => self.dispatch_runtime_window_close(primary_client_id, params),
@@ -206,7 +206,7 @@ impl RuntimeSessionService {
     ) -> Result<String> {
         self.require_live()?;
         let target = runtime_json_string_field(params, "client_id")
-            .ok_or_else(|| MezError::invalid_args("client/select_primary requires client_id"))?;
+            .ok_or_else(|| MezError::invalid_args("client/set_layout_owner requires client_id"))?;
         let transition = self
             .session
             .select_layout_owner_transition(Some(primary_client_id), &target)?;
@@ -214,8 +214,7 @@ impl RuntimeSessionService {
         self.presentation.clear_mouse_resize_drag_state();
         self.reflow_primary_record_browser_overlay();
         Ok(format!(
-            r#"{{"primary_client_id":"{}","layout_owner_client_id":"{}","layout_revision":{},"resized_panes":{}}}"#,
-            json_escape(transition.client_id.as_str()),
+            r#"{{"layout_owner_client_id":"{}","layout_revision":{},"resized_panes":{}}}"#,
             json_escape(transition.client_id.as_str()),
             self.session.layout_revision(),
             updates.len()

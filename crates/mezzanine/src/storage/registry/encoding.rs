@@ -31,7 +31,15 @@ impl SessionRecord {
         created_at_unix_seconds: u64,
         last_attach_at_unix_seconds: Option<u64>,
     ) -> Self {
+        let attached_client_count = session
+            .clients()
+            .iter()
+            .filter(|client| client.state == mez_mux::session::ClientState::Attached)
+            .count();
+        let attached_primary_count = session.attached_primaries().count();
         Self {
+            record_version: 2,
+            control_version: 2,
             session_id: session.id.to_string(),
             name: session.name.clone(),
             state: RegistrySessionState::from_session_state(session.state),
@@ -39,8 +47,12 @@ impl SessionRecord {
             created_at_unix_seconds,
             last_attach_at_unix_seconds,
             window_count: session.windows().len(),
-            client_count: session.clients().len(),
-            primary_available: session.primary_client_id().is_none(),
+            attached_client_count,
+            attached_primary_count,
+            max_attached_primaries: mez_mux::session::MAX_ATTACHED_PRIMARY_CLIENTS,
+            accepts_primary: attached_primary_count
+                < mez_mux::session::MAX_ATTACHED_PRIMARY_CLIENTS,
+            layout_owner_client_id: session.layout_owner_client_id().map(ToString::to_string),
             authoritative_columns: session.authoritative_size.columns,
             authoritative_rows: session.authoritative_size.rows,
         }
@@ -52,6 +64,21 @@ impl SessionRecord {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn validate(&self) -> Result<()> {
+        if self.record_version != 1 && self.record_version != 2 {
+            return Err(MezError::invalid_args(
+                "unsupported session registry record version",
+            ));
+        }
+        if self.control_version == 0 {
+            return Err(MezError::invalid_args(
+                "session registry control version must be non-zero",
+            ));
+        }
+        if self.attached_primary_count > self.max_attached_primaries {
+            return Err(MezError::invalid_args(
+                "session registry primary count exceeds capacity",
+            ));
+        }
         validate_non_empty("session_id", &self.session_id)?;
         validate_non_empty("name", &self.name)?;
         if !self.socket_path.is_absolute() {
@@ -103,7 +130,9 @@ impl SessionRecord {
             .map(|alias| format!(r#""{}""#, json_escape(alias)))
             .unwrap_or_else(|| "null".to_string());
         format!(
-            "{{\"session_id\":\"{}\",\"index_alias\":{},\"name\":\"{}\",\"state\":\"{}\",\"socket_path\":\"{}\",\"created_at_unix_seconds\":{},\"last_attach_at_unix_seconds\":{},\"windows\":{},\"clients\":{},\"primary_available\":{},\"columns\":{},\"rows\":{}}}",
+            "{{\"record_version\":{},\"control_version\":{},\"session_id\":\"{}\",\"index_alias\":{},\"name\":\"{}\",\"state\":\"{}\",\"socket_path\":\"{}\",\"created_at_unix_seconds\":{},\"last_attach_at_unix_seconds\":{},\"windows\":{},\"attached_clients\":{},\"attached_primaries\":{},\"max_attached_primaries\":{},\"accepts_primary\":{},\"layout_owner_client_id\":{},\"columns\":{},\"rows\":{}}}",
+            self.record_version,
+            self.control_version,
             json_escape(&self.session_id),
             index_alias,
             json_escape(&self.name),
@@ -112,8 +141,14 @@ impl SessionRecord {
             self.created_at_unix_seconds,
             last_attach,
             self.window_count,
-            self.client_count,
-            self.primary_available,
+            self.attached_client_count,
+            self.attached_primary_count,
+            self.max_attached_primaries,
+            self.accepts_primary,
+            self.layout_owner_client_id
+                .as_deref()
+                .map(|client_id| format!(r#""{}""#, json_escape(client_id)))
+                .unwrap_or_else(|| "null".to_string()),
             self.authoritative_columns,
             self.authoritative_rows
         )
@@ -131,6 +166,8 @@ impl SessionRecord {
             .to_str()
             .ok_or_else(|| MezError::invalid_args("socket path must be valid UTF-8"))?;
         let fields = [
+            self.record_version.to_string(),
+            self.control_version.to_string(),
             self.session_id.as_str().to_string(),
             self.name.as_str().to_string(),
             self.state.as_str().to_string(),
@@ -140,8 +177,11 @@ impl SessionRecord {
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
             self.window_count.to_string(),
-            self.client_count.to_string(),
-            self.primary_available.to_string(),
+            self.attached_client_count.to_string(),
+            self.attached_primary_count.to_string(),
+            self.max_attached_primaries.to_string(),
+            self.accepts_primary.to_string(),
+            self.layout_owner_client_id.clone().unwrap_or_default(),
             self.authoritative_columns.to_string(),
             self.authoritative_rows.to_string(),
         ];
@@ -159,27 +199,54 @@ impl SessionRecord {
     /// on duplicated control-flow logic.
     pub(super) fn decode(line: &str) -> Result<Self> {
         let fields = split_escaped_fields(line)?;
-        if fields.len() != 11 {
-            return Err(MezError::invalid_args(
-                "session registry record has the wrong field count",
-            ));
-        }
-
-        let record = Self {
-            session_id: fields[0].clone(),
-            name: fields[1].clone(),
-            state: RegistrySessionState::parse(&fields[2])?,
-            socket_path: PathBuf::from(&fields[3]),
-            created_at_unix_seconds: parse_u64(&fields[4], "created_at_unix_seconds")?,
-            last_attach_at_unix_seconds: parse_optional_u64(
-                &fields[5],
-                "last_attach_at_unix_seconds",
-            )?,
-            window_count: parse_usize(&fields[6], "window_count")?,
-            client_count: parse_usize(&fields[7], "client_count")?,
-            primary_available: parse_bool(&fields[8], "primary_available")?,
-            authoritative_columns: parse_u16(&fields[9], "authoritative_columns")?,
-            authoritative_rows: parse_u16(&fields[10], "authoritative_rows")?,
+        let record = match fields.len() {
+            16 => Self {
+                record_version: parse_u32(&fields[0], "record_version")?,
+                control_version: parse_u32(&fields[1], "control_version")?,
+                session_id: fields[2].clone(),
+                name: fields[3].clone(),
+                state: RegistrySessionState::parse(&fields[4])?,
+                socket_path: PathBuf::from(&fields[5]),
+                created_at_unix_seconds: parse_u64(&fields[6], "created_at_unix_seconds")?,
+                last_attach_at_unix_seconds: parse_optional_u64(
+                    &fields[7],
+                    "last_attach_at_unix_seconds",
+                )?,
+                window_count: parse_usize(&fields[8], "window_count")?,
+                attached_client_count: parse_usize(&fields[9], "attached_client_count")?,
+                attached_primary_count: parse_usize(&fields[10], "attached_primary_count")?,
+                max_attached_primaries: parse_usize(&fields[11], "max_attached_primaries")?,
+                accepts_primary: parse_bool(&fields[12], "accepts_primary")?,
+                layout_owner_client_id: (!fields[13].is_empty()).then(|| fields[13].clone()),
+                authoritative_columns: parse_u16(&fields[14], "authoritative_columns")?,
+                authoritative_rows: parse_u16(&fields[15], "authoritative_rows")?,
+            },
+            11 => Self {
+                record_version: 1,
+                control_version: 1,
+                session_id: fields[0].clone(),
+                name: fields[1].clone(),
+                state: RegistrySessionState::parse(&fields[2])?,
+                socket_path: PathBuf::from(&fields[3]),
+                created_at_unix_seconds: parse_u64(&fields[4], "created_at_unix_seconds")?,
+                last_attach_at_unix_seconds: parse_optional_u64(
+                    &fields[5],
+                    "last_attach_at_unix_seconds",
+                )?,
+                window_count: parse_usize(&fields[6], "window_count")?,
+                attached_client_count: parse_usize(&fields[7], "client_count")?,
+                attached_primary_count: 0,
+                max_attached_primaries: 1,
+                accepts_primary: false,
+                layout_owner_client_id: None,
+                authoritative_columns: parse_u16(&fields[9], "authoritative_columns")?,
+                authoritative_rows: parse_u16(&fields[10], "authoritative_rows")?,
+            },
+            _ => {
+                return Err(MezError::invalid_args(
+                    "session registry record has the wrong field count",
+                ));
+            }
         };
         record.validate()?;
         Ok(record)
@@ -405,6 +472,15 @@ fn split_escaped_fields(line: &str) -> Result<Vec<String>> {
 /// on duplicated control-flow logic.
 fn parse_u64(value: &str, field: &str) -> Result<u64> {
     value.parse::<u64>().map_err(|_| {
+        MezError::invalid_args(format!(
+            "session registry field `{field}` must be an integer"
+        ))
+    })
+}
+
+/// Parses one registry protocol or record version.
+fn parse_u32(value: &str, field: &str) -> Result<u32> {
+    value.parse::<u32>().map_err(|_| {
         MezError::invalid_args(format!(
             "session registry field `{field}` must be an integer"
         ))

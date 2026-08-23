@@ -231,7 +231,7 @@ fn runtime_iroh_initialize_requires_pairing_then_accepts_device_proof() {
     let denied = request(
         &mut service,
         &mut unpaired,
-        r#"{"jsonrpc":"2.0","id":"unpaired","method":"control/initialize","params":{"requested_role":"observer","requested_version":1,"client_name":"remote-observer","client":{"name":"remote-observer","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+        r#"{"jsonrpc":"2.0","id":"unpaired","method":"control/initialize","params":{"requested_role":"observer","requested_version":2,"client_name":"remote-observer","client":{"name":"remote-observer","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
     );
     assert_eq!(
         denied
@@ -246,7 +246,7 @@ fn runtime_iroh_initialize_requires_pairing_then_accepts_device_proof() {
         .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint(&client_endpoint_id))
         .unwrap();
     let initialize = format!(
-        r#"{{"jsonrpc":"2.0","id":"pair","method":"control/initialize","params":{{"requested_role":"observer","requested_version":1,"client_name":"remote-observer","client":{{"name":"remote-observer","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_invitation","token":{}}}}}}}"#,
+        r#"{{"jsonrpc":"2.0","id":"pair","method":"control/initialize","params":{{"requested_role":"observer","requested_version":2,"client_name":"remote-observer","client":{{"name":"remote-observer","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_invitation","token":{}}}}}}}"#,
         serde_json::to_string(token).unwrap()
     );
     let paired_response = request(&mut service, &mut paired, &initialize);
@@ -298,7 +298,7 @@ fn runtime_iroh_initialize_requires_pairing_then_accepts_device_proof() {
         .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint(&client_endpoint_id))
         .unwrap();
     let reconnect_initialize = format!(
-        r#"{{"jsonrpc":"2.0","id":"reconnect","method":"control/initialize","params":{{"requested_role":"observer","requested_version":1,"client_name":"remote-observer","client":{{"name":"remote-observer","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_device","token":{}}}}}}}"#,
+        r#"{{"jsonrpc":"2.0","id":"reconnect","method":"control/initialize","params":{{"requested_role":"observer","requested_version":2,"client_name":"remote-observer","client":{{"name":"remote-observer","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_device","token":{}}}}}}}"#,
         serde_json::to_string(&device_credential).unwrap()
     );
     let reconnect_response = request(&mut service, &mut reconnect, &reconnect_initialize);
@@ -327,7 +327,7 @@ fn runtime_remote_administration_rejects_iroh_transport() {
     let initialized = request(
         &mut service,
         &mut local,
-        r#"{"jsonrpc":"2.0","id":"local-init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+        r#"{"jsonrpc":"2.0","id":"local-init","method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
     );
     assert_eq!(
         initialized
@@ -369,7 +369,7 @@ fn runtime_remote_administration_rejects_iroh_transport() {
         .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint(endpoint_id))
         .unwrap();
     let initialize = format!(
-        r#"{{"jsonrpc":"2.0","id":"pair","method":"control/initialize","params":{{"requested_role":"primary","requested_version":1,"client_name":"remote-primary","client":{{"name":"remote-primary","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_invitation","token":{}}}}}}}"#,
+        r#"{{"jsonrpc":"2.0","id":"pair","method":"control/initialize","params":{{"requested_role":"primary","requested_version":2,"client_name":"remote-primary","client":{{"name":"remote-primary","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_invitation","token":{}}}}}}}"#,
         serde_json::to_string(token).unwrap()
     );
     let initialized = request(&mut service, &mut remote, &initialize);
@@ -428,7 +428,7 @@ fn runtime_failed_remote_initialize_does_not_consume_invitation() {
         denied
             .pointer("/error/data/mezzanine_code")
             .and_then(serde_json::Value::as_str),
-        Some("invalid_params")
+        Some("unsupported_version")
     );
     assert!(!failed.initialized());
     assert!(failed.remote_principal().is_none());
@@ -446,7 +446,7 @@ fn runtime_failed_remote_initialize_does_not_consume_invitation() {
         .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint(endpoint_id))
         .unwrap();
     let valid_initialize = format!(
-        r#"{{"jsonrpc":"2.0","id":"retry","method":"control/initialize","params":{{"requested_role":"observer","requested_version":1,"client_name":"remote-observer","client":{{"name":"remote-observer","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_invitation","token":{}}}}}}}"#,
+        r#"{{"jsonrpc":"2.0","id":"retry","method":"control/initialize","params":{{"requested_role":"observer","requested_version":2,"client_name":"remote-observer","client":{{"name":"remote-observer","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_invitation","token":{}}}}}}}"#,
         serde_json::to_string(token).unwrap()
     );
     let accepted = request(&mut service, &mut retry, &valid_initialize);
@@ -544,7 +544,7 @@ fn runtime_remote_pairing_audit_records_rejection_and_redemption() {
         .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint(endpoint_id))
         .unwrap();
     let valid_initialize = format!(
-        r#"{{"jsonrpc":"2.0","id":"pair","method":"control/initialize","params":{{"requested_role":"observer","requested_version":1,"client_name":"remote-observer","client":{{"name":"remote-observer","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_invitation","token":{}}}}}}}"#,
+        r#"{{"jsonrpc":"2.0","id":"pair","method":"control/initialize","params":{{"requested_role":"observer","requested_version":2,"client_name":"remote-observer","client":{{"name":"remote-observer","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_invitation","token":{}}}}}}}"#,
         serde_json::to_string(token).unwrap()
     );
     let accepted = request(&mut service, &mut paired, &valid_initialize);
@@ -592,7 +592,7 @@ fn runtime_remote_device_proof_rejects_escalation_revocation_and_unsupported_rol
         .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint(&endpoint_id))
         .unwrap();
     let initialize = format!(
-        r#"{{"jsonrpc":"2.0","id":"pair","method":"control/initialize","params":{{"requested_role":"observer","requested_version":1,"client_name":"remote-observer","client":{{"name":"remote-observer","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_invitation","token":{}}}}}}}"#,
+        r#"{{"jsonrpc":"2.0","id":"pair","method":"control/initialize","params":{{"requested_role":"observer","requested_version":2,"client_name":"remote-observer","client":{{"name":"remote-observer","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_invitation","token":{}}}}}}}"#,
         serde_json::to_string(token).unwrap()
     );
     let accepted = request(&mut service, &mut paired, &initialize);
@@ -639,7 +639,7 @@ fn runtime_remote_device_proof_rejects_escalation_revocation_and_unsupported_rol
             .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint(proof_endpoint))
             .unwrap();
         let initialize = format!(
-            r#"{{"jsonrpc":"2.0","id":{},"method":"control/initialize","params":{{"requested_role":{},"requested_version":1,"client_name":"remote-adversarial","client":{{"name":"remote-adversarial","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_device","token":{}}}}}}}"#,
+            r#"{{"jsonrpc":"2.0","id":{},"method":"control/initialize","params":{{"requested_role":{},"requested_version":2,"client_name":"remote-adversarial","client":{{"name":"remote-adversarial","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_device","token":{}}}}}}}"#,
             serde_json::to_string(case).unwrap(),
             serde_json::to_string(role).unwrap(),
             serde_json::to_string(&proof).unwrap(),
@@ -682,7 +682,7 @@ fn runtime_remote_device_proof_rejects_escalation_revocation_and_unsupported_rol
         .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint(endpoint_id))
         .unwrap();
     let reconnect = format!(
-        r#"{{"jsonrpc":"2.0","id":"revoked","method":"control/initialize","params":{{"requested_role":"observer","requested_version":1,"client_name":"remote-observer","client":{{"name":"remote-observer","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_device","token":{}}}}}}}"#,
+        r#"{{"jsonrpc":"2.0","id":"revoked","method":"control/initialize","params":{{"requested_role":"observer","requested_version":2,"client_name":"remote-observer","client":{{"name":"remote-observer","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"extension:iroh_device","token":{}}}}}}}"#,
         serde_json::to_string(&credential).unwrap()
     );
     let denied = request(&mut service, &mut after_revoke, &reconnect);

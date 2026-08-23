@@ -6,7 +6,7 @@ use super::{
     AuthenticationMaterial, AuthenticationMechanism, Capabilities, ClientId, ClientRole,
     ControlIdempotencyCache, GrantedRole, InitializeContext, InitializeResult, JsonRpcRequest,
     MezError, ObserverRequestSummary, RequestedRole, Result, ServerIdentity, Session,
-    authorize_control_request, error_code, initialize, initialize_params_from_json,
+    authorize_control_request, client_json, error_code, initialize, initialize_params_from_json,
     initialize_result_json, json_rpc_error, json_rpc_success, json_string_field,
     mezzanine_error_code, negotiate_protocol_version, observer_json, parse_json_rpc_request,
     require_session_target_matches_value, session_summary_json,
@@ -275,6 +275,13 @@ pub fn dispatch_control_request_for_connection(
         }
         return match initialize_control_connection(&request, session, connection) {
             Ok(result) => json_rpc_success(&request.id, &initialize_result_json(&result)),
+            Err(error)
+                if error
+                    .message()
+                    .starts_with("unsupported control protocol version:") =>
+            {
+                json_rpc_error(&request.id, -32003, error.message(), "unsupported_version")
+            }
             Err(error) => json_rpc_error(
                 &request.id,
                 error_code(error.kind()),
@@ -423,48 +430,26 @@ pub(super) fn initialize_control_connection(
                     "primary initialization requires a verified interactive terminal",
                 ));
             }
-            let (client_id, created_primary) = match session.primary_client_id().cloned() {
-                Some(existing_primary) => {
-                    let existing = session
-                        .clients()
-                        .iter()
-                        .find(|client| client.id == existing_primary)
-                        .ok_or_else(|| {
-                            MezError::invalid_state("primary client is missing from client list")
-                        })?;
-                    if matches!(
-                        connection.authenticated_peer(),
-                        Some(AuthenticatedPeer::IrohEndpoint { .. })
-                    ) {
-                        return Err(MezError::conflict(
-                            "session already has an attached primary client",
-                        ));
-                    }
-                    if existing.name != init.client_name {
-                        return Err(MezError::conflict(
-                            "session already has an attached primary client",
-                        ));
-                    }
-                    (existing_primary, false)
-                }
-                None => (
-                    session.attach_primary_with_terminal(
-                        init.client_name.clone(),
-                        client.interactive,
-                        client_terminal_descriptor_from_control(client.terminal.as_ref()),
-                    )?,
-                    true,
-                ),
-            };
+            let client_id = session.attach_primary_with_terminal(
+                init.client_name.clone(),
+                client.interactive,
+                client_terminal_descriptor_from_control(client.terminal.as_ref()),
+            )?;
+            let client_json = session
+                .clients()
+                .iter()
+                .find(|client| client.id == client_id)
+                .map(|client| client_json(session, client))
+                .ok_or_else(|| MezError::invalid_state("attached primary client is missing"))?;
             connection.initialized = true;
             connection.caller_client_id = Some(client_id);
-            connection.detach_client_on_disconnect =
-                created_primary && init.detach_primary_on_disconnect;
+            connection.detach_client_on_disconnect = init.detach_primary_on_disconnect;
             connection.event_stream_version = init.event_stream_version;
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),
                 session: Some(session_summary_json(session)),
+                client: Some(client_json),
                 granted_role: GrantedRole::Primary,
                 capabilities: Capabilities::primary(),
                 approval_pending: false,
@@ -479,13 +464,18 @@ pub(super) fn initialize_control_connection(
                 session.request_observer_with_terminal(init.client_name, terminal);
             let observer_state = observer_json(session, observer_id.as_str())?;
             connection.initialized = true;
-            connection.caller_client_id = Some(client_id);
+            connection.caller_client_id = Some(client_id.clone());
             connection.detach_client_on_disconnect = true;
             connection.event_stream_version = init.event_stream_version;
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),
                 session: None,
+                client: session
+                    .clients()
+                    .iter()
+                    .find(|client| client.id == client_id)
+                    .map(|client| client_json(session, client)),
                 granted_role: GrantedRole::PendingObserver,
                 capabilities: Capabilities::pending_observer(),
                 approval_pending: true,
@@ -505,12 +495,17 @@ pub(super) fn initialize_control_connection(
                     .is_some_and(|client| client.interactive),
             )?;
             connection.initialized = true;
-            connection.caller_client_id = Some(client_id);
+            connection.caller_client_id = Some(client_id.clone());
             connection.detach_client_on_disconnect = true;
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),
                 session: Some(session_summary_json(session)),
+                client: session
+                    .clients()
+                    .iter()
+                    .find(|client| client.id == client_id)
+                    .map(|client| client_json(session, client)),
                 granted_role: GrantedRole::Agent,
                 capabilities: Capabilities::agent(),
                 approval_pending: false,
@@ -526,12 +521,17 @@ pub(super) fn initialize_control_connection(
                     .is_some_and(|client| client.interactive),
             )?;
             connection.initialized = true;
-            connection.caller_client_id = Some(client_id);
+            connection.caller_client_id = Some(client_id.clone());
             connection.detach_client_on_disconnect = true;
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),
                 session: Some(session_summary_json(session)),
+                client: session
+                    .clients()
+                    .iter()
+                    .find(|client| client.id == client_id)
+                    .map(|client| client_json(session, client)),
                 granted_role: GrantedRole::Automation,
                 capabilities: Capabilities::automation(),
                 approval_pending: false,

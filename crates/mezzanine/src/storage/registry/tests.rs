@@ -46,6 +46,8 @@ fn wait_for_registry_writer(rx: &mpsc::Receiver<()>, timeout: Duration) -> bool 
 /// on duplicated control-flow logic.
 fn record(id: &str) -> SessionRecord {
     SessionRecord {
+        record_version: 2,
+        control_version: 2,
         session_id: id.to_string(),
         name: "default".to_string(),
         state: RegistrySessionState::Running,
@@ -53,8 +55,11 @@ fn record(id: &str) -> SessionRecord {
         created_at_unix_seconds: 10,
         last_attach_at_unix_seconds: Some(20),
         window_count: 1,
-        client_count: 1,
-        primary_available: false,
+        attached_client_count: 1,
+        attached_primary_count: 16,
+        max_attached_primaries: 16,
+        layout_owner_client_id: None,
+        accepts_primary: false,
         authoritative_columns: 80,
         authoritative_rows: 24,
     }
@@ -115,7 +120,7 @@ async fn async_upsert_and_remove_round_trip_registry_records() {
     registry.upsert_async(record("$1")).await.unwrap();
     let mut updated = record("$1");
     updated.state = RegistrySessionState::Detached;
-    updated.primary_available = true;
+    updated.accepts_primary = true;
     registry.upsert_async(updated.clone()).await.unwrap();
     registry.upsert_async(record("$2")).await.unwrap();
 
@@ -232,7 +237,7 @@ fn upsert_replaces_existing_record() {
 
     let mut updated = record("$1");
     updated.state = RegistrySessionState::Detached;
-    updated.primary_available = true;
+    updated.accepts_primary = true;
     registry.upsert(updated.clone()).unwrap();
 
     assert_eq!(registry.list().unwrap(), vec![updated]);
@@ -321,8 +326,10 @@ fn builds_record_from_session_state() {
     );
 
     assert_eq!(record.state, RegistrySessionState::Detached);
-    assert!(record.primary_available);
-    assert_eq!(record.client_count, 1);
+    assert!(record.accepts_primary);
+    assert_eq!(record.attached_client_count, 0);
+    assert_eq!(record.attached_primary_count, 0);
+    assert_eq!(record.control_version, 2);
 }
 
 /// Verifies records render as json array.
@@ -337,7 +344,10 @@ fn records_render_as_json_array() {
     assert!(json.starts_with("[{"));
     assert!(json.contains("\"session_id\":\"$1\""));
     assert!(json.contains("\"index_alias\":\"$1\""));
-    assert!(json.contains("\"primary_available\":false"));
+    assert!(json.contains("\"record_version\":2"));
+    assert!(json.contains("\"control_version\":2"));
+    assert!(json.contains("\"attached_primaries\":16"));
+    assert!(json.contains("\"accepts_primary\":false"));
 }
 
 /// Verifies creation-order index aliases are derived from registry records

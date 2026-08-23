@@ -58,7 +58,7 @@ fn runtime_layout_owner_transfer_applies_target_terminal_size() {
 
     let response = service.dispatch_runtime_control_body(
         &format!(
-            r#"{{"jsonrpc":"2.0","id":"owner","method":"client/select_primary","params":{{"client_id":"{}","idempotency_key":"owner-transfer"}}}}"#,
+            r#"{{"jsonrpc":"2.0","id":"owner","method":"client/set_layout_owner","params":{{"client_id":"{}","idempotency_key":"owner-transfer"}}}}"#,
             second
         ),
         &first,
@@ -141,7 +141,7 @@ fn runtime_control_initialize_can_reattach_primary_without_existing_primary() {
     let mut service = test_runtime_service();
     let mut connection = ControlConnectionState::new(true, true);
     let initialize = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"primary","requested_version":1,"client_name":"mez-cli","client":{"name":"mez-cli","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}}}}"#,
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"primary","requested_version":2,"client_name":"mez-cli","client":{"name":"mez-cli","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}}}}"#,
     );
     let get =
         encode_control_body(r#"{"jsonrpc":"2.0","id":"get","method":"session/get","params":{}}"#);
@@ -177,7 +177,7 @@ fn runtime_automation_connection_can_set_pane_attention() {
     let mut service = test_runtime_service();
     let mut connection = ControlConnectionState::new(true, true);
     let initialize = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"automation","requested_version":1,"client_name":"hook-harness","client":{"name":"hook-harness","interactive":false}}}"#,
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"automation","requested_version":2,"client_name":"hook-harness","client":{"name":"hook-harness","interactive":false}}}"#,
     );
     let attention = encode_control_body(
         r#"{"jsonrpc":"2.0","id":"attention","method":"pane/attention","params":{"target":{"pane_id":"%1"},"attention":true,"idempotency_key":"hook-attention"}}"#,
@@ -229,7 +229,7 @@ fn runtime_control_initialize_resizes_started_initial_pane_for_primary_terminal(
 
     let mut connection = ControlConnectionState::new(true, true);
     let initialize = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"primary","requested_version":1,"client_name":"mez-cli","client":{"name":"mez-cli","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}}}}"#,
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"primary","requested_version":2,"client_name":"mez-cli","client":{"name":"mez-cli","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}}}}"#,
     );
 
     let (output, consumed) = service
@@ -308,7 +308,7 @@ fn runtime_control_initialize_observer_logs_and_lists_pending_request() {
         .unwrap();
     let mut connection = ControlConnectionState::new(true, true);
     let initialize = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"observer","requested_version":1,"client_name":"observer-cli","client":{"name":"observer-cli","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}}}}"#,
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"observer","requested_version":2,"client_name":"observer-cli","client":{"name":"observer-cli","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}}}}"#,
     );
 
     let (output, consumed) = service
@@ -385,7 +385,7 @@ fn runtime_control_initialize_persists_attached_registry_state() {
     service.persist_registry_update().unwrap();
     let mut connection = ControlConnectionState::new(true, true);
     let initialize = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"primary","requested_version":1,"client_name":"mez-cli","client":{"name":"mez-cli","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}}}}"#,
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"requested_role":"primary","requested_version":2,"client_name":"mez-cli","client":{"name":"mez-cli","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}}}}"#,
     );
 
     service
@@ -396,7 +396,9 @@ fn runtime_control_initialize_persists_attached_registry_state() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].session_id, service.session().id.to_string());
     assert_eq!(records[0].state, RegistrySessionState::Running);
-    assert!(!records[0].primary_available);
+    assert!(records[0].accepts_primary);
+    assert_eq!(records[0].attached_primary_count, 1);
+    assert_eq!(records[0].control_version, 2);
     assert_eq!(records[0].authoritative_columns, 100);
     assert_eq!(records[0].authoritative_rows, 40);
     assert!(records[0].last_attach_at_unix_seconds.is_some());
@@ -424,7 +426,8 @@ fn attached_terminal_detach_action_persists_available_registry_state() {
         .unwrap();
     let busy_records = registry.list().unwrap();
     assert_eq!(busy_records.len(), 1);
-    assert!(!busy_records[0].primary_available);
+    assert!(busy_records[0].accepts_primary);
+    assert_eq!(busy_records[0].attached_primary_count, 1);
     let detach_step = AttachedTerminalClientStepPlan {
         actions: vec![TerminalClientLoopAction::ExecuteMux(
             MuxAction::DetachPrimaryClient,
@@ -443,7 +446,7 @@ fn attached_terminal_detach_action_persists_available_registry_state() {
     let records = registry.list().unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].state, RegistrySessionState::Detached);
-    assert!(records[0].primary_available);
+    assert!(records[0].accepts_primary);
     assert_eq!(records[0].last_attach_at_unix_seconds, Some(120));
 
     let _ = fs::remove_dir_all(root);
@@ -470,7 +473,7 @@ fn runtime_service_registry_plan_preserves_authoritative_detached_size() {
     };
     assert_eq!(record.state, RegistrySessionState::Detached);
     assert_eq!(record.last_attach_at_unix_seconds, Some(120));
-    assert!(record.primary_available);
+    assert!(record.accepts_primary);
     assert_eq!(record.authoritative_columns, 132);
     assert_eq!(record.authoritative_rows, 43);
 }

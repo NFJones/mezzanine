@@ -273,7 +273,7 @@ fn snapshot_resume_can_serve_restored_session_over_control_socket() {
     );
     let mut stream =
         connect_when_ready(&socket).expect("snapshot resume socket did not accept connections");
-    let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":1,"requested_role":"primary","client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
+    let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":2,"requested_role":"primary","client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
     let view = r#"{"jsonrpc":"2.0","id":"view","method":"terminal/view","params":{"client_size":{"columns":80,"rows":24}}}"#;
     stream.write_all(&encode_control_body(initialize)).unwrap();
     stream.write_all(&encode_control_body(view)).unwrap();

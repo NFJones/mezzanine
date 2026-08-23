@@ -26,8 +26,6 @@ pub(super) enum ControlDispatchKind {
     ControlShutdown,
     /// Cancel a pending request.
     ControlCancel,
-    /// Attach to a session.
-    SessionAttach,
     /// List sessions.
     SessionList,
     /// Inspect the active session.
@@ -100,8 +98,8 @@ pub(super) enum ControlDispatchKind {
     ClientList,
     /// Detach a client.
     ClientDetach,
-    /// Select the primary client.
-    ClientSelectPrimary,
+    /// Transfer canonical layout ownership to an attached primary.
+    ClientSetLayoutOwner,
     /// List observer requests.
     ObserverList,
     /// Inspect an observer request.
@@ -230,16 +228,6 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         params_schema: ControlParamsSchema::Allowed(&["request_id"]),
     },
     ControlMethodSpec {
-        method: "session/attach",
-        dispatch: ControlDispatchKind::SessionAttach,
-        params_schema: ControlParamsSchema::Allowed(&[
-            "target",
-            "role",
-            "client",
-            "idempotency_key",
-        ]),
-    },
-    ControlMethodSpec {
         method: "session/list",
         dispatch: ControlDispatchKind::SessionList,
         params_schema: ControlParamsSchema::Allowed(NO_PARAMS),
@@ -270,8 +258,8 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         params_schema: ControlParamsSchema::Allowed(CLIENT_IDEMPOTENCY_PARAMS),
     },
     ControlMethodSpec {
-        method: "client/select_primary",
-        dispatch: ControlDispatchKind::ClientSelectPrimary,
+        method: "client/set_layout_owner",
+        dispatch: ControlDispatchKind::ClientSetLayoutOwner,
         params_schema: ControlParamsSchema::Allowed(CLIENT_IDEMPOTENCY_PARAMS),
     },
     ControlMethodSpec {

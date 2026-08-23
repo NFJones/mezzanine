@@ -48,6 +48,8 @@ fn list_reads_durable_session_registry() {
     fs::write(&socket_path, "").unwrap();
     registry
         .upsert(SessionRecord {
+            record_version: 2,
+            control_version: 2,
             session_id: "$1".to_string(),
             name: "work".to_string(),
             state: RegistrySessionState::Detached,
@@ -55,8 +57,11 @@ fn list_reads_durable_session_registry() {
             created_at_unix_seconds: 100,
             last_attach_at_unix_seconds: Some(120),
             window_count: 2,
-            client_count: 0,
-            primary_available: true,
+            attached_client_count: 0,
+            attached_primary_count: 0,
+            max_attached_primaries: 16,
+            layout_owner_client_id: None,
+            accepts_primary: true,
             authoritative_columns: 100,
             authoritative_rows: 30,
         })
@@ -77,7 +82,9 @@ fn list_reads_durable_session_registry() {
     assert!(output.contains("\"session_id\":\"$1\""));
     assert!(output.contains("\"index_alias\":\"$1\""));
     assert!(output.contains("\"state\":\"detached\""));
-    assert!(output.contains("\"primary_available\":true"));
+    assert!(output.contains("\"record_version\":2"));
+    assert!(output.contains("\"control_version\":2"));
+    assert!(output.contains("\"accepts_primary\":true"));
     assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(directory.path);
@@ -309,6 +316,8 @@ fn default_attach_uses_registry_socket_with_available_primary() {
     fs::write(&second_socket, "").unwrap();
     registry
         .upsert(SessionRecord {
+            record_version: 2,
+            control_version: 2,
             session_id: "$1".to_string(),
             name: "busy".to_string(),
             state: RegistrySessionState::Running,
@@ -316,14 +325,19 @@ fn default_attach_uses_registry_socket_with_available_primary() {
             created_at_unix_seconds: 100,
             last_attach_at_unix_seconds: None,
             window_count: 1,
-            client_count: 1,
-            primary_available: false,
+            attached_client_count: 1,
+            attached_primary_count: 16,
+            max_attached_primaries: 16,
+            layout_owner_client_id: None,
+            accepts_primary: false,
             authoritative_columns: 80,
             authoritative_rows: 24,
         })
         .unwrap();
     registry
         .upsert(SessionRecord {
+            record_version: 2,
+            control_version: 2,
             session_id: "$2".to_string(),
             name: "free".to_string(),
             state: RegistrySessionState::Detached,
@@ -331,8 +345,11 @@ fn default_attach_uses_registry_socket_with_available_primary() {
             created_at_unix_seconds: 101,
             last_attach_at_unix_seconds: None,
             window_count: 1,
-            client_count: 0,
-            primary_available: true,
+            attached_client_count: 0,
+            attached_primary_count: 0,
+            max_attached_primaries: 16,
+            layout_owner_client_id: None,
+            accepts_primary: true,
             authoritative_columns: 80,
             authoritative_rows: 24,
         })
@@ -367,6 +384,8 @@ fn default_attach_reports_conflict_when_no_primary_is_available() {
     fs::write(&busy_socket, "").unwrap();
     registry
         .upsert(SessionRecord {
+            record_version: 2,
+            control_version: 2,
             session_id: "$1".to_string(),
             name: "busy".to_string(),
             state: RegistrySessionState::Running,
@@ -374,8 +393,11 @@ fn default_attach_reports_conflict_when_no_primary_is_available() {
             created_at_unix_seconds: 100,
             last_attach_at_unix_seconds: Some(110),
             window_count: 1,
-            client_count: 1,
-            primary_available: false,
+            attached_client_count: 1,
+            attached_primary_count: 16,
+            max_attached_primaries: 16,
+            layout_owner_client_id: None,
+            accepts_primary: false,
             authoritative_columns: 80,
             authoritative_rows: 24,
         })
@@ -414,6 +436,8 @@ fn attach_session_id_uses_matching_registry_socket() {
     fs::write(&target_socket, "").unwrap();
     registry
         .upsert(SessionRecord {
+            record_version: 2,
+            control_version: 2,
             session_id: "$target".to_string(),
             name: "target".to_string(),
             state: RegistrySessionState::Detached,
@@ -421,8 +445,11 @@ fn attach_session_id_uses_matching_registry_socket() {
             created_at_unix_seconds: 100,
             last_attach_at_unix_seconds: None,
             window_count: 1,
-            client_count: 0,
-            primary_available: true,
+            attached_client_count: 0,
+            attached_primary_count: 0,
+            max_attached_primaries: 16,
+            layout_owner_client_id: None,
+            accepts_primary: true,
             authoritative_columns: 80,
             authoritative_rows: 24,
         })
@@ -462,6 +489,8 @@ fn attach_session_alias_uses_creation_order_registry_socket() {
     fs::write(&newest_socket, "").unwrap();
     registry
         .upsert(SessionRecord {
+            record_version: 2,
+            control_version: 2,
             session_id: "$newest".to_string(),
             name: "newest".to_string(),
             state: RegistrySessionState::Detached,
@@ -469,14 +498,19 @@ fn attach_session_alias_uses_creation_order_registry_socket() {
             created_at_unix_seconds: 200,
             last_attach_at_unix_seconds: None,
             window_count: 1,
-            client_count: 0,
-            primary_available: true,
+            attached_client_count: 0,
+            attached_primary_count: 0,
+            max_attached_primaries: 16,
+            layout_owner_client_id: None,
+            accepts_primary: true,
             authoritative_columns: 80,
             authoritative_rows: 24,
         })
         .unwrap();
     registry
         .upsert(SessionRecord {
+            record_version: 2,
+            control_version: 2,
             session_id: "$oldest".to_string(),
             name: "oldest".to_string(),
             state: RegistrySessionState::Detached,
@@ -484,8 +518,11 @@ fn attach_session_alias_uses_creation_order_registry_socket() {
             created_at_unix_seconds: 100,
             last_attach_at_unix_seconds: None,
             window_count: 1,
-            client_count: 0,
-            primary_available: true,
+            attached_client_count: 0,
+            attached_primary_count: 0,
+            max_attached_primaries: 16,
+            layout_owner_client_id: None,
+            accepts_primary: true,
             authoritative_columns: 80,
             authoritative_rows: 24,
         })
@@ -530,6 +567,8 @@ fn attach_observer_accepts_session_index_alias() {
     fs::write(&target_socket, "").unwrap();
     registry
         .upsert(SessionRecord {
+            record_version: 2,
+            control_version: 2,
             session_id: "$target".to_string(),
             name: "target".to_string(),
             state: RegistrySessionState::Running,
@@ -537,8 +576,11 @@ fn attach_observer_accepts_session_index_alias() {
             created_at_unix_seconds: 100,
             last_attach_at_unix_seconds: Some(120),
             window_count: 1,
-            client_count: 1,
-            primary_available: false,
+            attached_client_count: 1,
+            attached_primary_count: 16,
+            max_attached_primaries: 16,
+            layout_owner_client_id: None,
+            accepts_primary: false,
             authoritative_columns: 80,
             authoritative_rows: 24,
         })

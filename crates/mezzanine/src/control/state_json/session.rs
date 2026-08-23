@@ -30,17 +30,17 @@ pub(in crate::control) fn granted_role_name(role: GrantedRole) -> &'static str {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(in crate::control) fn session_summary_json(session: &Session) -> String {
-    let active_window_id = session.active_window().map(|window| window.id.to_string());
-    let primary_client_id = session
-        .primary_client_id()
-        .map(|client_id| client_id.to_string());
     let attached_client_count = session
         .clients()
         .iter()
         .filter(|client| client.state == ClientState::Attached)
         .count();
+    let attached_primary_count = session.attached_primaries().count();
+    let layout_owner_client_id = session
+        .layout_owner_client_id()
+        .map(|client_id| client_id.to_string());
     format!(
-        r#"{{"id":"{}","version":1,"name":"{}","state":"{}","created_at":{},"last_attached_at":{},"window_count":{},"attached_client_count":{},"has_primary":{},"primary_client_id":{},"active_window_id":{}}}"#,
+        r#"{{"id":"{}","version":2,"name":"{}","state":"{}","created_at":{},"last_attached_at":{},"window_count":{},"attached_client_count":{},"attached_primary_count":{},"max_attached_primaries":{},"accepts_primary":{},"layout_owner_client_id":{},"authoritative_size":{{"columns":{},"rows":{}}}}}"#,
         json_escape(&session.id.to_string()),
         json_escape(&session.name),
         session_state_name(session.state),
@@ -48,9 +48,12 @@ pub(in crate::control) fn session_summary_json(session: &Session) -> String {
         optional_rfc3339_timestamp_json(session.last_attached_at_unix_seconds),
         session.windows().len(),
         attached_client_count,
-        session.primary_client_id().is_some(),
-        json_optional_string(primary_client_id.as_deref()),
-        json_optional_string(active_window_id.as_deref())
+        attached_primary_count,
+        mez_mux::session::MAX_ATTACHED_PRIMARY_CLIENTS,
+        attached_primary_count < mez_mux::session::MAX_ATTACHED_PRIMARY_CLIENTS,
+        json_optional_string(layout_owner_client_id.as_deref()),
+        session.authoritative_size.columns,
+        session.authoritative_size.rows
     )
 }
 
@@ -59,30 +62,63 @@ pub(in crate::control) fn session_summary_json(session: &Session) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::control) fn session_state_json(session: &Session) -> String {
-    let primary_client_id = session
-        .primary_client_id()
+pub(in crate::control) fn session_state_json(
+    session: &Session,
+    caller_client_id: &super::ClientId,
+) -> Result<String> {
+    let primary_client_ids = session
+        .attached_primaries()
+        .map(|client| format!(r#""{}""#, json_escape(client.id.as_str())))
+        .collect::<Vec<_>>()
+        .join(",");
+    let attached_primary_count = session.attached_primaries().count();
+    let layout_owner_client_id = session
+        .layout_owner_client_id()
         .map(|client_id| client_id.to_string());
-    let active_window_id = session.active_window().map(|window| window.id.to_string());
-    format!(
-        r#"{{"id":"{}","version":1,"session_id":"{}","name":"{}","state":"{}","created_at":{},"updated_at":{},"primary_client_id":{},"authoritative_size":{{"columns":{},"rows":{}}},"active_window_id":{},"windows":{},"window_count":{},"clients":{},"observers":{},"config_generation":{},"permission_summary":{}}}"#,
+    let navigation = session.navigation(caller_client_id)?;
+    let active_group_id = navigation.groups.active.as_ref().map(ToString::to_string);
+    let active_window_id = navigation
+        .groups
+        .active
+        .as_ref()
+        .and_then(|group_id| navigation.windows_by_group.get(group_id))
+        .and_then(|cursor| cursor.active.as_ref())
+        .map(ToString::to_string);
+    let active_pane_id = active_window_id
+        .as_deref()
+        .and_then(|window_id| {
+            navigation
+                .panes_by_window
+                .iter()
+                .find(|(id, _)| id.as_str() == window_id)
+        })
+        .and_then(|(_, cursor)| cursor.active.as_ref())
+        .map(ToString::to_string);
+    Ok(format!(
+        r#"{{"id":"{}","version":2,"session_id":"{}","name":"{}","state":"{}","created_at":{},"updated_at":{},"primary_client_ids":[{}],"attached_primary_count":{},"max_attached_primaries":{},"layout_owner_client_id":{},"authoritative_size":{{"columns":{},"rows":{}}},"navigation":{{"active_group_id":{},"active_window_id":{},"active_pane_id":{},"revision":{}}},"windows":{},"window_count":{},"clients":{},"observers":{},"config_generation":{},"permission_summary":{}}}"#,
         json_escape(&session.id.to_string()),
         json_escape(&session.id.to_string()),
         json_escape(&session.name),
         session_state_name(session.state),
         optional_rfc3339_timestamp_json(Some(session.created_at_unix_seconds)),
         optional_rfc3339_timestamp_json(Some(session.updated_at_unix_seconds)),
-        json_optional_string(primary_client_id.as_deref()),
+        primary_client_ids,
+        attached_primary_count,
+        mez_mux::session::MAX_ATTACHED_PRIMARY_CLIENTS,
+        json_optional_string(layout_owner_client_id.as_deref()),
         session.authoritative_size.columns,
         session.authoritative_size.rows,
+        json_optional_string(active_group_id.as_deref()),
         json_optional_string(active_window_id.as_deref()),
+        json_optional_string(active_pane_id.as_deref()),
+        navigation.revision,
         windows_json(session),
         session.windows().len(),
         clients_json(session),
         observers_json(session),
         session.config_generation,
         permission_summary_json()
-    )
+    ))
 }
 
 /// Runs the session state json for params operation for this subsystem.
@@ -92,10 +128,11 @@ pub(in crate::control) fn session_state_json(session: &Session) -> String {
 /// on duplicated control-flow logic.
 pub(in crate::control) fn session_state_json_for_params(
     session: &Session,
+    caller_client_id: &super::ClientId,
     params: Option<&str>,
 ) -> Result<String> {
     state_request_session_target_matches(session, params, "session/get params")?;
-    Ok(session_state_json(session))
+    session_state_json(session, caller_client_id)
 }
 
 /// Runs the permission summary json operation for this subsystem.

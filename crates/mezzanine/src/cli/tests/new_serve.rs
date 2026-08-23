@@ -302,7 +302,7 @@ fn serve_starts_foreground_control_daemon() {
 
     let mut stream =
         connect_when_ready(&socket).expect("serve command did not accept socket connections");
-    let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":1,"requested_role":"primary","client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
+    let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":2,"requested_role":"primary","client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
     let get = r#"{"jsonrpc":"2.0","id":"get","method":"session/get","params":{}}"#;
     stream.write_all(&encode_control_body(initialize)).unwrap();
     stream.write_all(&encode_control_body(get)).unwrap();
@@ -580,7 +580,7 @@ fn serve_can_start_message_protocol_socket() {
 
     let mut control_stream =
         connect_when_ready(&control_socket).expect("control socket did not accept connections");
-    let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":1,"requested_role":"primary","client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
+    let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":2,"requested_role":"primary","client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
     control_stream
         .write_all(&encode_control_body(initialize))
         .unwrap();
@@ -672,7 +672,7 @@ fn serve_can_start_event_stream_socket() {
 
     let mut control_stream =
         connect_when_ready(&control_socket).expect("control socket did not accept connections");
-    let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":1,"requested_role":"primary","event_stream_version":1,"client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
+    let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":2,"requested_role":"primary","event_stream_version":1,"client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
     let kill = r#"{"jsonrpc":"2.0","id":"kill","method":"session/kill","params":{"force":true,"idempotency_key":"kill"}}"#;
     control_stream
         .write_all(&encode_control_body(initialize))
@@ -797,7 +797,7 @@ fn serve_derives_default_auxiliary_sockets() {
 
     let mut control_stream =
         connect_when_ready(&control_socket).expect("control socket did not accept connections");
-    let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":1,"requested_role":"primary","event_stream_version":1,"client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
+    let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":2,"requested_role":"primary","event_stream_version":1,"client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
     let kill = r#"{"jsonrpc":"2.0","id":"kill","method":"session/kill","params":{"force":true,"idempotency_key":"kill"}}"#;
     control_stream
         .write_all(&encode_control_body(initialize))

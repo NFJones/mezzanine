@@ -536,7 +536,7 @@ impl RuntimeSessionService {
                     }
                 };
             }
-            match self.dispatch_runtime_read_only_state_request(&request) {
+            match self.dispatch_runtime_read_only_state_request(&request, primary_client_id) {
                 Ok(Some(result)) => {
                     return format!(
                         r#"{{"jsonrpc":"2.0","id":{},"result":{result}}}"#,
@@ -1057,7 +1057,7 @@ impl RuntimeSessionService {
                     }
                 };
             }
-            match self.dispatch_runtime_read_only_state_request(&request) {
+            match self.dispatch_runtime_read_only_state_request(&request, &caller_client_id) {
                 Ok(Some(result)) => {
                     return format!(
                         r#"{{"jsonrpc":"2.0","id":{},"result":{result}}}"#,
