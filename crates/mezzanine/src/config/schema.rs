@@ -19,6 +19,7 @@ pub const PRIMARY_CONFIG_FILENAMES: &[&str] =
 /// boundary and avoids relying on call-site inference.
 pub const BASELINE_TOP_LEVEL_KEYS: &[&str] = &[
     "version",
+    "host",
     "runtime",
     "transport",
     "terminal",
@@ -403,6 +404,15 @@ pub(crate) fn config_change_path_is_user_only_transport_policy(path: &str) -> bo
     path == "transport" || path.starts_with("transport.")
 }
 
+/// Reports whether a configuration path controls persistent-host authority.
+///
+/// Host lifecycle, recovery, quotas, and durable lease retention are primary
+/// user policy. Model-authored changes must not enable the host or alter those
+/// resource and authority boundaries.
+pub(crate) fn config_change_path_is_user_only_host_policy(path: &str) -> bool {
+    path == "host" || path.starts_with("host.")
+}
+
 /// Defines backend-neutral command-effect keys accepted by schema v21.
 pub(super) const COMMAND_RULE_EFFECT_KEYS: &[&str] = &[
     "completeness",
@@ -424,6 +434,27 @@ pub(super) const SESSION_KEYS: &[&str] = &["default_command"];
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub(super) const RUNTIME_KEYS: &[&str] = &["cpu_count"];
+
+/// Defines persistent-host policy keys introduced by schema v73.
+pub(super) const HOST_KEYS: &[&str] = &[
+    "enabled",
+    "auto_start_local",
+    "max_sessions",
+    "max_live_sessions",
+    "shutdown_timeout_ms",
+    "checkpoint_interval_seconds",
+    "recover_on_start",
+    "default_session_policy",
+    "leases",
+];
+
+/// Defines durable-lease retention and quota keys under `host.leases`.
+pub(super) const HOST_LEASE_KEYS: &[&str] = &[
+    "default_ttl_seconds",
+    "failed_retention_seconds",
+    "released_retention_seconds",
+    "max_per_remote_client",
+];
 
 /// Defines the schema-v71 Iroh transport keys.
 pub(super) const IROH_TRANSPORT_KEYS: &[&str] = &[

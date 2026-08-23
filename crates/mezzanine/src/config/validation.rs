@@ -309,6 +309,7 @@ pub fn validate_config_text(
     };
     let values = extract_config_values(format, text);
     diagnostics.extend(validate_agent_turn_timeout_config(format, text));
+    diagnostics.extend(validate_host_config(format, text));
     diagnostics.extend(validate_iroh_transport_config(format, text));
     diagnostics.extend(validate_group_whitelist_config(format, text));
     diagnostics.extend(validate_env_whitelist_config(format, text));
@@ -543,7 +544,93 @@ pub fn validate_config_text(
     ConfigValidation::from_diagnostics(diagnostics)
 }
 
-/// Validates schema-v71 Iroh transport policy with structured value types.
+/// Validates schema-v73 persistent-host policy with structured value types.
+fn validate_host_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
+    let Ok(root) = parse_config_json_value(format, text) else {
+        return Vec::new();
+    };
+    let Some(host) = root.get("host").and_then(serde_json::Value::as_object) else {
+        return Vec::new();
+    };
+    let mut diagnostics = Vec::new();
+    for key in ["enabled", "auto_start_local"] {
+        if host.get(key).is_some_and(|value| !value.is_boolean()) {
+            diagnostics.push(ConfigDiagnostic {
+                path: format!("host.{key}"),
+                message: "host flag must be true or false".to_string(),
+            });
+        }
+    }
+    for key in [
+        "max_sessions",
+        "max_live_sessions",
+        "shutdown_timeout_ms",
+        "checkpoint_interval_seconds",
+    ] {
+        if host
+            .get(key)
+            .is_some_and(|value| value.as_u64().is_none_or(|value| value == 0))
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path: format!("host.{key}"),
+                message: "host limit must be a positive integer".to_string(),
+            });
+        }
+    }
+    if host
+        .get("recover_on_start")
+        .is_some_and(|value| !matches!(value.as_str(), Some("lazy" | "eager" | "disabled")))
+    {
+        diagnostics.push(ConfigDiagnostic {
+            path: "host.recover_on_start".to_string(),
+            message: "host recovery policy must be lazy, eager, or disabled".to_string(),
+        });
+    }
+    if host
+        .get("default_session_policy")
+        .is_some_and(|value| !matches!(value.as_str(), Some("most_recent_attachable" | "none")))
+    {
+        diagnostics.push(ConfigDiagnostic {
+            path: "host.default_session_policy".to_string(),
+            message: "host default session policy must be most_recent_attachable or none"
+                .to_string(),
+        });
+    }
+    if let Some(leases) = host.get("leases").and_then(serde_json::Value::as_object) {
+        for key in [
+            "default_ttl_seconds",
+            "failed_retention_seconds",
+            "released_retention_seconds",
+        ] {
+            if leases
+                .get(key)
+                .is_some_and(|value| value.as_u64().is_none())
+            {
+                diagnostics.push(ConfigDiagnostic {
+                    path: format!("host.leases.{key}"),
+                    message: "host lease duration must be a non-negative integer".to_string(),
+                });
+            }
+        }
+        if leases
+            .get("max_per_remote_client")
+            .is_some_and(|value| value.as_u64().is_none_or(|value| value == 0))
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path: "host.leases.max_per_remote_client".to_string(),
+                message: "host lease limit must be a positive integer".to_string(),
+            });
+        }
+    } else if host.get("leases").is_some() {
+        diagnostics.push(ConfigDiagnostic {
+            path: "host.leases".to_string(),
+            message: "host leases must be a table".to_string(),
+        });
+    }
+    diagnostics
+}
+
+/// Validates schema-v73 Iroh transport policy with structured value types.
 fn validate_iroh_transport_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
     let Ok(root) = parse_config_json_value(format, text) else {
         return Vec::new();
@@ -581,11 +668,11 @@ fn validate_iroh_transport_config(format: ConfigFormat, text: &str) -> Vec<Confi
     }
     if iroh
         .get("identity")
-        .is_some_and(|value| value.as_str() != Some("per_session"))
+        .is_some_and(|value| !matches!(value.as_str(), Some("per_session" | "host")))
     {
         reject(
             "transport.iroh.identity",
-            "transport.iroh.identity must be per_session",
+            "transport.iroh.identity must be per_session or host",
         );
     }
     let address_lookup = iroh
@@ -949,6 +1036,8 @@ fn project_overlay_path_changes_execution_authority(path: &str) -> bool {
             | "permissions.bypass_mode"
             | "permissions.bubblewrap"
     ) || path.starts_with("permissions.bubblewrap.")
+        || path == "host"
+        || path.starts_with("host.")
         || path == "transport"
         || path.starts_with("transport.")
         || is_model_profile_approval_policy_path(path)

@@ -762,6 +762,11 @@ impl super::RuntimeSessionService {
             self.integration.set_remote_iroh_diagnostics(None);
             return Ok(None);
         }
+        if policy.identity == super::RuntimeIrohIdentityPolicy::Host {
+            return Err(MezError::invalid_state(
+                "host-scoped Iroh identity requires the persistent host runtime",
+            ));
+        }
         let session_id = self.session.id.to_string();
         let secret_key = self
             .integration

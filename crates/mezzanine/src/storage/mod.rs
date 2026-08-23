@@ -4,6 +4,11 @@
 //! private-file posture, repositories, and cross-crate snapshot persistence.
 
 pub(crate) mod issues;
+#[allow(
+    dead_code,
+    reason = "host routing, administration, and recovery consume the completed durable lease repository in subsequent architecture phases"
+)]
+pub(crate) mod lease;
 pub(crate) mod memory;
 pub(crate) mod registry;
 pub(crate) mod snapshot;

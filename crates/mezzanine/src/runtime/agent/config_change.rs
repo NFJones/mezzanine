@@ -17,7 +17,8 @@ use super::{
     runtime_set_theme_command,
 };
 use crate::config::{
-    compose_effective_config, config_change_path_is_user_only_host_power_policy,
+    compose_effective_config, config_change_path_is_user_only_host_policy,
+    config_change_path_is_user_only_host_power_policy,
     config_change_path_is_user_only_sandbox_policy,
     config_change_path_is_user_only_transport_policy, contains_secret_material,
 };
@@ -545,6 +546,15 @@ impl RuntimeSessionService {
                 ActionStatus::Denied,
                 "user_only_host_power_policy",
                 "host power policy can only be changed directly by the user",
+            )?);
+        }
+        if config_change_path_is_user_only_host_policy(setting_path) {
+            return Ok(ActionResult::failed(
+                turn,
+                action,
+                ActionStatus::Denied,
+                "user_only_host_policy",
+                "persistent host policy can only be changed directly by the user",
             )?);
         }
         if config_change_path_is_user_only_transport_policy(setting_path) {

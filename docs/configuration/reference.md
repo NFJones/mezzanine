@@ -43,7 +43,7 @@ configuration error; remove or relocate all but the intended file. See
 [Configuration overview](overview.md) for mutation examples and the layer
 selection workflow.
 
-The current config schema version is `63`. On launch, Mezzanine migrates an
+The current config schema version is `73`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -102,7 +102,8 @@ shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `63` | Config schema version. Do not change this. |
+| `version` | integer | `73` | Config schema version. Do not change this. |
+| `host` | table | see below | Disabled-by-default persistent host, recovery, and durable-lease policy. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
 | `keys` | table | see below | Prefix and direct key bindings. |
@@ -133,6 +134,27 @@ Shell discovery, pane layout, local messaging, and snapshot storage are runtime
 behavior rather than configurable schema tables. Use the relevant task and
 reference pages to inspect those live facilities.
 
+### `host`
+
+Schema 73 declares the persistent multi-session host and durable-lease policy.
+The host remains disabled until explicitly started or enabled, and local use
+does not require Iroh pairing.
+
+| Field | Type | Default declaration | Description |
+| --- | --- | --- | --- |
+| `host.enabled` | boolean | `false` | Enable persistent-host startup policy. |
+| `host.auto_start_local` | boolean | `true` | Allow ordinary local commands to start the host when the host command integration is available. |
+| `host.max_sessions` | integer | `64` | Maximum durable session assignments; must be positive. |
+| `host.max_live_sessions` | integer | `16` | Maximum concurrently live session runtimes; must be positive. |
+| `host.shutdown_timeout_ms` | integer | `10000` | Bounded graceful host shutdown interval; must be positive. |
+| `host.checkpoint_interval_seconds` | integer | `300` | Periodic checkpoint interval; must be positive. |
+| `host.recover_on_start` | string | `"lazy"` | Recovery policy: `lazy`, `eager`, or `disabled`. |
+| `host.default_session_policy` | string | `"most_recent_attachable"` | Existing-session default selection policy: `most_recent_attachable` or `none`. |
+| `host.leases.default_ttl_seconds` | integer | `0` | Default lease lifetime; `0` means no automatic expiry. |
+| `host.leases.failed_retention_seconds` | integer | `604800` | Retention for failed lease records before GC eligibility. |
+| `host.leases.released_retention_seconds` | integer | `604800` | Retention for released lease records before GC eligibility. |
+| `host.leases.max_per_remote_client` | integer | `8` | Default per-principal lease quota; must be positive. |
+
 ### `transport.iroh`
 
 This primary-user-only table is conservative and disabled by default. Project
@@ -145,7 +167,7 @@ changes require a daemon restart.
 | `transport.iroh.enabled` | boolean | `false` | Start the inbound Iroh listener; this does not gate explicit outbound targets. |
 | `transport.iroh.outbound_enabled` | boolean | `true` | Permit explicit `--iroh-invite-file` and `--iroh-profile` connections; set false for an administrator-controlled outbound opt-out. |
 | `transport.iroh.bind_port` | integer | `0` | Server direct-transport port. `0` is ephemeral; configure 1 through 65535 for restart-stable direct invitations. |
-| `transport.iroh.identity` | string | `"per_session"` | Persist a distinct protected endpoint identity for each session. |
+| `transport.iroh.identity` | string | `"host"` | Declare host-scoped identity ownership. `per_session` remains a validated compatibility mode for direct session endpoints. |
 | `transport.iroh.address_lookup` | string | `"disabled"` | Endpoint-address lookup policy. |
 | `transport.iroh.address_lookup_domain` | string | `""` | Explicit lookup domain when lookup policy requires one. |
 | `transport.iroh.relay_mode` | string | `"disabled"` | Relay policy; relay use is independent from direct connectivity. |
@@ -163,10 +185,12 @@ changes require a daemon restart.
 | `transport.iroh.compression_min_bytes` | integer | `512` | Complete v2 frames below this decoded size use an identity envelope. Valid values are 0 through 1048576. |
 | `transport.iroh.compression_zstd_level` | integer | `3` | Zstandard level for eligible v2 frames. Valid values are -5 through 22. |
 
-When enabled, daemon startup binds the protected per-session endpoint and runs
-Iroh control alongside Unix control. A configured endpoint failure is a startup
-error; Mezzanine does not silently weaken explicit enablement into Unix-only
-operation. The endpoint applies the selected lookup, relay, direct-IP, port
+When `identity = "per_session"` is enabled, direct-session daemon startup binds
+the protected per-session endpoint and runs Iroh control alongside Unix control.
+`identity = "host"` is owned by the persistent host and direct-session startup
+fails explicitly rather than silently reusing per-session key material. A
+configured endpoint failure is a startup error; Mezzanine does not silently
+weaken explicit enablement into Unix-only operation. The endpoint applies the selected lookup, relay, direct-IP, port
 mapping, proxy, and CA policies to both listening and explicit clients. It
 advertises the configured compression ALPNs in order, accepts one client-opened
 control stream per connection, and bounds setup, idle, connection, frame, and

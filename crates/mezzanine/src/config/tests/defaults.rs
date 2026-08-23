@@ -59,6 +59,33 @@ fn default_config_disables_active_turn_sleep_inhibition() {
     );
 }
 
+/// Generated schema-v73 configuration must retain local-only startup posture
+/// while declaring the host-scoped identity used by the persistent host.
+#[test]
+fn default_config_disables_persistent_host_and_inbound_iroh() {
+    let parsed: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let host = parsed.get("host").and_then(toml::Value::as_table).unwrap();
+    let iroh = parsed
+        .get("transport")
+        .and_then(toml::Value::as_table)
+        .and_then(|transport| transport.get("iroh"))
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    assert_eq!(
+        host.get("enabled").and_then(toml::Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        iroh.get("enabled").and_then(toml::Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        iroh.get("identity").and_then(toml::Value::as_str),
+        Some("host")
+    );
+}
+
 /// Verifies generated configuration selects native shell execution and
 /// platform-appropriate sandbox confinement for first-run users.
 #[test]

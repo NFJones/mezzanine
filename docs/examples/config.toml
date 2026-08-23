@@ -5,7 +5,25 @@
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 72
+version = 73
+
+# Persistent multi-session host policy. The host and inbound Iroh listener are
+# disabled until explicitly started or enabled by the primary user.
+[host]
+enabled = false
+auto_start_local = true
+max_sessions = 64
+max_live_sessions = 16
+shutdown_timeout_ms = 10000
+checkpoint_interval_seconds = 300
+recover_on_start = "lazy"
+default_session_policy = "most_recent_attachable"
+
+[host.leases]
+default_ttl_seconds = 0
+failed_retention_seconds = 604800
+released_retention_seconds = 604800
+max_per_remote_client = 8
 
 # Process-wide runtime sizing. Changes require a restart.
 [runtime]
@@ -19,7 +37,7 @@ cpu_count = 2
 enabled = false
 outbound_enabled = true
 bind_port = 0
-identity = "per_session"
+identity = "host"
 address_lookup = "disabled"
 address_lookup_domain = ""
 relay_mode = "disabled"

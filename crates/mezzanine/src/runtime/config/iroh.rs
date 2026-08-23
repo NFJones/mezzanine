@@ -33,6 +33,7 @@ impl RuntimeIrohCompressionCodec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeIrohIdentityPolicy {
     PerSession,
+    Host,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,9 +137,10 @@ pub(crate) fn runtime_iroh_transport_policy_from_config(
     let identity_name = string_value(iroh, "identity", "per_session")?;
     let identity = match identity_name.as_str() {
         "per_session" => RuntimeIrohIdentityPolicy::PerSession,
+        "host" => RuntimeIrohIdentityPolicy::Host,
         _ => {
             return Err(MezError::config(
-                "transport.iroh.identity must be per_session",
+                "transport.iroh.identity must be per_session or host",
             ));
         }
     };
@@ -489,6 +491,13 @@ mod tests {
         );
         assert_eq!(policy.compression_min_bytes, 1024);
         assert_eq!(policy.compression_zstd_level, -2);
+
+        let host = runtime_iroh_transport_policy_from_config(&serde_json::json!({
+            "transport": { "iroh": { "enabled": false, "identity": "host" } }
+        }))
+        .unwrap();
+        assert_eq!(host.identity, RuntimeIrohIdentityPolicy::Host);
+        assert!(!host.enabled);
     }
 
     #[test]

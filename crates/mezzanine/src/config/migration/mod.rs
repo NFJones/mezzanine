@@ -67,6 +67,7 @@ mod v68_v69;
 mod v69_v70;
 mod v70_v71;
 mod v71_v72;
+mod v72_v73;
 
 #[cfg(test)]
 pub use driver::migrate_config_text;

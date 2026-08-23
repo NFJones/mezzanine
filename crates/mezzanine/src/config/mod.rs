@@ -70,7 +70,7 @@ pub use schema::{
     config_change_setting_path_annotations_markdown, config_change_setting_path_description,
 };
 pub(crate) use schema::{
-    config_change_path_is_user_only_host_power_policy,
+    config_change_path_is_user_only_host_policy, config_change_path_is_user_only_host_power_policy,
     config_change_path_is_user_only_sandbox_policy,
     config_change_path_is_user_only_transport_policy,
 };
@@ -107,12 +107,12 @@ use paths::write_private_config_file_async;
 use paths::{format_diagnostics, write_private_config_file};
 use schema::{
     AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, BUBBLEWRAP_PERMISSION_KEYS,
-    COMMAND_RULE_EFFECT_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS, HISTORY_KEYS, HOOK_KEYS,
-    INSTRUCTION_KEYS, IROH_TRANSPORT_KEYS, ISSUE_KEYS, KEY_BINDING_KEYS, KEY_PRESET_KEYS,
-    LAYOUT_KEYS, MCP_SERVER_KEYS, MEMORY_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS,
-    MODEL_PROFILE_KEYS, PANE_FRAME_KEYS, PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS,
-    RUNTIME_KEYS, SESSION_KEYS, SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS,
-    THEME_KEYS, WINDOW_FRAME_KEYS,
+    COMMAND_RULE_EFFECT_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS, HISTORY_KEYS, HOOK_KEYS, HOST_KEYS,
+    HOST_LEASE_KEYS, INSTRUCTION_KEYS, IROH_TRANSPORT_KEYS, ISSUE_KEYS, KEY_BINDING_KEYS,
+    KEY_PRESET_KEYS, LAYOUT_KEYS, MCP_SERVER_KEYS, MEMORY_KEYS, MESSAGE_PROTOCOL_KEYS,
+    MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS, PANE_FRAME_KEYS, PERMISSION_KEYS,
+    PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, RUNTIME_KEYS, SESSION_KEYS, SHELL_KEYS, SNAPSHOT_KEYS,
+    SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
 };
 
 /// Reads the Tokio worker count from the migrated primary user configuration.

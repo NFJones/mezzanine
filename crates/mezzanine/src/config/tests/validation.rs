@@ -1210,3 +1210,53 @@ fn iroh_transport_policy_is_validated_and_primary_only() {
         );
     }
 }
+
+/// Persistent-host lifecycle and lease quotas are primary-user policy, so a
+/// project overlay must not enable or retarget that host authority.
+#[test]
+fn persistent_host_policy_is_validated_and_primary_only() {
+    let primary = validate_config_text(
+        ConfigFormat::Toml,
+        DEFAULT_CONFIG_TOML,
+        ConfigScope::Primary,
+    );
+    assert!(primary.valid, "{:?}", primary.diagnostics);
+
+    let overlay = validate_config_text(
+        ConfigFormat::Toml,
+        &format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[host]\nenabled = true\nmax_sessions = 4\n"
+        ),
+        ConfigScope::ProjectOverlay,
+    );
+    assert!(overlay.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "host.enabled"
+            && diagnostic
+                .message
+                .starts_with("primary_user_only_execution_authority:")
+    }));
+
+    for (body, path) in [
+        ("max_sessions = 0", "host.max_sessions"),
+        ("recover_on_start = \"unknown\"", "host.recover_on_start"),
+        (
+            "default_session_policy = \"create\"",
+            "host.default_session_policy",
+        ),
+        ("leases = \"invalid\"", "host.leases"),
+    ] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[host]\n{body}\n"),
+            ConfigScope::Primary,
+        );
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.path == path),
+            "{path}: {:?}",
+            validation.diagnostics
+        );
+    }
+}

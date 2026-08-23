@@ -2197,7 +2197,7 @@ fn migrates_schema_66_with_disabled_iroh_transport() {
 /// single bidirectional control stream enforced by the v1 Iroh protocol.
 #[test]
 fn migrates_schema_67_to_fixed_iroh_stream_limit() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 72);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 73);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2216,7 +2216,7 @@ fn migrates_schema_67_to_fixed_iroh_stream_limit() {
         let values = extract_config_values(format, &plan.text);
 
         assert_eq!(plan.from_version, 67);
-        assert_eq!(plan.to_version, 72);
+        assert_eq!(plan.to_version, 73);
         assert_eq!(
             values.get("transport.iroh.max_streams_per_connection"),
             Some(&"1".to_string())
@@ -2246,7 +2246,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
         let values = extract_config_values(format, &plan.text);
 
         assert_eq!(plan.from_version, 68);
-        assert_eq!(plan.to_version, 72);
+        assert_eq!(plan.to_version, 73);
         assert_eq!(
             values.get("transport.iroh.enabled"),
             Some(&"false".to_string())
@@ -2262,7 +2262,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
 /// changing the existing ephemeral behavior unless the owner configures it.
 #[test]
 fn migrates_schema_69_with_iroh_bind_port() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 72);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 73);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2281,7 +2281,7 @@ fn migrates_schema_69_with_iroh_bind_port() {
         let values = extract_config_values(format, &plan.text);
 
         assert_eq!(plan.from_version, 69);
-        assert_eq!(plan.to_version, 72);
+        assert_eq!(plan.to_version, 73);
         assert_eq!(
             values.get("transport.iroh.bind_port"),
             Some(&"0".to_string())
@@ -2293,7 +2293,7 @@ fn migrates_schema_69_with_iroh_bind_port() {
 /// supported primary configuration format without enabling the Iroh listener.
 #[test]
 fn migrates_schema_70_with_iroh_compression_defaults() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 72);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 73);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2313,7 +2313,7 @@ fn migrates_schema_70_with_iroh_compression_defaults() {
         let root = parse_config_json_value(format, &plan.text).unwrap();
 
         assert_eq!(plan.from_version, 70);
-        assert_eq!(plan.to_version, 72);
+        assert_eq!(plan.to_version, 73);
         assert_eq!(
             root.pointer("/transport/iroh/compression_codecs"),
             Some(&serde_json::json!(["zstd", "lz4", "none"]))
@@ -2355,7 +2355,7 @@ fn migrates_schema_71_with_iroh_status_theme_defaults() {
         let root = parse_config_json_value(format, &plan.text).unwrap();
 
         assert_eq!(plan.from_version, 71);
-        assert_eq!(plan.to_version, 72);
+        assert_eq!(plan.to_version, 73);
         assert_eq!(
             root.pointer("/transport/iroh/enabled"),
             Some(&serde_json::json!(false))
@@ -2375,6 +2375,56 @@ fn migrates_schema_71_with_iroh_status_theme_defaults() {
         assert_eq!(
             root.pointer("/theme/colors/iroh_status_unknown_fg"),
             Some(&serde_json::json!("muted_text"))
+        );
+    }
+}
+
+/// Schema v73 must add disabled host and lease defaults in every supported
+/// format without enabling inbound Iroh or moving protected identity material.
+#[test]
+fn migrates_schema_72_with_disabled_persistent_host_defaults() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 72\n[transport.iroh]\nenabled = false\nidentity = \"per_session\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":72,"transport":{"iroh":{"enabled":false,"identity":"per_session"}}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 72\ntransport:\n  iroh:\n    enabled: false\n    identity: per_session\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &plan.text).unwrap();
+
+        assert_eq!(plan.from_version, 72);
+        assert_eq!(plan.to_version, 73);
+        assert_eq!(
+            root.pointer("/host/enabled"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(
+            root.pointer("/host/auto_start_local"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            root.pointer("/host/max_sessions"),
+            Some(&serde_json::json!(64))
+        );
+        assert_eq!(
+            root.pointer("/host/leases/max_per_remote_client"),
+            Some(&serde_json::json!(8))
+        );
+        assert_eq!(
+            root.pointer("/transport/iroh/enabled"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(
+            root.pointer("/transport/iroh/identity"),
+            Some(&serde_json::json!("host"))
         );
     }
 }

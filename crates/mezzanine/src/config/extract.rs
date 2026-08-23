@@ -7,10 +7,10 @@
 use super::{
     AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, BTreeMap,
     BUBBLEWRAP_PERMISSION_KEYS, COMMAND_RULE_EFFECT_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS,
-    ConfigDiagnostic, ConfigFormat, ConfigScope, HISTORY_KEYS, HOOK_KEYS, INSTRUCTION_KEYS,
-    IROH_TRANSPORT_KEYS, ISSUE_KEYS, JsonPathParser, JsonValueParser, KEY_BINDING_KEYS,
-    KEY_PRESET_KEYS, LAYOUT_KEYS, MCP_SERVER_KEYS, MEMORY_KEYS, MESSAGE_PROTOCOL_KEYS,
-    MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS, PANE_FRAME_KEYS, PERMISSION_KEYS,
+    ConfigDiagnostic, ConfigFormat, ConfigScope, HISTORY_KEYS, HOOK_KEYS, HOST_KEYS,
+    HOST_LEASE_KEYS, INSTRUCTION_KEYS, IROH_TRANSPORT_KEYS, ISSUE_KEYS, JsonPathParser,
+    JsonValueParser, KEY_BINDING_KEYS, KEY_PRESET_KEYS, LAYOUT_KEYS, MCP_SERVER_KEYS, MEMORY_KEYS,
+    MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS, PANE_FRAME_KEYS, PERMISSION_KEYS,
     PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, RUNTIME_KEYS, SESSION_KEYS, SHELL_KEYS, SNAPSHOT_KEYS,
     SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS, exact_command_sha256,
     normalize_exact_command_text, parse_config_json_value_best_effort,
@@ -288,6 +288,7 @@ pub(super) fn validate_known_schema_path(path: &str) -> Option<String> {
     let top_level = segments.first().copied()?;
     match top_level {
         "version" => validate_top_level_scalar_path(&segments, "version"),
+        "host" => validate_host_path(&segments),
         "runtime" => validate_static_table_path(&segments, "runtime", RUNTIME_KEYS, &[]),
         "transport" => validate_transport_path(&segments),
         "session" => validate_static_table_path(&segments, "session", SESSION_KEYS, &[]),
@@ -327,6 +328,32 @@ pub(super) fn validate_known_schema_path(path: &str) -> Option<String> {
         "extensions" => None,
         _ => None,
     }
+}
+
+/// Validates persistent-host and durable-lease configuration path shapes.
+fn validate_host_path(segments: &[&str]) -> Option<String> {
+    if segments.len() == 1 {
+        return None;
+    }
+    if !HOST_KEYS.contains(&segments[1]) {
+        return Some("unknown host configuration key".to_string());
+    }
+    if segments[1] == "leases" {
+        if segments.len() == 2 {
+            return None;
+        }
+        if !HOST_LEASE_KEYS.contains(&segments[2]) {
+            return Some("unknown host.leases configuration key".to_string());
+        }
+        if segments.len() > 3 {
+            return Some("scalar host.leases setting must not contain nested keys".to_string());
+        }
+        return None;
+    }
+    if segments.len() > 2 {
+        return Some("scalar host setting must not contain nested keys".to_string());
+    }
+    None
 }
 
 /// Validates the primary-user Iroh transport policy path shape.

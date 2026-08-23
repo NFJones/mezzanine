@@ -66,8 +66,8 @@ pub(super) use hooks::{
     runtime_pre_shell_hook_payload, runtime_random_marker_token, runtime_user_prompt_hook_payload,
 };
 pub(crate) use iroh::{
-    RuntimeIrohAddressLookupPolicy, RuntimeIrohCompressionCodec, RuntimeIrohRelayPolicy,
-    RuntimeIrohTransportPolicy, runtime_iroh_transport_policy_from_config,
+    RuntimeIrohAddressLookupPolicy, RuntimeIrohCompressionCodec, RuntimeIrohIdentityPolicy,
+    RuntimeIrohRelayPolicy, RuntimeIrohTransportPolicy, runtime_iroh_transport_policy_from_config,
 };
 pub(super) use key_preset::{runtime_active_key_preset, runtime_key_preset_definition_from_value};
 pub(super) use mcp::runtime_mcp_registry_from_config;

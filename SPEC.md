@@ -2999,12 +2999,12 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 72 is the current implemented configuration schema version for this
+schema version 73 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
 
-Persistent host support reserves schema version 73. The `72 -> 73` migration
+The `72 -> 73` migration
 MUST add disabled-by-default host policy and lease-retention defaults, MUST
 preserve a disabled Iroh listener, and MUST NOT silently convert per-session
 endpoint key material or broaden any trust record. The migrated declaration
