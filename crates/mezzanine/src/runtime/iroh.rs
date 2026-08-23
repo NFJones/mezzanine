@@ -30,7 +30,9 @@ use super::config::{
     RuntimeIrohAddressLookupPolicy, RuntimeIrohCompressionCodec, RuntimeIrohRelayPolicy,
     RuntimeIrohTransportPolicy,
 };
-use super::{IrohCompressionBridge, IrohCompressionPolicy, IrohFrameCompressionMode};
+use super::{
+    IrohCompressionBridge, IrohCompressionMetrics, IrohCompressionPolicy, IrohFrameCompressionMode,
+};
 
 /// ALPN identity for the first Mezzanine Iroh transport contract.
 pub(crate) const MEZZANINE_IROH_ALPN: &[u8] = b"mezzanine/transport/1";
@@ -80,6 +82,11 @@ pub(crate) struct RuntimeIrohConnectionQualitySnapshot {
     pub(crate) congestion_events: u64,
     pub(crate) cwnd_bytes: u64,
     pub(crate) mtu: u16,
+    pub(crate) compression_codec: RuntimeIrohCompressionCodec,
+    pub(crate) compression_wire_bytes: u64,
+    pub(crate) compression_decoded_bytes: u64,
+    pub(crate) compression_compressed_frames: u64,
+    pub(crate) compression_identity_frames: u64,
     path: u8,
 }
 
@@ -116,6 +123,11 @@ impl RuntimeIrohConnectionQualitySnapshot {
             congestion_events: 0,
             cwnd_bytes: 65_536,
             mtu: 1_200,
+            compression_codec: RuntimeIrohCompressionCodec::Zstd,
+            compression_wire_bytes: 512,
+            compression_decoded_bytes: 1_024,
+            compression_compressed_frames: 2,
+            compression_identity_frames: 1,
             path: match path {
                 "direct" => 1,
                 "relay" => 2,
@@ -137,6 +149,10 @@ struct RuntimeIrohPathSample {
     rx_bytes: u64,
     lost_packets: u64,
     congestion_events: u64,
+    compression_wire_bytes: u64,
+    compression_decoded_bytes: u64,
+    compression_compressed_frames: u64,
+    compression_identity_frames: u64,
 }
 
 /// Copyable status projection that contains no endpoint or peer identifiers.
@@ -338,11 +354,12 @@ struct RuntimeIrohConnectionGuard {
 
 impl RuntimeIrohConnectionGuard {
     /// Builds a sampler tied to this guard's connection lifetime and cleanup key.
-    fn sampler(&self) -> RuntimeIrohPathSampler {
+    fn sampler(&self, compression_metrics: IrohCompressionMetrics) -> RuntimeIrohPathSampler {
         RuntimeIrohPathSampler {
             diagnostics: self.diagnostics.clone(),
             connected_at: self.connected_at,
             client_id: self.client_id.clone(),
+            compression_metrics,
             previous_sample: None,
         }
     }
@@ -352,6 +369,7 @@ struct RuntimeIrohPathSampler {
     diagnostics: RuntimeIrohDiagnostics,
     connected_at: Instant,
     client_id: Arc<Mutex<Option<String>>>,
+    compression_metrics: IrohCompressionMetrics,
     previous_sample: Option<RuntimeIrohPathSample>,
 }
 
@@ -424,6 +442,19 @@ impl RuntimeIrohPathSampler {
         };
         let tx_delta = delta(stats.udp_tx.bytes, |sample| sample.tx_bytes);
         let rx_delta = delta(stats.udp_rx.bytes, |sample| sample.rx_bytes);
+        let compression = self.compression_metrics.snapshot();
+        let compression_wire_bytes = delta(compression.wire_bytes, |sample| {
+            sample.compression_wire_bytes
+        });
+        let compression_decoded_bytes = delta(compression.decoded_bytes, |sample| {
+            sample.compression_decoded_bytes
+        });
+        let compression_compressed_frames = delta(compression.compressed_frames, |sample| {
+            sample.compression_compressed_frames
+        });
+        let compression_identity_frames = delta(compression.identity_frames, |sample| {
+            sample.compression_identity_frames
+        });
         let snapshot = RuntimeIrohConnectionQualitySnapshot {
             connected_millis: u64::try_from(now.duration_since(self.connected_at).as_millis())
                 .unwrap_or(u64::MAX),
@@ -439,6 +470,11 @@ impl RuntimeIrohPathSampler {
             congestion_events: delta(stats.congestion_events, |sample| sample.congestion_events),
             cwnd_bytes: stats.cwnd,
             mtu: stats.current_mtu,
+            compression_codec: compression.codec,
+            compression_wire_bytes,
+            compression_decoded_bytes,
+            compression_compressed_frames,
+            compression_identity_frames,
             path: if path.is_ip() {
                 1
             } else if path.is_relay() {
@@ -471,6 +507,10 @@ impl RuntimeIrohPathSampler {
             rx_bytes: stats.udp_rx.bytes,
             lost_packets: stats.lost_packets,
             congestion_events: stats.congestion_events,
+            compression_wire_bytes: compression.wire_bytes,
+            compression_decoded_bytes: compression.decoded_bytes,
+            compression_compressed_frames: compression.compressed_frames,
+            compression_identity_frames: compression.identity_frames,
         });
     }
 }
@@ -952,14 +992,21 @@ async fn serve_runtime_iroh_control_connection(
         .map_err(|error| {
             MezError::invalid_state(format!("failed to accept Iroh control stream: {error}"))
         })?;
-    let mut bridge =
-        IrohCompressionBridge::spawn(recv, send, compression, control_config.max_content_length)?;
+    let compression_metrics = IrohCompressionMetrics::new(compression.codec());
+    let mut bridge = IrohCompressionBridge::spawn_with_metrics(
+        recv,
+        send,
+        compression,
+        compression_metrics.clone(),
+        control_config.max_content_length,
+    )?;
     let mut connection_state = ControlConnectionState::new(false, false);
     let (event_start_tx, event_start_rx) = tokio::sync::oneshot::channel::<(ClientId, u32)>();
     let mut event_start_tx = Some(event_start_tx);
     let (event_stop_tx, event_stop_rx) = tokio::sync::watch::channel(false);
     let event_connection = connection.clone();
     let event_handle = handle.clone();
+    let event_compression_metrics = compression_metrics.clone();
     let mut event_task = tokio::spawn(async move {
         let Ok((client_id, version)) = event_start_rx.await else {
             return Ok(0);
@@ -970,13 +1017,14 @@ async fn serve_runtime_iroh_control_connection(
             client_id,
             version,
             compression,
+            event_compression_metrics,
             setup_timeout,
             idle_timeout,
             event_stop_rx,
         )
         .await
     });
-    let sampler = Arc::new(Mutex::new(connection_guard.sampler()));
+    let sampler = Arc::new(Mutex::new(connection_guard.sampler(compression_metrics)));
     let periodic_sampler = sampler.clone();
     let periodic_connection = connection.clone();
     let mut sample_task = tokio::spawn(async move {
@@ -1049,6 +1097,7 @@ async fn serve_runtime_iroh_event_stream(
     caller_client_id: ClientId,
     version: u32,
     compression: IrohCompressionPolicy,
+    compression_metrics: IrohCompressionMetrics,
     setup_timeout: std::time::Duration,
     idle_timeout: std::time::Duration,
     mut stop: tokio::sync::watch::Receiver<bool>,
@@ -1127,6 +1176,11 @@ async fn serve_runtime_iroh_event_stream(
             for event in wakeup.events {
                 let frame = encode_control_body(&encode_event_notification(&event));
                 let frame = compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?;
+                compression_metrics.record_frame(
+                    frame.as_bytes().len(),
+                    frame.decoded_bytes(),
+                    frame.compressed(),
+                );
                 tokio::time::timeout(idle_timeout, send.write_all(frame.as_bytes()))
                     .await
                     .map_err(|_| MezError::invalid_state("Iroh event stream write timed out"))?

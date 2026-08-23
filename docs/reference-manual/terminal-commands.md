@@ -40,10 +40,15 @@ client.
 
 `show-iroh-status` displays a table for the invoking remote client's selected
 Iroh path. It includes RTT, jitter, recent transfer rates, loss and congestion
-deltas, congestion window, MTU, sample freshness, and a reasoned quality label.
-Path type is reported separately from quality, and topology identifiers and
-addresses are intentionally omitted. Local control-socket clients see an
-unavailable state because they are not attached through Iroh.
+deltas, congestion window, MTU, sample freshness, negotiated codec, and
+connection-local interval compression effectiveness. Compression reports the
+decoded-to-wire ratio, bytes saved or expanded, and compressed versus identity
+frame counts. A new connection or codec context starts with an `insufficient
+sample` state rather than comparing counters across reconnects. Path type and
+quality remain independent from compression effectiveness. Topology identifiers,
+addresses, credentials, and payload-derived samples are intentionally omitted.
+Local control-socket clients see an unavailable state because they are not
+attached through Iroh.
 
 ## Related pages
 

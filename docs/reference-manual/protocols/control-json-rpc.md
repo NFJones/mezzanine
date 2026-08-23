@@ -69,6 +69,14 @@ never downgrade or replay after application bytes have been sent. The selected
 codec is immutable for the connection and applies to later control frames in
 both directions and to event frames after the unchanged event-stream preface.
 
+Each connection maintains non-sensitive application-frame counters for wire
+bytes, decoded bytes, compressed frames, and identity frames. The status sampler
+publishes only interval deltas for the exact initialized client and resets its
+baseline with the connection-local codec context. A zero-frame interval is
+insufficient data. Decode, limit, unsupported-codec, and malformed-envelope
+failures remain connection-local and diagnostics must identify only the failure
+class, never credentials, topology, payload bytes, or payload-derived samples.
+
 An Iroh endpoint ID proves possession of a transport key only; it grants no
 Mezzanine authority by itself. Before any other method, the peer must call
 `control/initialize` for role `primary` or `observer` with either a single-endpoint-use

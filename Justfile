@@ -57,6 +57,10 @@ test-real-bubblewrap:
 release-load-check:
     report="${MEZ_RELEASE_LOAD_REPORT:-target/release-load/$(uname -s | tr '[:upper:]' '[:lower:]').json}"; case "$report" in /*) ;; *) report="$(pwd)/$report";; esac; mkdir -p "$(dirname "$report")"; MEZ_RELEASE_LOAD_REPORT="$report" MEZ_RELEASE_LOAD_WORKERS="${MEZ_RELEASE_LOAD_WORKERS:-2}" cargo test -p mezzanine --release --lib --all-features --quiet host::async_runtime::tests::services::release_load::release_load_reports_cross_platform_pty_responsiveness -- --exact --ignored --nocapture --test-threads=1
 
+# Run the reproducible application-frame compression benchmark in release mode.
+iroh-compression-bench:
+    report="${MEZ_IROH_COMPRESSION_BENCH_REPORT:-target/iroh-compression-bench.json}"; case "$report" in /*) ;; *) report="$(pwd)/$report";; esac; mkdir -p "$(dirname "$report")"; MEZ_IROH_COMPRESSION_BENCH_REPORT="$report" cargo test -p mezzanine --release --lib --all-features --quiet runtime::iroh_compression::tests::iroh_compression_release_benchmark -- --exact --ignored --nocapture --test-threads=1
+
 # Compare product-shaped release workloads across explicit Tokio worker counts.
 release-load-sweep:
     for workers in ${MEZ_RELEASE_LOAD_WORKER_SWEEP:-1 2 4}; do MEZ_RELEASE_LOAD_WORKERS="$workers" MEZ_RELEASE_LOAD_REPORT="target/release-load/$(uname -s | tr '[:upper:]' '[:lower:]')-workers-$workers.json" just release-load-check; done

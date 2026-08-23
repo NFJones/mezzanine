@@ -119,6 +119,38 @@ Restart the daemon after changing this policy. Never retry a different codec
 after a stream is opened or initialization bytes are written; an ambiguous
 application outcome must fail visibly instead of being replayed.
 
+### Reproduce compression measurements
+
+Run the single-threaded release harness from the repository root:
+
+```text
+just iroh-compression-bench
+```
+
+It writes `target/iroh-compression-bench.json` by default; override the path
+with `MEZ_IROH_COMPRESSION_BENCH_REPORT`. The fixtures cover small control,
+repetitive terminal, JSON/configuration, deterministic incompressible, and
+bidirectional attach/event frames. Results include elapsed nanoseconds,
+throughput, allocation count and bytes, decoded bytes, wire bytes, and ratio for
+`none`, zstd level 3, and LZ4.
+
+The reference release run used 2,000 iterations per fixture. Small 146-byte
+control frames bypassed both codecs and completed below 57 ns per encode/decode
+operation; their v2 wire size was 1.11× because of the fixed 16-byte envelope.
+For repetitive terminal, JSON/configuration, and bidirectional fixtures, zstd
+used 1.9–6.7% of decoded bytes at 338–682 MiB/s, while LZ4 used 2.9–11.1% at
+4.3–5.1 GiB/s. The deterministic incompressible fixture selected fallback:
+LZ4 emitted only the 16-byte identity-envelope overhead, while zstd found a
+smaller representation for this ASCII fixture. Zstd used four allocations per
+large operation; LZ4 used five to six; `none` used two.
+
+Use these host-independent rollout budgets even though absolute timings remain
+report-only: below-threshold frames must bypass codec work; compressed output
+must never exceed its input; compressible fixtures should remain at or below
+15% wire/decoded size; zstd should sustain at least 250 MiB/s and LZ4 at least
+4 GiB/s on a comparable release run. The measurements support retaining
+`compression_min_bytes = 512` and `compression_zstd_level = 3`.
+
 ## Enable and verify
 
 1. Confirm the private Unix control socket works and retain a local primary
@@ -131,8 +163,9 @@ application outcome must fail visibly instead of being replayed.
 6. Inspect `show-metrics` locally. The `[iroh transport]` section reports only
    aggregate listener, setup, connection, shutdown, and path counters.
 7. From the paired remote client, run `show-iroh-status` in the command prompt
-   to inspect its selected path, RTT, traffic, recent loss/congestion, and
-   quality rating without exposing endpoint or route addresses.
+   to inspect its selected path, RTT, traffic, negotiated codec, interval wire
+   savings, recent loss/congestion, and quality rating without exposing endpoint,
+   route, credential, or payload data.
 8. Pair one role-limited test device, exercise attach and detach, revoke it, and
    verify future initialization fails.
 9. Confirm a local Unix client can still inspect, revoke, detach, and stop the
@@ -155,6 +188,12 @@ payloads, and trust records.
 | `connections_completed` and `connections_failed` | Control-task outcomes after accepted setup. Failures are aggregate and disclose no peer identity. |
 | `shutdown_aborts` | Connection tasks aborted after bounded listener drain expired. Any nonzero clean-shutdown value requires investigation. |
 | `last_connection_path` and path counts | Aggregate selected direct, relay, custom, or unknown path evidence. It is diagnostic evidence, not a route guarantee. |
+
+The client-local `show-iroh-status` codec and compression rows are not part of
+the process-lifetime aggregate table. They reset with each connection-local
+codec context. `insufficient sample` means no complete frame crossed during the
+latest interval; a ratio below 1.00× or an `expansion` label warrants workload
+review but does not change the route quality label.
 
 Counters are process-lifetime aggregates and can race with an in-flight state
 transition. Correlate them with lifecycle state and bounded audit events, not

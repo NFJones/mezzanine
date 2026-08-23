@@ -707,6 +707,8 @@ pub(crate) fn runtime_show_iroh_status_display(
             "| Metric | Value | Detail |",
             "| --- | --- | --- |",
             "| State | unavailable | this client has no correlated live Iroh connection |",
+            "| Codec | unavailable | no negotiated connection-local codec |",
+            "| Compression | unavailable | no connection-local frame samples |",
             "| Quality | unknown | insufficient transport samples |",
         ]
         .join("\n");
@@ -714,6 +716,7 @@ pub(crate) fn runtime_show_iroh_status_display(
 
     let sample_age = status.sample_age();
     let (quality, reason) = iroh_connection_quality(status, sample_age);
+    let compression = iroh_compression_effectiveness(status);
     [
         "# Iroh connection".to_string(),
         String::new(),
@@ -742,6 +745,11 @@ pub(crate) fn runtime_show_iroh_status_display(
             format_bytes(status.tx_bytes)
         ),
         format!(
+            "| Codec | {} | negotiated application-frame codec |",
+            status.compression_codec.as_str()
+        ),
+        compression,
+        format!(
             "| Loss | {} packets | since the previous selected-path sample |",
             status.lost_packets
         ),
@@ -754,6 +762,40 @@ pub(crate) fn runtime_show_iroh_status_display(
         format!("| Quality | {quality} | {reason} |"),
     ]
     .join("\n")
+}
+
+fn iroh_compression_effectiveness(
+    status: crate::runtime::RuntimeIrohConnectionQualitySnapshot,
+) -> String {
+    let frames = status
+        .compression_compressed_frames
+        .saturating_add(status.compression_identity_frames);
+    if frames == 0 || status.compression_decoded_bytes == 0 {
+        return "| Compression | insufficient sample | no complete frames in this interval |"
+            .to_string();
+    }
+    let ratio =
+        status.compression_decoded_bytes as f64 / status.compression_wire_bytes.max(1) as f64;
+    let saved = i128::from(status.compression_decoded_bytes)
+        .saturating_sub(i128::from(status.compression_wire_bytes));
+    let saved = if saved >= 0 {
+        format!(
+            "{} saved",
+            format_bytes(u64::try_from(saved).unwrap_or(u64::MAX))
+        )
+    } else {
+        format!(
+            "{} expansion",
+            format_bytes(u64::try_from(saved.saturating_abs()).unwrap_or(u64::MAX))
+        )
+    };
+    format!(
+        "| Compression | {ratio:.2}× · {saved} | interval wire {}; decoded {}; frames compressed {} · identity {} |",
+        format_bytes(status.compression_wire_bytes),
+        format_bytes(status.compression_decoded_bytes),
+        status.compression_compressed_frames,
+        status.compression_identity_frames
+    )
 }
 
 fn iroh_connection_quality(

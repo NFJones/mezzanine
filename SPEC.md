@@ -1773,7 +1773,7 @@ The baseline commands MUST have the following semantics:
 | `delete-buffer` | Delete the selected or named paste buffer. The command MUST fail with `not_found` for an unknown buffer. |
 | `show-messages` | Display Mezzanine message log entries, including diagnostics, pending observer requests, pending approvals, and hook failures visible to the primary client. |
 | `show-metrics` | Display runtime-service and async-runtime counters and bounded histogram summaries for important measurements, including agent turn lifecycle, provider prompt/cache shape, token usage, shell transaction behavior, actor queue wait and handler duration by fixed request family, event application and reconciliation, render composition and encoding, provider progress and total duration, persistence operations and batches, output flushes, side-effect queue age and activity, pane output sizes, and current queue depth snapshots, in the primary command-output pager. |
-| `show-iroh-status` | Display a privacy-safe table of the invoking Iroh client's selected path, connection duration, current and rolling RTT, jitter, recent traffic rate, byte totals, recent packet loss and congestion deltas, congestion window, MTU, sample freshness, and a reasoned quality rating. It MUST show an unavailable/unknown state for clients without a correlated live Iroh sample and MUST NOT expose endpoint identities, addresses, relay URLs, credentials, or another client's sample. |
+| `show-iroh-status` | Display a privacy-safe table of the invoking Iroh client's selected path, connection duration, current and rolling RTT, jitter, recent traffic rate, byte totals, negotiated application-frame codec, interval compression ratio and bytes saved or expanded, recent packet loss and congestion deltas, congestion window, MTU, sample freshness, and a reasoned quality rating. It MUST label unavailable and insufficient compression samples, reset interval comparisons for each connection-local codec context, show an unavailable/unknown state for clients without a correlated live Iroh sample, keep quality classification independent from compression effectiveness, and MUST NOT expose endpoint identities, addresses, relay URLs, credentials, payloads, payload-derived samples, or another client's sample. |
 | `list-keys` | Return effective key bindings in column-aligned form, including source configuration layer and command expansion. |
 | `list-key-presets` | Return built-in and configured key-assignment presets in an interactive table with active state, source, prefix, binding summary, and a selectable `set-key-preset` action. |
 | `list-themes` | Return built-in UI themes and configured custom themes in a column-aligned table, with a visually salient active-theme column, theme name, adjacent short unicode block color palette preview, source (`builtin` or `config`), preview colors, and `set-theme` action for easier theme selection. |
@@ -2980,6 +2980,23 @@ opening an application stream, MUST retain the selected codec for the complete
 connection lifetime, and MUST fail closed when no configured codec is mutual.
 Control requests and responses in both directions and event frames after the
 unchanged event-stream preface MUST use the selected connection-local framing.
+Connection-local observability MUST count only wire bytes, decoded frame bytes,
+compressed-frame count, and identity-frame count. Sampling MUST compare counters
+only within the same connection and negotiated codec, MUST label a zero-frame
+interval insufficient, and MUST remove the client projection when the connection
+ends. These counters MUST NOT retain payload bytes or influence path quality.
+
+The reproducible release benchmark MUST cover small control, repetitive terminal,
+JSON/configuration, incompressible, and bidirectional attach/event fixtures for
+`none`, default-level `zstd`, and LZ4. The checked-in command MUST report elapsed
+time, throughput, allocation count and bytes, decoded bytes, and encoded wire
+bytes. Host-dependent timings are report-only, but rollout review MUST preserve
+these budgets: below-threshold frames bypass codec work; no codec may emit a
+compressed representation larger than its input; compressible fixtures should
+use at most 15 percent of decoded bytes for either compressed codec; and release
+throughput should remain at least 250 MiB/s for zstd and 4 GiB/s for LZ4 on the
+reference workload. Measurements support retaining the 512-byte threshold and
+Zstandard level 3 defaults until a comparable release run contradicts them.
 
 `remote/invite` MUST use `transport.iroh.invitation_ttl_seconds` when the
 request omits `expires_seconds`. The CLI `--expires SECONDS` option MUST remain

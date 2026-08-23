@@ -206,6 +206,14 @@ fn runtime_show_iroh_status_reports_connection_quality_without_topology() {
         unavailable.contains("| Quality | unknown |"),
         "{unavailable}"
     );
+    assert!(
+        unavailable.contains("| Codec | unavailable |"),
+        "{unavailable}"
+    );
+    assert!(
+        unavailable.contains("| Compression | unavailable |"),
+        "{unavailable}"
+    );
 
     let diagnostics = crate::runtime::RuntimeIrohDiagnostics::default();
     diagnostics.set_connection_quality_for_test(
@@ -227,6 +235,9 @@ fn runtime_show_iroh_status_reports_connection_quality_without_topology() {
         "| Path | direct |",
         "| RTT | 42.0 ms | average 45.0 ms; jitter 6.0 ms |",
         "| Traffic | ↓ 3.2 KiB/s · ↑ 1.1 KiB/s |",
+        "| Codec | zstd | negotiated application-frame codec |",
+        "| Compression | 2.00× · 512 B saved |",
+        "frames compressed 2 · identity 1",
         "| Loss | 0 packets |",
         "| Congestion | 0 events | cwnd 64.0 KiB; MTU 1200 |",
         "| Quality | good |",
@@ -245,6 +256,65 @@ fn runtime_show_iroh_status_reports_connection_quality_without_topology() {
             "unexpected {forbidden:?} in {body}"
         );
     }
+}
+
+/// Verifies a newly sampled connection reports its codec without comparing
+/// cumulative counters against a prior connection or codec baseline.
+#[test]
+fn runtime_show_iroh_status_labels_empty_compression_interval() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let diagnostics = crate::runtime::RuntimeIrohDiagnostics::default();
+    let mut snapshot = crate::runtime::RuntimeIrohConnectionQualitySnapshot::test_fixture("relay");
+    snapshot.compression_codec = crate::runtime::RuntimeIrohCompressionCodec::Lz4;
+    snapshot.compression_wire_bytes = 0;
+    snapshot.compression_decoded_bytes = 0;
+    snapshot.compression_compressed_frames = 0;
+    snapshot.compression_identity_frames = 0;
+    diagnostics.set_connection_quality_for_test(&primary, snapshot);
+    service
+        .integration
+        .set_remote_iroh_diagnostics(Some(diagnostics));
+
+    let body = super::commands_support::runtime_show_iroh_status_display(&service, &primary);
+
+    assert!(body.contains("| Codec | lz4 |"), "{body}");
+    assert!(
+        body.contains("| Compression | insufficient sample |"),
+        "{body}"
+    );
+    assert!(body.contains("| Quality | good |"), "{body}");
+}
+
+/// Verifies identity-envelope overhead is rendered as expansion while route
+/// quality remains based solely on transport measurements.
+#[test]
+fn runtime_show_iroh_status_reports_expansion_without_changing_quality() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let diagnostics = crate::runtime::RuntimeIrohDiagnostics::default();
+    let mut snapshot = crate::runtime::RuntimeIrohConnectionQualitySnapshot::test_fixture("direct");
+    snapshot.compression_codec = crate::runtime::RuntimeIrohCompressionCodec::Lz4;
+    snapshot.compression_wire_bytes = 162;
+    snapshot.compression_decoded_bytes = 146;
+    snapshot.compression_compressed_frames = 0;
+    snapshot.compression_identity_frames = 1;
+    diagnostics.set_connection_quality_for_test(&primary, snapshot);
+    service
+        .integration
+        .set_remote_iroh_diagnostics(Some(diagnostics));
+
+    let body = super::commands_support::runtime_show_iroh_status_display(&service, &primary);
+
+    assert!(
+        body.contains("| Compression | 0.90× · 16 B expansion |"),
+        "{body}"
+    );
+    assert!(body.contains("| Quality | good |"), "{body}");
 }
 
 /// Verifies `/plan` changes only the issuing pane, supports idempotent modes,

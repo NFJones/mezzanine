@@ -183,6 +183,13 @@ been written. The selected codec then applies to eligible control and event
 frames for that connection. Setting `compression_codecs = ["none"]` is the
 restart-required compatibility and rollback policy.
 
+The reproducible release benchmark (`just iroh-compression-bench`) confirms the
+512-byte threshold avoids codec work for interactive small frames and that zstd
+level 3 provides the strongest measured bandwidth reduction while LZ4 provides
+the lower-CPU alternative. Keep these defaults unless a comparable release-mode
+run of the checked-in fixtures contradicts the documented budgets in the Iroh
+operations guide.
+
 Running `mez remote status` through local Unix control ensures the protected
 per-session endpoint identity exists and reports its public endpoint ID and the
 current bound endpoint address when available. The private endpoint key, client

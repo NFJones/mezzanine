@@ -537,7 +537,7 @@ pub(crate) use iroh::{
     build_runtime_iroh_control_service,
 };
 pub(crate) use iroh_compression::{
-    IrohCompressionBridge, IrohCompressionPolicy, IrohFrameCompressionMode,
+    IrohCompressionBridge, IrohCompressionMetrics, IrohCompressionPolicy, IrohFrameCompressionMode,
 };
 pub(crate) use json::current_unix_millis;
 use json::{
