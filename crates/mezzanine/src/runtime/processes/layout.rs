@@ -52,8 +52,10 @@ impl RuntimeSessionService {
         requested_size: Option<PaneSizeSpec>,
     ) -> Result<PaneProcessStart> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let source_pane_id = self
             .session
@@ -161,8 +163,10 @@ impl RuntimeSessionService {
         purpose: RuntimePaneProcessPurpose,
     ) -> Result<PaneProcessStart> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         self.create_unfocused_window_in_group_with_pane_process_internal(
             Some(primary_client_id),
@@ -281,8 +285,10 @@ impl RuntimeSessionService {
         start_directory: Option<&Path>,
     ) -> Result<PaneProcessStart> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let source_pane_id = self
             .session
@@ -386,8 +392,10 @@ impl RuntimeSessionService {
         requested_size: Option<PaneSizeSpec>,
     ) -> Result<PaneProcessStart> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let source_pane_id = self
             .session
@@ -466,8 +474,10 @@ impl RuntimeSessionService {
         purpose: RuntimePaneProcessPurpose,
     ) -> Result<PaneProcessStart> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         self.split_pane_in_window_with_process_internal(
             Some(primary_client_id),
@@ -565,8 +575,10 @@ impl RuntimeSessionService {
         size: Size,
     ) -> Result<PaneResizeUpdate> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         validate_pane_size(size)?;
         let descriptor = self.active_window_pane_descriptor(target)?;
@@ -598,8 +610,10 @@ impl RuntimeSessionService {
         spec: PaneSizeSpec,
     ) -> Result<PaneResizeUpdate> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let descriptor = self.active_window_pane_descriptor(target)?;
         let size = self
@@ -624,8 +638,10 @@ impl RuntimeSessionService {
         destination: &str,
     ) -> Result<Vec<PaneResizeUpdate>> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let effects = self
             .session
@@ -646,8 +662,10 @@ impl RuntimeSessionService {
         select_new_window: bool,
     ) -> Result<(WindowId, Vec<PaneResizeUpdate>)> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let transition = self.session.break_pane_transition(
             primary_client_id,
@@ -677,8 +695,10 @@ impl RuntimeSessionService {
         select_joined_pane: bool,
     ) -> Result<(PaneId, Vec<PaneResizeUpdate>)> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let transition = self.session.join_pane_transition(
             primary_client_id,

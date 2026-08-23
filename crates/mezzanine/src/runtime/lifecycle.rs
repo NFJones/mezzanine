@@ -15,6 +15,7 @@ use crate::runtime::{
 };
 #[cfg(test)]
 use mez_mux::session::ClientTerminalDescriptor;
+use mez_mux::session::PrimaryLifecycleEdge;
 
 // Session lifecycle, primary attachment, and kill handling.
 
@@ -80,17 +81,20 @@ impl RuntimeSessionService {
             term: self.terminal_term().to_string(),
             features: Vec::new(),
         };
-        let client_id =
-            self.session
-                .attach_primary_with_terminal(name, interactive, Some(terminal))?;
+        let transition = self.session.attach_primary_with_terminal_transition(
+            name,
+            interactive,
+            Some(terminal),
+        )?;
+        let client_id = transition.client_id.clone();
         self.presentation.activate_client_state(&client_id);
         self.session.state = mez_mux::session::SessionState::Running;
         self.session
             .set_lifecycle_state(RuntimeLifecycleState::Running);
-        self.session
-            .resize_authoritative_terminal(&client_id, terminal_size)?;
-        self.sync_tracked_pty_sizes()?;
-        self.resume_detached_config_change_actions()?;
+        self.sync_pane_resize_effects(&transition.resize_effects)?;
+        if transition.lifecycle_edge == PrimaryLifecycleEdge::Attached {
+            self.resume_detached_config_change_actions()?;
+        }
         self.session
             .set_last_attach_at_unix_seconds(Some(now_unix_seconds));
         self.append_lifecycle_event(
@@ -117,20 +121,35 @@ impl RuntimeSessionService {
         terminal_size: Size,
     ) -> Result<()> {
         self.require_live()?;
-        self.session.authoritative_size = terminal_size;
-        self.session.detach_primary(primary_client_id)?;
+        let terminal_resize_effects = self
+            .session
+            .resize_authoritative_terminal_transition(primary_client_id, terminal_size)?;
+        self.sync_pane_resize_effects(&terminal_resize_effects)?;
+        let transition = self.session.detach_primary_transition(primary_client_id)?;
+        self.sync_pane_resize_effects(&transition.resize_effects)?;
         self.presentation.remove_client_state(primary_client_id);
+        self.control
+            .remove_unix_event_bindings_for_client(primary_client_id);
+        let protected_clients = self.presentation.pending_client_references();
         self.session
-            .set_lifecycle_state(RuntimeLifecycleState::Detached);
-        self.run_configured_completed_hooks(
-            HookEvent::SessionDetach,
-            &format!(
-                r#"{{"client_id":"{}","role":"primary","columns":{},"rows":{}}}"#,
-                json_escape(primary_client_id.as_str()),
-                terminal_size.columns,
-                terminal_size.rows
-            ),
-        )?;
+            .prune_detached_client_summaries(&protected_clients);
+        let terminal_size = transition.authoritative_size_after;
+        if transition.lifecycle_edge == PrimaryLifecycleEdge::Detached {
+            self.session
+                .set_lifecycle_state(RuntimeLifecycleState::Detached);
+            self.run_configured_completed_hooks(
+                HookEvent::SessionDetach,
+                &format!(
+                    r#"{{"client_id":"{}","role":"primary","columns":{},"rows":{}}}"#,
+                    json_escape(primary_client_id.as_str()),
+                    terminal_size.columns,
+                    terminal_size.rows
+                ),
+            )?;
+        } else {
+            self.session
+                .set_lifecycle_state(RuntimeLifecycleState::Running);
+        }
         self.append_lifecycle_event(
             EventKind::ClientDetached,
             format!(
@@ -157,7 +176,7 @@ impl RuntimeSessionService {
         client_id: &mez_core::ids::ClientId,
         size: Size,
     ) -> Result<bool> {
-        if self.session.primary_client_id() != Some(client_id) {
+        if !self.session.is_attached_primary(client_id) {
             return Ok(false);
         }
         self.resize_attached_primary_terminal(client_id, size)?;
@@ -170,15 +189,47 @@ impl RuntimeSessionService {
         &mut self,
         event: ClientEvent,
     ) -> Result<RuntimeTransition> {
-        let (applied, reason) = match event {
-            ClientEvent::Resize { client_id, size } => (
-                self.apply_primary_client_resize_event(&client_id, size)?,
-                RenderInvalidationReason::Layout,
-            ),
-            ClientEvent::Disconnected { client_id, reason } => (
-                self.apply_client_disconnect_event(&client_id, reason)?,
-                RenderInvalidationReason::FullRedraw,
-            ),
+        let (applied, side_effects) = match event {
+            ClientEvent::Resize { client_id, size } => {
+                let layout_owner = self.session.layout_owner_client_id() == Some(&client_id);
+                let applied = self.apply_primary_client_resize_event(&client_id, size)?;
+                let side_effects = if !applied {
+                    Vec::new()
+                } else if layout_owner {
+                    self.session
+                        .clients()
+                        .iter()
+                        .filter(|client| client.state == mez_mux::session::ClientState::Attached)
+                        .map(|client| RuntimeSideEffect::RenderClient {
+                            client_id: client.id.clone(),
+                            reason: RenderInvalidationReason::Layout,
+                        })
+                        .collect()
+                } else {
+                    vec![RuntimeSideEffect::RenderClient {
+                        client_id,
+                        reason: RenderInvalidationReason::Resize,
+                    }]
+                };
+                (applied, side_effects)
+            }
+            ClientEvent::Disconnected { client_id, reason } => {
+                let applied = self.apply_client_disconnect_event(&client_id, reason)?;
+                let side_effects = if applied {
+                    self.session
+                        .clients()
+                        .iter()
+                        .filter(|client| client.state == mez_mux::session::ClientState::Attached)
+                        .map(|client| RuntimeSideEffect::RenderClient {
+                            client_id: client.id.clone(),
+                            reason: RenderInvalidationReason::FullRedraw,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                (applied, side_effects)
+            }
             ClientEvent::Input { .. }
             | ClientEvent::ResizeSignal { .. }
             | ClientEvent::OutputReady { .. } => {
@@ -186,19 +237,6 @@ impl RuntimeSessionService {
                     "client I/O and render signals require an async adapter transition",
                 ));
             }
-        };
-        let side_effects = if applied {
-            self.session
-                .clients()
-                .iter()
-                .filter(|client| client.state == mez_mux::session::ClientState::Attached)
-                .map(|client| RuntimeSideEffect::RenderClient {
-                    client_id: client.id.clone(),
-                    reason,
-                })
-                .collect()
-        } else {
-            Vec::new()
         };
         let mut side_effects = side_effects;
         if applied {
@@ -222,7 +260,7 @@ impl RuntimeSessionService {
         reason: impl Into<String>,
     ) -> Result<bool> {
         let reason = reason.into();
-        if self.session.primary_client_id() == Some(client_id) {
+        if self.session.is_attached_primary(client_id) {
             let terminal_size = self.session.authoritative_size;
             self.detach_primary(client_id, terminal_size)?;
             self.append_lifecycle_event(
@@ -260,6 +298,11 @@ impl RuntimeSessionService {
         };
         self.session.detach_client_self(client_id)?;
         self.presentation.remove_client_state(client_id);
+        self.control
+            .remove_unix_event_bindings_for_client(client_id);
+        let protected_clients = self.presentation.pending_client_references();
+        self.session
+            .prune_detached_client_summaries(&protected_clients);
         self.append_lifecycle_event(
             EventKind::ClientDetached,
             format!(
@@ -285,9 +328,9 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         self.require_live()?;
         let previous_state = self.session.lifecycle_state();
-        if self.session.primary_client_id() != Some(primary_client_id) {
+        if !self.session.is_attached_primary(primary_client_id) {
             return Err(crate::error::MezError::forbidden(
-                "operation requires the primary client",
+                "operation requires an attached primary client",
             ));
         }
         let panes_have_live_process = self

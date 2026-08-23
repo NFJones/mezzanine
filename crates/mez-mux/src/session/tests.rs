@@ -212,7 +212,7 @@ fn primary_attach_rejects_invalid_terminal_descriptor() {
     assert_eq!(error.kind(), mez_mux::MuxErrorKind::InvalidArgs);
 }
 
-/// Verifies primary selection is atomic and requires interactive target.
+/// Verifies layout-owner transfer is atomic and requires an attached primary.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
@@ -221,49 +221,203 @@ fn primary_attach_rejects_invalid_terminal_descriptor() {
 fn primary_selection_is_atomic_and_requires_interactive_target() {
     let mut session = test_session();
     let first = session.attach_primary("first", true).unwrap();
-    session.detach_primary(&first).unwrap();
     let second = session.attach_primary("second", true).unwrap();
 
     let selected = session
-        .select_primary_client(Some(&second), first.as_str())
+        .select_primary_client(Some(&first), second.as_str())
         .unwrap();
 
-    assert_eq!(selected, first);
-    assert_eq!(session.primary_client_id(), Some(&first));
-    assert_eq!(
-        session
-            .clients()
-            .iter()
-            .filter(|client| client.role == ClientRole::Primary)
-            .count(),
-        1
-    );
+    assert_eq!(selected, second);
+    assert_eq!(session.layout_owner_client_id(), Some(&second));
+    assert_eq!(session.attached_primaries().count(), 2);
 
     let (_observer_client, observer_request) = session.request_observer("observer");
     session
-        .reject_observer_target(&first, observer_request.as_str())
+        .reject_observer_target(&second, observer_request.as_str())
         .unwrap();
     let revoked_observer_client = session.clients().last().unwrap().id.to_string();
     let error = session
-        .select_primary_client(Some(&first), &revoked_observer_client)
+        .select_primary_client(Some(&second), &revoked_observer_client)
         .unwrap_err();
 
     assert_eq!(error.kind(), mez_mux::MuxErrorKind::Forbidden);
 }
 
-/// Verifies enforces single primary.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
+/// Verifies attached primaries have distinct identities and only the layout
+/// owner's terminal resize mutates canonical pane geometry.
 #[test]
-fn enforces_single_primary() {
+fn primary_membership_is_distinct_and_resize_is_owner_scoped() {
     let mut session = test_session();
-    session.attach_primary("first", true).unwrap();
+    let first = session
+        .attach_primary_with_terminal(
+            "same-name",
+            true,
+            Some(ClientTerminalDescriptor {
+                columns: 80,
+                rows: 24,
+                term: "xterm-256color".to_string(),
+                features: Vec::new(),
+            }),
+        )
+        .unwrap();
+    let second = session
+        .attach_primary_with_terminal(
+            "same-name",
+            true,
+            Some(ClientTerminalDescriptor {
+                columns: 100,
+                rows: 30,
+                term: "xterm-256color".to_string(),
+                features: Vec::new(),
+            }),
+        )
+        .unwrap();
 
-    let error = session.attach_primary("second", true).unwrap_err();
+    assert_ne!(first, second);
+    assert_eq!(session.attached_primaries().count(), 2);
+    assert_eq!(session.layout_owner_client_id(), Some(&first));
+
+    let layout_revision = session.layout_revision();
+    let effects = session
+        .resize_authoritative_terminal_transition(&second, Size::new(120, 40).unwrap())
+        .unwrap();
+    assert!(effects.is_empty());
+    assert_eq!(session.authoritative_size, Size::new(80, 24).unwrap());
+    assert_eq!(session.layout_revision(), layout_revision);
+    assert_eq!(
+        session
+            .clients()
+            .iter()
+            .find(|client| client.id == second)
+            .and_then(|client| client.terminal.as_ref())
+            .map(|terminal| (terminal.columns, terminal.rows)),
+        Some((120, 40))
+    );
+
+    let effects = session
+        .resize_authoritative_terminal_transition(&first, Size::new(90, 28).unwrap())
+        .unwrap();
+    assert!(!effects.is_empty());
+    assert_eq!(session.authoritative_size, Size::new(90, 28).unwrap());
+    assert_eq!(session.layout_revision(), layout_revision + 1);
+}
+
+/// Verifies primary admission is bounded at sixteen attached clients.
+#[test]
+fn primary_membership_enforces_attached_client_limit() {
+    let mut session = test_session();
+    for index in 0..super::MAX_ATTACHED_PRIMARY_CLIENTS {
+        session
+            .attach_primary(format!("primary-{index}"), true)
+            .unwrap();
+    }
+
+    let error = session.attach_primary("overflow", true).unwrap_err();
 
     assert_eq!(error.kind(), mez_mux::MuxErrorKind::Conflict);
+    assert_eq!(session.attached_primaries().count(), 16);
+}
+
+/// Verifies owner detach elects the oldest remaining primary and applies its
+/// latest terminal size once, while final detach retains canonical geometry.
+#[test]
+fn primary_owner_detach_elects_oldest_and_retains_final_size() {
+    let mut session = test_session();
+    let terminal = |columns, rows| ClientTerminalDescriptor {
+        columns,
+        rows,
+        term: "xterm-256color".to_string(),
+        features: Vec::new(),
+    };
+    let first = session
+        .attach_primary_with_terminal("first", true, Some(terminal(80, 24)))
+        .unwrap();
+    let second = session
+        .attach_primary_with_terminal("second", true, Some(terminal(100, 30)))
+        .unwrap();
+    let third = session
+        .attach_primary_with_terminal("third", true, Some(terminal(120, 40)))
+        .unwrap();
+    session
+        .resize_authoritative_terminal_transition(&second, Size::new(110, 32).unwrap())
+        .unwrap();
+
+    let owner_detach = session.detach_primary_transition(&first).unwrap();
+
+    assert_eq!(
+        owner_detach.lifecycle_edge,
+        super::PrimaryLifecycleEdge::None
+    );
+    assert_eq!(owner_detach.layout_owner_after, Some(second.clone()));
+    assert_eq!(
+        owner_detach.authoritative_size_after,
+        Size::new(110, 32).unwrap()
+    );
+    assert!(!owner_detach.resize_effects.is_empty());
+    assert_eq!(session.attached_primaries().count(), 2);
+
+    let non_owner_detach = session.detach_primary_transition(&third).unwrap();
+    assert_eq!(
+        non_owner_detach.lifecycle_edge,
+        super::PrimaryLifecycleEdge::None
+    );
+    assert_eq!(non_owner_detach.layout_owner_after, Some(second.clone()));
+    assert!(non_owner_detach.resize_effects.is_empty());
+
+    let final_detach = session.detach_primary_transition(&second).unwrap();
+    assert_eq!(
+        final_detach.lifecycle_edge,
+        super::PrimaryLifecycleEdge::Detached
+    );
+    assert_eq!(final_detach.layout_owner_after, None);
+    assert_eq!(session.authoritative_size, Size::new(110, 32).unwrap());
+    assert_eq!(session.state, SessionState::Detached);
+}
+
+/// Verifies detached summaries are bounded while observer-referenced and
+/// explicitly protected client identities remain available.
+#[test]
+fn detached_client_summary_pruning_preserves_referenced_identities() {
+    let mut session = test_session();
+    let (observer_client, _observer_request) = session.request_observer("observer");
+    session.detach_client_self(&observer_client).unwrap();
+
+    let mut detached_primaries = Vec::new();
+    for index in 0..=super::MAX_RETAINED_DETACHED_CLIENTS + 1 {
+        let primary = session
+            .attach_primary(format!("primary-{index}"), true)
+            .unwrap();
+        session.detach_primary(&primary).unwrap();
+        detached_primaries.push(primary);
+    }
+    let additionally_protected =
+        std::collections::HashSet::from([detached_primaries.first().unwrap().clone()]);
+
+    let removed = session.prune_detached_client_summaries(&additionally_protected);
+
+    assert_eq!(removed, 1);
+    assert!(
+        session
+            .clients()
+            .iter()
+            .any(|client| client.id == observer_client)
+    );
+    assert!(
+        session
+            .clients()
+            .iter()
+            .any(|client| client.id == detached_primaries[0])
+    );
+    assert_eq!(
+        session
+            .clients()
+            .iter()
+            .filter(|client| {
+                client.state == ClientState::Detached && client.role == ClientRole::Primary
+            })
+            .count(),
+        super::MAX_RETAINED_DETACHED_CLIENTS + 1
+    );
 }
 
 /// Verifies observer starts pending and approval sets visibility marker.

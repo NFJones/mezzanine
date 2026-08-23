@@ -53,6 +53,8 @@ pub(crate) fn runtime_mutating_method(method: &str) -> bool {
             | "pane/notice"
             | "buffer/create"
             | "buffer/delete"
+            | "client/detach"
+            | "client/select_primary"
             | "observer/approve"
             | "observer/reject"
             | "observer/revoke"

@@ -8,8 +8,9 @@ use mez_core::{ClientId, ObserverRequestId};
 
 use super::time::current_unix_seconds;
 use super::types::{
-    Client, ClientRole, ClientState, ClientTerminalDescriptor, ObserverDecisionState,
-    ObserverRequest, Session, SessionState,
+    Client, ClientRole, ClientState, ClientTerminalDescriptor, MAX_ATTACHED_PRIMARY_CLIENTS,
+    MAX_RETAINED_DETACHED_CLIENTS, ObserverDecisionState, ObserverRequest, PrimaryLifecycleEdge,
+    PrimaryMembershipTransition, Session, SessionState,
 };
 
 impl Session {
@@ -37,6 +38,18 @@ impl Session {
         interactive: bool,
         terminal: Option<ClientTerminalDescriptor>,
     ) -> Result<ClientId> {
+        Ok(self
+            .attach_primary_with_terminal_transition(name, interactive, terminal)?
+            .client_id)
+    }
+
+    /// Attaches one fresh primary and reports membership and ownership edges.
+    pub fn attach_primary_with_terminal_transition(
+        &mut self,
+        name: impl Into<String>,
+        interactive: bool,
+        terminal: Option<ClientTerminalDescriptor>,
+    ) -> Result<PrimaryMembershipTransition> {
         if !interactive {
             return Err(MezError::forbidden(
                 "primary clients must attach through an interactive terminal",
@@ -45,12 +58,19 @@ impl Session {
         if let Some(terminal) = terminal.as_ref() {
             validate_client_terminal_descriptor(terminal)?;
         }
-        if self.primary_client_id.is_some() {
-            return Err(MezError::conflict(
-                "session already has an attached primary client",
-            ));
+        let primary_count_before = self.attached_primaries().count();
+        if primary_count_before >= MAX_ATTACHED_PRIMARY_CLIENTS {
+            return Err(MezError::conflict(format!(
+                "session already has the maximum of {MAX_ATTACHED_PRIMARY_CLIENTS} attached primary clients"
+            )));
         }
 
+        let layout_owner_before = self.layout_owner_client_id.clone();
+        let authoritative_size_before = self.authoritative_size;
+        let terminal_size = terminal
+            .as_ref()
+            .map(|terminal| crate::layout::Size::new(terminal.columns, terminal.rows))
+            .transpose()?;
         let client_id = self.ids.client();
         let attached_at = current_unix_seconds();
         self.clients.push(Client {
@@ -64,10 +84,34 @@ impl Session {
             last_seen_at_unix_seconds: Some(attached_at),
             navigation: Some(self.navigation_from_landing()),
         });
-        self.primary_client_id = Some(client_id.clone());
+        let resize_effects = if self.layout_owner_client_id.is_none() {
+            self.layout_owner_client_id = Some(client_id.clone());
+            self.layout_revision = self.layout_revision.saturating_add(1);
+            terminal_size
+                .map(|size| self.apply_authoritative_layout_size(size))
+                .transpose()?
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         self.last_attached_at_unix_seconds = Some(attached_at);
+        self.state = SessionState::Running;
         self.record_event();
-        Ok(client_id)
+        Ok(PrimaryMembershipTransition {
+            client_id,
+            primary_count_before,
+            primary_count_after: primary_count_before.saturating_add(1),
+            layout_owner_before,
+            layout_owner_after: self.layout_owner_client_id.clone(),
+            authoritative_size_before,
+            authoritative_size_after: self.authoritative_size,
+            resize_effects,
+            lifecycle_edge: if primary_count_before == 0 {
+                PrimaryLifecycleEdge::Attached
+            } else {
+                PrimaryLifecycleEdge::None
+            },
+        })
     }
 
     /// Runs the select primary client operation for this subsystem.
@@ -80,46 +124,69 @@ impl Session {
         authority_client_id: Option<&ClientId>,
         target_client_id: &str,
     ) -> Result<ClientId> {
-        if let Some(current_primary) = self.primary_client_id.as_ref()
-            && authority_client_id != Some(current_primary)
-        {
-            return Err(MezError::forbidden(
-                "primary transfer requires the attached primary client",
-            ));
-        }
+        Ok(self
+            .select_layout_owner_transition(authority_client_id, target_client_id)?
+            .client_id)
+    }
+
+    /// Transfers canonical layout ownership to one attached primary.
+    pub fn select_layout_owner_transition(
+        &mut self,
+        authority_client_id: Option<&ClientId>,
+        target_client_id: &str,
+    ) -> Result<PrimaryMembershipTransition> {
+        let authority_client_id = authority_client_id.ok_or_else(|| {
+            MezError::forbidden("layout ownership transfer requires an attached primary client")
+        })?;
+        self.require_primary(authority_client_id)?;
 
         let target_index = self
             .clients
             .iter()
             .position(|client| client.id.as_str() == target_client_id)
             .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "client not found"))?;
-        if !self.clients[target_index].interactive {
+        if !self.clients[target_index].interactive
+            || self.clients[target_index].role != ClientRole::Primary
+            || self.clients[target_index].state != ClientState::Attached
+        {
             return Err(MezError::forbidden(
-                "primary client selection requires an interactive target client",
+                "layout ownership requires an attached interactive primary client",
             ));
         }
 
-        for client in &mut self.clients {
-            if matches!(client.role, ClientRole::Primary) {
-                client.role = ClientRole::Automation;
-            }
-        }
+        let primary_count = self.attached_primaries().count();
+        let layout_owner_before = self.layout_owner_client_id.clone();
+        let authoritative_size_before = self.authoritative_size;
         let target_id = self.clients[target_index].id.clone();
+        let target_size = self.clients[target_index]
+            .terminal
+            .as_ref()
+            .map(|terminal| crate::layout::Size::new(terminal.columns, terminal.rows))
+            .transpose()?;
         let selected_at = current_unix_seconds();
-        self.clients[target_index].role = ClientRole::Primary;
-        self.clients[target_index].state = ClientState::Attached;
-        if self.clients[target_index].navigation.is_none() {
-            self.clients[target_index].navigation = Some(self.navigation_from_landing());
-        }
-        self.clients[target_index]
-            .attached_at_unix_seconds
-            .get_or_insert(selected_at);
         self.clients[target_index].last_seen_at_unix_seconds = Some(selected_at);
-        self.primary_client_id = Some(target_id.clone());
-        self.last_attached_at_unix_seconds = Some(selected_at);
-        self.state = SessionState::Running;
+        let resize_effects = if self.layout_owner_client_id.as_ref() != Some(&target_id) {
+            self.layout_owner_client_id = Some(target_id.clone());
+            self.layout_revision = self.layout_revision.saturating_add(1);
+            target_size
+                .map(|size| self.apply_authoritative_layout_size(size))
+                .transpose()?
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         self.record_event();
-        Ok(target_id)
+        Ok(PrimaryMembershipTransition {
+            client_id: target_id,
+            primary_count_before: primary_count,
+            primary_count_after: primary_count,
+            layout_owner_before,
+            layout_owner_after: self.layout_owner_client_id.clone(),
+            authoritative_size_before,
+            authoritative_size_after: self.authoritative_size,
+            resize_effects,
+            lifecycle_edge: PrimaryLifecycleEdge::None,
+        })
     }
 
     /// Runs the request observer operation for this subsystem.
@@ -422,8 +489,18 @@ impl Session {
         client_id: &str,
     ) -> Result<()> {
         self.require_primary(primary_client_id)?;
-        if primary_client_id.as_str() == client_id {
-            return self.detach_primary(primary_client_id);
+        if self
+            .clients
+            .iter()
+            .any(|client| client.id.as_str() == client_id && client.role == ClientRole::Primary)
+        {
+            let target_id = self
+                .clients
+                .iter()
+                .find(|client| client.id.as_str() == client_id)
+                .map(|client| client.id.clone())
+                .expect("primary target was just resolved");
+            return self.detach_primary(&target_id);
         }
         let client = self
             .clients
@@ -449,7 +526,7 @@ impl Session {
     /// are revoked so a short-lived pairing or connectivity-check connection
     /// cannot leave a pending or approved observer request behind.
     pub fn detach_client_self(&mut self, client_id: &ClientId) -> Result<()> {
-        if self.primary_client_id.as_ref() == Some(client_id) {
+        if self.is_attached_primary(client_id) {
             return self.detach_primary(client_id);
         }
         let client = self
@@ -476,7 +553,19 @@ impl Session {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn detach_primary(&mut self, primary_client_id: &ClientId) -> Result<()> {
+        self.detach_primary_transition(primary_client_id)?;
+        Ok(())
+    }
+
+    /// Detaches one exact primary and elects a replacement layout owner.
+    pub fn detach_primary_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+    ) -> Result<PrimaryMembershipTransition> {
         self.require_primary(primary_client_id)?;
+        let primary_count_before = self.attached_primaries().count();
+        let layout_owner_before = self.layout_owner_client_id.clone();
+        let authoritative_size_before = self.authoritative_size;
         if let Some(client) = self
             .clients
             .iter_mut()
@@ -485,10 +574,50 @@ impl Session {
             client.state = ClientState::Detached;
             client.last_seen_at_unix_seconds = Some(current_unix_seconds());
         }
-        self.primary_client_id = None;
-        self.state = SessionState::Detached;
+        let primary_count_after = primary_count_before.saturating_sub(1);
+        let resize_effects = if self.layout_owner_client_id.as_ref() == Some(primary_client_id) {
+            self.layout_owner_client_id = self
+                .attached_primaries()
+                .min_by(|left, right| {
+                    left.attached_at_unix_seconds
+                        .cmp(&right.attached_at_unix_seconds)
+                        .then_with(|| left.id.as_str().cmp(right.id.as_str()))
+                })
+                .map(|client| client.id.clone());
+            self.layout_revision = self.layout_revision.saturating_add(1);
+            let elected_size = self
+                .layout_owner_client_id
+                .as_ref()
+                .and_then(|owner_id| self.clients.iter().find(|client| client.id == *owner_id))
+                .and_then(|client| client.terminal.as_ref())
+                .map(|terminal| crate::layout::Size::new(terminal.columns, terminal.rows))
+                .transpose()?;
+            elected_size
+                .map(|size| self.apply_authoritative_layout_size(size))
+                .transpose()?
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        if primary_count_after == 0 {
+            self.state = SessionState::Detached;
+        }
         self.record_event();
-        Ok(())
+        Ok(PrimaryMembershipTransition {
+            client_id: primary_client_id.clone(),
+            primary_count_before,
+            primary_count_after,
+            layout_owner_before,
+            layout_owner_after: self.layout_owner_client_id.clone(),
+            authoritative_size_before,
+            authoritative_size_after: self.authoritative_size,
+            resize_effects,
+            lifecycle_edge: if primary_count_after == 0 {
+                PrimaryLifecycleEdge::Detached
+            } else {
+                PrimaryLifecycleEdge::None
+            },
+        })
     }
 
     /// Validates one observer decision by request id before any mutation.
@@ -599,6 +728,61 @@ impl Session {
                 && client.state == ClientState::Attached
                 && client.interactive
         })
+    }
+
+    /// Prunes the oldest unreferenced detached client summaries to the retained limit.
+    ///
+    /// Observer request identities are always protected. Product adapters may
+    /// additionally protect clients referenced by unsettled external work.
+    pub fn prune_detached_client_summaries(
+        &mut self,
+        additionally_protected: &std::collections::HashSet<ClientId>,
+    ) -> usize {
+        let observer_clients = self
+            .observers
+            .iter()
+            .map(|observer| observer.client_id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        let mut removable = self
+            .clients
+            .iter()
+            .enumerate()
+            .filter(|(_, client)| {
+                client.state == ClientState::Detached
+                    && !observer_clients.contains(&client.id)
+                    && !additionally_protected.contains(&client.id)
+            })
+            .map(|(index, client)| {
+                (
+                    index,
+                    client.last_seen_at_unix_seconds.unwrap_or_default(),
+                    client.attached_at_unix_seconds.unwrap_or_default(),
+                    client.id.as_str().to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        if removable.len() <= MAX_RETAINED_DETACHED_CLIENTS {
+            return 0;
+        }
+        removable.sort_by(|left, right| {
+            left.1
+                .cmp(&right.1)
+                .then_with(|| left.2.cmp(&right.2))
+                .then_with(|| left.3.cmp(&right.3))
+        });
+        let remove_count = removable.len() - MAX_RETAINED_DETACHED_CLIENTS;
+        let remove_indices = removable
+            .into_iter()
+            .take(remove_count)
+            .map(|(index, _, _, _)| index)
+            .collect::<std::collections::HashSet<_>>();
+        let mut index = 0usize;
+        self.clients.retain(|_| {
+            let retain = !remove_indices.contains(&index);
+            index = index.saturating_add(1);
+            retain
+        });
+        remove_count
     }
 
     /// Returns caller-local navigation for an attached primary.

@@ -354,8 +354,10 @@ impl RuntimeSessionService {
         queue_external_effects_for_adapter: bool,
     ) -> Result<String> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let pane_id = self.active_pane_id()?;
         let visible = self
@@ -942,8 +944,10 @@ impl RuntimeSessionService {
         };
 
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let pane_id = self.active_pane_id()?;
         let visible = self
@@ -1047,8 +1051,10 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let pane_id = self.active_pane_id()?;
         let visible = self
@@ -1075,8 +1081,10 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let pane_id = self.active_pane_id()?;
         if self

@@ -125,6 +125,10 @@ impl RuntimeSessionService {
             "pane/notice" => self.dispatch_runtime_pane_notice(params),
             "buffer/create" => self.dispatch_runtime_buffer_create(params),
             "buffer/delete" => self.dispatch_runtime_buffer_delete(params),
+            "client/detach" => self.dispatch_runtime_client_detach(primary_client_id, params),
+            "client/select_primary" => {
+                self.dispatch_runtime_layout_owner_transfer(primary_client_id, params)
+            }
             "window/close" => self.dispatch_runtime_window_close(primary_client_id, params),
             "session/kill" => self.dispatch_runtime_session_kill(primary_client_id, params),
             "observer/approve" => self.dispatch_runtime_observer_approve(primary_client_id, params),
@@ -144,6 +148,78 @@ impl RuntimeSessionService {
                 "runtime control method was filtered incorrectly",
             )),
         }
+    }
+
+    /// Detaches one exact client through runtime lifecycle and presentation owners.
+    pub(super) fn dispatch_runtime_client_detach(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        params: &str,
+    ) -> Result<String> {
+        self.require_live()?;
+        self.session.require_primary(primary_client_id)?;
+        let target = runtime_json_string_field(params, "client_id")
+            .unwrap_or_else(|| primary_client_id.to_string());
+        let target_client = self
+            .session
+            .clients()
+            .iter()
+            .find(|client| client.id.as_str() == target)
+            .cloned()
+            .ok_or_else(|| {
+                MezError::new(crate::error::MezErrorKind::NotFound, "client not found")
+            })?;
+        if target_client.role == ClientRole::Primary {
+            let terminal_size = target_client
+                .terminal
+                .as_ref()
+                .map(|terminal| mez_mux::layout::Size::new(terminal.columns, terminal.rows))
+                .transpose()?
+                .unwrap_or(self.session.authoritative_size);
+            self.detach_primary(&target_client.id, terminal_size)?;
+        } else if target_client.id == *primary_client_id {
+            self.session.detach_client_self(primary_client_id)?;
+            self.presentation.remove_client_state(primary_client_id);
+            self.control
+                .remove_unix_event_bindings_for_client(primary_client_id);
+        } else {
+            self.session
+                .detach_client_target(primary_client_id, target_client.id.as_str())?;
+            self.presentation.remove_client_state(&target_client.id);
+            self.control
+                .remove_unix_event_bindings_for_client(&target_client.id);
+        }
+        let protected_clients = self.presentation.pending_client_references();
+        self.session
+            .prune_detached_client_summaries(&protected_clients);
+        Ok(format!(
+            r#"{{"detached":true,"client_id":"{}"}}"#,
+            json_escape(target_client.id.as_str())
+        ))
+    }
+
+    /// Transfers canonical layout ownership and synchronizes resulting pane geometry.
+    pub(super) fn dispatch_runtime_layout_owner_transfer(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        params: &str,
+    ) -> Result<String> {
+        self.require_live()?;
+        let target = runtime_json_string_field(params, "client_id")
+            .ok_or_else(|| MezError::invalid_args("client/select_primary requires client_id"))?;
+        let transition = self
+            .session
+            .select_layout_owner_transition(Some(primary_client_id), &target)?;
+        let updates = self.sync_pane_resize_effects(&transition.resize_effects)?;
+        self.presentation.clear_mouse_resize_drag_state();
+        self.reflow_primary_record_browser_overlay();
+        Ok(format!(
+            r#"{{"primary_client_id":"{}","layout_owner_client_id":"{}","layout_revision":{},"resized_panes":{}}}"#,
+            json_escape(transition.client_id.as_str()),
+            json_escape(transition.client_id.as_str()),
+            self.session.layout_revision(),
+            updates.len()
+        ))
     }
 
     /// Runs the dispatch runtime mcp retry operation for this subsystem.
@@ -410,8 +486,10 @@ impl RuntimeSessionService {
         params: &str,
     ) -> Result<String> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let force = runtime_json_bool_field(params, "force").unwrap_or(false);
         let target = pane_target_checked_resolved(&self.session, params)?;
@@ -468,8 +546,10 @@ impl RuntimeSessionService {
         params: &str,
     ) -> Result<String> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let force = runtime_json_bool_field(params, "force").unwrap_or(false);
         let target = window_target_checked_resolved(&self.session, params)?;
@@ -762,8 +842,10 @@ impl RuntimeSessionService {
         params: &str,
     ) -> Result<String> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let input = runtime_json_input_bytes(params)?;
         let render = runtime_json_bool_field(params, "render").unwrap_or(true);
@@ -1047,7 +1129,7 @@ impl RuntimeSessionService {
         request_id: &str,
         caller_client_id: &mez_core::ids::ClientId,
     ) -> String {
-        if self.session.primary_client_id() != Some(caller_client_id) {
+        if !self.session.is_attached_primary(caller_client_id) {
             return runtime_json_rpc_error(
                 request_id,
                 crate::error::MezErrorKind::Forbidden,

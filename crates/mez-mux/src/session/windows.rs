@@ -1247,11 +1247,43 @@ impl Session {
         size: Size,
     ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
+        let client = self
+            .clients
+            .iter_mut()
+            .find(|client| client.id == *primary_client_id)
+            .ok_or_else(|| MezError::forbidden("operation requires the primary client"))?;
+        if let Some(terminal) = client.terminal.as_mut() {
+            terminal.columns = size.columns;
+            terminal.rows = size.rows;
+        }
+        client.last_seen_at_unix_seconds = Some(super::time::current_unix_seconds());
+        if self.layout_owner_client_id.as_ref() != Some(primary_client_id) {
+            self.record_event();
+            return Ok(Vec::new());
+        }
+        if self.authoritative_size == size {
+            self.record_event();
+            return Ok(Vec::new());
+        }
+        let effects = self.apply_authoritative_layout_size(size)?;
+        self.layout_revision = self.layout_revision.saturating_add(1);
+        self.record_event();
+        Ok(effects)
+    }
+
+    /// Applies canonical layout geometry without recording a separate transition.
+    pub(super) fn apply_authoritative_layout_size(
+        &mut self,
+        size: Size,
+    ) -> Result<Vec<PaneResizeEffect>> {
+        if self.authoritative_size == size {
+            return Ok(Vec::new());
+        }
         self.authoritative_size = size;
         for window in &mut self.windows {
             window.resize_window(size)?;
         }
-        let effects = self
+        Ok(self
             .windows
             .iter()
             .flat_map(|window| window.panes())
@@ -1259,9 +1291,7 @@ impl Session {
                 pane_id: pane.id.clone(),
                 size: pane.size,
             })
-            .collect();
-        self.record_event();
-        Ok(effects)
+            .collect())
     }
 
     /// Runs the set pane live state operation for this subsystem.
@@ -1821,7 +1851,8 @@ impl Session {
                 client.last_seen_at_unix_seconds = Some(now);
             }
         }
-        self.primary_client_id = None;
+        self.layout_owner_client_id = None;
+        self.layout_revision = self.layout_revision.saturating_add(1);
         self.windows.clear();
         self.window_groups.clear();
         self.active_group_index = 0;

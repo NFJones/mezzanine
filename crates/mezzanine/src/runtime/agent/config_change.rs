@@ -10,13 +10,11 @@ use super::{
     AgentTurnRecord, AgentTurnState, CommandInvocation, ConfigFormat, ConfigLayer, ConfigMutation,
     ConfigMutationOperation, ConfigMutationValue, ConfigPaths, ConfigScope,
     DEFAULT_COMMAND_SHELL_CLASSIFICATION, MezError, PermissionPolicy, Result,
-    RuntimeSessionService, exact_command_sha256, json_escape, runtime_agent_action_summary,
+    RuntimeSessionService, exact_command_sha256, json_escape,
+    outcome::RuntimeTerminalActionObservations, runtime_agent_action_summary,
     runtime_agent_turn_state_from_action_results, runtime_apply_persisted_config_mutation_batch,
-    runtime_mezzanine_error_code, runtime_set_theme_command,
-};
-#[cfg(test)]
-use super::{
-    outcome::RuntimeTerminalActionObservations, runtime_execution_ready_for_provider_continuation,
+    runtime_execution_ready_for_provider_continuation, runtime_mezzanine_error_code,
+    runtime_set_theme_command,
 };
 use crate::config::{
     compose_effective_config, config_change_path_is_user_only_host_power_policy,
@@ -1152,7 +1150,6 @@ impl RuntimeSessionService {
     /// control path. While detached, the action therefore remains running in
     /// its retained execution instead of failing the agent turn. Reattachment
     /// supplies the primary identity required to finish that work.
-    #[cfg(test)]
     pub(crate) fn resume_detached_config_change_actions(&mut self) -> Result<()> {
         let turns = self
             .agent_turn_ledger()

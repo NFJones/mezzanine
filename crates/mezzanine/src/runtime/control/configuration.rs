@@ -962,9 +962,9 @@ impl RuntimeSessionService {
         caller_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
-        if self.session.primary_client_id() != Some(caller_client_id) {
+        if !self.session.is_attached_primary(caller_client_id) {
             return Err(MezError::forbidden(
-                "project trust methods require the primary client",
+                "project trust methods require an attached primary client",
             ));
         }
         self.refresh_project_trust_store_from_disk_if_changed()?;
@@ -1016,9 +1016,9 @@ impl RuntimeSessionService {
         caller_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
-        if self.session.primary_client_id() != Some(caller_client_id) {
+        if !self.session.is_attached_primary(caller_client_id) {
             return Err(MezError::forbidden(
-                "project trust mutations require the primary client",
+                "project trust mutations require an attached primary client",
             ));
         }
         self.refresh_project_trust_store_from_disk_if_changed()?;

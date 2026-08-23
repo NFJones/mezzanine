@@ -828,6 +828,16 @@ impl RuntimePresentationComponent {
         }
     }
 
+    /// Returns exact clients retained by provider refresh work awaiting dispatch.
+    pub(crate) fn pending_client_references(
+        &self,
+    ) -> std::collections::HashSet<mez_core::ids::ClientId> {
+        self.pending_agent_prompt_provider_info_refreshes
+            .iter()
+            .map(|refresh| refresh.primary_client_id.clone())
+            .collect()
+    }
+
     /// Removes pane-scoped interaction state from every retained client.
     pub(crate) fn remove_pane_state_for_all_clients(&mut self, pane_id: &str) {
         self.capture_projected_client_state();

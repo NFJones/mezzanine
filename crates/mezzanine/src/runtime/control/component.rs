@@ -114,6 +114,12 @@ impl RuntimeControlComponent {
             .map(|binding| binding.client_id)
     }
 
+    /// Removes every unconsumed event binding owned by one detached client.
+    pub(crate) fn remove_unix_event_bindings_for_client(&mut self, client_id: &ClientId) {
+        self.unix_event_bindings
+            .retain(|_, binding| &binding.client_id != client_id);
+    }
+
     /// Returns the idempotency cache for read-only diagnostics.
     #[cfg(test)]
     pub(crate) fn idempotency(&self) -> &ControlIdempotencyCache {

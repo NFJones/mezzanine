@@ -341,8 +341,10 @@ impl RuntimeSessionService {
         input: &str,
     ) -> Result<String> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let outcomes = execute_runtime_command_sequence(self, primary_client_id, input)?;
         Ok(runtime_command_outcomes_json(&outcomes))
@@ -359,8 +361,10 @@ impl RuntimeSessionService {
         input: &str,
     ) -> Result<String> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let outcomes =
             execute_runtime_command_sequence_async(self, primary_client_id, input).await?;

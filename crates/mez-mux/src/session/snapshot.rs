@@ -190,7 +190,8 @@ impl Session {
             clients: Vec::new(),
             observers: Vec::new(),
             landing_navigation,
-            primary_client_id: None,
+            layout_owner_client_id: None,
+            layout_revision: 0,
             next_event_id: 1,
         })
     }

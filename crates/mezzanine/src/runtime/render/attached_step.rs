@@ -94,8 +94,10 @@ impl RuntimeSessionService {
         if input.is_empty() {
             return Err(MezError::invalid_args("pane input must not be empty"));
         }
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let descriptor = match target {
             Some(target) => self.find_pane_descriptor(target).ok_or_else(|| {
@@ -121,8 +123,10 @@ impl RuntimeSessionService {
         if input.is_empty() {
             return Err(MezError::invalid_args("pane input must not be empty"));
         }
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         if !self.pane_process_input_is_allowed(descriptor.pane_id.as_str()) {
             return Err(MezError::forbidden(

@@ -57,7 +57,8 @@ impl Session {
             clients: Vec::new(),
             observers: Vec::new(),
             landing_navigation,
-            primary_client_id: None,
+            layout_owner_client_id: None,
+            layout_revision: 0,
             next_event_id: 1,
         }
     }
@@ -228,13 +229,19 @@ impl Session {
         self.pane_state_metadata.get(pane_id)
     }
 
-    /// Runs the primary client id operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Returns the current layout owner for compatibility with v1 callers.
     pub fn primary_client_id(&self) -> Option<&ClientId> {
-        self.primary_client_id.as_ref()
+        self.layout_owner_client_id.as_ref()
+    }
+
+    /// Returns the attached primary that owns canonical terminal geometry.
+    pub fn layout_owner_client_id(&self) -> Option<&ClientId> {
+        self.layout_owner_client_id.as_ref()
+    }
+
+    /// Returns the monotonic canonical layout revision.
+    pub fn layout_revision(&self) -> u64 {
+        self.layout_revision
     }
 
     /// Runs the advance config generation operation for this subsystem.

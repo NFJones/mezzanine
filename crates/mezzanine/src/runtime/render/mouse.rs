@@ -891,8 +891,10 @@ impl RuntimeSessionService {
         field: PaneAgentStatusField,
         item_index: usize,
     ) -> Result<()> {
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let Some(selector) = self.presentation.pane_agent_status_selector.take() else {
             return Ok(());

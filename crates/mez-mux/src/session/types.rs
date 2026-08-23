@@ -353,6 +353,46 @@ pub struct Client {
     pub navigation: Option<ClientNavigationState>,
 }
 
+/// Maximum number of interactive primary clients attached concurrently.
+pub const MAX_ATTACHED_PRIMARY_CLIENTS: usize = 16;
+
+/// Maximum number of unreferenced detached client summaries retained in memory.
+pub const MAX_RETAINED_DETACHED_CLIENTS: usize = 64;
+
+/// Session lifecycle edge produced by an exact primary membership change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimaryLifecycleEdge {
+    /// Membership changed without entering or leaving the attached state.
+    None,
+    /// The first primary attached to a session with no attached primaries.
+    Attached,
+    /// The final attached primary detached from the session.
+    Detached,
+}
+
+/// Exact primary membership transition returned by attach and detach owners.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrimaryMembershipTransition {
+    /// Exact client whose membership changed.
+    pub client_id: ClientId,
+    /// Number of attached primaries before the transition.
+    pub primary_count_before: usize,
+    /// Number of attached primaries after the transition.
+    pub primary_count_after: usize,
+    /// Layout owner before the transition.
+    pub layout_owner_before: Option<ClientId>,
+    /// Layout owner after the transition.
+    pub layout_owner_after: Option<ClientId>,
+    /// Canonical terminal size before the transition.
+    pub authoritative_size_before: Size,
+    /// Canonical terminal size after owner attachment, transfer, or election.
+    pub authoritative_size_after: Size,
+    /// Pane sizes produced when the canonical terminal geometry changed.
+    pub resize_effects: Vec<super::windows::PaneResizeEffect>,
+    /// Lifecycle edge produced by the membership count change.
+    pub lifecycle_edge: PrimaryLifecycleEdge,
+}
+
 /// Carries Observer Decision State state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -655,11 +695,10 @@ pub struct Session {
     pub(super) observers: Vec<ObserverRequest>,
     /// Client-independent landing navigation used to seed primary views.
     pub(super) landing_navigation: LandingNavigationState,
-    /// Stores the primary client id value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) primary_client_id: Option<ClientId>,
+    /// Attached primary whose terminal size owns canonical layout geometry.
+    pub(super) layout_owner_client_id: Option<ClientId>,
+    /// Monotonic revision of canonical layout geometry and ownership.
+    pub(super) layout_revision: u64,
     /// Stores the next event id value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

@@ -209,7 +209,7 @@ impl RuntimeSessionService {
         connection: &mut ControlConnectionState,
         prepared: PreparedRemoteInitializeAuthority,
     ) -> String {
-        let primary_before = self.session.primary_client_id().cloned();
+        let primary_count_before = self.session.attached_primaries().count();
         let observer_count_before = self.session.observers().len();
         let mut staged_session = self.session.clone();
         let mut staged_connection = connection.clone();
@@ -287,7 +287,8 @@ impl RuntimeSessionService {
             };
         if let Err(error) = self.apply_runtime_initialize_side_effects(
             request,
-            primary_before.as_ref(),
+            primary_count_before,
+            connection.caller_client_id(),
             observer_count_before,
         ) {
             self.session = original_session;

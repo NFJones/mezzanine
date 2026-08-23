@@ -51,9 +51,9 @@ impl RuntimeSessionService {
         input: &str,
         origin: AgentShellCommandOrigin,
     ) -> Result<AgentShellCommandOutcome> {
-        if self.session.primary_client_id() != Some(primary_client_id) {
+        if !self.session.is_attached_primary(primary_client_id) {
             return Err(MezError::forbidden(
-                "sandbox commands require the primary client",
+                "sandbox commands require an attached primary client",
             ));
         }
         let operation = parse_sandbox_command(input)?;

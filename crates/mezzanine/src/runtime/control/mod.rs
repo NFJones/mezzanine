@@ -869,7 +869,7 @@ impl RuntimeSessionService {
                     .dispatch_prepared_remote_initialize(body, &request, connection, prepared);
             }
 
-            let primary_before = self.session.primary_client_id().cloned();
+            let primary_count_before = self.session.attached_primaries().count();
             let observer_count_before = self.session.observers().len();
             let mut response = dispatch_control_request_for_connection(
                 body,
@@ -880,7 +880,8 @@ impl RuntimeSessionService {
             if response.contains(r#""result""#)
                 && let Err(error) = self.apply_runtime_initialize_side_effects(
                     &request,
-                    primary_before.as_ref(),
+                    primary_count_before,
+                    connection.caller_client_id(),
                     observer_count_before,
                 )
             {

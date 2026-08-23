@@ -41,6 +41,96 @@ fn runtime_service_tracks_attach_detach_lifecycle() {
     assert_ne!(primary, reattached);
 }
 
+/// Verifies runtime layout-owner transfer keeps both primaries attached while
+/// applying the target owner's latest terminal geometry to live pane state.
+#[test]
+fn runtime_layout_owner_transfer_applies_target_terminal_size() {
+    let mut service = test_runtime_service();
+    let first = service
+        .attach_primary("first", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let second = service
+        .attach_primary("second", true, Size::new(100, 30).unwrap(), 121)
+        .unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"owner","method":"client/select_primary","params":{{"client_id":"{}","idempotency_key":"owner-transfer"}}}}"#,
+            second
+        ),
+        &first,
+    );
+
+    assert!(
+        response.contains(r#""layout_owner_client_id""#),
+        "{response}"
+    );
+    assert_eq!(service.session().layout_owner_client_id(), Some(&second));
+    assert_eq!(service.session().attached_primaries().count(), 2);
+    assert_eq!(
+        service.session().authoritative_size,
+        Size::new(100, 30).unwrap()
+    );
+    assert_eq!(
+        service
+            .tracked_pane_descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.pane_id.as_str() == "%1")
+            .unwrap()
+            .size,
+        Size::new(100, 28).unwrap()
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies owner disconnect elects the remaining primary without taking the
+/// runtime through its final-detach edge, and duplicate cleanup is inert.
+#[test]
+fn runtime_non_last_primary_disconnect_elects_owner_and_final_detach_is_exact() {
+    let mut service = test_runtime_service();
+    let first = service
+        .attach_primary("first", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let second = service
+        .attach_primary("second", true, Size::new(100, 30).unwrap(), 121)
+        .unwrap();
+
+    assert!(
+        service
+            .apply_client_disconnect_event(&first, "first connection closed")
+            .unwrap()
+    );
+    assert_eq!(service.lifecycle_state(), RuntimeLifecycleState::Running);
+    assert_eq!(service.session().layout_owner_client_id(), Some(&second));
+    assert_eq!(service.session().attached_primaries().count(), 1);
+    assert_eq!(
+        service.session().authoritative_size,
+        Size::new(100, 30).unwrap()
+    );
+    assert!(
+        !service
+            .apply_client_disconnect_event(&first, "duplicate close")
+            .unwrap()
+    );
+
+    assert!(
+        service
+            .apply_client_disconnect_event(&second, "final connection closed")
+            .unwrap()
+    );
+    assert_eq!(service.lifecycle_state(), RuntimeLifecycleState::Detached);
+    assert_eq!(service.session().layout_owner_client_id(), None);
+    assert_eq!(service.session().attached_primaries().count(), 0);
+    assert_eq!(
+        service.session().authoritative_size,
+        Size::new(100, 30).unwrap()
+    );
+}
+
 /// Verifies runtime control initialize can reattach primary without existing primary.
 ///
 /// This regression scenario documents the behavior being protected so a

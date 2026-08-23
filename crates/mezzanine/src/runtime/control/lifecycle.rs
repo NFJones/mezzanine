@@ -24,7 +24,8 @@ impl RuntimeSessionService {
     pub(super) fn apply_runtime_initialize_side_effects(
         &mut self,
         request: &crate::control::JsonRpcRequest,
-        primary_before: Option<&mez_core::ids::ClientId>,
+        primary_count_before: usize,
+        initialized_client_id: Option<&mez_core::ids::ClientId>,
         observer_count_before: usize,
     ) -> Result<()> {
         if runtime_initialize_requested_observer(request) {
@@ -41,7 +42,10 @@ impl RuntimeSessionService {
                 ));
             return Ok(());
         }
-        let Some(primary_after) = self.session.primary_client_id().cloned() else {
+        let Some(primary_after) = initialized_client_id
+            .filter(|client_id| self.session.is_attached_primary(client_id))
+            .cloned()
+        else {
             self.session
                 .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
                     self.session.state,
@@ -57,8 +61,11 @@ impl RuntimeSessionService {
                 .resize_authoritative_terminal(&primary_after, size)?;
             self.sync_tracked_pty_sizes()?;
         }
-        if primary_before == Some(&primary_after) {
+        if self.session.attached_primaries().count() == primary_count_before {
             return Ok(());
+        }
+        if primary_count_before == 0 {
+            self.resume_detached_config_change_actions()?;
         }
         self.session
             .set_last_attach_at_unix_seconds(Some(current_unix_seconds()));

@@ -96,25 +96,17 @@ fn dispatches_client_and_observer_methods() {
 #[test]
 fn dispatches_primary_client_selection_atomically() {
     let (mut session, first) = test_session();
-    session.detach_primary(&first).unwrap();
     let second = session.attach_primary("second", true).unwrap();
     let request = format!(
         r#"{{"jsonrpc":"2.0","id":1,"method":"client/select_primary","params":{{"client_id":"{}","idempotency_key":"select-primary"}}}}"#,
-        first
+        second
     );
 
-    let response = dispatch_control_request(&request, &mut session, &second);
+    let response = dispatch_control_request(&request, &mut session, &first);
 
-    assert!(response.contains(&format!(r#""primary_client_id":"{}""#, first)));
-    assert_eq!(session.primary_client_id(), Some(&first));
-    assert_eq!(
-        session
-            .clients()
-            .iter()
-            .filter(|client| client.role == mez_mux::session::ClientRole::Primary)
-            .count(),
-        1
-    );
+    assert!(response.contains(&format!(r#""primary_client_id":"{}""#, second)));
+    assert_eq!(session.layout_owner_client_id(), Some(&second));
+    assert_eq!(session.attached_primaries().count(), 2);
 }
 
 /// Verifies pending observer cannot receive session or mcp data.
