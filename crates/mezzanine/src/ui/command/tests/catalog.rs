@@ -32,6 +32,7 @@ fn list_commands_reports_baseline_command_statuses() {
     assert!(body.contains("copy-mode:status=runtime-required"));
     assert!(body.contains("show-messages:status=implemented"));
     assert!(body.contains("show-metrics:status=runtime-required"));
+    assert!(body.contains("show-iroh-status:status=runtime-required"));
     assert!(body.contains("list-keys:status=implemented"));
     assert!(body.contains("list-themes:status=implemented"));
     assert!(body.contains("set-theme:status=store-required"));
@@ -103,6 +104,7 @@ fn help_command_describes_mezzanine_command_set() {
     assert!(help.contains("| `list-commands` |"), "{help}");
     assert!(help.contains("| `list-keys` |"), "{help}");
     assert!(help.contains("show-metrics"), "{help}");
+    assert!(help.contains("show-iroh-status"), "{help}");
     assert!(help.contains("rebalance-window"), "{help}");
     assert!(
         help.contains("|  | `rename-pane` | rename the active or target pane. |"),

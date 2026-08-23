@@ -107,9 +107,12 @@ programmatically.
    endpoint address match the intended policy.
 6. Inspect `show-metrics` locally. The `[iroh transport]` section reports only
    aggregate listener, setup, connection, shutdown, and path counters.
-7. Pair one role-limited test device, exercise attach and detach, revoke it, and
+7. From the paired remote client, run `show-iroh-status` in the command prompt
+   to inspect its selected path, RTT, traffic, recent loss/congestion, and
+   quality rating without exposing endpoint or route addresses.
+8. Pair one role-limited test device, exercise attach and detach, revoke it, and
    verify future initialization fails.
-8. Confirm a local Unix client can still inspect, revoke, detach, and stop the
+9. Confirm a local Unix client can still inspect, revoke, detach, and stop the
    session during and after remote failures.
 
 `remote/status` includes endpoint identity and dialable endpoint address because

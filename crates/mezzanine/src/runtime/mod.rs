@@ -529,8 +529,8 @@ use hook_support::{
     runtime_hook_event_for_lifecycle, runtime_hook_event_name,
 };
 pub(crate) use iroh::{
-    MEZZANINE_IROH_ALPN, MEZZANINE_IROH_EVENT_STREAM_PREFACE, RuntimeIrohDiagnostics,
-    RuntimeIrohDiagnosticsSnapshot, bind_runtime_iroh_client_endpoint,
+    MEZZANINE_IROH_ALPN, MEZZANINE_IROH_EVENT_STREAM_PREFACE, RuntimeIrohConnectionQualitySnapshot,
+    RuntimeIrohDiagnostics, RuntimeIrohDiagnosticsSnapshot, bind_runtime_iroh_client_endpoint,
     build_runtime_iroh_control_service,
 };
 pub(crate) use json::current_unix_millis;

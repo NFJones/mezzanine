@@ -188,6 +188,65 @@ fn runtime_show_metrics_reports_privacy_safe_iroh_diagnostics() {
     }
 }
 
+/// Verifies `show-iroh-status` renders only the invoking client's redacted
+/// selected-path measurements and reports local clients as unavailable.
+#[test]
+fn runtime_show_iroh_status_reports_connection_quality_without_topology() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let unavailable = super::commands_support::runtime_show_iroh_status_display(&service, &primary);
+    assert!(
+        unavailable.contains("| State | unavailable |"),
+        "{unavailable}"
+    );
+    assert!(
+        unavailable.contains("| Quality | unknown |"),
+        "{unavailable}"
+    );
+
+    let diagnostics = crate::runtime::RuntimeIrohDiagnostics::default();
+    diagnostics.set_connection_quality_for_test(
+        &primary,
+        crate::runtime::RuntimeIrohConnectionQualitySnapshot::test_fixture("direct"),
+    );
+    service
+        .integration
+        .set_remote_iroh_diagnostics(Some(diagnostics));
+    let body = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"show-iroh-status","method":"terminal/command","params":{"idempotency_key":"show-iroh-status","input":"show-iroh-status"}}"#,
+        &primary,
+    );
+
+    for expected in [
+        "# Iroh connection",
+        "| Metric | Value | Detail |",
+        "| State | connected |",
+        "| Path | direct |",
+        "| RTT | 42.0 ms | average 45.0 ms; jitter 6.0 ms |",
+        "| Traffic | ↓ 3.2 KiB/s · ↑ 1.1 KiB/s |",
+        "| Loss | 0 packets |",
+        "| Congestion | 0 events | cwnd 64.0 KiB; MTU 1200 |",
+        "| Quality | good |",
+    ] {
+        assert!(body.contains(expected), "missing {expected:?} in {body}");
+    }
+    for forbidden in [
+        "endpoint_id",
+        "endpoint_addr",
+        "relay_url",
+        "credential",
+        "peer_address",
+    ] {
+        assert!(
+            !body.contains(forbidden),
+            "unexpected {forbidden:?} in {body}"
+        );
+    }
+}
+
 /// Verifies `/plan` changes only the issuing pane, supports idempotent modes,
 /// and reports the resulting read-only state through the live command path.
 #[test]

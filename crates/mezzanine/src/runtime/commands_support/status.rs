@@ -692,6 +692,126 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
     lines.join("\n")
 }
 
+/// Builds a privacy-safe live Iroh status table for the invoking client.
+pub(crate) fn runtime_show_iroh_status_display(
+    service: &RuntimeSessionService,
+    client_id: &mez_core::ids::ClientId,
+) -> String {
+    let Some(status) = service
+        .integration
+        .remote_iroh_connection_quality(client_id)
+    else {
+        return [
+            "# Iroh connection",
+            "",
+            "| Metric | Value | Detail |",
+            "| --- | --- | --- |",
+            "| State | unavailable | this client has no correlated live Iroh connection |",
+            "| Quality | unknown | insufficient transport samples |",
+        ]
+        .join("\n");
+    };
+
+    let sample_age = status.sample_age();
+    let (quality, reason) = iroh_connection_quality(status, sample_age);
+    [
+        "# Iroh connection".to_string(),
+        String::new(),
+        "| Metric | Value | Detail |".to_string(),
+        "| --- | --- | --- |".to_string(),
+        format!(
+            "| State | connected | connected for {}; sample {} old |",
+            format_duration_millis(status.connected_millis),
+            format_duration_millis(u64::try_from(sample_age.as_millis()).unwrap_or(u64::MAX))
+        ),
+        format!(
+            "| Path | {} | selected transport path |",
+            status.path_name()
+        ),
+        format!(
+            "| RTT | {} | average {}; jitter {} |",
+            format_micros(status.rtt_micros),
+            format_micros(status.average_rtt_micros),
+            format_micros(status.jitter_micros)
+        ),
+        format!(
+            "| Traffic | ↓ {}/s · ↑ {}/s | totals ↓ {} · ↑ {} |",
+            format_bytes(status.rx_bytes_per_second),
+            format_bytes(status.tx_bytes_per_second),
+            format_bytes(status.rx_bytes),
+            format_bytes(status.tx_bytes)
+        ),
+        format!(
+            "| Loss | {} packets | since the previous selected-path sample |",
+            status.lost_packets
+        ),
+        format!(
+            "| Congestion | {} events | cwnd {}; MTU {} |",
+            status.congestion_events,
+            format_bytes(status.cwnd_bytes),
+            status.mtu
+        ),
+        format!("| Quality | {quality} | {reason} |"),
+    ]
+    .join("\n")
+}
+
+fn iroh_connection_quality(
+    status: crate::runtime::RuntimeIrohConnectionQualitySnapshot,
+    sample_age: std::time::Duration,
+) -> (&'static str, &'static str) {
+    if sample_age > std::time::Duration::from_secs(5) {
+        ("unknown", "transport sample is stale")
+    } else if status.rtt_micros >= 500_000
+        || status.lost_packets >= 4
+        || status.congestion_events >= 4
+    {
+        ("poor", "high RTT or sustained recent transport trouble")
+    } else if status.rtt_micros >= 200_000
+        || status.jitter_micros >= 75_000
+        || status.lost_packets > 0
+        || status.congestion_events > 0
+    {
+        ("degraded", "elevated RTT, jitter, loss, or congestion")
+    } else {
+        ("good", "stable RTT with no recent loss or congestion")
+    }
+}
+
+fn format_micros(micros: u64) -> String {
+    if micros < 1_000 {
+        format!("{micros} µs")
+    } else {
+        format!("{:.1} ms", micros as f64 / 1_000.0)
+    }
+}
+
+fn format_duration_millis(millis: u64) -> String {
+    if millis < 1_000 {
+        format!("{millis} ms")
+    } else if millis < 60_000 {
+        format!("{:.1} s", millis as f64 / 1_000.0)
+    } else {
+        let seconds = millis / 1_000;
+        format!("{}m {:02}s", seconds / 60, seconds % 60)
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1_024;
+    const MIB: u64 = KIB * 1_024;
+    const GIB: u64 = MIB * 1_024;
+    if bytes >= GIB {
+        format!("{:.1} GiB", bytes as f64 / GIB as f64)
+    } else if bytes >= MIB {
+        format!("{:.1} MiB", bytes as f64 / MIB as f64)
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", bytes as f64 / KIB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 /// Runs the runtime show messages body operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

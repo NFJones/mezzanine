@@ -6,9 +6,10 @@ use iroh::endpoint::{
 };
 use iroh::tls::CaTlsConfig;
 use iroh::{Endpoint, RelayMap, RelayMode, SecretKey, Watcher};
+use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use tokio::task::JoinSet;
@@ -58,6 +59,82 @@ struct RuntimeIrohDiagnosticsInner {
     unknown_connections: AtomicU64,
     shutdown_aborts: AtomicU64,
     last_path: AtomicU8,
+    connection_quality: Mutex<BTreeMap<String, RuntimeIrohConnectionQualitySnapshot>>,
+}
+
+/// Privacy-safe selected-path measurements for one initialized Iroh client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeIrohConnectionQualitySnapshot {
+    pub(crate) connected_millis: u64,
+    pub(crate) sampled_at: Instant,
+    pub(crate) rtt_micros: u64,
+    pub(crate) average_rtt_micros: u64,
+    pub(crate) jitter_micros: u64,
+    pub(crate) tx_bytes: u64,
+    pub(crate) rx_bytes: u64,
+    pub(crate) tx_bytes_per_second: u64,
+    pub(crate) rx_bytes_per_second: u64,
+    pub(crate) lost_packets: u64,
+    pub(crate) congestion_events: u64,
+    pub(crate) cwnd_bytes: u64,
+    pub(crate) mtu: u16,
+    path: u8,
+}
+
+impl RuntimeIrohConnectionQualitySnapshot {
+    /// Returns the selected path class without exposing an address or relay URL.
+    pub(crate) const fn path_name(self) -> &'static str {
+        match self.path {
+            1 => "direct",
+            2 => "relay",
+            3 => "custom",
+            _ => "unknown",
+        }
+    }
+
+    /// Returns the elapsed time since the transport sample was collected.
+    pub(crate) fn sample_age(self) -> std::time::Duration {
+        self.sampled_at.elapsed()
+    }
+
+    /// Builds a deterministic snapshot for focused command-rendering tests.
+    #[cfg(test)]
+    pub(crate) fn test_fixture(path: &str) -> Self {
+        Self {
+            connected_millis: 12_000,
+            sampled_at: Instant::now(),
+            rtt_micros: 42_000,
+            average_rtt_micros: 45_000,
+            jitter_micros: 6_000,
+            tx_bytes: 524_288,
+            rx_bytes: 8_388_608,
+            tx_bytes_per_second: 1_126,
+            rx_bytes_per_second: 3_277,
+            lost_packets: 0,
+            congestion_events: 0,
+            cwnd_bytes: 65_536,
+            mtu: 1_200,
+            path: match path {
+                "direct" => 1,
+                "relay" => 2,
+                "custom" => 3,
+                _ => 0,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeIrohPathSample {
+    sampled_at: Instant,
+    path_id: String,
+    rtt_micros: u64,
+    average_rtt_micros: u64,
+    jitter_micros: u64,
+    tx_bytes: u64,
+    rx_bytes: u64,
+    lost_packets: u64,
+    congestion_events: u64,
 }
 
 /// Copyable status projection that contains no endpoint or peer identifiers.
@@ -164,8 +241,35 @@ impl RuntimeIrohDiagnostics {
             .active_connections
             .fetch_add(1, Ordering::Relaxed);
         self.record_path(connection);
+        let client_id = Arc::new(Mutex::new(None));
         RuntimeIrohConnectionGuard {
             diagnostics: self.clone(),
+            connected_at: Instant::now(),
+            client_id,
+        }
+    }
+
+    /// Returns the latest selected-path sample for one initialized client.
+    pub(crate) fn connection_quality(
+        &self,
+        client_id: &ClientId,
+    ) -> Option<RuntimeIrohConnectionQualitySnapshot> {
+        self.inner
+            .connection_quality
+            .lock()
+            .ok()?
+            .get(client_id.as_str())
+            .copied()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_connection_quality_for_test(
+        &self,
+        client_id: &ClientId,
+        snapshot: RuntimeIrohConnectionQualitySnapshot,
+    ) {
+        if let Ok(mut quality) = self.inner.connection_quality.lock() {
+            quality.insert(client_id.to_string(), snapshot);
         }
     }
 
@@ -226,10 +330,160 @@ impl Drop for RuntimeIrohListenerGuard {
 
 struct RuntimeIrohConnectionGuard {
     diagnostics: RuntimeIrohDiagnostics,
+    connected_at: Instant,
+    client_id: Arc<Mutex<Option<String>>>,
+}
+
+impl RuntimeIrohConnectionGuard {
+    /// Builds a sampler tied to this guard's connection lifetime and cleanup key.
+    fn sampler(&self) -> RuntimeIrohPathSampler {
+        RuntimeIrohPathSampler {
+            diagnostics: self.diagnostics.clone(),
+            connected_at: self.connected_at,
+            client_id: self.client_id.clone(),
+            previous_sample: None,
+        }
+    }
+}
+
+struct RuntimeIrohPathSampler {
+    diagnostics: RuntimeIrohDiagnostics,
+    connected_at: Instant,
+    client_id: Arc<Mutex<Option<String>>>,
+    previous_sample: Option<RuntimeIrohPathSample>,
+}
+
+impl RuntimeIrohPathSampler {
+    /// Samples the currently selected path and associates it with the initialized client.
+    fn sample(&mut self, connection: &iroh::endpoint::Connection, client_id: &ClientId) {
+        self.sample_for_client(connection, client_id.as_str());
+    }
+
+    /// Refreshes the selected path for the client already associated with the connection.
+    fn sample_current(&mut self, connection: &iroh::endpoint::Connection) {
+        let client_id = self
+            .client_id
+            .lock()
+            .ok()
+            .and_then(|client_id| client_id.clone());
+        if let Some(client_id) = client_id {
+            self.sample_for_client(connection, &client_id);
+        }
+    }
+
+    fn sample_for_client(&mut self, connection: &iroh::endpoint::Connection, client_id: &str) {
+        let now = Instant::now();
+        let paths = connection.paths();
+        let Some(path) = paths.iter().find(|path| path.is_selected()) else {
+            return;
+        };
+        let stats = path.stats();
+        let path_id = format!("{:?}", path.id());
+        let rtt_micros = u64::try_from(stats.rtt.as_micros()).unwrap_or(u64::MAX);
+        let same_path = self
+            .previous_sample
+            .as_ref()
+            .is_some_and(|previous| previous.path_id == path_id);
+        let (average_rtt_micros, jitter_micros) = self
+            .previous_sample
+            .as_ref()
+            .filter(|_| same_path)
+            .map(|previous| {
+                (
+                    previous
+                        .average_rtt_micros
+                        .saturating_mul(3)
+                        .saturating_add(rtt_micros)
+                        / 4,
+                    previous
+                        .jitter_micros
+                        .saturating_mul(3)
+                        .saturating_add(rtt_micros.abs_diff(previous.rtt_micros))
+                        / 4,
+                )
+            })
+            .unwrap_or((rtt_micros, 0));
+        let elapsed_millis = self
+            .previous_sample
+            .as_ref()
+            .filter(|_| same_path)
+            .map(|previous| {
+                u64::try_from(now.duration_since(previous.sampled_at).as_millis())
+                    .unwrap_or(u64::MAX)
+                    .max(1)
+            })
+            .unwrap_or(1);
+        let delta = |current: u64, previous: fn(&RuntimeIrohPathSample) -> u64| {
+            self.previous_sample
+                .as_ref()
+                .filter(|_| same_path)
+                .map(|sample| current.saturating_sub(previous(sample)))
+                .unwrap_or(0)
+        };
+        let tx_delta = delta(stats.udp_tx.bytes, |sample| sample.tx_bytes);
+        let rx_delta = delta(stats.udp_rx.bytes, |sample| sample.rx_bytes);
+        let snapshot = RuntimeIrohConnectionQualitySnapshot {
+            connected_millis: u64::try_from(now.duration_since(self.connected_at).as_millis())
+                .unwrap_or(u64::MAX),
+            sampled_at: now,
+            rtt_micros,
+            average_rtt_micros,
+            jitter_micros,
+            tx_bytes: stats.udp_tx.bytes,
+            rx_bytes: stats.udp_rx.bytes,
+            tx_bytes_per_second: tx_delta.saturating_mul(1_000) / elapsed_millis,
+            rx_bytes_per_second: rx_delta.saturating_mul(1_000) / elapsed_millis,
+            lost_packets: delta(stats.lost_packets, |sample| sample.lost_packets),
+            congestion_events: delta(stats.congestion_events, |sample| sample.congestion_events),
+            cwnd_bytes: stats.cwnd,
+            mtu: stats.current_mtu,
+            path: if path.is_ip() {
+                1
+            } else if path.is_relay() {
+                2
+            } else {
+                3
+            },
+        };
+        let client_id = client_id.to_string();
+        if let Ok(mut current_client_id) = self.client_id.lock()
+            && current_client_id.as_deref() != Some(client_id.as_str())
+        {
+            if let Some(previous_client_id) = current_client_id.replace(client_id.clone())
+                && let Ok(mut quality) = self.diagnostics.inner.connection_quality.lock()
+            {
+                quality.remove(&previous_client_id);
+            }
+            self.previous_sample = None;
+        }
+        if let Ok(mut quality) = self.diagnostics.inner.connection_quality.lock() {
+            quality.insert(client_id, snapshot);
+        }
+        self.previous_sample = Some(RuntimeIrohPathSample {
+            sampled_at: now,
+            path_id,
+            rtt_micros,
+            average_rtt_micros,
+            jitter_micros,
+            tx_bytes: stats.udp_tx.bytes,
+            rx_bytes: stats.udp_rx.bytes,
+            lost_packets: stats.lost_packets,
+            congestion_events: stats.congestion_events,
+        });
+    }
 }
 
 impl Drop for RuntimeIrohConnectionGuard {
     fn drop(&mut self) {
+        if let Some(client_id) = self
+            .client_id
+            .lock()
+            .ok()
+            .and_then(|client_id| client_id.clone())
+            && let Ok(mut quality) = self.diagnostics.inner.connection_quality.lock()
+        {
+            quality.remove(&client_id);
+        }
         self.diagnostics
             .inner
             .active_connections
@@ -586,9 +840,9 @@ async fn serve_runtime_iroh_control_listener(
                 let setup_timeout = endpoint.policy.setup_timeout;
                 let idle_timeout = endpoint.policy.idle_timeout;
                 tasks.spawn(async move {
-                    let _connection_guard = connection_guard;
                     let result = serve_runtime_iroh_control_connection(
                         connection,
+                        connection_guard,
                         &connection_handle,
                         control_config,
                         connection_snapshots.as_ref(),
@@ -650,6 +904,7 @@ async fn serve_runtime_iroh_control_listener(
 
 async fn serve_runtime_iroh_control_connection(
     connection: iroh::endpoint::Connection,
+    connection_guard: RuntimeIrohConnectionGuard,
     handle: &AsyncRuntimeSessionHandle,
     control_config: AsyncRuntimeControlConnectionConfig,
     snapshots: Option<&SnapshotRepository>,
@@ -685,6 +940,21 @@ async fn serve_runtime_iroh_control_connection(
         )
         .await
     });
+    let sampler = Arc::new(Mutex::new(connection_guard.sampler()));
+    let periodic_sampler = sampler.clone();
+    let periodic_connection = connection.clone();
+    let mut sample_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if let Ok(mut sampler) = periodic_sampler.lock() {
+                sampler.sample_current(&periodic_connection);
+            }
+        }
+    });
+    let sample_connection = connection.clone();
+    let response_sampler = sampler.clone();
     let result =
         serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush(
             &mut stream,
@@ -695,6 +965,11 @@ async fn serve_runtime_iroh_control_connection(
             snapshots,
             |_, state| terminal_daemon_state(state),
             move |connection_state| {
+                if let Some(client_id) = connection_state.caller_client_id()
+                    && let Ok(mut sampler) = response_sampler.lock()
+                {
+                    sampler.sample(&sample_connection, client_id);
+                }
                 if let Some(start) = connection_state.take_event_stream_start()
                     && let Some(sender) = event_start_tx.take()
                 {
@@ -704,6 +979,8 @@ async fn serve_runtime_iroh_control_connection(
             },
         )
         .await;
+    sample_task.abort();
+    let _ = (&mut sample_task).await;
     let _ = event_stop_tx.send(true);
     if tokio::time::timeout(setup_timeout, &mut event_task)
         .await

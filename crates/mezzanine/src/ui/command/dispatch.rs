@@ -750,6 +750,10 @@ pub fn execute_command(
             command: invocation.name.clone(),
             body: show_metrics_display(),
         }),
+        "show-iroh-status" => Ok(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: "Iroh connection status requires the live runtime".to_string(),
+        }),
         "list-keys" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: list_default_key_bindings(),

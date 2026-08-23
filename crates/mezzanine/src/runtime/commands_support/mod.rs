@@ -231,6 +231,10 @@ pub(super) fn execute_runtime_live_terminal_command(
             command: invocation.name.clone(),
             body: runtime_show_metrics_display(service),
         })),
+        "show-iroh-status" => Ok(Some(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: runtime_show_iroh_status_display(service, primary_client_id),
+        })),
         "help" => Ok(Some(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: runtime_command_help_display(service)?,

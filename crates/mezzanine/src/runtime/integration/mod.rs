@@ -195,6 +195,16 @@ impl RuntimeIntegrationComponent {
             .unwrap_or_default()
     }
 
+    /// Returns the latest privacy-safe Iroh path sample for one client.
+    pub(crate) fn remote_iroh_connection_quality(
+        &self,
+        client_id: &mez_core::ids::ClientId,
+    ) -> Option<crate::runtime::RuntimeIrohConnectionQualitySnapshot> {
+        self.remote_iroh_diagnostics
+            .as_ref()
+            .and_then(|diagnostics| diagnostics.connection_quality(client_id))
+    }
+
     /// Returns the latest async-actor metrics snapshot.
     pub(crate) fn async_runtime_metrics(&self) -> Option<&AsyncRuntimeActorMetrics> {
         self.async_runtime_metrics.as_ref()

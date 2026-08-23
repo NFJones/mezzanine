@@ -202,6 +202,7 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "delete-buffer",
     "show-messages",
     "show-metrics",
+    "show-iroh-status",
     "list-keys",
     "list-key-presets",
     "list-themes",
@@ -240,8 +241,10 @@ fn baseline_command_status(name: &str) -> BaselineCommandStatus {
         "copy-mode" | "copy-selection" | "paste-clipboard" | "paste-buffer" | "create-buffer"
         | "list-buffers" | "choose-buffer" | "delete-buffer" | "capture-pane" | "save-buffer"
         | "clear-history" | "search-history" | "export-history" | "pipe-pane"
-        | "refresh-client" | "show-metrics" | "agent-shell" | "approve-observer"
-        | "reject-observer" | "revoke-observer" => BaselineCommandStatus::RuntimeRequired,
+        | "refresh-client" | "show-metrics" | "show-iroh-status" | "agent-shell"
+        | "approve-observer" | "reject-observer" | "revoke-observer" => {
+            BaselineCommandStatus::RuntimeRequired
+        }
         "bind-key" | "unbind-key" | "set-key-preset" | "set-theme" | "set-option"
         | "source-file" | "mark-pane-ready" => BaselineCommandStatus::StoreRequired,
         "attach-session" | "list-sessions" | "save-layout" | "load-layout" => {

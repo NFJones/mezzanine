@@ -30,13 +30,20 @@ state can affect what is available.
 | Manage windows and panes | `new-window`, `split-window`, `select-pane`, `resize-pane`, `rename-pane`, `list-windows`, and `list-panes` |
 | Work with sessions and clients | `list-sessions`, `attach-session`, `detach-client`, `list-clients`, and `kill-session` |
 | Copy and retain output | `copy-mode`, `copy-selection`, `paste-clipboard`, `paste-buffer`, `list-buffers`, `search-history`, `export-history`, and `clear-history` |
-| Inspect and adjust the interface | `show-messages`, `list-keys`, `list-key-presets`, `set-key-preset`, `list-themes`, `set-theme`, `show-options`, `set-option`, `bind-key`, and `unbind-key` |
+| Inspect and adjust the interface | `show-messages`, `show-iroh-status`, `list-keys`, `list-key-presets`, `set-key-preset`, `list-themes`, `set-theme`, `show-options`, `set-option`, `bind-key`, and `unbind-key` |
 | Save or load layout state | `save-layout` and `load-layout` |
 
 Some commands require an active runtime, control endpoint, or primary-client
 authority. Use `help <command>` when available and review the resulting prompt
 or approval rather than assuming a command affects a detached or observer
 client.
+
+`show-iroh-status` displays a table for the invoking remote client's selected
+Iroh path. It includes RTT, jitter, recent transfer rates, loss and congestion
+deltas, congestion window, MTU, sample freshness, and a reasoned quality label.
+Path type is reported separately from quality, and topology identifiers and
+addresses are intentionally omitted. Local control-socket clients see an
+unavailable state because they are not attached through Iroh.
 
 ## Related pages
 

@@ -340,6 +340,7 @@ pub(super) fn terminal_command_display_body_is_markdown(command: Option<&str>, b
     match command {
         Some("help") => body.trim_start().starts_with('#'),
         Some("list-key-presets" | "list-themes") => body.trim_start().starts_with('|'),
+        Some("show-iroh-status") => body.trim_start().starts_with('#'),
         _ => false,
     }
 }

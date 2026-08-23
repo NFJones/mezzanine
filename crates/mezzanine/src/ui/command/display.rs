@@ -101,7 +101,7 @@ fn terminal_command_category(name: &str) -> &'static str {
             "copy, buffers, and history"
         }
         "help" | "list-commands" | "mark-pane-ready" | "refresh-client" | "show-messages"
-        | "show-metrics" => "diagnostics and help",
+        | "show-metrics" | "show-iroh-status" => "diagnostics and help",
         "approve-observer" | "attach-session" | "choose-observer" | "detach-client" | "exit"
         | "kill-session" | "list-clients" | "list-observers" | "list-sessions"
         | "reject-observer" | "rename-session" | "load-layout" | "revoke-observer"
@@ -185,6 +185,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "set-theme" => "switch active UI theme by name.",
         "show-messages" => "show diagnostics, pending approvals, and observer requests.",
         "show-metrics" => "show async runtime counters and histograms.",
+        "show-iroh-status" => "show the invoking client's live Iroh path quality.",
         "show-options" => "show effective options.",
         "save-layout" => "create a structured session snapshot.",
         "source-file" => "load a configuration file.",

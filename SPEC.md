@@ -1687,6 +1687,7 @@ The command language MUST include commands equivalent to:
 - `delete-buffer`
 - `show-messages`
 - `show-metrics`
+- `show-iroh-status`
 - `list-keys`
 - `list-key-presets`
 - `list-themes`
@@ -1772,6 +1773,7 @@ The baseline commands MUST have the following semantics:
 | `delete-buffer` | Delete the selected or named paste buffer. The command MUST fail with `not_found` for an unknown buffer. |
 | `show-messages` | Display Mezzanine message log entries, including diagnostics, pending observer requests, pending approvals, and hook failures visible to the primary client. |
 | `show-metrics` | Display runtime-service and async-runtime counters and bounded histogram summaries for important measurements, including agent turn lifecycle, provider prompt/cache shape, token usage, shell transaction behavior, actor queue wait and handler duration by fixed request family, event application and reconciliation, render composition and encoding, provider progress and total duration, persistence operations and batches, output flushes, side-effect queue age and activity, pane output sizes, and current queue depth snapshots, in the primary command-output pager. |
+| `show-iroh-status` | Display a privacy-safe table of the invoking Iroh client's selected path, connection duration, current and rolling RTT, jitter, recent traffic rate, byte totals, recent packet loss and congestion deltas, congestion window, MTU, sample freshness, and a reasoned quality rating. It MUST show an unavailable/unknown state for clients without a correlated live Iroh sample and MUST NOT expose endpoint identities, addresses, relay URLs, credentials, or another client's sample. |
 | `list-keys` | Return effective key bindings in column-aligned form, including source configuration layer and command expansion. |
 | `list-key-presets` | Return built-in and configured key-assignment presets in an interactive table with active state, source, prefix, binding summary, and a selectable `set-key-preset` action. |
 | `list-themes` | Return built-in UI themes and configured custom themes in a column-aligned table, with a visually salient active-theme column, theme name, adjacent short unicode block color palette preview, source (`builtin` or `config`), preview colors, and `set-theme` action for easier theme selection. |
