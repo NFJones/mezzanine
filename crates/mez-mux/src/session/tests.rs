@@ -401,6 +401,124 @@ fn primary_can_reject_revoke_and_detach_observers() {
     );
 }
 
+/// Verifies rejected and revoked observer decisions are terminal.
+///
+/// A fresh idempotency key at the control layer must not let a later decision
+/// overwrite authority, visibility, attribution, client state, or the event
+/// sequence after an observer request has reached a terminal state.
+#[test]
+fn observer_terminal_decisions_reject_later_transitions_without_mutation() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let (rejected_client_id, rejected_request_id) = session.request_observer("rejected");
+    session
+        .reject_observer_target_with_reason(
+            &primary,
+            rejected_request_id.as_str(),
+            Some("denied".into()),
+        )
+        .unwrap();
+
+    let rejected_request = session.observers()[0].clone();
+    let rejected_client = session
+        .clients()
+        .iter()
+        .find(|client| client.id == rejected_client_id)
+        .unwrap()
+        .clone();
+    let rejected_next_event_id = session.next_event_id;
+    let rejected_updated_at = session.updated_at_unix_seconds;
+
+    let error = session
+        .approve_observer_target(&primary, rejected_request_id.as_str())
+        .unwrap_err();
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Conflict);
+    assert_eq!(session.observers()[0], rejected_request);
+    assert_eq!(
+        session
+            .clients()
+            .iter()
+            .find(|client| client.id == rejected_client_id)
+            .unwrap(),
+        &rejected_client
+    );
+    assert_eq!(session.next_event_id, rejected_next_event_id);
+    assert_eq!(session.updated_at_unix_seconds, rejected_updated_at);
+
+    let (approved_client_id, approved_request_id) = session.request_observer("approved");
+    session
+        .approve_observer_target(&primary, approved_request_id.as_str())
+        .unwrap();
+    session
+        .revoke_observer_client_with_reason(
+            &primary,
+            approved_client_id.as_str(),
+            Some("revoked".into()),
+        )
+        .unwrap();
+
+    let revoked_request = session.observers()[1].clone();
+    let revoked_client = session
+        .clients()
+        .iter()
+        .find(|client| client.id == approved_client_id)
+        .unwrap()
+        .clone();
+    let revoked_next_event_id = session.next_event_id;
+    let revoked_updated_at = session.updated_at_unix_seconds;
+
+    let error = session
+        .approve_observer_target(&primary, approved_request_id.as_str())
+        .unwrap_err();
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Conflict);
+    let error = session
+        .revoke_observer_client(&primary, approved_client_id.as_str())
+        .unwrap_err();
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Conflict);
+    assert_eq!(session.observers()[1], revoked_request);
+    assert_eq!(
+        session
+            .clients()
+            .iter()
+            .find(|client| client.id == approved_client_id)
+            .unwrap(),
+        &revoked_client
+    );
+    assert_eq!(session.next_event_id, revoked_next_event_id);
+    assert_eq!(session.updated_at_unix_seconds, revoked_updated_at);
+}
+
+/// Verifies detaching a pending observer terminalizes its request.
+///
+/// Primary-targeted detach must not leave a pending request that a later
+/// approval can revive after its requesting client has disconnected.
+#[test]
+fn detached_pending_observer_cannot_be_approved() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let (observer_client_id, observer_request_id) = session.request_observer("observer");
+
+    session
+        .detach_client_target(&primary, observer_client_id.as_str())
+        .unwrap();
+
+    let observer_request = session.observers()[0].clone();
+    let observer_client = session.clients()[1].clone();
+    let next_event_id = session.next_event_id;
+    let updated_at = session.updated_at_unix_seconds;
+    assert_eq!(observer_request.state, ObserverDecisionState::Rejected);
+
+    let error = session
+        .approve_observer_target(&primary, observer_request_id.as_str())
+        .unwrap_err();
+
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Conflict);
+    assert_eq!(session.observers()[0], observer_request);
+    assert_eq!(session.clients()[1], observer_client);
+    assert_eq!(session.next_event_id, next_event_id);
+    assert_eq!(session.updated_at_unix_seconds, updated_at);
+}
+
 /// Verifies primary can create and select windows.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -1492,7 +1610,7 @@ fn client_self_detach_preserves_primary_and_observer_lifecycle() {
         .iter()
         .find(|observer| observer.id == observer_request)
         .unwrap();
-    assert_eq!(observer.state, ObserverDecisionState::Revoked);
+    assert_eq!(observer.state, ObserverDecisionState::Rejected);
     assert_eq!(observer.reason.as_deref(), Some("client detached itself"));
     assert_eq!(session.primary_client_id(), Some(&primary));
     assert_eq!(session.state, SessionState::Running);

@@ -227,10 +227,12 @@ impl Session {
         observer_id: &str,
     ) -> Result<()> {
         self.require_primary(primary_client_id)?;
+        let observer_index =
+            self.require_observer_transition(observer_id, ObserverDecisionState::Approved)?;
         let visible_from_event_id = self.record_event();
         self.approve_observer_target_with_visible_from(
             primary_client_id,
-            observer_id,
+            observer_index,
             visible_from_event_id,
         )
     }
@@ -247,10 +249,12 @@ impl Session {
         visible_from_event_id: u64,
     ) -> Result<()> {
         self.require_primary(primary_client_id)?;
+        let observer_index =
+            self.require_observer_transition(observer_id, ObserverDecisionState::Approved)?;
         self.record_event();
         self.approve_observer_target_with_visible_from(
             primary_client_id,
-            observer_id,
+            observer_index,
             visible_from_event_id,
         )
     }
@@ -263,13 +267,12 @@ impl Session {
     fn approve_observer_target_with_visible_from(
         &mut self,
         primary_client_id: &ClientId,
-        observer_id: &str,
+        observer_index: usize,
         visible_from_event_id: u64,
     ) -> Result<()> {
         let observer = self
             .observers
-            .iter_mut()
-            .find(|observer| observer.id.as_str() == observer_id)
+            .get_mut(observer_index)
             .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "observer not found"))?;
 
         let decided_at = current_unix_seconds();
@@ -318,12 +321,14 @@ impl Session {
         reason: Option<String>,
     ) -> Result<()> {
         self.require_primary(primary_client_id)?;
+        let observer_index =
+            self.require_observer_transition(observer_id, ObserverDecisionState::Rejected)?;
         let observer = self
             .observers
-            .iter_mut()
-            .find(|observer| observer.id.as_str() == observer_id)
+            .get_mut(observer_index)
             .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "observer not found"))?;
         let decided_at = current_unix_seconds();
+        let observer_client_id = observer.client_id.clone();
         observer.state = ObserverDecisionState::Rejected;
         observer.decided_at_unix_seconds = Some(decided_at);
         observer.decided_by_client_id = Some(primary_client_id.to_string());
@@ -331,7 +336,7 @@ impl Session {
         if let Some(client) = self
             .clients
             .iter_mut()
-            .find(|client| client.id == observer.client_id)
+            .find(|client| client.id == observer_client_id)
         {
             client.state = ClientState::Revoked;
             client.last_seen_at_unix_seconds = Some(decided_at);
@@ -365,29 +370,37 @@ impl Session {
         reason: Option<String>,
     ) -> Result<()> {
         self.require_primary(primary_client_id)?;
-        let client = self
+        let client_index = self
             .clients
-            .iter_mut()
-            .find(|client| client.id.as_str() == client_id)
+            .iter()
+            .position(|client| client.id.as_str() == client_id)
             .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "client not found"))?;
+        let observer_index = self
+            .observers
+            .iter()
+            .position(|observer| observer.client_id.as_str() == client_id)
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "observer not found"))?;
+        self.require_observer_transition_at(observer_index, ObserverDecisionState::Revoked)?;
+        let client = &self.clients[client_index];
         if client.role != ClientRole::Observer {
             return Err(MezError::invalid_args(
                 "revoke-observer requires an approved observer client",
             ));
         }
+        if client.state != ClientState::Attached {
+            return Err(MezError::conflict(
+                "revoke-observer requires an attached observer client",
+            ));
+        }
         let decided_at = current_unix_seconds();
+        let client = &mut self.clients[client_index];
         client.state = ClientState::Revoked;
         client.last_seen_at_unix_seconds = Some(decided_at);
-        if let Some(observer) = self
-            .observers
-            .iter_mut()
-            .find(|observer| observer.client_id.as_str() == client_id)
-        {
-            observer.state = ObserverDecisionState::Revoked;
-            observer.decided_at_unix_seconds = Some(decided_at);
-            observer.decided_by_client_id = Some(primary_client_id.to_string());
-            observer.reason = reason;
-        }
+        let observer = &mut self.observers[observer_index];
+        observer.state = ObserverDecisionState::Revoked;
+        observer.decided_at_unix_seconds = Some(decided_at);
+        observer.decided_by_client_id = Some(primary_client_id.to_string());
+        observer.reason = reason;
         self.record_event();
         Ok(())
     }
@@ -411,8 +424,15 @@ impl Session {
             .iter_mut()
             .find(|client| client.id.as_str() == client_id)
             .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "client not found"))?;
+        let detached_at = current_unix_seconds();
         client.state = ClientState::Detached;
-        client.last_seen_at_unix_seconds = Some(current_unix_seconds());
+        client.last_seen_at_unix_seconds = Some(detached_at);
+        self.terminalize_observer_for_detach(
+            client_id,
+            detached_at,
+            Some(primary_client_id),
+            "client detached by primary",
+        );
         self.record_event();
         Ok(())
     }
@@ -431,17 +451,15 @@ impl Session {
             .iter_mut()
             .find(|client| client.id == *client_id)
             .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "client not found"))?;
+        let detached_at = current_unix_seconds();
         client.state = ClientState::Detached;
-        client.last_seen_at_unix_seconds = Some(current_unix_seconds());
-        if let Some(observer) = self
-            .observers
-            .iter_mut()
-            .find(|observer| observer.client_id == *client_id)
-        {
-            observer.state = ObserverDecisionState::Revoked;
-            observer.decided_at_unix_seconds = Some(current_unix_seconds());
-            observer.reason = Some("client detached itself".to_string());
-        }
+        client.last_seen_at_unix_seconds = Some(detached_at);
+        self.terminalize_observer_for_detach(
+            client_id.as_str(),
+            detached_at,
+            None,
+            "client detached itself",
+        );
         self.record_event();
         Ok(())
     }
@@ -465,6 +483,84 @@ impl Session {
         self.state = SessionState::Detached;
         self.record_event();
         Ok(())
+    }
+
+    /// Validates one observer decision by request id before any mutation.
+    ///
+    /// Only pending requests may be approved or rejected, and only approved
+    /// requests may be revoked. Terminal decisions return a conflict without
+    /// advancing the event sequence or changing observer/client state.
+    fn require_observer_transition(
+        &self,
+        observer_id: &str,
+        next_state: ObserverDecisionState,
+    ) -> Result<usize> {
+        let observer_index = self
+            .observers
+            .iter()
+            .position(|observer| observer.id.as_str() == observer_id)
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "observer not found"))?;
+        self.require_observer_transition_at(observer_index, next_state)?;
+        Ok(observer_index)
+    }
+
+    /// Validates one observer decision by its already-resolved request index.
+    fn require_observer_transition_at(
+        &self,
+        observer_index: usize,
+        next_state: ObserverDecisionState,
+    ) -> Result<()> {
+        let observer = self
+            .observers
+            .get(observer_index)
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "observer not found"))?;
+        let transition_allowed = matches!(
+            (observer.state, next_state),
+            (
+                ObserverDecisionState::Pending,
+                ObserverDecisionState::Approved | ObserverDecisionState::Rejected
+            ) | (
+                ObserverDecisionState::Approved,
+                ObserverDecisionState::Revoked
+            )
+        );
+        if transition_allowed {
+            Ok(())
+        } else {
+            Err(MezError::conflict(format!(
+                "observer request cannot transition from {:?} to {:?}",
+                observer.state, next_state
+            )))
+        }
+    }
+
+    /// Terminalizes a pending or approved observer when its client detaches.
+    ///
+    /// Pending requests become rejected because no live requester remains;
+    /// approved observers become revoked. Existing terminal decisions are
+    /// preserved so detach cannot rewrite their attribution or reason.
+    fn terminalize_observer_for_detach(
+        &mut self,
+        client_id: &str,
+        decided_at: u64,
+        decided_by_client_id: Option<&ClientId>,
+        reason: &str,
+    ) {
+        let Some(observer) = self
+            .observers
+            .iter_mut()
+            .find(|observer| observer.client_id.as_str() == client_id)
+        else {
+            return;
+        };
+        observer.state = match observer.state {
+            ObserverDecisionState::Pending => ObserverDecisionState::Rejected,
+            ObserverDecisionState::Approved => ObserverDecisionState::Revoked,
+            ObserverDecisionState::Rejected | ObserverDecisionState::Revoked => return,
+        };
+        observer.decided_at_unix_seconds = Some(decided_at);
+        observer.decided_by_client_id = decided_by_client_id.map(ToString::to_string);
+        observer.reason = Some(reason.to_string());
     }
 
     /// Runs the require primary operation for this subsystem.
