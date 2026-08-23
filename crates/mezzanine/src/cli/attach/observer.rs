@@ -1,8 +1,9 @@
 //! Observer control-socket attach setup and presentation loop.
 
 use super::event_stream::{
-    AttachRenderAction, read_attached_client_input_or_deadline,
-    read_attached_client_input_or_iroh_event,
+    AttachRenderAction, AttachedRuntimeEventStream, optional_control_socket_event_stream,
+    read_attached_client_input_or_deadline, read_attached_client_input_or_iroh_event,
+    read_attached_client_input_or_runtime_event,
 };
 use super::requests::{
     control_socket_cursor_blink_elapsed, observer_inspect_control_request,
@@ -28,21 +29,28 @@ use super::{
 /// on duplicated control-flow logic.
 pub(in crate::cli) async fn run_control_socket_attached_observer_client(
     stream: &mut UnixStream,
+    control_socket_path: &std::path::Path,
     observer_request_id: String,
     client_size: Size,
+    event_binding_token: String,
 ) -> Result<()> {
     let input_fd = io::stdin().as_raw_fd();
     let output_fd = io::stdout().as_raw_fd();
     let control_stream = stream.try_clone()?;
     control_stream.set_nonblocking(true)?;
     let mut control_stream = tokio::net::UnixStream::from_std(control_stream)?;
+    let event_stream =
+        optional_control_socket_event_stream(control_socket_path, event_binding_token.as_str())?;
+    let mut event_stream = event_stream.map(AttachedRuntimeEventStream::new);
     let mut terminal_guard =
         AsyncAttachedTerminalPresentationGuard::new(input_fd, output_fd, None)?;
-    let run_result = run_control_socket_attached_observer_client_loop_async(
+    let run_result = run_attached_observer_client_loop_async(
         &mut control_stream,
         terminal_guard.io_mut(),
         observer_request_id,
         client_size,
+        event_stream.as_mut(),
+        None,
     )
     .await;
     let restore_result = terminal_guard.restore().await;
@@ -74,6 +82,7 @@ where
         terminal_guard.io_mut(),
         observer_request_id,
         client_size,
+        None,
         Some(&mut event_receiver),
     )
     .await;
@@ -93,6 +102,7 @@ where
 /// still use the async terminal boundary for readiness, resize, presentation,
 /// and styled output so observer attachment follows the same terminal ownership
 /// model as primary attachment.
+#[cfg(test)]
 pub(in crate::cli) async fn run_control_socket_attached_observer_client_loop_async<I, S>(
     stream: &mut S,
     terminal_io: &mut I,
@@ -109,6 +119,7 @@ where
         observer_request_id,
         client_size,
         None,
+        None,
     )
     .await
 }
@@ -118,6 +129,7 @@ async fn run_attached_observer_client_loop_async<I, S>(
     terminal_io: &mut I,
     observer_request_id: String,
     mut client_size: Size,
+    mut event_stream: Option<&mut AttachedRuntimeEventStream>,
     mut event_receiver: Option<&mut tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>>,
 ) -> Result<()>
 where
@@ -134,8 +146,18 @@ where
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
         }
-        let input = match event_receiver.as_deref_mut() {
-            Some(event_receiver) => {
+        let input = match (event_stream.as_deref_mut(), event_receiver.as_deref_mut()) {
+            (Some(event_stream), None) => {
+                read_attached_client_input_or_runtime_event(
+                    terminal_io,
+                    Some(event_stream),
+                    4096,
+                    None,
+                    size_refresh.deadline(),
+                )
+                .await?
+            }
+            (None, Some(event_receiver)) => {
                 read_attached_client_input_or_iroh_event(
                     terminal_io,
                     event_receiver,
@@ -144,7 +166,7 @@ where
                 )
                 .await?
             }
-            None => {
+            (None, None) => {
                 read_attached_client_input_or_deadline(
                     terminal_io,
                     4096,
@@ -152,6 +174,11 @@ where
                     size_refresh.deadline(),
                 )
                 .await?
+            }
+            (Some(_), Some(_)) => {
+                return Err(MezError::invalid_state(
+                    "observer attach cannot use Unix and Iroh event streams together",
+                ));
             }
         };
         size_refresh.reschedule();
@@ -162,7 +189,7 @@ where
             }
             AttachRenderAction::Disconnect => {
                 return Err(MezError::invalid_state(
-                    "Iroh event stream disconnected; reattach required",
+                    "runtime event stream disconnected; reattach required",
                 ));
             }
         }

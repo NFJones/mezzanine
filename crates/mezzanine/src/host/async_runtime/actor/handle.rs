@@ -7,13 +7,14 @@ use super::{
     AttachedClientStepApplication, AttachedTerminalClientStepPlan, ClientId, ClientViewRole,
     ControlConnectionState, DeliveryCursor, FanoutBatch, MessageConnection, MezError,
     PaneResizeUpdate, Result, RuntimeAgentProviderDispatch, RuntimeApprovedExternalActionDispatch,
-    RuntimeApprovedExternalActionOutcome, RuntimeEventBatch, RuntimeEventConnectionTable,
-    RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSideEffect, Size,
-    TerminalClientLoopConfig, oneshot, watch,
+    RuntimeApprovedExternalActionOutcome, RuntimeEventBatch, RuntimeEventIngressReport,
+    RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSideEffect, Size, TerminalClientLoopConfig,
+    oneshot, watch,
 };
 #[cfg(test)]
 use super::{
     AsyncRenderedClientFlush, ClientStatusLine, RenderedClientView, RuntimeAgentProviderTask,
+    RuntimeEventConnectionTable,
 };
 use crate::runtime::RuntimeNativeShellDispatch;
 
@@ -385,6 +386,7 @@ impl AsyncRuntimeSessionHandle {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub async fn event_wakeups(
         &self,
         connections: RuntimeEventConnectionTable,
@@ -411,6 +413,20 @@ impl AsyncRuntimeSessionHandle {
             connection_id,
             last_delivered_event_id,
             limit_per_connection,
+            reply,
+        })
+        .await?
+    }
+
+    /// Consumes one short-lived Unix event binding for the authenticated peer.
+    pub async fn consume_unix_event_binding(
+        &self,
+        token: String,
+        peer_uid: u32,
+    ) -> Result<ClientId> {
+        self.request(|reply| AsyncRuntimeRequest::ConsumeUnixEventBinding {
+            token,
+            peer_uid,
             reply,
         })
         .await?

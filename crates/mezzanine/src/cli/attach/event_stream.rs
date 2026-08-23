@@ -4,8 +4,9 @@ use super::{
     ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH, ATTACH_EVENT_STREAM_READ_BUFFER_BYTES,
     AsyncAttachedTerminalIo, AuxiliarySocketKind, MezError, Result, UnixStream,
     attached_terminal_output_disconnected, auxiliary_socket_path_for_control_socket,
-    decode_control_frame,
+    decode_control_frame, encode_control_body,
 };
+use std::io::Write;
 use tokio::io::AsyncReadExt;
 
 /// Carries Attached Client Input Poll state for this subsystem.
@@ -653,6 +654,7 @@ mod iroh_setup_tests {
 /// Connects to the auxiliary event socket for event-driven attach redraws.
 pub(super) fn optional_control_socket_event_stream(
     control_socket_path: &std::path::Path,
+    binding_token: &str,
 ) -> Result<Option<tokio::net::UnixStream>> {
     let event_socket_path =
         auxiliary_socket_path_for_control_socket(control_socket_path, AuxiliarySocketKind::Event)?;
@@ -668,6 +670,18 @@ pub(super) fn optional_control_socket_event_stream(
         }
         Err(error) => return Err(MezError::from(error)),
     };
+    let initialize = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "event-init",
+        "method": "event/initialize",
+        "params": {
+            "binding_token": binding_token,
+            "after_event_id": 0
+        }
+    })
+    .to_string();
+    (&stream).write_all(&encode_control_body(&initialize))?;
+    (&stream).flush()?;
     stream.set_nonblocking(true)?;
     Ok(Some(tokio::net::UnixStream::from_std(stream)?))
 }

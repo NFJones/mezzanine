@@ -8,7 +8,14 @@ use std::path::PathBuf;
 
 use crate::control::ControlIdempotencyCache;
 use crate::protocol::event::EventLog;
+use base64::Engine;
 use mez_agent::messaging::MessageService;
+use mez_core::ids::ClientId;
+use rand::Rng;
+use sha2::{Digest, Sha256};
+
+const UNIX_EVENT_BINDING_TOKEN_BYTES: usize = 32;
+const UNIX_EVENT_BINDING_TTL_SECONDS: u64 = 60;
 
 /// Owns control replay, messaging, and event-fanout state.
 #[derive(Debug)]
@@ -17,6 +24,18 @@ pub(crate) struct RuntimeControlComponent {
     message_service: MessageService,
     event_log: Option<EventLog>,
     approval_bindings: BTreeMap<String, ApprovalBinding>,
+    unix_event_bindings: BTreeMap<[u8; 32], UnixEventBinding>,
+}
+
+/// Exact-client authority retained for one short-lived Unix event handshake.
+///
+/// The map key is a SHA-256 digest of the bearer token so runtime debug output
+/// and diagnostics never retain the raw credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UnixEventBinding {
+    client_id: ClientId,
+    peer_uid: u32,
+    expires_at_unix_seconds: u64,
 }
 
 /// Runtime-owned facts captured when a pending approval is created.
@@ -42,7 +61,57 @@ impl RuntimeControlComponent {
             message_service,
             event_log,
             approval_bindings: BTreeMap::new(),
+            unix_event_bindings: BTreeMap::new(),
         }
+    }
+
+    /// Mints one short-lived Unix event binding for an initialized client.
+    ///
+    /// The returned token is the only raw copy retained by the caller. Runtime
+    /// state stores only its digest and exact client/peer binding.
+    pub(crate) fn mint_unix_event_binding(
+        &mut self,
+        client_id: ClientId,
+        peer_uid: u32,
+        now_unix_seconds: u64,
+    ) -> (String, u64) {
+        self.unix_event_bindings
+            .retain(|_, binding| binding.expires_at_unix_seconds >= now_unix_seconds);
+        let mut token_bytes = [0u8; UNIX_EVENT_BINDING_TOKEN_BYTES];
+        rand::rng().fill_bytes(&mut token_bytes);
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token_bytes);
+        let digest = unix_event_binding_digest(&token);
+        let expires_at_unix_seconds =
+            now_unix_seconds.saturating_add(UNIX_EVENT_BINDING_TTL_SECONDS);
+        self.unix_event_bindings.insert(
+            digest,
+            UnixEventBinding {
+                client_id,
+                peer_uid,
+                expires_at_unix_seconds,
+            },
+        );
+        (token, expires_at_unix_seconds)
+    }
+
+    /// Consumes one matching Unix event binding exactly once.
+    ///
+    /// Unknown, expired, and wrong-peer credentials share one redacted error
+    /// at the service boundary; this owner never returns token material.
+    pub(crate) fn consume_unix_event_binding(
+        &mut self,
+        token: &str,
+        peer_uid: u32,
+        now_unix_seconds: u64,
+    ) -> Option<ClientId> {
+        let digest = unix_event_binding_digest(token);
+        let binding = self.unix_event_bindings.get(&digest)?;
+        if binding.peer_uid != peer_uid || binding.expires_at_unix_seconds < now_unix_seconds {
+            return None;
+        }
+        self.unix_event_bindings
+            .remove(&digest)
+            .map(|binding| binding.client_id)
     }
 
     /// Returns the idempotency cache for read-only diagnostics.
@@ -108,4 +177,8 @@ impl RuntimeControlComponent {
     pub(crate) fn clear_approval_bindings(&mut self) {
         self.approval_bindings.clear();
     }
+}
+
+fn unix_event_binding_digest(token: &str) -> [u8; 32] {
+    Sha256::digest(token.as_bytes()).into()
 }

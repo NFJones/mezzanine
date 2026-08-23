@@ -508,6 +508,7 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
+            #[cfg(test)]
             AsyncRuntimeRequest::EventWakeups {
                 connections,
                 limit_per_connection,
@@ -530,6 +531,15 @@ impl AsyncRuntimeSessionActor {
                     last_delivered_event_id,
                     limit_per_connection,
                 );
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::ConsumeUnixEventBinding {
+                token,
+                peer_uid,
+                reply,
+            } => {
+                let result = self.service.consume_unix_event_binding(&token, peer_uid);
                 let _ = reply.send(result);
                 false
             }

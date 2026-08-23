@@ -8,8 +8,8 @@ use super::primary::{
     run_control_socket_attached_primary_client, run_iroh_attached_primary_client,
 };
 use super::responses::{
-    ensure_control_response_success, observer_request_id_from_initialize_response,
-    primary_client_id_from_initialize_response,
+    ensure_control_response_success, event_binding_token_from_initialize_response,
+    observer_request_id_from_initialize_response, primary_client_id_from_initialize_response,
 };
 use super::{
     Args, AsRawFd, CliEnv, CliOutputFormat, IsTerminal, MezError, Result, SessionRecord,
@@ -121,7 +121,7 @@ pub(in crate::cli) async fn run_attach<W: Write>(
     let mut stream = UnixStream::connect(socket_path)?;
     let detach_primary_on_disconnect = request.requested_role == "primary";
     let initialize = format!(
-        r#"{{"jsonrpc":"2.0","id":"cli-init","method":"control/initialize","params":{{"requested_role":"{}","requested_version":1,"client_name":"mez-cli","detach_primary_on_disconnect":{},"client":{{"name":"mez-cli","interactive":true,"terminal":{{"columns":{},"rows":{},"term":"{}"}}}}}}}}"#,
+        r#"{{"jsonrpc":"2.0","id":"cli-init","method":"control/initialize","params":{{"requested_role":"{}","requested_version":1,"client_name":"mez-cli","detach_primary_on_disconnect":{},"event_stream_version":1,"client":{{"name":"mez-cli","interactive":true,"terminal":{{"columns":{},"rows":{},"term":"{}"}}}}}}}}"#,
         request.requested_role,
         detach_primary_on_disconnect,
         columns,
@@ -136,10 +136,13 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         if io::stdin().is_terminal() && io::stdout().is_terminal() {
             ensure_control_response_success(body.as_str())?;
             let observer_request_id = observer_request_id_from_initialize_response(body.as_str())?;
+            let event_binding_token = event_binding_token_from_initialize_response(body.as_str())?;
             return run_control_socket_attached_observer_client(
                 &mut stream,
+                socket_path,
                 observer_request_id,
                 Size::new(columns, rows)?,
+                event_binding_token,
             )
             .await;
         }
@@ -152,11 +155,13 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         let response = read_control_response_frames(&mut stream, 1024 * 1024, 1)?;
         let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
         let primary_client_id = primary_client_id_from_initialize_response(body.as_str())?;
+        let event_binding_token = event_binding_token_from_initialize_response(body.as_str())?;
         return run_control_socket_attached_primary_client(
             &mut stream,
             socket_path,
             primary_client_id,
             Size::new(columns, rows)?,
+            event_binding_token,
         )
         .await;
     }

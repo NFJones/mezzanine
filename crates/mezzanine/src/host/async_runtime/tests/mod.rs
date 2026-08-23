@@ -38,7 +38,7 @@ use super::{
     serve_async_runtime_event_connection, serve_async_runtime_event_listener,
     serve_async_runtime_message_connection, serve_async_runtime_message_connection_loop,
     serve_async_runtime_message_listener, serve_async_runtime_message_listener_concurrent,
-    supervise_async_runtime_services,
+    serve_bound_async_runtime_event_connection, supervise_async_runtime_services,
 };
 use crate::MezError;
 use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};

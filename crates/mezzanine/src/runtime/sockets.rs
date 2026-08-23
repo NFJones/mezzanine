@@ -376,6 +376,7 @@ pub fn current_effective_uid() -> u32 {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn authorize_unix_peer_raw_fd(raw_fd: RawFd, owner_uid: u32) -> Result<()> {
     authenticated_unix_peer_uid(raw_fd, owner_uid).map(|_| ())
 }

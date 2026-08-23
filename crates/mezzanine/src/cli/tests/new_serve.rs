@@ -672,26 +672,44 @@ fn serve_can_start_event_stream_socket() {
 
     let mut control_stream =
         connect_when_ready(&control_socket).expect("control socket did not accept connections");
-    let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":1,"requested_role":"primary","client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
+    let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":1,"requested_role":"primary","event_stream_version":1,"client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
     let kill = r#"{"jsonrpc":"2.0","id":"kill","method":"session/kill","params":{"force":true,"idempotency_key":"kill"}}"#;
     control_stream
         .write_all(&encode_control_body(initialize))
         .unwrap();
-    control_stream
-        .write_all(&encode_control_body(kill))
-        .unwrap();
     control_stream.flush().unwrap();
-    let control_response =
-        read_control_response_frames(&mut control_stream, 1024 * 1024, 2).unwrap();
-    let (initialize_body, consumed) = decode_control_frame(&control_response, 1024 * 1024).unwrap();
-    let (kill_body, _) = decode_control_frame(&control_response[consumed..], 1024 * 1024).unwrap();
+    let initialize_response =
+        read_control_response_frames(&mut control_stream, 1024 * 1024, 1).unwrap();
+    let (initialize_body, _) = decode_control_frame(&initialize_response, 1024 * 1024).unwrap();
     assert!(initialize_body.contains(r#""granted_role":"primary""#));
-    assert!(kill_body.contains(r#""killed":true"#));
-    drop(control_stream);
+    let initialize_json: serde_json::Value = serde_json::from_str(&initialize_body).unwrap();
+    let binding_token = initialize_json["result"]["event_binding"]["token"]
+        .as_str()
+        .unwrap();
+    let event_initialize = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "event-init",
+        "method": "event/initialize",
+        "params": {"binding_token": binding_token, "after_event_id": 0}
+    })
+    .to_string();
+    event_stream
+        .write_all(&encode_control_body(&event_initialize))
+        .unwrap();
+    event_stream.flush().unwrap();
 
     let event_response = read_control_response_frames(&mut event_stream, 1024 * 1024, 1).unwrap();
     let (event_body, _) = decode_control_frame(&event_response, 1024 * 1024).unwrap();
     assert!(event_body.contains(r#""method":"event/"#));
+
+    control_stream
+        .write_all(&encode_control_body(kill))
+        .unwrap();
+    control_stream.flush().unwrap();
+    let kill_response = read_control_response_frames(&mut control_stream, 1024 * 1024, 1).unwrap();
+    let (kill_body, _) = decode_control_frame(&kill_response, 1024 * 1024).unwrap();
+    assert!(kill_body.contains(r#""killed":true"#));
+    drop(control_stream);
     drop(event_stream);
 
     let (result, stdout, stderr) = server.join().unwrap();
@@ -779,26 +797,44 @@ fn serve_derives_default_auxiliary_sockets() {
 
     let mut control_stream =
         connect_when_ready(&control_socket).expect("control socket did not accept connections");
-    let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":1,"requested_role":"primary","client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
+    let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":1,"requested_role":"primary","event_stream_version":1,"client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
     let kill = r#"{"jsonrpc":"2.0","id":"kill","method":"session/kill","params":{"force":true,"idempotency_key":"kill"}}"#;
     control_stream
         .write_all(&encode_control_body(initialize))
         .unwrap();
-    control_stream
-        .write_all(&encode_control_body(kill))
-        .unwrap();
     control_stream.flush().unwrap();
-    let control_response =
-        read_control_response_frames(&mut control_stream, 1024 * 1024, 2).unwrap();
-    let (initialize_body, consumed) = decode_control_frame(&control_response, 1024 * 1024).unwrap();
-    let (kill_body, _) = decode_control_frame(&control_response[consumed..], 1024 * 1024).unwrap();
+    let initialize_response =
+        read_control_response_frames(&mut control_stream, 1024 * 1024, 1).unwrap();
+    let (initialize_body, _) = decode_control_frame(&initialize_response, 1024 * 1024).unwrap();
     assert!(initialize_body.contains(r#""granted_role":"primary""#));
-    assert!(kill_body.contains(r#""killed":true"#));
-    drop(control_stream);
+    let initialize_json: serde_json::Value = serde_json::from_str(&initialize_body).unwrap();
+    let binding_token = initialize_json["result"]["event_binding"]["token"]
+        .as_str()
+        .unwrap();
+    let event_initialize = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "event-init",
+        "method": "event/initialize",
+        "params": {"binding_token": binding_token, "after_event_id": 0}
+    })
+    .to_string();
+    event_stream
+        .write_all(&encode_control_body(&event_initialize))
+        .unwrap();
+    event_stream.flush().unwrap();
 
     let event_response = read_control_response_frames(&mut event_stream, 1024 * 1024, 1).unwrap();
     let (event_body, _) = decode_control_frame(&event_response, 1024 * 1024).unwrap();
     assert!(event_body.contains(r#""method":"event/"#));
+
+    control_stream
+        .write_all(&encode_control_body(kill))
+        .unwrap();
+    control_stream.flush().unwrap();
+    let kill_response = read_control_response_frames(&mut control_stream, 1024 * 1024, 1).unwrap();
+    let (kill_body, _) = decode_control_frame(&kill_response, 1024 * 1024).unwrap();
+    assert!(kill_body.contains(r#""killed":true"#));
+    drop(control_stream);
     drop(event_stream);
 
     let (result, stdout, stderr) = server.join().unwrap();

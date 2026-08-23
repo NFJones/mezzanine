@@ -872,7 +872,7 @@ impl RuntimeSessionService {
 
             let primary_before = self.session.primary_client_id().cloned();
             let observer_count_before = self.session.observers().len();
-            let response = dispatch_control_request_for_connection(
+            let mut response = dispatch_control_request_for_connection(
                 body,
                 &mut self.session,
                 connection,
@@ -886,6 +886,36 @@ impl RuntimeSessionService {
                 )
             {
                 return runtime_json_rpc_error(&request.id, error.kind(), error.message());
+            }
+            if response.contains(r#""result""#)
+                && request
+                    .params
+                    .as_deref()
+                    .and_then(|params| serde_json::from_str::<serde_json::Value>(params).ok())
+                    .and_then(|params| params.get("event_stream_version").cloned())
+                    .and_then(|version| version.as_u64())
+                    == Some(1)
+                && let Some(crate::control::AuthenticatedPeer::UnixUser { uid }) =
+                    connection.authenticated_peer()
+                && let Some(client_id) = connection.caller_client_id().cloned()
+            {
+                let (token, expires_at_unix_seconds) =
+                    self.mint_unix_event_binding(client_id, *uid);
+                if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&response)
+                    && let Some(result) = value
+                        .get_mut("result")
+                        .and_then(serde_json::Value::as_object_mut)
+                {
+                    result.insert(
+                        "event_binding".to_string(),
+                        serde_json::json!({
+                            "version": 1,
+                            "token": token,
+                            "expires_at_unix_seconds": expires_at_unix_seconds
+                        }),
+                    );
+                    response = value.to_string();
+                }
             }
             return response;
         }

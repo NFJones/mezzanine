@@ -34,18 +34,21 @@ use crate::host::terminal::{
     plan_attached_terminal_client_step_with_host_paste_buffer,
 };
 use crate::integrations::agent::actions::AgentTurnRunner;
-use crate::protocol::event::{EventAudience, encode_event_notification};
+#[cfg(test)]
+use crate::protocol::event::EventAudience;
+use crate::protocol::event::encode_event_notification;
 use crate::protocol::framing::{ProtocolFrameCodec, encode_frame};
 use crate::protocol::message::encode_mmp_body;
+#[cfg(test)]
+use crate::runtime::authorize_unix_peer_raw_fd;
 use crate::runtime::{
     AttachedClientStepApplication, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
     RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
-    RuntimeEventConnectionTable, RuntimeEventWakeup, RuntimeLifecycleState,
-    RuntimeNativeShellDispatch, RuntimeNativeShellFailure, RuntimeNativeShellOutcome,
-    RuntimeProviderInfoRefreshOutcome, RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome,
-    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
-    authenticated_unix_peer_uid, authorize_unix_peer_raw_fd, current_effective_uid,
+    RuntimeEventWakeup, RuntimeLifecycleState, RuntimeNativeShellDispatch,
+    RuntimeNativeShellFailure, RuntimeNativeShellOutcome, RuntimeProviderInfoRefreshOutcome,
+    RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
+    RuntimeSnapshotControlAsyncWorkKind, authenticated_unix_peer_uid, current_effective_uid,
 };
 use mez_agent::AgentTurnLedger;
 use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageConnection, delivery_batch_json};
@@ -188,10 +191,13 @@ pub use config::{
 pub use daemon::build_async_runtime_daemon_services;
 #[cfg(test)]
 pub use daemon::run_async_runtime_daemon;
-pub use events::serve_async_runtime_event_listener;
+#[cfg(test)]
+pub(crate) use events::serve_bound_async_runtime_event_connection;
+pub use events::serve_bound_async_runtime_event_listener;
 #[cfg(test)]
 pub use events::{
     flush_async_runtime_event_wakeups_to_stream, serve_async_runtime_event_connection,
+    serve_async_runtime_event_listener,
 };
 #[cfg(test)]
 pub use pane_io::AsyncFakePaneProcessIo;

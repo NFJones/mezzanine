@@ -12,8 +12,8 @@ use super::{
     build_async_host_clipboard_side_effect_service, build_async_pane_process_supervisor_service,
     build_async_persistence_side_effect_service, build_async_runtime_timer_side_effect_service,
     build_async_status_pill_side_effect_service,
-    serve_async_runtime_control_listener_with_snapshots, serve_async_runtime_event_listener,
-    serve_async_runtime_message_listener_concurrent,
+    serve_async_runtime_control_listener_with_snapshots,
+    serve_async_runtime_message_listener_concurrent, serve_bound_async_runtime_event_listener,
 };
 #[cfg(test)]
 use super::{AsyncRuntimeSupervisionReport, Future, supervise_async_runtime_services};
@@ -78,13 +78,11 @@ pub fn build_async_runtime_daemon_services(
         let event_config = config.event;
         let max_connections = config.max_event_connections;
         let max_batches = config.max_event_batches_per_connection;
-        let audience = config.event_audience.clone();
         services.push(AsyncRuntimeService::new("event", async move {
-            let served = serve_async_runtime_event_listener(
+            let served = serve_bound_async_runtime_event_listener(
                 &listener,
                 &handle,
                 event_config,
-                move |index| Ok((format!("event-{index}"), audience.clone(), 0)),
                 |served, delivered, state| {
                     served >= max_connections
                         || delivered >= max_batches

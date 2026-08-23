@@ -15,9 +15,8 @@ use super::{
     Notify, PaneEvent, PersistenceEvent, RenderInvalidationReason, Result,
     RuntimeAgentProviderDispatch, RuntimeApprovedExternalActionDispatch,
     RuntimeApprovedExternalActionOutcome, RuntimeEvent, RuntimeEventBatch,
-    RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
-    RuntimeLifecycleState, RuntimeSessionService, RuntimeSideEffect,
-    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
+    RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
+    RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
     RuntimeSnapshotControlAsyncWorkKind, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition,
     ShutdownEvent, Size, TerminalClientLoopConfig, TimerEvent, VecDeque,
     compose_client_presentation_with_styles, delivery_batch_json, encode_mmp_body, mpsc, oneshot,
@@ -31,6 +30,8 @@ use crate::integrations::agent::provider::{
     provider_event_error_kind,
 };
 use crate::runtime::PaneResizeUpdate;
+#[cfg(test)]
+use crate::runtime::RuntimeEventConnectionTable;
 #[cfg(test)]
 use crate::runtime::coalesce_config_persistence_effects;
 use mez_agent::{DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass};

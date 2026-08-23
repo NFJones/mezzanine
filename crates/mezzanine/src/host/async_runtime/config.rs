@@ -7,7 +7,7 @@
 use super::{
     AgentId, Arc, AsyncRuntimeRequestEnvelope, ControlConnectionState,
     DEFAULT_ASYNC_CONTROL_MAX_CONTENT_LENGTH, DEFAULT_ASYNC_EVENT_LIMIT_PER_CONNECTION,
-    DEFAULT_ASYNC_RUNTIME_COMMAND_BUFFER, Duration, EventAudience, FanoutBatch, HashMap, HashSet,
+    DEFAULT_ASYNC_RUNTIME_COMMAND_BUFFER, Duration, FanoutBatch, HashMap, HashSet,
     MessageConnection, MezError, Notify, PaneProcessInstance, Result, RuntimeLifecycleState,
     RuntimeSessionService, RuntimeSideEffect, RuntimeTimerKey, UnixListener, VecDeque,
     current_effective_uid, mpsc, watch,
@@ -989,11 +989,6 @@ pub struct AsyncRuntimeDaemonConfig {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub max_event_batches_per_connection: u64,
-    /// Stores the event audience value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub event_audience: EventAudience,
     /// Unix-millisecond clock captured when the daemon timer worker starts.
     ///
     /// Timer events add monotonic elapsed time to this base before comparing
@@ -1019,7 +1014,6 @@ impl Default for AsyncRuntimeDaemonConfig {
             max_message_connections: u64::MAX,
             max_event_connections: u64::MAX,
             max_event_batches_per_connection: u64::MAX,
-            event_audience: EventAudience::Primary,
             timer_base_now_ms: crate::runtime::current_unix_millis(),
         }
     }

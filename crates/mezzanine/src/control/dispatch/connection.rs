@@ -402,16 +402,14 @@ pub(super) fn initialize_control_connection(
     }
     if let Some(version) = init.event_stream_version {
         if version != 1 {
-            return Err(MezError::invalid_args(
-                "unsupported Iroh event stream version",
-            ));
+            return Err(MezError::invalid_args("unsupported event stream version"));
         }
         if !matches!(
             connection.authenticated_peer(),
-            Some(AuthenticatedPeer::IrohEndpoint { .. })
+            Some(AuthenticatedPeer::IrohEndpoint { .. } | AuthenticatedPeer::UnixUser { .. })
         ) {
             return Err(MezError::forbidden(
-                "server-opened event streams require an authenticated Iroh connection",
+                "event streams require an authenticated transport connection",
             ));
         }
     }

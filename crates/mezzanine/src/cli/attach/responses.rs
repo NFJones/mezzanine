@@ -58,6 +58,22 @@ pub(super) fn primary_client_id_from_initialize_response(body: &str) -> Result<C
         .ok_or_else(|| MezError::invalid_state("control initialize returned an invalid client id"))
 }
 
+/// Extracts the one-time Unix event binding token from initialization.
+pub(super) fn event_binding_token_from_initialize_response(body: &str) -> Result<String> {
+    let parsed: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_args("control initialize response is not valid JSON"))?;
+    parsed
+        .get("result")
+        .and_then(|result| result.get("event_binding"))
+        .and_then(|binding| binding.get("token"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            MezError::invalid_state("control initialize did not return an event binding")
+        })
+}
+
 /// Extracts the pending observer request id from a successful initialize
 /// response.
 ///

@@ -29,13 +29,15 @@ pub(in crate::cli) async fn run_control_socket_attached_primary_client(
     control_socket_path: &std::path::Path,
     primary_client_id: ClientId,
     client_size: Size,
+    event_binding_token: String,
 ) -> Result<()> {
     let input_fd = io::stdin().as_raw_fd();
     let output_fd = io::stdout().as_raw_fd();
     let control_stream = stream.try_clone()?;
     control_stream.set_nonblocking(true)?;
     let mut control_stream = tokio::net::UnixStream::from_std(control_stream)?;
-    let event_stream = optional_control_socket_event_stream(control_socket_path)?;
+    let event_stream =
+        optional_control_socket_event_stream(control_socket_path, event_binding_token.as_str())?;
     let mut terminal_guard =
         AsyncAttachedTerminalPresentationGuard::new(input_fd, output_fd, None)?;
     let run_result = run_control_socket_attached_primary_client_loop_async_with_runtime_events(

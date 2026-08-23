@@ -22,6 +22,27 @@ use super::protocol::{
 use crate::control::control_event_audience;
 
 impl RuntimeSessionService {
+    /// Mints one short-lived event-socket binding for an initialized Unix client.
+    pub(crate) fn mint_unix_event_binding(
+        &mut self,
+        client_id: mez_core::ids::ClientId,
+        peer_uid: u32,
+    ) -> (String, u64) {
+        self.control
+            .mint_unix_event_binding(client_id, peer_uid, super::current_unix_seconds())
+    }
+
+    /// Consumes one Unix event-socket binding without disclosing credential state.
+    pub(crate) fn consume_unix_event_binding(
+        &mut self,
+        token: &str,
+        peer_uid: u32,
+    ) -> Result<mez_core::ids::ClientId> {
+        self.control
+            .consume_unix_event_binding(token, peer_uid, super::current_unix_seconds())
+            .ok_or_else(|| MezError::forbidden("invalid or expired event binding"))
+    }
+
     /// Runs the dispatch runtime read only state request operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

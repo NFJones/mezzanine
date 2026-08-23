@@ -9,16 +9,15 @@ use super::{
     PaneProcess, PaneResizeUpdate, RenderedClientView, Result, RuntimeAgentCompactionDispatch,
     RuntimeAgentProviderDispatch, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
     RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome, RuntimeEventBatch,
-    RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
-    RuntimeLifecycleState, RuntimeProviderInfoRefreshOutcome, RuntimeSideEffect,
-    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork, Size, SnapshotRepository,
-    TerminalClientLoopConfig, oneshot,
+    RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState,
+    RuntimeProviderInfoRefreshOutcome, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
+    RuntimeSnapshotControlAsyncWork, Size, SnapshotRepository, TerminalClientLoopConfig, oneshot,
 };
-#[cfg(test)]
-use crate::runtime::PaneInputDispatch;
 use crate::runtime::PaneProcessInstance;
 use crate::runtime::RuntimeAgentPromptProviderInfoRefresh;
 use crate::runtime::RuntimeNativeShellDispatch;
+#[cfg(test)]
+use crate::runtime::{PaneInputDispatch, RuntimeEventConnectionTable};
 use crate::runtime::{RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork};
 use std::time::Instant;
 
@@ -433,6 +432,7 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
+    #[cfg(test)]
     EventWakeups {
         /// Stores the connections value for this data structure.
         ///
@@ -462,6 +462,15 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         limit_per_connection: usize,
         /// Authorized visible events or a current-role authorization failure.
         reply: oneshot::Sender<Result<Vec<RuntimeEventWakeup>>>,
+    },
+    /// Consumes one short-lived Unix event binding credential.
+    ConsumeUnixEventBinding {
+        /// Raw bearer credential received only from the event initialization frame.
+        token: String,
+        /// Authenticated Unix peer uid for the event socket.
+        peer_uid: u32,
+        /// Exact initialized client bound to the consumed credential.
+        reply: oneshot::Sender<Result<ClientId>>,
     },
     /// Represents the Apply Attached Terminal Step case for this enumeration.
     ///
@@ -1074,11 +1083,13 @@ impl AsyncRuntimeRequest {
             Self::HandleControlInput { .. }
             | Self::HandleControlInputWithSnapshots { .. }
             | Self::CompleteSnapshotControlInput { .. } => Family::Control,
+            #[cfg(test)]
+            Self::EventWakeups { .. } => Family::Message,
             Self::HandleMessageInput { .. }
             | Self::MessageFanoutReadyFor { .. }
             | Self::AcknowledgeMessageFanout { .. }
-            | Self::EventWakeups { .. }
-            | Self::EventWakeupsForClient { .. } => Family::Message,
+            | Self::EventWakeupsForClient { .. }
+            | Self::ConsumeUnixEventBinding { .. } => Family::Message,
             #[cfg(test)]
             Self::WriteInputToPane { .. }
             | Self::ManagedShellLifecycleState { .. }

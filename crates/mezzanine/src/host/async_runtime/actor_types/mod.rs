@@ -17,11 +17,10 @@ use super::{
     RenderedClientView, Result, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderTask, RuntimeAgentRememberDispatch, RuntimeApprovedExternalActionDispatch,
     RuntimeApprovedExternalActionOutcome, RuntimeEvent, RuntimeEventBatch,
-    RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
-    RuntimeLifecycleState, RuntimeProviderInfoRefreshOutcome, RuntimeSideEffect,
-    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork, Size, StreamExt,
-    TerminalClientLoopConfig, TerminalStyleSpan, UnixListener, UnixStream,
-    authenticated_unix_peer_uid, encode_frame, oneshot,
+    RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState,
+    RuntimeProviderInfoRefreshOutcome, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
+    RuntimeSnapshotControlAsyncWork, Size, StreamExt, TerminalClientLoopConfig, TerminalStyleSpan,
+    UnixListener, UnixStream, authenticated_unix_peer_uid, encode_frame, oneshot,
 };
 use crate::runtime::PaneResizeUpdate;
 use crate::storage::snapshot::SnapshotRepository;
