@@ -51,7 +51,7 @@ Local control-socket clients see an unavailable state because they are not
 attached through Iroh.
 
 The bottom window bar independently shows a privacy-safe plain-text Iroh status
-pill, such as `Iroh: good` or `Iroh: degraded`, for that same live Iroh client.
+pill, such as `good` or `degraded`, for that same live Iroh client.
 It is omitted for local Unix-socket clients and contains no path, endpoint,
 address, relay, peer, or diagnostic information; use `show-iroh-status` for
 the detailed client-local table.

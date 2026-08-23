@@ -531,7 +531,7 @@ fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
     for (quality, expected_text, expected_background) in [
         (
             TerminalIrohStatusQuality::Good,
-            " Iroh: good ",
+            " good ",
             TerminalClientLoopConfig::default()
                 .ui_theme
                 .colors
@@ -540,7 +540,7 @@ fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
         ),
         (
             TerminalIrohStatusQuality::Degraded,
-            " Iroh: degraded ",
+            " degraded ",
             TerminalClientLoopConfig::default()
                 .ui_theme
                 .colors
@@ -549,7 +549,7 @@ fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
         ),
         (
             TerminalIrohStatusQuality::Poor,
-            " Iroh: poor ",
+            " poor ",
             TerminalClientLoopConfig::default()
                 .ui_theme
                 .colors
@@ -558,7 +558,7 @@ fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
         ),
         (
             TerminalIrohStatusQuality::Unknown,
-            " Iroh: unknown ",
+            " unknown ",
             TerminalClientLoopConfig::default()
                 .ui_theme
                 .colors

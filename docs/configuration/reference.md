@@ -305,7 +305,7 @@ Default `frames.window.visible_fields`:
 ```
 
 `#{iroh.status}` is a client-local, non-clickable status pill. It renders plain
-text such as `Iroh: good`, `Iroh: degraded`, `Iroh: poor`, or `Iroh: unknown`
+text such as `good`, `degraded`, `poor`, or `unknown`
 only for the exact client with a live Iroh connection and is omitted without
 padding for Unix-socket, never-Iroh, or disconnected clients. Each connected
 quality uses the matching Iroh theme color pair. It is included by the generated

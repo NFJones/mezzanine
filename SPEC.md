@@ -3311,8 +3311,8 @@ one of `hide`, `show_empty`, or `keep_previous`; error behavior MUST be one of
 `hide`, `show_error`, or `keep_previous`.
 
 `#{iroh.status}` MUST be a non-clickable, client-local window-status field. It
-MUST render padded plain text indicating the quality (`Iroh: good`,
-`Iroh: degraded`, `Iroh: poor`, or `Iroh: unknown`) only when the exact
+MUST render padded plain text indicating the quality (`good`, `degraded`,
+`poor`, or `unknown`) only when the exact
 rendered client has a live Iroh connection, using `iroh_status_good`,
 `iroh_status_degraded`, `iroh_status_poor`, or `iroh_status_unknown` according
 to the same stale, RTT, jitter, loss, and congestion classification used by
