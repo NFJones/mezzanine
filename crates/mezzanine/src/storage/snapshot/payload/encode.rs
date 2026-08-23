@@ -28,6 +28,27 @@ impl SessionSnapshotPayload {
             escape_field(self.active_window_id.as_deref().unwrap_or(""))
         ));
         output.push_str(&format!(
+            "landing_navigation\t{}\t{}\t{}\n",
+            escape_field(
+                self.landing_navigation
+                    .active_group_id
+                    .as_deref()
+                    .unwrap_or("")
+            ),
+            escape_field(
+                self.landing_navigation
+                    .active_window_id
+                    .as_deref()
+                    .unwrap_or("")
+            ),
+            escape_field(
+                self.landing_navigation
+                    .active_pane_id
+                    .as_deref()
+                    .unwrap_or("")
+            )
+        ));
+        output.push_str(&format!(
             "shell\t{}\t{}\t{}\n",
             escape_field(&self.shell.path),
             escape_field(&self.shell.source),

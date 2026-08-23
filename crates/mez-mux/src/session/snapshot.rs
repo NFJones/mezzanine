@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::time::current_unix_seconds;
 use super::types::{
-    PaneStateMetadata, RestoredSessionState, Session, SessionRestoreInput, SessionShell,
-    SessionState, WindowGroup,
+    LandingNavigationState, PaneStateMetadata, RestoredSessionState, Session, SessionRestoreInput,
+    SessionShell, SessionState, WindowGroup,
 };
 
 /// Carries freshly allocated layout state rebuilt from a snapshot payload.
@@ -22,6 +22,7 @@ type FreshSnapshotLayout = (
     usize,
     Option<usize>,
     BTreeMap<String, PaneStateMetadata>,
+    LandingNavigationState,
 );
 
 impl Session {
@@ -32,6 +33,7 @@ impl Session {
     ) -> Result<Self> {
         let shell = shell.into();
         let restored_at = current_unix_seconds();
+        let landing_navigation = input.landing_navigation.clone();
         let mut restored_ids = vec![input.session_id.clone()];
         let mut active_window_index = None;
         let mut pane_state_metadata = BTreeMap::new();
@@ -149,18 +151,6 @@ impl Session {
         let active_group_index = active_group_index.ok_or_else(|| {
             MezError::invalid_args("restored session must contain exactly one active window group")
         })?;
-        let landing_navigation = super::types::LandingNavigationState {
-            active_group_id: window_groups
-                .get(active_group_index)
-                .map(|group| group.id.clone()),
-            active_window_id: windows
-                .get(active_window_index)
-                .map(|window| window.id.clone()),
-            active_pane_id: windows
-                .get(active_window_index)
-                .map(|window| window.active_pane().id.clone()),
-        };
-
         Ok(Self {
             ids: IdFactory::after_existing_ids(restored_ids.iter()),
             id: input.session_id,
@@ -201,7 +191,15 @@ impl Session {
     /// Fresh live identifiers are allocated so loading a saved layout behaves
     /// like recreating its groups, windows, and panes in the current session.
     pub fn replace_layout_from_restore_input(&mut self, input: SessionRestoreInput) -> Result<()> {
-        let authoritative_size = input.authoritative_size;
+        let restored_authoritative_size = input.authoritative_size;
+        let authoritative_size = self
+            .layout_owner_client_id
+            .as_ref()
+            .and_then(|owner_id| self.clients.iter().find(|client| client.id == *owner_id))
+            .and_then(|client| client.terminal.as_ref())
+            .map(|terminal| crate::layout::Size::new(terminal.columns, terminal.rows))
+            .transpose()?
+            .unwrap_or(restored_authoritative_size);
         let (
             windows,
             window_groups,
@@ -209,9 +207,10 @@ impl Session {
             active_group_index,
             last_active_group_index,
             pane_state_metadata,
+            landing_navigation,
         ) = self.layout_from_restore_input_with_fresh_ids(input)?;
 
-        self.authoritative_size = authoritative_size;
+        self.authoritative_size = restored_authoritative_size;
         self.windows = windows;
         self.window_groups = window_groups;
         self.active_window_index = active_window_index;
@@ -220,20 +219,8 @@ impl Session {
         self.last_active_group_index = last_active_group_index;
         self.group_focus_history.clear();
         self.pane_state_metadata = pane_state_metadata;
-        self.landing_navigation = super::types::LandingNavigationState {
-            active_group_id: self
-                .window_groups
-                .get(self.active_group_index)
-                .map(|group| group.id.clone()),
-            active_window_id: self
-                .windows
-                .get(self.active_window_index)
-                .map(|window| window.id.clone()),
-            active_pane_id: self
-                .windows
-                .get(self.active_window_index)
-                .map(|window| window.active_pane().id.clone()),
-        };
+        self.landing_navigation = landing_navigation;
+        let _ = self.apply_authoritative_layout_size(authoritative_size)?;
         let _ = self.reconcile_client_navigation();
         self.record_event();
         Ok(())
@@ -244,7 +231,10 @@ impl Session {
         &mut self,
         input: SessionRestoreInput,
     ) -> Result<FreshSnapshotLayout> {
+        let restored_landing_navigation = input.landing_navigation.clone();
         let mut restored_to_live_window_ids = BTreeMap::new();
+        let mut restored_to_live_pane_ids = BTreeMap::new();
+        let mut restored_to_live_group_ids = BTreeMap::new();
         let mut active_window_index = None;
         let mut pane_state_metadata = BTreeMap::new();
         let mut windows = Vec::with_capacity(input.windows.len());
@@ -275,7 +265,9 @@ impl Session {
                         "restored panes must be stored in contiguous index order",
                     ));
                 }
+                let restored_pane_id = restored_pane.id.to_string();
                 let pane_id = self.ids.pane();
+                restored_to_live_pane_ids.insert(restored_pane_id, pane_id.clone());
                 pane_state_metadata.insert(
                     pane_id.to_string(),
                     PaneStateMetadata {
@@ -354,8 +346,11 @@ impl Session {
             let first_window = window_ids.first().cloned().ok_or_else(|| {
                 MezError::invalid_args("restored window group must contain at least one window")
             })?;
+            let restored_group_id = restored_group.id.to_string();
+            let group_id = self.ids.window_group();
+            restored_to_live_group_ids.insert(restored_group_id, group_id.clone());
             let mut group = WindowGroup::new(
-                self.ids.window_group(),
+                group_id,
                 restored_group.index,
                 restored_group.name,
                 first_window,
@@ -395,6 +390,23 @@ impl Session {
         let active_group_index = active_group_index.ok_or_else(|| {
             MezError::invalid_args("restored session must contain exactly one active window group")
         })?;
+        let landing_navigation = LandingNavigationState {
+            active_group_id: restored_landing_navigation
+                .active_group_id
+                .as_ref()
+                .and_then(|id| restored_to_live_group_ids.get(id.as_str()))
+                .cloned(),
+            active_window_id: restored_landing_navigation
+                .active_window_id
+                .as_ref()
+                .and_then(|id| restored_to_live_window_ids.get(id.as_str()))
+                .cloned(),
+            active_pane_id: restored_landing_navigation
+                .active_pane_id
+                .as_ref()
+                .and_then(|id| restored_to_live_pane_ids.get(id.as_str()))
+                .cloned(),
+        };
 
         Ok((
             windows,
@@ -403,6 +415,7 @@ impl Session {
             active_group_index,
             None,
             pane_state_metadata,
+            landing_navigation,
         ))
     }
 }

@@ -31,6 +31,12 @@ fn runtime_observer_render_follows_exact_source_navigation() {
     let source = service
         .attach_primary("source", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
+    let landing_window = service
+        .session()
+        .active_window_for(&source)
+        .unwrap()
+        .id
+        .clone();
     let source_window = service.session.new_window(&source, "source", true).unwrap();
     let source_pane = service
         .session()
@@ -40,6 +46,10 @@ fn runtime_observer_render_follows_exact_source_navigation() {
         .clone();
     let decider = service
         .attach_primary("decider", true, Size::new(80, 24).unwrap(), 121)
+        .unwrap();
+    service
+        .session
+        .select_window(&decider, landing_window.as_str())
         .unwrap();
     let decider_window = service
         .session()

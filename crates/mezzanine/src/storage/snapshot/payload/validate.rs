@@ -74,6 +74,47 @@ impl SessionSnapshotPayload {
             window.validate()?;
         }
         validate_snapshot_window_groups(self)?;
+        self.validate_landing_navigation()?;
+        Ok(())
+    }
+
+    /// Validates the v5 landing group/window/pane parent chain.
+    fn validate_landing_navigation(&self) -> Result<()> {
+        let group_id = self
+            .landing_navigation
+            .active_group_id
+            .as_deref()
+            .ok_or_else(|| MezError::invalid_args("snapshot landing group is missing"))?;
+        let window_id = self
+            .landing_navigation
+            .active_window_id
+            .as_deref()
+            .ok_or_else(|| MezError::invalid_args("snapshot landing window is missing"))?;
+        let pane_id = self
+            .landing_navigation
+            .active_pane_id
+            .as_deref()
+            .ok_or_else(|| MezError::invalid_args("snapshot landing pane is missing"))?;
+        let group = self
+            .window_groups
+            .iter()
+            .find(|group| group.group_id == group_id)
+            .ok_or_else(|| MezError::invalid_args("snapshot landing group is unknown"))?;
+        if !group.window_ids.iter().any(|id| id == window_id) {
+            return Err(MezError::invalid_args(
+                "snapshot landing window is not in the landing group",
+            ));
+        }
+        let window = self
+            .windows
+            .iter()
+            .find(|window| window.window_id == window_id)
+            .ok_or_else(|| MezError::invalid_args("snapshot landing window is unknown"))?;
+        if !window.panes.iter().any(|pane| pane.pane_id == pane_id) {
+            return Err(MezError::invalid_args(
+                "snapshot landing pane is not in the landing window",
+            ));
+        }
         Ok(())
     }
 

@@ -556,7 +556,7 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     let loaded = repo.inspect_payload("snap-1").unwrap();
     let plan = payload.resume_plan();
 
-    assert!(encoded.starts_with("payload_version\t4\n"));
+    assert!(encoded.starts_with("payload_version\t5\n"));
     assert!(encoded.contains("\nwindow_layout\t@1\t"));
     assert!(encoded.contains("\npane_shell\t%1\t\texited\t\tunknown\n"));
     assert_eq!(loaded, payload);
@@ -609,6 +609,81 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     assert!(plan.restart_required_panes.is_empty());
     assert!(plan.limitations.is_empty());
 
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies manual capture uses the invoking primary while automatic capture
+/// follows the layout owner, without persisting either client identity.
+#[test]
+fn snapshot_v5_selects_manual_and_automatic_landing_sources() {
+    let mut session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let owner = session.attach_primary("owner", true).unwrap();
+    let owner_window = session.new_window(&owner, "owner", true).unwrap();
+    let second = session.attach_primary("second", true).unwrap();
+    let second_window = session.new_window(&second, "second", true).unwrap();
+
+    let automatic = SessionSnapshotPayload::from_session(&session);
+    let manual = SessionSnapshotPayload::from_session_with_context(
+        &session,
+        SnapshotCreationContext::new(&[], &[], &SnapshotFrameState::default(), &[])
+            .with_navigation_source(&second),
+    );
+
+    assert_eq!(
+        automatic.landing_navigation.active_window_id.as_deref(),
+        Some(owner_window.as_str())
+    );
+    assert_eq!(
+        manual.landing_navigation.active_window_id.as_deref(),
+        Some(second_window.as_str())
+    );
+    let encoded = manual.encode().unwrap();
+    assert!(!encoded.contains(owner.as_str()));
+    assert!(!encoded.contains(second.as_str()));
+}
+
+/// Verifies version-4 payloads without an explicit landing record normalize
+/// their singular active group, window, and pane into version-5 landing state.
+#[test]
+fn snapshot_v4_normalizes_legacy_focus_into_landing_navigation() {
+    let root = std::env::temp_dir().join(format!("mez-snapshot-v4-landing-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let repo = SnapshotRepository::new(root.clone());
+    let session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let payload = SessionSnapshotPayload::from_session(&session);
+    repo.write_payload("legacy", &payload).unwrap();
+    let path = root.join("legacy.payload");
+    let legacy = fs::read_to_string(&path)
+        .unwrap()
+        .replace("payload_version\t5\n", "payload_version\t4\n")
+        .lines()
+        .filter(|line| !line.starts_with("landing_navigation\t"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(&path, legacy).unwrap();
+
+    let loaded = repo.inspect_payload("legacy").unwrap();
+
+    assert_eq!(
+        loaded.landing_navigation.active_group_id.as_deref(),
+        Some("g1")
+    );
+    assert_eq!(
+        loaded.landing_navigation.active_window_id.as_deref(),
+        Some("@1")
+    );
+    assert_eq!(
+        loaded.landing_navigation.active_pane_id.as_deref(),
+        Some("%1")
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -866,6 +941,7 @@ fn snapshot_payload_rejects_windows_without_panes() {
         authoritative_columns: 80,
         authoritative_rows: 24,
         active_window_id: None,
+        landing_navigation: super::SnapshotLandingNavigation::default(),
         shell: SnapshotShellMetadata::default(),
         active_config_layers: Vec::new(),
         frame_state: SnapshotFrameState::default(),
@@ -946,6 +1022,32 @@ fn snapshot_payload_rejects_invalid_pane_readiness_state() {
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
 }
 
+/// Verifies v5 landing navigation rejects a pane from a different window.
+#[test]
+fn snapshot_v5_rejects_cross_parent_landing_navigation() {
+    let mut session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let primary = session.attach_primary("primary", true).unwrap();
+    let first_window = session.active_window().unwrap().id.clone();
+    let second_window = session.new_window(&primary, "second", true).unwrap();
+    let second_pane = session.active_pane_for(&primary).unwrap().id.clone();
+    let mut payload = SessionSnapshotPayload::from_session(&session);
+    payload.landing_navigation.active_window_id = Some(first_window.to_string());
+    payload.landing_navigation.active_pane_id = Some(second_pane.to_string());
+    assert_ne!(first_window, second_window);
+
+    let error = payload.validate().unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(
+        error
+            .message()
+            .contains("landing pane is not in the landing window")
+    );
+}
+
 /// Verifies snapshot payload rejects unsupported format version.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -962,7 +1064,7 @@ fn snapshot_payload_rejects_unsupported_format_version() {
     let repo = SnapshotRepository::new(root.clone());
     fs::write(
         root.join("snap-version.payload"),
-        "payload_version\t5\nsession\t$1\tdefault\trunning\t80\t24\t\n",
+        "payload_version\t6\nsession\t$1\tdefault\trunning\t80\t24\t\n",
     )
     .unwrap();
 
@@ -1333,6 +1435,11 @@ fn session_restores_layout_from_snapshot_payload_and_seeds_ids() {
         authoritative_columns: 100,
         authoritative_rows: 40,
         active_window_id: Some("@8".to_string()),
+        landing_navigation: super::SnapshotLandingNavigation {
+            active_group_id: Some("g1".to_string()),
+            active_window_id: Some("@8".to_string()),
+            active_pane_id: Some("%12".to_string()),
+        },
         shell: SnapshotShellMetadata::default(),
         active_config_layers: Vec::new(),
         frame_state: SnapshotFrameState::default(),
@@ -1341,7 +1448,15 @@ fn session_restores_layout_from_snapshot_payload_and_seeds_ids() {
         approval_requests: Vec::new(),
         message_state: None,
         mcp_servers: Vec::new(),
-        window_groups: Vec::new(),
+        window_groups: vec![super::WindowGroupSnapshotPayload {
+            group_id: "g1".to_string(),
+            index: 0,
+            name: "0".to_string(),
+            window_ids: vec!["@8".to_string()],
+            active_window_id: Some("@8".to_string()),
+            last_active_window_id: None,
+            active: true,
+        }],
         windows: vec![WindowSnapshotPayload {
             window_id: "@8".to_string(),
             index: 0,
@@ -1388,6 +1503,10 @@ fn session_restores_layout_from_snapshot_payload_and_seeds_ids() {
     assert_eq!(session.id.as_str(), "$4");
     assert_eq!(session.name, "restored");
     assert_eq!(session.state, SessionState::Detached);
+    assert!(session.clients().is_empty());
+    assert!(session.observers().is_empty());
+    assert_eq!(session.layout_owner_client_id(), None);
+    assert_eq!(session.authoritative_size, Size::new(100, 40).unwrap());
     assert_eq!(session.active_window().unwrap().id.as_str(), "@8");
     assert_eq!(
         session.active_window().unwrap().active_pane().id.as_str(),

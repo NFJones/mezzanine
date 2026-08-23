@@ -130,6 +130,11 @@ fn generic_pane_state_serializes_restored_snapshot_metadata() {
         authoritative_columns: 100,
         authoritative_rows: 40,
         active_window_id: Some("@4".to_string()),
+        landing_navigation: crate::storage::snapshot::SnapshotLandingNavigation {
+            active_group_id: Some("g1".to_string()),
+            active_window_id: Some("@4".to_string()),
+            active_pane_id: Some("%9".to_string()),
+        },
         shell: SnapshotShellMetadata::default(),
         active_config_layers: Vec::new(),
         frame_state: SnapshotFrameState::default(),
@@ -138,7 +143,15 @@ fn generic_pane_state_serializes_restored_snapshot_metadata() {
         approval_requests: Vec::new(),
         message_state: None,
         mcp_servers: Vec::new(),
-        window_groups: Vec::new(),
+        window_groups: vec![crate::storage::snapshot::WindowGroupSnapshotPayload {
+            group_id: "g1".to_string(),
+            index: 0,
+            name: "0".to_string(),
+            window_ids: vec!["@4".to_string()],
+            active_window_id: Some("@4".to_string()),
+            last_active_window_id: None,
+            active: true,
+        }],
         windows: vec![WindowSnapshotPayload {
             window_id: "@4".to_string(),
             index: 0,

@@ -256,6 +256,7 @@ impl RuntimeSessionService {
                 session: Box::new((*self.session).clone()),
                 context: Box::new(RuntimeSnapshotOwnedCreationContext {
                     pane_captures: self.live_snapshot_pane_captures(),
+                    navigation_source_client_id: Some(caller_client_id.clone()),
                     active_config_layers: self.live_snapshot_config_layers(),
                     frame_state: self.live_snapshot_frame_state(),
                     agent_sessions: self.live_snapshot_agent_sessions(),

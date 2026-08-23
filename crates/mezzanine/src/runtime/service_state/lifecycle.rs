@@ -83,6 +83,8 @@ pub enum RuntimeRegistryUpdatePlan {
 pub(crate) struct RuntimeSnapshotOwnedCreationContext {
     /// Live pane terminal/process captures.
     pub pane_captures: Vec<crate::storage::snapshot::SnapshotPaneCapture>,
+    /// Exact primary whose caller-local navigation becomes snapshot landing focus.
+    pub navigation_source_client_id: Option<mez_core::ids::ClientId>,
     /// Active config layers at capture time.
     pub active_config_layers: Vec<crate::storage::snapshot::SnapshotConfigLayerMetadata>,
     /// Live terminal frame state at capture time.
@@ -104,15 +106,22 @@ impl RuntimeSnapshotOwnedCreationContext {
     pub(crate) fn as_creation_context(
         &self,
     ) -> crate::storage::snapshot::SnapshotCreationContext<'_> {
-        crate::storage::snapshot::SnapshotCreationContext::new(
+        let context = crate::storage::snapshot::SnapshotCreationContext::new(
             &self.pane_captures,
             &self.active_config_layers,
             &self.frame_state,
             &self.agent_sessions,
-        )
-        .with_approvals(&self.approval_grants, &self.approval_requests)
-        .with_message_state(&self.message_state)
-        .with_mcp_servers(&self.mcp_servers)
+        );
+        let context = self
+            .navigation_source_client_id
+            .as_ref()
+            .map_or(context, |client_id| {
+                context.with_navigation_source(client_id)
+            });
+        context
+            .with_approvals(&self.approval_grants, &self.approval_requests)
+            .with_message_state(&self.message_state)
+            .with_mcp_servers(&self.mcp_servers)
     }
 }
 

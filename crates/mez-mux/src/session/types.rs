@@ -87,6 +87,8 @@ pub struct SessionRestoreInput {
     pub authoritative_size: Size,
     /// Stable active-window identity, when recorded.
     pub active_window_id: Option<WindowId>,
+    /// Client-independent landing focus restored for fresh primary clients.
+    pub landing_navigation: LandingNavigationState,
     /// Restored window topology in index order.
     pub windows: Vec<RestoredWindow>,
     /// Restored window-group topology in index order.

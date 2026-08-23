@@ -8,8 +8,8 @@ use crate::host::shell::ResolvedShell;
 use mez_core::ids::{PaneId, SessionId, WindowGroupId, WindowId};
 use mez_mux::layout::{LayoutPolicy, PaneGeometry, Size};
 use mez_mux::session::{
-    RestoredPane, RestoredSessionState, RestoredWindow, RestoredWindowGroup, Session,
-    SessionRestoreInput,
+    LandingNavigationState, RestoredPane, RestoredSessionState, RestoredWindow,
+    RestoredWindowGroup, Session, SessionRestoreInput,
 };
 use std::collections::BTreeMap;
 
@@ -162,6 +162,44 @@ pub(crate) fn session_restore_input(
         },
         authoritative_size,
         active_window_id,
+        landing_navigation: LandingNavigationState {
+            active_group_id: payload
+                .landing_navigation
+                .active_group_id
+                .as_ref()
+                .map(|id| {
+                    WindowGroupId::parse('g', id.clone()).ok_or_else(|| {
+                        MezError::invalid_args(
+                            "snapshot landing navigation contains an invalid group id",
+                        )
+                    })
+                })
+                .transpose()?,
+            active_window_id: payload
+                .landing_navigation
+                .active_window_id
+                .as_ref()
+                .map(|id| {
+                    WindowId::parse('@', id.clone()).ok_or_else(|| {
+                        MezError::invalid_args(
+                            "snapshot landing navigation contains an invalid window id",
+                        )
+                    })
+                })
+                .transpose()?,
+            active_pane_id: payload
+                .landing_navigation
+                .active_pane_id
+                .as_ref()
+                .map(|id| {
+                    PaneId::parse('%', id.clone()).ok_or_else(|| {
+                        MezError::invalid_args(
+                            "snapshot landing navigation contains an invalid pane id",
+                        )
+                    })
+                })
+                .transpose()?,
+        },
         windows,
         window_groups,
     })

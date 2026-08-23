@@ -46,8 +46,9 @@ pub use types::{
 };
 #[cfg(test)]
 pub use types::{
-    PaneSnapshotPayload, SnapshotLayoutNode, SnapshotManifest, SnapshotPaneGeometry,
-    SnapshotSessionState, SnapshotShellMetadata, WindowSnapshotPayload,
+    PaneSnapshotPayload, SnapshotLandingNavigation, SnapshotLayoutNode, SnapshotManifest,
+    SnapshotPaneGeometry, SnapshotSessionState, SnapshotShellMetadata, WindowGroupSnapshotPayload,
+    WindowSnapshotPayload,
 };
 
 /// Exposes the tests module boundary.

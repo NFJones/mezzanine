@@ -23,16 +23,17 @@ use super::types::{
     LayoutLoadPlan, PaneSnapshotPayload, SessionSnapshotPayload, SnapshotAgentSession,
     SnapshotApprovalGrantMetadata, SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic,
     SnapshotConfigLayerMetadata, SnapshotCreationContext, SnapshotFrameSettings,
-    SnapshotFrameState, SnapshotLayoutNode, SnapshotMcpExternalCapability, SnapshotMcpServerState,
-    SnapshotMcpToolEffects, SnapshotMcpToolState, SnapshotPaneGeometry, SnapshotSessionState,
-    SnapshotShellMetadata, WindowGroupSnapshotPayload, WindowSnapshotPayload,
+    SnapshotFrameState, SnapshotLandingNavigation, SnapshotLayoutNode,
+    SnapshotMcpExternalCapability, SnapshotMcpServerState, SnapshotMcpToolEffects,
+    SnapshotMcpToolState, SnapshotPaneGeometry, SnapshotSessionState, SnapshotShellMetadata,
+    WindowGroupSnapshotPayload, WindowSnapshotPayload,
 };
 
 /// Defines the SNAPSHOT PAYLOAD FORMAT VERSION const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const SNAPSHOT_PAYLOAD_FORMAT_VERSION: u32 = 4;
+const SNAPSHOT_PAYLOAD_FORMAT_VERSION: u32 = 5;
 /// Defines the MIN SUPPORTED SNAPSHOT PAYLOAD FORMAT VERSION const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module

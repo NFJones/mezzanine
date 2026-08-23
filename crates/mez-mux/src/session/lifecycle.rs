@@ -145,13 +145,15 @@ impl Session {
             .ok_or_else(|| MezError::invalid_state("client active pane is stale"))
     }
 
-    /// Builds a fresh primary navigation state from client-independent landing focus.
-    pub(super) fn navigation_from_landing(&self) -> ClientNavigationState {
+    /// Builds fresh primary navigation from one client-independent landing chain.
+    fn navigation_from_landing_state(
+        landing_navigation: &LandingNavigationState,
+    ) -> ClientNavigationState {
         let mut navigation = ClientNavigationState::default();
-        navigation.groups.active = self.landing_navigation.active_group_id.clone();
+        navigation.groups.active = landing_navigation.active_group_id.clone();
         if let (Some(group_id), Some(window_id)) = (
-            self.landing_navigation.active_group_id.clone(),
-            self.landing_navigation.active_window_id.clone(),
+            landing_navigation.active_group_id.clone(),
+            landing_navigation.active_window_id.clone(),
         ) {
             navigation.windows_by_group.insert(
                 group_id,
@@ -160,7 +162,7 @@ impl Session {
                     ..FocusCursor::default()
                 },
             );
-            if let Some(pane_id) = self.landing_navigation.active_pane_id.clone() {
+            if let Some(pane_id) = landing_navigation.active_pane_id.clone() {
                 navigation.panes_by_window.insert(
                     window_id,
                     FocusCursor {
@@ -171,6 +173,51 @@ impl Session {
             }
         }
         navigation
+    }
+
+    /// Builds a fresh primary navigation state from client-independent landing focus.
+    pub(super) fn navigation_from_landing(&self) -> ClientNavigationState {
+        Self::navigation_from_landing_state(&self.landing_navigation)
+    }
+
+    /// Builds a fresh primary view from an attached source without copying its
+    /// transient MRU history, last-focus state, or zoom selections.
+    pub(super) fn navigation_from_primary_source(
+        &self,
+        source_client_id: &ClientId,
+    ) -> Result<ClientNavigationState> {
+        let landing = self.snapshot_landing_navigation(Some(source_client_id))?;
+        Ok(Self::navigation_from_landing_state(&landing))
+    }
+
+    /// Returns the client-independent landing focus to persist in snapshots.
+    ///
+    /// An explicit attached primary supplies manual snapshot focus. Without an
+    /// explicit caller, automatic capture follows the layout owner when one is
+    /// attached and otherwise preserves the existing landing focus.
+    pub fn snapshot_landing_navigation(
+        &self,
+        source_client_id: Option<&ClientId>,
+    ) -> Result<LandingNavigationState> {
+        let source_client_id = source_client_id.or(self.layout_owner_client_id.as_ref());
+        let Some(source_client_id) = source_client_id else {
+            return Ok(self.landing_navigation.clone());
+        };
+        let navigation = self.navigation(source_client_id)?;
+        let active_group_id = navigation.groups.active.clone();
+        let active_window_id = active_group_id
+            .as_ref()
+            .and_then(|group_id| navigation.windows_by_group.get(group_id))
+            .and_then(|cursor| cursor.active.clone());
+        let active_pane_id = active_window_id
+            .as_ref()
+            .and_then(|window_id| navigation.panes_by_window.get(window_id))
+            .and_then(|cursor| cursor.active.clone());
+        Ok(LandingNavigationState {
+            active_group_id,
+            active_window_id,
+            active_pane_id,
+        })
     }
 
     /// Returns whether the session layout currently contains a pane.

@@ -12,10 +12,10 @@ use super::{
     PaneSnapshotPayload, Result, SNAPSHOT_PAYLOAD_FORMAT_VERSION, SessionSnapshotPayload,
     SnapshotAgentSession, SnapshotApprovalGrantMetadata, SnapshotApprovalRequestMetadata,
     SnapshotConfigDiagnostic, SnapshotConfigLayerMetadata, SnapshotFrameSettings,
-    SnapshotFrameState, SnapshotPaneGeometry, SnapshotSessionState, SnapshotShellMetadata,
-    TerminalCursorState, TerminalModeState, TerminalSavedDecPrivateMode, TerminalSavedState,
-    TerminalStyleSpan, WindowGroupSnapshotPayload, WindowSnapshotPayload, non_empty_string,
-    parse_bool, parse_u16, parse_u32, parse_u64, parse_usize, split_fields,
+    SnapshotFrameState, SnapshotLandingNavigation, SnapshotPaneGeometry, SnapshotSessionState,
+    SnapshotShellMetadata, TerminalCursorState, TerminalModeState, TerminalSavedDecPrivateMode,
+    TerminalSavedState, TerminalStyleSpan, WindowGroupSnapshotPayload, WindowSnapshotPayload,
+    non_empty_string, parse_bool, parse_u16, parse_u32, parse_u64, parse_usize, split_fields,
 };
 impl SessionSnapshotPayload {
     /// Runs the decode operation for this subsystem.
@@ -29,7 +29,8 @@ impl SessionSnapshotPayload {
             .next()
             .ok_or_else(|| MezError::invalid_args("snapshot payload is empty"))?;
         let first_fields = split_fields(first_line)?;
-        let session_fields = if first_fields.first().map(String::as_str) == Some("payload_version")
+        let (payload_version, session_fields) = if first_fields.first().map(String::as_str)
+            == Some("payload_version")
         {
             if first_fields.len() != 2 {
                 return Err(MezError::invalid_args(
@@ -47,9 +48,9 @@ impl SessionSnapshotPayload {
             let session_line = lines
                 .next()
                 .ok_or_else(|| MezError::invalid_args("snapshot payload session header missing"))?;
-            split_fields(session_line)?
+            (version, split_fields(session_line)?)
         } else {
-            first_fields
+            (MIN_SUPPORTED_SNAPSHOT_PAYLOAD_FORMAT_VERSION, first_fields)
         };
         if session_fields.len() != 7 || session_fields[0] != "session" {
             return Err(MezError::invalid_args(
@@ -64,6 +65,7 @@ impl SessionSnapshotPayload {
             authoritative_columns: parse_u16(&session_fields[4])?,
             authoritative_rows: parse_u16(&session_fields[5])?,
             active_window_id: non_empty_string(&session_fields[6]),
+            landing_navigation: SnapshotLandingNavigation::default(),
             shell: SnapshotShellMetadata::default(),
             active_config_layers: Vec::new(),
             frame_state: SnapshotFrameState::default(),
@@ -79,6 +81,18 @@ impl SessionSnapshotPayload {
         for line in lines {
             let fields = split_fields(line)?;
             match fields.first().map(String::as_str) {
+                Some("landing_navigation") => {
+                    if fields.len() != 4 {
+                        return Err(MezError::invalid_args(
+                            "invalid snapshot landing navigation field count",
+                        ));
+                    }
+                    payload.landing_navigation = SnapshotLandingNavigation {
+                        active_group_id: non_empty_string(&fields[1]),
+                        active_window_id: non_empty_string(&fields[2]),
+                        active_pane_id: non_empty_string(&fields[3]),
+                    };
+                }
                 Some("window_group") => {
                     if fields.len() != 7 {
                         return Err(MezError::invalid_args(
@@ -666,6 +680,56 @@ impl SessionSnapshotPayload {
                 }
                 _ => return Err(MezError::invalid_args("unknown snapshot payload record")),
             }
+        }
+
+        if payload_version < 5 && payload.window_groups.is_empty() {
+            let active_window_id = payload.active_window_id.clone().or_else(|| {
+                payload
+                    .windows
+                    .iter()
+                    .find(|window| window.active)
+                    .map(|window| window.window_id.clone())
+            });
+            payload.window_groups.push(WindowGroupSnapshotPayload {
+                group_id: "g1".to_string(),
+                index: 0,
+                name: "0".to_string(),
+                window_ids: payload
+                    .windows
+                    .iter()
+                    .map(|window| window.window_id.clone())
+                    .collect(),
+                active_window_id,
+                last_active_window_id: None,
+                active: true,
+            });
+        }
+        if payload_version < 5 {
+            payload.landing_navigation.active_group_id = payload
+                .window_groups
+                .iter()
+                .find(|group| group.active)
+                .map(|group| group.group_id.clone());
+            payload.landing_navigation.active_window_id =
+                payload.active_window_id.clone().or_else(|| {
+                    payload
+                        .windows
+                        .iter()
+                        .find(|window| window.active)
+                        .map(|window| window.window_id.clone())
+                });
+            payload.landing_navigation.active_pane_id = payload
+                .landing_navigation
+                .active_window_id
+                .as_ref()
+                .and_then(|window_id| {
+                    payload
+                        .windows
+                        .iter()
+                        .find(|window| &window.window_id == window_id)
+                })
+                .and_then(|window| window.panes.iter().find(|pane| pane.active))
+                .map(|pane| pane.pane_id.clone());
         }
 
         normalize_payload_visible_line_style_spans(&mut payload);

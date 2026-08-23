@@ -38,6 +38,11 @@ fn single_window_restore_input() -> SessionRestoreInput {
         state: RestoredSessionState::Running,
         authoritative_size: size,
         active_window_id: Some(window_id.clone()),
+        landing_navigation: super::LandingNavigationState {
+            active_group_id: Some(group_id.clone()),
+            active_window_id: Some(window_id.clone()),
+            active_pane_id: Some(pane_id.clone()),
+        },
         windows: vec![RestoredWindow {
             id: window_id.clone(),
             index: 0,
@@ -91,6 +96,95 @@ fn restore_and_layout_replacement_reset_transient_focus_histories() {
 
     assert!(session.group_focus_history.is_empty());
     assert!(session.window_groups[0].window_focus_history.is_empty());
+}
+
+/// Verifies new primaries inherit the layout owner's current navigation, while
+/// the final primary detach promotes that exact view to client-independent
+/// landing navigation for later attachments.
+#[test]
+fn primary_join_and_final_detach_preserve_landing_navigation() {
+    let mut session = test_session();
+    let owner = session.attach_primary("owner", true).unwrap();
+    let owner_window = session.new_window(&owner, "owner-work", true).unwrap();
+    let owner_pane = session
+        .split_active_pane(&owner, SplitDirection::Vertical)
+        .unwrap();
+
+    let joined = session.attach_primary("joined", true).unwrap();
+    assert_eq!(session.active_window_for(&joined).unwrap().id, owner_window);
+    assert_eq!(session.active_pane_for(&joined).unwrap().id, owner_pane);
+
+    session.detach_primary(&joined).unwrap();
+    session.detach_primary(&owner).unwrap();
+
+    assert_eq!(
+        session.landing_navigation.active_window_id,
+        Some(owner_window.clone())
+    );
+    assert_eq!(
+        session.landing_navigation.active_pane_id,
+        Some(owner_pane.clone())
+    );
+    let later = session.attach_primary("later", true).unwrap();
+    assert_eq!(session.active_window_for(&later).unwrap().id, owner_window);
+    assert_eq!(session.active_pane_for(&later).unwrap().id, owner_pane);
+}
+
+/// Verifies live layout replacement remaps landing navigation to fresh stable
+/// identities, resets every attached view to that landing chain, and retains
+/// the live layout owner's authoritative terminal dimensions.
+#[test]
+fn live_layout_replacement_remaps_landing_and_retains_owner_size() {
+    let mut session = test_session();
+    let owner = session
+        .attach_primary_with_terminal(
+            "owner",
+            true,
+            Some(ClientTerminalDescriptor {
+                columns: 100,
+                rows: 30,
+                term: "xterm-256color".to_string(),
+                features: Vec::new(),
+            }),
+        )
+        .unwrap();
+    let other = session.attach_primary("other", true).unwrap();
+    session.new_window(&owner, "stale-owner", true).unwrap();
+    session.new_window(&other, "stale-other", true).unwrap();
+
+    session
+        .replace_layout_from_restore_input(single_window_restore_input())
+        .unwrap();
+
+    assert_eq!(session.authoritative_size, Size::new(100, 30).unwrap());
+    assert_eq!(session.layout_owner_client_id(), Some(&owner));
+    assert_eq!(session.windows().len(), 1);
+    let landing_window = session.landing_navigation.active_window_id.clone().unwrap();
+    let landing_pane = session.landing_navigation.active_pane_id.clone().unwrap();
+    assert_eq!(
+        session.active_window_for(&owner).unwrap().id,
+        landing_window
+    );
+    assert_eq!(session.active_pane_for(&owner).unwrap().id, landing_pane);
+    assert_eq!(
+        session.active_window_for(&other).unwrap().id,
+        landing_window
+    );
+    assert_eq!(session.active_pane_for(&other).unwrap().id, landing_pane);
+    assert!(
+        session
+            .navigation(&owner)
+            .unwrap()
+            .zoomed_panes_by_window
+            .is_empty()
+    );
+    assert!(
+        session
+            .navigation(&other)
+            .unwrap()
+            .zoomed_panes_by_window
+            .is_empty()
+    );
 }
 
 /// Verifies new session has one window and one pane.

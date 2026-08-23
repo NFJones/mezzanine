@@ -783,6 +783,7 @@ impl RuntimeSessionService {
             &frame_state,
             &agent_sessions,
         )
+        .with_navigation_source(&caller_client_id)
         .with_approvals(&approval_grants, &approval_requests)
         .with_message_state(&message_state)
         .with_mcp_servers(&mcp_servers);
@@ -1020,6 +1021,7 @@ impl RuntimeSessionService {
                     &frame_state,
                     &agent_sessions,
                 )
+                .with_navigation_source(&caller_client_id)
                 .with_approvals(&approval_grants, &approval_requests)
                 .with_message_state(&message_state)
                 .with_mcp_servers(&mcp_servers),

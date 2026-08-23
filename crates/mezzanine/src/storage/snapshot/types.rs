@@ -193,6 +193,8 @@ pub struct SessionSnapshotPayload {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub active_window_id: Option<String>,
+    /// Client-independent group, window, and pane focus used for fresh clients.
+    pub landing_navigation: SnapshotLandingNavigation,
     /// Stores the shell value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -240,6 +242,17 @@ pub struct SessionSnapshotPayload {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub windows: Vec<WindowSnapshotPayload>,
+}
+
+/// Client-independent navigation persisted by snapshot payload version 5.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SnapshotLandingNavigation {
+    /// Active window-group identity at capture time.
+    pub active_group_id: Option<String>,
+    /// Active window identity within the landing group.
+    pub active_window_id: Option<String>,
+    /// Active pane identity within the landing window.
+    pub active_pane_id: Option<String>,
 }
 
 /// Window group topology captured by a snapshot payload.
@@ -829,6 +842,8 @@ pub struct SnapshotPaneCapture {
 pub struct SnapshotCreationContext<'a> {
     /// Terminal and transcript capture state by pane.
     pub pane_captures: &'a [SnapshotPaneCapture],
+    /// Exact primary whose caller-local navigation should become landing focus.
+    pub navigation_source_client_id: Option<&'a mez_core::ids::ClientId>,
     /// Active configuration layer metadata.
     #[allow(
         dead_code,
@@ -867,6 +882,7 @@ impl<'a> SnapshotCreationContext<'a> {
     ) -> Self {
         Self {
             pane_captures,
+            navigation_source_client_id: None,
             active_config_layers,
             frame_state,
             agent_sessions,
@@ -875,6 +891,12 @@ impl<'a> SnapshotCreationContext<'a> {
             message_state: None,
             mcp_servers: &[],
         }
+    }
+
+    /// Selects one exact attached primary as the snapshot landing source.
+    pub fn with_navigation_source(mut self, client_id: &'a mez_core::ids::ClientId) -> Self {
+        self.navigation_source_client_id = Some(client_id);
+        self
     }
 
     /// Adds approval audit metadata to the snapshot creation context.

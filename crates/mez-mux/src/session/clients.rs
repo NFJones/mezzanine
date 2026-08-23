@@ -71,6 +71,11 @@ impl Session {
             .as_ref()
             .map(|terminal| crate::layout::Size::new(terminal.columns, terminal.rows))
             .transpose()?;
+        let navigation = if let Some(owner_id) = self.layout_owner_client_id.as_ref() {
+            self.navigation_from_primary_source(owner_id)?
+        } else {
+            self.navigation_from_landing()
+        };
         let client_id = self.ids.client();
         let attached_at = current_unix_seconds();
         self.clients.push(Client {
@@ -82,7 +87,7 @@ impl Session {
             terminal,
             attached_at_unix_seconds: Some(attached_at),
             last_seen_at_unix_seconds: Some(attached_at),
-            navigation: Some(self.navigation_from_landing()),
+            navigation: Some(navigation),
         });
         let resize_effects = if self.layout_owner_client_id.is_none() {
             self.layout_owner_client_id = Some(client_id.clone());
@@ -601,6 +606,9 @@ impl Session {
         let primary_count_before = self.attached_primaries().count();
         let layout_owner_before = self.layout_owner_client_id.clone();
         let authoritative_size_before = self.authoritative_size;
+        let final_primary_landing = (primary_count_before == 1)
+            .then(|| self.snapshot_landing_navigation(Some(primary_client_id)))
+            .transpose()?;
         if let Some(client) = self
             .clients
             .iter_mut()
@@ -662,6 +670,9 @@ impl Session {
         };
         if primary_count_after == 0 {
             self.state = SessionState::Detached;
+            if let Some(landing) = final_primary_landing {
+                self.landing_navigation = landing;
+            }
         }
         self.record_event();
         Ok(PrimaryMembershipTransition {

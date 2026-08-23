@@ -3,8 +3,9 @@
 use super::helpers::{default_pane_process_state, shell_metadata_from_session};
 use super::{
     PaneSnapshotPayload, Session, SessionSnapshotPayload, SnapshotCreationContext,
-    SnapshotFrameState, SnapshotLayoutNode, SnapshotPaneGeometry, SnapshotSessionState,
-    TerminalModeState, TerminalSavedState, WindowGroupSnapshotPayload, WindowSnapshotPayload,
+    SnapshotFrameState, SnapshotLandingNavigation, SnapshotLayoutNode, SnapshotPaneGeometry,
+    SnapshotSessionState, TerminalModeState, TerminalSavedState, WindowGroupSnapshotPayload,
+    WindowSnapshotPayload,
 };
 #[cfg(test)]
 use super::{SnapshotAgentSession, SnapshotConfigLayerMetadata, SnapshotPaneCapture};
@@ -105,7 +106,11 @@ impl SessionSnapshotPayload {
         session: &Session,
         context: SnapshotCreationContext<'_>,
     ) -> Self {
-        let active_window_id = session.active_window().map(|window| window.id.to_string());
+        let landing = session
+            .snapshot_landing_navigation(context.navigation_source_client_id)
+            .unwrap_or_default();
+        let active_window_id = landing.active_window_id.as_ref().map(ToString::to_string);
+        let active_pane_id = landing.active_pane_id.as_ref().map(ToString::to_string);
         let windows = session
             .windows()
             .iter()
@@ -138,7 +143,9 @@ impl SessionSnapshotPayload {
                                 pane_id,
                                 index: pane.index,
                                 title: pane.title.clone(),
-                                active: pane.active,
+                                active: active_pane_id.as_deref() == Some(pane.id.as_str())
+                                    || (active_window_id.as_deref() != Some(window.id.as_str())
+                                        && pane.index == 0),
                                 live_at_snapshot: false,
                                 columns: pane.size.columns,
                                 rows: pane.size.rows,
@@ -170,21 +177,25 @@ impl SessionSnapshotPayload {
                 }
             })
             .collect();
-        let active_group_id = session.active_group().map(|group| group.id.to_string());
+        let active_group_id = landing.active_group_id.as_ref().map(ToString::to_string);
         let window_groups = session
             .window_groups()
             .iter()
-            .map(|group| WindowGroupSnapshotPayload {
-                group_id: group.id.to_string(),
-                index: group.index,
-                name: group.name.clone(),
-                window_ids: group.window_ids.iter().map(ToString::to_string).collect(),
-                active_window_id: group.active_window_id.as_ref().map(ToString::to_string),
-                last_active_window_id: group
-                    .last_active_window_id
-                    .as_ref()
-                    .map(ToString::to_string),
-                active: Some(group.id.to_string()) == active_group_id,
+            .map(|group| {
+                let active = Some(group.id.to_string()) == active_group_id;
+                WindowGroupSnapshotPayload {
+                    group_id: group.id.to_string(),
+                    index: group.index,
+                    name: group.name.clone(),
+                    window_ids: group.window_ids.iter().map(ToString::to_string).collect(),
+                    active_window_id: if active {
+                        active_window_id.clone()
+                    } else {
+                        group.window_ids.first().map(ToString::to_string)
+                    },
+                    last_active_window_id: None,
+                    active,
+                }
             })
             .collect();
 
@@ -195,6 +206,11 @@ impl SessionSnapshotPayload {
             authoritative_columns: session.authoritative_size.columns,
             authoritative_rows: session.authoritative_size.rows,
             active_window_id,
+            landing_navigation: SnapshotLandingNavigation {
+                active_group_id,
+                active_window_id: landing.active_window_id.map(|id| id.to_string()),
+                active_pane_id: landing.active_pane_id.map(|id| id.to_string()),
+            },
             shell: shell_metadata_from_session(session),
             active_config_layers: Vec::new(),
             frame_state: SnapshotFrameState::default(),
