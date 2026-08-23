@@ -432,6 +432,14 @@ pub(super) fn initialize_control_connection(
                         .ok_or_else(|| {
                             MezError::invalid_state("primary client is missing from client list")
                         })?;
+                    if matches!(
+                        connection.authenticated_peer(),
+                        Some(AuthenticatedPeer::IrohEndpoint { .. })
+                    ) {
+                        return Err(MezError::conflict(
+                            "session already has an attached primary client",
+                        ));
+                    }
                     if existing.name != init.client_name {
                         return Err(MezError::conflict(
                             "session already has an attached primary client",

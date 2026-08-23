@@ -494,3 +494,53 @@ fn request_local_primary_reuse_preserves_existing_primary_on_disconnect() {
     assert_eq!(session.primary_client_id(), Some(&existing_primary));
     assert!(connection.take_disconnect_client_id().is_none());
 }
+
+/// Verifies a distinct Iroh principal cannot take over a live primary by name.
+///
+/// Remote CLI clients commonly share one display name. Transport endpoint and
+/// trust-record identity, not that metadata, must determine whether a control
+/// connection can acquire primary authority. A conflicting connection must
+/// remain uninitialized and leave the original primary untouched.
+#[test]
+fn iroh_primary_cannot_reuse_live_primary_by_display_name() {
+    use crate::security::remote::{RemotePrincipal, RemoteRoleCeiling};
+
+    let mut session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let existing_primary = session.attach_primary("remote-cli", true).unwrap();
+    let mut connection = ControlConnectionState::new(false, false);
+    connection
+        .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint("endpoint-b"))
+        .unwrap();
+    connection
+        .bind_remote_principal(RemotePrincipal {
+            trust_record_id: "trust-b".to_string(),
+            endpoint_id: "endpoint-b".to_string(),
+            role_ceiling: RemoteRoleCeiling::Primary,
+            requested_role: RequestedRole::Primary,
+        })
+        .unwrap();
+    let mut cache = ControlIdempotencyCache::default();
+    let input = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"remote-cli","requested_version":1,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"remote-cli","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+    );
+
+    let (output, consumed) = handle_control_frames_for_connection(
+        &input,
+        4096,
+        &mut session,
+        &mut connection,
+        &mut cache,
+    )
+    .unwrap();
+    let (body, _) = decode_control_frame(&output, 4096).unwrap();
+
+    assert_eq!(consumed, input.len());
+    assert!(body.contains(r#""mezzanine_code":"conflict""#), "{body}");
+    assert!(!connection.initialized());
+    assert_eq!(connection.caller_client_id(), None);
+    assert_eq!(session.primary_client_id(), Some(&existing_primary));
+    assert_eq!(session.clients().len(), 1);
+}
