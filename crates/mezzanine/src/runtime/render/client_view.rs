@@ -28,6 +28,7 @@ use super::{
     window_frame_action_pillbox_cells, window_frame_pillbox_cells,
     window_group_frame_pillbox_cells,
 };
+use crate::host::terminal::TerminalIrohStatusQuality;
 
 /// Runs the apply copy mode selection spans operation for this subsystem.
 ///
@@ -1288,6 +1289,28 @@ impl RuntimeSessionService {
         })
     }
 
+    /// Projects only the exact client's privacy-safe live Iroh quality.
+    fn runtime_iroh_status_quality(&self) -> Option<TerminalIrohStatusQuality> {
+        let client_id = self.presentation.projected_client_id.as_ref()?;
+        let status = self.integration.remote_iroh_connection_quality(client_id)?;
+        if status.sample_age() > std::time::Duration::from_secs(5) {
+            Some(TerminalIrohStatusQuality::Unknown)
+        } else if status.rtt_micros >= 500_000
+            || status.lost_packets >= 4
+            || status.congestion_events >= 4
+        {
+            Some(TerminalIrohStatusQuality::Poor)
+        } else if status.rtt_micros >= 200_000
+            || status.jitter_micros >= 75_000
+            || status.lost_packets > 0
+            || status.congestion_events > 0
+        {
+            Some(TerminalIrohStatusQuality::Degraded)
+        } else {
+            Some(TerminalIrohStatusQuality::Good)
+        }
+    }
+
     /// Runs the terminal frame context operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1317,6 +1340,7 @@ impl RuntimeSessionService {
                 .settings
                 .terminal_completion_attention_flashing,
             window_status: self.runtime_window_status_context(),
+            iroh_status_quality: self.runtime_iroh_status_quality(),
             ..TerminalFrameContext::default()
         };
         let active_window_id = self

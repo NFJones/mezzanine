@@ -1031,7 +1031,10 @@ baseline slot names are `window_frame_fg`, `window_frame_bg`,
 `frame_fill_fg`, `frame_fill_bg`, `scroll_indicator_fg`,
 `scroll_indicator_bg`, `pane_pwd_fg`, `pane_pwd_bg`, `window_status_uptime_fg`,
 `window_status_uptime_bg`, `window_status_datetime_fg`,
-`window_status_datetime_bg`, `prompt_fg`, `prompt_bg`, `agent_prompt_fg`,
+`window_status_datetime_bg`, `iroh_status_good_fg`, `iroh_status_good_bg`,
+`iroh_status_degraded_fg`, `iroh_status_degraded_bg`, `iroh_status_poor_fg`,
+`iroh_status_poor_bg`, `iroh_status_unknown_fg`, `iroh_status_unknown_bg`,
+`prompt_fg`, `prompt_bg`, `agent_prompt_fg`,
 `agent_prompt_bg`, `agent_transcript_user_fg`, `agent_transcript_user_bg`,
 `agent_transcript_assistant_fg`, `agent_transcript_assistant_bg`,
 `agent_transcript_status_fg`, `agent_transcript_status_bg`,
@@ -3306,6 +3309,18 @@ state. Command stdout MUST be trimmed to the first line before display and
 bounded by the configured maximum output length. Empty output behavior MUST be
 one of `hide`, `show_empty`, or `keep_previous`; error behavior MUST be one of
 `hide`, `show_error`, or `keep_previous`.
+
+`#{iroh.status}` MUST be a non-clickable, client-local window-status field. It
+MUST render a padded `🔗` only when the exact rendered client has a live Iroh
+connection, using `iroh_status_good`, `iroh_status_degraded`,
+`iroh_status_poor`, or `iroh_status_unknown` according to the same stale,
+RTT, jitter, loss, and congestion classification used by `show-iroh-status`.
+It MUST be omitted with no associated padding for Unix-socket clients,
+never-Iroh clients, and ended Iroh connections. The generated default
+right-status template MUST include the field at its far right before the
+protected trailing fill cell; custom templates MUST opt in explicitly.
+Rendering MUST expose no endpoint, address, relay, route, peer identity, or
+diagnostic counter through this field.
 
 The `theme` table MUST support `active`, `aliases`, and `colors`. `theme.active`
 MUST select the active named theme and MUST default to `acid_lime`.

@@ -293,7 +293,7 @@ the live session, and persists it to the primary config. Later `bind-key`,
 | `frames.window.enabled` | boolean | `true` | Render the window frame/status bar. |
 | `frames.window.position` | string | `"bottom"` | `top`, `bottom`, or `border`. |
 | `frames.window.template` | string | `"#{window.list}"` | Left/main window frame template. |
-| `frames.window.right_status` | string | `"#{pane.pwd} #{button:-|terminal|split-window -h} #{button:+|terminal|split-window} #{button:□|terminal|new-window} #{button:⊕|terminal|new-group} #{button:λ|terminal|agent-shell} #{system.uptime} #{datetime.local}"` | Right-aligned status and command buttons; the built-in `pane.pwd` display is home-relative when possible and collapses deep paths to the last three segments. |
+| `frames.window.right_status` | string | `"#{pane.pwd} #{button:-|terminal|split-window -h} #{button:+|terminal|split-window} #{button:□|terminal|new-window} #{button:⊕|terminal|new-group} #{button:λ|terminal|agent-shell} #{system.uptime} #{datetime.local}#{iroh.status}"` | Right-aligned status and command buttons; the built-in `pane.pwd` display is home-relative when possible and collapses deep paths to the last three segments. |
 | `frames.window.pills` | table | `{}` | Named command-backed status pills referenced from `frames.window.right_status` as `#{pill.<name>}`. |
 | `frames.window.style` | string | `"default"` | Frame text style: `default`, `bold`, `underline`, `inverse`, or `reverse`. |
 | `frames.window.visible_fields` | string array | `[...]` | Allowed template fields for window frames. |
@@ -301,8 +301,15 @@ the live session, and persists it to the primary config. Later `bind-key`,
 Default `frames.window.visible_fields`:
 
 ```toml
-["window.list", "window.index", "window.name", "window.id", "pane.index", "pane.title", "pane.id", "window.pane_count", "window.buttons", "pane.pwd", "system.uptime", "datetime.local"]
+["window.list", "window.index", "window.name", "window.id", "pane.index", "pane.title", "pane.id", "window.pane_count", "window.buttons", "pane.pwd", "system.uptime", "datetime.local", "iroh.status"]
 ```
+
+`#{iroh.status}` is a client-local, non-clickable status pill. It renders `🔗`
+only for the exact client with a live Iroh connection and is omitted without
+padding for Unix-socket, never-Iroh, or disconnected clients. Good, degraded,
+poor, and stale/unknown connected samples use the matching Iroh theme color
+pair. It is included by the generated default but custom right-status templates
+must reference it explicitly; detailed diagnostics remain in `show-iroh-status`.
 
 Command-backed status pills are configured under `frames.window.pills.<name>`
 and render only when the active right-status template references
@@ -407,6 +414,14 @@ Default color slots:
 | `window_status_uptime_bg` | `"secondary"` | Uptime status background. |
 | `window_status_datetime_fg` | `"tertiary_text"` | Date/time status foreground. |
 | `window_status_datetime_bg` | `"tertiary"` | Date/time status background. |
+| `iroh_status_good_fg` | `"primary_text"` | Healthy Iroh-status pill foreground. |
+| `iroh_status_good_bg` | `"primary"` | Healthy Iroh-status pill background. |
+| `iroh_status_degraded_fg` | `"tertiary_text"` | Degraded Iroh-status pill foreground. |
+| `iroh_status_degraded_bg` | `"tertiary"` | Degraded Iroh-status pill background. |
+| `iroh_status_poor_fg` | `"danger_text"` | Poor Iroh-status pill foreground. |
+| `iroh_status_poor_bg` | `"danger"` | Poor Iroh-status pill background. |
+| `iroh_status_unknown_fg` | `"muted_text"` | Unknown or stale Iroh-status pill foreground. |
+| `iroh_status_unknown_bg` | `"muted"` | Unknown or stale Iroh-status pill background. |
 | `prompt_fg` | `"primary_foreground"` | Command prompt foreground. |
 | `prompt_bg` | `"surface"` | Command prompt background. |
 | `agent_prompt_fg` | `"#f8ffe0"` | Agent prompt foreground. |

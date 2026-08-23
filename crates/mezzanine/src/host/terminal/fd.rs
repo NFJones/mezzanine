@@ -75,8 +75,23 @@ pub struct TerminalFrameContext {
     pub approval_attention_groups: std::collections::BTreeSet<String>,
     /// Right-side status fields rendered into the active pane frame.
     pub window_status: Option<TerminalWindowStatusContext>,
+    /// Exact-client Iroh connection quality projected for `iroh.status`.
+    pub iroh_status_quality: Option<TerminalIrohStatusQuality>,
     /// Per-pane runtime metadata keyed by stable pane id.
     pub panes: BTreeMap<String, TerminalPaneFrameContext>,
+}
+
+/// Minimal privacy-safe Iroh state available to terminal status rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalIrohStatusQuality {
+    /// Healthy live transport measurements.
+    Good,
+    /// Elevated latency, jitter, loss, or congestion.
+    Degraded,
+    /// Poor live transport measurements.
+    Poor,
+    /// Missing or stale live measurements on an established Iroh connection.
+    Unknown,
 }
 
 /// Product specialization of the mux-owned pane presentation input.

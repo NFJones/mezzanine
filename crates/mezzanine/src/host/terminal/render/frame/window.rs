@@ -85,6 +85,8 @@ pub(in crate::host::terminal::render) enum WindowStatusSegmentKind {
     DateTime,
     /// Represents a configured command-backed status pill.
     StatusPill,
+    /// Represents the exact-client Iroh connection quality pill.
+    Iroh(crate::host::terminal::TerminalIrohStatusQuality),
 }
 
 impl WindowStatusSegmentKind {
@@ -92,7 +94,7 @@ impl WindowStatusSegmentKind {
     fn action(&self) -> Option<&WindowFrameAction> {
         match self {
             Self::Action { action, .. } => Some(action),
-            Self::Uptime | Self::DateTime | Self::StatusPill => None,
+            Self::Uptime | Self::DateTime | Self::StatusPill | Self::Iroh(_) => None,
         }
     }
 }
@@ -149,6 +151,24 @@ pub(in crate::host::terminal::render) fn window_status_field_component(
     status: &TerminalWindowStatusContext,
     field: &str,
 ) -> WindowStatusFieldComponent {
+    if field == "iroh.status" {
+        let Some(quality) = frame_context.iroh_status_quality else {
+            return WindowStatusFieldComponent {
+                text: String::new(),
+                segments: Vec::new(),
+            };
+        };
+        let text = " 🔗 ".to_string();
+        return WindowStatusFieldComponent {
+            segments: vec![WindowStatusSegment {
+                start: 0,
+                width: fitted_text_width(&text, usize::MAX),
+                key: WindowStatusSegmentKind::Iroh(quality),
+                value: text.clone(),
+            }],
+            text,
+        };
+    }
     if field == "window.buttons" || field == "window.actions" {
         return window_actions_status_component(frame_context);
     }
@@ -321,6 +341,20 @@ pub(in crate::host::terminal::render) fn window_status_style_spans(
                 WindowStatusSegmentKind::StatusPill => {
                     ui_theme.colors.window_status_uptime.rendition()
                 }
+                WindowStatusSegmentKind::Iroh(quality) => match quality {
+                    crate::host::terminal::TerminalIrohStatusQuality::Good => {
+                        ui_theme.colors.iroh_status_good.rendition()
+                    }
+                    crate::host::terminal::TerminalIrohStatusQuality::Degraded => {
+                        ui_theme.colors.iroh_status_degraded.rendition()
+                    }
+                    crate::host::terminal::TerminalIrohStatusQuality::Poor => {
+                        ui_theme.colors.iroh_status_poor.rendition()
+                    }
+                    crate::host::terminal::TerminalIrohStatusQuality::Unknown => {
+                        ui_theme.colors.iroh_status_unknown.rendition()
+                    }
+                },
             },
         })
         .collect()

@@ -171,6 +171,20 @@ pub(in crate::host::terminal::render) fn styled_window_pillbox_line(
                         WindowStatusSegmentKind::StatusPill => {
                             ui_theme.colors.window_status_uptime.rendition()
                         }
+                        WindowStatusSegmentKind::Iroh(quality) => match quality {
+                            crate::host::terminal::TerminalIrohStatusQuality::Good => {
+                                ui_theme.colors.iroh_status_good.rendition()
+                            }
+                            crate::host::terminal::TerminalIrohStatusQuality::Degraded => {
+                                ui_theme.colors.iroh_status_degraded.rendition()
+                            }
+                            crate::host::terminal::TerminalIrohStatusQuality::Poor => {
+                                ui_theme.colors.iroh_status_poor.rendition()
+                            }
+                            crate::host::terminal::TerminalIrohStatusQuality::Unknown => {
+                                ui_theme.colors.iroh_status_unknown.rendition()
+                            }
+                        },
                     },
                 }),
         )

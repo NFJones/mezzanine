@@ -5,7 +5,7 @@
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 71
+version = 72
 
 # Process-wide runtime sizing. Changes require a restart.
 [runtime]
@@ -148,9 +148,9 @@ active = "default"
 enabled = true
 position = "bottom"
 template = "#{window.list}"
-right_status = "#{pane.pwd} #{button:-|terminal|split-window -h} #{button:+|terminal|split-window} #{button:□|terminal|new-window} #{button:⊕|terminal|new-group} #{button:λ|terminal|agent-shell} #{system.uptime} #{datetime.local}"
+right_status = "#{pane.pwd} #{button:-|terminal|split-window -h} #{button:+|terminal|split-window} #{button:□|terminal|new-window} #{button:⊕|terminal|new-group} #{button:λ|terminal|agent-shell} #{system.uptime} #{datetime.local}#{iroh.status}"
 style = "default"
-visible_fields = ["window.list", "window.index", "window.name", "window.id", "pane.index", "pane.title", "pane.id", "window.pane_count", "window.buttons", "pane.pwd", "system.uptime", "datetime.local"]
+visible_fields = ["window.list", "window.index", "window.name", "window.id", "pane.index", "pane.title", "pane.id", "window.pane_count", "window.buttons", "pane.pwd", "system.uptime", "datetime.local", "iroh.status"]
 
 [frames.window.pills]
 # Optional asynchronously refreshed right-status pill.
@@ -227,6 +227,14 @@ window_status_uptime_fg = "secondary_text"
 window_status_uptime_bg = "secondary"
 window_status_datetime_fg = "tertiary_text"
 window_status_datetime_bg = "tertiary"
+iroh_status_good_fg = "primary_text"
+iroh_status_good_bg = "primary"
+iroh_status_degraded_fg = "tertiary_text"
+iroh_status_degraded_bg = "tertiary"
+iroh_status_poor_fg = "danger_text"
+iroh_status_poor_bg = "danger"
+iroh_status_unknown_fg = "muted_text"
+iroh_status_unknown_bg = "muted"
 prompt_fg = "primary_foreground"
 prompt_bg = "surface"
 agent_prompt_fg = "#f8ffe0"

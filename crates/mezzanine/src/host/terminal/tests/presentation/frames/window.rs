@@ -3,8 +3,9 @@
 use crate::host::terminal::{
     BTreeMap, DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE,
     DEFAULT_WINDOW_FRAME_TEMPLATE, PaneRenderInput, TerminalClientLoopConfig, TerminalFrameContext,
-    TerminalFrameRenderOptions, WindowFrameAction, render_attached_client_view,
-    render_window_with_pane_frame_template, window_frame_action_pillbox_cells,
+    TerminalFrameRenderOptions, TerminalIrohStatusQuality, WindowFrameAction,
+    render_attached_client_view, render_window_with_pane_frame_template,
+    window_frame_action_pillbox_cells,
 };
 use mez_core::ids::IdFactory;
 use mez_mux::layout::{Size, SplitDirection, Window};
@@ -482,4 +483,93 @@ fn render_window_frame_fits_single_row_window() {
     .unwrap();
 
     assert_eq!(rendered, vec!["0:main      "]);
+}
+
+/// Verifies that `iroh.status` is an opt-in, exact-client status segment with
+/// quality-specific styling and no action hit target. The absent projection
+/// must leave no separator or padding behind for Unix and never-Iroh clients.
+#[test]
+fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "work", Size::new(40, 3).unwrap());
+    let render = |quality| {
+        let config = TerminalClientLoopConfig {
+            frame_context: TerminalFrameContext {
+                iroh_status_quality: quality,
+                window_status: Some(TerminalWindowStatusContext {
+                    template: "#{datetime.local}#{iroh.status}".to_string(),
+                    active_pane_working_directory: None,
+                    status_pills: BTreeMap::new(),
+                    system_uptime: String::new(),
+                    datetime_local: "now".to_string(),
+                }),
+                ..TerminalFrameContext::default()
+            },
+            window_frames_enabled: true,
+            window_frame_template: DEFAULT_WINDOW_FRAME_TEMPLATE.to_string(),
+            pane_frames_enabled: false,
+            ..TerminalClientLoopConfig::default()
+        };
+        let view = render_attached_client_view(
+            ClientViewRole::Primary,
+            &window,
+            &BTreeMap::new(),
+            &config,
+            window.size,
+        )
+        .unwrap()
+        .unwrap();
+        (config, view)
+    };
+
+    let (absent_config, absent) = render(None);
+    assert!(!absent.lines[2].contains('🔗'), "{}", absent.lines[2]);
+    assert!(absent.lines[2].ends_with(" now  "), "{}", absent.lines[2]);
+    assert!(window_frame_action_pillbox_cells(&absent_config.frame_context, 2, 40).is_empty());
+
+    for (quality, expected_background) in [
+        (
+            TerminalIrohStatusQuality::Good,
+            TerminalClientLoopConfig::default()
+                .ui_theme
+                .colors
+                .iroh_status_good
+                .background,
+        ),
+        (
+            TerminalIrohStatusQuality::Degraded,
+            TerminalClientLoopConfig::default()
+                .ui_theme
+                .colors
+                .iroh_status_degraded
+                .background,
+        ),
+        (
+            TerminalIrohStatusQuality::Poor,
+            TerminalClientLoopConfig::default()
+                .ui_theme
+                .colors
+                .iroh_status_poor
+                .background,
+        ),
+        (
+            TerminalIrohStatusQuality::Unknown,
+            TerminalClientLoopConfig::default()
+                .ui_theme
+                .colors
+                .iroh_status_unknown
+                .background,
+        ),
+    ] {
+        let (config, view) = render(Some(quality));
+        let status_start =
+            UnicodeWidthStr::width(&view.lines[2][..view.lines[2].find(" 🔗 ").unwrap()]);
+        assert_eq!(view.lines[2].chars().last(), Some(' '), "{}", view.lines[2]);
+        assert!(view.line_style_spans[2].iter().any(|span| {
+            span.start == status_start
+                && span.length == UnicodeWidthStr::width(" 🔗 ")
+                && span.rendition.background == Some(expected_background)
+        }));
+        assert!(window_frame_action_pillbox_cells(&config.frame_context, 2, 40).is_empty());
+    }
 }

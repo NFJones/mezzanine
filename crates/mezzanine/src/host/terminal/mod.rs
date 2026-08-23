@@ -80,8 +80,8 @@ pub use fd::PaneRenderInput;
 pub use fd::poll_attached_terminal_fd_readiness;
 pub use fd::{
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, TerminalClientLoopConfig,
-    TerminalFdInterest, TerminalFrameContext, TerminalPaneFrameContext, TerminalRawModeGuard,
-    read_attached_terminal_size,
+    TerminalFdInterest, TerminalFrameContext, TerminalIrohStatusQuality, TerminalPaneFrameContext,
+    TerminalRawModeGuard, read_attached_terminal_size,
 };
 pub use host_clipboard::{
     DEFAULT_HOST_CLIPBOARD_READ_MAX_BYTES, DEFAULT_HOST_CLIPBOARD_READ_TIMEOUT, HostClipboard,
