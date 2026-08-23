@@ -626,7 +626,7 @@ fn runtime_applies_default_prefix_mux_actions() {
     let events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::PrimaryClient(primary.clone()));
     assert!(
         events
             .iter()

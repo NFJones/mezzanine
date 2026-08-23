@@ -193,3 +193,40 @@ impl RuntimeControlComponent {
 fn unix_event_binding_digest(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client_id(value: &str) -> ClientId {
+        ClientId::parse('c', value.to_string()).unwrap()
+    }
+
+    #[test]
+    fn unix_event_bindings_expire_and_are_removed_with_their_client() {
+        let mut control = RuntimeControlComponent::new(
+            ControlIdempotencyCache::default(),
+            MessageService::default(),
+            None,
+        );
+        let expiring_client = client_id("c1");
+        let detached_client = client_id("c2");
+        let peer_uid = 1000;
+
+        let (expired_token, expires_at) =
+            control.mint_unix_event_binding(expiring_client, peer_uid, 100);
+        assert_eq!(expires_at, 160);
+        assert_eq!(
+            control.consume_unix_event_binding(&expired_token, peer_uid, 161),
+            None
+        );
+
+        let (detached_token, _) =
+            control.mint_unix_event_binding(detached_client.clone(), peer_uid, 200);
+        control.remove_unix_event_bindings_for_client(&detached_client);
+        assert_eq!(
+            control.consume_unix_event_binding(&detached_token, peer_uid, 200),
+            None
+        );
+    }
+}

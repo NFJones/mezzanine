@@ -19,18 +19,74 @@ fn event_log_replays_primary_events() {
     log.append(
         EventKind::ApprovalChanged,
         Some("$1".to_string()),
-        EventVisibility::PrimaryOnly,
+        EventVisibility::AllPrimaries,
         "{\"approval\":\"pending\"}",
     )
     .unwrap();
 
-    let events = log.replay_for(&EventAudience::Primary);
+    let events = log.replay_for(&EventAudience::AllPrimaries);
 
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].session_id.as_deref(), Some("$1"));
     assert!(events[0].time.contains('T'));
     assert!(events[0].time.ends_with('Z'));
     assert!(!events[0].time.starts_with("event:"));
+}
+
+/// Verifies shared primary events fan out to every exact primary while
+/// client-private events remain visible only to their owning client.
+#[test]
+fn exact_primary_audiences_receive_shared_and_private_events() {
+    let first = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    let second = mez_core::ids::ClientId::parse('c', "c2".to_string()).unwrap();
+    let mut log = EventLog::new(10, 1024).unwrap();
+    log.append(
+        EventKind::ClientAttached,
+        Some("$1".to_string()),
+        EventVisibility::AllPrimaries,
+        "shared",
+    )
+    .unwrap();
+    log.append(
+        EventKind::Diagnostic,
+        Some("$1".to_string()),
+        EventVisibility::PrimaryClient(first.clone()),
+        "private-first",
+    )
+    .unwrap();
+    log.append(
+        EventKind::PaneChanged,
+        Some("$1".to_string()),
+        EventVisibility::SessionView,
+        "session-view",
+    )
+    .unwrap();
+
+    let first_events = log.replay_for(&EventAudience::PrimaryClient(first));
+    let second_events = log.replay_for(&EventAudience::PrimaryClient(second));
+    let session_events = log.replay_for(&EventAudience::SessionView);
+
+    assert_eq!(
+        first_events
+            .iter()
+            .map(|event| event.payload.as_str())
+            .collect::<Vec<_>>(),
+        vec!["shared", "private-first", "session-view"]
+    );
+    assert_eq!(
+        second_events
+            .iter()
+            .map(|event| event.payload.as_str())
+            .collect::<Vec<_>>(),
+        vec!["shared", "session-view"]
+    );
+    assert_eq!(
+        session_events
+            .iter()
+            .map(|event| event.payload.as_str())
+            .collect::<Vec<_>>(),
+        vec!["session-view"]
+    );
 }
 
 /// Verifies that approved observers only see session-view events at or after
@@ -49,7 +105,7 @@ fn approved_observer_replay_starts_at_visibility_marker() {
         .append(
             EventKind::ObserverDecided,
             Some("$1".to_string()),
-            EventVisibility::PrimaryOnly,
+            EventVisibility::AllPrimaries,
             "approved",
         )
         .unwrap();
@@ -77,7 +133,7 @@ fn pending_observer_receives_only_request_local_status_without_session() {
     log.append(
         EventKind::ObserverRequested,
         Some("$1".to_string()),
-        EventVisibility::PendingObserverRequest("o1".to_string()),
+        EventVisibility::AllPrimariesAndPendingObserverRequest("o1".to_string()),
         "{\"state\":\"pending\"}",
     )
     .unwrap();
@@ -106,26 +162,26 @@ fn event_log_retains_bounded_events() {
     log.append(
         EventKind::Diagnostic,
         None,
-        EventVisibility::PrimaryOnly,
+        EventVisibility::AllPrimaries,
         "one",
     )
     .unwrap();
     log.append(
         EventKind::Diagnostic,
         None,
-        EventVisibility::PrimaryOnly,
+        EventVisibility::AllPrimaries,
         "two",
     )
     .unwrap();
     log.append(
         EventKind::Diagnostic,
         None,
-        EventVisibility::PrimaryOnly,
+        EventVisibility::AllPrimaries,
         "three",
     )
     .unwrap();
 
-    let events = log.replay_for(&EventAudience::Primary);
+    let events = log.replay_for(&EventAudience::AllPrimaries);
 
     assert_eq!(log.len(), 2);
     assert_eq!(events[0].payload, "two");
@@ -142,7 +198,7 @@ fn oversized_payload_is_rejected() {
         .append(
             EventKind::Diagnostic,
             None,
-            EventVisibility::PrimaryOnly,
+            EventVisibility::AllPrimaries,
             "too long",
         )
         .unwrap_err();
@@ -173,7 +229,7 @@ fn event_log_replays_visible_events_after_cursor() {
     log.append(
         EventKind::ApprovalChanged,
         Some("$1".to_string()),
-        EventVisibility::PrimaryOnly,
+        EventVisibility::AllPrimaries,
         "secret",
     )
     .unwrap();

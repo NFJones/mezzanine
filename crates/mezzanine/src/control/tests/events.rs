@@ -22,7 +22,7 @@ fn event_list_uses_role_visibility_policy() {
     log.append(
         EventKind::ObserverRequested,
         Some(session.id.to_string()),
-        EventVisibility::PendingObserverRequest(observer_request.to_string()),
+        EventVisibility::AllPrimariesAndPendingObserverRequest(observer_request.to_string()),
         "{\"state\":\"pending\"}",
     )
     .unwrap();

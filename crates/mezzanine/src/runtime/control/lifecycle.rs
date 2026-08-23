@@ -127,7 +127,7 @@ impl RuntimeSessionService {
             event_log.append(
                 EventKind::ObserverRequested,
                 Some(self.session.id.to_string()),
-                EventVisibility::PendingObserverRequest(observer_id.to_string()),
+                EventVisibility::AllPrimariesAndPendingObserverRequest(observer_id.to_string()),
                 payload.clone(),
             )?;
         }

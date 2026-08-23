@@ -327,7 +327,7 @@ fn runtime_control_initialize_observer_logs_and_lists_pending_request() {
     let events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(
         events.iter().any(|event| {
             event.kind == EventKind::ObserverRequested && event.payload.contains(&observer_id)
@@ -622,7 +622,7 @@ fn runtime_attached_detach_mux_action_emits_lifecycle_state() {
     let events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(
         events
             .iter()

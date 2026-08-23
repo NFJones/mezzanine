@@ -193,7 +193,8 @@ impl RuntimeSessionService {
         let output = self.execute_terminal_command(primary_client_id, command)?;
         let output_excerpt = output.chars().take(384).collect::<String>();
         let truncated = output_excerpt.len() < output.len();
-        self.append_lifecycle_event(
+        self.append_primary_client_event(
+            primary_client_id,
             EventKind::Diagnostic,
             format!(
                 r#"{{"attached_display_command":"{}","output":"{}","truncated":{}}}"#,

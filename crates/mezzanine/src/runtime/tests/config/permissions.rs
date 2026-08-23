@@ -443,7 +443,7 @@ fn runtime_control_approval_methods_use_runtime_owned_queue() {
     let primary_events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(
         primary_events.iter().any(|event| {
             event.kind == EventKind::ApprovalChanged
@@ -969,7 +969,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     let primary_events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(primary_events.iter().any(|event| {
         event.kind == EventKind::ConfigChanged
             && event.payload.contains(r#""state":"pending""#)
@@ -1165,7 +1165,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     let primary_events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(
         primary_events.iter().any(|event| {
             event.kind == EventKind::ConfigChanged

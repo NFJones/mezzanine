@@ -200,7 +200,7 @@ async fn async_actor_applies_foreground_process_metadata_to_pane_title() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary)
+        .replay_for(&EventAudience::AllPrimaries)
         .iter()
         .map(|event| event.payload.as_str())
         .collect::<Vec<_>>()
@@ -286,7 +286,7 @@ async fn async_actor_applies_process_spawn_events_to_event_log() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event.payload.contains(r#""process_state":"running""#)
             && event.payload.contains(r#""primary_pid":42"#)
@@ -331,7 +331,7 @@ async fn async_actor_applies_process_failure_events_to_event_log() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event.payload.contains(r#""process_state":"failed""#)
             && event.payload.contains("wait task failed")
@@ -382,7 +382,7 @@ async fn async_actor_applies_pane_io_completion_events_to_event_log() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event.payload.contains(r#""pane_io":"write_failed""#)
             && event.payload.contains("broken pipe")

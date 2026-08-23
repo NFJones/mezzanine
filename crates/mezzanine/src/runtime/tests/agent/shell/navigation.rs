@@ -1005,7 +1005,7 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
         service
             .event_log()
             .unwrap()
-            .replay_after_for(&EventAudience::Primary, 0, 4096);
+            .replay_after_for(&EventAudience::AllPrimaries, 0, 4096);
     let process_screen = service
         .process_pane_screen("%1")
         .unwrap()
@@ -1081,11 +1081,11 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
         &primary,
     );
     assert!(response.contains(r#""visibility":"hidden""#), "{response}");
-    let exit_events =
-        service
-            .event_log()
-            .unwrap()
-            .replay_after_for(&EventAudience::Primary, last_event_id, 10);
+    let exit_events = service.event_log().unwrap().replay_after_for(
+        &EventAudience::AllPrimaries,
+        last_event_id,
+        10,
+    );
     assert!(
         exit_events
             .iter()

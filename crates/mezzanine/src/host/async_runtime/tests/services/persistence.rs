@@ -79,7 +79,7 @@ async fn async_persistence_side_effect_service_writes_bytes_and_reports_completi
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event.payload.contains(r#""worker":"async-persistence""#)
             && event.payload.contains(r#""target":"audit_log""#)
@@ -268,7 +268,7 @@ async fn async_persistence_side_effect_service_appends_token_usage() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event.payload.contains(r#""target":"token_usage""#)
             && event.payload.contains(r#""state":"completed""#)
@@ -477,7 +477,7 @@ async fn async_persistence_side_effect_service_honors_create_new_mode() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event.payload.contains(r#""worker":"async-persistence""#)
             && event.payload.contains(r#""target":"config""#)
@@ -546,7 +546,7 @@ async fn async_persistence_side_effect_service_reports_failures_without_crashing
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event.payload.contains(r#""worker":"async-persistence""#)
             && event.payload.contains(r#""target":"config""#)
@@ -612,7 +612,7 @@ async fn async_persistence_side_effect_service_rejects_config_symlink_destinatio
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event.payload.contains(r#""worker":"async-persistence""#)
             && event.payload.contains(r#""target":"config""#)

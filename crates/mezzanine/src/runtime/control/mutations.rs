@@ -805,7 +805,7 @@ impl RuntimeSessionService {
             event_log.append(
                 EventKind::ObserverDecided,
                 Some(staged_session.id.to_string()),
-                EventVisibility::PrimaryOnly,
+                EventVisibility::AllPrimaries,
                 event_payload,
             )?;
         }

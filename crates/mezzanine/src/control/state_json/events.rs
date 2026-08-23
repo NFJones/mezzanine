@@ -32,7 +32,7 @@ pub(crate) fn control_event_audience(
         ));
     }
     match client.role {
-        ClientRole::Primary => Ok(EventAudience::Primary),
+        ClientRole::Primary => Ok(EventAudience::PrimaryClient(caller_client_id.clone())),
         ClientRole::Observer => {
             let observer = session
                 .observers()

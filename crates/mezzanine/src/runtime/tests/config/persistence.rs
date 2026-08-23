@@ -31,7 +31,7 @@ fn runtime_persisted_config_mutation_rolls_back_existing_file_on_apply_failure()
     let initial_events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary)
+        .replay_for(&EventAudience::AllPrimaries)
         .into_iter()
         .filter(|event| event.kind == EventKind::ConfigChanged)
         .count();
@@ -56,7 +56,7 @@ fn runtime_persisted_config_mutation_rolls_back_existing_file_on_apply_failure()
     let final_events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary)
+        .replay_for(&EventAudience::AllPrimaries)
         .into_iter()
         .filter(|event| event.kind == EventKind::ConfigChanged)
         .count();
@@ -111,7 +111,7 @@ fn runtime_persisted_config_mutation_removes_new_file_on_apply_failure() {
         service
             .event_log()
             .unwrap()
-            .replay_for(&EventAudience::Primary)
+            .replay_for(&EventAudience::AllPrimaries)
             .into_iter()
             .all(|event| event.kind != EventKind::ConfigChanged)
     );

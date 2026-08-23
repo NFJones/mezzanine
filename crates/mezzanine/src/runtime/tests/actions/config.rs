@@ -771,7 +771,7 @@ fn runtime_config_change_duplicate_success_terminates_continuation() {
         service
             .event_log()
             .unwrap()
-            .replay_for(&EventAudience::Primary)
+            .replay_for(&EventAudience::AllPrimaries)
             .into_iter()
             .filter(|event| event.kind == EventKind::ConfigChanged)
             .count()
@@ -925,7 +925,7 @@ fn runtime_config_change_duplicate_success_terminates_continuation() {
     let same_event_payloads = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary)
+        .replay_for(&EventAudience::AllPrimaries)
         .into_iter()
         .filter(|event| event.kind == EventKind::ConfigChanged)
         .map(|event| event.payload)
@@ -1195,7 +1195,7 @@ fn runtime_batched_config_change_duplicates_terminate_without_reload() {
         service
             .event_log()
             .unwrap()
-            .replay_for(&EventAudience::Primary)
+            .replay_for(&EventAudience::AllPrimaries)
             .into_iter()
             .filter(|event| event.kind == EventKind::ConfigChanged)
             .count()
@@ -1348,7 +1348,7 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
     let before_config_events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary)
+        .replay_for(&EventAudience::AllPrimaries)
         .into_iter()
         .filter(|event| event.kind == EventKind::ConfigChanged)
         .count();
@@ -1425,7 +1425,7 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
     let after_config_events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary)
+        .replay_for(&EventAudience::AllPrimaries)
         .into_iter()
         .filter(|event| event.kind == EventKind::ConfigChanged)
         .count();

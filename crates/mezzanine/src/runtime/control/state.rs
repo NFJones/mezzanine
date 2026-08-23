@@ -741,6 +741,83 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn exact_primary_event_wakeups_keep_private_visibility_and_independent_cursors() {
+        let mut service = RuntimeServiceFixture::new().build();
+        let first = service
+            .attach_primary("first", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        let second = service
+            .attach_primary("second", true, Size::new(100, 30).unwrap(), 121)
+            .unwrap();
+        service
+            .append_primary_lifecycle_event(
+                EventKind::Diagnostic,
+                r#"{"scope":"shared-first"}"#.to_string(),
+            )
+            .unwrap();
+        let first_cursor = service.event_log().unwrap().latest_event_id();
+        service
+            .append_primary_client_event(
+                &first,
+                EventKind::Diagnostic,
+                r#"{"scope":"private-first"}"#.to_string(),
+            )
+            .unwrap();
+        service
+            .append_primary_lifecycle_event(
+                EventKind::Diagnostic,
+                r#"{"scope":"shared-second"}"#.to_string(),
+            )
+            .unwrap();
+
+        let first_payloads = service
+            .authorized_event_wakeups(&first, "first-events", 0, 8)
+            .unwrap()
+            .into_iter()
+            .flat_map(|wakeup| wakeup.events)
+            .map(|event| event.payload)
+            .collect::<Vec<_>>();
+        let second_payloads = service
+            .authorized_event_wakeups(&second, "second-events", first_cursor, 8)
+            .unwrap()
+            .into_iter()
+            .flat_map(|wakeup| wakeup.events)
+            .map(|event| event.payload)
+            .collect::<Vec<_>>();
+
+        assert!(
+            first_payloads
+                .iter()
+                .any(|payload| payload.contains("shared-first"))
+        );
+        assert!(
+            first_payloads
+                .iter()
+                .any(|payload| payload.contains("private-first"))
+        );
+        assert!(
+            first_payloads
+                .iter()
+                .any(|payload| payload.contains("shared-second"))
+        );
+        assert!(
+            !second_payloads
+                .iter()
+                .any(|payload| payload.contains("shared-first"))
+        );
+        assert!(
+            !second_payloads
+                .iter()
+                .any(|payload| payload.contains("private-first"))
+        );
+        assert!(
+            second_payloads
+                .iter()
+                .any(|payload| payload.contains("shared-second"))
+        );
+    }
+
+    #[test]
     fn authorized_event_wakeups_revalidates_observer_approval_and_revocation() {
         let mut service = RuntimeServiceFixture::new().build();
         let primary = service
@@ -871,7 +948,7 @@ mod tests {
         let primary_events = service
             .event_log()
             .unwrap()
-            .replay_for(&EventAudience::Primary);
+            .replay_for(&EventAudience::AllPrimaries);
         assert!(primary_events.iter().any(|event| {
             event.kind == EventKind::ObserverDecided
                 && event.payload.contains(second_request.as_str())

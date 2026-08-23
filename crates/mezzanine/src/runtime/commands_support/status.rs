@@ -77,7 +77,7 @@ pub(crate) fn runtime_show_messages_display(service: &RuntimeSessionService) -> 
             status_lines,
         );
     };
-    let events = event_log.replay_for(&EventAudience::Primary);
+    let events = event_log.replay_for(&EventAudience::AllPrimaries);
     if events.is_empty() {
         return runtime_show_messages_body(
             0,

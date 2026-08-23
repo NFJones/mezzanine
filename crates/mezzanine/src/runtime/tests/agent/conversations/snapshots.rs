@@ -70,7 +70,7 @@ fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
     let events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(
         events
             .iter()

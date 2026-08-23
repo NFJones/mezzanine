@@ -267,7 +267,7 @@ async fn async_actor_defers_audit_writes_to_persistence_worker() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event.payload.contains(r#""worker":"async-persistence""#)
             && event.payload.contains(r#""target":"audit_log""#)
@@ -349,7 +349,7 @@ async fn async_actor_defers_file_pane_pipe_writes_to_persistence_worker() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event.payload.contains(r#""worker":"async-persistence""#)
             && event.payload.contains(r#""target":"pane_pipe""#)
@@ -422,7 +422,7 @@ async fn async_actor_stops_file_pane_pipe_after_persistence_failure() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event.payload.contains(r#""worker":"async-persistence""#)
             && event.payload.contains(r#""target":"pane_pipe""#)
@@ -512,7 +512,7 @@ async fn async_actor_stops_command_pane_pipe_after_health_timer() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event.payload.contains(r#""pipe":"stopped""#)
             && event.payload.contains(r#""mode":"command""#)

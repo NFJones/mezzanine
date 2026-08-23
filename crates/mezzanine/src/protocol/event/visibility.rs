@@ -15,7 +15,19 @@ pub(super) fn visible_event(
     audience: &EventAudience,
 ) -> Option<VisibleEvent> {
     let include = match (&event.visibility, audience) {
-        (_, EventAudience::Primary) => true,
+        (EventVisibility::AllPrimaries, EventAudience::AllPrimaries)
+        | (EventVisibility::SessionView, EventAudience::AllPrimaries)
+        | (EventVisibility::AllPrimaries, EventAudience::PrimaryClient(_))
+        | (EventVisibility::SessionView, EventAudience::PrimaryClient(_))
+        | (EventVisibility::SessionView, EventAudience::SessionView) => true,
+        (
+            EventVisibility::AllPrimariesAndPendingObserverRequest(_),
+            EventAudience::AllPrimaries | EventAudience::PrimaryClient(_),
+        ) => true,
+        (
+            EventVisibility::PrimaryClient(event_client_id),
+            EventAudience::PrimaryClient(audience_client_id),
+        ) => event_client_id == audience_client_id,
         (
             EventVisibility::SessionView,
             EventAudience::ApprovedObserver {
@@ -23,7 +35,7 @@ pub(super) fn visible_event(
             },
         ) => event.id >= *visible_from_event_id,
         (
-            EventVisibility::PendingObserverRequest(event_observer),
+            EventVisibility::AllPrimariesAndPendingObserverRequest(event_observer),
             EventAudience::PendingObserver {
                 observer_request_id,
             },

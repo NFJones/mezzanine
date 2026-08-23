@@ -1361,7 +1361,7 @@ fn runtime_service_starts_initial_pane_process_through_resolved_shell() {
     let events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(
         events
             .iter()
@@ -1659,7 +1659,7 @@ fn runtime_service_restarts_restored_panes_with_fresh_primary_pids() {
     let events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(
         events
             .iter()
@@ -1787,7 +1787,7 @@ fn runtime_service_restarts_restored_panes_from_home_when_saved_cwd_fails() {
     let events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event
             .payload

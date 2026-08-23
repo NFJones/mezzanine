@@ -1336,6 +1336,225 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Verifies one trusted Iroh endpoint may own two independent primary
+    /// clients and event streams, and closing one exact client does not close
+    /// or deauthorize the other stream.
+    #[tokio::test(flavor = "current_thread")]
+    async fn same_iroh_endpoint_keeps_independent_primary_event_streams() {
+        use secrecy::ExposeSecret;
+
+        use crate::control::encode_control_body;
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::security::remote::{RemoteRoleCeiling, RemoteTrustStore};
+        use crate::test_support::runtime::RuntimeServiceFixture;
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-iroh-two-primary-events-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut service = RuntimeServiceFixture::new().build();
+        service.set_config_root(root.clone());
+        let session_id = service.session().id.to_string();
+        let (server_secret, server_endpoint_id) = {
+            let identity = service
+                .integration
+                .ensure_remote_endpoint_identity(&session_id)
+                .unwrap();
+            (
+                identity.secret_key().clone(),
+                identity.endpoint_id().to_string(),
+            )
+        };
+        let store = RemoteTrustStore::under_config_root(&root, &session_id).unwrap();
+        let invitation = store
+            .create_invitation(
+                &server_endpoint_id,
+                RemoteRoleCeiling::Primary,
+                600,
+                crate::runtime::current_unix_seconds(),
+            )
+            .unwrap();
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            max_connections: 2,
+            max_streams_per_connection: 1,
+            setup_timeout: std::time::Duration::from_secs(10),
+            idle_timeout: std::time::Duration::from_secs(30),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let server_endpoint = bind_runtime_iroh_endpoint(policy, server_secret)
+            .await
+            .unwrap()
+            .unwrap();
+        let server_addr = server_endpoint.endpoint().addr();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let listener_handle = handle.clone();
+        drop(handle);
+
+        let client_endpoint = Endpoint::builder(presets::Minimal)
+            .secret_key(SecretKey::generate())
+            .transport_config(
+                QuicTransportConfig::builder()
+                    .max_concurrent_uni_streams(VarInt::from_u32(1))
+                    .build(),
+            )
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+
+        let listener = async move {
+            let served = serve_runtime_iroh_control_listener(
+                &server_endpoint,
+                &listener_handle,
+                AsyncRuntimeControlConnectionConfig::new(1024 * 1024, 0).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(served, 2);
+            server_endpoint.close().await;
+        };
+        let clients = async {
+            let first_connection = client_endpoint
+                .connect(server_addr.clone(), MEZZANINE_IROH_ALPN)
+                .await
+                .unwrap();
+            let (mut first_send, mut first_recv) = first_connection.open_bi().await.unwrap();
+            let first_initialize = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "first-init",
+                "method": "control/initialize",
+                "params": {
+                    "requested_role": "primary",
+                    "requested_version": 2,
+                    "client_name": "same-endpoint",
+                    "detach_primary_on_disconnect": true,
+                    "event_stream_version": 1,
+                    "client": {
+                        "name": "same-endpoint",
+                        "interactive": true,
+                        "terminal": {"columns": 80, "rows": 24, "term": "xterm-256color"}
+                    },
+                    "authentication": {
+                        "mechanism": "extension:iroh_invitation",
+                        "token": invitation.token.expose_secret()
+                    }
+                }
+            })
+            .to_string();
+            first_send
+                .write_all(&encode_control_body(&first_initialize))
+                .await
+                .unwrap();
+            first_send.flush().await.unwrap();
+            let first_body = read_test_control_body(&mut first_recv).await;
+            let first_json: serde_json::Value = serde_json::from_str(&first_body).unwrap();
+            let first_client_id = first_json["result"]["client"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let device_credential = first_json["result"]["device_credential"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let mut first_events = first_connection.accept_uni().await.unwrap();
+            let mut first_preface = vec![0u8; MEZZANINE_IROH_EVENT_STREAM_PREFACE.len()];
+            first_events.read_exact(&mut first_preface).await.unwrap();
+            assert_eq!(first_preface, MEZZANINE_IROH_EVENT_STREAM_PREFACE);
+
+            let second_connection = client_endpoint
+                .connect(server_addr, MEZZANINE_IROH_ALPN)
+                .await
+                .unwrap();
+            let (mut second_send, mut second_recv) = second_connection.open_bi().await.unwrap();
+            let second_initialize = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "second-init",
+                "method": "control/initialize",
+                "params": {
+                    "requested_role": "primary",
+                    "requested_version": 2,
+                    "client_name": "same-endpoint",
+                    "detach_primary_on_disconnect": true,
+                    "event_stream_version": 1,
+                    "client": {
+                        "name": "same-endpoint",
+                        "interactive": true,
+                        "terminal": {"columns": 100, "rows": 30, "term": "xterm-256color"}
+                    },
+                    "authentication": {
+                        "mechanism": "extension:iroh_device",
+                        "token": device_credential
+                    }
+                }
+            })
+            .to_string();
+            second_send
+                .write_all(&encode_control_body(&second_initialize))
+                .await
+                .unwrap();
+            second_send.flush().await.unwrap();
+            let second_body = read_test_control_body(&mut second_recv).await;
+            let second_json: serde_json::Value = serde_json::from_str(&second_body).unwrap();
+            let second_client_id = second_json["result"]["client"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert_ne!(first_client_id, second_client_id);
+            let mut second_events = second_connection.accept_uni().await.unwrap();
+            let mut second_preface = vec![0u8; MEZZANINE_IROH_EVENT_STREAM_PREFACE.len()];
+            second_events.read_exact(&mut second_preface).await.unwrap();
+            assert_eq!(second_preface, MEZZANINE_IROH_EVENT_STREAM_PREFACE);
+
+            first_send.finish().unwrap();
+            first_connection.close(VarInt::from_u32(0), b"first client complete");
+
+            let detached_event = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    let body = read_test_control_body(&mut second_events).await;
+                    let frame: serde_json::Value = serde_json::from_str(&body).unwrap();
+                    if frame["params"]["event_type"] == "client_detached"
+                        && body.contains(&first_client_id)
+                    {
+                        break body;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert!(detached_event.contains(&first_client_id));
+
+            let kill = r#"{"jsonrpc":"2.0","id":"kill","method":"session/kill","params":{"force":true,"idempotency_key":"two-client-kill"}}"#;
+            second_send
+                .write_all(&encode_control_body(kill))
+                .await
+                .unwrap();
+            second_send.finish().unwrap();
+            let kill_body = read_test_control_body(&mut second_recv).await;
+            assert!(kill_body.contains(r#""killed":true"#), "{kill_body}");
+            second_connection.close(VarInt::from_u32(0), b"test complete");
+            client_endpoint.close().await;
+        };
+
+        let actor_task = tokio::spawn(actor.run());
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            let ((), ()) = tokio::join!(listener, clients);
+        })
+        .await
+        .unwrap();
+        actor_task.abort();
+        let _ = actor_task.await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn iroh_client_connector_pairs_persists_and_reconnects_without_unix_fallback() {
         use crate::cli::{IrohControlTarget, exchange_iroh_control_request};

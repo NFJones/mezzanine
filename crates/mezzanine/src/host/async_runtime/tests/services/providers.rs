@@ -1778,7 +1778,7 @@ executable = "{bubblewrap_executable}"
     let retained_events = exit
         .service
         .event_log()
-        .map(|event_log| event_log.replay_for(&EventAudience::Primary))
+        .map(|event_log| event_log.replay_for(&EventAudience::AllPrimaries))
         .unwrap_or_default();
     let failed_execution = exit
         .service

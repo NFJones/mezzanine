@@ -365,7 +365,7 @@ async fn async_actor_applies_hook_completion_events_to_event_log() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary)
+        .replay_for(&EventAudience::AllPrimaries)
         .iter()
         .map(|event| event.payload.as_str())
         .collect::<Vec<_>>()
@@ -599,7 +599,7 @@ async fn async_actor_applies_forced_shutdown_events_without_primary() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event.payload.contains(r#""lifecycle":"shutdown""#)
             && event.payload.contains("test supervisor shutdown")
@@ -656,7 +656,7 @@ async fn async_actor_applies_graceful_shutdown_events() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary)
+        .replay_for(&EventAudience::AllPrimaries)
         .iter()
         .map(|event| event.payload.as_str())
         .collect::<Vec<_>>()
@@ -719,7 +719,7 @@ async fn async_actor_applies_failed_shutdown_events() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary)
+        .replay_for(&EventAudience::AllPrimaries)
         .iter()
         .map(|event| event.payload.as_str())
         .collect::<Vec<_>>()

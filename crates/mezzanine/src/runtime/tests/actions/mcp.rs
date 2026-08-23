@@ -447,7 +447,7 @@ async fn runtime_async_config_apply_initializes_mcp_and_logs_readable_status() {
     let payloads = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary)
+        .replay_for(&EventAudience::AllPrimaries)
         .into_iter()
         .map(|event| event.payload)
         .collect::<Vec<_>>();

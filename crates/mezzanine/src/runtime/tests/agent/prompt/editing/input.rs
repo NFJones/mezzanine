@@ -110,7 +110,7 @@ fn runtime_agent_prompt_same_row_edits_do_not_resize_the_pty() {
     let resize_events_before = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary)
+        .replay_for(&EventAudience::AllPrimaries)
         .into_iter()
         .filter(|event| event.payload.contains(r#""layout":"resized""#))
         .count();
@@ -134,7 +134,7 @@ fn runtime_agent_prompt_same_row_edits_do_not_resize_the_pty() {
     let resize_events_after = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary)
+        .replay_for(&EventAudience::AllPrimaries)
         .into_iter()
         .filter(|event| event.payload.contains(r#""layout":"resized""#))
         .count();

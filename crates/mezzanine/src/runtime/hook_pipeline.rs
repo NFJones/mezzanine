@@ -33,12 +33,30 @@ impl RuntimeSessionService {
             event_log.append(
                 kind,
                 Some(self.session.id.to_string()),
-                EventVisibility::PrimaryOnly,
+                EventVisibility::AllPrimaries,
                 payload.clone(),
             )?;
         }
         if let Some(hook_event) = runtime_hook_event_for_lifecycle(kind, &payload) {
             self.run_configured_completed_hooks(hook_event, &payload)?;
+        }
+        Ok(())
+    }
+
+    /// Appends one event visible only to an exact attached primary client.
+    pub(super) fn append_primary_client_event(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+        kind: EventKind,
+        payload: String,
+    ) -> Result<()> {
+        if let Some(event_log) = self.control.event_log_mut() {
+            event_log.append(
+                kind,
+                Some(self.session.id.to_string()),
+                EventVisibility::PrimaryClient(client_id.clone()),
+                payload,
+            )?;
         }
         Ok(())
     }

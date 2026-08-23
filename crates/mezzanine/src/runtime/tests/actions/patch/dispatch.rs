@@ -1254,7 +1254,7 @@ bootstrap\tcomplete\t1714500000\n";
     let events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event
             .payload

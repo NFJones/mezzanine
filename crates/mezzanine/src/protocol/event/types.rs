@@ -5,6 +5,8 @@
 
 use std::collections::VecDeque;
 
+use mez_core::ids::ClientId;
+
 /// Kinds of state changes emitted by the Mezzanine runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventKind {
@@ -45,12 +47,14 @@ pub enum EventKind {
 /// Visibility policy attached to an event at append time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventVisibility {
-    /// Visible only to the primary client.
-    PrimaryOnly,
+    /// Visible to every attached primary, but never to observers.
+    AllPrimaries,
+    /// Visible only to one exact attached primary client.
+    PrimaryClient(ClientId),
     /// Visible to the session view after observer approval.
     SessionView,
-    /// Visible only to one pending observer request.
-    PendingObserverRequest(String),
+    /// Visible to all primaries and one matching pending observer request.
+    AllPrimariesAndPendingObserverRequest(String),
     /// Visible only to one agent.
     #[allow(
         dead_code,
@@ -68,8 +72,16 @@ pub enum EventVisibility {
 /// Audience requesting retained event replay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventAudience {
-    /// Primary client with complete session visibility.
-    Primary,
+    /// Aggregate shared-primary projection used by canonical diagnostics.
+    AllPrimaries,
+    /// One exact primary client, including shared session-view events.
+    PrimaryClient(ClientId),
+    /// Shared session view without primary-only visibility.
+    #[allow(
+        dead_code,
+        reason = "aggregate session-view projection is retained for protocol adapters"
+    )]
+    SessionView,
     /// Approved observer, visible only from its approval marker onward.
     ApprovedObserver {
         /// Earliest event id the observer may see.

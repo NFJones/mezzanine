@@ -89,7 +89,7 @@ fn runtime_pane_notice_emits_structured_message_event() {
     let events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(events.iter().any(|event| {
         event.kind == EventKind::Message
             && event.payload.contains(r#""source":"deploy""#)

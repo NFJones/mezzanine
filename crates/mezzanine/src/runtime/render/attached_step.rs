@@ -639,7 +639,8 @@ impl RuntimeSessionService {
                     match self.execute_terminal_command(primary_client_id, command) {
                         Ok(output) => {
                             report.registry_persistence_required = true;
-                            self.append_lifecycle_event(
+                            self.append_primary_client_event(
+                                primary_client_id,
                                 EventKind::Diagnostic,
                                 format!(
                                     r#"{{"key_binding_command":"{}","output":"{}"}}"#,

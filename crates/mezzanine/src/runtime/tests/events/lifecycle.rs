@@ -391,7 +391,7 @@ fn runtime_bootstrap_unparsed_output_does_not_retry_forever() {
     let events = service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary);
+        .replay_for(&EventAudience::AllPrimaries);
     assert!(
         events
             .iter()
@@ -1121,7 +1121,7 @@ fn runtime_event_fanout_batches_frames_per_connection() {
     connections
         .attach(
             "event-connection",
-            crate::protocol::event::EventAudience::Primary,
+            crate::protocol::event::EventAudience::AllPrimaries,
             true,
             0,
         )

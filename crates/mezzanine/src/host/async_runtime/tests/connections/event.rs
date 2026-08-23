@@ -20,7 +20,7 @@ async fn async_event_flush_writes_notifications_and_advances_cursor() {
         .unwrap();
     let mut connections = RuntimeEventConnectionTable::default();
     connections
-        .attach("events-primary", EventAudience::Primary, true, 0)
+        .attach("events-primary", EventAudience::AllPrimaries, true, 0)
         .unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -86,7 +86,7 @@ async fn async_event_connection_serves_until_shutdown_predicate() {
         .unwrap();
     let mut connections = RuntimeEventConnectionTable::default();
     connections
-        .attach("events-primary", EventAudience::Primary, true, 0)
+        .attach("events-primary", EventAudience::AllPrimaries, true, 0)
         .unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -144,7 +144,7 @@ async fn async_event_connection_notification_flushes_later_events() {
     connections
         .attach(
             "events-primary",
-            EventAudience::Primary,
+            EventAudience::AllPrimaries,
             true,
             last_event_id,
         )
@@ -250,7 +250,7 @@ async fn async_event_connection_rejects_wrong_unix_peer_owner() {
     let (_client_stream, mut server_stream) = UnixStream::pair().unwrap();
     let mut connections = RuntimeEventConnectionTable::default();
     connections
-        .attach("events-primary", EventAudience::Primary, true, 0)
+        .attach("events-primary", EventAudience::AllPrimaries, true, 0)
         .unwrap();
 
     let error = serve_async_runtime_event_connection(
@@ -308,7 +308,7 @@ async fn async_event_listener_accepts_and_streams_visible_events() {
             &listener,
             &handle,
             AsyncRuntimeEventConnectionConfig::new(10, current_effective_uid()).unwrap(),
-            |index| Ok((format!("events-{index}"), EventAudience::Primary, 0)),
+            |index| Ok((format!("events-{index}"), EventAudience::AllPrimaries, 0)),
             |accepted, delivered, _state| accepted >= 1 || delivered >= 1,
         )
         .await

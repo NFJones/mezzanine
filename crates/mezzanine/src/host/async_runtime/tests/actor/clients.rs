@@ -139,7 +139,7 @@ async fn async_actor_applies_primary_client_disconnect_events() {
         .service
         .event_log()
         .unwrap()
-        .replay_for(&EventAudience::Primary)
+        .replay_for(&EventAudience::AllPrimaries)
         .iter()
         .map(|event| event.payload.as_str())
         .collect::<Vec<_>>()
