@@ -155,28 +155,32 @@ pub fn display_panes(session: &Session) -> Result<String> {
     Ok(body)
 }
 
-/// Renders attached and observer clients as compact state rows.
+/// Renders attached and observer clients as a pager-friendly Markdown table.
 pub fn list_clients(session: &Session) -> String {
-    session
-        .clients()
-        .iter()
-        .map(|client| {
+    let mut lines = vec![
+        "| client | name | role | state | interactive | attached at | last seen at | terminal | approval |".to_string(),
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |".to_string(),
+    ];
+    if session.clients().is_empty() {
+        lines.push("| — | no clients | — | — | — | — | — | — | — |".to_string());
+    } else {
+        lines.extend(session.clients().iter().map(|client| {
             let observer = observer_for_client(session, client);
             format!(
-                "{}:{}:role={}:state={}:interactive={}:attached_at={}:last_seen_at={}:terminal={}:approval={}",
-                client.id,
-                client.name,
-                client_role_name(client.role),
-                client_state_name(client.state),
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                markdown_table_cell(&client.id.to_string()),
+                markdown_table_cell(&client.name),
+                markdown_table_cell(client_role_name(client.role)),
+                markdown_table_cell(client_state_name(client.state)),
                 client.interactive,
-                optional_unix_seconds(client.attached_at_unix_seconds),
-                optional_unix_seconds(client.last_seen_at_unix_seconds),
-                client_terminal_display(session, client, observer),
-                client_approval_display(observer)
+                markdown_table_cell(&optional_unix_seconds(client.attached_at_unix_seconds)),
+                markdown_table_cell(&optional_unix_seconds(client.last_seen_at_unix_seconds)),
+                markdown_table_cell(&client_terminal_display(session, client, observer)),
+                markdown_table_cell(&client_approval_display(observer))
             )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+        }));
+    }
+    lines.join("\n")
 }
 
 /// Renders clients with concrete detach-client actions.
@@ -270,7 +274,7 @@ pub fn choose_observer_display(session: &Session) -> String {
         .join("\n")
 }
 
-/// Renders the current session as the single local list-sessions row.
+/// Renders the current session as a single-row pager-friendly Markdown table.
 pub fn list_current_session(session: &Session) -> String {
     let attached_clients = session
         .clients()
@@ -278,24 +282,36 @@ pub fn list_current_session(session: &Session) -> String {
         .filter(|client| client.state == ClientState::Attached)
         .count();
     let attached_primaries = session.attached_primaries().count();
-    format!(
-        "{}:{}:state={}:created_at={}:last_attached_at={}:windows={}:clients={}:attached_clients={}:attached_primaries={}:max_attached_primaries={}:accepts_primary={}:layout_owner={}",
-        session.id,
-        session.name,
-        session_state_name(session.state),
-        session.created_at_unix_seconds,
-        optional_unix_seconds(session.last_attached_at_unix_seconds),
-        session.windows().len(),
-        session.clients().len(),
-        attached_clients,
-        attached_primaries,
-        MAX_ATTACHED_PRIMARY_CLIENTS,
-        attached_primaries < MAX_ATTACHED_PRIMARY_CLIENTS,
-        session
-            .layout_owner_client_id()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| "none".to_string())
-    )
+    [
+        "| session | name | state | created at | last attached at | windows | clients | attached clients | attached primaries | max attached primaries | accepts primary | layout owner |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        &format!(
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            markdown_table_cell(&session.id.to_string()),
+            markdown_table_cell(&session.name),
+            markdown_table_cell(session_state_name(session.state)),
+            session.created_at_unix_seconds,
+            markdown_table_cell(&optional_unix_seconds(session.last_attached_at_unix_seconds)),
+            session.windows().len(),
+            session.clients().len(),
+            attached_clients,
+            attached_primaries,
+            MAX_ATTACHED_PRIMARY_CLIENTS,
+            attached_primaries < MAX_ATTACHED_PRIMARY_CLIENTS,
+            markdown_table_cell(
+                &session
+                    .layout_owner_client_id()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "none".to_string()),
+            )
+        ),
+    ]
+    .join("\n")
+}
+
+/// Escapes a value for a Markdown table cell without changing its meaning.
+fn markdown_table_cell(value: &str) -> String {
+    value.replace('|', r"\|").replace('\n', "<br>")
 }
 
 /// Renders the local attach-session result for an already attached session.
@@ -473,7 +489,15 @@ mod tests {
                 .unwrap()
                 .contains("action=select-pane -t 0")
         );
-        assert!(list_clients(&session).contains("role=primary:state=attached"));
+        let clients = list_clients(&session);
+        assert!(
+            clients.starts_with("| client | name | role | state |"),
+            "{clients}"
+        );
+        assert!(
+            clients.contains("| c1 | primary | primary | attached |"),
+            "{clients}"
+        );
         assert!(
             choose_client_display(&session)
                 .contains(&format!("action=detach-client -t {observer_client}"))
@@ -482,21 +506,30 @@ mod tests {
             "approve-observer -t {observer_request}|reject-observer -t {observer_request}"
         )));
         let session_row = list_current_session(&session);
-        assert!(session_row.contains("attached_clients=1"), "{session_row}");
         assert!(
-            session_row.contains("attached_primaries=1"),
+            session_row.starts_with("| session | name | state |"),
             "{session_row}"
         );
         assert!(
-            session_row.contains("max_attached_primaries=16"),
+            session_row.contains("| 1 | 2 | 1 | 1 | 16 | true | c1 |"),
             "{session_row}"
         );
-        assert!(
-            session_row.contains("accepts_primary=true"),
-            "{session_row}"
-        );
-        assert!(session_row.contains("layout_owner=c1"), "{session_row}");
         assert!(attach_session_display(&session).contains("attach=already-attached"));
+    }
+
+    /// Verifies an empty client list retains table structure and a readable
+    /// empty row so pager rendering does not collapse into unstructured text.
+    #[test]
+    fn list_clients_renders_an_empty_table_row() {
+        let session = Session::new_default(
+            SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
+            Size::new(80, 24).unwrap(),
+        );
+
+        assert_eq!(
+            list_clients(&session),
+            "| client | name | role | state | interactive | attached at | last seen at | terminal | approval |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| — | no clients | — | — | — | — | — | — | — |"
+        );
     }
 
     /// Verifies pane renderers report a mux invalid-state error after session

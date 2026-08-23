@@ -279,23 +279,30 @@ fn list_commands_return_session_state() {
     assert!(panes.contains("agent_id=none"), "{panes}");
     assert!(panes.contains("size="), "{panes}");
     let clients = display_body(clients);
-    assert!(clients.contains("role=primary"), "{clients}");
-    assert!(clients.contains("attached_at="), "{clients}");
-    assert!(clients.contains("last_seen_at="), "{clients}");
     assert!(
-        clients.contains("terminal=80x24:term=xterm-256color"),
+        clients.starts_with("| client | name | role | state |"),
         "{clients}"
     );
     assert!(
-        clients.contains(&format!("approval={observer_request}:pending")),
+        clients.contains("| c1 | primary | primary | attached |"),
         "{clients}"
     );
     assert!(
-        clients.contains(&format!("{observer_client}:observer:role=pending_observer")),
+        clients.contains("| 80x24:term=xterm-256color | none |"),
         "{clients}"
     );
     assert!(
-        clients.contains("terminal=100x30:term=xterm-256color"),
+        clients.contains(&format!("| {observer_request}:pending |")),
+        "{clients}"
+    );
+    assert!(
+        clients.contains(&format!(
+            "| {observer_client} | observer | pending_observer | pending |"
+        )),
+        "{clients}"
+    );
+    assert!(
+        clients.contains("| 100x30:term=xterm-256color |"),
         "{clients}"
     );
     let observers = display_body(observers);
@@ -324,13 +331,14 @@ fn list_commands_return_session_state() {
         "{choose_observer}"
     );
     let sessions = display_body(sessions);
-    assert!(sessions.contains("created_at="), "{sessions}");
-    assert!(sessions.contains("last_attached_at="), "{sessions}");
-    assert!(sessions.contains("attached_clients=1"), "{sessions}");
-    assert!(sessions.contains("attached_primaries=1"), "{sessions}");
-    assert!(sessions.contains("max_attached_primaries=16"), "{sessions}");
-    assert!(sessions.contains("accepts_primary=true"), "{sessions}");
-    assert!(sessions.contains("layout_owner=c1"), "{sessions}");
+    assert!(
+        sessions.starts_with("| session | name | state | created at |"),
+        "{sessions}"
+    );
+    assert!(
+        sessions.contains("| 1 | 2 | 1 | 1 | 16 | true | c1 |"),
+        "{sessions}"
+    );
     let pane_selector = display_body(pane_selector);
     assert!(
         pane_selector.contains("action=select-pane -t 0"),
