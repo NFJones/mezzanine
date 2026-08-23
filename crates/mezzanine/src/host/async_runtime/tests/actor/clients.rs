@@ -1,6 +1,7 @@
 //! Async-runtime tests owned by clients behavior.
 
 use super::super::*;
+use crate::test_support::runtime::{RuntimeServiceFixture, SessionFixture};
 
 /// Verifies that a primary-client resize delivered through typed async runtime
 /// events mutates authoritative terminal geometry through the actor instead of
@@ -151,5 +152,91 @@ async fn async_actor_applies_primary_client_disconnect_events() {
         events.contains(r#""reason":"terminal input hangup""#),
         "{events}"
     );
+    assert_eq!(exit.commands_processed, 2);
+}
+
+/// Verifies connection-loss events clean up pending and approved observers.
+///
+/// Observer connections own their exact client attachment. Actor-ordered
+/// disconnects must terminalize pending requests, revoke approved observers,
+/// preserve the primary lifecycle, and make duplicate cleanup harmless.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_cleans_up_observers_on_connection_loss() {
+    let mut session = SessionFixture::new().build();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let (pending_client, pending_request) = session.request_observer("pending");
+    let (approved_client, approved_request) = session.request_observer("approved");
+    session
+        .approve_observer(&primary, &approved_request)
+        .unwrap();
+    let service = RuntimeServiceFixture::new().build_with_session(session);
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Client(ClientEvent::Disconnected {
+            client_id: pending_client.clone(),
+            reason: "pending observer socket closed".to_string(),
+        }));
+        batch.push(RuntimeEvent::Client(ClientEvent::Disconnected {
+            client_id: approved_client.clone(),
+            reason: "approved observer socket closed".to_string(),
+        }));
+        batch.push(RuntimeEvent::Client(ClientEvent::Disconnected {
+            client_id: approved_client,
+            reason: "duplicate observer cleanup".to_string(),
+        }));
+
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.accepted, 3);
+        assert_eq!(report.applied, 2);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(
+        exit.service.lifecycle_state(),
+        RuntimeLifecycleState::Running
+    );
+    assert_eq!(exit.service.session().primary_client_id(), Some(&primary));
+    let pending = exit
+        .service
+        .session()
+        .observers()
+        .iter()
+        .find(|observer| observer.id == pending_request)
+        .unwrap();
+    let approved = exit
+        .service
+        .session()
+        .observers()
+        .iter()
+        .find(|observer| observer.id == approved_request)
+        .unwrap();
+    assert_eq!(
+        pending.state,
+        mez_mux::session::ObserverDecisionState::Rejected
+    );
+    assert_eq!(
+        approved.state,
+        mez_mux::session::ObserverDecisionState::Revoked
+    );
+    for observer_client in [pending.client_id.clone(), approved.client_id.clone()] {
+        assert_eq!(
+            exit.service
+                .session()
+                .clients()
+                .iter()
+                .find(|client| client.id == observer_client)
+                .unwrap()
+                .state,
+            ClientState::Detached
+        );
+    }
     assert_eq!(exit.commands_processed, 2);
 }

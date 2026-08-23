@@ -174,7 +174,7 @@ impl RuntimeSessionService {
                 RenderInvalidationReason::Layout,
             ),
             ClientEvent::Disconnected { client_id, reason } => (
-                self.apply_primary_client_disconnect_event(&client_id, reason)?,
+                self.apply_client_disconnect_event(&client_id, reason)?,
                 RenderInvalidationReason::FullRedraw,
             ),
             ClientEvent::Input { .. }
@@ -208,29 +208,61 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Applies a primary-client disconnect delivered through async runtime
-    /// event ingress.
+    /// Applies an exact-client disconnect delivered through runtime ingress.
     ///
-    /// Non-primary disconnects are accepted as stale or observer-local events
-    /// for now. Primary disconnects reuse the normal detach path and append an
-    /// additional diagnostic carrying the async I/O reason so event consumers
-    /// can distinguish user-initiated detach from fd hangup or service exit.
-    pub fn apply_primary_client_disconnect_event(
+    /// Primary disconnects retain the established session-detach lifecycle.
+    /// Pending and approved observers, agents, and automation clients detach
+    /// only themselves. Already detached or revoked clients are stale no-ops,
+    /// making duplicate EOF, reset, and shutdown cleanup harmless.
+    pub fn apply_client_disconnect_event(
         &mut self,
         client_id: &mez_core::ids::ClientId,
         reason: impl Into<String>,
     ) -> Result<bool> {
-        if self.session.primary_client_id() != Some(client_id) {
+        let reason = reason.into();
+        if self.session.primary_client_id() == Some(client_id) {
+            let terminal_size = self.session.authoritative_size;
+            self.detach_primary(client_id, terminal_size)?;
+            self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                format!(
+                    r#"{{"client_id":"{}","client_disconnect":"primary","reason":"{}"}}"#,
+                    json_escape(client_id.as_str()),
+                    json_escape(&reason)
+                ),
+            )?;
+            self.persist_or_defer_registry_update()?;
+            return Ok(true);
+        }
+
+        let Some(client) = self
+            .session
+            .clients()
+            .iter()
+            .find(|client| client.id == *client_id)
+        else {
+            return Ok(false);
+        };
+        if !matches!(
+            client.state,
+            mez_mux::session::ClientState::Attached | mez_mux::session::ClientState::Pending
+        ) {
             return Ok(false);
         }
-        let reason = reason.into();
-        let terminal_size = self.session.authoritative_size;
-        self.detach_primary(client_id, terminal_size)?;
+        let role = match client.role {
+            mez_mux::session::ClientRole::PendingObserver => "pending_observer",
+            mez_mux::session::ClientRole::Observer => "observer",
+            mez_mux::session::ClientRole::Agent => "agent",
+            mez_mux::session::ClientRole::Automation => "automation",
+            mez_mux::session::ClientRole::Primary => return Ok(false),
+        };
+        self.session.detach_client_self(client_id)?;
         self.append_lifecycle_event(
-            EventKind::Diagnostic,
+            EventKind::ClientDetached,
             format!(
-                r#"{{"client_id":"{}","client_disconnect":"primary","reason":"{}"}}"#,
+                r#"{{"client_id":"{}","role":"{}","reason":"{}"}}"#,
                 json_escape(client_id.as_str()),
+                role,
                 json_escape(&reason)
             ),
         )?;

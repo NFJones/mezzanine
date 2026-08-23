@@ -48,11 +48,12 @@ pub struct ControlConnectionState {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) caller_client_id: Option<ClientId>,
-    /// Stores whether EOF on this connection should detach the primary client.
+    /// Stores whether EOF on this connection should detach its owned client.
     ///
-    /// This is opt-in for foreground attach sockets so request-scoped control
-    /// clients can close without mutating primary ownership.
-    pub(super) detach_primary_on_disconnect: bool,
+    /// Newly created foreground primary and observer attachments are owned by
+    /// their connection. Request-scoped clients reusing an existing primary
+    /// remain unowned so their EOF cannot detach another connection's client.
+    pub(super) detach_client_on_disconnect: bool,
     /// Negotiated server-opened event stream version for this connection.
     pub(super) event_stream_version: Option<u32>,
     /// Whether the negotiated event stream start was already consumed.
@@ -75,7 +76,7 @@ impl ControlConnectionState {
             outer_authenticated,
             trusted_interactive_assertion,
             caller_client_id: None,
-            detach_primary_on_disconnect: false,
+            detach_client_on_disconnect: false,
             event_stream_version: None,
             event_stream_started: false,
             disconnect_submitted: false,
@@ -95,7 +96,7 @@ impl ControlConnectionState {
             outer_authenticated: true,
             trusted_interactive_assertion: true,
             caller_client_id: Some(caller_client_id),
-            detach_primary_on_disconnect: false,
+            detach_client_on_disconnect: false,
             event_stream_version: None,
             event_stream_started: false,
             disconnect_submitted: false,
@@ -206,12 +207,12 @@ impl ControlConnectionState {
         Some((client_id, version))
     }
 
-    /// Takes the primary client that should receive an EOF disconnect event.
+    /// Takes the connection-owned client that should receive a disconnect event.
     ///
     /// At most one call returns a client ID, making duplicate EOF, reset, and
     /// shutdown notifications harmless at this boundary.
     pub fn take_disconnect_client_id(&mut self) -> Option<ClientId> {
-        if self.disconnect_submitted || !self.detach_primary_on_disconnect {
+        if self.disconnect_submitted || !self.detach_client_on_disconnect {
             return None;
         }
         let client_id = self.caller_client_id.clone()?;
@@ -451,7 +452,7 @@ pub(super) fn initialize_control_connection(
             };
             connection.initialized = true;
             connection.caller_client_id = Some(client_id);
-            connection.detach_primary_on_disconnect =
+            connection.detach_client_on_disconnect =
                 created_primary && init.detach_primary_on_disconnect;
             connection.event_stream_version = init.event_stream_version;
             Ok(InitializeResult {
@@ -473,7 +474,7 @@ pub(super) fn initialize_control_connection(
             let observer_state = observer_json(session, observer_id.as_str())?;
             connection.initialized = true;
             connection.caller_client_id = Some(client_id);
-            connection.detach_primary_on_disconnect = false;
+            connection.detach_client_on_disconnect = true;
             connection.event_stream_version = init.event_stream_version;
             Ok(InitializeResult {
                 selected_version,
@@ -499,6 +500,7 @@ pub(super) fn initialize_control_connection(
             )?;
             connection.initialized = true;
             connection.caller_client_id = Some(client_id);
+            connection.detach_client_on_disconnect = true;
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),
@@ -519,6 +521,7 @@ pub(super) fn initialize_control_connection(
             )?;
             connection.initialized = true;
             connection.caller_client_id = Some(client_id);
+            connection.detach_client_on_disconnect = true;
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),

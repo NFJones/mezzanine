@@ -88,12 +88,22 @@ impl RuntimeServiceFixture {
 
     /// Builds the runtime service.
     pub(crate) fn build(self) -> RuntimeSessionService {
+        let session = SessionFixture::new().size(self.size).build();
+        self.build_with_session(session)
+    }
+
+    /// Builds the runtime service around an explicitly prepared session.
+    ///
+    /// This test-only path supports lifecycle scenarios that require pending
+    /// or approved clients before the async actor takes ownership, without
+    /// exposing mutable session access from the production runtime service.
+    pub(crate) fn build_with_session(self, session: Session) -> RuntimeSessionService {
         if let Some(parent) = self.control_socket.parent() {
             std::fs::create_dir_all(parent)
                 .expect("runtime fixture control socket parent should be creatable");
         }
         let mut service = RuntimeSessionService::with_event_log(
-            SessionFixture::new().size(self.size).build(),
+            session,
             self.control_socket,
             self.created_at_unix_seconds,
             self.max_events,

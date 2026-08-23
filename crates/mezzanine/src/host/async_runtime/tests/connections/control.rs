@@ -266,6 +266,7 @@ async fn async_control_listener_registers_observer_while_primary_connection_rema
     );
     let (primary_ready_tx, primary_ready_rx) = oneshot::channel();
     let (observer_ready_tx, observer_ready_rx) = oneshot::channel();
+    let (observer_listed_tx, observer_listed_rx) = oneshot::channel();
 
     let primary_client = async {
         let mut stream = UnixStream::connect(&path).await.unwrap();
@@ -280,6 +281,7 @@ async fn async_control_listener_registers_observer_while_primary_connection_rema
         assert!(body.contains(r#""observers""#), "{body}");
         assert!(body.contains(r#""state":"pending""#), "{body}");
         assert!(body.contains("observer-cli"), "{body}");
+        observer_listed_tx.send(()).unwrap();
     };
     let observer_client = async {
         primary_ready_rx.await.unwrap();
@@ -291,6 +293,7 @@ async fn async_control_listener_registers_observer_while_primary_connection_rema
             "{body}"
         );
         observer_ready_tx.send(()).unwrap();
+        observer_listed_rx.await.unwrap();
     };
     let server = async {
         let served = serve_async_runtime_control_listener(

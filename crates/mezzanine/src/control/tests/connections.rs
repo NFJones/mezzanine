@@ -380,6 +380,31 @@ fn pending_observer_connection_gets_no_session_data_after_initialize() {
     );
 }
 
+/// Verifies observer initialization owns one disconnect cleanup event.
+///
+/// Each observer request is created for one live control connection. EOF,
+/// reset, and shutdown may race, so the connection must expose its observer
+/// client exactly once for role-neutral runtime cleanup.
+#[test]
+fn observer_disconnect_client_is_taken_once() {
+    let (mut session, _primary) = test_session();
+    let mut connection = ControlConnectionState::new(true, true);
+    let mut cache = ControlIdempotencyCache::default();
+    let input = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"observer","requested_version":1,"requested_role":"observer","client":{"name":"observer","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+    );
+
+    handle_control_frames_for_connection(&input, 4096, &mut session, &mut connection, &mut cache)
+        .unwrap();
+
+    let observer_client = session.observers()[0].client_id.clone();
+    assert_eq!(
+        connection.take_disconnect_client_id(),
+        Some(observer_client)
+    );
+    assert!(connection.take_disconnect_client_id().is_none());
+}
+
 /// Verifies transport-authenticated identity cannot change on a live connection.
 ///
 /// The transport peer is evidence supplied by the concrete adapter, so accepting
