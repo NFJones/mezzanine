@@ -97,7 +97,12 @@ pub(super) enum ControlTargetSelection {
     /// Uses one protected, previously paired Iroh profile.
     IrohProfile(String),
     /// Uses one protected first-pairing invitation file.
-    IrohInvitation(PathBuf),
+    IrohInvitation {
+        /// Owner-only invitation file to read.
+        path: PathBuf,
+        /// Optional client-local alias overriding invitation display metadata.
+        save_as: Option<String>,
+    },
 }
 
 impl ControlTargetSelection {
@@ -189,6 +194,15 @@ pub(super) struct CliArgv {
         help_heading = "Global Options"
     )]
     pub(super) iroh_invite_file: Option<PathBuf>,
+    /// Saves an invitation-paired profile under this client-local alias.
+    #[arg(
+        long = "save-as",
+        value_name = "NAME",
+        global = true,
+        requires = "iroh_invite_file",
+        help_heading = "Global Options"
+    )]
+    pub(super) save_as: Option<String>,
     /// Emits machine-readable JSON for structured command output.
     #[arg(long, global = true, help_heading = "Global Options")]
     pub(super) json: bool,
@@ -287,13 +301,18 @@ impl CliInvocation {
             )?);
         }
 
-        let control_target = match (parsed.iroh_profile, parsed.iroh_invite_file) {
-            (Some(profile), None) => ControlTargetSelection::IrohProfile(profile),
-            (None, Some(path)) => ControlTargetSelection::IrohInvitation(path),
-            (None, None) => ControlTargetSelection::Unix,
-            (Some(_), Some(_)) => {
+        let control_target = match (parsed.iroh_profile, parsed.iroh_invite_file, parsed.save_as) {
+            (Some(profile), None, None) => ControlTargetSelection::IrohProfile(profile),
+            (None, Some(path), save_as) => ControlTargetSelection::IrohInvitation { path, save_as },
+            (None, None, None) => ControlTargetSelection::Unix,
+            (Some(_), Some(_), _) => {
                 return Err(MezError::invalid_args(
                     "only one Iroh control target may be provided",
+                ));
+            }
+            (_, None, Some(_)) => {
+                return Err(MezError::invalid_args(
+                    "--save-as requires --iroh-invite-file",
                 ));
             }
         };

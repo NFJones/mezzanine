@@ -1,7 +1,8 @@
 //! Protected persistent identity and profiles for Iroh clients.
 
-use std::fs;
-use std::io::Read;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use iroh::{EndpointAddr, SecretKey};
@@ -55,6 +56,37 @@ pub(crate) fn read_remote_invitation_file(path: &Path, max_bytes: u64) -> Result
         ));
     }
     Ok(bytes)
+}
+
+/// Creates one owner-only invitation file without replacing an existing path.
+///
+/// The final path is opened with `create_new`, mode `0600`, and no preflight
+/// existence check, so an existing regular file or symlink wins the race and
+/// remains untouched. A failed write removes only the file created here.
+pub(crate) fn write_remote_invitation_file_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true).mode(0o600);
+    let mut file = options.open(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            MezError::conflict(format!(
+                "Iroh invitation output {} already exists; choose another path",
+                path.display()
+            ))
+        } else {
+            error.into()
+        }
+    })?;
+    let result = (|| -> Result<()> {
+        file.write_all(bytes)?;
+        file.flush()?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+    result
 }
 
 /// Persistent endpoint identity shared by explicit remote client targets.
@@ -129,6 +161,21 @@ pub(crate) struct RemoteClientProfile {
     pub device_credential: SecretString,
 }
 
+/// Redacted local metadata for one endpoint-bound remote server profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct RemoteClientProfileSummary {
+    /// Client-local alias used by `--iroh-profile`.
+    pub name: String,
+    /// Abbreviated pinned server endpoint identity for safe display.
+    pub server_fingerprint: String,
+    /// Maximum role granted by the protected device credential.
+    pub role: RemoteRoleCeiling,
+    /// Number of persisted direct IP route hints.
+    pub direct_route_count: usize,
+    /// Number of persisted relay route hints.
+    pub relay_route_count: usize,
+}
+
 impl std::fmt::Debug for RemoteClientProfile {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter
@@ -188,6 +235,136 @@ impl RemoteClientProfileStore {
             role: stored.role,
             device_credential: SecretString::from(credential),
         }))
+    }
+
+    /// Lists redacted profile metadata without opening credential files.
+    pub(crate) fn list(&self) -> Result<Vec<RemoteClientProfileSummary>> {
+        ensure_client_directory_chain(&self.directory)?;
+        let lock = open_private_lock(&self.directory.join(PROFILES_LOCK_FILE_NAME))?;
+        flock(&lock, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        let database = self.load_database()?;
+        Ok(database
+            .profiles
+            .iter()
+            .map(remote_client_profile_summary)
+            .collect())
+    }
+
+    /// Loads redacted metadata for one named profile.
+    pub(crate) fn summary(&self, name: &str) -> Result<Option<RemoteClientProfileSummary>> {
+        validate_profile_name(name)?;
+        ensure_client_directory_chain(&self.directory)?;
+        let lock = open_private_lock(&self.directory.join(PROFILES_LOCK_FILE_NAME))?;
+        flock(&lock, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        let database = self.load_database()?;
+        Ok(database
+            .profiles
+            .iter()
+            .find(|profile| profile.name == name)
+            .map(remote_client_profile_summary))
+    }
+
+    /// Rejects a client-local alias already pinned to another server identity.
+    ///
+    /// This preflight is intentionally performed before invitation redemption
+    /// so a local naming conflict cannot consume remote pairing state.
+    pub(crate) fn preflight_name_for_server(
+        &self,
+        name: &str,
+        server_endpoint_id: iroh::EndpointId,
+    ) -> Result<()> {
+        validate_profile_name(name)?;
+        ensure_client_directory_chain(&self.directory)?;
+        let lock = open_private_lock(&self.directory.join(PROFILES_LOCK_FILE_NAME))?;
+        flock(&lock, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        let database = self.load_database()?;
+        if let Some(existing) = database
+            .profiles
+            .iter()
+            .find(|profile| profile.name == name)
+            && existing.server_addr.id != server_endpoint_id
+        {
+            return Err(MezError::conflict(format!(
+                "remote client profile `{name}` is pinned to a different server identity; choose a different --save-as name"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Renames one client-local profile alias without changing its authority.
+    pub(crate) fn rename(
+        &self,
+        current_name: &str,
+        new_name: &str,
+    ) -> Result<RemoteClientProfileSummary> {
+        validate_profile_name(current_name)?;
+        validate_profile_name(new_name)?;
+        ensure_client_directory_chain(&self.directory)?;
+        let lock = open_private_lock(&self.directory.join(PROFILES_LOCK_FILE_NAME))?;
+        flock(&lock, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        let mut database = self.load_database()?;
+        let current_index = database
+            .profiles
+            .iter()
+            .position(|profile| profile.name == current_name)
+            .ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    format!("remote client profile `{current_name}` was not found"),
+                )
+            })?;
+        if current_name != new_name
+            && database
+                .profiles
+                .iter()
+                .any(|profile| profile.name == new_name)
+        {
+            return Err(MezError::conflict(format!(
+                "remote client profile `{new_name}` already exists"
+            )));
+        }
+        database.profiles[current_index].name = new_name.to_string();
+        let summary = remote_client_profile_summary(&database.profiles[current_index]);
+        database
+            .profiles
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        self.write_database(&database)?;
+        Ok(summary)
+    }
+
+    /// Removes one local reconnect profile and its protected credential file.
+    ///
+    /// This does not revoke the corresponding server-side trusted-client
+    /// record; revocation remains a local Unix-control administration action.
+    pub(crate) fn remove(&self, name: &str) -> Result<RemoteClientProfileSummary> {
+        validate_profile_name(name)?;
+        ensure_client_directory_chain(&self.directory)?;
+        let lock = open_private_lock(&self.directory.join(PROFILES_LOCK_FILE_NAME))?;
+        flock(&lock, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        let mut database = self.load_database()?;
+        let index = database
+            .profiles
+            .iter()
+            .position(|profile| profile.name == name)
+            .ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    format!("remote client profile `{name}` was not found"),
+                )
+            })?;
+        let removed = database.profiles.remove(index);
+        validate_credential_file_name(&removed.credential_file)?;
+        self.write_database(&database)?;
+        let credential_path = self
+            .directory
+            .join(CREDENTIALS_DIRECTORY_NAME)
+            .join(&removed.credential_file);
+        match fs::remove_file(credential_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        Ok(remote_client_profile_summary(&removed))
     }
 
     /// Atomically publishes a profile after its credential is safely persisted.
@@ -386,6 +563,36 @@ fn profile_storage_key(name: &str) -> String {
         .collect()
 }
 
+/// Returns a stable abbreviated display fingerprint for one public endpoint ID.
+pub(crate) fn abbreviated_endpoint_fingerprint(endpoint_id: iroh::EndpointId) -> String {
+    endpoint_id.to_string().chars().take(12).collect()
+}
+
+/// Builds secret-free metadata from one persisted profile record.
+fn remote_client_profile_summary(
+    profile: &StoredRemoteClientProfile,
+) -> RemoteClientProfileSummary {
+    let direct_route_count = profile
+        .server_addr
+        .addrs
+        .iter()
+        .filter(|addr| matches!(addr, iroh::TransportAddr::Ip(_)))
+        .count();
+    let relay_route_count = profile
+        .server_addr
+        .addrs
+        .iter()
+        .filter(|addr| matches!(addr, iroh::TransportAddr::Relay(_)))
+        .count();
+    RemoteClientProfileSummary {
+        name: profile.name.clone(),
+        server_fingerprint: abbreviated_endpoint_fingerprint(profile.server_addr.id),
+        role: profile.role,
+        direct_route_count,
+        relay_route_count,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
@@ -565,6 +772,89 @@ mod tests {
                 &format!("credential-{index}")
             );
         }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies local profile management changes aliases without changing
+    /// endpoint authority and removes only the selected protected credential.
+    ///
+    /// List and show results must remain redacted, rename must reject an
+    /// existing alias, and remove must leave unrelated profiles usable.
+    #[test]
+    fn profile_management_is_redacted_collision_safe_and_local() {
+        let root = test_root("profile-management");
+        let store = RemoteClientProfileStore::under_config_root(&root);
+        let first = RemoteClientProfile {
+            name: "home".to_string(),
+            server_addr: EndpointAddr::new(SecretKey::generate().public())
+                .with_ip_addr("127.0.0.1:47201".parse().unwrap()),
+            role: RemoteRoleCeiling::Primary,
+            device_credential: SecretString::from("home-secret".to_string()),
+        };
+        let second = RemoteClientProfile {
+            name: "office".to_string(),
+            server_addr: EndpointAddr::new(SecretKey::generate().public())
+                .with_relay_url("https://relay.example".parse().unwrap()),
+            role: RemoteRoleCeiling::Observer,
+            device_credential: SecretString::from("office-secret".to_string()),
+        };
+        store.save(&first).unwrap();
+        store.save(&second).unwrap();
+
+        let summaries = store.list().unwrap();
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].name, "home");
+        assert_eq!(summaries[0].direct_route_count, 1);
+        assert_eq!(summaries[1].relay_route_count, 1);
+        assert!(!format!("{summaries:?}").contains("secret"));
+
+        let collision = store.rename("home", "office").unwrap_err();
+        assert_eq!(collision.kind(), crate::error::MezErrorKind::Conflict);
+        let renamed = store.rename("home", "home-mez").unwrap();
+        assert_eq!(renamed.name, "home-mez");
+        assert_eq!(
+            store
+                .load("home-mez")
+                .unwrap()
+                .unwrap()
+                .device_credential
+                .expose_secret(),
+            "home-secret"
+        );
+
+        let removed = store.remove("home-mez").unwrap();
+        assert_eq!(removed.name, "home-mez");
+        assert!(store.load("home-mez").unwrap().is_none());
+        assert!(store.load("office").unwrap().is_some());
+        let credentials = fs::read_dir(store.directory().join(CREDENTIALS_DIRECTORY_NAME))
+            .unwrap()
+            .collect::<Vec<_>>();
+        assert_eq!(credentials.len(), 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies secure invitation output is owner-only and never replaces an
+    /// existing file or symlink target.
+    ///
+    /// Invitation output contains a bearer token, so no-overwrite creation and
+    /// restrictive permissions are required independently of the caller's
+    /// process umask.
+    #[test]
+    fn invitation_output_is_private_and_refuses_overwrite() {
+        let root = test_root("invitation-output");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("invite.json");
+
+        write_remote_invitation_file_new(&path, br#"{"token":"secret"}"#).unwrap();
+
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(fs::read(&path).unwrap(), br#"{"token":"secret"}"#);
+        let conflict = write_remote_invitation_file_new(&path, b"replacement").unwrap_err();
+        assert_eq!(conflict.kind(), crate::error::MezErrorKind::Conflict);
+        assert_eq!(fs::read(&path).unwrap(), br#"{"token":"secret"}"#);
         let _ = fs::remove_dir_all(root);
     }
 }

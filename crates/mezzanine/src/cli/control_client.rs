@@ -40,11 +40,20 @@ pub(super) fn run_control_request<W: Write>(
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
-    let socket_path = selected_socket_path(socket_selection);
-    let mut stream = UnixStream::connect(socket_path)?;
-    let body = exchange_control_request(&mut stream, method, params)?;
+    let body = request_control_body(socket_selection, method, params)?;
     write_control_response(stdout, output_format, &body)?;
     Ok(())
+}
+
+/// Exchanges one initialized request over the selected local control socket.
+pub(super) fn request_control_body(
+    socket_selection: &SocketSelection,
+    method: &str,
+    params: &str,
+) -> Result<String> {
+    let socket_path = selected_socket_path(socket_selection);
+    let mut stream = UnixStream::connect(socket_path)?;
+    exchange_control_request(&mut stream, method, params)
 }
 
 /// Exchanges initialization and one request over an established byte stream.
@@ -128,7 +137,11 @@ pub(super) async fn run_control_request_for_target<W: Write>(
                 })?;
             IrohControlTarget::Profile(profile)
         }
-        super::ControlTargetSelection::IrohInvitation(path) => parse_iroh_invitation_file(path)?,
+        super::ControlTargetSelection::IrohInvitation { path, save_as } => {
+            let target = parse_iroh_invitation_file(path, save_as.as_deref())?;
+            preflight_iroh_invitation_profile(paths.root(), &target)?;
+            target
+        }
     };
     let policy = explicit_iroh_client_policy(&configured_policy, &target)?;
     let body =
@@ -136,7 +149,7 @@ pub(super) async fn run_control_request_for_target<W: Write>(
     write_control_response(stdout, output_format, &body)
 }
 
-fn parse_iroh_invitation_file(path: &Path) -> Result<IrohControlTarget> {
+fn parse_iroh_invitation_file(path: &Path, save_as: Option<&str>) -> Result<IrohControlTarget> {
     let bytes = read_remote_invitation_file(path, MAX_IROH_INVITATION_FILE_BYTES)?;
     let value: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|_| MezError::invalid_args("invalid Iroh invitation JSON"))?;
@@ -144,6 +157,15 @@ fn parse_iroh_invitation_file(path: &Path) -> Result<IrohControlTarget> {
     let object = invitation
         .as_object()
         .ok_or_else(|| MezError::invalid_args("Iroh invitation must be a JSON object"))?;
+    if object
+        .get("format_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
+        return Err(MezError::invalid_args(
+            "Iroh invitation format_version must be 1",
+        ));
+    }
     let server_addr: EndpointAddr = serde_json::from_value(
         object
             .get("server_addr")
@@ -160,7 +182,9 @@ fn parse_iroh_invitation_file(path: &Path) -> Result<IrohControlTarget> {
             "Iroh invitation server identity does not match its address",
         ));
     }
-    let profile_name = invitation_string(object, "profile_name")?;
+    let profile_name = save_as
+        .map(str::to_string)
+        .unwrap_or(invitation_string(object, "profile_name")?);
     let token = invitation_string(object, "token")?;
     let role = match invitation_string(object, "role")?.as_str() {
         "observer" => RemoteRoleCeiling::Observer,
@@ -182,6 +206,78 @@ fn parse_iroh_invitation_file(path: &Path) -> Result<IrohControlTarget> {
         role,
         expires_at_unix_seconds,
     })
+}
+
+/// Secret-free metadata parsed from one validated invitation file.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(super) struct IrohInvitationSummary {
+    /// Version of the invitation envelope.
+    pub format_version: u64,
+    /// Server-suggested client-local profile name.
+    pub profile_name: String,
+    /// Abbreviated pinned server endpoint identity.
+    pub server_fingerprint: String,
+    /// Maximum role carried by the invitation.
+    pub role: RemoteRoleCeiling,
+    /// Invitation expiration as Unix seconds.
+    pub expires_at_unix_seconds: u64,
+    /// Whether the invitation is already expired according to the local clock.
+    pub expired: bool,
+    /// Number of pinned direct IP routes.
+    pub direct_route_count: usize,
+    /// Number of pinned relay routes.
+    pub relay_route_count: usize,
+}
+
+/// Parses one invitation file and returns only safe display metadata.
+pub(super) fn inspect_iroh_invitation_file(path: &Path) -> Result<IrohInvitationSummary> {
+    let target = parse_iroh_invitation_file(path, None)?;
+    let IrohControlTarget::Invitation {
+        profile_name,
+        server_addr,
+        role,
+        expires_at_unix_seconds,
+        ..
+    } = target
+    else {
+        unreachable!("invitation parsing always returns an invitation target")
+    };
+    let direct_route_count = server_addr
+        .addrs
+        .iter()
+        .filter(|addr| matches!(addr, iroh::TransportAddr::Ip(_)))
+        .count();
+    let relay_route_count = server_addr
+        .addrs
+        .iter()
+        .filter(|addr| matches!(addr, iroh::TransportAddr::Relay(_)))
+        .count();
+    Ok(IrohInvitationSummary {
+        format_version: 1,
+        profile_name,
+        server_fingerprint: crate::security::remote::abbreviated_endpoint_fingerprint(
+            server_addr.id,
+        ),
+        role,
+        expires_at_unix_seconds,
+        expired: current_unix_seconds_for_iroh_client()? > expires_at_unix_seconds,
+        direct_route_count,
+        relay_route_count,
+    })
+}
+
+/// Rejects an invitation alias conflict before dialing or redeeming its token.
+fn preflight_iroh_invitation_profile(config_root: &Path, target: &IrohControlTarget) -> Result<()> {
+    let IrohControlTarget::Invitation {
+        profile_name,
+        server_addr,
+        ..
+    } = target
+    else {
+        return Ok(());
+    };
+    RemoteClientProfileStore::under_config_root(config_root)
+        .preflight_name_for_server(profile_name, server_addr.id)
 }
 
 fn invitation_string(
@@ -245,6 +341,29 @@ impl IrohControlTarget {
             Self::Invitation { server_addr, .. } => server_addr,
             Self::Profile(profile) => &profile.server_addr,
         }
+    }
+
+    fn profile_name(&self) -> &str {
+        match self {
+            Self::Invitation { profile_name, .. } => profile_name,
+            Self::Profile(profile) => &profile.name,
+        }
+    }
+
+    fn route_counts(&self) -> (usize, usize) {
+        let direct = self
+            .server_addr()
+            .addrs
+            .iter()
+            .filter(|addr| matches!(addr, iroh::TransportAddr::Ip(_)))
+            .count();
+        let relay = self
+            .server_addr()
+            .addrs
+            .iter()
+            .filter(|addr| matches!(addr, iroh::TransportAddr::Relay(_)))
+            .count();
+        (direct, relay)
     }
 
     fn role(&self) -> RemoteRoleCeiling {
@@ -441,7 +560,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
         endpoint.connect(target.server_addr().clone(), MEZZANINE_IROH_ALPN),
     )
     .await
-    .map_err(|_| MezError::invalid_state("Iroh connection setup timed out"))?
+    .map_err(|_| iroh_setup_timeout_error(&policy, &target, "connection setup"))?
     .map_err(iroh_connect_error)?;
     if connection.remote_id() != target.server_addr().id {
         return Err(MezError::forbidden(
@@ -553,7 +672,11 @@ fn resolve_iroh_control_target(
                     )
                 })
         }
-        super::ControlTargetSelection::IrohInvitation(path) => parse_iroh_invitation_file(path),
+        super::ControlTargetSelection::IrohInvitation { path, save_as } => {
+            let target = parse_iroh_invitation_file(path, save_as.as_deref())?;
+            preflight_iroh_invitation_profile(config_root, &target)?;
+            Ok(target)
+        }
     }
 }
 
@@ -585,7 +708,118 @@ pub(crate) async fn exchange_iroh_control_request(
     method: &str,
     params: &str,
 ) -> Result<String> {
+    exchange_iroh_control_request_as(
+        config_root,
+        configured_policy,
+        target,
+        target.role().as_str(),
+        true,
+        method,
+        params,
+    )
+    .await
+}
+
+/// Pairs from one invitation without entering an interactive terminal session.
+pub(super) async fn pair_iroh_invitation(
+    env: &super::CliEnv,
+    path: &Path,
+    save_as: Option<&str>,
+) -> Result<crate::security::remote::RemoteClientProfileSummary> {
+    let paths = env.config_paths()?;
+    let layers = super::load_runtime_config_layers(&paths)?;
+    let structured = crate::runtime::runtime_effective_config_value(&layers)?;
+    let configured_policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
+    let target = parse_iroh_invitation_file(path, save_as)?;
+    preflight_iroh_invitation_profile(paths.root(), &target)?;
+    let profile_name = target.profile_name().to_string();
+    let params = format!(
+        r#"{{"idempotency_key":"{}"}}"#,
+        super::cli_idempotency_key("remote-pair-detach")
+    );
+    let body = exchange_iroh_control_request_as(
+        paths.root(),
+        &configured_policy,
+        &target,
+        "observer",
+        false,
+        "client/detach",
+        &params,
+    )
+    .await?;
+    ensure_iroh_follow_up_success(&body, "pairing cleanup")?;
+    RemoteClientProfileStore::under_config_root(paths.root())
+        .summary(&profile_name)?
+        .ok_or_else(|| MezError::invalid_state("successful Iroh pairing did not persist a profile"))
+}
+
+/// Authenticates one paired profile and cleans up its temporary observer client.
+pub(super) async fn check_iroh_profile(
+    env: &super::CliEnv,
+    profile_name: &str,
+) -> Result<crate::security::remote::RemoteClientProfileSummary> {
+    let paths = env.config_paths()?;
+    let layers = super::load_runtime_config_layers(&paths)?;
+    let structured = crate::runtime::runtime_effective_config_value(&layers)?;
+    let configured_policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
+    let profile = RemoteClientProfileStore::under_config_root(paths.root())
+        .load(profile_name)?
+        .ok_or_else(|| {
+            MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                format!("remote client profile `{profile_name}` was not found"),
+            )
+        })?;
+    let target = IrohControlTarget::Profile(profile);
+    let params = format!(
+        r#"{{"idempotency_key":"{}"}}"#,
+        super::cli_idempotency_key("remote-profile-check-detach")
+    );
+    let body = exchange_iroh_control_request_as(
+        paths.root(),
+        &configured_policy,
+        &target,
+        "observer",
+        false,
+        "client/detach",
+        &params,
+    )
+    .await?;
+    ensure_iroh_follow_up_success(&body, "profile check cleanup")?;
+    RemoteClientProfileStore::under_config_root(paths.root())
+        .summary(profile_name)?
+        .ok_or_else(|| MezError::invalid_state("authenticated Iroh profile disappeared"))
+}
+
+/// Rejects a JSON-RPC follow-up error after successful Iroh authentication.
+fn ensure_iroh_follow_up_success(body: &str, operation: &str) -> Result<()> {
+    let value: serde_json::Value = serde_json::from_str(body).map_err(|_| {
+        MezError::invalid_state(format!("Iroh {operation} response is invalid JSON"))
+    })?;
+    if let Some(error) = value.get("error") {
+        let message = error
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("remote control request was rejected");
+        return Err(MezError::invalid_state(format!(
+            "Iroh {operation} failed: {message}"
+        )));
+    }
+    Ok(())
+}
+
+/// Exchanges initialization at one permitted role and one follow-up request.
+async fn exchange_iroh_control_request_as(
+    config_root: &Path,
+    configured_policy: &RuntimeIrohTransportPolicy,
+    target: &IrohControlTarget,
+    requested_role: &str,
+    client_interactive: bool,
+    method: &str,
+    params: &str,
+) -> Result<String> {
     let policy = explicit_iroh_client_policy(configured_policy, target)?;
+    ensure_iroh_attach_role_allowed(target.role(), requested_role)?;
     if let IrohControlTarget::Invitation {
         expires_at_unix_seconds,
         ..
@@ -606,6 +840,10 @@ pub(crate) async fn exchange_iroh_control_request(
         config_root,
         &policy,
         target,
+        IrohClientInitialization {
+            requested_role,
+            interactive: client_interactive,
+        },
         method,
         request_params,
         &endpoint,
@@ -731,10 +969,18 @@ mod outbound_policy_tests {
     }
 }
 
+/// Client role and presentation metadata sent during one-shot Iroh initialization.
+#[derive(Debug, Clone, Copy)]
+struct IrohClientInitialization<'a> {
+    requested_role: &'a str,
+    interactive: bool,
+}
+
 async fn exchange_bound_iroh_control_request(
     config_root: &Path,
     policy: &RuntimeIrohTransportPolicy,
     target: &IrohControlTarget,
+    initialization: IrohClientInitialization<'_>,
     method: &str,
     params: serde_json::Value,
     endpoint: &iroh::Endpoint,
@@ -744,7 +990,7 @@ async fn exchange_bound_iroh_control_request(
         endpoint.connect(target.server_addr().clone(), MEZZANINE_IROH_ALPN),
     )
     .await
-    .map_err(|_| MezError::invalid_state("Iroh connection setup timed out"))?
+    .map_err(|_| iroh_setup_timeout_error(policy, target, "connection setup"))?
     .map_err(iroh_connect_error)?;
     if connection.remote_id() != target.server_addr().id {
         return Err(MezError::forbidden(
@@ -757,7 +1003,23 @@ async fn exchange_bound_iroh_control_request(
         .map_err(|_| MezError::invalid_state("failed to open Iroh control stream"))?;
 
     let (mechanism, credential) = target.authentication();
-    let role = target.role().as_str();
+    let client = if initialization.interactive {
+        serde_json::json!({
+            "name": "remote-cli",
+            "interactive": true,
+            "terminal": {
+                "columns": 80,
+                "rows": 24,
+                "term": "xterm-256color"
+            }
+        })
+    } else {
+        serde_json::json!({
+            "name": "remote-cli",
+            "interactive": false,
+            "purpose": "pairing-or-connectivity-check"
+        })
+    };
     let initialize = serde_json::json!({
         "jsonrpc": "2.0",
         "id": "cli-init",
@@ -765,17 +1027,9 @@ async fn exchange_bound_iroh_control_request(
         "params": {
             "client_name": "remote-cli",
             "requested_version": 1,
-            "requested_role": role,
-            "detach_primary_on_disconnect": true,
-            "client": {
-                "name": "remote-cli",
-                "interactive": true,
-                "terminal": {
-                    "columns": 80,
-                    "rows": 24,
-                    "term": "xterm-256color"
-                }
-            },
+            "requested_role": initialization.requested_role,
+            "detach_primary_on_disconnect": initialization.requested_role == "primary",
+            "client": client,
             "authentication": {
                 "mechanism": mechanism,
                 "token": credential.expose_secret()
@@ -785,7 +1039,8 @@ async fn exchange_bound_iroh_control_request(
     .to_string();
     write_iroh_control_frame(&mut send, &initialize, policy.idle_timeout).await?;
     let initialize_body = read_iroh_control_frame(&mut recv, policy.idle_timeout).await?;
-    let issued_credential = validate_iroh_initialize_response(&initialize_body, role)?;
+    let issued_credential =
+        validate_iroh_initialize_response(&initialize_body, initialization.requested_role)?;
 
     if let IrohControlTarget::Invitation {
         profile_name,
@@ -951,6 +1206,19 @@ fn iroh_connect_error(error: iroh::endpoint::ConnectError) -> MezError {
     } else {
         MezError::invalid_state("Iroh connection failed during address, relay, or ALPN negotiation")
     }
+}
+
+fn iroh_setup_timeout_error(
+    policy: &RuntimeIrohTransportPolicy,
+    target: &IrohControlTarget,
+    stage: &str,
+) -> MezError {
+    let (direct_routes, relay_routes) = target.route_counts();
+    MezError::invalid_state(format!(
+        "Iroh {stage} timed out after {} ms before Mezzanine authentication; profile `{}` has {direct_routes} pinned direct route(s) and {relay_routes} pinned relay route(s)",
+        policy.setup_timeout.as_millis(),
+        target.profile_name()
+    ))
 }
 
 fn current_unix_seconds_for_iroh_client() -> Result<u64> {

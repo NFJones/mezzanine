@@ -417,6 +417,35 @@ impl Session {
         Ok(())
     }
 
+    /// Detaches one session client acting on its own authenticated identity.
+    ///
+    /// This does not grant authority over any other client. Observer records
+    /// are revoked so a short-lived pairing or connectivity-check connection
+    /// cannot leave a pending or approved observer request behind.
+    pub fn detach_client_self(&mut self, client_id: &ClientId) -> Result<()> {
+        if self.primary_client_id.as_ref() == Some(client_id) {
+            return self.detach_primary(client_id);
+        }
+        let client = self
+            .clients
+            .iter_mut()
+            .find(|client| client.id == *client_id)
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "client not found"))?;
+        client.state = ClientState::Detached;
+        client.last_seen_at_unix_seconds = Some(current_unix_seconds());
+        if let Some(observer) = self
+            .observers
+            .iter_mut()
+            .find(|observer| observer.client_id == *client_id)
+        {
+            observer.state = ObserverDecisionState::Revoked;
+            observer.decided_at_unix_seconds = Some(current_unix_seconds());
+            observer.reason = Some("client detached itself".to_string());
+        }
+        self.record_event();
+        Ok(())
+    }
+
     /// Runs the detach primary operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

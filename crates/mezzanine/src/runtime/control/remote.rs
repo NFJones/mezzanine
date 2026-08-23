@@ -537,6 +537,7 @@ impl RuntimeSessionService {
                         super::current_unix_seconds(),
                     )?;
                 Ok(serde_json::json!({
+                    "format_version": 1,
                     "invitation_id": invitation.invitation_id,
                     "token": invitation.token.expose_secret(),
                     "server_endpoint_id": invitation.server_endpoint_id,

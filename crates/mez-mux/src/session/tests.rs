@@ -1472,3 +1472,33 @@ fn killing_final_window_marks_session_empty() {
     assert!(session.windows().is_empty());
     assert_eq!(session.state, SessionState::Empty);
 }
+
+/// Verifies self-detach preserves primary lifecycle semantics while allowing
+/// a temporary observer to revoke only its own pending request.
+///
+/// Pairing and profile checks use observer self-detach for cleanup. Extending
+/// that path must not weaken client isolation or leave a primary session in a
+/// running state after its owning client explicitly detaches.
+#[test]
+fn client_self_detach_preserves_primary_and_observer_lifecycle() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let (observer_client, observer_request) = session.request_observer("pairing-check");
+
+    session.detach_client_self(&observer_client).unwrap();
+
+    let observer = session
+        .observers()
+        .iter()
+        .find(|observer| observer.id == observer_request)
+        .unwrap();
+    assert_eq!(observer.state, ObserverDecisionState::Revoked);
+    assert_eq!(observer.reason.as_deref(), Some("client detached itself"));
+    assert_eq!(session.primary_client_id(), Some(&primary));
+    assert_eq!(session.state, SessionState::Running);
+
+    session.detach_client_self(&primary).unwrap();
+
+    assert!(session.primary_client_id().is_none());
+    assert_eq!(session.state, SessionState::Detached);
+}

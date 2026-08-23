@@ -594,7 +594,11 @@ pub(super) fn dispatch_parsed_request(
             require_idempotency_key(params)?;
             let client_id = json_string_field(params, "client_id")
                 .unwrap_or_else(|| primary_client_id.to_string());
-            session.detach_client_target(primary_client_id, &client_id)?;
+            if client_id == primary_client_id.as_str() {
+                session.detach_client_self(primary_client_id)?;
+            } else {
+                session.detach_client_target(primary_client_id, &client_id)?;
+            }
             Ok(r#"{"detached":true}"#.to_string())
         }
         ControlDispatchKind::ClientSelectPrimary => {

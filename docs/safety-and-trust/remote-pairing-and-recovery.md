@@ -42,15 +42,20 @@ mez remote invite --role observer
 `status` reports the public per-session endpoint identity and, while the listener
 is bound, its current dialable endpoint address. `invite` returns a short-lived
 bearer token once together with that pinned address, role, expiry, and profile
-name. Its lifetime defaults to `transport.iroh.invitation_ttl_seconds` (600
+name. The versioned invitation envelope currently uses format version 1. Its
+lifetime defaults to `transport.iroh.invitation_ttl_seconds` (600
 seconds by default); `--expires SECONDS` explicitly overrides that lifetime
 within the supported 30 through 86,400 second range. Transfer the JSON through
-a confidential channel and store it in an owner-only file:
+a confidential channel. Prefer secure no-overwrite output:
 
 ```console
-umask 077
-mez --json remote invite --role primary > mez-invite.json
+mez remote invite --role primary --output mez-invite.json
 ```
+
+The output file is created mode `0600`, existing files and symlinks are refused,
+and the terminal receives only the created path. `mez remote invitation inspect
+mez-invite.json` reports only expiry, role, an abbreviated server fingerprint,
+and direct/relay route counts; it never prints the token.
 
 The one-shot local administration connection releases a primary that it
 created when the request completes, so the invited remote primary can redeem
@@ -72,11 +77,21 @@ response is lost or local profile persistence fails, retry the same invitation
 from the same client endpoint before it expires. The server returns the same
 credential and reuses the existing trust record; another endpoint cannot claim
 or resume it. This retry does not replay a later control or terminal request.
-If the invitation's profile name already belongs to a different server endpoint,
-profile publication fails without replacing its route or credential. Issue a
-new invitation with a distinct profile name rather than deleting or rewriting
-the protected profile database by hand. A retry for the same server identity may
-refresh that profile after successful initialization.
+Use a human-readable client-local alias while pairing or attaching:
+
+```console
+mez remote pair --invite-file mez-invite.json --name home-mez
+# Or pair and immediately attach:
+mez --iroh-invite-file mez-invite.json --save-as home-mez attach
+```
+
+Aliases are display and reconnect metadata only. They do not grant authority or
+replace endpoint identity, role, or credential checks. If an alias already
+belongs to a different server endpoint, the client fails before dialing or
+redeeming the invitation and preserves the existing profile. Reusing an alias
+for the same endpoint may refresh authenticated routes and credentials.
+`remote pair` authenticates temporarily as an observer and self-detaches, so it
+does not displace a primary or leave a pending observer request.
 Foreign-machine invitations include only a relay route or a non-loopback direct
 route on a configured non-zero `transport.iroh.bind_port`. Direct-only
 deployments must configure that stable port and the network must make it
@@ -84,12 +99,31 @@ reachable. Relay-backed routes survive direct-port changes. If address lookup
 is explicitly configured, a paired profile may resolve and persist refreshed
 route hints only after the connection authenticates the same pinned server ID
 and device credential.
-Later control and interactive attach use `--iroh-profile PROFILE`. The direct
+Later control and interactive attach use `--iroh-profile PROFILE`. Inspect and
+manage local reconnect profiles without exposing credentials:
+
+```console
+mez remote profile list
+mez remote profile show home-mez
+mez remote profile rename home-mez workstation
+mez remote profile check workstation
+mez remote profile remove workstation
+```
+
+Rename changes only the alias. Remove deletes only the local profile; it does
+not revoke the server trust record. Check authenticates through a temporary
+observer and self-detaches. Server-side revocation remains the local Unix
+`remote revoke` workflow below. The direct
 Iroh CLI surface supports `attach`, `kill`, and `detach`. For example, use `mez
 --iroh-invite-file mez-invite.json attach` for first pairing or `mez
 --iroh-profile PROFILE attach` for reconnect; add `--observer` to request
 observer access. An observer-limited invitation or profile cannot attach as
 primary.
+
+Setup timeout errors name the failed stage and deadline, summarize pinned
+direct/relay route counts, and state when no Mezzanine authentication occurred.
+This diagnostic is safe to share because it omits route addresses, tokens,
+credentials, and private keys.
 
 Interactive attach retains one initialized control stream and orders each
 resize, terminal-input, and view request behind its response. It explicitly

@@ -283,7 +283,7 @@ pub async fn run_with<W: Write, E: Write>(
             run_memory(args, env, output_format, stdout)?;
         }
         Some(CliCommand::Remote(args)) => {
-            run_remote(args, &socket_selection, output_format, stdout)?;
+            run_remote(args, &socket_selection, &env, output_format, stdout).await?;
         }
         Some(CliCommand::Sandbox(args)) => {
             exit_code = run_sandbox(args, env, interactive, output_format, stdout)?;

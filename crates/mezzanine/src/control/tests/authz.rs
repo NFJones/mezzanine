@@ -209,6 +209,7 @@ fn pending_observer_capabilities_exclude_session_and_terminal_view_methods() {
         "control/initialize",
         "session/attach",
         "observer/inspect",
+        "client/detach",
         "control/cancel",
         "control/shutdown",
     ] {
@@ -217,6 +218,32 @@ fn pending_observer_capabilities_exclude_session_and_terminal_view_methods() {
             "{method} missing from pending observer capabilities"
         );
     }
+}
+
+/// Verifies an observer may detach only its own authenticated client record.
+///
+/// Pairing and profile checks use this narrow cleanup capability. Supplying
+/// another client id must remain forbidden so the helper cannot become remote
+/// client-administration authority.
+#[test]
+fn pending_observer_self_detach_cannot_target_another_client() {
+    let (mut session, primary) = test_session();
+    let (observer, _request) = session.request_observer("pairing-check");
+    let own = parse_json_rpc_request(&format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"client/detach","params":{{"client_id":"{}","idempotency_key":"self-detach"}}}}"#,
+        observer
+    ))
+    .unwrap();
+    let other = parse_json_rpc_request(&format!(
+        r#"{{"jsonrpc":"2.0","id":2,"method":"client/detach","params":{{"client_id":"{}","idempotency_key":"other-detach"}}}}"#,
+        primary
+    ))
+    .unwrap();
+
+    super::super::authorize_control_request(&session, &observer, &own).unwrap();
+    let error = super::super::authorize_control_request(&session, &observer, &other).unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(error.message().contains("detach only themselves"));
 }
 
 /// Restricted-role capability advertisements must use the same method lists as

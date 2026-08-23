@@ -17,7 +17,9 @@ mez [GLOBAL OPTIONS] [COMMAND [ARGUMENTS...]]
 ```
 
 Global options are `--json`, `-S PATH`, `-L NAME`, `--iroh-profile NAME`,
-and `--iroh-invite-file PATH`; they may appear before or after a command.
+`--iroh-invite-file PATH`, and `--save-as NAME`; they may appear before or after
+a command. `--save-as` requires an invitation target and selects the
+client-local alias used for later reconnects.
 `--json` selects machine-readable output. `-S` selects an explicit control
 socket and `-L` selects a named socket in the Mez runtime directory. The Iroh
 selectors are explicit remote targets, conflict with Unix socket selectors,
@@ -97,16 +99,19 @@ processes that existed when the snapshot was taken.
 | `mez sandbox` | Inspect, plan, enable, disable, manage presets, profiles, project trust, and Bubblewrap-home caches. `mez sandbox trust` supports `list`, `inspect PATH`, `add PATH`, `reject PATH`, and `revoke PATH`. |
 | `mez issue` | Add, show, update, query, and delete local project issues. |
 | `mez memory` | List, inspect, add, edit, delete, archive, mark stale, restore, record use or confirmation, supersede, prune, export, and search persistent memory records. |
-| `mez remote` | Use authenticated local Unix control for `status`, `invite --role observer|primary [--expires SECONDS]`, `clients`, `rename CLIENT_ID LABEL`, and `revoke CLIENT_ID [--reason TEXT]`. Paired Iroh clients cannot use these administration methods. |
+| `mez remote` | Use authenticated local Unix control for `status`, `invite --role observer|primary [--expires SECONDS] [--output PATH]`, `clients`, `rename CLIENT_ID LABEL`, and `revoke CLIENT_ID [--reason TEXT]`. Client-local commands are `pair --invite-file PATH [--name NAME]`, `invitation inspect PATH`, and `profile list|show|rename|remove|check`. Paired Iroh clients cannot use server trust-administration methods. |
 | `mez completion <shell>` | Generate a completion definition for `bash`, `elvish`, `fish`, `powershell`, or `zsh`. |
 
 Direct control commands keep Unix as their default target. `--iroh-invite-file
 PATH` explicitly performs first-use pairing from an owner-only, bounded JSON
 invitation file, while `--iroh-profile NAME` explicitly uses a protected paired
-profile. These selectors conflict with `-S` and `-L`, never fall back to Unix,
-and apply to `mez attach`, `mez kill --force`, and `mez detach`. Supplying a
-session argument is invalid with an explicit Iroh target because the profile or
-invitation already selects the remote session.
+profile. Add `--save-as NAME` to save invitation-issued authority under a
+human-readable client-local alias. The alias is not a trust input: the pinned
+server identity, client endpoint identity, role ceiling, and protected device
+credential remain authoritative. These selectors conflict with `-S` and `-L`,
+never fall back to Unix, and apply to `mez attach`, `mez kill --force`, and `mez
+detach`. Supplying a session argument is invalid with an explicit Iroh target
+because the profile or invitation already selects the remote session.
 
 Explicit Iroh targets work when listener-oriented `transport.iroh.enabled` is
 false. They require `transport.iroh.outbound_enabled = true` (the default) and
@@ -130,18 +135,35 @@ sent, Mez reports that the outcome is unknown, does not reconnect or replay the
 input, and requires an explicit reattach.
 
 Create invitation files without exposing the token through shell arguments or
-world-readable output. Omitting `--expires` uses
+world-readable output. `--output PATH` securely creates a new mode-`0600` file,
+refuses to replace an existing path or symlink, and prints only the created
+path. Invitations carry format version 1, and incompatible clients reject them
+before dialing. Omitting `--expires` uses
 `transport.iroh.invitation_ttl_seconds`; an explicit override must be from 30
 through 86,400 seconds. For example:
 
 ```console
-umask 077
-mez --json remote invite --role primary > mez-invite.json
-mez --iroh-invite-file mez-invite.json attach
-# Later, after successful pairing persisted the profile named by the invitation:
-mez --iroh-profile SESSION_PROFILE attach
-mez --iroh-profile SESSION_PROFILE kill --force
+mez remote invite --role primary --output mez-invite.json
+mez remote invitation inspect mez-invite.json
+mez remote pair --invite-file mez-invite.json --name home-mez
+mez --iroh-profile home-mez attach
+mez --iroh-profile home-mez kill --force
 ```
+
+`remote pair` redeems and saves the profile without entering a terminal session.
+It authenticates temporarily as an observer, detaches its own pending client,
+and prints the exact reconnect command. `remote profile list` and `show` expose
+only aliases, role ceilings, abbreviated server fingerprints, and route counts.
+`rename` changes only the local alias. `remove` deletes only the local reconnect
+profile and explicitly does not revoke server trust. `check` authenticates the
+profile through the same temporary observer/self-detach flow and reports a
+secret-free result. Use local Unix `remote revoke` on the server to revoke a
+device.
+
+Connection failures identify the setup stage and configured deadline. A setup
+timeout also reports pinned direct and relay route counts and states that
+Mezzanine authentication was not attempted, so users can distinguish network
+reachability from trust rejection without exposing addresses or credentials.
 
 `mez version` prints version information. `mez help` and `mez <command> --help`
 show the generated command contract. Human-readable output is the default;

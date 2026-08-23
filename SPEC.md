@@ -2949,6 +2949,10 @@ the same `device_credential` without creating duplicate trust; a different
 endpoint MUST NOT resume it. This recovery is limited to pairing initialization
 and MUST NOT replay later application requests. Status and list results,
 errors, debug output, and audit records MUST NOT disclose the credential.
+Invitation envelopes MUST carry `format_version = 1`; clients MUST reject
+missing or unsupported versions before network use. `remote invite --output`
+MUST create a new owner-only file without replacing an existing file or
+symlink, and successful output MUST NOT echo the invitation token.
 Durable trust MUST bind the server endpoint identity, authenticated client
 endpoint identity, stable trust record ID, role ceiling, revocation state, and
 a verifier for the device credential. Reconnects MUST resolve the presented
@@ -2959,7 +2963,14 @@ The client MUST persist its endpoint key, server profile, and device credential
 under owner-only protected paths. A live client endpoint
 identity MUST retain an exclusive lock, and profile database reads and writes
 MUST be serialized under a protected lock. The client MUST publish a profile
-only after successful invitation initialization. Explicit
+only after successful invitation initialization. A client-local alias supplied
+by `--save-as` or `remote pair --name` MUST affect only profile lookup and
+display metadata; it MUST NOT participate in authentication or authorization.
+An alias already pinned to another server identity MUST fail before network
+activity or invitation redemption, while the same-server alias MAY refresh
+authenticated route and credential material. Local profile list, show, rename,
+remove, and check operations MUST NOT disclose credentials. Removing a local
+profile MUST NOT claim to revoke server-side trust. Explicit
 `--iroh-invite-file` and `--iroh-profile` selections MUST NOT fall back to a Unix
 socket after any remote failure. Invitation files MUST be bounded, owner-only,
 and validated for pinned server-identity/address consistency before network use.
@@ -2981,6 +2992,15 @@ Publishing a same-named client profile MAY refresh its route, role ceiling, and
 credential only when the existing and incoming profiles are pinned to the same
 server endpoint identity. A different-server name collision MUST fail before
 credential publication and MUST preserve the existing profile and credential.
+`remote pair` and `remote profile check` MUST authenticate through a temporary
+observer connection, request no event stream, detach only their own temporary
+session client, and MUST NOT displace an attached primary or leave a pending
+observer request. Their output MAY include the local alias, role ceiling,
+abbreviated server fingerprint, route counts, and reconnect command, but MUST
+NOT include invitation tokens, device credentials, or private endpoint keys.
+Connection timeout diagnostics MUST identify the failed setup stage, configured
+deadline, and secret-free direct/relay route counts, and MUST state when
+Mezzanine authentication was not attempted.
 The direct Iroh CLI surface MUST support explicit `attach`, `kill`, and
 `detach` selection; other command paths MUST reject the remote selector before
 local Unix access rather than silently changing transports. Explicit Iroh

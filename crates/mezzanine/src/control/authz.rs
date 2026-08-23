@@ -66,6 +66,7 @@ pub(super) fn authorize_observer_method(
 
     match request.method.as_str() {
         "control/initialize" | "control/shutdown" | "control/cancel" => Ok(()),
+        "client/detach" => authorize_client_self_detach(caller_client_id, request),
         "terminal/view" => Ok(()),
         "event/list" if client.role == ClientRole::Observer => Ok(()),
         "session/attach" => {
@@ -125,6 +126,7 @@ fn authorize_pending_observer_method(
 
     match request.method.as_str() {
         "control/initialize" | "control/shutdown" | "control/cancel" => Ok(()),
+        "client/detach" => authorize_client_self_detach(caller_client_id, request),
         "session/attach" => {
             let Some(params) = request.params.as_deref() else {
                 return Err(MezError::invalid_args(
@@ -161,6 +163,27 @@ fn authorize_pending_observer_method(
         _ => Err(MezError::forbidden(
             "pending observer clients are not authorized for this control method",
         )),
+    }
+}
+
+/// Allows an observer to detach only its own authenticated session client.
+fn authorize_client_self_detach(
+    caller_client_id: &ClientId,
+    request: &JsonRpcRequest,
+) -> Result<()> {
+    let requested_client_id = request
+        .params
+        .as_deref()
+        .and_then(|params| json_string_field(params, "client_id"));
+    if requested_client_id
+        .as_deref()
+        .is_none_or(|id| id == caller_client_id.as_str())
+    {
+        Ok(())
+    } else {
+        Err(MezError::forbidden(
+            "observer clients may detach only themselves",
+        ))
     }
 }
 

@@ -516,10 +516,33 @@ fn invocation_parses_explicit_iroh_target_without_unix_fallback() {
     .unwrap();
     assert!(matches!(
         invitation.control_target,
-        ControlTargetSelection::IrohInvitation(ref path)
-            if path == &PathBuf::from("/tmp/pairing.json")
+        ControlTargetSelection::IrohInvitation {
+            ref path,
+            save_as: None,
+        } if path == &PathBuf::from("/tmp/pairing.json")
     ));
     assert!(matches!(invitation.command, Some(CliCommand::Attach(_))));
+
+    let named_invitation = CliInvocation::parse(
+        &[
+            "mez".to_string(),
+            "--iroh-invite-file".to_string(),
+            "/tmp/pairing.json".to_string(),
+            "--save-as".to_string(),
+            "home-mez".to_string(),
+            "attach".to_string(),
+        ],
+        &runtime,
+        None,
+    )
+    .unwrap();
+    assert!(matches!(
+        named_invitation.control_target,
+        ControlTargetSelection::IrohInvitation {
+            ref path,
+            save_as: Some(ref name),
+        } if path == &PathBuf::from("/tmp/pairing.json") && name == "home-mez"
+    ));
 
     let profile_attach = CliInvocation::parse(
         &[

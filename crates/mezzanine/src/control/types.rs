@@ -495,6 +495,7 @@ pub(crate) const PENDING_OBSERVER_CONTROL_METHODS: &[&str] = &[
     "control/initialize",
     "session/attach",
     "observer/inspect",
+    "client/detach",
     "control/cancel",
     "control/shutdown",
 ];
@@ -507,6 +508,7 @@ pub(crate) const OBSERVER_CONTROL_METHODS: &[&str] = &[
     "control/initialize",
     "control/shutdown",
     "control/cancel",
+    "client/detach",
     "terminal/view",
     "event/list",
     "session/attach",

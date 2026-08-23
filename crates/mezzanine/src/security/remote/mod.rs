@@ -12,7 +12,8 @@ mod types;
 
 pub(crate) use client::{
     RemoteClientIdentity, RemoteClientProfile, RemoteClientProfileStore,
-    read_remote_invitation_file,
+    RemoteClientProfileSummary, abbreviated_endpoint_fingerprint, read_remote_invitation_file,
+    write_remote_invitation_file_new,
 };
 pub(crate) use store::{RemoteEndpointIdentity, RemotePairingPreparation, RemoteTrustStore};
 pub(crate) use types::{
