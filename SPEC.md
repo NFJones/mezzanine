@@ -280,26 +280,68 @@ Mezzanine MUST support attaching one or more read-only observers to a session.
 A client MUST NOT be granted the primary role unless it is attached through an
 interactive terminal.
 
-Exactly one client MUST be primary for a session while any primary client is
-attached. Mezzanine MUST NOT permit more than one primary client for a session
-at a time. A request to attach as primary while another primary client is
-attached MUST fail with a structured conflict unless it is an authenticated
-reattachment of the same primary client identity or an explicit primary
-transfer operation that atomically removes the previous primary role before
-granting the new one.
+An attached primary MUST be a live interactive client whose role is `primary`
+and whose state is `attached`. Mezzanine control protocol version 2 MUST allow
+at most 16 attached primaries in one session. Every successful primary
+attachment MUST allocate a fresh, non-resumable `ClientId`; a display name is
+metadata and MUST NOT merge clients, resume authority, or identify a transport
+principal. Reconnection after detach or transport loss MUST create a new client
+identity.
+
+All attached primaries MUST have equal session authority, subject only to
+transport-specific restrictions that do not depend on display name or focus.
+Shared state MUST include topology, pane processes and screens, configuration,
+named buffers, committed command history, approvals, hooks, audit records, and
+one canonical PTY geometry. Each attached primary MUST have independent active,
+last, and bounded MRU group/window/pane navigation; zoom; prompt and prefix
+state; overlays and errors; copy mode and viewport; mouse state; pane selector;
+and agent drafts. One primary's navigation or transient presentation MUST NOT
+move, reveal, complete, or overwrite another primary's view.
+
+Mezzanine MUST retain no more than 64 unreferenced detached client summaries.
+It MUST NOT prune a client record while an observer request, unsettled approval,
+event binding, audit relation, or other live work refers to that client.
+
+One attached primary MUST be the layout owner whenever any primary is attached.
+The first attached primary becomes owner. Only owner resize changes canonical
+PTY geometry, layouts, terminal screens, and pane process sizes. A non-owner
+resize MUST update only that client's terminal descriptor and local viewport.
+Ownership MAY transfer atomically to another attached interactive primary
+without changing either client's authority. When the owner detaches, Mezzanine
+MUST elect the oldest attached primary, breaking equal-time ties by `ClientId`,
+and apply the elected owner's latest size exactly once. With zero primaries,
+Mezzanine MUST retain canonical geometry and have no layout owner.
+
+Primary lifecycle edges MUST be exact and actor ordered. `0 -> 1` enters the
+attached/running lifecycle and runs session-attach effects once. `N -> N+1`
+for `N >= 1` attaches only the new client. A non-final primary detach MUST NOT
+run session-detach persistence or hooks. `1 -> 0` MUST preserve canonical size,
+clear the owner, update client-independent landing navigation from the final
+primary, and run final-detach effects once. Duplicate EOF, reset, cancellation,
+shutdown, and explicit-detach cleanup for the same connection MUST be inert
+after the first exact-client transition. Pane processes, agents, providers,
+retries, pending observer requests, and pending approvals MUST continue while
+zero primaries are attached.
 
 A client requesting read-only access MUST enter the pending observer role
 first. A pending observer MUST NOT receive terminal, frame, window, pane, agent
 status, message-log, or notification payloads other than request-local status
 for its own observer request.
 
-A pending observer MUST graduate to read-only observer only after the primary
-client explicitly approves that observer. A rejected pending observer MUST be
-disconnected or left connected only to a request-local status surface that
-exposes no session state.
+A pending observer MUST graduate to read-only observer only after one attached
+primary explicitly approves that observer. Approval MUST atomically bind the
+observer to an exact attached source primary; the deciding primary is the
+default source, and an explicitly requested source MUST already be attached in
+the same session. A rejected pending observer MUST be disconnected or left
+connected only to a request-local status surface that exposes no session state.
+An approved observer MUST follow only its source primary's navigation and live
+pane content. It MUST NOT receive the source primary's prompts, overlays, copy
+mode, mouse state, drafts, private errors, or pre-approval history. Source
+detach MUST revoke the observer and close its stream; Mezzanine MUST NOT
+silently transfer an observer to another primary.
 
 After approval, a read-only observer MAY receive the raw rendered live view
-visible to the primary client from the approval moment forward. The observer
+of its source primary from the approval moment forward. The observer
 stream MUST start at the live viewport and live scroll position at the approval
 moment, not at a historical copy-mode or scrollback position. Mezzanine MUST
 NOT apply observer-specific redaction to the approved live rendered view.
@@ -307,38 +349,36 @@ NOT apply observer-specific redaction to the approved live rendered view.
 Read-only observers MUST NOT receive pane history, paste buffers, transcripts,
 or terminal output from before the approval moment.
 
-If the primary client is in copy mode, viewing scrollback, viewing a paste
+If the source primary is in copy mode, viewing scrollback, viewing a paste
 buffer, or otherwise displaying pre-approval history when an observer is
 approved, Mezzanine MUST show the observer the live viewport instead or a
-status placeholder until the primary returns to live content. After approval,
+status placeholder until the source returns to live content. After approval,
 commands or UI states that would expose pre-approval history to that observer
 MUST either omit older content or display a placeholder for it.
 
-The primary client MUST define the authoritative terminal dimensions for the
-session while attached. Read-only observers MUST render the primary client's
+The layout owner MUST define the authoritative terminal dimensions for the
+session while attached. Read-only observers MUST render their source primary's
 view without changing pane pseudoterminal sizes. If a read-only observer's
-terminal is smaller than the primary view, Mezzanine MUST either scale through
+terminal is smaller than the source view, Mezzanine MUST either scale through
 documented terminal-safe rendering or provide local scrolling within the
-presented view. If a read-only observer's terminal is larger than the primary
+presented view. If a read-only observer's terminal is larger than the source
 view, unused space MUST NOT change the controlled pane layout.
 
-If the primary client detaches, the most recent dimensions defined by the
-primary client MUST remain authoritative until a primary client reattaches or a
-new primary client is explicitly selected by an authorized operation. Read-only
-observers MUST NOT change pane pseudoterminal dimensions while no primary
-client is attached.
+If the final primary detaches, the most recent canonical dimensions MUST remain
+authoritative until a new primary attaches. Read-only observers MUST NOT change
+pane pseudoterminal dimensions while no primary is attached.
 
 Approved read-only observers MAY continue receiving rendered updates while no
 primary client is attached, but those updates MUST use the last authoritative
 primary-client dimensions and MUST NOT expose pre-approval history.
 
-If the primary client detaches and pane primary processes remain active,
+If the final primary detaches and pane primary processes remain active,
 Mezzanine MUST keep the session running.
 
 If all clients detach, Mezzanine MUST keep the session running unless the user
 has configured exit-on-detach behavior.
 
-Mezzanine MUST provide a way to detach the primary client without terminating
+Mezzanine MUST provide a way to detach the invoking primary without terminating
 the session.
 
 Mezzanine MUST provide a way to list resumable sessions.
@@ -7588,6 +7628,99 @@ The control endpoint MUST support version negotiation.
 The control endpoint protocol specified here is Mezzanine Control Protocol
 version 1, abbreviated as `mezctl/1`.
 
+Independent multi-primary sessions MUST use Mezzanine Control Protocol version
+2, abbreviated as `mezctl/2`. The first `mezctl/2` implementation milestone
+MUST be a cutover rather than a mixed attachment mode: a server advertising
+multi-primary behavior MUST accept `requested_version = 2` and MUST reject
+`requested_version = 1` with `-32003` and `mezzanine_code =
+"unsupported_version"`. A server that has not completed the v2 cutover MAY
+continue serving `mezctl/1`, but it MUST NOT advertise `multiple_primaries`,
+`client_local_focus`, `layout_owner`, or `client_bound_events`, and MUST NOT
+enable a second attached primary. This specification milestone therefore does
+not itself authorize second-primary ingress in a v1 implementation.
+
+Every successful v2 primary initialization MUST allocate and return a fresh
+exact `ClientState`; display-name equality MUST NOT reuse a live or detached
+client. The initialize result MUST include `client`, and capabilities MUST
+advertise `multiple_primaries`, `client_local_focus`, `layout_owner`, and
+`client_bound_events` together with `max_attached_primaries = 16`. Primary
+initialization MUST validate the session target and terminal descriptor before
+allocating a client. Two valid primary initializations arriving concurrently
+MUST be settled in actor order, may both succeed up to capacity, and MUST
+return distinct client IDs.
+
+V2 MUST remove the unbound `session/attach` primary/observer allocation path
+and `client/select_primary`. Attachment occurs only through
+`control/initialize`, which binds the resulting client to the authenticated
+connection. `client/detach` without `client_id` MUST detach the exact caller;
+detaching another client MUST require an explicit target and administrative
+authorization. V2 MUST add `client/set_layout_owner { "client_id": string,
+"idempotency_key": string }`; its target MUST be an attached interactive
+primary and transfer MUST be atomic.
+
+V2 `SessionSummary` MUST contain `attached_client_count`,
+`attached_primary_count`, `max_attached_primaries`, `accepts_primary`,
+`layout_owner_client_id`, and `authoritative_size`; it MUST NOT contain
+`has_primary` or singular active-view fields. V2 `SessionState` MUST contain
+`primary_client_ids`, `attached_primary_count`, `max_attached_primaries`,
+`layout_owner_client_id`, `authoritative_size`, and caller-relative
+`navigation`; it MUST NOT contain `primary_client_id` or a session-global
+active group, window, pane, zoom, prompt, overlay, copy, mouse, viewport, or
+draft. V2 `ClientState` for an attached primary MUST include its terminal
+descriptor and caller-readable navigation revision. Client IDs are
+non-resumable and MUST NOT be persisted.
+
+V2 event visibility MUST distinguish `AllPrimaries`,
+`PrimaryClient(ClientId)`, `SessionView`,
+`PendingObserverRequest(ObserverRequestId)`, `Agent(AgentId)`, and
+`Automation`. Shared lifecycle, security, approval, and observer-decision
+notifications MUST use `AllPrimaries`; focus, local errors, prompts, overlays,
+and other private presentation notices MUST use `PrimaryClient`. Observer
+management decisions MUST NOT use `SessionView`. Every Unix and Iroh event
+stream MUST bind to one exact initialized client and revalidate that client's
+live role and attachment before every batch. Canonical shared transitions MUST
+be retained and hooked once, then projected independently for each audience;
+one slow or closed stream MUST NOT block or close another.
+
+Observer approval in v2 MUST record `view_source_client_id` and the exact
+deciding client ID in state and audit. Decision transitions are strictly
+`pending -> approved|rejected` and `approved -> revoked`; the first valid
+actor-ordered transition wins, and losing or duplicate decisions MUST have no
+marker, timestamp, event, hook, audit, focus, publication, or resume side
+effect. Request-connection loss and source-primary detach MUST settle before a
+later queued decision when they reach the actor first. Required publication
+failure MUST either roll back the entire authority transition or commit a
+successful response with durable publication retry; a cached error MUST never
+contradict committed authority.
+
+V2 topology and presentation races MUST be actor ordered. Reconciliation after
+a shared topology mutation MUST complete before the next queued caller input
+resolves. Owner resize versus owner detach MUST apply exactly one canonical
+geometry transition according to actor order. Concurrent attach, duplicate
+disconnect, close versus observer decision, and approval versus source detach
+MUST be deterministic and duplicate-safe. Input events from different clients
+MAY interleave only at whole-event boundaries, never within one event's byte
+sequence.
+
+The following v2 scenarios are normative examples:
+
+- Two concurrent primary initializations named `mez-cli` allocate different
+  client IDs. Selecting a window, pane, zoom state, prompt, or copy viewport in
+  one client does not change the other. Both may mutate shared topology.
+- If client `c1` owns layout at `120x40` and client `c2` reports `80x24`, only
+  `c2`'s local viewport changes. If `c1` then detaches, `c2` becomes owner and
+  its latest `80x24` size is applied once.
+- An observer approved by `c2` records `view_source_client_id = "c2"`, follows
+  only `c2`'s live navigation, and is revoked when `c2` detaches even when
+  `c1` remains attached.
+- Snapshot restore starts with no clients and no owner. The first new primary
+  receives fresh identity and navigation seeded from version-5 landing state;
+  no prior client, event credential, approval authority, or transient view is
+  resumed.
+- If owner resize and owner detach are queued concurrently, whichever actor
+  transition runs first determines whether the old size is applied before
+  election; the final state still has exactly one owner and one canonical size.
+
 `mezctl/1` messages over stream transports MUST be framed as UTF-8 JSON values
 with an ASCII header block followed by a JSON body. The header block MUST use
 the following format:
@@ -7794,16 +7927,20 @@ size with non-positive values MUST be rejected with `invalid-params`.
 `credentials`, `process_control`, `destructive`, `privilege_change`, and
 `unknown`. When an effect is not known, `unknown` MUST be true.
 
+The following table is the implemented `mezctl/1` baseline catalog. The v2
+cutover removes and replaces methods exactly as specified above; entries in
+this table do not reintroduce removed v2 methods or singular v2 state.
+
 The baseline control methods are:
 
 | Method | Params | Result | Notes |
 | --- | --- | --- | --- |
-| `control/initialize` | `{ "client_name": string, "requested_version": integer, "requested_role": string, "client_version": string \| null, "session_target": SessionTarget \| null, "detach_primary_on_disconnect": boolean \| null, "client": ClientDescriptor \| null, "authentication": AuthenticationMaterial \| null }` | `{ "selected_version": integer, "server": ServerIdentity, "session": SessionSummary \| null, "granted_role": string, "capabilities": Capabilities, "approval_pending": boolean, "observer_request": ObserverState \| null }` | First request on a connection unless negotiated externally. Pending observers receive no session data beyond request-local status. Foreground primary attach clients and one-shot administrative clients set `detach_primary_on_disconnect` when they may create the primary. Cleanup is armed only when that connection actually creates the primary; same-name reuse preserves the existing owner. |
+| `control/initialize` | `{ "client_name": string, "requested_version": integer, "requested_role": string, "client_version": string \| null, "session_target": SessionTarget \| null, "detach_primary_on_disconnect": boolean \| null, "client": ClientDescriptor \| null, "authentication": AuthenticationMaterial \| null }` | `{ "selected_version": integer, "server": ServerIdentity, "session": SessionSummary \| null, "granted_role": string, "capabilities": Capabilities, "approval_pending": boolean, "observer_request": ObserverState \| null }` | V1 first request on a connection unless negotiated externally. Pending observers receive no session data beyond request-local status. Foreground primary attach clients and one-shot administrative clients set `detach_primary_on_disconnect` when they may create the v1 primary. Cleanup is armed only when that connection actually creates the v1 primary; local same-name reuse preserves the existing owner. |
 | `control/shutdown` | `{}` | `{ "closed": boolean }` | Orderly client disconnect. Naturally idempotent. |
 | `control/cancel` | `{ "request_id": string }` | `{ "cancel_requested": boolean }` | May cancel only requests owned by the caller unless primary policy permits broader cancellation. |
 | `session/list` | `{}` | `{ "sessions": [SessionSummary] }` | Read-only and naturally idempotent. |
 | `session/get` | `{ "target": SessionTarget }` | `{ "session": SessionState }` | Read-only and naturally idempotent. |
-| `session/attach` | `{ "target": SessionTarget, "role": "primary" \| "observer", "client": ClientDescriptor, "idempotency_key": string }` | `{ "client": ClientState, "approval_pending": boolean }` | Primary attachment MUST enforce the single-primary invariant. Observer attachment MUST create a pending observer and expose no view until approved. |
+| `session/attach` | `{ "target": SessionTarget, "role": "primary" \| "observer", "client": ClientDescriptor, "idempotency_key": string }` | `{ "client": ClientState, "approval_pending": boolean }` | V1 primary attachment MUST enforce its single-primary invariant. Observer attachment MUST create a pending observer and expose no view until approved. This method is absent from v2. |
 | `session/rename` | `{ "name": string, "idempotency_key": string }` | `{ "renamed": boolean }` | Primary-only mutating method. `name` MUST be non-empty. |
 | `session/kill` | `{ "force": boolean, "idempotency_key": string }` | `{ "killed": boolean, "session_id": string }` | Primary-only destructive method. `force` MAY be omitted or false only when no pane process remains live. |
 | `client/list` | `{ "target": SessionTarget }` | `{ "clients": [ClientState] }` | Primary-readable and naturally idempotent. Observers MAY receive only their own `ClientState` unless the primary explicitly grants broader visibility. Pending observers MUST NOT use this method. |
@@ -7897,17 +8034,23 @@ trusts that client class to assert interactive terminal state. If Mezzanine
 cannot verify or trust the assertion, a primary-role request MUST fail with
 `forbidden` or `invalid_state`.
 
-`SessionSummary` MUST include `id`, `version`, `name`, `state`, `created_at`,
+In `mezctl/1`, `SessionSummary` MUST include `id`, `version`, `name`, `state`, `created_at`,
 `last_attached_at`, `window_count`, `attached_client_count`, `has_primary`,
 and `active_window_id`. `state` MUST be one of `running`, `detached`,
 `empty`, `stopping`, or `failed`.
 
-`SessionState` MUST include `id`, `version`, `name`, `state`, `created_at`,
+In `mezctl/1`, `SessionState` MUST include `id`, `version`, `name`, `state`, `created_at`,
 `updated_at`, `primary_client_id`, `authoritative_size`, `active_window_id`,
 `windows`, `clients`, `observers`, `config_generation`, and
 `permission_summary`. `primary_client_id` MAY be null only while no primary
 client is attached. `authoritative_size` MUST include `columns` and `rows` and
 MUST remain the last primary-defined size while detached.
+
+In `mezctl/2`, `SessionSummary` and `SessionState` MUST instead use the
+multi-primary fields defined in the v2 cutover contract. Caller-relative
+navigation MUST identify the active group, window, and pane plus navigation
+revision; active flags in shared `WindowState` and `PaneState` MUST NOT be used
+as global focus authority.
 
 `ClientState` MUST include `id`, `version`, `role`, `requested_role`, `state`,
 `attached_at`, `last_seen_at`, `descriptor`, and `terminal_size`. `role` MUST
@@ -8068,9 +8211,9 @@ configuration, agents, approvals unrelated to the observer request, or other
 runtime state. It MAY create or update observer-request metadata needed for
 primary-client approval and audit.
 
-Only the primary client MAY approve, reject, or revoke observer access through
-the control endpoint. If no primary client is attached, observer requests MUST
-remain pending and MUST receive no session view until a primary client decides
+Only an attached primary MAY approve, reject, or revoke observer access through
+the control endpoint. If no primary is attached, observer requests MUST remain
+pending and MUST receive no session view until an attached primary decides
 them.
 
 Agent harness requests that mutate multiplexer state MUST be subject to the active
@@ -9368,10 +9511,10 @@ cooperation mode, read scopes, write scopes, and available decisions.
 
 The available decisions MUST include approve, disapprove, and redirect.
 
-Only the primary client MAY approve, disapprove, or redirect a blocked agent
+Only an attached primary MAY approve, disapprove, or redirect a blocked agent
 action. Read-only observers MUST NOT make approval decisions.
 
-The primary client MUST be able to approve pending actions from the blocked
+An attached primary MUST be able to approve pending actions from the blocked
 pane's agent shell with `/approve`. Pane-local approval requests MUST display
 their approval id and a copyable approval command in the pane buffer.
 
@@ -9517,19 +9660,48 @@ explicitly stopped by user command or policy.
 During detachment, agent tasks MUST continue running unless explicitly stopped
 by user command or policy.
 
-On reattach, Mezzanine MUST restore windows, panes, layouts, active selections,
-frames, bounded history, agent shell sessions, and local message passing state
-to the extent still available within configured persistence limits.
+On reattach to a still-live runtime, Mezzanine MUST retain shared windows,
+panes, layouts, frames, bounded history, agent shell sessions, and local message
+passing state to the extent still available within configured persistence
+limits. A newly attached primary MUST receive a fresh client identity and seed
+its client-local navigation from the current owner or landing navigation; it
+MUST NOT resume a detached client's transient presentation.
 
 If any state cannot be restored, Mezzanine MUST report the lost state to the
 user.
 
-A session snapshot MUST include session identity, group, window, and pane
-layout topology, active selections, pane and window titles, and the last known
-pane current working directory when available. A session snapshot MUST NOT
-persist pane process state, bounded terminal history, agent sessions, local
-message protocol state, active configuration layer metadata, MCP server state,
-or approval history as resumable live state.
+A snapshot written by the independent-primary implementation MUST use payload
+version 5. It MUST include session identity, shared group/window/pane topology,
+canonical authoritative size, pane and window titles, the last known pane
+current working directory when available, and one client-independent landing
+navigation chain. It MUST NOT persist attached or detached client IDs, client
+roles, layout ownership, terminal descriptors, primary navigation MRU or zoom,
+prompts, overlays, copy mode, mouse state, viewport, drafts, observer authority,
+event credentials or cursors, pane process state, bounded terminal history,
+agent sessions, local message protocol state, active configuration layer
+metadata, MCP server state, or approval history as resumable live state.
+
+Manual snapshot capture MUST update landing navigation from the invoking
+primary. Automatic capture MUST use layout-owner navigation when an owner is
+attached and otherwise retain the existing landing navigation. Final-primary
+detach MUST update landing navigation before discarding ephemeral client state.
+A newly attached primary MUST seed its navigation from the layout owner when
+present and otherwise from landing navigation; MRU history and zoom MUST start
+empty.
+
+Snapshot readers MUST decode payload versions 2 through 4 and normalize their
+singular focus fields into valid version-5 landing navigation. Restoration MUST
+validate group/window/pane parent relationships and remap every landing ID when
+fresh topology IDs are allocated. Invalid or cross-parent references MUST fail
+safely. Writers MUST emit only version 5 after migration.
+
+A session restored from a snapshot MUST start with zero attached primaries and
+no layout owner while retaining canonical size and valid landing navigation.
+Live topology replacement MUST be atomic: replace shared topology, reset every
+attached primary to valid landing navigation, clear stale pane-scoped
+presentation, retain the owner only if still attached, use owner size when
+primaries remain, reconcile all client cursors once, and publish one bounded
+invalidation wave.
 
 A session snapshot MUST NOT persist active pending approval requests or active
 approval grants as live authority. When a snapshot is resumed into a new live

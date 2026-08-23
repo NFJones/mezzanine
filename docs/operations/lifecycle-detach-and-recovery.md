@@ -14,9 +14,17 @@ Know the basic session commands in [Sessions and panes](../using-mezzanine/sessi
 Use `mez new` to create a session. Bare `mez` attaches to the first session
 that accepts a primary client and creates a session only when none is
 available. Use `mez list` to discover resumable sessions and `mez attach` to
-select one. Press `Ctrl+A d` or use `mez detach` to leave the primary client.
-Detaching normally leaves pane processes and agent tasks running; only one
-attached client can be primary at a time.
+select one. Press `Ctrl+A d` or use `mez detach` to leave the invoking client.
+Detaching normally leaves pane processes and agent tasks running.
+
+The checked-in runtime currently exposes the single-primary `mezctl/1`
+compatibility contract. The specified `mezctl/2` cutover will allow up to 16
+equal-authority attached primaries with independent navigation and transient
+presentation. One layout owner controls canonical PTY geometry; non-owner
+resizes affect only that client's viewport. Owner detach elects the oldest
+remaining primary, while final-primary detach retains canonical size and lets
+background work continue. The implementation MUST NOT expose second-primary
+ingress until the complete v2 cutover is available.
 
 Use `mez serve` to run a foreground session service without attaching a primary
 terminal. Select a specific service with `-S <socket-path>` or `-L <name>`, and
@@ -49,11 +57,13 @@ channel.
 
 Use `mez snapshot create` to save layout state, and `mez snapshot` to list
 saved snapshots. The `inspect`, `delete`, `resume`, and `resume-latest`
-subcommands operate on those saved layouts. A snapshot retains session topology,
-selections, names, and known pane working directories. It can contain sensitive
-titles and paths, but a resumed snapshot does not restore credentials, terminal
-history, agent conversations, local message state, live MCP state, pending
-approvals, approval grants, or pane processes.
+subcommands operate on those saved layouts. Snapshot payload version 5 retains
+shared session topology, canonical geometry, names, known pane working directories,
+and a client-independent landing view. It never restores attached client IDs,
+layout ownership, client-local focus/history/zoom, transient presentation,
+observer authority, event credentials, credentials, terminal history, agent
+conversations, local message state, live MCP state, pending approvals, approval
+grants, or pane processes. Restored sessions begin with zero attached primaries.
 
 Snapshots are stored under Mezzanine's user-private configuration area. The
 snapshot CLI uses its `snapshots` directory, while live session layout commands

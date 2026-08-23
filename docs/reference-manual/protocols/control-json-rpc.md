@@ -1,12 +1,36 @@
-# `mezctl/1` control JSON-RPC reference
+# Mezzanine control JSON-RPC reference
 
 ## Purpose
 
-Specify the version 1 control endpoint used by attach clients, automation, and
-alternative frontends. It exposes multiplexer state and mutation separately
-from agent-to-agent messaging. This page summarizes the implementer contract;
+Describe the implemented `mezctl/1` endpoint and the specified `mezctl/2`
+independent-primary cutover. This page summarizes the implementer contract;
 the [control endpoint in `SPEC.md`](../../../SPEC.md#13-control-endpoint) is
-normative.
+normative. The current runtime remains v1 and MUST NOT enable a second primary
+until the complete v2 cutover is implemented.
+
+## Version 2 cutover contract
+
+`mezctl/2` allocates a fresh non-resumable client ID for every attachment and
+supports at most 16 equal-authority attached primaries. Each primary owns
+independent navigation and transient presentation. One layout owner controls
+canonical PTY geometry. V2 initialization returns the exact client and
+advertises `multiple_primaries`, `client_local_focus`, `layout_owner`, and
+`client_bound_events`; v2 session state reports primary IDs/count/capacity,
+owner, canonical size, and caller-relative navigation rather than singular
+primary/focus fields.
+
+V2 removes `session/attach` and `client/select_primary`. `client/detach`
+defaults to the exact caller, and `client/set_layout_owner` atomically targets
+another attached interactive primary. A v2 server rejects requested version 1
+with `unsupported_version`; a v1 server continues rejecting version 2 and must
+not advertise v2 feature flags.
+
+V2 event delivery binds every stream to an exact initialized client. Shared
+events target all primaries, private presentation events target one client,
+and observers receive only their source primary's live session view after the
+approval marker. Snapshot payload v5 persists shared topology, canonical size,
+and landing navigation, but never live clients, owner, event credentials, or
+transient presentation.
 
 ## Transport, framing, and initialization
 
@@ -111,8 +135,10 @@ log or copy invitation or device credentials into diagnostics.
 
 ## Roles, authorization, and idempotency
 
-Requested roles are `primary`, `observer`, `agent`, and `automation`. One
-interactive primary client owns interactive terminal input. A primary request
+Requested roles are `primary`, `observer`, `agent`, and `automation`. Under
+v1, one interactive primary owns terminal input. Under v2, every attached
+primary may submit actor-ordered input against its own navigation, while only
+the layout owner's resize changes canonical geometry. A primary request always
 requires a verifiable interactive terminal; a client descriptor alone is not
 sufficient when the transport does not trust that assertion.
 
@@ -163,9 +189,12 @@ State results use versioned objects such as `SessionState`, `WindowState`,
 MCP server/tool state. State records include opaque `id` and `version`; clients
 must preserve unknown extensions and refetch rather than reconstructing state.
 
-## Method catalog
+## Version 1 method catalog
 
-The table gives the complete baseline catalog. “RO” means read-only and
+The table gives the complete implemented v1 catalog. V2 removes
+`session/attach` and `client/select_primary` and adds
+`client/set_layout_owner`; the table below does not define the v2 surface.
+“RO” means read-only and
 naturally idempotent. Every other entry requires `idempotency_key` unless its
 note says otherwise. The parameter and result object schemas are specified in
 the [baseline method table in `SPEC.md`](../../../SPEC.md#13-control-endpoint).

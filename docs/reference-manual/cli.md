@@ -42,11 +42,14 @@ or `mez attach` to select an existing one.
 
 Creating or attaching a primary client needs an interactive terminal. `mez
 serve` can run without one. An observer request also requires an interactive
-terminal and remains pending until the primary client approves it. `mez snapshot
-resume <snapshot-id> --serve` restores a snapshot as a foreground daemon; add
-`--attach-primary` only when the invoking terminal should attach as its primary
-client. Use `mez --help` and `mez <command> --help` for the current argument
-and target syntax.
+terminal and remains pending until an attached primary approves it. The current
+runtime implements the single-primary `mezctl/1` compatibility contract. The
+specified `mezctl/2` cutover will support up to 16 independent primaries and a
+single elected layout owner, but second-primary ingress remains disabled until
+that complete cutover lands. `mez snapshot resume <snapshot-id> --serve`
+restores a snapshot as a foreground daemon; add `--attach-primary` only when
+the invoking terminal should attach as a primary client. Use `mez --help` and
+`mez <command> --help` for the current argument and target syntax.
 
 ## Foreground service options
 
@@ -72,9 +75,11 @@ enabled. Use `--no-aux-sockets` for an intentional control-only service.
 
 ## Snapshot forms
 
-Snapshots preserve recoverable session layout state, not running processes,
-terminal history, or agent conversations. Pending approvals and approval grants
-do not become authority in a restored session:
+Snapshot payload version 5 preserves recoverable shared topology, canonical
+geometry, and client-independent landing navigation, not running processes, live client
+identities, layout ownership, transient presentation, terminal history, or
+agent conversations. Pending approvals and approval grants do not become
+authority in a restored session:
 
 | Command | Behavior |
 | --- | --- |

@@ -29,10 +29,18 @@ Use `mez list` to find a session ID, then pass it to `mez attach <session-id>`
 when more than one resumable session is available. Omitting the ID uses the
 selected socket or the default attach-selection behavior.
 
-Only one attached client can be primary at a time. `mez attach --observer`
-requests observer access; the primary client must approve the request before
-the observer receives the live view. Observers are read-only and do not receive
-history from before approval.
+The current `mezctl/1` runtime permits one attached primary. The specified
+`mezctl/2` cutover will permit up to 16 attached primaries with independent
+group, window, and pane navigation, zoom, prompts, overlays, copy mode, mouse
+state, and viewport. One elected layout owner controls canonical pane geometry.
+This documentation defines the target contract; second-primary ingress remains
+disabled until the v2 implementation is complete.
+
+`mez attach --observer` requests observer access. An attached primary must
+approve the request and becomes its exact view source unless another attached
+source is selected atomically. Observers are read-only, receive no history from
+before approval, and are revoked rather than silently transferred when their
+source primary detaches.
 
 ## Work with windows and panes
 
