@@ -9,7 +9,11 @@ use super::super::*;
 /// implementation detail.
 #[tokio::test(flavor = "current_thread")]
 async fn async_attached_terminal_step_uses_runtime_rendered_view() {
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
 
@@ -40,6 +44,7 @@ async fn async_attached_terminal_step_uses_runtime_rendered_view() {
         };
         let plan = plan_async_attached_terminal_client_step(
             &handle,
+            primary,
             ClientViewRole::Primary,
             Size::new(80, 24).unwrap(),
             TerminalClientLoopConfig::default(),

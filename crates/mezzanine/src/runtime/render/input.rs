@@ -635,6 +635,10 @@ impl RuntimeSessionService {
     /// on the worker, while duplicate requests for the same generation are
     /// suppressed.
     pub(crate) fn request_agent_prompt_selector_extra_candidates_refresh(&mut self, pane_id: &str) {
+        let Some(client_id) = self.presentation.projected_client_id.clone() else {
+            return;
+        };
+        let refresh_key = (client_id, pane_id.to_string());
         let state = self
             .presentation
             .agent_prompt_inputs
@@ -647,7 +651,7 @@ impl RuntimeSessionService {
         if self
             .presentation
             .agent_prompt_selector_refreshes
-            .get(pane_id)
+            .get(&refresh_key)
             .is_some_and(|refresh| refresh.generation == generation)
         {
             return;
@@ -678,7 +682,7 @@ impl RuntimeSessionService {
         let transcript_store = self.persistence.cloned_transcript_store();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         self.presentation.agent_prompt_selector_refreshes.insert(
-            pane_id.to_string(),
+            refresh_key.clone(),
             super::RuntimeAgentSelectorCandidateRefresh {
                 generation,
                 receiver,
@@ -699,7 +703,7 @@ impl RuntimeSessionService {
         if spawn.is_err() {
             self.presentation
                 .agent_prompt_selector_refreshes
-                .remove(pane_id);
+                .remove(&refresh_key);
             if let Some(state) = self.presentation.agent_prompt_inputs.get_mut(pane_id)
                 && state.selector_extra_candidates_generation == generation
             {
@@ -714,11 +718,15 @@ impl RuntimeSessionService {
     /// snapshot, and stale generations are discarded without mutating the
     /// current prompt.
     fn poll_agent_prompt_selector_extra_candidates_refresh(&mut self, pane_id: &str) -> bool {
+        let Some(client_id) = self.presentation.projected_client_id.clone() else {
+            return false;
+        };
+        let refresh_key = (client_id, pane_id.to_string());
         let completion = {
             let Some(refresh) = self
                 .presentation
                 .agent_prompt_selector_refreshes
-                .get(pane_id)
+                .get(&refresh_key)
             else {
                 return false;
             };
@@ -733,7 +741,7 @@ impl RuntimeSessionService {
         };
         self.presentation
             .agent_prompt_selector_refreshes
-            .remove(pane_id);
+            .remove(&refresh_key);
         let Some(state) = self.presentation.agent_prompt_inputs.get_mut(pane_id) else {
             return false;
         };
@@ -766,6 +774,11 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> std::sync::mpsc::SyncSender<Vec<SelectorExtraCandidate>> {
+        let client_id = self
+            .presentation
+            .projected_client_id
+            .clone()
+            .expect("agent prompt selector refresh requires an active client");
         let state = self
             .presentation
             .agent_prompt_inputs
@@ -775,7 +788,7 @@ impl RuntimeSessionService {
         let generation = state.selector_extra_candidates_generation;
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         self.presentation.agent_prompt_selector_refreshes.insert(
-            pane_id.to_string(),
+            (client_id, pane_id.to_string()),
             super::RuntimeAgentSelectorCandidateRefresh {
                 generation,
                 receiver,
@@ -976,12 +989,21 @@ impl RuntimeSessionService {
         refresh: crate::runtime::RuntimeAgentPromptProviderInfoRefresh,
         outcome: crate::runtime::RuntimeProviderInfoRefreshOutcome,
     ) -> Result<()> {
-        let body = self.complete_agent_shell_provider_info_refresh(
+        self.prepare_client_render(
             &refresh.primary_client_id,
-            &refresh.input,
-            outcome,
+            mez_mux::presentation::ClientViewRole::Primary,
         )?;
-        self.set_agent_prompt_response_display_output_for_refresh(&refresh.pane_id, &body)
+        let result = self
+            .complete_agent_shell_provider_info_refresh(
+                &refresh.primary_client_id,
+                &refresh.input,
+                outcome,
+            )
+            .and_then(|body| {
+                self.set_agent_prompt_response_display_output_for_refresh(&refresh.pane_id, &body)
+            });
+        self.presentation.capture_projected_client_state();
+        result
     }
 
     /// Renders a completed prompt refresh response at its original pane.

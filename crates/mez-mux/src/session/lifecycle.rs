@@ -90,6 +90,11 @@ impl Session {
         self.windows.get(self.active_window_index)
     }
 
+    /// Returns the monotonic session mutation revision used to fence rendered input.
+    pub fn mutation_revision(&self) -> u64 {
+        self.next_event_id.saturating_sub(1)
+    }
+
     /// Returns caller-relative active group for an attached primary.
     pub fn active_group_for(&self, client_id: &ClientId) -> Result<&WindowGroup> {
         let navigation = self.navigation(client_id)?;

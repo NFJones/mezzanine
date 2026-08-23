@@ -158,7 +158,7 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
     runtime.block_on(async {
         let workload = async {
         let mut service = test_service();
-        service
+        let primary = service
             .attach_primary("release-load", true, Size::new(120, 40).unwrap(), 20_000)
             .unwrap();
         let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
@@ -216,6 +216,7 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
                         let render_started = Instant::now();
                         handle
                             .render_client_frame(
+                                primary.clone(),
                                 ClientViewRole::Primary,
                                 Size::new(120, 40).unwrap(),
                                 TerminalClientLoopConfig::default(),

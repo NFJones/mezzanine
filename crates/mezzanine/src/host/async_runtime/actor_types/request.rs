@@ -1,9 +1,9 @@
 //! The complete command envelope accepted by the async runtime actor.
 
 use super::{
-    AgentId, AsyncControlInputResult, AsyncMessageFanout, AsyncMessageInputResult,
-    AsyncRenderedClientFlush, AsyncRenderedClientFrame, AsyncRuntimeActorMetrics,
-    AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot,
+    AgentId, AsyncClientRenderToken, AsyncControlInputResult, AsyncMessageFanout,
+    AsyncMessageInputResult, AsyncRenderedClientFlush, AsyncRenderedClientFrame,
+    AsyncRuntimeActorMetrics, AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot,
     AttachedClientStepApplication, AttachedTerminalClientStepPlan, ClientId, ClientStatusLine,
     ClientViewRole, ControlConnectionState, DeliveryCursor, FanoutBatch, MessageConnection,
     PaneProcess, PaneResizeUpdate, RenderedClientView, Result, RuntimeAgentCompactionDispatch,
@@ -163,6 +163,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     RenderClientFrame {
+        /// Exact attached client whose presentation is rendered.
+        client_id: ClientId,
         /// Stores the role value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
@@ -482,6 +484,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         primary_client_id: ClientId,
+        /// Render identity used to fence coordinate-derived actions.
+        render_token: Option<AsyncClientRenderToken>,
         /// Stores the step value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module

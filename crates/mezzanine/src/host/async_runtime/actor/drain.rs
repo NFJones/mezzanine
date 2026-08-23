@@ -626,16 +626,30 @@ impl AsyncRuntimeSessionActor {
         let Some(client_size) = self.attached_client_size(&client_id)? else {
             return Ok(None);
         };
-        let role = if self.service.session().primary_client_id() == Some(&client_id) {
-            ClientViewRole::Primary
-        } else {
-            ClientViewRole::Observer
+        let role = match self
+            .service
+            .session()
+            .clients()
+            .iter()
+            .find(|client| client.id == client_id)
+            .map(|client| client.role)
+        {
+            Some(mez_mux::session::ClientRole::Primary) => ClientViewRole::Primary,
+            Some(mez_mux::session::ClientRole::Observer) => ClientViewRole::Observer,
+            Some(mez_mux::session::ClientRole::PendingObserver) => ClientViewRole::PendingObserver,
+            _ => return Ok(None),
         };
+        self.service.prepare_client_render(&client_id, role)?;
         let config = self.service.terminal_client_loop_config(config)?;
         let composition_started = std::time::Instant::now();
         let view = self
             .service
-            .render_client_view_with_resolved_config(role, client_size, &config);
+            .render_client_view_for_client_with_resolved_config(
+                &client_id,
+                role,
+                client_size,
+                &config,
+            );
         self.metrics.record_phase_latency(
             crate::host::async_runtime::AsyncRuntimeLatencyPhase::RenderComposition,
             u64::try_from(composition_started.elapsed().as_millis()).unwrap_or(u64::MAX),

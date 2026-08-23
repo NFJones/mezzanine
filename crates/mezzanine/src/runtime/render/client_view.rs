@@ -125,6 +125,61 @@ pub(super) fn copy_selection_rendition(
 }
 
 impl RuntimeSessionService {
+    /// Prepares compatibility focus and transient state for one exact client.
+    pub(crate) fn prepare_client_render(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+        role: ClientViewRole,
+    ) -> Result<()> {
+        let client = self
+            .session
+            .clients()
+            .iter()
+            .find(|client| client.id == *client_id)
+            .ok_or_else(|| MezError::forbidden("render requires an attached client"))?;
+        if !matches!(
+            client.state,
+            mez_mux::session::ClientState::Attached | mez_mux::session::ClientState::Pending
+        ) {
+            return Err(MezError::forbidden("render requires an attached client"));
+        }
+        let role_matches = matches!(
+            (client.role, role),
+            (
+                mez_mux::session::ClientRole::Primary,
+                ClientViewRole::Primary
+            ) | (
+                mez_mux::session::ClientRole::Observer,
+                ClientViewRole::Observer
+            ) | (
+                mez_mux::session::ClientRole::PendingObserver,
+                ClientViewRole::PendingObserver
+            )
+        );
+        if !role_matches {
+            return Err(MezError::forbidden(
+                "render client role does not match session role",
+            ));
+        }
+        self.presentation.activate_client_state(client_id);
+        if role == ClientViewRole::Primary {
+            self.session.activate_client_navigation(client_id)?;
+        }
+        Ok(())
+    }
+
+    /// Renders one exact attached client's view after validating its live role.
+    pub fn render_client_view_for_client_with_resolved_config(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+        role: ClientViewRole,
+        client_size: Size,
+        config: &TerminalClientLoopConfig,
+    ) -> Result<Option<RenderedClientView>> {
+        self.prepare_client_render(client_id, role)?;
+        self.render_client_view_with_resolved_config(role, client_size, config)
+    }
+
     pub fn render_client_view(
         &self,
         role: ClientViewRole,

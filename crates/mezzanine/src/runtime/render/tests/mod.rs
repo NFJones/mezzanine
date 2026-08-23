@@ -22,6 +22,7 @@ use mez_mux::theme::default_ui_theme;
 use mez_terminal::{GraphicRendition, TerminalStyleSpan};
 
 mod action_presentation;
+mod client_isolation;
 mod human_readable;
 mod link_styling;
 mod overlay_interaction;

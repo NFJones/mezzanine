@@ -333,6 +333,30 @@ struct RuntimeAgentShellPreviewPresentation {
     settled_owners: std::collections::BTreeSet<RuntimeAgentShellPreviewOwner>,
 }
 
+/// Transient terminal interaction state owned by one exact client.
+///
+/// The runtime still projects these values through the legacy presentation
+/// fields while applying one client operation. The keyed copy is authoritative
+/// between operations, which prevents another client from inheriting prompts,
+/// overlays, prefix state, or incomplete mouse gestures.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RuntimeClientPresentationState {
+    primary_prompt_input: Option<RuntimePrimaryPromptInput>,
+    primary_prefix_key_pending: bool,
+    primary_display_overlay: Option<RuntimeDisplayOverlay>,
+    agent_prompt_inputs: std::collections::BTreeMap<String, RuntimeAgentPromptInput>,
+    active_copy_modes: std::collections::BTreeMap<(String, PaneSurfaceKind), CopyMode>,
+    scrollback_copy_mode_panes: std::collections::BTreeSet<(String, PaneSurfaceKind)>,
+    mouse_resize_drag_state: Option<MouseResizeDragState>,
+    mouse_selection_drag_state: Option<MouseSelectionDragState>,
+    last_mouse_click_state: Option<RuntimeMouseClickState>,
+    deferred_word_copy_cleanup: Option<(String, PaneSurfaceKind, CopyMode, u64)>,
+    pressed_window_action: Option<WindowFrameAction>,
+    primary_error_status_overlay: Option<String>,
+    pane_agent_status_selector: Option<RuntimePaneAgentStatusSelector>,
+    presentation_revision: u64,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct RuntimePresentationComponent {
     /// Current atomically replaceable presentation configuration.
@@ -345,15 +369,22 @@ pub(crate) struct RuntimePresentationComponent {
     window_presentation_plan_cache: std::cell::RefCell<RuntimeWindowPresentationPlanCache>,
     /// Cached output for command-backed window status pills.
     window_status_pill_cache: std::cell::RefCell<RuntimeStatusPillCache>,
+    /// Exact-client transient interaction state retained between operations.
+    client_states:
+        std::collections::HashMap<mez_core::ids::ClientId, RuntimeClientPresentationState>,
+    /// Client whose state is currently projected through the compatibility fields.
+    projected_client_id: Option<mez_core::ids::ClientId>,
     /// Copy, paste-buffer, and host-clipboard state.
     copy: RuntimeCopyPresentationState,
     /// Active agent prompt editor state keyed by pane id.
     agent_prompt_inputs: std::collections::BTreeMap<String, RuntimeAgentPromptInput>,
     /// Provider refreshes submitted from agent prompts awaiting actor dispatch.
     pending_agent_prompt_provider_info_refreshes: Vec<RuntimeAgentPromptProviderInfoRefresh>,
-    /// Background selector discoveries keyed by their pane-local owner.
-    agent_prompt_selector_refreshes:
-        std::collections::BTreeMap<String, RuntimeAgentSelectorCandidateRefresh>,
+    /// Background selector discoveries keyed by exact client and pane owner.
+    agent_prompt_selector_refreshes: std::collections::HashMap<
+        (mez_core::ids::ClientId, String),
+        RuntimeAgentSelectorCandidateRefresh,
+    >,
     /// Pane-local owner-aware transient shell-output projections.
     agent_shell_output_previews:
         std::collections::BTreeMap<String, RuntimeAgentShellPreviewPresentation>,
@@ -702,6 +733,146 @@ fn presentation_render_invalidation_priority(reason: RenderInvalidationReason) -
 }
 
 impl RuntimePresentationComponent {
+    /// Returns the newest captured transient presentation revision for one client.
+    pub(crate) fn client_presentation_revision(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+    ) -> u64 {
+        self.capture_projected_client_state();
+        self.client_states
+            .get(client_id)
+            .map(|state| state.presentation_revision)
+            .unwrap_or_default()
+    }
+
+    /// Switches the compatibility fields to one exact client's transient state.
+    pub(crate) fn activate_client_state(&mut self, client_id: &mez_core::ids::ClientId) {
+        if self.projected_client_id.as_ref() == Some(client_id) {
+            return;
+        }
+        self.capture_projected_client_state();
+        let state = self
+            .client_states
+            .get(client_id)
+            .cloned()
+            .unwrap_or_default();
+        self.primary_prompt_input = state.primary_prompt_input;
+        self.primary_prefix_key_pending = state.primary_prefix_key_pending;
+        self.primary_display_overlay = state.primary_display_overlay;
+        self.agent_prompt_inputs = state.agent_prompt_inputs;
+        self.copy.active_copy_modes = state.active_copy_modes;
+        self.copy.scrollback_copy_mode_panes = state.scrollback_copy_mode_panes;
+        self.mouse_resize_drag_state = state.mouse_resize_drag_state;
+        self.mouse_selection_drag_state = state.mouse_selection_drag_state;
+        self.last_mouse_click_state = state.last_mouse_click_state;
+        self.deferred_word_copy_cleanup
+            .replace(state.deferred_word_copy_cleanup);
+        self.pressed_window_action = state.pressed_window_action;
+        self.primary_error_status_overlay = state.primary_error_status_overlay;
+        self.pane_agent_status_selector = state.pane_agent_status_selector;
+        self.projected_client_id = Some(client_id.clone());
+    }
+
+    /// Persists the currently projected compatibility fields for their owner.
+    pub(crate) fn capture_projected_client_state(&mut self) {
+        let Some(client_id) = self.projected_client_id.clone() else {
+            return;
+        };
+        let previous = self
+            .client_states
+            .get(&client_id)
+            .cloned()
+            .unwrap_or_default();
+        let mut next = RuntimeClientPresentationState {
+            primary_prompt_input: self.primary_prompt_input.clone(),
+            primary_prefix_key_pending: self.primary_prefix_key_pending,
+            primary_display_overlay: self.primary_display_overlay.clone(),
+            agent_prompt_inputs: self.agent_prompt_inputs.clone(),
+            active_copy_modes: self.copy.active_copy_modes.clone(),
+            scrollback_copy_mode_panes: self.copy.scrollback_copy_mode_panes.clone(),
+            mouse_resize_drag_state: self.mouse_resize_drag_state.clone(),
+            mouse_selection_drag_state: self.mouse_selection_drag_state.clone(),
+            last_mouse_click_state: self.last_mouse_click_state.clone(),
+            deferred_word_copy_cleanup: self.deferred_word_copy_cleanup.borrow().clone(),
+            pressed_window_action: self.pressed_window_action.clone(),
+            primary_error_status_overlay: self.primary_error_status_overlay.clone(),
+            pane_agent_status_selector: self.pane_agent_status_selector.clone(),
+            presentation_revision: previous.presentation_revision,
+        };
+        if next != previous {
+            next.presentation_revision = previous.presentation_revision.saturating_add(1);
+        }
+        self.client_states.insert(client_id, next);
+    }
+
+    /// Removes all transient presentation owned by one detached client.
+    pub(crate) fn remove_client_state(&mut self, client_id: &mez_core::ids::ClientId) {
+        self.client_states.remove(client_id);
+        self.agent_prompt_selector_refreshes
+            .retain(|(candidate, _), _| candidate != client_id);
+        if self.projected_client_id.as_ref() == Some(client_id) {
+            self.primary_prompt_input = None;
+            self.primary_prefix_key_pending = false;
+            self.primary_display_overlay = None;
+            self.agent_prompt_inputs.clear();
+            self.copy.active_copy_modes.clear();
+            self.copy.scrollback_copy_mode_panes.clear();
+            self.mouse_resize_drag_state = None;
+            self.mouse_selection_drag_state = None;
+            self.last_mouse_click_state = None;
+            self.deferred_word_copy_cleanup.replace(None);
+            self.pressed_window_action = None;
+            self.primary_error_status_overlay = None;
+            self.pane_agent_status_selector = None;
+            self.projected_client_id = None;
+        }
+    }
+
+    /// Removes pane-scoped interaction state from every retained client.
+    pub(crate) fn remove_pane_state_for_all_clients(&mut self, pane_id: &str) {
+        self.capture_projected_client_state();
+        self.agent_prompt_selector_refreshes
+            .retain(|(_, candidate), _| candidate != pane_id);
+        for state in self.client_states.values_mut() {
+            let before = state.clone();
+            state.agent_prompt_inputs.remove(pane_id);
+            state
+                .active_copy_modes
+                .retain(|(candidate, _), _| candidate != pane_id);
+            state
+                .scrollback_copy_mode_panes
+                .retain(|(candidate, _)| candidate != pane_id);
+            if state
+                .mouse_selection_drag_state
+                .as_ref()
+                .is_some_and(|drag| drag.pane_id == pane_id)
+            {
+                state.mouse_selection_drag_state = None;
+            }
+            if state
+                .last_mouse_click_state
+                .as_ref()
+                .is_some_and(|click| click.pane_id == pane_id)
+            {
+                state.last_mouse_click_state = None;
+            }
+            if state
+                .deferred_word_copy_cleanup
+                .as_ref()
+                .is_some_and(|(candidate, _, _, _)| candidate == pane_id)
+            {
+                state.deferred_word_copy_cleanup = None;
+            }
+            if *state != before {
+                state.presentation_revision = before.presentation_revision.saturating_add(1);
+            }
+        }
+        if let Some(client_id) = self.projected_client_id.clone() {
+            self.projected_client_id = None;
+            self.activate_client_state(&client_id);
+        }
+    }
+
     /// Reports whether provisional provider output may be rendered live.
     pub(crate) fn effective_agent_streaming_output(&self) -> bool {
         self.settings.effective_agent_streaming_output()
@@ -731,7 +902,8 @@ impl RuntimePresentationComponent {
     /// Removes every pane-keyed agent presentation artifact during teardown.
     pub(crate) fn remove_agent_presentation_state(&mut self, pane_id: &str) {
         self.agent_prompt_inputs.remove(pane_id);
-        self.agent_prompt_selector_refreshes.remove(pane_id);
+        self.agent_prompt_selector_refreshes
+            .retain(|(_, candidate), _| candidate != pane_id);
         self.agent_shell_output_previews.remove(pane_id);
         self.agent_streaming_say_presentations.remove(pane_id);
         self.agent_promoted_streaming_say_actions
@@ -993,7 +1165,7 @@ impl RuntimeSessionService {
         self.presentation.agent_prompt_inputs.remove(pane_id);
         self.presentation
             .agent_prompt_selector_refreshes
-            .remove(pane_id);
+            .retain(|(_, candidate), _| candidate != pane_id);
         if let Some(value) = snapshot.prompt_input {
             self.presentation
                 .agent_prompt_inputs
@@ -1424,6 +1596,11 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Removes pane-scoped interaction state from every exact client.
+    pub(crate) fn clear_client_interaction_state_for_removed_pane(&mut self, pane_id: &str) {
+        self.presentation.remove_pane_state_for_all_clients(pane_id);
+    }
+
     /// Clears copy and transient mouse state owned by one retained pane surface.
     pub(crate) fn clear_interaction_state_for_surface(
         &mut self,
@@ -1477,7 +1654,7 @@ impl RuntimeSessionService {
     ) -> Option<RuntimeAgentPromptInput> {
         self.presentation
             .agent_prompt_selector_refreshes
-            .remove(pane_id);
+            .retain(|(_, candidate), _| candidate != pane_id);
         self.presentation.agent_prompt_inputs.remove(pane_id)
     }
 
@@ -1551,6 +1728,43 @@ impl RuntimeSessionService {
                     .window_frame_right_status_template,
                 event,
             )
+    }
+}
+
+impl RuntimeSessionService {
+    /// Returns the exact render identity currently owned by an attached primary.
+    pub(crate) fn client_render_identity(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+    ) -> Result<(String, u64, u64, u64)> {
+        self.prepare_client_render(client_id, ClientViewRole::Primary)?;
+        let window_id = self.session.active_window_for(client_id)?.id.to_string();
+        let navigation_revision = self.session.navigation(client_id)?.revision;
+        let layout_revision = self.session.mutation_revision();
+        let presentation_revision = self.presentation.client_presentation_revision(client_id);
+        Ok((
+            window_id,
+            navigation_revision,
+            layout_revision,
+            presentation_revision,
+        ))
+    }
+
+    /// Cancels coordinate input derived from a stale frame and notifies its owner.
+    pub(crate) fn cancel_stale_client_coordinate_input(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+    ) -> Result<AttachedClientStepApplication> {
+        self.prepare_client_render(client_id, ClientViewRole::Primary)?;
+        self.show_primary_notice_overlay(vec![
+            "view changed; pointer input was cancelled".to_string(),
+        ])?;
+        self.presentation.capture_projected_client_state();
+        Ok(AttachedClientStepApplication {
+            view_refresh_required: true,
+            full_redraw_required: true,
+            ..AttachedClientStepApplication::default()
+        })
     }
 }
 

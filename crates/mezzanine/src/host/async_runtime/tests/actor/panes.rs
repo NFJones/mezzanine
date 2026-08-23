@@ -502,8 +502,10 @@ async fn async_actor_control_initialize_resizes_worker_owned_initial_pane() {
         connection = show_result.connection;
         let (show_body, _) = decode_control_frame(&show_result.output, 1024 * 1024).unwrap();
         assert!(show_body.contains(r#""visible":true"#), "{show_body}");
+        let primary = connection.caller_client_id().unwrap().clone();
         let frame = handle
             .render_client_frame(
+                primary,
                 ClientViewRole::Primary,
                 Size::new(100, 40).unwrap(),
                 TerminalClientLoopConfig::default(),

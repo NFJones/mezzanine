@@ -20,6 +20,26 @@ pub(super) fn test_service() -> RuntimeSessionService {
     )
 }
 
+/// Builds the shared async runtime fixture with one live approved observer.
+pub(super) fn test_service_with_observer() -> (RuntimeSessionService, ClientId) {
+    let shell = crate::host::shell::ResolvedShell::new(
+        PathBuf::from("/bin/sh"),
+        crate::host::shell::ShellSource::ShellEnv,
+    );
+    let size = Size::new(80, 24).unwrap();
+    let mut session = Session::new_default(shell, size);
+    let primary = session.attach_primary("primary", true).unwrap();
+    let (observer, request) = session.request_observer("observer");
+    session.approve_observer(&primary, &request).unwrap();
+    let service = RuntimeSessionService::new(
+        session,
+        PathBuf::from("/tmp/mez-async-runtime-test.sock"),
+        1,
+    )
+    .unwrap();
+    (legacy_test_service(service), observer)
+}
+
 /// Builds the shared async runtime fixture with an explicit shell executable.
 pub(super) fn test_service_with_shell(shell_path: &str) -> RuntimeSessionService {
     let shell = resolve_shell(Some(OsString::from(shell_path))).unwrap();

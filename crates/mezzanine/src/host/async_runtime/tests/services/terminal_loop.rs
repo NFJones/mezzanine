@@ -713,7 +713,7 @@ async fn async_attached_terminal_loop_routes_runtime_errors_to_actor_overlay() {
         assert!(
             error_frame
                 .iter()
-                .any(|line| line.contains("operation requires the primary client")),
+                .any(|line| line.contains("operation requires an attached primary client")),
             "{:?}",
             error_frame
         );
@@ -738,7 +738,7 @@ async fn async_attached_terminal_loop_routes_runtime_errors_to_actor_overlay() {
         overlay_view
             .lines
             .iter()
-            .any(|line| line.contains("operation requires the primary client")),
+            .any(|line| line.contains("operation requires an attached primary client")),
         "{:?}",
         overlay_view.lines
     );
@@ -1264,7 +1264,8 @@ async fn async_attached_terminal_loop_full_redraws_after_agent_prompt_exit() {
 /// implementation detail.
 #[tokio::test(flavor = "current_thread")]
 async fn async_attached_terminal_loop_renders_observer_without_applying_input() {
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+    let (service, observer) = test_service_with_observer();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
@@ -1299,7 +1300,7 @@ async fn async_attached_terminal_loop_renders_observer_without_applying_input() 
             &mut io,
             AsyncAttachedTerminalLoopRequest {
                 role: ClientViewRole::Observer,
-                client_id: ClientId::new('c', 9001),
+                client_id: observer,
                 primary_client_id: None,
                 client_size: Size::new(80, 24).unwrap(),
                 terminal_config: TerminalClientLoopConfig::default(),

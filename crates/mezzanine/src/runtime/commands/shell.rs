@@ -1100,9 +1100,12 @@ impl RuntimeSessionService {
         outcome: crate::runtime::RuntimeProviderInfoRefreshOutcome,
     ) -> Result<String> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
+        self.session.activate_client_navigation(primary_client_id)?;
         let pane_id = self.active_pane_id()?;
         if self
             .agent_shell_store()

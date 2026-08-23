@@ -603,6 +603,7 @@ async fn async_actor_metrics_track_render_and_terminal_control_requests() {
     let client = async {
         handle
             .render_client_frame(
+                primary.clone(),
                 ClientViewRole::Primary,
                 Size::new(80, 24).unwrap(),
                 TerminalClientLoopConfig::default(),
@@ -671,6 +672,7 @@ async fn async_actor_metrics_track_and_reset_request_family_latencies() {
     let client = async {
         handle
             .render_client_frame(
+                primary.clone(),
                 ClientViewRole::Primary,
                 Size::new(80, 24).unwrap(),
                 TerminalClientLoopConfig::default(),
@@ -779,10 +781,13 @@ async fn async_actor_serializes_lifecycle_render_and_shutdown() {
 /// when a presentation/configuration invalidation makes the snapshot stale.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_reuses_and_invalidates_terminal_config_snapshots() {
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+    let mut service = test_service();
+    let client_id = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
-    let client_id = ClientId::new('c', 9040);
 
     let client = async {
         let initial = handle
@@ -791,7 +796,8 @@ async fn async_actor_reuses_and_invalidates_terminal_config_snapshots() {
             .unwrap();
         let reused = handle
             .render_client_frame_with_snapshot(
-                ClientViewRole::Observer,
+                client_id.clone(),
+                ClientViewRole::Primary,
                 Size::new(80, 24).unwrap(),
                 initial.clone(),
                 false,
@@ -800,7 +806,8 @@ async fn async_actor_reuses_and_invalidates_terminal_config_snapshots() {
             .unwrap()
             .config;
         assert_eq!(reused.generation(), initial.generation());
-        assert!(std::ptr::eq(reused.config(), initial.config()));
+        assert!(!std::ptr::eq(reused.config(), initial.config()));
+        assert_eq!(reused.client_id(), Some(&client_id));
 
         handle
             .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
@@ -818,14 +825,15 @@ async fn async_actor_reuses_and_invalidates_terminal_config_snapshots() {
 
         handle
             .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
-                client_id,
+                client_id: client_id.clone(),
                 reason: RenderInvalidationReason::Configuration,
             }])
             .await
             .unwrap();
         let refreshed = handle
             .render_client_frame_with_snapshot(
-                ClientViewRole::Observer,
+                client_id.clone(),
+                ClientViewRole::Primary,
                 Size::new(80, 24).unwrap(),
                 cursor_reused.clone(),
                 false,
@@ -843,4 +851,75 @@ async fn async_actor_reuses_and_invalidates_terminal_config_snapshots() {
 
     let ((), exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.commands_processed, 6);
+}
+
+/// Verifies coordinate actions derived from an older frame are cancelled
+/// after topology changes instead of targeting the replacement layout.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_cancels_coordinate_input_from_stale_render_token() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let frame = handle
+            .render_client_frame(
+                primary.clone(),
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+                true,
+            )
+            .await
+            .unwrap();
+        let render_token = frame.render_token.clone();
+        assert!(render_token.is_some());
+
+        let topology_change = AttachedTerminalClientStepPlan {
+            actions: vec![TerminalClientLoopAction::ExecuteMux(MuxAction::NewWindow)],
+            output_lines: Vec::new(),
+            output_line_style_spans: Vec::new(),
+            input_hangup: false,
+            output_hangup: false,
+            error_roles: Vec::new(),
+        };
+        handle
+            .apply_attached_terminal_step_plan(primary.clone(), topology_change)
+            .await
+            .unwrap();
+
+        let stale_coordinate_step = AttachedTerminalClientStepPlan {
+            actions: vec![TerminalClientLoopAction::HandleMouse(
+                crate::host::terminal::MouseAction::FocusWindow { index: 0 },
+            )],
+            output_lines: Vec::new(),
+            output_line_style_spans: Vec::new(),
+            input_hangup: false,
+            output_hangup: false,
+            error_roles: Vec::new(),
+        };
+        let application = handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                render_token,
+                stale_coordinate_step,
+            )
+            .await
+            .unwrap();
+        assert_eq!(application.mouse_actions_reported, 0);
+        assert!(application.view_refresh_required);
+        assert!(application.full_redraw_required);
+
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.commands_processed, 4);
 }

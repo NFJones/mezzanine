@@ -7,7 +7,7 @@
 //! scheduled or drained.
 
 /// Effects applied while processing one attached terminal client step.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AttachedClientStepApplication {
     /// Number of raw input bytes forwarded to panes.
     pub forwarded_bytes: usize,

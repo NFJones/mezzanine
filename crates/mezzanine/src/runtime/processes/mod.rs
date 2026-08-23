@@ -4559,7 +4559,7 @@ impl RuntimeSessionService {
         self.clear_agent_shell_mode_override(pane_id);
         self.clear_runtime_agent_surface_startup(pane_id);
         self.clear_agent_pane_artifacts(pane_id);
-        self.clear_copy_state_for_pane(pane_id);
+        self.clear_client_interaction_state_for_removed_pane(pane_id);
         self.process
             .pane_current_working_directories
             .remove(pane_id);

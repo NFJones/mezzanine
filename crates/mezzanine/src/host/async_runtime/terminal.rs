@@ -183,6 +183,7 @@ where
     }
     let refreshed = handle
         .render_client_frame(
+            recovery.client_id.clone(),
             ClientViewRole::Primary,
             recovery.client_size,
             recovery.terminal_config,
@@ -425,6 +426,7 @@ where
             await_attached_terminal_step(
                 "client frame render",
                 handle.render_client_frame_with_snapshot(
+                    request.client_id.clone(),
                     request.role,
                     request.client_size,
                     terminal_config.clone(),
@@ -435,6 +437,7 @@ where
         } else {
             AsyncRenderedClientFrame {
                 config: terminal_config.clone(),
+                render_token: None,
                 view: None,
             }
         };
@@ -477,7 +480,11 @@ where
             let primary_client_id = request.client_id.clone();
             let application_result = await_attached_terminal_step(
                 "pane I/O apply",
-                handle.apply_attached_terminal_step_plan(primary_client_id, step.clone()),
+                handle.apply_attached_terminal_step_plan_for_frame(
+                    primary_client_id,
+                    frame.render_token.clone(),
+                    step.clone(),
+                ),
             )
             .await;
             Some(match application_result {
@@ -571,7 +578,11 @@ where
         {
             let application_result = await_attached_terminal_step(
                 "pane I/O apply",
-                handle.apply_attached_terminal_step_plan(primary_client_id.clone(), step.clone()),
+                handle.apply_attached_terminal_step_plan_for_frame(
+                    primary_client_id.clone(),
+                    frame.render_token.clone(),
+                    step.clone(),
+                ),
             )
             .await;
             Some(match application_result {
@@ -612,6 +623,7 @@ where
                 let refreshed = await_attached_terminal_step(
                     "refreshed client frame render",
                     handle.render_client_frame_with_snapshot(
+                        request.client_id.clone(),
                         request.role,
                         request.client_size,
                         frame.config.clone(),

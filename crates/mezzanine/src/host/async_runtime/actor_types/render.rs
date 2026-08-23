@@ -9,6 +9,16 @@ use std::sync::Arc;
 
 // Async runtime actor request and report types.
 
+/// Exact client and presentation generations that produced one rendered frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::host::async_runtime) struct AsyncClientRenderToken {
+    pub(in crate::host::async_runtime) client_id: ClientId,
+    pub(in crate::host::async_runtime) window_id: String,
+    pub(in crate::host::async_runtime) navigation_revision: u64,
+    pub(in crate::host::async_runtime) layout_revision: u64,
+    pub(in crate::host::async_runtime) presentation_revision: u64,
+}
+
 /// Immutable actor-resolved terminal configuration shared across client requests.
 ///
 /// The generation changes whenever actor-owned terminal interaction or
@@ -18,6 +28,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct AsyncTerminalClientConfigSnapshot {
     generation: u64,
+    client_id: Option<ClientId>,
     config: Arc<TerminalClientLoopConfig>,
 }
 
@@ -29,6 +40,20 @@ impl AsyncTerminalClientConfigSnapshot {
     ) -> Self {
         Self {
             generation,
+            client_id: None,
+            config: Arc::new(config),
+        }
+    }
+
+    /// Builds one resolved snapshot owned by an exact attached client.
+    pub(in crate::host::async_runtime) fn new_for_client(
+        generation: u64,
+        client_id: ClientId,
+        config: TerminalClientLoopConfig,
+    ) -> Self {
+        Self {
+            generation,
+            client_id: Some(client_id),
             config: Arc::new(config),
         }
     }
@@ -36,6 +61,11 @@ impl AsyncTerminalClientConfigSnapshot {
     /// Returns the actor generation represented by this snapshot.
     pub(in crate::host::async_runtime) fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Returns the exact client whose transient frame configuration is cached.
+    pub(in crate::host::async_runtime) fn client_id(&self) -> Option<&ClientId> {
+        self.client_id.as_ref()
     }
 
     /// Returns the immutable resolved configuration.
@@ -69,6 +99,8 @@ pub(in crate::host::async_runtime) enum AsyncTerminalClientConfigInput {
 pub struct AsyncRenderedClientFrame {
     /// Actor-resolved configuration used to compose this frame.
     pub config: AsyncTerminalClientConfigSnapshot,
+    /// Identity and revisions used to validate coordinate-derived input.
+    pub(in crate::host::async_runtime) render_token: Option<AsyncClientRenderToken>,
     /// Stores the view value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

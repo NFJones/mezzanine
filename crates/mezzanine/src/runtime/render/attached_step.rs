@@ -177,8 +177,18 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         step: &AttachedTerminalClientStepPlan,
     ) -> Result<AttachedClientStepApplication> {
-        self.apply_attached_terminal_step_plan_inner(primary_client_id, step, false, false)
-            .map(|(application, _)| application)
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
+        }
+        self.presentation.activate_client_state(primary_client_id);
+        self.session.activate_client_navigation(primary_client_id)?;
+        let result = self
+            .apply_attached_terminal_step_plan_inner(primary_client_id, step, false, false)
+            .map(|(application, _)| application);
+        self.presentation.capture_projected_client_state();
+        result
     }
 
     /// Applies one planned client step and returns its ordered adapter effects.
@@ -187,8 +197,17 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         step: &AttachedTerminalClientStepPlan,
     ) -> Result<(AttachedClientStepApplication, RuntimeTransition)> {
-        let (application, mut side_effects) =
-            self.apply_attached_terminal_step_plan_inner(primary_client_id, step, true, true)?;
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
+        }
+        self.presentation.activate_client_state(primary_client_id);
+        self.session.activate_client_navigation(primary_client_id)?;
+        let result =
+            self.apply_attached_terminal_step_plan_inner(primary_client_id, step, true, true);
+        self.presentation.capture_projected_client_state();
+        let (application, mut side_effects) = result?;
         let active_resize_drag = application.full_redraw_required
             && self.presentation.mouse_resize_drag_active()
             && step.actions.iter().any(|action| {
@@ -251,21 +270,23 @@ impl RuntimeSessionService {
         client_id: &mez_core::ids::ClientId,
         bytes: &[u8],
     ) -> Result<RuntimeTransition> {
-        if bytes.is_empty() || self.session.primary_client_id() != Some(client_id) {
+        if bytes.is_empty() || !self.session.is_attached_primary(client_id) {
             return Ok(RuntimeTransition::default());
         }
-        let Some(client) = self.session.clients().iter().find(|client| {
-            client.id == *client_id && client.state == mez_mux::session::ClientState::Attached
-        }) else {
+        let Some(terminal) = self
+            .session
+            .clients()
+            .iter()
+            .find(|client| {
+                client.id == *client_id && client.state == mez_mux::session::ClientState::Attached
+            })
+            .and_then(|client| client.terminal.clone())
+        else {
             return Ok(RuntimeTransition::default());
         };
-        let size = if let Some(terminal) = client.terminal.as_ref() {
-            Size::new(terminal.columns, terminal.rows)?
-        } else if let Some(window) = self.session.active_window() {
-            window.size
-        } else {
-            return Ok(RuntimeTransition::default());
-        };
+        self.presentation.activate_client_state(client_id);
+        self.session.activate_client_navigation(client_id)?;
+        let size = Size::new(terminal.columns, terminal.rows)?;
         let config = self.terminal_client_loop_config(TerminalClientLoopConfig::default())?;
         let view =
             self.render_client_view_with_resolved_config(ClientViewRole::Primary, size, &config)?;
@@ -286,6 +307,7 @@ impl RuntimeSessionService {
             &config,
         )?;
         if step.actions.is_empty() {
+            self.presentation.capture_projected_client_state();
             return Ok(RuntimeTransition::default());
         }
         self.apply_attached_terminal_step_transition(client_id, &step)
@@ -340,8 +362,10 @@ impl RuntimeSessionService {
         queue_external_effects: bool,
     ) -> Result<(AttachedClientStepApplication, Vec<RuntimeSideEffect>)> {
         self.require_live()?;
-        if self.session.primary_client_id() != Some(primary_client_id) {
-            return Err(MezError::forbidden("operation requires the primary client"));
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "operation requires an attached primary client",
+            ));
         }
         let mut pane_input_effects = Vec::new();
         let mut report = AttachedClientStepApplication {

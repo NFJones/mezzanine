@@ -53,7 +53,9 @@ pub use message::{
     serve_async_runtime_message_connection, serve_async_runtime_message_connection_loop,
     serve_async_runtime_message_listener,
 };
-pub(in crate::host::async_runtime) use render::AsyncTerminalClientConfigInput;
+pub(in crate::host::async_runtime) use render::{
+    AsyncClientRenderToken, AsyncTerminalClientConfigInput,
+};
 pub use render::{
     AsyncRenderedClientFlush, AsyncRenderedClientFrame, AsyncTerminalClientConfigSnapshot,
 };

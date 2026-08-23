@@ -229,7 +229,8 @@ async fn async_attached_terminal_service_routes_input_while_output_is_pending() 
 /// implementation detail.
 #[tokio::test(flavor = "current_thread")]
 async fn async_attached_terminal_service_runs_batches_until_hangup() {
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+    let (service, observer) = test_service_with_observer();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
@@ -253,7 +254,7 @@ async fn async_attached_terminal_service_runs_batches_until_hangup() {
             &mut io,
             AsyncAttachedTerminalLoopRequest {
                 role: ClientViewRole::Observer,
-                client_id: ClientId::new('c', 9002),
+                client_id: observer,
                 primary_client_id: None,
                 client_size: Size::new(80, 24).unwrap(),
                 terminal_config: TerminalClientLoopConfig::default(),
@@ -295,7 +296,8 @@ async fn async_attached_terminal_service_runs_batches_until_hangup() {
 /// quiet periods no longer have a periodic foreground redraw sleep.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_attached_terminal_service_wakes_between_batches_on_side_effects() {
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+    let (service, observer) = test_service_with_observer();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
@@ -313,7 +315,7 @@ async fn async_attached_terminal_service_wakes_between_batches_on_side_effects()
             &mut io,
             AsyncAttachedTerminalLoopRequest {
                 role: ClientViewRole::Observer,
-                client_id: ClientId::new('c', 9022),
+                client_id: observer.clone(),
                 primary_client_id: None,
                 client_size: Size::new(80, 24).unwrap(),
                 terminal_config: TerminalClientLoopConfig::default(),
@@ -330,7 +332,7 @@ async fn async_attached_terminal_service_wakes_between_batches_on_side_effects()
             tokio::time::advance(Duration::from_millis(10)).await;
             notify_handle
                 .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
-                    client_id: ClientId::new('c', 9022),
+                    client_id: observer,
                     reason: RenderInvalidationReason::CursorBlink,
                 }])
                 .await
@@ -360,7 +362,8 @@ async fn async_attached_terminal_service_wakes_between_batches_on_side_effects()
 /// idle.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_attached_terminal_service_has_no_idle_batch_timer() {
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+    let (service, observer) = test_service_with_observer();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
     let write_count = StdArc::new(AtomicUsize::new(0));
@@ -373,7 +376,7 @@ async fn async_attached_terminal_service_has_no_idle_batch_timer() {
             &mut io,
             AsyncAttachedTerminalLoopRequest {
                 role: ClientViewRole::Observer,
-                client_id: ClientId::new('c', 9023),
+                client_id: observer,
                 primary_client_id: None,
                 client_size: Size::new(80, 24).unwrap(),
                 terminal_config: TerminalClientLoopConfig::default(),
@@ -418,10 +421,10 @@ async fn async_attached_terminal_service_has_no_idle_batch_timer() {
 /// awaiting fresh input so a quiet terminal cannot strand a repaint forever.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_attached_terminal_service_drains_stranded_render_effect_before_waiting() {
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+    let (service, client_id) = test_service_with_observer();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
-    let client_id = ClientId::new('c', 9024);
     let write_count = StdArc::new(AtomicUsize::new(0));
     let write_notify = StdArc::new(tokio::sync::Notify::new());
     let mut io = IdleAsyncAttachedTerminalLoopIo::new(write_count.clone(), write_notify.clone());
@@ -932,7 +935,8 @@ async fn async_attached_terminal_service_flushes_idle_pending_output_without_red
 /// CLI error handler during clean primary shutdown or terminal teardown.
 #[tokio::test(flavor = "current_thread")]
 async fn async_attached_terminal_service_treats_broken_pipe_as_output_hangup() {
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+    let (service, observer) = test_service_with_observer();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
@@ -956,7 +960,7 @@ async fn async_attached_terminal_service_treats_broken_pipe_as_output_hangup() {
             &mut io,
             AsyncAttachedTerminalLoopRequest {
                 role: ClientViewRole::Observer,
-                client_id: ClientId::new('c', 9003),
+                client_id: observer,
                 primary_client_id: None,
                 client_size: Size::new(80, 24).unwrap(),
                 terminal_config: TerminalClientLoopConfig::default(),
@@ -1267,7 +1271,8 @@ async fn async_attached_terminal_service_schedules_resize_debounce_timer() {
 /// implementation detail.
 #[tokio::test(flavor = "current_thread")]
 async fn async_attached_terminal_service_can_be_supervised_by_name() {
-    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+    let (service, observer) = test_service_with_observer();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
     let actor_handle = handle.clone();
@@ -1291,7 +1296,7 @@ async fn async_attached_terminal_service_can_be_supervised_by_name() {
         io,
         AsyncAttachedTerminalLoopRequest {
             role: ClientViewRole::Observer,
-            client_id: ClientId::new('c', 9004),
+            client_id: observer,
             primary_client_id: None,
             client_size: Size::new(80, 24).unwrap(),
             terminal_config: TerminalClientLoopConfig::default(),

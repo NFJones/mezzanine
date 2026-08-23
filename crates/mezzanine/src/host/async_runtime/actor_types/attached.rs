@@ -13,8 +13,13 @@ use crate::host::terminal::plan_attached_terminal_client_step;
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 #[cfg(test)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "test helper mirrors the complete attached-client planning boundary"
+)]
 pub async fn plan_async_attached_terminal_client_step(
     handle: &AsyncRuntimeSessionHandle,
+    client_id: ClientId,
     role: ClientViewRole,
     client_size: Size,
     config: TerminalClientLoopConfig,
@@ -23,7 +28,7 @@ pub async fn plan_async_attached_terminal_client_step(
     status: Option<&ClientStatusLine>,
 ) -> Result<AttachedTerminalClientStepPlan> {
     let frame = handle
-        .render_client_frame(role, client_size, config, true)
+        .render_client_frame(client_id, role, client_size, config, true)
         .await?;
     plan_attached_terminal_client_step(readiness, input, frame.view.as_ref(), status, &frame.config)
 }
@@ -87,6 +92,7 @@ pub async fn plan_and_apply_async_attached_terminal_client_step(
 )> {
     let plan = plan_async_attached_terminal_client_step(
         handle,
+        request.primary_client_id.clone(),
         request.role,
         request.client_size,
         request.config,

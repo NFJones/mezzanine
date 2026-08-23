@@ -83,6 +83,7 @@ impl RuntimeSessionService {
         let client_id =
             self.session
                 .attach_primary_with_terminal(name, interactive, Some(terminal))?;
+        self.presentation.activate_client_state(&client_id);
         self.session.state = mez_mux::session::SessionState::Running;
         self.session
             .set_lifecycle_state(RuntimeLifecycleState::Running);
@@ -118,6 +119,7 @@ impl RuntimeSessionService {
         self.require_live()?;
         self.session.authoritative_size = terminal_size;
         self.session.detach_primary(primary_client_id)?;
+        self.presentation.remove_client_state(primary_client_id);
         self.session
             .set_lifecycle_state(RuntimeLifecycleState::Detached);
         self.run_configured_completed_hooks(
@@ -257,6 +259,7 @@ impl RuntimeSessionService {
             mez_mux::session::ClientRole::Primary => return Ok(false),
         };
         self.session.detach_client_self(client_id)?;
+        self.presentation.remove_client_state(client_id);
         self.append_lifecycle_event(
             EventKind::ClientDetached,
             format!(

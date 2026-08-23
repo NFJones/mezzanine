@@ -2,6 +2,27 @@
 
 use super::*;
 
+/// Verifies exact-client rendering rejects identities that are not currently
+/// attached instead of falling back to the session's compatibility focus.
+#[test]
+fn runtime_exact_client_render_rejects_stale_identity() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let stale = mez_core::ids::ClientId::new('c', 99_999);
+    let error = service
+        .render_client_view_for_client_with_resolved_config(
+            &stale,
+            ClientViewRole::Primary,
+            Size::new(80, 24).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap_err();
+
+    assert!(error.to_string().contains("attached client"), "{error}");
+}
+
 /// Verifies primary and observer frames render the visibility-selected screen
 /// without allowing hidden process application modes to affect agent input.
 #[test]

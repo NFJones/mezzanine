@@ -8,8 +8,98 @@ use super::{
     DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS, RuntimeSessionService, decode_control_frame,
     delivery_batch_json, encode_control_body, encode_mmp_body,
 };
+use crate::host::async_runtime::actor_types::AsyncClientRenderToken;
+use crate::host::terminal::AttachedTerminalClientStepPlan;
 
 impl AsyncRuntimeSessionActor {
+    /// Captures the exact primary view identity used to derive coordinate actions.
+    fn client_render_token(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+        role: mez_mux::presentation::ClientViewRole,
+    ) -> crate::Result<Option<AsyncClientRenderToken>> {
+        if role != mez_mux::presentation::ClientViewRole::Primary {
+            return Ok(None);
+        }
+        let (window_id, navigation_revision, layout_revision, presentation_revision) =
+            self.service.client_render_identity(client_id)?;
+        Ok(Some(AsyncClientRenderToken {
+            client_id: client_id.clone(),
+            window_id,
+            navigation_revision,
+            layout_revision,
+            presentation_revision,
+        }))
+    }
+
+    /// Reports whether a planned step contains coordinates resolved from a frame.
+    fn step_uses_render_coordinates(step: &AttachedTerminalClientStepPlan) -> bool {
+        step.actions.iter().any(|action| {
+            matches!(
+                action,
+                crate::host::terminal::TerminalClientLoopAction::HandleMouse(
+                    crate::host::terminal::MouseAction::FocusWindow { .. }
+                        | crate::host::terminal::MouseAction::FocusGroup { .. }
+                        | crate::host::terminal::MouseAction::PressWindowAction { .. }
+                        | crate::host::terminal::MouseAction::ReleaseWindowAction { .. }
+                        | crate::host::terminal::MouseAction::OpenPaneAgentStatusSelector { .. }
+                        | crate::host::terminal::MouseAction::HoverPaneAgentStatusSelector { .. }
+                        | crate::host::terminal::MouseAction::SelectPaneAgentStatusSelector { .. }
+                        | crate::host::terminal::MouseAction::BeginDisplayOverlaySelection { .. }
+                        | crate::host::terminal::MouseAction::UpdateDisplayOverlaySelection { .. }
+                        | crate::host::terminal::MouseAction::FinishDisplayOverlaySelection { .. }
+                        | crate::host::terminal::MouseAction::SelectDisplayOverlay { .. }
+                        | crate::host::terminal::MouseAction::FocusPane(_)
+                        | crate::host::terminal::MouseAction::FocusPaneOnly(_)
+                        | crate::host::terminal::MouseAction::PasteClipboard(_)
+                        | crate::host::terminal::MouseAction::ShowWindowChooser { .. }
+                        | crate::host::terminal::MouseAction::ResizePane { .. }
+                        | crate::host::terminal::MouseAction::CopySelectionStart(_)
+                        | crate::host::terminal::MouseAction::CopyWord(_)
+                        | crate::host::terminal::MouseAction::CopySelectionUpdate(_)
+                        | crate::host::terminal::MouseAction::CopySelectionFinish(_)
+                        | crate::host::terminal::MouseAction::ScrollHistory { .. }
+                )
+            )
+        })
+    }
+
+    /// Resolves terminal configuration for one exact client's prepared view.
+    fn resolve_terminal_client_config_snapshot_for_client(
+        &self,
+        client_id: &mez_core::ids::ClientId,
+        input: AsyncTerminalClientConfigInput,
+    ) -> crate::Result<AsyncTerminalClientConfigSnapshot> {
+        match input {
+            AsyncTerminalClientConfigInput::Snapshot(snapshot)
+                if snapshot.generation() == self.terminal_config_generation
+                    && snapshot.client_id() == Some(client_id) =>
+            {
+                Ok(snapshot)
+            }
+            AsyncTerminalClientConfigInput::Raw(config) => self
+                .service
+                .terminal_client_loop_config(*config)
+                .map(|config| {
+                    AsyncTerminalClientConfigSnapshot::new_for_client(
+                        self.terminal_config_generation,
+                        client_id.clone(),
+                        config,
+                    )
+                }),
+            AsyncTerminalClientConfigInput::Snapshot(snapshot) => self
+                .service
+                .terminal_client_loop_config(snapshot.config().clone())
+                .map(|config| {
+                    AsyncTerminalClientConfigSnapshot::new_for_client(
+                        self.terminal_config_generation,
+                        client_id.clone(),
+                        config,
+                    )
+                }),
+        }
+    }
+
     /// Resolves stale terminal configuration while reusing current snapshots.
     fn resolve_terminal_client_config_snapshot(
         &self,
@@ -159,6 +249,7 @@ impl AsyncRuntimeSessionActor {
                 false
             }
             AsyncRuntimeRequest::RenderClientFrame {
+                client_id,
                 role,
                 client_size,
                 config,
@@ -170,14 +261,25 @@ impl AsyncRuntimeSessionActor {
                         self.metrics.render_client_frame_requests.saturating_add(1);
                 }
                 let result = self
-                    .resolve_terminal_client_config_snapshot(config)
+                    .service
+                    .prepare_client_render(&client_id, role)
+                    .and_then(|()| {
+                        self.resolve_terminal_client_config_snapshot_for_client(&client_id, config)
+                    })
                     .and_then(|config| {
                         let view = if render {
-                            self.service.render_client_view_with_resolved_config(
-                                role,
-                                client_size,
-                                config.config(),
-                            )?
+                            self.service
+                                .render_client_view_for_client_with_resolved_config(
+                                    &client_id,
+                                    role,
+                                    client_size,
+                                    config.config(),
+                                )?
+                        } else {
+                            None
+                        };
+                        let render_token = if render {
+                            self.client_render_token(&client_id, role)?
                         } else {
                             None
                         };
@@ -188,7 +290,11 @@ impl AsyncRuntimeSessionActor {
                         if !effects.is_empty() {
                             self.queue_runtime_side_effects(effects)?;
                         }
-                        Ok(AsyncRenderedClientFrame { config, view })
+                        Ok(AsyncRenderedClientFrame {
+                            config,
+                            render_token,
+                            view,
+                        })
                     });
                 let _ = reply.send(result);
                 false
@@ -545,42 +651,75 @@ impl AsyncRuntimeSessionActor {
             }
             AsyncRuntimeRequest::ApplyAttachedTerminalStep {
                 primary_client_id,
+                render_token,
                 step,
                 reply,
             } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
-                let result = self
-                    .service
-                    .apply_attached_terminal_step_transition(&primary_client_id, &step)
-                    .and_then(|(application, transition)| {
-                        self.queue_runtime_side_effects(transition.side_effects)?;
-                        self.queue_deferred_pane_io_side_effects_from_service()?;
-                        self.queue_pending_provider_dispatch_side_effects()?;
-                        self.queue_shell_lifecycle_timer_side_effects()?;
-                        for mut refresh in self
+                let stale_coordinate_input = render_token
+                    .as_ref()
+                    .filter(|_| Self::step_uses_render_coordinates(&step))
+                    .map(|token| {
+                        self.service.client_render_identity(&primary_client_id).map(
+                            |(
+                                window_id,
+                                navigation_revision,
+                                layout_revision,
+                                presentation_revision,
+                            )| {
+                                token.client_id != primary_client_id
+                                    || token.window_id != window_id
+                                    || token.navigation_revision != navigation_revision
+                                    || token.layout_revision != layout_revision
+                                    || token.presentation_revision != presentation_revision
+                            },
+                        )
+                    })
+                    .transpose();
+                let result = stale_coordinate_input.and_then(|stale| {
+                    if stale == Some(true) {
+                        let application = self
                             .service
-                            .take_pending_agent_prompt_provider_info_refreshes()
-                        {
-                            let Some(work) = refresh.work.take() else {
-                                continue;
-                            };
-                            let sender = self.sender.clone();
-                            let join_handle = tokio::spawn(async move {
-                                let outcome =
-                                    RuntimeSessionService::execute_provider_info_refresh(work).await;
-                                let _ = sender
-                                    .send(AsyncRuntimeRequestEnvelope::new(
-                                        AsyncRuntimeRequest::CompleteAgentPromptProviderInfoRefresh {
-                                            refresh,
-                                            outcome,
-                                        },
-                                    ))
-                                    .await;
-                            });
-                            std::mem::drop(join_handle);
-                        }
-                        Ok(application)
-                    });
+                            .cancel_stale_client_coordinate_input(&primary_client_id)?;
+                        self.queue_runtime_side_effects(vec![
+                            crate::runtime::RuntimeSideEffect::RenderClient {
+                                client_id: primary_client_id.clone(),
+                                reason: crate::runtime::RenderInvalidationReason::FullRedraw,
+                            },
+                        ])?;
+                        return Ok(application);
+                    }
+                    let (application, transition) = self
+                        .service
+                        .apply_attached_terminal_step_transition(&primary_client_id, &step)?;
+                    self.queue_runtime_side_effects(transition.side_effects)?;
+                    self.queue_deferred_pane_io_side_effects_from_service()?;
+                    self.queue_pending_provider_dispatch_side_effects()?;
+                    self.queue_shell_lifecycle_timer_side_effects()?;
+                    for mut refresh in self
+                        .service
+                        .take_pending_agent_prompt_provider_info_refreshes()
+                    {
+                        let Some(work) = refresh.work.take() else {
+                            continue;
+                        };
+                        let sender = self.sender.clone();
+                        let join_handle = tokio::spawn(async move {
+                            let outcome =
+                                RuntimeSessionService::execute_provider_info_refresh(work).await;
+                            let _ = sender
+                                .send(AsyncRuntimeRequestEnvelope::new(
+                                    AsyncRuntimeRequest::CompleteAgentPromptProviderInfoRefresh {
+                                        refresh,
+                                        outcome,
+                                    },
+                                ))
+                                .await;
+                        });
+                        std::mem::drop(join_handle);
+                    }
+                    Ok(application)
+                });
                 let _ = reply.send(result);
                 self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
                 false

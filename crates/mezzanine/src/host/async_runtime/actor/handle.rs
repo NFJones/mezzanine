@@ -16,6 +16,7 @@ use super::{
     AsyncRenderedClientFlush, ClientStatusLine, RenderedClientView, RuntimeAgentProviderTask,
     RuntimeEventConnectionTable,
 };
+use crate::host::async_runtime::actor_types::AsyncClientRenderToken;
 use crate::runtime::RuntimeNativeShellDispatch;
 
 impl AsyncRuntimeSessionHandle {
@@ -137,12 +138,14 @@ impl AsyncRuntimeSessionHandle {
     /// on duplicated control-flow logic.
     pub async fn render_client_frame(
         &self,
+        client_id: ClientId,
         role: ClientViewRole,
         client_size: Size,
         config: TerminalClientLoopConfig,
         render: bool,
     ) -> Result<AsyncRenderedClientFrame> {
         self.request(|reply| AsyncRuntimeRequest::RenderClientFrame {
+            client_id,
             role,
             client_size,
             config: AsyncTerminalClientConfigInput::Raw(Box::new(config)),
@@ -155,12 +158,14 @@ impl AsyncRuntimeSessionHandle {
     /// Renders from an actor-resolved snapshot, refreshing stale generations.
     pub(in crate::host::async_runtime) async fn render_client_frame_with_snapshot(
         &self,
+        client_id: ClientId,
         role: ClientViewRole,
         client_size: Size,
         config: AsyncTerminalClientConfigSnapshot,
         render: bool,
     ) -> Result<AsyncRenderedClientFrame> {
         self.request(|reply| AsyncRuntimeRequest::RenderClientFrame {
+            client_id,
             role,
             client_size,
             config: AsyncTerminalClientConfigInput::Snapshot(config),
@@ -437,6 +442,7 @@ impl AsyncRuntimeSessionHandle {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub async fn apply_attached_terminal_step_plan(
         &self,
         primary_client_id: ClientId,
@@ -444,6 +450,23 @@ impl AsyncRuntimeSessionHandle {
     ) -> Result<AttachedClientStepApplication> {
         self.request(|reply| AsyncRuntimeRequest::ApplyAttachedTerminalStep {
             primary_client_id,
+            render_token: None,
+            step,
+            reply,
+        })
+        .await?
+    }
+
+    /// Applies a terminal step fenced by the exact frame that produced it.
+    pub(in crate::host::async_runtime) async fn apply_attached_terminal_step_plan_for_frame(
+        &self,
+        primary_client_id: ClientId,
+        render_token: Option<AsyncClientRenderToken>,
+        step: AttachedTerminalClientStepPlan,
+    ) -> Result<AttachedClientStepApplication> {
+        self.request(|reply| AsyncRuntimeRequest::ApplyAttachedTerminalStep {
+            primary_client_id,
+            render_token,
             step,
             reply,
         })

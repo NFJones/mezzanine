@@ -11,10 +11,11 @@ use super::types::{ClientNavigationState, FocusCursor, Session, SessionState};
 
 impl Session {
     /// Projects one attached primary's stable-id navigation into legacy focus owners.
-    pub(super) fn activate_client_navigation(
-        &mut self,
-        client_id: &mez_core::ClientId,
-    ) -> Result<()> {
+    ///
+    /// Runtime presentation uses this compatibility projection before composing
+    /// a caller-relative frame. Mutations capture any resulting focus changes
+    /// back into the same client's navigation state.
+    pub fn activate_client_navigation(&mut self, client_id: &mez_core::ClientId) -> Result<()> {
         self.require_primary(client_id)?;
         let navigation = self.navigation(client_id)?.clone();
         if let Some(group_id) = navigation.groups.active.as_ref()
