@@ -361,7 +361,7 @@ fn runtime_remote_administration_rejects_iroh_transport() {
     service
         .detach_primary(&request_local_primary, Size::new(80, 24).unwrap())
         .unwrap();
-    assert!(service.session().primary_client_id().is_none());
+    assert!(service.session().layout_owner_client_id().is_none());
 
     let endpoint_id = SecretKey::generate().public().to_string();
     let mut remote = ControlConnectionState::new(true, true);

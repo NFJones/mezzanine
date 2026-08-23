@@ -340,7 +340,7 @@ impl RuntimeSessionService {
                     if let Some(child_pane_id) = runtime_agent_pane_id(child_agent_id) {
                         if self.find_pane_descriptor(child_pane_id.as_str()).is_some() {
                             if let Some(primary_client_id) =
-                                self.session.primary_client_id().cloned()
+                                self.session.layout_owner_client_id().cloned()
                             {
                                 self.dispatch_runtime_pane_close(
                                     &primary_client_id,
@@ -403,7 +403,7 @@ impl RuntimeSessionService {
                     if let Some(child_pane_id) = runtime_agent_pane_id(child_agent_id) {
                         if self.find_pane_descriptor(child_pane_id.as_str()).is_some() {
                             if let Some(primary_client_id) =
-                                self.session.primary_client_id().cloned()
+                                self.session.layout_owner_client_id().cloned()
                             {
                                 self.dispatch_runtime_pane_close(
                                     &primary_client_id,

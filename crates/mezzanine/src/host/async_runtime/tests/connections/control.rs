@@ -315,6 +315,110 @@ async fn async_control_listener_registers_observer_while_primary_connection_rema
     let _ = std::fs::remove_file(&path);
 }
 
+/// Verifies two same-named Unix control connections receive independent v2
+/// primary identities and closing one connection does not detach the other.
+#[tokio::test(flavor = "current_thread")]
+async fn async_control_listener_keeps_same_named_primaries_independent() {
+    use crate::control::{decode_control_frame, encode_control_body};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{UnixListener, UnixStream};
+    use tokio::sync::oneshot;
+
+    async fn read_control_body(stream: &mut UnixStream) -> String {
+        let mut output = vec![0; 16 * 1024];
+        let read = stream.read(&mut output).await.unwrap();
+        output.truncate(read);
+        decode_control_frame(&output, 16 * 1024).unwrap().0
+    }
+
+    let path = std::path::PathBuf::from("/tmp")
+        .join(format!("mez-ctl-{}-two-primary.sock", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let initialize = |id: &str| {
+        encode_control_body(&format!(
+            r#"{{"jsonrpc":"2.0","id":"{id}","method":"control/initialize","params":{{"client_name":"same-name","requested_version":2,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{{"name":"same-name","interactive":true,"terminal":{{"columns":80,"rows":24,"term":"xterm-256color"}}}},"authentication":{{"mechanism":"peer_credentials"}}}}}}"#
+        ))
+    };
+    let (first_initialized_tx, first_initialized_rx) = oneshot::channel();
+    let (second_initialized_tx, second_initialized_rx) = oneshot::channel();
+    let (first_closed_tx, first_closed_rx) = oneshot::channel();
+
+    let first_client = async {
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        stream.write_all(&initialize("first-init")).await.unwrap();
+        let body = read_control_body(&mut stream).await;
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let client_id = value["result"]["client"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        first_initialized_tx.send(client_id).unwrap();
+        second_initialized_rx.await.unwrap();
+        stream.shutdown().await.unwrap();
+        drop(stream);
+        first_closed_tx.send(()).unwrap();
+    };
+    let second_client = async {
+        let first_client_id = first_initialized_rx.await.unwrap();
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        stream.write_all(&initialize("second-init")).await.unwrap();
+        let body = read_control_body(&mut stream).await;
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let second_client_id = value["result"]["client"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_ne!(first_client_id, second_client_id);
+        assert_eq!(value["result"]["session"]["attached_primary_count"], 2);
+        second_initialized_tx.send(()).unwrap();
+        first_closed_rx.await.unwrap();
+
+        let mut attached_primary_count = 2;
+        for request_id in 0..20 {
+            let request = format!(
+                r#"{{"jsonrpc":"2.0","id":"state-{request_id}","method":"session/get","params":{{}}}}"#
+            );
+            stream
+                .write_all(&encode_control_body(&request))
+                .await
+                .unwrap();
+            let body = read_control_body(&mut stream).await;
+            let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+            attached_primary_count = value["result"]["session"]["attached_primary_count"]
+                .as_u64()
+                .unwrap();
+            if attached_primary_count == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(attached_primary_count, 1);
+        stream.shutdown().await.unwrap();
+    };
+    let server = async {
+        let served = serve_async_runtime_control_listener(
+            &listener,
+            &handle,
+            AsyncRuntimeControlConnectionConfig::new(16 * 1024, current_effective_uid()).unwrap(),
+            |served, _state| served >= 2,
+        )
+        .await
+        .unwrap();
+        assert_eq!(served, 2);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Detached
+        );
+    };
+
+    let ((), (), (), _exit) = tokio::join!(first_client, second_client, server, actor.run());
+    let _ = std::fs::remove_file(&path);
+}
+
 /// Verifies the shared control loop accepts a non-Unix async byte stream.
 ///
 /// A Tokio duplex stream has no raw descriptor or peer credentials, so this

@@ -1587,7 +1587,7 @@ fn runtime_routed_worker_joined_child_failure_recovers_parent() {
         selected_routed_loop("/loop --limit 3 recover failed joined descendant");
     let primary = service
         .session
-        .primary_client_id()
+        .layout_owner_client_id()
         .cloned()
         .expect("primary should remain attached");
     let child_pane = service

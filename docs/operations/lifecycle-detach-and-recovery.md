@@ -17,14 +17,11 @@ available. Use `mez list` to discover resumable sessions and `mez attach` to
 select one. Press `Ctrl+A d` or use `mez detach` to leave the invoking client.
 Detaching normally leaves pane processes and agent tasks running.
 
-The checked-in runtime currently exposes the single-primary `mezctl/1`
-compatibility contract. The specified `mezctl/2` cutover will allow up to 16
-equal-authority attached primaries with independent navigation and transient
-presentation. One layout owner controls canonical PTY geometry; non-owner
-resizes affect only that client's viewport. Owner detach elects the oldest
-remaining primary, while final-primary detach retains canonical size and lets
-background work continue. The implementation MUST NOT expose second-primary
-ingress until the complete v2 cutover is available.
+The runtime exposes `mezctl/2` and allows up to 16 equal-authority attached
+primaries with independent navigation and transient presentation. One layout
+owner controls canonical PTY geometry; non-owner resizes affect only that
+client's viewport. Owner detach elects the oldest remaining primary, while
+final-primary detach retains canonical size and lets background work continue.
 
 Use `mez serve` to run a foreground session service without attaching a primary
 terminal. Select a specific service with `-S <socket-path>` or `-L <name>`, and

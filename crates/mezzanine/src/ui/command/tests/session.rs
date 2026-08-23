@@ -327,7 +327,10 @@ fn list_commands_return_session_state() {
     assert!(sessions.contains("created_at="), "{sessions}");
     assert!(sessions.contains("last_attached_at="), "{sessions}");
     assert!(sessions.contains("attached_clients=1"), "{sessions}");
-    assert!(sessions.contains("primary_available=false"), "{sessions}");
+    assert!(sessions.contains("attached_primaries=1"), "{sessions}");
+    assert!(sessions.contains("max_attached_primaries=16"), "{sessions}");
+    assert!(sessions.contains("accepts_primary=true"), "{sessions}");
+    assert!(sessions.contains("layout_owner=c1"), "{sessions}");
     let pane_selector = display_body(pane_selector);
     assert!(
         pane_selector.contains("action=select-pane -t 0"),

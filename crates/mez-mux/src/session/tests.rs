@@ -1940,21 +1940,20 @@ fn client_self_detach_preserves_primary_and_observer_lifecycle() {
         .unwrap();
     assert_eq!(observer.state, ObserverDecisionState::Rejected);
     assert_eq!(observer.reason.as_deref(), Some("client detached itself"));
-    assert_eq!(session.primary_client_id(), Some(&primary));
+    assert_eq!(session.layout_owner_client_id(), Some(&primary));
     assert_eq!(session.state, SessionState::Running);
 
     session.detach_client_self(&primary).unwrap();
 
-    assert!(session.primary_client_id().is_none());
+    assert!(session.layout_owner_client_id().is_none());
     assert_eq!(session.state, SessionState::Detached);
 }
 
-/// Verifies synthetic primary views retain independent navigation and zoom.
+/// Verifies attached primary views retain independent navigation and zoom.
 ///
-/// This milestone keeps production ingress single-primary, but the mux domain
-/// must already isolate two attached-primary records so later protocol-v2
-/// attachment cannot make one caller's window, pane, no-select, or zoom
-/// mutation overwrite the other caller's view.
+/// Protocol-v2 clients own distinct navigation records, so one caller's
+/// window, pane, no-select, or zoom mutation must not overwrite another
+/// attached primary's view.
 #[test]
 fn synthetic_primary_views_keep_independent_navigation_and_zoom() {
     let mut session = test_session();

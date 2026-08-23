@@ -7625,19 +7625,12 @@ user-private file.
 
 The control endpoint MUST support version negotiation.
 
-The control endpoint protocol specified here is Mezzanine Control Protocol
-version 1, abbreviated as `mezctl/1`.
-
-Independent multi-primary sessions MUST use Mezzanine Control Protocol version
-2, abbreviated as `mezctl/2`. The first `mezctl/2` implementation milestone
-MUST be a cutover rather than a mixed attachment mode: a server advertising
-multi-primary behavior MUST accept `requested_version = 2` and MUST reject
-`requested_version = 1` with `-32003` and `mezzanine_code =
-"unsupported_version"`. A server that has not completed the v2 cutover MAY
-continue serving `mezctl/1`, but it MUST NOT advertise `multiple_primaries`,
-`client_local_focus`, `layout_owner`, or `client_bound_events`, and MUST NOT
-enable a second attached primary. This specification milestone therefore does
-not itself authorize second-primary ingress in a v1 implementation.
+The implemented control endpoint protocol is Mezzanine Control Protocol
+version 2, abbreviated as `mezctl/2`. It is a complete cutover rather than a
+mixed attachment mode: the server MUST accept `requested_version = 2` and MUST
+reject `requested_version = 1` with `-32003` and `mezzanine_code =
+"unsupported_version"`. The removed `mezctl/1` contract remains documented
+only as migration history and MUST NOT be advertised or accepted.
 
 Every successful v2 primary initialization MUST allocate and return a fresh
 exact `ClientState`; display-name equality MUST NOT reuse a live or detached
@@ -7927,9 +7920,10 @@ size with non-positive values MUST be rejected with `invalid-params`.
 `credentials`, `process_control`, `destructive`, `privilege_change`, and
 `unknown`. When an effect is not known, `unknown` MUST be true.
 
-The following table is the implemented `mezctl/1` baseline catalog. The v2
-cutover removes and replaces methods exactly as specified above; entries in
-this table do not reintroduce removed v2 methods or singular v2 state.
+The following table records the removed `mezctl/1` baseline catalog for
+migration reference. The implemented v2 endpoint removes and replaces methods
+exactly as specified above; entries in this table do not reintroduce removed v2
+methods or singular v2 state.
 
 The baseline control methods are:
 

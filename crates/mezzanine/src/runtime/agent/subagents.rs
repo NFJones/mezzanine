@@ -1724,7 +1724,7 @@ impl RuntimeSessionService {
         if self.find_pane_descriptor(&turn.pane_id).is_none() {
             return Ok(());
         }
-        let Some(primary) = self.session.primary_client_id().cloned() else {
+        let Some(primary) = self.session.layout_owner_client_id().cloned() else {
             return Ok(());
         };
         self.dispatch_runtime_pane_close(

@@ -35,9 +35,13 @@ impl RuntimeSessionService {
         max_content_length: usize,
     ) -> Result<(Vec<u8>, usize)> {
         self.require_live()?;
-        let primary_client_id = self.session.primary_client_id().cloned().ok_or_else(|| {
-            MezError::invalid_state("control service requires an attached primary")
-        })?;
+        let primary_client_id =
+            self.session
+                .layout_owner_client_id()
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state("control service requires an attached primary")
+                })?;
         let mut offset = 0usize;
         let mut output = Vec::new();
         while offset < input.len() {

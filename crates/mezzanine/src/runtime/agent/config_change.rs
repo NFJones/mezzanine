@@ -1049,7 +1049,7 @@ impl RuntimeSessionService {
         let Some(batch) = execution.response.action_batch.clone() else {
             return Ok(0);
         };
-        let Some(controller) = self.session.primary_client_id().cloned() else {
+        let Some(controller) = self.session.layout_owner_client_id().cloned() else {
             return Ok(0);
         };
         let pending_config_actions = execution

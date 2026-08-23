@@ -29,12 +29,11 @@ Use `mez list` to find a session ID, then pass it to `mez attach <session-id>`
 when more than one resumable session is available. Omitting the ID uses the
 selected socket or the default attach-selection behavior.
 
-The current `mezctl/1` runtime permits one attached primary. The specified
-`mezctl/2` cutover will permit up to 16 attached primaries with independent
+The `mezctl/2` runtime permits up to 16 attached primaries with independent
 group, window, and pane navigation, zoom, prompts, overlays, copy mode, mouse
 state, and viewport. One elected layout owner controls canonical pane geometry.
-This documentation defines the target contract; second-primary ingress remains
-disabled until the v2 implementation is complete.
+Every attach receives a fresh non-resumable client ID, even when display names
+match.
 
 `mez attach --observer` requests observer access. An attached primary must
 approve the request and becomes its exact view source unless another attached
@@ -55,7 +54,7 @@ The default prefix is `Ctrl+A`.
 | `Ctrl+A n` / `Ctrl+A p` | Select the next or previous window. |
 | `Ctrl+A C` | Create a window group. |
 | `Ctrl+A (` / `Ctrl+A )` | Select the previous or next group. |
-| `Ctrl+A d` | Detach the primary client. |
+| `Ctrl+A d` | Detach the invoking primary client. |
 
 Open the Mezzanine command prompt with `Ctrl+A :` for commands such as
 `new-window`, `split-window`, `select-pane`, `resize-pane`, `rename-pane`, and

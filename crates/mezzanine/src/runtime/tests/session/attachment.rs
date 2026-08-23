@@ -16,7 +16,7 @@ fn runtime_service_tracks_attach_detach_lifecycle() {
         .unwrap();
     assert_eq!(service.lifecycle_state(), RuntimeLifecycleState::Running);
     assert_eq!(service.last_attach_at_unix_seconds(), Some(120));
-    assert_eq!(service.session().primary_client_id(), Some(&primary));
+    assert_eq!(service.session().layout_owner_client_id(), Some(&primary));
     assert_eq!(
         service.session().authoritative_size,
         Size::new(100, 40).unwrap()
@@ -26,7 +26,7 @@ fn runtime_service_tracks_attach_detach_lifecycle() {
         .detach_primary(&primary, Size::new(132, 43).unwrap())
         .unwrap();
     assert_eq!(service.lifecycle_state(), RuntimeLifecycleState::Detached);
-    assert!(service.session().primary_client_id().is_none());
+    assert!(service.session().layout_owner_client_id().is_none());
     assert_eq!(
         service.session().authoritative_size,
         Size::new(132, 43).unwrap()
@@ -36,7 +36,10 @@ fn runtime_service_tracks_attach_detach_lifecycle() {
         .attach_primary("reattach", true, Size::new(90, 30).unwrap(), 180)
         .unwrap();
     assert_eq!(service.lifecycle_state(), RuntimeLifecycleState::Running);
-    assert_eq!(service.session().primary_client_id(), Some(&reattached));
+    assert_eq!(
+        service.session().layout_owner_client_id(),
+        Some(&reattached)
+    );
     assert_eq!(service.last_attach_at_unix_seconds(), Some(180));
     assert_ne!(primary, reattached);
 }
@@ -158,7 +161,7 @@ fn runtime_control_initialize_can_reattach_primary_without_existing_primary() {
     assert!(first_body.contains(r#""granted_role":"primary""#));
     assert!(second_body.contains(r#""session_id":"$1""#));
     assert!(connection.caller_client_id().is_some());
-    assert!(service.session().primary_client_id().is_some());
+    assert!(service.session().layout_owner_client_id().is_some());
     assert_eq!(
         service.session().authoritative_size,
         Size::new(100, 40).unwrap()
@@ -618,7 +621,7 @@ fn runtime_attached_detach_mux_action_emits_lifecycle_state() {
     );
 
     assert_eq!(service.lifecycle_state(), RuntimeLifecycleState::Detached);
-    assert!(service.session().primary_client_id().is_none());
+    assert!(service.session().layout_owner_client_id().is_none());
     let events = service
         .event_log()
         .unwrap()

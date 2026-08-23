@@ -275,7 +275,7 @@ impl RuntimeSessionService {
         plan: &HookExecutionPlan,
         continuation: Option<PendingFocusedShellHookContinuation>,
     ) -> Result<HookExecutionResult> {
-        let Some(primary_client_id) = self.session.primary_client_id().cloned() else {
+        let Some(primary_client_id) = self.session.layout_owner_client_id().cloned() else {
             return Ok(focused_shell_pre_action_failed_result(
                 plan,
                 HookFailureKind::ShellUnavailable,

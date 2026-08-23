@@ -336,7 +336,7 @@ impl RuntimeSessionService {
             }
             let controller = caller_client_id
                 .cloned()
-                .or_else(|| self.session.primary_client_id().cloned())
+                .or_else(|| self.session.layout_owner_client_id().cloned())
                 .ok_or_else(|| {
                     MezError::invalid_state(
                         "policy-resolved blocked approval requires an attached primary client",
@@ -402,11 +402,15 @@ impl RuntimeSessionService {
             {
                 continue;
             }
-            let controller = self.session.primary_client_id().cloned().ok_or_else(|| {
-                MezError::invalid_state(
-                    "policy-resolved blocked approval requires an attached primary client",
-                )
-            })?;
+            let controller = self
+                .session
+                .layout_owner_client_id()
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "policy-resolved blocked approval requires an attached primary client",
+                    )
+                })?;
             let decided = self
                 .integration
                 .blocked_approvals_mut()
@@ -608,7 +612,7 @@ impl RuntimeSessionService {
                     .decided_by_client_id
                     .as_deref()
                     .and_then(mez_core::ids::ClientId::opaque)
-                    .or_else(|| self.session.primary_client_id().cloned())
+                    .or_else(|| self.session.layout_owner_client_id().cloned())
                     .ok_or_else(|| {
                         MezError::invalid_state(
                             "approved action resumption requires an attached client identity",

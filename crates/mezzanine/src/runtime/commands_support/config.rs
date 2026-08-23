@@ -923,7 +923,7 @@ pub(crate) fn runtime_refresh_client_command(
 ) -> Result<String> {
     let primary = service
         .session
-        .primary_client_id()
+        .layout_owner_client_id()
         .cloned()
         .ok_or_else(|| MezError::invalid_state("refresh-client requires an attached primary"))?;
     let size = service.session.authoritative_size;

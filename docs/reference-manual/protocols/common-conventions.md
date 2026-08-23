@@ -48,6 +48,6 @@ scope remain enforced by the receiving service.
 
 ## Related pages
 
-- [`mezctl/1` control JSON-RPC](control-json-rpc.md)
+- [`mezctl/2` control JSON-RPC](control-json-rpc.md)
 - [`maap/1` action protocol](maap.md)
 - [`mmp/1` local messages](mmp.md)

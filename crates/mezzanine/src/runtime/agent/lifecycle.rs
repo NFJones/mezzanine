@@ -628,7 +628,7 @@ impl RuntimeSessionService {
         if descendants.is_empty() {
             return Ok(0);
         }
-        let Some(primary_client_id) = self.session.primary_client_id().cloned() else {
+        let Some(primary_client_id) = self.session.layout_owner_client_id().cloned() else {
             for agent_id in descendants {
                 if let Some(pane_id) = runtime_agent_pane_id(&agent_id) {
                     self.cleanup_removed_pane_runtime_state(pane_id.as_str())?;

@@ -203,7 +203,10 @@ async fn async_actor_cleans_up_observers_on_connection_loss() {
         exit.service.lifecycle_state(),
         RuntimeLifecycleState::Running
     );
-    assert_eq!(exit.service.session().primary_client_id(), Some(&primary));
+    assert_eq!(
+        exit.service.session().layout_owner_client_id(),
+        Some(&primary)
+    );
     let pending = exit
         .service
         .session()

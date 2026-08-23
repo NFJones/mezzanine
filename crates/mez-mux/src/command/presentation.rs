@@ -5,7 +5,8 @@
 //! product stores; callers wrap these strings in their own command outcomes.
 
 use crate::session::{
-    Client, ClientRole, ClientState, ObserverDecisionState, ObserverRequest, Session, SessionState,
+    Client, ClientRole, ClientState, MAX_ATTACHED_PRIMARY_CLIENTS, ObserverDecisionState,
+    ObserverRequest, Session, SessionState,
 };
 use crate::{MuxError, Result};
 
@@ -276,8 +277,9 @@ pub fn list_current_session(session: &Session) -> String {
         .iter()
         .filter(|client| client.state == ClientState::Attached)
         .count();
+    let attached_primaries = session.attached_primaries().count();
     format!(
-        "{}:{}:state={}:created_at={}:last_attached_at={}:windows={}:clients={}:attached_clients={}:primary_available={}",
+        "{}:{}:state={}:created_at={}:last_attached_at={}:windows={}:clients={}:attached_clients={}:attached_primaries={}:max_attached_primaries={}:accepts_primary={}:layout_owner={}",
         session.id,
         session.name,
         session_state_name(session.state),
@@ -286,7 +288,13 @@ pub fn list_current_session(session: &Session) -> String {
         session.windows().len(),
         session.clients().len(),
         attached_clients,
-        session.primary_client_id().is_none()
+        attached_primaries,
+        MAX_ATTACHED_PRIMARY_CLIENTS,
+        attached_primaries < MAX_ATTACHED_PRIMARY_CLIENTS,
+        session
+            .layout_owner_client_id()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "none".to_string())
     )
 }
 
@@ -311,10 +319,7 @@ fn client_terminal_display(
     client: &Client,
     observer: Option<&ObserverRequest>,
 ) -> String {
-    if session
-        .primary_client_id()
-        .is_some_and(|primary| primary == &client.id)
-    {
+    if session.is_attached_primary(&client.id) && client.terminal.is_none() {
         return format!(
             "{}x{}:term={}",
             session.authoritative_size.columns,
@@ -476,7 +481,21 @@ mod tests {
         assert!(choose_observer_display(&session).contains(&format!(
             "approve-observer -t {observer_request}|reject-observer -t {observer_request}"
         )));
-        assert!(list_current_session(&session).contains("attached_clients=1"));
+        let session_row = list_current_session(&session);
+        assert!(session_row.contains("attached_clients=1"), "{session_row}");
+        assert!(
+            session_row.contains("attached_primaries=1"),
+            "{session_row}"
+        );
+        assert!(
+            session_row.contains("max_attached_primaries=16"),
+            "{session_row}"
+        );
+        assert!(
+            session_row.contains("accepts_primary=true"),
+            "{session_row}"
+        );
+        assert!(session_row.contains("layout_owner=c1"), "{session_row}");
         assert!(attach_session_display(&session).contains("attach=already-attached"));
     }
 

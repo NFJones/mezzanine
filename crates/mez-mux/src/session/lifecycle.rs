@@ -276,11 +276,6 @@ impl Session {
         self.pane_state_metadata.get(pane_id)
     }
 
-    /// Returns the current layout owner for compatibility with v1 callers.
-    pub fn primary_client_id(&self) -> Option<&ClientId> {
-        self.layout_owner_client_id.as_ref()
-    }
-
     /// Returns the attached primary that owns canonical terminal geometry.
     pub fn layout_owner_client_id(&self) -> Option<&ClientId> {
         self.layout_owner_client_id.as_ref()

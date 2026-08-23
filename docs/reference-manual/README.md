@@ -21,7 +21,7 @@ This section owns the following reference material:
 - [Agent actions](agent-actions.md)
 - [Terminal compatibility](terminal-compatibility.md)
 - [Protocol reference](protocols/README.md): implementer summaries for
-  [`mezctl/1` JSON-RPC](protocols/control-json-rpc.md), [`maap/1`](protocols/maap.md),
+  [`mezctl/2` JSON-RPC](protocols/control-json-rpc.md), [`maap/1`](protocols/maap.md),
   and [`mmp/1`](protocols/mmp.md), with links to their normative contracts.
 
 ## Related pages

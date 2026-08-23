@@ -375,7 +375,7 @@ fn client_attached_at_for_display(
 ) -> Option<u64> {
     if service
         .session
-        .primary_client_id()
+        .layout_owner_client_id()
         .is_some_and(|primary| primary == &client.id)
     {
         service
@@ -397,7 +397,7 @@ fn client_last_seen_at_for_display(
 ) -> Option<u64> {
     if service
         .session
-        .primary_client_id()
+        .layout_owner_client_id()
         .is_some_and(|primary| primary == &client.id)
     {
         service
@@ -431,7 +431,7 @@ fn runtime_client_terminal_display(
 ) -> String {
     if service
         .session
-        .primary_client_id()
+        .layout_owner_client_id()
         .is_some_and(|primary| primary == &client.id)
     {
         return format!(

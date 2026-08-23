@@ -654,7 +654,7 @@ fn runtime_spawn_agent_action_succeeds_while_primary_is_detached() {
         .unwrap();
 
     assert_eq!(result.status, ActionStatus::Running);
-    assert!(service.session().primary_client_id().is_none());
+    assert!(service.session().layout_owner_client_id().is_none());
     assert_eq!(service.joined_subagent_dependency_count(), 1);
     assert!(service.session().windows().len() > 1);
     service.terminate_all_pane_processes().unwrap();

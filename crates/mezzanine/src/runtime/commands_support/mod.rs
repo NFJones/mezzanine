@@ -425,7 +425,7 @@ pub(super) fn execute_runtime_live_terminal_command(
             );
             let primary = service
                 .session
-                .primary_client_id()
+                .layout_owner_client_id()
                 .cloned()
                 .ok_or_else(|| {
                     MezError::invalid_state("paste-buffer requires an attached primary client")

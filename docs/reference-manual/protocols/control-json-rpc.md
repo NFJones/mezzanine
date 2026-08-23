@@ -2,11 +2,10 @@
 
 ## Purpose
 
-Describe the implemented `mezctl/1` endpoint and the specified `mezctl/2`
-independent-primary cutover. This page summarizes the implementer contract;
+Describe the implemented `mezctl/2` independent-primary endpoint and its
+unsupported `mezctl/1` predecessor. This page summarizes the implementer contract;
 the [control endpoint in `SPEC.md`](../../../SPEC.md#13-control-endpoint) is
-normative. The current runtime remains v1 and MUST NOT enable a second primary
-until the complete v2 cutover is implemented.
+normative.
 
 ## Version 2 cutover contract
 
@@ -22,8 +21,7 @@ primary/focus fields.
 V2 removes `session/attach` and `client/select_primary`. `client/detach`
 defaults to the exact caller, and `client/set_layout_owner` atomically targets
 another attached interactive primary. A v2 server rejects requested version 1
-with `unsupported_version`; a v1 server continues rejecting version 2 and must
-not advertise v2 feature flags.
+with `unsupported_version`.
 
 V2 event delivery binds every stream to an exact initialized client. Shared
 events target all primaries, private presentation events target one client,
@@ -41,7 +39,7 @@ path. TCP clients must authenticate with an unguessable bearer token or a
 stronger configured mechanism before receiving session data or mutating state.
 
 The opt-in Iroh adapter uses ALPN `mezzanine/transport/1` and carries the same
-bounded `mezctl/1` frames on exactly one long-lived, client-opened bidirectional
+bounded `mezctl/2` frames on exactly one long-lived, client-opened bidirectional
 control stream. The server accepts no client-opened unidirectional streams and
 lowers each connection to one concurrent bidirectional control stream. An
 interactive client may request `event_stream_version: 1` during
@@ -189,9 +187,9 @@ State results use versioned objects such as `SessionState`, `WindowState`,
 MCP server/tool state. State records include opaque `id` and `version`; clients
 must preserve unknown extensions and refetch rather than reconstructing state.
 
-## Version 1 method catalog
+## Version 1 compatibility catalog
 
-The table gives the complete implemented v1 catalog. V2 removes
+The table records the unsupported predecessor catalog for migration reference. V2 removes
 `session/attach` and `client/select_primary` and adds
 `client/set_layout_owner`; the table below does not define the v2 surface.
 “RO” means read-only and

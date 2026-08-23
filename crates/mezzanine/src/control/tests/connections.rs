@@ -494,7 +494,7 @@ fn same_named_primary_initialization_creates_independent_owned_client() {
 
     assert_eq!(consumed, input.len());
     assert!(body.contains(r#""granted_role":"primary""#), "{body}");
-    assert_eq!(session.primary_client_id(), Some(&existing_primary));
+    assert_eq!(session.layout_owner_client_id(), Some(&existing_primary));
     let initialized_primary = connection.take_disconnect_client_id().unwrap();
     assert_ne!(initialized_primary, existing_primary);
     assert!(body.contains(&format!(r#""client":{{"id":"{initialized_primary}""#)));
@@ -545,6 +545,6 @@ fn iroh_primary_with_same_display_name_gets_independent_client() {
     let remote_primary = connection.caller_client_id().unwrap();
     assert_ne!(remote_primary, &existing_primary);
     assert!(body.contains(&format!(r#""client":{{"id":"{remote_primary}""#)));
-    assert_eq!(session.primary_client_id(), Some(&existing_primary));
+    assert_eq!(session.layout_owner_client_id(), Some(&existing_primary));
     assert_eq!(session.attached_primaries().count(), 2);
 }

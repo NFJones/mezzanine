@@ -191,7 +191,7 @@ pub(super) fn runtime_paste_clipboard_command(
     let descriptor = service.active_window_pane_descriptor(invocation.target_arg())?;
     let primary = service
         .session
-        .primary_client_id()
+        .layout_owner_client_id()
         .cloned()
         .ok_or_else(|| {
             MezError::invalid_state("paste-clipboard requires an attached primary client")

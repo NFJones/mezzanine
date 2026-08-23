@@ -212,10 +212,11 @@ impl RuntimeSessionService {
                 "agent/spawn requires a primary or agent client",
             ));
         }
-        let controller =
-            self.session.primary_client_id().cloned().ok_or_else(|| {
-                MezError::invalid_state("agent/spawn requires an attached primary")
-            })?;
+        let controller = self
+            .session
+            .layout_owner_client_id()
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("agent/spawn requires an attached primary"))?;
         let spawn = runtime_subagent_spawn_request(params, caller.role == ClientRole::Primary)?;
         let placement = runtime_subagent_placement_mode(params)?;
         self.spawn_runtime_subagent(&controller, spawn, placement)

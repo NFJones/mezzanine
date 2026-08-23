@@ -42,11 +42,10 @@ or `mez attach` to select an existing one.
 
 Creating or attaching a primary client needs an interactive terminal. `mez
 serve` can run without one. An observer request also requires an interactive
-terminal and remains pending until an attached primary approves it. The current
-runtime implements the single-primary `mezctl/1` compatibility contract. The
-specified `mezctl/2` cutover will support up to 16 independent primaries and a
-single elected layout owner, but second-primary ingress remains disabled until
-that complete cutover lands. `mez snapshot resume <snapshot-id> --serve`
+terminal and remains pending until an attached primary approves it. The runtime
+implements `mezctl/2` and accepts up to 16 independent attached primaries. Each
+has caller-local navigation and presentation; one elected layout owner controls
+canonical PTY geometry. `mez snapshot resume <snapshot-id> --serve`
 restores a snapshot as a foreground daemon; add `--attach-primary` only when
 the invoking terminal should attach as a primary client. Use `mez --help` and
 `mez <command> --help` for the current argument and target syntax.

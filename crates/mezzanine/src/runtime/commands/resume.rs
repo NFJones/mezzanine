@@ -474,6 +474,7 @@ impl RuntimeSessionService {
             "### Live Mezzanine Session".to_string(),
             String::new(),
         ];
+        let attached_primaries = self.session.attached_primaries().count();
         let rows = vec![vec![
             self.session.id.to_string(),
             self.session.name.clone(),
@@ -483,7 +484,13 @@ impl RuntimeSessionService {
             self.session.windows().len().to_string(),
             self.session.clients().len().to_string(),
             attached_clients.to_string(),
-            self.session.primary_client_id().is_none().to_string(),
+            attached_primaries.to_string(),
+            mez_mux::session::MAX_ATTACHED_PRIMARY_CLIENTS.to_string(),
+            (attached_primaries < mez_mux::session::MAX_ATTACHED_PRIMARY_CLIENTS).to_string(),
+            self.session
+                .layout_owner_client_id()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "none".to_string()),
         ]];
         lines.extend(runtime_markdown_table(
             &[
@@ -495,7 +502,10 @@ impl RuntimeSessionService {
                 "Windows",
                 "Clients",
                 "Attached clients",
-                "Primary available",
+                "Attached primaries",
+                "Primary capacity",
+                "Accepts primary",
+                "Layout owner",
             ],
             &rows,
         ));

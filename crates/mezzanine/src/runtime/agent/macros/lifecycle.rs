@@ -144,10 +144,11 @@ impl RuntimeSessionService {
             )
         })?;
         let definition = load_macro_definition(&summary)?;
-        let controller =
-            self.session.primary_client_id().cloned().ok_or_else(|| {
-                MezError::invalid_state("agent macro requires an attached primary")
-            })?;
+        let controller = self
+            .session
+            .layout_owner_client_id()
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("agent macro requires an attached primary"))?;
         let parent_agent_id = format!("agent-{pane_id}");
         let params = serde_json::json!({
             "parent_agent": { "agent_id": parent_agent_id },

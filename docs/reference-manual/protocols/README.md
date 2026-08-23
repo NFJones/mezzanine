@@ -17,12 +17,12 @@ advertised by that live service as authoritative over this summary.
 
 | Protocol | Audience | Responsibility |
 | --- | --- | --- |
-| [`mezctl/1`](control-json-rpc.md) | Attach clients, automation, and alternative frontends | JSON-RPC control, terminal rendering and input, session state, and events. |
+| [`mezctl/2`](control-json-rpc.md) | Attach clients, automation, and alternative frontends | JSON-RPC control, terminal rendering and input, session state, and events. |
 | [`maap/1`](maap.md) | Agent providers and harness integrations | Agent action proposals, approval, execution, and results. |
 | [`mmp/1`](mmp.md) | Local agents and coordination services | Agent discovery, local messaging, presence, and task status. |
 
 [Common conventions](common-conventions.md) defines terminology shared by these
-pages. The protocols are separate services: use `mezctl/1` for multiplexer
+pages. The protocols are separate services: use `mezctl/2` for multiplexer
 control, `maap/1` for model-to-runtime actions, and `mmp/1` for agent messages.
 
 ## Compatibility
@@ -45,5 +45,5 @@ role, transport, configuration, or policy state.
 
 ## Next step
 
-Choose [`mezctl/1`](control-json-rpc.md) to build a client, [`maap/1`](maap.md)
+Choose [`mezctl/2`](control-json-rpc.md) to build a client, [`maap/1`](maap.md)
 to integrate an agent provider, or [`mmp/1`](mmp.md) to coordinate local agents.
