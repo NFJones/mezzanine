@@ -125,7 +125,9 @@ pub(super) fn dispatch_parsed_request(
                 .ok_or_else(|| MezError::invalid_args("control/cancel requires request_id"))?;
             Ok(r#"{"cancel_requested":false}"#.to_string())
         }
-        ControlDispatchKind::SessionAttach => dispatch_session_attach_parsed(request, session),
+        ControlDispatchKind::SessionAttach => {
+            dispatch_session_attach_parsed(request, session, primary_client_id)
+        }
         ControlDispatchKind::SessionList => Ok(format!(
             r#"{{"sessions":[{}]}}"#,
             session_summary_json(session)

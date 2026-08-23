@@ -2,12 +2,13 @@
 
 use super::entry::client_terminal_descriptor_from_control;
 use super::{
-    ControlParamsSchema, JsonRpcRequest, MezError, PaneSizeSpec, RequestedRole, ResizeAxis,
-    ResizeDirection, Result, Session, client_descriptor_from_json, client_json,
-    control_method_spec, ensure_client_descriptor_role_matches, json_null_field, json_object_field,
-    json_raw_field, json_string_field, parse_json_object_value, reject_unknown_json_fields,
-    require_idempotency_key, validate_config_control_params_schema,
+    ClientId, ClientRole, ControlParamsSchema, JsonRpcRequest, MezError, PaneSizeSpec,
+    RequestedRole, ResizeAxis, ResizeDirection, Result, Session, client_descriptor_from_json,
+    client_json, control_method_spec, ensure_client_descriptor_role_matches, json_null_field,
+    json_object_field, json_raw_field, json_string_field, parse_json_object_value,
+    reject_unknown_json_fields, require_idempotency_key, validate_config_control_params_schema,
 };
+use mez_mux::session::ObserverDecisionState;
 /// Returns the wall-clock timestamp supplied to lower approval state changes.
 pub(super) fn control_current_unix_seconds() -> u64 {
     std::time::SystemTime::now()
@@ -65,6 +66,7 @@ pub(super) fn reject_runtime_required_creation_fields(
 pub(super) fn dispatch_session_attach_parsed(
     request: &JsonRpcRequest,
     session: &mut Session,
+    caller_client_id: &ClientId,
 ) -> Result<String> {
     let params = request
         .params
@@ -107,6 +109,36 @@ pub(super) fn dispatch_session_attach_parsed(
                 RequestedRole::Observer,
                 "session/attach client descriptor",
             )?;
+            if matches!(
+                session
+                    .clients()
+                    .iter()
+                    .find(|client| client.id == *caller_client_id)
+                    .map(|client| client.role),
+                Some(ClientRole::PendingObserver | ClientRole::Observer)
+            ) {
+                let observer = session
+                    .observers()
+                    .iter()
+                    .find(|observer| observer.client_id == *caller_client_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "observer caller has no caller-bound observer request",
+                        )
+                    })?;
+                let approval_pending = observer.state == ObserverDecisionState::Pending;
+                let client = session
+                    .clients()
+                    .iter()
+                    .find(|client| client.id == *caller_client_id)
+                    .ok_or_else(|| {
+                        MezError::new(crate::error::MezErrorKind::NotFound, "client not found")
+                    })?;
+                return Ok(format!(
+                    r#"{{"client":{},"approval_pending":{approval_pending}}}"#,
+                    client_json(session, client)
+                ));
+            }
             let (client_id, _observer_id) = session.request_observer_with_terminal(
                 &client_descriptor.name,
                 client_terminal_descriptor_from_control(client_descriptor.terminal.as_ref()),

@@ -344,12 +344,80 @@ fn pending_observer_can_attach_observer_without_receiving_session_data() {
     .unwrap();
     let (init_body, first_len) = decode_control_frame(&output, 4096).unwrap();
     let (attach_body, _) = decode_control_frame(&output[first_len..], 4096).unwrap();
+    let initialized_observer_client = connection.caller_client_id().unwrap().clone();
 
     assert!(init_body.contains(r#""granted_role":"pending_observer""#));
     assert!(attach_body.contains(r#""role":"pending_observer""#));
     assert!(attach_body.contains(r#""approval_pending":true"#));
+    assert!(
+        attach_body.contains(&format!(r#""client_id":"{}""#, initialized_observer_client)),
+        "{attach_body}"
+    );
     assert!(!attach_body.contains(r#""windows""#));
     assert!(!attach_body.contains(r#""panes""#));
+    assert_eq!(session.clients().len(), 2);
+    assert_eq!(session.observers().len(), 1);
+    assert_eq!(
+        session.observers()[0].client_id,
+        initialized_observer_client
+    );
+}
+
+/// Verifies approved observer attachment remains bound to its live caller.
+///
+/// A new idempotency key after approval must report the existing observer
+/// client rather than create an unowned pending registration that a primary
+/// could approve without a corresponding live requester.
+#[test]
+fn approved_observer_attach_reuses_caller_without_creating_request() {
+    let (mut session, primary) = test_session();
+    let mut connection = ControlConnectionState::new(true, true);
+    let mut cache = ControlIdempotencyCache::default();
+    let initialize = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"observer","requested_version":1,"requested_role":"observer","client":{"name":"observer","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+    );
+    handle_control_frames_for_connection(
+        &initialize,
+        4096,
+        &mut session,
+        &mut connection,
+        &mut cache,
+    )
+    .unwrap();
+    let observer_client = connection.caller_client_id().unwrap().clone();
+    let observer_request = session.observers()[0].id.clone();
+    session
+        .approve_observer(&primary, &observer_request)
+        .unwrap();
+
+    let attach = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":2,"method":"session/attach","params":{"role":"observer","client":{"name":"observer","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}},"idempotency_key":"approved-observer-attach"}}"#,
+    );
+    let (output, _) = handle_control_frames_for_connection(
+        &attach,
+        4096,
+        &mut session,
+        &mut connection,
+        &mut cache,
+    )
+    .unwrap();
+    let (attach_body, _) = decode_control_frame(&output, 4096).unwrap();
+
+    assert!(
+        attach_body.contains(r#""role":"observer""#),
+        "{attach_body}"
+    );
+    assert!(
+        attach_body.contains(r#""approval_pending":false"#),
+        "{attach_body}"
+    );
+    assert!(
+        attach_body.contains(&format!(r#""client_id":"{}""#, observer_client)),
+        "{attach_body}"
+    );
+    assert_eq!(session.clients().len(), 2);
+    assert_eq!(session.observers().len(), 1);
+    assert_eq!(session.observers()[0].client_id, observer_client);
 }
 
 /// Verifies dispatches mutating window and pane methods.
