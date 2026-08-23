@@ -284,7 +284,7 @@ fn session_attach_dispatcher_enforces_primary_and_observer_semantics() {
     session.detach_primary(&primary).unwrap();
 
     let primary_attach = dispatch_session_attach_request(
-        r#"{"jsonrpc":"2.0","id":1,"method":"session/attach","params":{"role":"primary","client":{"name":"reattach","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"idempotency_key":"reattach"}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"session/attach","params":{"target":{"default":true},"role":"primary","client":{"name":"reattach","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"idempotency_key":"reattach"}}"#,
         &mut session,
     );
     assert!(primary_attach.contains(r#""role":"primary""#));
@@ -297,7 +297,7 @@ fn session_attach_dispatcher_enforces_primary_and_observer_semantics() {
     );
 
     let observer_attach = dispatch_session_attach_request(
-        r#"{"jsonrpc":"2.0","id":2,"method":"session/attach","params":{"role":"observer","client":{"name":"watch","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"idempotency_key":"observer"}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"session/attach","params":{"target":{"default":true},"role":"observer","client":{"name":"watch","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"idempotency_key":"observer"}}"#,
         &mut session,
     );
     assert!(observer_attach.contains(r#""role":"pending_observer""#));
@@ -317,6 +317,42 @@ fn session_attach_dispatcher_enforces_primary_and_observer_semantics() {
     );
 }
 
+/// Verifies session attachment validates its required target before mutation.
+///
+/// Missing, malformed, and mismatched targets must not create clients or
+/// observer requests, even when the rest of the attachment is valid.
+#[test]
+fn session_attach_rejects_invalid_targets_without_mutation() {
+    let (mut session, primary) = test_session();
+    session.detach_primary(&primary).unwrap();
+    let clients_before = session.clients().len();
+    let observers_before = session.observers().len();
+
+    for (request, expected_code) in [
+        (
+            r#"{"jsonrpc":"2.0","id":1,"method":"session/attach","params":{"role":"observer","client":{"name":"missing","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"idempotency_key":"missing-target"}}"#,
+            "invalid_params",
+        ),
+        (
+            r#"{"jsonrpc":"2.0","id":2,"method":"session/attach","params":{"target":[],"role":"observer","client":{"name":"malformed","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"idempotency_key":"malformed-target"}}"#,
+            "invalid_params",
+        ),
+        (
+            r#"{"jsonrpc":"2.0","id":3,"method":"session/attach","params":{"target":{"session_id":"$missing"},"role":"observer","client":{"name":"mismatch","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"idempotency_key":"mismatched-target"}}"#,
+            "not_found",
+        ),
+    ] {
+        let response = dispatch_session_attach_request(request, &mut session);
+        assert!(
+            response.contains(&format!(r#""mezzanine_code":"{expected_code}""#)),
+            "{response}"
+        );
+        assert_eq!(session.clients().len(), clients_before);
+        assert_eq!(session.observers().len(), observers_before);
+        assert!(session.primary_client_id().is_none());
+    }
+}
+
 /// Verifies pending observer can attach observer without receiving session data.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -331,7 +367,7 @@ fn pending_observer_can_attach_observer_without_receiving_session_data() {
         r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"observer","requested_version":1,"requested_role":"observer","client":{"name":"observer","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
     input.extend_from_slice(&encode_control_body(
-        r#"{"jsonrpc":"2.0","id":2,"method":"session/attach","params":{"role":"observer","client":{"name":"observer","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"idempotency_key":"observer-attach"}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"session/attach","params":{"target":{"default":true},"role":"observer","client":{"name":"observer","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"idempotency_key":"observer-attach"}}"#,
     ));
 
     let (output, _) = handle_control_frames_for_connection(
@@ -391,7 +427,7 @@ fn approved_observer_attach_reuses_caller_without_creating_request() {
         .unwrap();
 
     let attach = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":2,"method":"session/attach","params":{"role":"observer","client":{"name":"observer","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}},"idempotency_key":"approved-observer-attach"}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"session/attach","params":{"target":{"default":true},"role":"observer","client":{"name":"observer","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}},"idempotency_key":"approved-observer-attach"}}"#,
     );
     let (output, _) = handle_control_frames_for_connection(
         &attach,

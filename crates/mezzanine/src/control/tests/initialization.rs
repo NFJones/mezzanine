@@ -212,7 +212,7 @@ fn session_attach_preserves_terminal_descriptor_features() {
         Size::new(80, 24).unwrap(),
     );
     let response = dispatch_session_attach_request(
-        r#"{"jsonrpc":"2.0","id":1,"method":"session/attach","params":{"role":"primary","client":{"name":"feature-client","requested_role":"primary","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color","features":["mouse","truecolor"]}},"idempotency_key":"attach-features"}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"session/attach","params":{"target":{"default":true},"role":"primary","client":{"name":"feature-client","requested_role":"primary","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color","features":["mouse","truecolor"]}},"idempotency_key":"attach-features"}}"#,
         &mut session,
     );
 

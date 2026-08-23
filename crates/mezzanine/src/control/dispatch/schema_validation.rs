@@ -6,7 +6,8 @@ use super::{
     RequestedRole, ResizeAxis, ResizeDirection, Result, Session, client_descriptor_from_json,
     client_json, control_method_spec, ensure_client_descriptor_role_matches, json_null_field,
     json_object_field, json_raw_field, json_string_field, parse_json_object_value,
-    reject_unknown_json_fields, require_idempotency_key, validate_config_control_params_schema,
+    reject_unknown_json_fields, require_idempotency_key, require_session_target_matches_value,
+    validate_config_control_params_schema,
 };
 use mez_mux::session::ObserverDecisionState;
 /// Returns the wall-clock timestamp supplied to lower approval state changes.
@@ -72,6 +73,12 @@ pub(super) fn dispatch_session_attach_parsed(
         .params
         .as_deref()
         .ok_or_else(|| MezError::invalid_args("session/attach requires a params object"))?;
+    let target = json_raw_field(params, "target")
+        .ok_or_else(|| MezError::invalid_args("session/attach requires target"))?;
+    let target = serde_json::from_str::<serde_json::Value>(&target).map_err(|error| {
+        MezError::invalid_args(format!("session/attach target is invalid: {error}"))
+    })?;
+    require_session_target_matches_value(session, &target)?;
     require_idempotency_key(params)?;
     let role = json_string_field(params, "role").unwrap_or_else(|| "primary".to_string());
     let client_descriptor = json_object_field(params, "client")

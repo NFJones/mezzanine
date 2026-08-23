@@ -238,7 +238,7 @@ fn primary_control_method_fixture_request(
             r#"{"jsonrpc":"2.0","id":1,"method":"session/kill","params":{"force":true,"idempotency_key":"session-kill"}}"#.to_string()
         }
         "session/attach" => {
-            r#"{"jsonrpc":"2.0","id":1,"method":"session/attach","params":{"role":"observer","client":{"name":"observer","requested_role":"observer","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"idempotency_key":"session-attach"}}"#.to_string()
+            r#"{"jsonrpc":"2.0","id":1,"method":"session/attach","params":{"target":{"default":true},"role":"observer","client":{"name":"observer","requested_role":"observer","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"idempotency_key":"session-attach"}}"#.to_string()
         }
         "client/list" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"client/list","params":{}}"#.to_string()

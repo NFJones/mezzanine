@@ -19,7 +19,7 @@ use super::{
     RequestedRole, TrustDecision, client_descriptor_from_json, client_json,
     ensure_client_descriptor_role_matches, parse_json_rpc_request, parse_trust_decision,
     project_trust_json, project_trust_state_filter_from_params,
-    validate_control_method_params_schema,
+    require_session_target_matches_value, validate_control_method_params_schema,
 };
 #[cfg(test)]
 use crate::security::project::ProjectTrustStore;
@@ -71,6 +71,12 @@ pub fn dispatch_session_attach_request(body: &str, session: &mut Session) -> Str
             .params
             .as_deref()
             .ok_or_else(|| MezError::invalid_args("session/attach requires a params object"))?;
+        let target = json_raw_field(params, "target")
+            .ok_or_else(|| MezError::invalid_args("session/attach requires target"))?;
+        let target = serde_json::from_str::<serde_json::Value>(&target).map_err(|error| {
+            MezError::invalid_args(format!("session/attach target is invalid: {error}"))
+        })?;
+        require_session_target_matches_value(session, &target)?;
         require_idempotency_key(params)?;
         let role = json_string_field(params, "role").unwrap_or_else(|| "primary".to_string());
         let client_descriptor = json_object_field(params, "client")
