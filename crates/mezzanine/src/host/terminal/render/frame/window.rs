@@ -158,7 +158,13 @@ pub(in crate::host::terminal::render) fn window_status_field_component(
                 segments: Vec::new(),
             };
         };
-        let text = " 🔗 ".to_string();
+        let text = match quality {
+            crate::host::terminal::TerminalIrohStatusQuality::Good => " Iroh: good ",
+            crate::host::terminal::TerminalIrohStatusQuality::Degraded => " Iroh: degraded ",
+            crate::host::terminal::TerminalIrohStatusQuality::Poor => " Iroh: poor ",
+            crate::host::terminal::TerminalIrohStatusQuality::Unknown => " Iroh: unknown ",
+        }
+        .to_string();
         return WindowStatusFieldComponent {
             segments: vec![WindowStatusSegment {
                 start: 0,

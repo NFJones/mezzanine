@@ -304,12 +304,13 @@ Default `frames.window.visible_fields`:
 ["window.list", "window.index", "window.name", "window.id", "pane.index", "pane.title", "pane.id", "window.pane_count", "window.buttons", "pane.pwd", "system.uptime", "datetime.local", "iroh.status"]
 ```
 
-`#{iroh.status}` is a client-local, non-clickable status pill. It renders `🔗`
+`#{iroh.status}` is a client-local, non-clickable status pill. It renders plain
+text such as `Iroh: good`, `Iroh: degraded`, `Iroh: poor`, or `Iroh: unknown`
 only for the exact client with a live Iroh connection and is omitted without
-padding for Unix-socket, never-Iroh, or disconnected clients. Good, degraded,
-poor, and stale/unknown connected samples use the matching Iroh theme color
-pair. It is included by the generated default but custom right-status templates
-must reference it explicitly; detailed diagnostics remain in `show-iroh-status`.
+padding for Unix-socket, never-Iroh, or disconnected clients. Each connected
+quality uses the matching Iroh theme color pair. It is included by the generated
+default but custom right-status templates must reference it explicitly; detailed
+diagnostics remain in `show-iroh-status`.
 
 Command-backed status pills are configured under `frames.window.pills.<name>`
 and render only when the active right-status template references

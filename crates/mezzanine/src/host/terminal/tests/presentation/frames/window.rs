@@ -485,9 +485,10 @@ fn render_window_frame_fits_single_row_window() {
     assert_eq!(rendered, vec!["0:main      "]);
 }
 
-/// Verifies that `iroh.status` is an opt-in, exact-client status segment with
-/// quality-specific styling and no action hit target. The absent projection
-/// must leave no separator or padding behind for Unix and never-Iroh clients.
+/// Verifies that `iroh.status` is an opt-in, exact-client plain-text quality
+/// segment with quality-specific styling and no action hit target. The absent
+/// projection must leave no separator or padding behind for Unix and
+/// never-Iroh clients.
 #[test]
 fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
     let mut ids = IdFactory::default();
@@ -523,13 +524,14 @@ fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
     };
 
     let (absent_config, absent) = render(None);
-    assert!(!absent.lines[2].contains('🔗'), "{}", absent.lines[2]);
+    assert!(!absent.lines[2].contains("Iroh:"), "{}", absent.lines[2]);
     assert!(absent.lines[2].ends_with(" now  "), "{}", absent.lines[2]);
     assert!(window_frame_action_pillbox_cells(&absent_config.frame_context, 2, 40).is_empty());
 
-    for (quality, expected_background) in [
+    for (quality, expected_text, expected_background) in [
         (
             TerminalIrohStatusQuality::Good,
+            " Iroh: good ",
             TerminalClientLoopConfig::default()
                 .ui_theme
                 .colors
@@ -538,6 +540,7 @@ fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
         ),
         (
             TerminalIrohStatusQuality::Degraded,
+            " Iroh: degraded ",
             TerminalClientLoopConfig::default()
                 .ui_theme
                 .colors
@@ -546,6 +549,7 @@ fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
         ),
         (
             TerminalIrohStatusQuality::Poor,
+            " Iroh: poor ",
             TerminalClientLoopConfig::default()
                 .ui_theme
                 .colors
@@ -554,6 +558,7 @@ fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
         ),
         (
             TerminalIrohStatusQuality::Unknown,
+            " Iroh: unknown ",
             TerminalClientLoopConfig::default()
                 .ui_theme
                 .colors
@@ -563,11 +568,11 @@ fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
     ] {
         let (config, view) = render(Some(quality));
         let status_start =
-            UnicodeWidthStr::width(&view.lines[2][..view.lines[2].find(" 🔗 ").unwrap()]);
+            UnicodeWidthStr::width(&view.lines[2][..view.lines[2].find(expected_text).unwrap()]);
         assert_eq!(view.lines[2].chars().last(), Some(' '), "{}", view.lines[2]);
         assert!(view.line_style_spans[2].iter().any(|span| {
             span.start == status_start
-                && span.length == UnicodeWidthStr::width(" 🔗 ")
+                && span.length == UnicodeWidthStr::width(expected_text)
                 && span.rendition.background == Some(expected_background)
         }));
         assert!(window_frame_action_pillbox_cells(&config.frame_context, 2, 40).is_empty());
