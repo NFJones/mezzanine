@@ -49,6 +49,26 @@ server open one unidirectional stream beginning with the exact preface
 wrong ALPNs, excess streams, malformed frames, stalled setup, and one failed
 connection are isolated from later clients and from the Unix listener.
 
+Schema v71 defines two compressed application-framing ALPNs for subsequent
+runtime integration: `mezzanine/transport/2/zstd` and
+`mezzanine/transport/2/lz4`. This is not Iroh or QUIC compression. On either
+ALPN, each complete existing control or event frame is independently wrapped
+in a fixed 16-byte `MZC2` envelope containing flags, an encoded length, and the
+exact decoded length. Unknown flags, non-zero reserved bytes, zero or excessive
+lengths, truncation, trailing bytes, decode failures, and decoded-length
+mismatches are protocol errors local to the offending connection. A frame
+below `compression_min_bytes`, or one whose compressed representation would
+expand, uses an identity v2 envelope without changing the negotiated codec.
+
+`control/initialize` requests and responses, including invitation-issued
+`device_credential` values, must use identity envelopes. Compression becomes
+eligible only after successful initialization has been flushed. Clients choose
+configured codecs in order and may try another ALPN only after connection or
+ALPN failure before opening a stream or writing initialization data. They must
+never downgrade or replay after application bytes have been sent. The current
+connection runtime still selects the unchanged v1 ALPN while this v2 framing
+foundation awaits runtime integration.
+
 An Iroh endpoint ID proves possession of a transport key only; it grants no
 Mezzanine authority by itself. Before any other method, the peer must call
 `control/initialize` for role `primary` or `observer` with either a single-endpoint-use

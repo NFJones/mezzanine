@@ -543,7 +543,7 @@ pub fn validate_config_text(
     ConfigValidation::from_diagnostics(diagnostics)
 }
 
-/// Validates schema-v70 Iroh transport policy with structured value types.
+/// Validates schema-v71 Iroh transport policy with structured value types.
 fn validate_iroh_transport_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
     let Ok(root) = parse_config_json_value(format, text) else {
         return Vec::new();
@@ -712,6 +712,59 @@ fn validate_iroh_transport_config(format: ConfigFormat, text: &str) -> Vec<Confi
                 ),
             }
         }
+    }
+    if let Some(value) = iroh.get("compression_codecs") {
+        match value.as_array() {
+            Some(codecs) if (1..=3).contains(&codecs.len()) => {
+                let mut names = std::collections::BTreeSet::new();
+                for codec in codecs {
+                    match codec.as_str() {
+                        Some(name) if matches!(name, "zstd" | "lz4" | "none") => {
+                            if !names.insert(name) {
+                                reject(
+                                    "transport.iroh.compression_codecs",
+                                    "compression_codecs must not contain duplicates",
+                                );
+                            }
+                        }
+                        Some(_) => reject(
+                            "transport.iroh.compression_codecs",
+                            "compression_codecs supports only zstd, lz4, and none",
+                        ),
+                        None => reject(
+                            "transport.iroh.compression_codecs",
+                            "compression_codecs must contain only strings",
+                        ),
+                    }
+                }
+            }
+            Some(_) => reject(
+                "transport.iroh.compression_codecs",
+                "compression_codecs must contain one through three codecs",
+            ),
+            None => reject(
+                "transport.iroh.compression_codecs",
+                "compression_codecs must be a string array",
+            ),
+        }
+    }
+    if let Some(value) = iroh.get("compression_min_bytes")
+        && !value.as_u64().is_some_and(|value| value <= 1024 * 1024)
+    {
+        reject(
+            "transport.iroh.compression_min_bytes",
+            "compression_min_bytes must be an integer from 0 to 1048576",
+        );
+    }
+    if let Some(value) = iroh.get("compression_zstd_level")
+        && !value
+            .as_i64()
+            .is_some_and(|value| (-5..=22).contains(&value))
+    {
+        reject(
+            "transport.iroh.compression_zstd_level",
+            "compression_zstd_level must be an integer from -5 to 22",
+        );
     }
     diagnostics
 }

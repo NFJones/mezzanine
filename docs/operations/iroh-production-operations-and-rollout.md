@@ -96,6 +96,29 @@ The runtime rejects contradictory route, lookup-domain, relay-URL, type, and
 numeric-bound combinations even when configuration is composed
 programmatically.
 
+## Compression policy foundation
+
+Schema v71 adds ordered `compression_codecs`, `compression_min_bytes`, and
+`compression_zstd_level` settings. Compression is applied to complete
+Mezzanine application frames, not by Iroh or QUIC. The v2 frame foundation
+supports bounded Zstandard and LZ4 payloads plus per-frame identity fallback;
+the current connection runtime remains on the unchanged v1 `none` route until
+negotiation and stream integration are enabled in a later runtime change.
+
+Do not treat configuration presence as evidence that a live connection is
+compressed. During staged integration, retain `none` in canary preference
+lists for old-peer compatibility and verify negotiation before reviewing CPU
+or bandwidth effects. Immediate rollback is:
+
+```toml
+[transport.iroh]
+compression_codecs = ["none"]
+```
+
+Restart the daemon after changing this policy. Never retry a different codec
+after a stream is opened or initialization bytes are written; an ambiguous
+application outcome must fail visibly instead of being replayed.
+
 ## Enable and verify
 
 1. Confirm the private Unix control socket works and retain a local primary

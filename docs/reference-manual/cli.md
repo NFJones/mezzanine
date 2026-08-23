@@ -125,6 +125,14 @@ no address lookup. Paired profiles may use an address-lookup service only when
 the user explicitly configured one; a successful endpoint-ID-pinned reconnect
 refreshes authenticated route hints in the protected profile.
 
+The primary `transport.iroh.compression_codecs` array defines future v2 ALPN
+preference order for explicit clients as well as listeners. `zstd` and `lz4`
+are application-frame codecs; `none` is the unchanged v1 compatibility route.
+There is no hidden downgrade when `none` is absent, and
+`compression_codecs = ["none"]` is the restart-required rollback setting. The
+current connection runtime remains on v1 until negotiated v2 framing is wired
+into client and server stream handling.
+
 Interactive remote attach requires a terminal and keeps one initialized Iroh
 control stream open for its lifetime. A `primary` profile may attach as primary
 or request observer access; an `observer` profile cannot attach as primary.

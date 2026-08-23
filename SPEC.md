@@ -2933,13 +2933,14 @@ count when Mezzanine starts. Because the runtime is constructed before trusted
 project overlays can be discovered, this primary-user setting MUST NOT be
 overridden by project configuration and changes take effect on restart.
 
-The schema-v70 `transport.iroh` table MUST be primary-user-only and MUST default
+The schema-v71 `transport.iroh` table MUST be primary-user-only and MUST default
 `enabled` to false, `outbound_enabled` to true, and `bind_port` to 0. It MUST
 support `identity`, `address_lookup`,
 `address_lookup_domain`, `relay_mode`, `relay_urls`, `direct_connections`,
 `port_mapping`, `proxy_from_env`, `system_ca_store`,
 `invitation_ttl_seconds`, `max_connections`, `max_streams_per_connection`,
-`setup_timeout_ms`, and `idle_timeout_ms`. Unix sockets MUST remain the default
+`setup_timeout_ms`, `idle_timeout_ms`, `compression_codecs`,
+`compression_min_bytes`, and `compression_zstd_level`. Unix sockets MUST remain the default
 and local recovery transport. Public lookup, public relays, port mapping,
 proxy inheritance, and system CA use MUST each require an explicit independent
 selection. Project overlays and model-authored configuration changes MUST NOT
@@ -2955,6 +2956,27 @@ permission without enabling the inbound listener.
 The v69 to v70 migration MUST add `bind_port = 0` without enabling network
 activity. A non-zero bind port MUST be applied to server IPv4 and available
 IPv6 sockets and MUST remain stable across restart when the port is available.
+The v70 to v71 migration MUST materialize `compression_codecs = ["zstd",
+"lz4", "none"]`, `compression_min_bytes = 512`, and
+`compression_zstd_level = 3` in TOML, JSON, and YAML without enabling the
+inbound listener. The codec list MUST contain one through three unique values
+drawn from `zstd`, `lz4`, and `none`; the minimum size MUST be from 0 through
+1048576, and the Zstandard level MUST be from -5 through 22.
+
+The version 2 Iroh application-frame foundation MUST map `zstd` to ALPN
+`mezzanine/transport/2/zstd`, `lz4` to
+`mezzanine/transport/2/lz4`, and `none` to the unchanged version 1 ALPN. Each
+compressed-ALPN frame MUST use one bounded, independently decoded `MZC2`
+envelope with flags, encoded length, and exact decoded length. Implementations
+MUST reject unknown flags, non-zero reserved bytes, zero or excessive lengths,
+truncation, trailing bytes, decode failures, and decoded-length mismatches
+before forwarding a frame. Frames below the configured threshold, frames that
+would expand, and credential-bearing initialization requests or responses MUST
+use identity envelopes. Codec retry is permitted only before a stream is
+opened or initialization data is written; application bytes MUST NOT be
+replayed after an ambiguous failure. The current connection runtime MAY retain
+the unchanged v1 path until the dependent negotiation and stream integration
+is implemented.
 
 `remote/invite` MUST use `transport.iroh.invitation_ttl_seconds` when the
 request omits `expires_seconds`. The CLI `--expires SECONDS` option MUST remain

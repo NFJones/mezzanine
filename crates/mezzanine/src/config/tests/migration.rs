@@ -2198,7 +2198,7 @@ fn migrates_schema_66_with_disabled_iroh_transport() {
 /// single bidirectional control stream enforced by the v1 Iroh protocol.
 #[test]
 fn migrates_schema_67_to_fixed_iroh_stream_limit() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 70);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 71);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2217,7 +2217,7 @@ fn migrates_schema_67_to_fixed_iroh_stream_limit() {
         let values = extract_config_values(format, &plan.text);
 
         assert_eq!(plan.from_version, 67);
-        assert_eq!(plan.to_version, 70);
+        assert_eq!(plan.to_version, 71);
         assert_eq!(
             values.get("transport.iroh.max_streams_per_connection"),
             Some(&"1".to_string())
@@ -2247,7 +2247,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
         let values = extract_config_values(format, &plan.text);
 
         assert_eq!(plan.from_version, 68);
-        assert_eq!(plan.to_version, 70);
+        assert_eq!(plan.to_version, 71);
         assert_eq!(
             values.get("transport.iroh.enabled"),
             Some(&"false".to_string())
@@ -2263,7 +2263,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
 /// changing the existing ephemeral behavior unless the owner configures it.
 #[test]
 fn migrates_schema_69_with_iroh_bind_port() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 70);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 71);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2282,10 +2282,54 @@ fn migrates_schema_69_with_iroh_bind_port() {
         let values = extract_config_values(format, &plan.text);
 
         assert_eq!(plan.from_version, 69);
-        assert_eq!(plan.to_version, 70);
+        assert_eq!(plan.to_version, 71);
         assert_eq!(
             values.get("transport.iroh.bind_port"),
             Some(&"0".to_string())
+        );
+    }
+}
+
+/// Verifies schema v71 materializes the ordered compression policy in every
+/// supported primary configuration format without enabling the Iroh listener.
+#[test]
+fn migrates_schema_70_with_iroh_compression_defaults() {
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 71);
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 70\n[transport.iroh]\nenabled = false\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":70,"transport":{"iroh":{"enabled":false}}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 70\ntransport:\n  iroh:\n    enabled: false\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let values = extract_config_values(format, &plan.text);
+        let root = parse_config_json_value(format, &plan.text).unwrap();
+
+        assert_eq!(plan.from_version, 70);
+        assert_eq!(plan.to_version, 71);
+        assert_eq!(
+            root.pointer("/transport/iroh/compression_codecs"),
+            Some(&serde_json::json!(["zstd", "lz4", "none"]))
+        );
+        assert_eq!(
+            values.get("transport.iroh.compression_min_bytes"),
+            Some(&"512".to_string())
+        );
+        assert_eq!(
+            values.get("transport.iroh.compression_zstd_level"),
+            Some(&"3".to_string())
+        );
+        assert_eq!(
+            values.get("transport.iroh.enabled"),
+            Some(&"false".to_string())
         );
     }
 }

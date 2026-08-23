@@ -1174,6 +1174,26 @@ fn iroh_transport_policy_is_validated_and_primary_only() {
             "transport.iroh.outbound_enabled",
         ),
         ("bind_port = 65536", "transport.iroh.bind_port"),
+        (
+            "compression_codecs = []",
+            "transport.iroh.compression_codecs",
+        ),
+        (
+            "compression_codecs = [\"zstd\", \"zstd\"]",
+            "transport.iroh.compression_codecs",
+        ),
+        (
+            "compression_codecs = [\"brotli\"]",
+            "transport.iroh.compression_codecs",
+        ),
+        (
+            "compression_min_bytes = -1",
+            "transport.iroh.compression_min_bytes",
+        ),
+        (
+            "compression_zstd_level = 23",
+            "transport.iroh.compression_zstd_level",
+        ),
     ] {
         let validation = validate_config_text(
             ConfigFormat::Toml,

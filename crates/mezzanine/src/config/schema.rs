@@ -425,7 +425,7 @@ pub(super) const SESSION_KEYS: &[&str] = &["default_command"];
 /// boundary and avoids relying on call-site inference.
 pub(super) const RUNTIME_KEYS: &[&str] = &["cpu_count"];
 
-/// Defines the schema-v70 Iroh transport keys.
+/// Defines the schema-v71 Iroh transport keys.
 pub(super) const IROH_TRANSPORT_KEYS: &[&str] = &[
     "enabled",
     "outbound_enabled",
@@ -444,6 +444,9 @@ pub(super) const IROH_TRANSPORT_KEYS: &[&str] = &[
     "max_streams_per_connection",
     "setup_timeout_ms",
     "idle_timeout_ms",
+    "compression_codecs",
+    "compression_min_bytes",
+    "compression_zstd_level",
 ];
 
 /// Defines the TERMINAL KEYS const used by this subsystem.

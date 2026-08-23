@@ -159,6 +159,9 @@ changes require a daemon restart.
 | `transport.iroh.max_streams_per_connection` | integer | `1` | Fixed v1 limit for the single client-opened bidirectional control stream; the only valid value is 1. |
 | `transport.iroh.setup_timeout_ms` | integer | `10000` | Bounded connection setup timeout. |
 | `transport.iroh.idle_timeout_ms` | integer | `300000` | Bounded idle timeout. |
+| `transport.iroh.compression_codecs` | string array | `["zstd", "lz4", "none"]` | Ordered, unique application-frame codec policy. Valid entries are `zstd`, `lz4`, and `none`; one through three entries are required. |
+| `transport.iroh.compression_min_bytes` | integer | `512` | Complete v2 frames below this decoded size use an identity envelope. Valid values are 0 through 1048576. |
+| `transport.iroh.compression_zstd_level` | integer | `3` | Zstandard level for eligible v2 frames. Valid values are -5 through 22. |
 
 When enabled, daemon startup binds the protected per-session endpoint and runs
 Iroh control alongside Unix control. A configured endpoint failure is a startup
@@ -167,6 +170,17 @@ operation. The endpoint applies the selected lookup, relay, direct-IP, port
 mapping, proxy, and CA policies to both listening and explicit clients. It
 negotiates only `mezzanine/transport/1`, accepts one client-opened control stream
 per connection, and bounds setup, idle, connection, frame, and shutdown work.
+
+Schema v71 also defines the ordered application-layer compression policy used
+by version 2 Iroh framing. This is compression of complete Mezzanine frames,
+not an Iroh or QUIC transport feature. `zstd` maps to
+`mezzanine/transport/2/zstd`, `lz4` maps to
+`mezzanine/transport/2/lz4`, and `none` retains the unchanged
+`mezzanine/transport/1` bytes. The bounded v2 envelope and codec adapters are
+available as the protocol foundation; the current connection runtime continues
+to negotiate v1 until version 2 negotiation is integrated. Setting
+`compression_codecs = ["none"]` is the restart-required compatibility and
+rollback policy.
 
 Running `mez remote status` through local Unix control ensures the protected
 per-session endpoint identity exists and reports its public endpoint ID and the

@@ -8,6 +8,28 @@ use crate::error::{MezError, Result};
 
 use super::{runtime_json_bool, runtime_json_object, runtime_json_string_array, runtime_json_u64};
 
+/// Compression algorithms supported by the versioned Iroh application framing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeIrohCompressionCodec {
+    /// Zstandard compression on the version 2 Iroh ALPN.
+    Zstd,
+    /// LZ4 block compression on the version 2 Iroh ALPN.
+    Lz4,
+    /// The unchanged version 1 Iroh framing contract.
+    None,
+}
+
+impl RuntimeIrohCompressionCodec {
+    /// Returns the stable configuration name for this codec.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Zstd => "zstd",
+            Self::Lz4 => "lz4",
+            Self::None => "none",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeIrohIdentityPolicy {
     PerSession,
@@ -66,6 +88,9 @@ pub(crate) struct RuntimeIrohTransportPolicy {
     pub(crate) max_streams_per_connection: usize,
     pub(crate) setup_timeout: Duration,
     pub(crate) idle_timeout: Duration,
+    pub(crate) compression_codecs: Vec<RuntimeIrohCompressionCodec>,
+    pub(crate) compression_min_bytes: usize,
+    pub(crate) compression_zstd_level: i32,
 }
 
 impl Default for RuntimeIrohTransportPolicy {
@@ -86,6 +111,13 @@ impl Default for RuntimeIrohTransportPolicy {
             max_streams_per_connection: 1,
             setup_timeout: Duration::from_millis(10_000),
             idle_timeout: Duration::from_millis(300_000),
+            compression_codecs: vec![
+                RuntimeIrohCompressionCodec::Zstd,
+                RuntimeIrohCompressionCodec::Lz4,
+                RuntimeIrohCompressionCodec::None,
+            ],
+            compression_min_bytes: 512,
+            compression_zstd_level: 3,
         }
     }
 }
@@ -189,6 +221,38 @@ pub(crate) fn runtime_iroh_transport_policy_from_config(
             "transport.iroh disabling direct connections requires a relay mode",
         ));
     }
+    let compression_names = runtime_json_string_array(iroh.get("compression_codecs"))?
+        .unwrap_or_else(|| {
+            defaults
+                .compression_codecs
+                .iter()
+                .map(|codec| codec.as_str().to_string())
+                .collect()
+        });
+    if !(1..=3).contains(&compression_names.len()) {
+        return Err(MezError::config(
+            "transport.iroh.compression_codecs must contain one through three codecs",
+        ));
+    }
+    let mut compression_codecs = Vec::with_capacity(compression_names.len());
+    for name in compression_names {
+        let codec = match name.as_str() {
+            "zstd" => RuntimeIrohCompressionCodec::Zstd,
+            "lz4" => RuntimeIrohCompressionCodec::Lz4,
+            "none" => RuntimeIrohCompressionCodec::None,
+            _ => {
+                return Err(MezError::config(
+                    "transport.iroh.compression_codecs supports only zstd, lz4, and none",
+                ));
+            }
+        };
+        if compression_codecs.contains(&codec) {
+            return Err(MezError::config(
+                "transport.iroh.compression_codecs must not contain duplicates",
+            ));
+        }
+        compression_codecs.push(codec);
+    }
     Ok(RuntimeIrohTransportPolicy {
         enabled: bool_value(iroh, "enabled", defaults.enabled)?,
         outbound_enabled: bool_value(iroh, "outbound_enabled", defaults.outbound_enabled)?,
@@ -242,6 +306,21 @@ pub(crate) fn runtime_iroh_transport_policy_from_config(
             1_000,
             86_400_000,
         )?),
+        compression_codecs,
+        compression_min_bytes: bounded_usize_value(
+            iroh,
+            "compression_min_bytes",
+            defaults.compression_min_bytes,
+            0,
+            1024 * 1024,
+        )?,
+        compression_zstd_level: bounded_i32_value(
+            iroh,
+            "compression_zstd_level",
+            defaults.compression_zstd_level,
+            -5,
+            22,
+        )?,
     })
 }
 
@@ -309,6 +388,29 @@ fn bounded_usize_value(
     .map_err(|_| MezError::config(format!("transport.iroh.{key} is too large")))
 }
 
+fn bounded_i32_value(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    default: i32,
+    minimum: i32,
+    maximum: i32,
+) -> Result<i32> {
+    let value = match object.get(key) {
+        None => i64::from(default),
+        Some(value) => value
+            .as_i64()
+            .ok_or_else(|| MezError::config(format!("transport.iroh.{key} must be an integer")))?,
+    };
+    let value = i32::try_from(value)
+        .map_err(|_| MezError::config(format!("transport.iroh.{key} is out of range")))?;
+    if !(minimum..=maximum).contains(&value) {
+        return Err(MezError::config(format!(
+            "transport.iroh.{key} must be an integer from {minimum} to {maximum}",
+        )));
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,6 +422,16 @@ mod tests {
         assert!(defaults.outbound_enabled);
         assert_eq!(defaults.bind_port, 0);
         assert_eq!(defaults.max_streams_per_connection, 1);
+        assert_eq!(
+            defaults.compression_codecs,
+            vec![
+                RuntimeIrohCompressionCodec::Zstd,
+                RuntimeIrohCompressionCodec::Lz4,
+                RuntimeIrohCompressionCodec::None,
+            ]
+        );
+        assert_eq!(defaults.compression_min_bytes, 512);
+        assert_eq!(defaults.compression_zstd_level, 3);
 
         let policy = runtime_iroh_transport_policy_from_config(&serde_json::json!({
             "transport": { "iroh": {
@@ -339,7 +451,10 @@ mod tests {
                 "max_connections": 8,
                 "max_streams_per_connection": 1,
                 "setup_timeout_ms": 5000,
-                "idle_timeout_ms": 60000
+                "idle_timeout_ms": 60000,
+                "compression_codecs": ["lz4", "none"],
+                "compression_min_bytes": 1024,
+                "compression_zstd_level": -2
             }}
         }))
         .unwrap();
@@ -365,6 +480,15 @@ mod tests {
         assert_eq!(policy.max_streams_per_connection, 1);
         assert_eq!(policy.setup_timeout, Duration::from_secs(5));
         assert_eq!(policy.idle_timeout, Duration::from_secs(60));
+        assert_eq!(
+            policy.compression_codecs,
+            vec![
+                RuntimeIrohCompressionCodec::Lz4,
+                RuntimeIrohCompressionCodec::None,
+            ]
+        );
+        assert_eq!(policy.compression_min_bytes, 1024);
+        assert_eq!(policy.compression_zstd_level, -2);
     }
 
     #[test]
@@ -380,6 +504,11 @@ mod tests {
             serde_json::json!({"transport":{"iroh":{"max_streams_per_connection":2}}}),
             serde_json::json!({"transport":{"iroh":{"bind_port":65536}}}),
             serde_json::json!({"transport":{"iroh":{"idle_timeout_ms":999}}}),
+            serde_json::json!({"transport":{"iroh":{"compression_codecs":[]}}}),
+            serde_json::json!({"transport":{"iroh":{"compression_codecs":["zstd","zstd"]}}}),
+            serde_json::json!({"transport":{"iroh":{"compression_codecs":["brotli"]}}}),
+            serde_json::json!({"transport":{"iroh":{"compression_min_bytes":1048577}}}),
+            serde_json::json!({"transport":{"iroh":{"compression_zstd_level":23}}}),
         ] {
             assert!(
                 runtime_iroh_transport_policy_from_config(&value).is_err(),

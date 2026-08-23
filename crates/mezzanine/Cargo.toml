@@ -21,6 +21,7 @@ futures-util = "0.3"
 include_dir = "0.7"
 iroh = { version = "=1.0.3", default-features = false, features = ["platform-verifier", "portmapper", "tls-ring"] }
 keyring-core = "1.0"
+lz4_flex = { version = "0.11", default-features = false }
 merman = { version = "=0.7.0", default-features = false, features = ["ascii"] }
 merman-ascii = "=0.7.0"
 rand = "0.10"
