@@ -612,6 +612,71 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// A noninteractive bare invocation fails before the hosted
+    /// resolve-or-create request can allocate a session.
+    #[tokio::test(flavor = "current_thread")]
+    async fn noninteractive_bare_cli_does_not_create_hosted_session() {
+        let root = test_root("noninteractive-bare");
+        let env = test_env(&root);
+        let runtime_root = default_socket_directory(&env.runtime).unwrap().path;
+        let config_root = env.config_paths().unwrap().root().to_path_buf();
+        let server = HostServer::bind(HostServerConfig {
+            runtime_root,
+            owner_uid: env.runtime.uid,
+            config_root,
+            config_layers: vec![ConfigLayer {
+                name: "host-cli-test".to_string(),
+                path: None,
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: DEFAULT_CONFIG_TOML.to_string(),
+            }],
+            shell: ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+            max_sessions: 8,
+            max_live_sessions: 4,
+            shutdown_timeout: Duration::from_secs(2),
+            iroh_invitation_issuer: None,
+            max_remote_leases: 8,
+            audit_log: None,
+        })
+        .unwrap();
+
+        let server_future = server.serve(std::future::pending());
+        let client_future = async {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let error = crate::cli::run_with(
+                vec!["mez".to_string()],
+                env.clone(),
+                false,
+                &mut stdout,
+                &mut stderr,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+            assert!(error.message().contains("interactive terminal"));
+            assert!(
+                host_list_sessions(&env)
+                    .await
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+
+            request_host(&env, "host/shutdown", serde_json::json!({"force": true}))
+                .await
+                .unwrap();
+        };
+
+        let (server_result, ()) = tokio::join!(server_future, client_future);
+        server_result.unwrap();
+        drop(server);
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn test_env(root: &Path) -> CliEnv {
         let runtime_tmp = root.join("runtime");
         fs::create_dir_all(&runtime_tmp).unwrap();

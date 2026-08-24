@@ -158,6 +158,11 @@ async fn run_with_inner<W: Write, E: Write>(
 
     match command {
         None => {
+            if !interactive {
+                return Err(MezError::forbidden(
+                    "attaching as the primary client requires an interactive terminal",
+                ));
+            }
             if prefer_host && ensure_host_available(&env).await? {
                 let socket = host_resolve_or_create_session(&env).await?;
                 return run_attach(
