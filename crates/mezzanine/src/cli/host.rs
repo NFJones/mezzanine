@@ -147,6 +147,7 @@ async fn run_host_serve<W: Write>(
         },
         ownership,
     )?;
+    server.prepare_startup().await?;
     let started = serde_json::json!({
         "serving": true,
         "host": true,

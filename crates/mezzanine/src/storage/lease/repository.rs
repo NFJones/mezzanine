@@ -28,6 +28,8 @@ struct LeaseDatabase {
     version: u32,
     boot_generation: u64,
     leases: Vec<RemoteSessionLease>,
+    #[serde(default)]
+    snapshot_cleanup_candidates: Vec<String>,
 }
 
 impl Default for LeaseDatabase {
@@ -36,6 +38,7 @@ impl Default for LeaseDatabase {
             version: DATABASE_VERSION,
             boot_generation: 0,
             leases: Vec::new(),
+            snapshot_cleanup_candidates: Vec::new(),
         }
     }
 }
@@ -357,25 +360,113 @@ impl RemoteSessionLeaseRepository {
         checkpoint: LeaseCheckpointReference,
         now_unix_seconds: u64,
     ) -> Result<RemoteSessionLease> {
-        self.transition(
-            lease_id,
-            expected_boot_generation,
-            expected_lease_generation,
-            now_unix_seconds,
-            |lease| {
-                require_state(
-                    lease,
-                    &[
-                        RemoteSessionLeaseState::Active,
-                        RemoteSessionLeaseState::Recoverable,
-                    ],
-                    "update checkpoint",
-                )?;
-                checkpoint.validate(&lease.session_id)?;
-                lease.checkpoint = Some(checkpoint);
-                Ok(())
-            },
-        )
+        validate_nonempty_identifier(lease_id, "id")?;
+        self.mutate_database(|database| {
+            if database.boot_generation != expected_boot_generation {
+                return Err(MezError::conflict(
+                    "remote session lease boot generation is stale",
+                ));
+            }
+            let lease = database
+                .leases
+                .iter_mut()
+                .find(|lease| lease.lease_id == lease_id)
+                .ok_or_else(|| {
+                    MezError::new(
+                        crate::error::MezErrorKind::NotFound,
+                        "remote session lease not found",
+                    )
+                })?;
+            if lease.boot_generation != expected_boot_generation
+                || lease.lease_generation != expected_lease_generation
+            {
+                return Err(MezError::conflict(
+                    "remote session lease generation is stale",
+                ));
+            }
+            if now_unix_seconds < lease.updated_at_unix_seconds {
+                return Err(MezError::conflict(
+                    "remote session lease update timestamp is stale",
+                ));
+            }
+            require_state(
+                lease,
+                &[
+                    RemoteSessionLeaseState::Active,
+                    RemoteSessionLeaseState::Recoverable,
+                ],
+                "update checkpoint",
+            )?;
+            checkpoint.validate(&lease.session_id)?;
+            if database
+                .snapshot_cleanup_candidates
+                .contains(&checkpoint.snapshot_id)
+            {
+                return Err(MezError::conflict(
+                    "remote session checkpoint is already pending artifact cleanup",
+                ));
+            }
+            let replaced_snapshot_id = lease
+                .checkpoint
+                .as_ref()
+                .filter(|prior| prior.snapshot_id != checkpoint.snapshot_id)
+                .map(|prior| prior.snapshot_id.clone());
+            lease.checkpoint = Some(checkpoint);
+            lease.updated_at_unix_seconds = now_unix_seconds;
+            lease.lease_generation = lease.lease_generation.saturating_add(1);
+            lease.validate()?;
+            let updated = lease.clone();
+            if let Some(snapshot_id) = replaced_snapshot_id {
+                database.snapshot_cleanup_candidates.push(snapshot_id);
+                database.snapshot_cleanup_candidates.sort();
+                database.snapshot_cleanup_candidates.dedup();
+            }
+            Ok(updated)
+        })
+    }
+
+    /// Lists snapshot identifiers whose last known owning reference was
+    /// replaced or garbage-collected and whose artifact cleanup is pending.
+    pub(crate) fn snapshot_cleanup_candidates(&self) -> Result<Vec<String>> {
+        self.with_locked_database(|database| {
+            let mut candidates = database.snapshot_cleanup_candidates;
+            candidates.sort();
+            Ok(candidates)
+        })
+    }
+
+    /// Checks whether any current durable lease still owns this snapshot.
+    pub(crate) fn snapshot_is_referenced(&self, snapshot_id: &str) -> Result<bool> {
+        validate_nonempty_identifier(snapshot_id, "checkpoint snapshot id")?;
+        self.with_locked_database(|database| {
+            Ok(database.leases.iter().any(|lease| {
+                lease
+                    .checkpoint
+                    .as_ref()
+                    .is_some_and(|checkpoint| checkpoint.snapshot_id == snapshot_id)
+            }))
+        })
+    }
+
+    /// Removes one completed cleanup intent unless a current lease still
+    /// references the snapshot identifier.
+    pub(crate) fn acknowledge_snapshot_cleanup(&self, snapshot_id: &str) -> Result<bool> {
+        validate_nonempty_identifier(snapshot_id, "checkpoint snapshot id")?;
+        self.mutate_database(|database| {
+            if database.leases.iter().any(|lease| {
+                lease
+                    .checkpoint
+                    .as_ref()
+                    .is_some_and(|checkpoint| checkpoint.snapshot_id == snapshot_id)
+            }) {
+                return Ok(false);
+            }
+            let prior_len = database.snapshot_cleanup_candidates.len();
+            database
+                .snapshot_cleanup_candidates
+                .retain(|candidate| candidate != snapshot_id);
+            Ok(database.snapshot_cleanup_candidates.len() != prior_len)
+        })
     }
 
     pub(crate) fn release(
@@ -479,6 +570,11 @@ impl RemoteSessionLeaseRepository {
         self.mutate_database(|database| {
             let preview = gc_preview(database, policy);
             let candidates = preview.lease_ids.iter().cloned().collect::<HashSet<_>>();
+            database
+                .snapshot_cleanup_candidates
+                .extend(preview.checkpoint_snapshot_ids.iter().cloned());
+            database.snapshot_cleanup_candidates.sort();
+            database.snapshot_cleanup_candidates.dedup();
             database
                 .leases
                 .retain(|lease| !candidates.contains(&lease.lease_id));
@@ -666,6 +762,15 @@ fn validate_database(database: &LeaseDatabase) -> Result<()> {
     let mut lease_ids = HashSet::new();
     let mut session_ids = HashSet::new();
     let mut idempotency = HashSet::new();
+    let mut cleanup_candidates = HashSet::new();
+    for snapshot_id in &database.snapshot_cleanup_candidates {
+        validate_nonempty_identifier(snapshot_id, "checkpoint snapshot id")?;
+        if !cleanup_candidates.insert(snapshot_id) {
+            return Err(MezError::invalid_state(
+                "remote session lease database contains duplicate snapshot cleanup candidates",
+            ));
+        }
+    }
     for lease in &database.leases {
         lease.validate()?;
         if !lease_ids.insert(lease.lease_id.clone()) {

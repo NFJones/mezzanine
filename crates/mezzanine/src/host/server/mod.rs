@@ -137,6 +137,12 @@ impl HostServer {
         self.router.clone()
     }
 
+    /// Reconciles durable snapshot cleanup before listeners start serving.
+    pub(crate) async fn prepare_startup(&self) -> Result<()> {
+        let _ = self.router.reconcile_snapshot_cleanup().await?;
+        Ok(())
+    }
+
     /// Serves local management requests until cancellation or `host/shutdown`.
     pub(crate) async fn serve<C>(&self, cancellation: C) -> Result<()>
     where
@@ -547,6 +553,7 @@ impl HostServer {
                 Ok((session_record_json(&record), None))
             }
             "host/reconcile" => {
+                let _ = self.router.reconcile_snapshot_cleanup().await?;
                 let report = self.router.reconcile()?;
                 Ok((
                     json!({
@@ -583,6 +590,7 @@ impl HostServer {
 
     async fn status_json(&self) -> Result<Value> {
         let snapshots = self.router.snapshots().await?;
+        let reconciliation = self.router.reconcile()?;
         let running = snapshots
             .iter()
             .filter(|snapshot| snapshot.state == SessionSupervisorState::Running)
@@ -597,6 +605,7 @@ impl HostServer {
             "socket": self.socket_path,
             "running_sessions": running,
             "starting_sessions": starting,
+            "snapshot_cleanup_pending": reconciliation.snapshot_cleanup_pending,
             "max_sessions": self.config.max_sessions,
             "max_live_sessions": self.config.max_live_sessions,
         }))

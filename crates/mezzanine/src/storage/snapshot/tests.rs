@@ -221,6 +221,24 @@ async fn snapshot_repository_async_persists_lists_and_deletes_snapshots() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A retry after an older manifest-first deletion failure removes a residual
+/// directory payload even though the snapshot manifest is already absent.
+#[tokio::test]
+async fn snapshot_delete_retry_removes_manifestless_directory_payload() {
+    let root =
+        std::env::temp_dir().join(format!("mez-snapshot-delete-retry-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("orphan.payload/nested")).unwrap();
+    fs::write(root.join("orphan.payload/nested/data"), b"orphan\n").unwrap();
+    let repo = SnapshotRepository::new(root.clone());
+
+    assert!(repo.delete_async("orphan").await.unwrap());
+    assert!(!root.join("orphan.payload").exists());
+    assert!(!repo.delete_async("orphan").await.unwrap());
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies snapshot repository selects latest snapshot by session.
 ///
 /// This regression scenario documents the behavior being protected so a

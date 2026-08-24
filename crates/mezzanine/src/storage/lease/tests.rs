@@ -120,6 +120,131 @@ fn lease_transitions_are_generation_fenced_and_checkpoint_bound() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Replacing a checkpoint and collecting its terminal lease must preserve
+/// durable snapshot cleanup work until deletion is acknowledged, while an
+/// identifier still referenced by another lease remains fenced from cleanup.
+#[test]
+fn checkpoint_replacement_and_gc_persist_cleanup_candidates() {
+    let root = test_root("snapshot-cleanup");
+    let repository = RemoteSessionLeaseRepository::new(root.clone());
+    let first_pending = repository
+        .reserve_pending(reservation(
+            "lease-first",
+            "$1",
+            "device-1",
+            "create-first",
+            "fingerprint-first",
+        ))
+        .unwrap()
+        .lease()
+        .clone();
+    let first = repository
+        .activate(
+            &first_pending.lease_id,
+            first_pending.boot_generation,
+            first_pending.lease_generation,
+            11,
+        )
+        .unwrap();
+    let first = repository
+        .update_checkpoint(
+            &first.lease_id,
+            first.boot_generation,
+            first.lease_generation,
+            checkpoint("snapshot-old", &first.session_id),
+            12,
+        )
+        .unwrap();
+    let first = repository
+        .update_checkpoint(
+            &first.lease_id,
+            first.boot_generation,
+            first.lease_generation,
+            checkpoint("snapshot-shared", &first.session_id),
+            13,
+        )
+        .unwrap();
+    assert_eq!(
+        repository.snapshot_cleanup_candidates().unwrap(),
+        vec!["snapshot-old"]
+    );
+
+    let second_pending = repository
+        .reserve_pending(reservation(
+            "lease-second",
+            "$2",
+            "device-2",
+            "create-second",
+            "fingerprint-second",
+        ))
+        .unwrap()
+        .lease()
+        .clone();
+    let second = repository
+        .activate(
+            &second_pending.lease_id,
+            second_pending.boot_generation,
+            second_pending.lease_generation,
+            14,
+        )
+        .unwrap();
+    let cleanup_race = repository
+        .update_checkpoint(
+            &second.lease_id,
+            second.boot_generation,
+            second.lease_generation,
+            checkpoint("snapshot-old", &second.session_id),
+            15,
+        )
+        .unwrap_err();
+    assert_eq!(cleanup_race.kind(), MezErrorKind::Conflict);
+    repository
+        .update_checkpoint(
+            &second.lease_id,
+            second.boot_generation,
+            second.lease_generation,
+            checkpoint("snapshot-shared", &second.session_id),
+            15,
+        )
+        .unwrap();
+    let released = repository
+        .release(
+            &first.lease_id,
+            first.boot_generation,
+            first.lease_generation,
+            16,
+        )
+        .unwrap();
+    assert_eq!(released.state, RemoteSessionLeaseState::Released);
+    repository
+        .apply_gc(LeaseGarbageCollectionPolicy {
+            released_before_unix_seconds: 16,
+            revoked_before_unix_seconds: 16,
+            failed_before_unix_seconds: 16,
+        })
+        .unwrap();
+    assert_eq!(
+        repository.snapshot_cleanup_candidates().unwrap(),
+        vec!["snapshot-old", "snapshot-shared"]
+    );
+    assert!(
+        !repository
+            .acknowledge_snapshot_cleanup("snapshot-shared")
+            .unwrap()
+    );
+    assert!(
+        repository
+            .acknowledge_snapshot_cleanup("snapshot-old")
+            .unwrap()
+    );
+    assert_eq!(
+        repository.snapshot_cleanup_candidates().unwrap(),
+        vec!["snapshot-shared"]
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Advancing the boot generation deterministically fails interrupted pending
 /// work, makes formerly active leases recoverable, and fences prior actors.
 #[test]

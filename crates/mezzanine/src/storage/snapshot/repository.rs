@@ -253,12 +253,26 @@ impl SnapshotRepository {
         let manifest = match SnapshotManifest::read_from_file_async(&path).await {
             Ok(manifest) => manifest,
             Err(error) if error.io_kind() == Some(std::io::ErrorKind::NotFound) => {
-                return Ok(false);
+                let payload_path = self.payload_path(snapshot_id)?;
+                let removed = match tokio::fs::metadata(&payload_path).await {
+                    Ok(metadata) if metadata.is_dir() => {
+                        tokio::fs::remove_dir_all(&payload_path).await?;
+                        true
+                    }
+                    Ok(_) => {
+                        tokio::fs::remove_file(&payload_path).await?;
+                        true
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(error) => return Err(error.into()),
+                };
+                self.rebuild_latest_indexes_async().await?;
+                return Ok(removed);
             }
             Err(error) => return Err(error),
         };
-        tokio::fs::remove_file(&path).await?;
         self.remove_payload_if_local_async(&manifest).await?;
+        tokio::fs::remove_file(&path).await?;
         self.rebuild_latest_indexes_async().await?;
         Ok(true)
     }

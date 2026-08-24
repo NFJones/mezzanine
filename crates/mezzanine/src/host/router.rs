@@ -73,6 +73,7 @@ pub(crate) struct HostReconciliationReport {
     pub(crate) released: usize,
     pub(crate) revoked: usize,
     pub(crate) failed: usize,
+    pub(crate) snapshot_cleanup_pending: usize,
     pub(crate) pruned_registry_records: usize,
 }
 
@@ -81,6 +82,13 @@ pub(crate) struct HostReconciliationReport {
 pub(crate) struct HostLeaseGarbageCollectionReport {
     pub(crate) preview: LeaseGarbageCollectionPreview,
     pub(crate) applied: bool,
+    pub(crate) deleted_snapshot_ids: Vec<String>,
+    pub(crate) retained_snapshot_ids: Vec<String>,
+}
+
+/// Result of one reference-checked snapshot cleanup reconciliation pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HostSnapshotCleanupReport {
     pub(crate) deleted_snapshot_ids: Vec<String>,
     pub(crate) retained_snapshot_ids: Vec<String>,
 }
@@ -134,6 +142,7 @@ impl HostSessionRouter {
             released: 0,
             revoked: 0,
             failed: 0,
+            snapshot_cleanup_pending: self.leases.snapshot_cleanup_candidates()?.len(),
             pruned_registry_records,
         };
         for lease in leases {
@@ -513,10 +522,16 @@ impl HostSessionRouter {
             },
             now,
         );
-        if updated.is_err() {
-            let _ = snapshots.delete_async(&snapshot.id).await;
+        match updated {
+            Ok(updated) => {
+                let _ = self.reconcile_snapshot_cleanup_locked().await;
+                Ok(updated)
+            }
+            Err(error) => {
+                let _ = snapshots.delete_async(&snapshot.id).await;
+                Err(error)
+            }
         }
-        updated
     }
 
     /// Explicitly restores one recoverable lease or reports an already-live lease.
@@ -614,28 +629,47 @@ impl HostSessionRouter {
         } else {
             self.leases.preview_gc(policy)?
         };
-        let mut deleted_snapshot_ids = Vec::new();
-        let mut retained_snapshot_ids = Vec::new();
-        if apply {
-            let remaining = self.leases.list()?;
-            let snapshots = SnapshotRepository::new(self.config.config_root.join("layouts"));
-            for snapshot_id in &preview.checkpoint_snapshot_ids {
-                let still_referenced = remaining.iter().any(|lease| {
-                    lease
-                        .checkpoint
-                        .as_ref()
-                        .is_some_and(|checkpoint| checkpoint.snapshot_id == *snapshot_id)
-                });
-                if still_referenced || !snapshots.delete_async(snapshot_id).await.unwrap_or(false) {
-                    retained_snapshot_ids.push(snapshot_id.clone());
-                } else {
-                    deleted_snapshot_ids.push(snapshot_id.clone());
-                }
+        let cleanup = if apply {
+            self.reconcile_snapshot_cleanup_locked().await?
+        } else {
+            HostSnapshotCleanupReport {
+                deleted_snapshot_ids: Vec::new(),
+                retained_snapshot_ids: Vec::new(),
             }
-        }
+        };
         Ok(HostLeaseGarbageCollectionReport {
             preview,
             applied: apply,
+            deleted_snapshot_ids: cleanup.deleted_snapshot_ids,
+            retained_snapshot_ids: cleanup.retained_snapshot_ids,
+        })
+    }
+
+    /// Retries durable snapshot cleanup intents without blocking unrelated
+    /// host work when artifact deletion encounters a transient error.
+    pub(crate) async fn reconcile_snapshot_cleanup(&self) -> Result<HostSnapshotCleanupReport> {
+        let _creation = self.creation_lock.lock().await;
+        self.reconcile_snapshot_cleanup_locked().await
+    }
+
+    async fn reconcile_snapshot_cleanup_locked(&self) -> Result<HostSnapshotCleanupReport> {
+        let candidates = self.leases.snapshot_cleanup_candidates()?;
+        let snapshots = SnapshotRepository::new(self.config.config_root.join("layouts"));
+        let mut deleted_snapshot_ids = Vec::new();
+        let mut retained_snapshot_ids = Vec::new();
+        for snapshot_id in candidates {
+            if self.leases.snapshot_is_referenced(&snapshot_id)? {
+                retained_snapshot_ids.push(snapshot_id);
+                continue;
+            }
+            match snapshots.delete_async(&snapshot_id).await {
+                Ok(_) if self.leases.acknowledge_snapshot_cleanup(&snapshot_id)? => {
+                    deleted_snapshot_ids.push(snapshot_id);
+                }
+                Ok(_) | Err(_) => retained_snapshot_ids.push(snapshot_id),
+            }
+        }
+        Ok(HostSnapshotCleanupReport {
             deleted_snapshot_ids,
             retained_snapshot_ids,
         })
@@ -1924,6 +1958,152 @@ mod tests {
             .shutdown_all(true, Duration::from_secs(2))
             .await
             .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A checkpoint replacement records failed artifact deletion durably and
+    /// retries it after restart without removing the lease's new checkpoint.
+    #[tokio::test(flavor = "current_thread")]
+    async fn checkpoint_replacement_cleanup_retries_after_restart() {
+        let root = test_root("cleanup-replace");
+        let config = test_config(&root);
+        let principal = test_principal("cleanup-owner", 1);
+        let router = HostSessionRouter::new(config.clone());
+        let created = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("cleanup-replacement".to_string()),
+                    idempotency_key: "cleanup-replacement-create".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let first = router
+            .checkpoint_lease(&created.lease.lease_id)
+            .await
+            .unwrap()
+            .checkpoint
+            .unwrap();
+        let layouts = config.config_root.join("layouts");
+        let first_payload = layouts.join(format!("{}.payload", first.snapshot_id));
+        fs::remove_file(&first_payload).unwrap();
+        fs::create_dir(&first_payload).unwrap();
+        fs::write(first_payload.join("blocked"), b"cleanup retry\n").unwrap();
+        fs::set_permissions(&first_payload, fs::Permissions::from_mode(0o500)).unwrap();
+
+        let second = router
+            .checkpoint_lease(&created.lease.lease_id)
+            .await
+            .unwrap()
+            .checkpoint
+            .unwrap();
+        assert_ne!(second.snapshot_id, first.snapshot_id);
+        assert_eq!(router.reconcile().unwrap().snapshot_cleanup_pending, 1);
+        SnapshotRepository::new(layouts.clone())
+            .inspect(&first.snapshot_id)
+            .unwrap();
+        SnapshotRepository::new(layouts.clone())
+            .inspect(&second.snapshot_id)
+            .unwrap();
+
+        router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        drop(created);
+        drop(router);
+        fs::set_permissions(&first_payload, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let restarted = HostSessionRouter::new(config);
+        assert_eq!(
+            restarted
+                .reconcile_startup()
+                .unwrap()
+                .snapshot_cleanup_pending,
+            1
+        );
+        let cleanup = restarted.reconcile_snapshot_cleanup().await.unwrap();
+        assert_eq!(
+            cleanup.deleted_snapshot_ids,
+            vec![first.snapshot_id.clone()]
+        );
+        assert!(cleanup.retained_snapshot_ids.is_empty());
+        assert_eq!(restarted.reconcile().unwrap().snapshot_cleanup_pending, 0);
+        assert!(
+            SnapshotRepository::new(layouts.clone())
+                .inspect(&first.snapshot_id)
+                .is_err()
+        );
+        SnapshotRepository::new(layouts.clone())
+            .inspect(&second.snapshot_id)
+            .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Lease GC retains a durable cleanup intent across deletion failures and
+    /// repeated GC calls, then reclaims the artifact once the failure clears.
+    #[tokio::test(flavor = "current_thread")]
+    async fn lease_gc_cleanup_failure_is_retryable_and_idempotent() {
+        let root = test_root("lease-gc-cleanup");
+        let config = test_config(&root);
+        let principal = test_principal("gc-cleanup-owner", 1);
+        let router = HostSessionRouter::new(config.clone());
+        let created = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("gc-cleanup".to_string()),
+                    idempotency_key: "gc-cleanup-create".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let checkpoint = router
+            .checkpoint_lease(&created.lease.lease_id)
+            .await
+            .unwrap()
+            .checkpoint
+            .unwrap();
+        router
+            .release_lease(&created.lease.lease_id, true)
+            .await
+            .unwrap();
+        let layouts = config.config_root.join("layouts");
+        let payload = layouts.join(format!("{}.payload", checkpoint.snapshot_id));
+        fs::remove_file(&payload).unwrap();
+        fs::create_dir(&payload).unwrap();
+        fs::write(payload.join("blocked"), b"cleanup retry\n").unwrap();
+        fs::set_permissions(&payload, fs::Permissions::from_mode(0o500)).unwrap();
+        let policy = LeaseGarbageCollectionPolicy {
+            released_before_unix_seconds: u64::MAX,
+            revoked_before_unix_seconds: u64::MAX,
+            failed_before_unix_seconds: u64::MAX,
+        };
+
+        let first_gc = router.garbage_collect_leases(policy, true).await.unwrap();
+        assert_eq!(first_gc.preview.lease_ids, vec![created.lease.lease_id]);
+        assert!(first_gc.deleted_snapshot_ids.is_empty());
+        assert_eq!(
+            first_gc.retained_snapshot_ids,
+            vec![checkpoint.snapshot_id.clone()]
+        );
+        assert!(router.list_leases(None, None, true).unwrap().is_empty());
+        assert_eq!(router.reconcile().unwrap().snapshot_cleanup_pending, 1);
+
+        let repeated = router.garbage_collect_leases(policy, true).await.unwrap();
+        assert!(repeated.preview.lease_ids.is_empty());
+        assert_eq!(
+            repeated.retained_snapshot_ids,
+            vec![checkpoint.snapshot_id.clone()]
+        );
+        fs::set_permissions(&payload, fs::Permissions::from_mode(0o700)).unwrap();
+        let cleanup = router.reconcile_snapshot_cleanup().await.unwrap();
+        assert_eq!(cleanup.deleted_snapshot_ids, vec![checkpoint.snapshot_id]);
+        assert!(cleanup.retained_snapshot_ids.is_empty());
+        assert_eq!(router.reconcile().unwrap().snapshot_cleanup_pending, 0);
         let _ = fs::remove_dir_all(root);
     }
 
