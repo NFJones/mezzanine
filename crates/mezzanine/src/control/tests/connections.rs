@@ -549,3 +549,27 @@ fn iroh_primary_with_same_display_name_gets_independent_client() {
     assert_eq!(session.layout_owner_client_id(), Some(&existing_primary));
     assert_eq!(session.attached_primaries().count(), 2);
 }
+
+/// Verifies a forged primary request cannot turn an observer-only durable
+/// trust ceiling into primary-terminal authority.
+#[test]
+fn iroh_primary_request_cannot_override_server_held_role_ceiling() {
+    use crate::security::remote::{RemoteHostRoutingAuthority, RemotePrincipal, RemoteRoleCeiling};
+
+    let mut connection = ControlConnectionState::new(false, false);
+    connection
+        .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint("endpoint-observer"))
+        .unwrap();
+    let error = connection
+        .bind_remote_principal(RemotePrincipal {
+            trust_record_id: "trust-observer".to_string(),
+            endpoint_id: "endpoint-observer".to_string(),
+            role_ceiling: RemoteRoleCeiling::Observer,
+            host_routing: RemoteHostRoutingAuthority::default(),
+            requested_role: RequestedRole::Primary,
+        })
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(connection.remote_principal().is_none());
+}

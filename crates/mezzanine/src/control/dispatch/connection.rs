@@ -14,7 +14,7 @@ use super::{
 #[cfg(test)]
 use super::{decode_control_frame, encode_control_body};
 use crate::control::AuthenticatedPeer;
-use crate::security::remote::RemotePrincipal;
+use crate::security::remote::{RemotePrincipal, RemoteRoleCeiling};
 /// Carries Control Connection State state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -145,6 +145,11 @@ impl ControlConnectionState {
                 "remote principal endpoint does not match the transport peer",
             ));
         }
+        if !principal.role_ceiling.permits(principal.requested_role) {
+            return Err(MezError::forbidden(
+                "remote principal requested a role above its durable trust ceiling",
+            ));
+        }
         if let Some(existing) = self.remote_principal.as_ref()
             && existing != &principal
         {
@@ -153,7 +158,7 @@ impl ControlConnectionState {
             ));
         }
         self.outer_authenticated = true;
-        self.trusted_interactive_assertion = principal.requested_role == RequestedRole::Primary;
+        self.trusted_interactive_assertion = principal.role_ceiling == RemoteRoleCeiling::Primary;
         self.remote_principal = Some(principal);
         Ok(())
     }
