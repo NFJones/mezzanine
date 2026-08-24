@@ -107,6 +107,44 @@ fn kill_command_accepts_kill_session_as_an_alias() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Hosted list aggregation and remote kill are explicit typed contracts.
+#[test]
+fn list_all_and_remote_kill_require_explicit_supported_arguments() {
+    let (env, home) = test_env("hosted-command-matrix");
+    let list = CliInvocation::parse(
+        &["mez".to_string(), "list".to_string(), "--all".to_string()],
+        &env.runtime,
+        None,
+    )
+    .unwrap();
+    assert!(matches!(
+        list.command,
+        Some(CliCommand::List(args)) if args.all
+    ));
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let error = run_with(
+        vec![
+            "mez".to_string(),
+            "--iroh-profile".to_string(),
+            "host".to_string(),
+            "kill".to_string(),
+            "--force".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(error.message().contains("requires a lease id"), "{error}");
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies `mez kill` resolves a creation-order session alias through the
 /// registry before sending its termination request.
 ///

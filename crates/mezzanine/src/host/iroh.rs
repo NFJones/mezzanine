@@ -996,6 +996,13 @@ fn handle_host_only_initialize_with_audit(
             ));
         }
     };
+    let mut methods = Vec::new();
+    if principal.host_routing.session_list {
+        methods.push("host/session/list");
+    }
+    if principal.host_routing.session_kill {
+        methods.push("host/session/kill");
+    }
     let mut result = json!({
         "selected_version": 3,
         "server": {
@@ -1009,7 +1016,7 @@ fn handle_host_only_initialize_with_audit(
         "session": null,
         "client": null,
         "granted_role": "observer",
-        "capabilities": { "methods": ["control/shutdown"], "features": { "host_only": true } },
+        "capabilities": { "methods": methods, "features": { "host_only": true } },
         "approval_pending": false,
         "observer_request": null,
         "principal_id": principal.trust_record_id,
@@ -1125,6 +1132,40 @@ where
                 "sessions": leases.iter().map(remote_lease_summary).collect::<Vec<_>>()
             })
         }),
+        Some("host/session/kill") => {
+            let params = request
+                .get("params")
+                .and_then(Value::as_object)
+                .ok_or_else(|| MezError::invalid_args("host/session/kill requires params"))?;
+            let target = params
+                .get("target")
+                .and_then(Value::as_str)
+                .filter(|target| !target.is_empty())
+                .ok_or_else(|| MezError::invalid_args("host/session/kill requires target"))?;
+            if params.get("force").and_then(Value::as_bool) != Some(true) {
+                return Err(MezError::invalid_args(
+                    "host/session/kill requires force=true",
+                ));
+            }
+            params
+                .get("idempotency_key")
+                .and_then(Value::as_str)
+                .filter(|key| !key.is_empty())
+                .ok_or_else(|| {
+                    MezError::invalid_args("host/session/kill requires idempotency_key")
+                })?;
+            router
+                .force_kill_remote(principal, target)
+                .await
+                .map(|lease| {
+                    json!({
+                        "killed": true,
+                        "lease_id": lease.lease_id,
+                        "session_id": lease.session_id,
+                        "state": remote_lease_state_name(lease.state),
+                    })
+                })
+        }
         Some(_) => Err(MezError::forbidden(
             "host-only remote control permits only advertised host methods",
         )),
@@ -1563,6 +1604,7 @@ mod tests {
                 RemoteRoleCeiling::Observer,
                 RemoteHostRoutingAuthority {
                     session_create: true,
+                    session_kill: false,
                     session_list: true,
                     session_attach_scope: RemoteSessionAttachScope::Own,
                     max_active_leases: 2,
@@ -1608,6 +1650,11 @@ mod tests {
             .await;
             assert!(paired["result"]["session"].is_null(), "{paired}");
             assert!(paired["result"]["lease"].is_null(), "{paired}");
+            assert_eq!(
+                paired["result"]["capabilities"]["methods"],
+                json!(["host/session/list"]),
+                "{paired}"
+            );
             assert!(router.snapshots().await.unwrap().is_empty());
             let credential = paired["result"]["device_credential"]
                 .as_str()
@@ -1712,6 +1759,11 @@ mod tests {
                 "host_only",
             )
             .await;
+            assert_eq!(
+                denied_pair["result"]["capabilities"]["methods"],
+                json!([]),
+                "{denied_pair}"
+            );
             let denied_credential = denied_pair["result"]["device_credential"].as_str().unwrap();
             let denied_create = exchange_test_routed_initialize(
                 &denied_client,

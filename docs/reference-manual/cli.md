@@ -34,7 +34,7 @@ or `mez attach` to select an existing one.
 | --- | --- |
 | `mez new [--dry-run]` | Start a new background session and attach when interactive. With `--dry-run`, validate session construction instead of starting a daemon. Alias: `new-session`. |
 | `mez serve` | Start a foreground session service; it does not attach a primary client unless `--attach-primary` is supplied from an interactive terminal. Alias: `daemon`. |
-| `mez list` | List resumable sessions. Alias: `list-sessions`. |
+| `mez list [--all]` | List hosted local sessions. With the persistent local host, `--all` adds non-terminal remote durable leases to the same scope-tagged aggregate. Alias: `list-sessions`. |
 | `mez attach [session-id] [--observer]` | Attach a primary client, or request read-only observer access. Alias: `attach-session`. |
 | `mez detach [--client-id ID]` | Detach the current client, or the selected client when `--client-id` is supplied. Alias: `detach-client`. |
 | `mez kill [session-id] --force` | Terminate the selected live session through its control socket; the optional target accepts a registered session id or creation-order index. `--force` confirms the destructive operation. Alias: `kill-session`. |
@@ -114,8 +114,9 @@ human-readable client-local alias. The alias is not a trust input: the pinned
 server identity, client endpoint identity, role ceiling, and protected device
 credential remain authoritative. These selectors conflict with `-S` and `-L`,
 never fall back to Unix, and apply to `mez attach`, `mez kill --force`, and `mez
-detach`. Supplying a session argument is invalid with an explicit Iroh target
-because the profile or invitation already selects the remote session.
+detach`. Host-profile attach and kill targets accept a lease ID, stable session
+ID, or exact name. Remote kill requires an explicit target, `--force`, a primary
+role ceiling, and separately granted force-kill authority.
 
 Explicit Iroh targets work when listener-oriented `transport.iroh.enabled` is
 false. They require `transport.iroh.outbound_enabled = true` (the default) and
@@ -177,17 +178,21 @@ one session. The remote forms are:
 
 ```text
 mez --iroh-profile HOST attach
-mez --iroh-profile HOST attach <session-id|name>
+mez --iroh-profile HOST attach <lease-id|session-id|name>
 mez --iroh-profile HOST attach --default
 mez --iroh-profile HOST new [--name NAME]
 mez --iroh-profile HOST list
-mez --iroh-profile HOST kill <session-id|name> --force
+mez --iroh-profile HOST kill <lease-id|session-id|name> --force
 ```
 
 Omitted-target `attach` and `new` explicitly request idempotent creation. An
 explicit target attaches only an authorized existing lease; `--default`
 selects an existing default and never creates. Pairing and profile checks are
 implemented as host-only operations and cannot create or attach a session.
+Host-only initialization advertises only the methods granted to that trust
+record. Force-kill is distinct from detach and lease administration: it must be
+granted when issuing a primary invitation and durably revokes the selected
+lease before terminating its runtime.
 Protected profiles report scope `host` or `legacy_session`; old profiles
 without scope metadata remain legacy and are not granted host authority. Lease
 release, lease revocation, runtime kill, and client-trust revocation remain

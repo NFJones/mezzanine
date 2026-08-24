@@ -63,7 +63,7 @@ pub(super) enum CliCommand {
     Lease(super::lease::LeaseCliArgs),
     /// Lists resumable sessions known to this client.
     #[command(visible_alias = "list-sessions")]
-    List,
+    List(ListSessionsCliArgs),
     /// Reattaches the primary terminal or requests observer access.
     #[command(visible_alias = "attach-session")]
     Attach(super::attach::AttachCliArgs),
@@ -231,6 +231,14 @@ pub(super) struct KillSessionCliArgs {
     /// Confirms intentional termination of the live session.
     #[arg(short, long)]
     pub(super) force: bool,
+}
+
+/// Typed process CLI arguments for `mez list`.
+#[derive(Debug, Clone, Args)]
+pub(super) struct ListSessionsCliArgs {
+    /// Includes hosted local and remote durable sessions in one aggregate view.
+    #[arg(long)]
+    pub(super) all: bool,
 }
 
 /// Typed process CLI arguments for `mez completion`.

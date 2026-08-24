@@ -7804,7 +7804,8 @@ Version 3 adds `session_intent` and `idempotency_key` to
   non-empty client-generated value. The host creates one authorized,
   lease-backed session or returns the previously committed result for the same
   principal, key, and normalized inputs.
-- `attach`: `session_target` MUST select one existing session or lease and
+- `attach`: `session_target` MUST select one existing lease by `lease_id`,
+  session by `session_id`, or exact `name`, and
   `idempotency_key` MUST be omitted. Missing, ambiguous, unauthorized,
   released, or revoked targets MUST NOT cause creation.
 - `default`: `session_target` and `idempotency_key` MUST be omitted. The host
@@ -7827,6 +7828,7 @@ before target lookup, lease reservation, runtime allocation, or session
 disclosure. Pairing is mandatory once per client device at host scope; a host
 endpoint ID alone grants no application authority. Host trust MUST express a
 maximum attach role, session-creation permission, session-list permission,
+separate force-kill permission,
 attach scope (`own`, `shared`, or `all`), active-lease limit, concurrent-live
 session limit, and optional lease-lifetime ceiling. Global host limits,
 initialization deadlines, request-size limits, connection limits, and
@@ -7855,7 +7857,12 @@ The persistent-host CLI contract is:
 - `mez lease list|show|checkpoint|recover|release|revoke|gc` for local durable
   lease administration.
 
-The host-scoped JSON-RPC catalog MUST include `host/get`, `host/shutdown`,
+Host-only initialization MUST advertise exactly the host methods granted to the
+principal. `host/session/kill` requires a primary role ceiling, separately
+granted force-kill authority, `force=true`, an idempotency key, and an explicit
+lease ID, session ID, or exact name. It MUST durably revoke authority before
+runtime teardown and MUST NOT imply lease-administration or trust-revocation
+authority. The host-scoped JSON-RPC catalog MUST include `host/get`, `host/shutdown`,
 `host/reconcile`, `host/session/list`, `host/session/create`, and
 `host/session/resolve`. The lease catalog MUST include `lease/list`,
 `lease/get`, `lease/checkpoint`, `lease/recover`, `lease/release`,

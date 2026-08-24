@@ -938,9 +938,13 @@ impl HostSessionRouter {
                 })?;
                 visible.iter().find(|lease| {
                     object
-                        .get("session_id")
+                        .get("lease_id")
                         .and_then(serde_json::Value::as_str)
-                        .is_some_and(|value| value == lease.session_id)
+                        .is_some_and(|value| value == lease.lease_id)
+                        || object
+                            .get("session_id")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|value| value == lease.session_id)
                         || object
                             .get("name")
                             .and_then(serde_json::Value::as_str)
@@ -995,6 +999,61 @@ impl HostSessionRouter {
             ));
         }
         self.visible_leases(principal)
+    }
+
+    /// Force-terminates one visible remote session under an explicit
+    /// destructive host-routing grant and durably revokes its lease first.
+    pub(crate) async fn force_kill_remote(
+        &self,
+        principal: &RemotePrincipal,
+        target: &str,
+    ) -> Result<RemoteSessionLease> {
+        if !principal.host_routing.session_kill
+            || principal.role_ceiling != crate::security::remote::RemoteRoleCeiling::Primary
+        {
+            return Err(MezError::forbidden(
+                "remote principal is not permitted to force-kill sessions",
+            ));
+        }
+        if target.trim().is_empty() {
+            return Err(MezError::invalid_args(
+                "remote force-kill requires a lease id, session id, or exact name",
+            ));
+        }
+        let _creation = self.creation_lock.lock().await;
+        self.require_serving()?;
+        let mut matches = self.visible_leases(principal)?.into_iter().filter(|lease| {
+            lease.lease_id == target
+                || lease.session_id == target
+                || lease.name.as_deref() == Some(target)
+        });
+        let lease = matches
+            .next()
+            .ok_or_else(|| MezError::new(MezErrorKind::NotFound, "remote session was not found"))?;
+        if matches.next().is_some() {
+            return Err(MezError::conflict("remote session target is ambiguous"));
+        }
+        if lease.state == RemoteSessionLeaseState::Released {
+            return Err(MezError::forbidden(
+                "released remote session lease cannot be force-killed",
+            ));
+        }
+        if lease.state == RemoteSessionLeaseState::Revoked {
+            self.stop_terminal_lease_runtime_if_requested(&lease, true)
+                .await?;
+            return Ok(lease);
+        }
+        let revoked = self.leases.revoke(
+            &lease.lease_id,
+            lease.boot_generation,
+            lease.lease_generation,
+            current_unix_seconds()?,
+            Some("remote force-kill".to_string()),
+        )?;
+        self.notify_authority_change();
+        self.stop_terminal_lease_runtime_if_requested(&revoked, true)
+            .await?;
+        Ok(revoked)
     }
 
     pub(crate) async fn snapshots(&self) -> Result<Vec<SessionSupervisorSnapshot>> {
@@ -2488,6 +2547,53 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Remote force-kill requires its distinct authority and revokes the
+    /// durable lease before the runtime disappears.
+    #[tokio::test(flavor = "current_thread")]
+    async fn remote_force_kill_is_separately_authorized_and_lease_targeted() {
+        let root = test_root("remote-force-kill");
+        let router = HostSessionRouter::new(test_config(&root));
+        let principal = test_principal("kill-owner", 1);
+        let created = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("kill-me".to_string()),
+                    idempotency_key: "kill-create".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let denied = router
+            .force_kill_remote(&principal, &created.lease.lease_id)
+            .await
+            .unwrap_err();
+        assert_eq!(denied.kind(), MezErrorKind::Forbidden);
+        assert_eq!(
+            router.get_lease(&created.lease.lease_id).unwrap().state,
+            RemoteSessionLeaseState::Active
+        );
+
+        let mut permitted = principal;
+        permitted.host_routing.session_kill = true;
+        let killed = router
+            .force_kill_remote(&permitted, &created.lease.lease_id)
+            .await
+            .unwrap();
+        assert_eq!(killed.state, RemoteSessionLeaseState::Revoked);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while router.supervisor.lookup(&created.lease.session_id).is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn remote_create_is_idempotent_quota_bounded_and_owner_scoped() {
         let root = test_root("remote-create");
@@ -3448,6 +3554,7 @@ mod tests {
             role_ceiling: RemoteRoleCeiling::Primary,
             host_routing: RemoteHostRoutingAuthority {
                 session_create: true,
+                session_kill: false,
                 session_list: true,
                 session_attach_scope: RemoteSessionAttachScope::Own,
                 max_active_leases: max,

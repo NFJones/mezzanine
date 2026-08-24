@@ -407,8 +407,17 @@ pub(super) async fn host_resolve_session(
 }
 
 /// Lists host-supervised compatibility session records.
+#[cfg(test)]
 pub(super) async fn host_list_sessions(env: &CliEnv) -> Result<serde_json::Value> {
-    let result = request_host(env, "host/session/list", serde_json::json!({})).await?;
+    host_list_sessions_with_all(env, false).await
+}
+
+/// Lists host-supervised sessions, optionally including remote durable leases.
+pub(super) async fn host_list_sessions_with_all(
+    env: &CliEnv,
+    all: bool,
+) -> Result<serde_json::Value> {
+    let result = request_host(env, "host/session/list", serde_json::json!({"all": all})).await?;
     Ok(result
         .get("sessions")
         .cloned()

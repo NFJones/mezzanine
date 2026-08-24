@@ -676,12 +676,27 @@ impl HostServer {
                     .get("allow_create")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                let allow_kill = params
+                    .get("allow_kill")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if allow_kill && !allow_create {
+                    return Err(MezError::invalid_args(
+                        "remote force-kill authority requires session creation authority",
+                    ));
+                }
+                if allow_kill && role != crate::security::remote::RemoteRoleCeiling::Primary {
+                    return Err(MezError::invalid_args(
+                        "remote force-kill authority requires a primary role ceiling",
+                    ));
+                }
                 let max_leases = optional_positive_usize(&params, "max_leases")?
                     .unwrap_or(self.config.max_remote_leases);
                 let max_live_sessions = optional_positive_usize(&params, "max_live_sessions")?
                     .unwrap_or(self.config.max_live_sessions.min(max_leases));
                 let authority = crate::security::remote::RemoteHostRoutingAuthority {
                     session_create: allow_create,
+                    session_kill: allow_kill,
                     session_list: true,
                     session_attach_scope: crate::security::remote::RemoteSessionAttachScope::Own,
                     max_active_leases: if allow_create { max_leases } else { 0 },
@@ -856,12 +871,20 @@ impl HostServer {
                 ))
             }
             "host/session/list" => {
+                let all = params.get("all").and_then(Value::as_bool).unwrap_or(false);
                 let _ = self.router.registry().prune_stale()?;
+                let remote_leases = self.router.list_leases(None, None, false)?;
                 let mut records: Vec<Value> =
                     serde_json::from_str(&records_to_json(&self.router.registry().list()?))
                         .map_err(|error| {
                             MezError::invalid_state(format!("invalid registry JSON: {error}"))
                         })?;
+                records.retain(|record| {
+                    let session_id = record.get("session_id").and_then(Value::as_str);
+                    !remote_leases
+                        .iter()
+                        .any(|lease| Some(lease.session_id.as_str()) == session_id)
+                });
                 records.extend(
                     self.router
                         .list_recoverable_local_assignments()?
@@ -877,6 +900,32 @@ impl HostServer {
                             })
                         }),
                 );
+                if all {
+                    for record in &mut records {
+                        if let Some(record) = record.as_object_mut() {
+                            record.insert("scope".to_string(), Value::String("local".to_string()));
+                        }
+                    }
+                    records.extend(remote_leases.iter().map(|lease| {
+                        json!({
+                            "scope": "remote",
+                            "lease_id": lease.lease_id,
+                            "session_id": lease.session_id,
+                            "name": lease.name,
+                            "state": match lease.state {
+                                crate::storage::lease::RemoteSessionLeaseState::Pending => "pending",
+                                crate::storage::lease::RemoteSessionLeaseState::Active => "active",
+                                crate::storage::lease::RemoteSessionLeaseState::Recoverable => "recoverable",
+                                crate::storage::lease::RemoteSessionLeaseState::Released => "released",
+                                crate::storage::lease::RemoteSessionLeaseState::Revoked => "revoked",
+                                crate::storage::lease::RemoteSessionLeaseState::Failed => "failed",
+                            },
+                            "socket": Value::Null,
+                            "accepts_primary": false,
+                            "recoverable": lease.state == crate::storage::lease::RemoteSessionLeaseState::Recoverable,
+                        })
+                    }));
+                }
                 Ok((json!({"sessions": records}), None))
             }
             "host/session/create" => {
@@ -1583,6 +1632,7 @@ mod tests {
             role_ceiling: RemoteRoleCeiling::Observer,
             host_routing: RemoteHostRoutingAuthority {
                 session_create: true,
+                session_kill: false,
                 session_list: true,
                 session_attach_scope: RemoteSessionAttachScope::Own,
                 max_active_leases: 1,
@@ -1731,6 +1781,7 @@ mod tests {
             role_ceiling: RemoteRoleCeiling::Primary,
             host_routing: RemoteHostRoutingAuthority {
                 session_create: true,
+                session_kill: false,
                 session_list: true,
                 session_attach_scope: RemoteSessionAttachScope::Own,
                 max_active_leases: 1,
@@ -1775,6 +1826,7 @@ mod tests {
             role_ceiling: RemoteRoleCeiling::Primary,
             host_routing: RemoteHostRoutingAuthority {
                 session_create: true,
+                session_kill: false,
                 session_list: true,
                 session_attach_scope: RemoteSessionAttachScope::Own,
                 max_active_leases: 1,
@@ -1846,6 +1898,7 @@ mod tests {
             role_ceiling: RemoteRoleCeiling::Primary,
             host_routing: RemoteHostRoutingAuthority {
                 session_create: true,
+                session_kill: false,
                 session_list: true,
                 session_attach_scope: RemoteSessionAttachScope::Own,
                 max_active_leases: 2,
@@ -1994,6 +2047,7 @@ mod tests {
             role_ceiling: RemoteRoleCeiling::Primary,
             host_routing: RemoteHostRoutingAuthority {
                 session_create: true,
+                session_kill: false,
                 session_list: true,
                 session_attach_scope: RemoteSessionAttachScope::Own,
                 max_active_leases: 1,
@@ -2066,6 +2120,7 @@ mod tests {
             role_ceiling: RemoteRoleCeiling::Primary,
             host_routing: RemoteHostRoutingAuthority {
                 session_create: true,
+                session_kill: false,
                 session_list: true,
                 session_attach_scope: RemoteSessionAttachScope::Own,
                 max_active_leases: 1,

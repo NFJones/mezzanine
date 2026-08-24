@@ -10,11 +10,11 @@ use super::env::CliArgv;
 use super::{
     CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, MezError, OsString,
     PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, ensure_host_available,
-    ensure_private_socket_directory, host_create_session, host_list_sessions,
-    host_resolve_or_create_session, host_resolve_session, io, json_escape, list_iroh_host_sessions,
-    prune_stale_socket_files_in_directory, run_attach, run_auth, run_config,
-    run_control_request_for_target, run_host, run_issue, run_lease, run_list, run_mcp, run_memory,
-    run_new, run_remote, run_sandbox, run_serve, run_snapshot,
+    ensure_private_socket_directory, force_kill_iroh_host_session, host_create_session,
+    host_list_sessions_with_all, host_resolve_or_create_session, host_resolve_session, io,
+    json_escape, list_iroh_host_sessions, prune_stale_socket_files_in_directory, run_attach,
+    run_auth, run_config, run_control_request_for_target, run_host, run_issue, run_lease, run_list,
+    run_mcp, run_memory, run_new, run_remote, run_sandbox, run_serve, run_snapshot,
 };
 
 // Top-level CLI run and command dispatch.
@@ -132,7 +132,7 @@ async fn run_with_inner<W: Write, E: Write>(
             Some(
                 CliCommand::Attach(_)
                     | CliCommand::New(_)
-                    | CliCommand::List
+                    | CliCommand::List(_)
                     | CliCommand::Kill(_)
                     | CliCommand::Detach(_)
                     | CliCommand::Lease(_)
@@ -305,15 +305,25 @@ async fn run_with_inner<W: Write, E: Write>(
             )
             .await?
         }
-        Some(CliCommand::List) => {
+        Some(CliCommand::List(args)) => {
             if !control_target.is_unix() {
+                if args.all {
+                    return Err(MezError::invalid_args(
+                        "remote host list already returns every visible session and does not support --all",
+                    ));
+                }
                 let body = list_iroh_host_sessions(&control_target, &env).await?;
                 super::write_control_response(stdout, output_format, &body)?;
             } else if prefer_host && ensure_host_available(&env).await? {
-                let sessions = host_list_sessions(&env).await?;
+                let sessions = host_list_sessions_with_all(&env, args.all).await?;
                 let output = super::serialize_json(&sessions)?;
                 super::write_json_or_plain(stdout, output_format, &output)?;
             } else {
+                if args.all {
+                    return Err(MezError::invalid_args(
+                        "list --all requires the persistent local host",
+                    ));
+                }
                 run_list(&socket_selection, env, output_format, stdout)?;
             }
         }
@@ -374,39 +384,49 @@ async fn run_with_inner<W: Write, E: Write>(
         }
         Some(CliCommand::Kill(args)) => {
             let force = args.force;
-            if !control_target.is_unix() && args.session_id.is_some() {
-                return Err(MezError::invalid_args(
-                    "an explicit Iroh target already selects the remote session",
-                ));
-            }
-            let socket_selection = if prefer_host && ensure_host_available(&env).await? {
-                super::SocketSelection::Explicit(
-                    host_resolve_session(&env, args.session_id.as_deref(), "primary").await?,
-                )
-            } else {
-                match args.session_id.as_deref() {
-                    Some(session_id) => super::attach::socket_selection_for_registry_session(
-                        &socket_selection,
-                        env.runtime.uid,
-                        session_id,
-                    )?,
-                    None => socket_selection,
+            if !control_target.is_unix() {
+                if !force {
+                    return Err(MezError::invalid_args(
+                        "remote session kill requires --force",
+                    ));
                 }
-            };
-            let params = format!(
-                r#"{{"idempotency_key":"{}","force":{force}}}"#,
-                cli_idempotency_key("session-kill")
-            );
-            run_control_request_for_target(
-                &control_target,
-                &socket_selection,
-                &env,
-                "session/kill",
-                &params,
-                output_format,
-                stdout,
-            )
-            .await?;
+                let target = args.session_id.as_deref().ok_or_else(|| {
+                    MezError::invalid_args(
+                        "remote session kill requires a lease id, session id, or exact name",
+                    )
+                })?;
+                let body = force_kill_iroh_host_session(&control_target, &env, target).await?;
+                super::write_control_response(stdout, output_format, &body)?;
+            } else {
+                let socket_selection = if prefer_host && ensure_host_available(&env).await? {
+                    super::SocketSelection::Explicit(
+                        host_resolve_session(&env, args.session_id.as_deref(), "primary").await?,
+                    )
+                } else {
+                    match args.session_id.as_deref() {
+                        Some(session_id) => super::attach::socket_selection_for_registry_session(
+                            &socket_selection,
+                            env.runtime.uid,
+                            session_id,
+                        )?,
+                        None => socket_selection,
+                    }
+                };
+                let params = format!(
+                    r#"{{"idempotency_key":"{}","force":{force}}}"#,
+                    cli_idempotency_key("session-kill")
+                );
+                run_control_request_for_target(
+                    &control_target,
+                    &socket_selection,
+                    &env,
+                    "session/kill",
+                    &params,
+                    output_format,
+                    stdout,
+                )
+                .await?;
+            }
         }
         Some(CliCommand::Snapshot(args)) => {
             run_snapshot(

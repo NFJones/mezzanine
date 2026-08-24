@@ -124,6 +124,8 @@ fn remote_invite_sends_bounded_params_and_renders_plain_output() {
         assert!(invite.contains(r#""method":"remote/invite""#), "{invite}");
         assert!(invite.contains(r#""role":"primary""#), "{invite}");
         assert!(invite.contains(r#""expires_seconds":120"#), "{invite}");
+        assert!(invite.contains(r#""allow_create":true"#), "{invite}");
+        assert!(invite.contains(r#""allow_kill":true"#), "{invite}");
         assert!(invite.contains(r#""idempotency_key":""#), "{invite}");
         stream
             .write_all(&encode_control_body(
@@ -143,6 +145,8 @@ fn remote_invite_sends_bounded_params_and_renders_plain_output() {
             "invite".to_string(),
             "--role".to_string(),
             "primary".to_string(),
+            "--allow-create".to_string(),
+            "--allow-kill".to_string(),
             "--expires".to_string(),
             "120".to_string(),
         ],

@@ -33,6 +33,9 @@ enum RemoteCliCommand {
         /// Permits this paired device to create lease-backed host sessions.
         #[arg(long)]
         allow_create: bool,
+        /// Permits this paired primary device to force-kill sessions it creates.
+        #[arg(long, requires = "allow_create")]
+        allow_kill: bool,
         /// Maximum active leases granted to this paired device.
         #[arg(long, value_name = "N", requires = "allow_create")]
         max_leases: Option<usize>,
@@ -152,6 +155,7 @@ pub(super) async fn run_remote<W: Write>(
         RemoteCliCommand::Invite {
             role,
             allow_create,
+            allow_kill,
             max_leases,
             max_live_sessions,
             expires_seconds,
@@ -163,6 +167,14 @@ pub(super) async fn run_remote<W: Write>(
             });
             if allow_create {
                 params["allow_create"] = serde_json::Value::Bool(true);
+            }
+            if allow_kill {
+                if !matches!(role, RemoteInviteRole::Primary) {
+                    return Err(MezError::invalid_args(
+                        "--allow-kill requires --role primary",
+                    ));
+                }
+                params["allow_kill"] = serde_json::Value::Bool(true);
             }
             if let Some(max_leases) = max_leases {
                 params["max_leases"] = serde_json::Value::from(max_leases);

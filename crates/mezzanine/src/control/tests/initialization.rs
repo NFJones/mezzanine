@@ -170,6 +170,17 @@ fn control_initialize_parses_host_routing_intents() {
     );
     assert_eq!(attach.idempotency_key, None);
 
+    let lease_attach = initialize_params_from_json(
+        r#"{"client_name":"remote","requested_version":3,"requested_role":"observer","session_intent":"attach","session_target":{"lease_id":"lease-9"}}"#,
+    )
+    .unwrap();
+    assert_eq!(lease_attach.session_intent, Some(SessionIntent::Attach));
+    assert_eq!(
+        lease_attach.session_target_json.as_deref(),
+        Some(r#"{"lease_id":"lease-9"}"#)
+    );
+    assert_eq!(lease_attach.idempotency_key, None);
+
     let default_existing = initialize_params_from_json(
         r#"{"client_name":"remote","requested_version":3,"requested_role":"observer","session_intent":"default"}"#,
     )

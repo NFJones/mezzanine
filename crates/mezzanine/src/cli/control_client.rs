@@ -512,7 +512,7 @@ pub(super) enum IrohSessionRouting {
         name: Option<String>,
         idempotency_key: String,
     },
-    /// Attaches one existing lease by stable session id or exact name.
+    /// Attaches one existing lease by stable lease id, session id, or exact name.
     Attach { target: String },
     /// Selects one existing default and never creates.
     Default,
@@ -529,6 +529,9 @@ impl IrohSessionRouting {
 
     fn session_target(&self) -> Option<serde_json::Value> {
         match self {
+            Self::Attach { target } if target.starts_with("lease-") => {
+                Some(serde_json::json!({"lease_id": target}))
+            }
             Self::Attach { target } if target.starts_with('$') => {
                 Some(serde_json::json!({"session_id": target}))
             }
@@ -927,6 +930,47 @@ pub(super) async fn list_iroh_host_sessions(
     control_target: &super::ControlTargetSelection,
     env: &super::CliEnv,
 ) -> Result<String> {
+    exchange_iroh_host_request(
+        control_target,
+        env,
+        "host/session/list",
+        serde_json::json!({}),
+        "session-list",
+        "session list",
+    )
+    .await
+}
+
+/// Force-kills one visible hosted session through a separately authorized
+/// host-only operation without attaching a terminal client.
+pub(super) async fn force_kill_iroh_host_session(
+    control_target: &super::ControlTargetSelection,
+    env: &super::CliEnv,
+    target: &str,
+) -> Result<String> {
+    exchange_iroh_host_request(
+        control_target,
+        env,
+        "host/session/kill",
+        serde_json::json!({
+            "target": target,
+            "force": true,
+            "idempotency_key": super::cli_idempotency_key("remote-session-kill"),
+        }),
+        "session-kill",
+        "session kill",
+    )
+    .await
+}
+
+async fn exchange_iroh_host_request(
+    control_target: &super::ControlTargetSelection,
+    env: &super::CliEnv,
+    method: &str,
+    params: serde_json::Value,
+    purpose: &str,
+    operation: &str,
+) -> Result<String> {
     let paths = env.config_paths()?;
     let layers = super::load_runtime_config_layers(&paths)?;
     let structured = crate::runtime::runtime_effective_config_value(&layers)?;
@@ -951,17 +995,34 @@ pub(super) async fn list_iroh_host_sessions(
     let identity = RemoteClientIdentity::load_or_create(paths.root())?;
     let endpoint =
         bind_runtime_iroh_client_endpoint(&policy, identity.secret_key().clone()).await?;
-    let result =
-        exchange_bound_iroh_host_session_list(paths.root(), &policy, &target, &endpoint).await;
+    let result = exchange_bound_iroh_host_request(
+        paths.root(),
+        &policy,
+        &target,
+        &endpoint,
+        method,
+        params,
+        purpose,
+        operation,
+    )
+    .await;
     let _ = tokio::time::timeout(policy.setup_timeout, endpoint.close()).await;
     result
 }
 
-async fn exchange_bound_iroh_host_session_list(
+#[allow(
+    clippy::too_many_arguments,
+    reason = "host request transport, method payload, client purpose, and diagnostics are independent inputs"
+)]
+async fn exchange_bound_iroh_host_request(
     config_root: &Path,
     policy: &RuntimeIrohTransportPolicy,
     target: &IrohControlTarget,
     endpoint: &iroh::Endpoint,
+    method: &str,
+    params: serde_json::Value,
+    purpose: &str,
+    operation: &str,
 ) -> Result<String> {
     let (connection, compression) = connect_iroh_with_compression(endpoint, policy, target).await?;
     if connection.remote_id() != target.server_addr().id {
@@ -988,7 +1049,7 @@ async fn exchange_bound_iroh_host_session_list(
             "client": {
                 "name": "remote-cli",
                 "interactive": false,
-                "purpose": "session-list"
+                "purpose": purpose
             },
             "authentication": {
                 "mechanism": mechanism,
@@ -1026,18 +1087,21 @@ async fn exchange_bound_iroh_host_session_list(
     let request = serde_json::json!({
         "jsonrpc": "2.0",
         "id": "cli",
-        "method": "host/session/list",
-        "params": {}
+        "method": method,
+        "params": params
     })
     .to_string();
     write_iroh_control_frame(bridge.stream_mut(), &request, policy.idle_timeout).await?;
     tokio::io::AsyncWriteExt::shutdown(bridge.stream_mut())
         .await
-        .map_err(|_| MezError::invalid_state("failed to finish Iroh host list request"))?;
+        .map_err(|_| MezError::invalid_state("failed to finish Iroh host request"))?;
     let body = read_iroh_control_frame(bridge.stream_mut(), policy.idle_timeout).await?;
-    ensure_iroh_follow_up_success(&body, "session list")?;
+    ensure_iroh_follow_up_success(&body, operation)?;
     bridge.shutdown(policy.setup_timeout).await?;
-    connection.close(iroh::endpoint::VarInt::from_u32(0), b"host list complete");
+    connection.close(
+        iroh::endpoint::VarInt::from_u32(0),
+        b"host request complete",
+    );
     Ok(body)
 }
 
@@ -1297,6 +1361,7 @@ mod outbound_policy_tests {
                 RemoteRoleCeiling::Observer,
                 RemoteHostRoutingAuthority {
                     session_create: true,
+                    session_kill: false,
                     session_list: true,
                     session_attach_scope: RemoteSessionAttachScope::Own,
                     max_active_leases: 2,
@@ -1313,6 +1378,7 @@ mod outbound_policy_tests {
                 RemoteRoleCeiling::Observer,
                 RemoteHostRoutingAuthority {
                     session_create: false,
+                    session_kill: false,
                     session_list: true,
                     session_attach_scope: RemoteSessionAttachScope::All,
                     max_active_leases: 0,

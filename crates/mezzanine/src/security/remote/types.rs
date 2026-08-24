@@ -58,6 +58,9 @@ pub(crate) enum RemoteSessionAttachScope {
 pub(crate) struct RemoteHostRoutingAuthority {
     /// Whether this principal may reserve and start new lease-backed sessions.
     pub session_create: bool,
+    /// Whether this principal may force-terminate and revoke a visible session lease.
+    #[serde(default)]
+    pub session_kill: bool,
     /// Whether this principal may enumerate its visible leases.
     pub session_list: bool,
     /// Which existing leases this principal may resolve.

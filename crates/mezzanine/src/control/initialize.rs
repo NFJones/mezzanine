@@ -327,13 +327,17 @@ fn validate_session_target_value(value: &serde_json::Value) -> Result<()> {
             }
             continue;
         }
-        if !matches!(key.as_str(), "session_id" | "name" | "default") {
+        if !matches!(key.as_str(), "lease_id" | "session_id" | "name" | "default") {
             return Err(MezError::invalid_args(format!(
                 "control/initialize session_target contains unknown field `{key}`"
             )));
         }
     }
     let mut selector_count = 0usize;
+    if object.get("lease_id").is_some_and(|value| !value.is_null()) {
+        selector_count += 1;
+        required_string_member(object, "lease_id", "control/initialize session_target")?;
+    }
     if object
         .get("session_id")
         .is_some_and(|value| !value.is_null())
@@ -354,7 +358,7 @@ fn validate_session_target_value(value: &serde_json::Value) -> Result<()> {
     }
     if selector_count != 1 {
         return Err(MezError::invalid_args(
-            "SessionTarget must use exactly one of session_id, name, or default=true",
+            "SessionTarget must use exactly one of lease_id, session_id, name, or default=true",
         ));
     }
     Ok(())
