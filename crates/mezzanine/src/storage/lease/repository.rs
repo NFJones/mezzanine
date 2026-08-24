@@ -188,6 +188,7 @@ impl RemoteSessionLeaseRepository {
                 lease_id: request.lease_id,
                 session_id: request.session_id,
                 owner_principal_id: request.owner_principal_id,
+                owner_live_session_limit: request.owner_live_session_limit,
                 name: request.name,
                 default_for_owner: request.default_for_owner,
                 state: RemoteSessionLeaseState::Pending,
@@ -284,6 +285,33 @@ impl RemoteSessionLeaseRepository {
                 )?;
                 lease.state = RemoteSessionLeaseState::Recoverable;
                 lease.failure = Some(diagnostic);
+                Ok(())
+            },
+        )
+    }
+
+    /// Records a retryable recovery diagnostic without consuming recoverability.
+    pub(crate) fn record_retryable_recovery_failure(
+        &self,
+        lease_id: &str,
+        expected_boot_generation: u64,
+        expected_lease_generation: u64,
+        now_unix_seconds: u64,
+        failure: String,
+    ) -> Result<RemoteSessionLease> {
+        validate_optional_text(Some(&failure), "recovery failure", 1024)?;
+        self.transition(
+            lease_id,
+            expected_boot_generation,
+            expected_lease_generation,
+            now_unix_seconds,
+            |lease| {
+                require_state(
+                    lease,
+                    &[RemoteSessionLeaseState::Recoverable],
+                    "record retryable recovery failure",
+                )?;
+                lease.failure = Some(failure);
                 Ok(())
             },
         )

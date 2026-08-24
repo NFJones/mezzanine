@@ -66,6 +66,8 @@ pub(crate) struct RemoteSessionLease {
     pub(crate) lease_id: String,
     pub(crate) session_id: String,
     pub(crate) owner_principal_id: String,
+    #[serde(default = "default_owner_live_session_limit")]
+    pub(crate) owner_live_session_limit: usize,
     pub(crate) name: Option<String>,
     pub(crate) default_for_owner: bool,
     pub(crate) state: RemoteSessionLeaseState,
@@ -86,6 +88,11 @@ impl RemoteSessionLease {
         validate_nonempty_identifier(&self.lease_id, "id")?;
         validate_nonempty_identifier(&self.session_id, "session id")?;
         validate_nonempty_identifier(&self.owner_principal_id, "owner principal id")?;
+        if self.owner_live_session_limit == 0 {
+            return Err(crate::error::MezError::invalid_args(
+                "remote session lease owner live-session limit must be positive",
+            ));
+        }
         validate_nonempty_identifier(&self.idempotency_key, "idempotency key")?;
         validate_nonempty_identifier(&self.creation_fingerprint, "creation fingerprint")?;
         validate_optional_text(self.name.as_deref(), "name", 256)?;
@@ -125,11 +132,16 @@ pub(crate) struct LeaseReservationRequest {
     pub(crate) lease_id: String,
     pub(crate) session_id: String,
     pub(crate) owner_principal_id: String,
+    pub(crate) owner_live_session_limit: usize,
     pub(crate) name: Option<String>,
     pub(crate) default_for_owner: bool,
     pub(crate) idempotency_key: String,
     pub(crate) creation_fingerprint: String,
     pub(crate) now_unix_seconds: u64,
+}
+
+fn default_owner_live_session_limit() -> usize {
+    usize::MAX
 }
 
 /// Result of principal-scoped idempotent reservation.

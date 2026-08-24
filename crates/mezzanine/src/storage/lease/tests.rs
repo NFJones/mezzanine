@@ -294,6 +294,7 @@ fn reservation(
         lease_id: lease_id.to_string(),
         session_id: session_id.to_string(),
         owner_principal_id: principal.to_string(),
+        owner_live_session_limit: usize::MAX,
         name: None,
         default_for_owner: false,
         idempotency_key: idempotency_key.to_string(),
