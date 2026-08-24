@@ -11,8 +11,10 @@ use std::future::Future;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::Engine;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinSet;
 
@@ -21,6 +23,7 @@ use crate::control::{
     decode_control_frame, encode_control_body, initialize_params_from_json,
 };
 use crate::error::{MezError, MezErrorKind, Result};
+use crate::host::administration::{HostAuditLog, administration_request_fingerprint};
 use crate::host::async_runtime::{
     AsyncRuntimeControlConnectionConfig,
     serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush,
@@ -31,6 +34,7 @@ use crate::runtime::{
     RuntimeIrohIdentityPolicy, RuntimeIrohTransportPolicy, RuntimeLifecycleState,
     bind_runtime_iroh_endpoint, serve_host_routed_iroh_event_stream,
 };
+use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::remote::{
     RemoteEndpointIdentity, RemoteHostRoutingAuthority, RemotePrincipal, RemoteRoleCeiling,
     RemoteTrustStore,
@@ -45,6 +49,7 @@ pub(crate) struct HostIrohRuntime {
     identity: RemoteEndpointIdentity,
     trust: RemoteTrustStore,
     endpoint: RuntimeIrohEndpoint,
+    audit_log: Option<HostAuditLog>,
 }
 
 /// Cloneable local-administration view of one live host Iroh endpoint.
@@ -91,6 +96,106 @@ impl HostIrohInvitationIssuer {
             "routing": invitation.host_routing,
             "expires_at_unix_seconds": invitation.expires_at_unix_seconds,
         }))
+    }
+
+    /// Creates or resumes the exact invitation bound to one durable host
+    /// administration request without persisting its bearer token.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn create_idempotent_invitation(
+        &self,
+        profile_name: &str,
+        role: RemoteRoleCeiling,
+        authority: RemoteHostRoutingAuthority,
+        ttl_seconds: u64,
+        now_unix_seconds: u64,
+        idempotency_key: &str,
+        request_fingerprint: &str,
+    ) -> Result<Value> {
+        if profile_name.trim().is_empty() || profile_name.chars().any(char::is_control) {
+            return Err(MezError::invalid_args(
+                "host Iroh profile name must be non-empty printable text",
+            ));
+        }
+        let (invitation_id, token) =
+            self.invitation_replay_material(idempotency_key, request_fingerprint);
+        let server_addr = foreign_machine_invitation_addr(self.endpoint.addr(), &self.policy)?;
+        let invitation = self.trust.create_host_invitation_idempotent(
+            &self.endpoint_id,
+            role,
+            authority,
+            ttl_seconds,
+            now_unix_seconds,
+            invitation_id,
+            token,
+        )?;
+        Ok(json!({
+            "format_version": 1,
+            "profile_scope": "host",
+            "profile_name": profile_name,
+            "invitation_id": invitation.invitation_id,
+            "token": invitation.token.expose_secret(),
+            "server_endpoint_id": invitation.server_endpoint_id,
+            "server_addr": server_addr,
+            "role": invitation.role_ceiling.as_str(),
+            "routing": invitation.host_routing,
+            "expires_at_unix_seconds": invitation.expires_at_unix_seconds,
+        }))
+    }
+
+    /// Restores the secret-bearing invitation response from secret-free
+    /// durable replay metadata and the retained host endpoint identity.
+    pub(crate) fn restore_invitation_response(
+        &self,
+        mut response: Value,
+        idempotency_key: &str,
+        params: &serde_json::Map<String, Value>,
+    ) -> Result<Value> {
+        let request_fingerprint = administration_request_fingerprint("remote/invite", params)?;
+        let (invitation_id, token) =
+            self.invitation_replay_material(idempotency_key, &request_fingerprint);
+        let object = response.as_object_mut().ok_or_else(|| {
+            MezError::invalid_state("persisted invitation replay response must be an object")
+        })?;
+        if object.get("invitation_id").and_then(Value::as_str) != Some(invitation_id.as_str()) {
+            return Err(MezError::invalid_state(
+                "persisted invitation replay identity does not match the administration request",
+            ));
+        }
+        object.insert(
+            "token".to_string(),
+            Value::String(token.expose_secret().to_string()),
+        );
+        Ok(response)
+    }
+
+    fn invitation_replay_material(
+        &self,
+        idempotency_key: &str,
+        request_fingerprint: &str,
+    ) -> (String, SecretString) {
+        let secret_key = self.endpoint.secret_key().to_bytes();
+        let mut invitation_digest = Sha256::new();
+        invitation_digest.update(b"mezzanine-host-invitation-id-v1\0");
+        invitation_digest.update(secret_key);
+        invitation_digest.update(idempotency_key.as_bytes());
+        invitation_digest.update(b"\0");
+        invitation_digest.update(request_fingerprint.as_bytes());
+        let invitation_digest = invitation_digest.finalize();
+        let invitation_id = format!(
+            "invite-{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&invitation_digest[..16])
+        );
+
+        let mut token_digest = Sha256::new();
+        token_digest.update(b"mezzanine-host-invitation-token-v1\0");
+        token_digest.update(secret_key);
+        token_digest.update(idempotency_key.as_bytes());
+        token_digest.update(b"\0");
+        token_digest.update(request_fingerprint.as_bytes());
+        let token = SecretString::from(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token_digest.finalize()),
+        );
+        (invitation_id, token)
     }
 
     pub(crate) fn list_clients(&self) -> Result<Vec<crate::security::remote::RemoteTrustRecord>> {
@@ -143,7 +248,13 @@ impl HostIrohRuntime {
             identity,
             trust,
             endpoint,
+            audit_log: None,
         }))
+    }
+
+    /// Shares the serialized host audit writer with invitation redemption.
+    pub(crate) fn set_audit_log(&mut self, audit_log: HostAuditLog) {
+        self.audit_log = Some(audit_log);
     }
 
     /// Stable public endpoint identity retained across host restarts.
@@ -215,6 +326,7 @@ impl HostIrohRuntime {
         let policy = self.endpoint.policy().clone();
         let trust = self.trust.clone();
         let server_endpoint_id = self.endpoint_id().to_string();
+        let audit_log = self.audit_log.clone();
         let mut tasks = JoinSet::new();
         let mut accepted = 0u64;
         tokio::pin!(cancellation);
@@ -228,6 +340,7 @@ impl HostIrohRuntime {
                     let trust = trust.clone();
                     let server_endpoint_id = server_endpoint_id.clone();
                     let router = router.clone();
+                    let audit_log = audit_log.clone();
                     tasks.spawn(async move {
                         serve_host_only_connection(
                             incoming,
@@ -235,6 +348,7 @@ impl HostIrohRuntime {
                             trust,
                             server_endpoint_id,
                             router,
+                            audit_log,
                         ).await
                     });
                     accepted = accepted.saturating_add(1);
@@ -268,6 +382,7 @@ async fn serve_host_only_connection(
     trust: RemoteTrustStore,
     server_endpoint_id: String,
     router: Option<HostSessionRouter>,
+    audit_log: Option<HostAuditLog>,
 ) -> Result<()> {
     let mut accepting = incoming
         .accept()
@@ -318,11 +433,12 @@ async fn serve_host_only_connection(
         )
         .await;
     }
-    let initialized = match handle_host_only_initialize(
+    let initialized = match handle_host_only_initialize_with_audit(
         &request,
         &trust,
         &server_endpoint_id,
         &client_endpoint_id,
+        audit_log.as_ref(),
     ) {
         Ok(initialized) => initialized,
         Err(error) => HostOnlyInitializeResponse {
@@ -676,6 +792,7 @@ fn request_session_intent(body: &str) -> Option<String> {
         })
 }
 
+#[derive(Debug)]
 struct HostOnlyInitializeResponse {
     body: String,
     redemption: Option<crate::security::remote::RemotePairingRedemption>,
@@ -687,6 +804,22 @@ fn handle_host_only_initialize(
     trust: &RemoteTrustStore,
     server_endpoint_id: &str,
     client_endpoint_id: &str,
+) -> Result<HostOnlyInitializeResponse> {
+    handle_host_only_initialize_with_audit(
+        body,
+        trust,
+        server_endpoint_id,
+        client_endpoint_id,
+        None,
+    )
+}
+
+fn handle_host_only_initialize_with_audit(
+    body: &str,
+    trust: &RemoteTrustStore,
+    server_endpoint_id: &str,
+    client_endpoint_id: &str,
+    audit_log: Option<&HostAuditLog>,
 ) -> Result<HostOnlyInitializeResponse> {
     let request: Value = serde_json::from_str(body).map_err(|error| {
         MezError::invalid_args(format!("invalid host initialize JSON: {error}"))
@@ -750,7 +883,36 @@ fn handle_host_only_initialize(
                 now,
             )?;
             let principal = preparation.principal();
-            let redemption = trust.commit_invitation(preparation, now)?;
+            append_pairing_audit(
+                audit_log,
+                client_endpoint_id,
+                &principal.trust_record_id,
+                None,
+                "attempted",
+            )?;
+            let redemption = match trust.commit_invitation(preparation, now) {
+                Ok(redemption) => redemption,
+                Err(error) => {
+                    append_pairing_audit(
+                        audit_log,
+                        client_endpoint_id,
+                        &principal.trust_record_id,
+                        None,
+                        "failed",
+                    )?;
+                    return Err(error);
+                }
+            };
+            if let Err(error) = append_pairing_audit(
+                audit_log,
+                client_endpoint_id,
+                &principal.trust_record_id,
+                Some(redemption.invitation_id()),
+                "succeeded",
+            ) {
+                trust.rollback_invitation_redemption(&redemption)?;
+                return Err(error);
+            }
             (
                 principal,
                 Some(redemption.device_credential.clone()),
@@ -805,6 +967,41 @@ fn handle_host_only_initialize(
         redemption,
         principal: Some(principal),
     })
+}
+
+fn append_pairing_audit(
+    audit_log: Option<&HostAuditLog>,
+    client_endpoint_id: &str,
+    trust_record_id: &str,
+    invitation_id: Option<&str>,
+    outcome: &str,
+) -> Result<()> {
+    let Some(audit_log) = audit_log else {
+        return Ok(());
+    };
+    let mut audit_log = audit_log
+        .lock()
+        .map_err(|_| MezError::invalid_state("host audit lock was poisoned"))?;
+    let Some(audit_log) = audit_log.as_mut() else {
+        return Ok(());
+    };
+    let mut record = AuditRecord::new(
+        "host",
+        AuditActor {
+            kind: "remote_endpoint".to_string(),
+            id: client_endpoint_id.to_string(),
+        },
+        "trust_administration",
+        "invitation_redeem",
+    )
+    .with_metadata("trust_record_id", trust_record_id)
+    .with_metadata("client_endpoint_id", client_endpoint_id);
+    if let Some(invitation_id) = invitation_id {
+        record = record.with_metadata("invitation_id", invitation_id);
+    }
+    record.outcome = outcome.to_string();
+    audit_log.append(record.sanitized())?;
+    Ok(())
 }
 
 async fn read_optional_control_frame<S>(
@@ -1013,6 +1210,7 @@ mod tests {
     use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
     use crate::host::router::HostSessionRouterConfig;
     use crate::host::shell::{ResolvedShell, ShellSource};
+    use crate::security::audit::{AuditConfig, AuditLog};
     use crate::security::remote::RemoteSessionAttachScope;
 
     use super::*;
@@ -1051,6 +1249,14 @@ mod tests {
         let root = test_root("initialize");
         let identity = RemoteEndpointIdentity::load_or_create_host(&root).unwrap();
         let trust = RemoteTrustStore::under_host_config_root(&root).unwrap();
+        let audit_path = root.join("host-audit.jsonl");
+        let audit_log =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(AuditLog::new(AuditConfig {
+                enabled: true,
+                path: audit_path.clone(),
+                hash_chain: false,
+                required: true,
+            }))));
         let now = current_unix_seconds().unwrap();
         let invitation = trust
             .create_invitation(
@@ -1077,14 +1283,24 @@ mod tests {
             }
         })
         .to_string();
-        let response =
-            handle_host_only_initialize(&request, &trust, identity.endpoint_id(), &client_id)
-                .unwrap();
+        let response = handle_host_only_initialize_with_audit(
+            &request,
+            &trust,
+            identity.endpoint_id(),
+            &client_id,
+            Some(&audit_log),
+        )
+        .unwrap();
         let response: Value = serde_json::from_str(&response.body).unwrap();
         assert!(response["result"]["session"].is_null());
         assert!(response["result"]["lease"].is_null());
         assert!(response["result"]["device_credential"].is_string());
         assert_eq!(trust.list_records().unwrap().len(), 1);
+        let audit = fs::read_to_string(audit_path).unwrap();
+        assert!(audit.contains(r#""action":"invitation_redeem""#), "{audit}");
+        assert!(audit.contains(r#""outcome":"attempted""#), "{audit}");
+        assert!(audit.contains(r#""outcome":"succeeded""#), "{audit}");
+        assert!(!audit.contains(invitation.token.expose_secret()), "{audit}");
 
         let attach = request.replace("host_only", "attach");
         assert!(
@@ -1092,6 +1308,60 @@ mod tests {
                 .is_err()
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Required audit denial must prevent invitation authority from being
+    /// committed when the host cannot write its pairing attribution record.
+    #[test]
+    fn host_only_pairing_rolls_back_when_required_audit_is_unavailable() {
+        let root = test_root("pairing-audit-denied");
+        let identity = RemoteEndpointIdentity::load_or_create_host(&root).unwrap();
+        let trust = RemoteTrustStore::under_host_config_root(&root).unwrap();
+        let invitation = trust
+            .create_invitation(
+                identity.endpoint_id(),
+                RemoteRoleCeiling::Observer,
+                600,
+                current_unix_seconds().unwrap(),
+            )
+            .unwrap();
+        let client_id = iroh::SecretKey::generate().public().to_string();
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": "audit-denied",
+            "method": "control/initialize",
+            "params": {
+                "client_name": "audit-denied-client",
+                "requested_version": 3,
+                "requested_role": "observer",
+                "session_intent": "host_only",
+                "authentication": {
+                    "mechanism": "extension:iroh_invitation",
+                    "token": invitation.token.expose_secret()
+                }
+            }
+        })
+        .to_string();
+        let audit_log =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(AuditLog::new(AuditConfig {
+                enabled: false,
+                path: root.join("disabled-audit.jsonl"),
+                hash_chain: false,
+                required: true,
+            }))));
+
+        let error = handle_host_only_initialize_with_audit(
+            &request,
+            &trust,
+            identity.endpoint_id(),
+            &client_id,
+            Some(&audit_log),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), MezErrorKind::Forbidden);
+        assert!(trust.list_records().unwrap().is_empty());
+
+        let _ = fs::remove_dir_all(root);
     }
 
     /// The bound host front door must isolate an invalid routing intent, then

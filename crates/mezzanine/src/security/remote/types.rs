@@ -173,6 +173,13 @@ pub(crate) struct RemotePairingRedemption {
     pub(super) newly_committed: bool,
 }
 
+impl RemotePairingRedemption {
+    /// Returns the non-secret invitation identity for audit attribution.
+    pub(crate) fn invitation_id(&self) -> &str {
+        &self.invitation_id
+    }
+}
+
 impl std::fmt::Debug for RemotePairingRedemption {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter

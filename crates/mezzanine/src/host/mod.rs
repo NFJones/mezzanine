@@ -3,6 +3,7 @@
 //! Raw descriptors, PTYs, Unix sockets, subprocess discovery, Tokio workers,
 //! and concrete effect execution are isolated from deterministic lower engines.
 
+mod administration;
 pub(crate) mod async_runtime;
 #[allow(
     dead_code,

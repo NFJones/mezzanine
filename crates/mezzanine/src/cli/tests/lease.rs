@@ -51,6 +51,7 @@ fn lease_revoke_shapes_local_host_request() {
         assert_eq!(request["params"]["target"], "lease-1");
         assert_eq!(request["params"]["reason"], "maintenance");
         assert_eq!(request["params"]["terminate"], true);
+        assert!(request["params"]["idempotency_key"].is_string());
         stream
             .write_all(&encode_control_body(
                 r#"{"jsonrpc":"2.0","id":"host-cli","result":{"lease_id":"lease-1","state":"revoked"}}"#,

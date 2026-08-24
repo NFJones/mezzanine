@@ -131,7 +131,7 @@ async fn run_host_serve<W: Write>(
     let runtime_root = default_socket_directory(&env.runtime)?.path;
     let ownership = HostOwnershipGuard::acquire(paths.root(), env.runtime.uid)?;
     let iroh_policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
-    let iroh = HostIrohRuntime::bind(paths.root(), iroh_policy).await?;
+    let mut iroh = HostIrohRuntime::bind(paths.root(), iroh_policy).await?;
     let audit_log = crate::runtime::runtime_audit_log_from_config(&structured, Some(paths.root()))?;
     let server = HostServer::bind_with_ownership(
         HostServerConfig {
@@ -149,6 +149,9 @@ async fn run_host_serve<W: Write>(
         },
         ownership,
     )?;
+    if let Some(iroh) = iroh.as_mut() {
+        iroh.set_audit_log(server.audit_log_handle());
+    }
     server.prepare_startup().await?;
     let started = serde_json::json!({
         "serving": true,

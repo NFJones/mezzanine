@@ -22,6 +22,9 @@ use tokio_util::codec::Framed;
 
 use crate::config::{ConfigLayer, ConfigPaths, load_runtime_config_layers_for_directory};
 use crate::error::{MezError, MezErrorKind, Result};
+use crate::host::administration::{
+    HostAdministrationBegin, HostAdministrationJournal, HostAdministrationReplay, HostAuditLog,
+};
 use crate::host::iroh::HostIrohInvitationIssuer;
 use crate::host::ownership::HostOwnershipGuard;
 use crate::host::router::{
@@ -73,7 +76,11 @@ pub(crate) struct HostServer {
     config: HostServerConfig,
     listener: tokio::net::UnixListener,
     router: HostSessionRouter,
-    audit_log: std::sync::Mutex<Option<AuditLog>>,
+    audit_log: HostAuditLog,
+    administration_journal: HostAdministrationJournal,
+    administration_lock: tokio::sync::Mutex<()>,
+    #[cfg(test)]
+    fail_next_administration_completion_audit: std::sync::atomic::AtomicBool,
     socket_path: PathBuf,
     _ownership: HostOwnershipGuard,
 }
@@ -81,6 +88,12 @@ pub(crate) struct HostServer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HostShutdownRequest {
     force: bool,
+}
+
+#[derive(Debug)]
+struct HostAdministrationExecution<'a> {
+    idempotency_key: &'a str,
+    request_fingerprint: &'a str,
 }
 
 impl HostServer {
@@ -120,12 +133,18 @@ impl HostServer {
             max_live_sessions: config.max_live_sessions,
         });
         let _ = router.reconcile_startup()?;
-        let audit_log = std::sync::Mutex::new(config.audit_log.clone());
+        let audit_log = std::sync::Arc::new(std::sync::Mutex::new(config.audit_log.clone()));
+        let administration_journal =
+            HostAdministrationJournal::under_config_root(&config.config_root);
         Ok(Self {
             config,
             listener,
             router,
             audit_log,
+            administration_journal,
+            administration_lock: tokio::sync::Mutex::new(()),
+            #[cfg(test)]
+            fail_next_administration_completion_audit: std::sync::atomic::AtomicBool::new(false),
             socket_path,
             _ownership: ownership,
         })
@@ -139,6 +158,17 @@ impl HostServer {
     /// Returns the shared session router used by local and remote front doors.
     pub(crate) fn router(&self) -> HostSessionRouter {
         self.router.clone()
+    }
+
+    /// Returns the serialized host audit writer shared with the Iroh front door.
+    pub(crate) fn audit_log_handle(&self) -> HostAuditLog {
+        self.audit_log.clone()
+    }
+
+    #[cfg(test)]
+    fn fail_next_administration_completion_audit(&self) {
+        self.fail_next_administration_completion_audit
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Reconciles durable snapshot cleanup before listeners start serving.
@@ -228,23 +258,7 @@ impl HostServer {
             MezError::invalid_args(format!("invalid host control JSON: {error}"))
         })?;
         let id = request.get("id").cloned().unwrap_or(Value::Null);
-        let lease_method = request
-            .get("method")
-            .and_then(Value::as_str)
-            .is_some_and(|method| method.starts_with("lease/"));
-        let result = if lease_method {
-            self.append_lease_audit(&request, None, "attempted")?;
-            let result = self.dispatch_request(&request).await;
-            let outcome = if result.is_ok() {
-                "succeeded"
-            } else {
-                "failed"
-            };
-            let _ = self.append_lease_audit(&request, Some(&result), outcome);
-            result
-        } else {
-            self.dispatch_request(&request).await
-        };
+        let result = self.dispatch_managed_request(&request).await;
         let (body, shutdown) = match result {
             Ok((result, shutdown)) => (json!({"jsonrpc":"2.0","id":id,"result":result}), shutdown),
             Err(error) => (host_error_response(id, &error), None),
@@ -257,12 +271,156 @@ impl HostServer {
         Ok(shutdown)
     }
 
-    fn append_lease_audit(
+    async fn dispatch_managed_request(
+        &self,
+        request: &Value,
+    ) -> Result<(Value, Option<HostShutdownRequest>)> {
+        let method = request
+            .get("method")
+            .and_then(Value::as_str)
+            .ok_or_else(|| MezError::invalid_args("host control method is required"))?;
+        if !host_administration_mutates(method, request) {
+            if method.starts_with("lease/") {
+                self.append_administration_audit(request, None, "attempted", None, None, None)?;
+                let result = self.dispatch_request(request).await;
+                let outcome = if result.is_ok() {
+                    "succeeded"
+                } else {
+                    "failed"
+                };
+                self.append_administration_audit(
+                    request,
+                    Some(&result),
+                    outcome,
+                    None,
+                    None,
+                    administration_new_generation(&result),
+                )?;
+                return result;
+            }
+            return self.dispatch_request(request).await;
+        }
+
+        let _administration = self.administration_lock.lock().await;
+        let params = request
+            .get("params")
+            .and_then(Value::as_object)
+            .ok_or_else(|| MezError::invalid_args("host administration requires params"))?;
+        let idempotency_key = required_string(params, "idempotency_key")?;
+        let target = administration_target(method, params);
+        let observed_generation = target
+            .and_then(|target| self.router.get_lease(target).ok())
+            .map(|lease| lease.lease_generation);
+        let now = current_unix_seconds()?;
+        let (request_fingerprint, previous_generation, pending) = match self
+            .administration_journal
+            .begin(
+                idempotency_key,
+                method,
+                params,
+                &self.config.owner_uid.to_string(),
+                target,
+                observed_generation,
+                now,
+            )? {
+            HostAdministrationBegin::Fresh {
+                request_fingerprint,
+                previous_generation,
+            } => (request_fingerprint, previous_generation, false),
+            HostAdministrationBegin::Pending {
+                request_fingerprint,
+                previous_generation,
+            } => (request_fingerprint, previous_generation, true),
+            HostAdministrationBegin::Replay(HostAdministrationReplay::Success(response)) => {
+                return Ok((
+                    self.restore_administration_replay(method, response, idempotency_key, params)?,
+                    None,
+                ));
+            }
+            HostAdministrationBegin::Replay(HostAdministrationReplay::Failure(error)) => {
+                return Err(error);
+            }
+        };
+
+        self.append_administration_audit(
+            request,
+            None,
+            "attempted",
+            Some(&request_fingerprint),
+            previous_generation,
+            None,
+        )?;
+        let execution = HostAdministrationExecution {
+            idempotency_key,
+            request_fingerprint: &request_fingerprint,
+        };
+        let result = if pending {
+            match self
+                .reconcile_pending_administration(method, params, previous_generation)
+                .await?
+            {
+                Some(result) => Ok((result, None)),
+                None => {
+                    self.dispatch_request_with_administration(request, Some(&execution))
+                        .await
+                }
+            }
+        } else {
+            self.dispatch_request_with_administration(request, Some(&execution))
+                .await
+        };
+        let outcome = if result.is_ok() {
+            "succeeded"
+        } else {
+            "failed"
+        };
+        let new_generation = administration_new_generation(&result);
+        self.append_administration_audit(
+            request,
+            Some(&result),
+            outcome,
+            Some(&request_fingerprint),
+            previous_generation,
+            new_generation,
+        )?;
+        match &result {
+            Ok((response, _)) => self.administration_journal.complete_success(
+                idempotency_key,
+                &request_fingerprint,
+                administration_persisted_response(method, response),
+                new_generation,
+                current_unix_seconds()?,
+            )?,
+            Err(error) => self.administration_journal.complete_failure(
+                idempotency_key,
+                &request_fingerprint,
+                error,
+                current_unix_seconds()?,
+            )?,
+        }
+        result
+    }
+
+    fn append_administration_audit(
         &self,
         request: &Value,
         result: Option<&Result<(Value, Option<HostShutdownRequest>)>>,
         outcome: &str,
+        request_fingerprint: Option<&str>,
+        previous_generation: Option<u64>,
+        new_generation: Option<u64>,
     ) -> Result<()> {
+        #[cfg(test)]
+        if outcome != "attempted"
+            && self
+                .fail_next_administration_completion_audit
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(std::io::Error::other(
+                "injected host administration completion audit failure",
+            )
+            .into());
+        }
         let mut audit = self
             .audit_log
             .lock()
@@ -273,7 +431,7 @@ impl HostServer {
         let method = request
             .get("method")
             .and_then(Value::as_str)
-            .unwrap_or("lease/unknown");
+            .unwrap_or("host/administration/unknown");
         let response = result.and_then(|result| result.as_ref().ok().map(|(value, _)| value));
         let requested_lease = request
             .pointer("/params/target")
@@ -294,10 +452,32 @@ impl HostServer {
                 kind: "local_host_admin".to_string(),
                 id: self.config.owner_uid.to_string(),
             },
-            "lease_administration",
+            if method.starts_with("lease/") {
+                "lease_administration"
+            } else {
+                "trust_administration"
+            },
             method,
         );
         record.outcome = outcome.to_string();
+        if let Some(request_fingerprint) = request_fingerprint {
+            record = record.with_metadata("request_fingerprint", request_fingerprint);
+        }
+        if let Some(target) = administration_target(
+            method,
+            request
+                .get("params")
+                .and_then(Value::as_object)
+                .unwrap_or(&serde_json::Map::new()),
+        ) {
+            record = record.with_metadata("target", target);
+        }
+        if let Some(previous_generation) = previous_generation {
+            record = record.with_metadata("previous_generation", previous_generation.to_string());
+        }
+        if let Some(new_generation) = new_generation {
+            record = record.with_metadata("new_generation", new_generation.to_string());
+        }
         if let Some(lease_id) = response
             .and_then(|value| value.get("lease_id"))
             .and_then(Value::as_str)
@@ -320,9 +500,104 @@ impl HostServer {
         Ok(())
     }
 
+    async fn reconcile_pending_administration(
+        &self,
+        method: &str,
+        params: &serde_json::Map<String, Value>,
+        previous_generation: Option<u64>,
+    ) -> Result<Option<Value>> {
+        match method {
+            "remote/client/rename" => {
+                let issuer = self.require_invitation_issuer()?;
+                let client_id = required_string(params, "client_id")?;
+                let label = required_string(params, "label")?;
+                Ok(issuer
+                    .list_clients()?
+                    .into_iter()
+                    .find(|record| record.id == client_id && record.label == label)
+                    .map(|record| remote_trust_record_json(&record)))
+            }
+            "remote/client/revoke" => {
+                let issuer = self.require_invitation_issuer()?;
+                let client_id = required_string(params, "client_id")?;
+                let reason = params.get("reason").and_then(Value::as_str);
+                Ok(issuer
+                    .list_clients()?
+                    .into_iter()
+                    .find(|record| {
+                        record.id == client_id
+                            && record.revoked()
+                            && record.revocation_reason.as_deref() == reason
+                    })
+                    .map(|record| remote_trust_record_json(&record)))
+            }
+            "lease/checkpoint" => {
+                self.reconcile_pending_lease(params, previous_generation, |lease| {
+                    lease.checkpoint.is_some()
+                })
+            }
+            "lease/recover" => self.reconcile_pending_lease(params, previous_generation, |lease| {
+                lease.state == crate::storage::lease::RemoteSessionLeaseState::Active
+            }),
+            "lease/release" => self.reconcile_pending_lease(params, previous_generation, |lease| {
+                lease.state == crate::storage::lease::RemoteSessionLeaseState::Released
+            }),
+            "lease/revoke" => self.reconcile_pending_lease(params, previous_generation, |lease| {
+                lease.state == crate::storage::lease::RemoteSessionLeaseState::Revoked
+            }),
+            _ => Ok(None),
+        }
+    }
+
+    fn reconcile_pending_lease(
+        &self,
+        params: &serde_json::Map<String, Value>,
+        previous_generation: Option<u64>,
+        matches: impl FnOnce(&crate::storage::lease::RemoteSessionLease) -> bool,
+    ) -> Result<Option<Value>> {
+        let target = required_string(params, "target")?;
+        let lease = self.router.get_lease(target)?;
+        Ok(
+            (previous_generation.is_some_and(|generation| lease.lease_generation > generation)
+                && matches(&lease))
+            .then(|| remote_lease_json(&lease)),
+        )
+    }
+
+    fn restore_administration_replay(
+        &self,
+        method: &str,
+        response: Value,
+        idempotency_key: &str,
+        params: &serde_json::Map<String, Value>,
+    ) -> Result<Value> {
+        if method == "remote/invite" {
+            return self
+                .require_invitation_issuer()?
+                .restore_invitation_response(response, idempotency_key, params);
+        }
+        Ok(response)
+    }
+
+    fn require_invitation_issuer(&self) -> Result<&HostIrohInvitationIssuer> {
+        self.config
+            .iroh_invitation_issuer
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("host Iroh listener is not enabled"))
+    }
+
     async fn dispatch_request(
         &self,
         request: &Value,
+    ) -> Result<(Value, Option<HostShutdownRequest>)> {
+        self.dispatch_request_with_administration(request, None)
+            .await
+    }
+
+    async fn dispatch_request_with_administration(
+        &self,
+        request: &Value,
+        administration: Option<&HostAdministrationExecution<'_>>,
     ) -> Result<(Value, Option<HostShutdownRequest>)> {
         let method = request
             .get("method")
@@ -394,16 +669,25 @@ impl HostServer {
                     .get("profile_name")
                     .and_then(Value::as_str)
                     .unwrap_or("mez-host");
-                Ok((
-                    issuer.create_invitation(
+                let invitation = match administration {
+                    Some(administration) => issuer.create_idempotent_invitation(
+                        profile_name,
+                        role,
+                        authority,
+                        ttl_seconds,
+                        current_unix_seconds()?,
+                        administration.idempotency_key,
+                        administration.request_fingerprint,
+                    )?,
+                    None => issuer.create_invitation(
                         profile_name,
                         role,
                         authority,
                         ttl_seconds,
                         current_unix_seconds()?,
                     )?,
-                    None,
-                ))
+                };
+                Ok((invitation, None))
             }
             "remote/client/list" => {
                 let issuer =
@@ -837,6 +1121,63 @@ fn parse_lease_state(value: &str) -> Result<crate::storage::lease::RemoteSession
     }
 }
 
+fn host_administration_mutates(method: &str, request: &Value) -> bool {
+    match method {
+        "remote/invite"
+        | "remote/client/rename"
+        | "remote/client/revoke"
+        | "lease/checkpoint"
+        | "lease/recover"
+        | "lease/release"
+        | "lease/revoke" => true,
+        "lease/gc" => request
+            .pointer("/params/apply")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+fn administration_target<'a>(
+    method: &str,
+    params: &'a serde_json::Map<String, Value>,
+) -> Option<&'a str> {
+    match method {
+        "remote/invite" => params
+            .get("profile_name")
+            .and_then(Value::as_str)
+            .or(Some("mez-host")),
+        "remote/client/rename" | "remote/client/revoke" => {
+            params.get("client_id").and_then(Value::as_str)
+        }
+        method if method.starts_with("lease/") && method != "lease/gc" => {
+            params.get("target").and_then(Value::as_str)
+        }
+        "lease/gc" => Some("lease-gc"),
+        _ => None,
+    }
+}
+
+fn administration_new_generation(
+    result: &Result<(Value, Option<HostShutdownRequest>)>,
+) -> Option<u64> {
+    result
+        .as_ref()
+        .ok()
+        .and_then(|(value, _)| value.get("lease_generation"))
+        .and_then(Value::as_u64)
+}
+
+fn administration_persisted_response(method: &str, response: &Value) -> Value {
+    let mut persisted = response.clone();
+    if method == "remote/invite"
+        && let Some(object) = persisted.as_object_mut()
+    {
+        object.remove("token");
+    }
+    persisted
+}
+
 fn remote_lease_json(lease: &crate::storage::lease::RemoteSessionLease) -> Value {
     json!({
         "lease_id": lease.lease_id,
@@ -892,9 +1233,21 @@ fn host_error_response(id: Value, error: &MezError) -> Value {
         "error":{
             "code":code,
             "message":error.message(),
-            "data":{"mezzanine_code":format!("{:?}", error.kind()).to_lowercase()}
+            "data":{"mezzanine_code":host_error_name(error.kind())}
         }
     })
+}
+
+fn host_error_name(kind: MezErrorKind) -> &'static str {
+    match kind {
+        MezErrorKind::InvalidArgs => "invalid_params",
+        MezErrorKind::InvalidState => "invalid_state",
+        MezErrorKind::Config | MezErrorKind::Io => "internal_error",
+        MezErrorKind::Conflict => "conflict",
+        MezErrorKind::NotFound => "not_found",
+        MezErrorKind::Forbidden => "forbidden",
+        MezErrorKind::NotImplemented => "method_not_found",
+    }
 }
 
 #[cfg(test)]
@@ -1396,17 +1749,28 @@ mod tests {
         assert!(!encoded.contains("idempotency"), "{encoded}");
         assert!(!encoded.contains("fingerprint"), "{encoded}");
 
-        let checkpointed =
-            exchange_host_request(&host, "lease/checkpoint", json!({"target":"rpc-lease"})).await;
+        let checkpointed = exchange_host_request(
+            &host,
+            "lease/checkpoint",
+            json!({
+                "target":"rpc-lease",
+                "idempotency_key":"checkpoint-rpc-lease"
+            }),
+        )
+        .await;
         assert!(checkpointed["result"]["checkpoint"]["snapshot_id"].is_string());
         let refused = exchange_host_request(
             &host,
             "lease/release",
-            json!({"target":"rpc-lease","terminate":false}),
+            json!({
+                "target":"rpc-lease",
+                "terminate":false,
+                "idempotency_key":"release-without-termination"
+            }),
         )
         .await;
         assert_eq!(refused["error"]["data"]["mezzanine_code"], "conflict");
-        let revoked = exchange_host_request(
+        let missing_idempotency = exchange_host_request(
             &host,
             "lease/revoke",
             json!({
@@ -1416,7 +1780,44 @@ mod tests {
             }),
         )
         .await;
+        assert_eq!(
+            missing_idempotency["error"]["data"]["mezzanine_code"],
+            "invalid_params"
+        );
+        assert_eq!(
+            host.router
+                .get_lease(created.lease.lease_id.as_str())
+                .unwrap()
+                .state,
+            crate::storage::lease::RemoteSessionLeaseState::Active
+        );
+        let revoke_params = json!({
+            "target": created.lease.lease_id,
+            "reason": "operator maintenance",
+            "terminate": true,
+            "idempotency_key": "revoke-rpc-lease"
+        });
+        let (revoked, concurrent_replay) = tokio::join!(
+            exchange_host_request(&host, "lease/revoke", revoke_params.clone()),
+            exchange_host_request(&host, "lease/revoke", revoke_params.clone())
+        );
         assert_eq!(revoked["result"]["state"], "revoked");
+        assert_eq!(concurrent_replay["result"], revoked["result"]);
+        let conflicting_key = exchange_host_request(
+            &host,
+            "lease/revoke",
+            json!({
+                "target": created.lease.lease_id,
+                "reason": "different request",
+                "terminate": true,
+                "idempotency_key": "revoke-rpc-lease"
+            }),
+        )
+        .await;
+        assert_eq!(
+            conflicting_key["error"]["data"]["mezzanine_code"],
+            "conflict"
+        );
         let preview = exchange_host_request(
             &host,
             "lease/gc",
@@ -1441,6 +1842,134 @@ mod tests {
         assert!(!audit.contains("secret-create-key"), "{audit}");
         assert!(!audit.contains("operator maintenance"), "{audit}");
         drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A completion-audit failure must suppress success, leave a recoverable
+    /// pending replay, and let the same request finish without a second state change.
+    #[tokio::test(flavor = "current_thread")]
+    async fn administration_audit_failure_recovers_exact_result_on_retry() {
+        let root = test_root("admin-audit-retry");
+        let audit_path = root.join("host-audit.jsonl");
+        let mut host_config = config(root.clone());
+        host_config.audit_log = Some(AuditLog::new(AuditConfig {
+            enabled: true,
+            path: audit_path.clone(),
+            hash_chain: false,
+            required: true,
+        }));
+        let host = HostServer::bind(host_config).unwrap();
+        let principal = RemotePrincipal {
+            trust_record_id: "audit-owner".to_string(),
+            endpoint_id: "audit-endpoint".to_string(),
+            role_ceiling: RemoteRoleCeiling::Primary,
+            host_routing: RemoteHostRoutingAuthority {
+                session_create: true,
+                session_list: true,
+                session_attach_scope: RemoteSessionAttachScope::Own,
+                max_active_leases: 1,
+                max_live_sessions: 1,
+                lease_lifetime_ceiling_seconds: None,
+            },
+            requested_role: RequestedRole::Primary,
+        };
+        let created = host
+            .router
+            .create_remote(
+                &principal,
+                crate::host::router::RemoteSessionCreateRequest {
+                    name: Some("audit-retry".to_string()),
+                    idempotency_key: "audit-retry-create".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let params = json!({
+            "target": created.lease.lease_id,
+            "terminate": true,
+            "reason": "required audit retry",
+            "idempotency_key": "audit-retry-revoke"
+        });
+
+        host.fail_next_administration_completion_audit();
+        let failed = exchange_host_request(&host, "lease/revoke", params.clone()).await;
+        assert_eq!(failed["error"]["data"]["mezzanine_code"], "internal_error");
+        let transitioned = host.router.get_lease(&created.lease.lease_id).unwrap();
+        assert_eq!(
+            transitioned.state,
+            crate::storage::lease::RemoteSessionLeaseState::Revoked
+        );
+        let generation = transitioned.lease_generation;
+
+        let retried = exchange_host_request(&host, "lease/revoke", params).await;
+        assert_eq!(retried["result"]["state"], "revoked");
+        assert_eq!(retried["result"]["lease_generation"], generation);
+        assert_eq!(
+            host.router
+                .get_lease(&created.lease.lease_id)
+                .unwrap()
+                .lease_generation,
+            generation
+        );
+        let audit = fs::read_to_string(audit_path).unwrap();
+        assert!(audit.contains(r#""outcome":"succeeded""#), "{audit}");
+        assert!(!audit.contains("required audit retry"), "{audit}");
+
+        host.router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Completed administration outcomes survive host restart and replay
+    /// without advancing the durable lease generation a second time.
+    #[tokio::test(flavor = "current_thread")]
+    async fn administration_replay_survives_host_restart() {
+        let root = test_root("admin-restart-replay");
+        let host_config = config(root.clone());
+        let host = HostServer::bind(host_config.clone()).unwrap();
+        let principal = RemotePrincipal {
+            trust_record_id: "restart-owner".to_string(),
+            endpoint_id: "restart-endpoint".to_string(),
+            role_ceiling: RemoteRoleCeiling::Primary,
+            host_routing: RemoteHostRoutingAuthority {
+                session_create: true,
+                session_list: true,
+                session_attach_scope: RemoteSessionAttachScope::Own,
+                max_active_leases: 1,
+                max_live_sessions: 1,
+                lease_lifetime_ceiling_seconds: None,
+            },
+            requested_role: RequestedRole::Primary,
+        };
+        let created = host
+            .router
+            .create_remote(
+                &principal,
+                crate::host::router::RemoteSessionCreateRequest {
+                    name: Some("restart-replay".to_string()),
+                    idempotency_key: "restart-replay-create".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let params = json!({
+            "target": created.lease.lease_id,
+            "terminate": true,
+            "idempotency_key": "restart-replay-revoke"
+        });
+        let first = exchange_host_request(&host, "lease/revoke", params.clone()).await;
+        assert_eq!(first["result"]["state"], "revoked");
+        drop(host);
+
+        let restarted = HostServer::bind(host_config).unwrap();
+        let replay = exchange_host_request(&restarted, "lease/revoke", params).await;
+        assert_eq!(replay["result"], first["result"]);
+        drop(restarted);
         let _ = fs::remove_dir_all(root);
     }
 

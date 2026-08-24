@@ -227,6 +227,30 @@ impl RemoteTrustStore {
         )
     }
 
+    /// Creates or resumes an invitation from deterministic, caller-protected
+    /// material used by the host administration replay boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn create_host_invitation_idempotent(
+        &self,
+        server_endpoint_id: &str,
+        role_ceiling: RemoteRoleCeiling,
+        host_routing: RemoteHostRoutingAuthority,
+        ttl_seconds: u64,
+        now_unix_seconds: u64,
+        invitation_id: String,
+        token: SecretString,
+    ) -> Result<RemotePairingInvitation> {
+        self.create_invitation_with_material(
+            server_endpoint_id,
+            role_ceiling,
+            host_routing,
+            ttl_seconds,
+            now_unix_seconds,
+            invitation_id,
+            token,
+        )
+    }
+
     fn create_invitation_with_authority(
         &self,
         server_endpoint_id: &str,
@@ -235,26 +259,66 @@ impl RemoteTrustStore {
         ttl_seconds: u64,
         now_unix_seconds: u64,
     ) -> Result<RemotePairingInvitation> {
+        self.create_invitation_with_material(
+            server_endpoint_id,
+            role_ceiling,
+            host_routing,
+            ttl_seconds,
+            now_unix_seconds,
+            random_identifier("invite", 16),
+            random_token(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_invitation_with_material(
+        &self,
+        server_endpoint_id: &str,
+        role_ceiling: RemoteRoleCeiling,
+        host_routing: RemoteHostRoutingAuthority,
+        ttl_seconds: u64,
+        now_unix_seconds: u64,
+        invitation_id: String,
+        token: SecretString,
+    ) -> Result<RemotePairingInvitation> {
         validate_endpoint_id(server_endpoint_id)?;
         if !(30..=86_400).contains(&ttl_seconds) {
             return Err(MezError::invalid_args(
                 "remote invitation TTL must be from 30 to 86400 seconds",
             ));
         }
-        let invitation_id = random_identifier("invite", 16);
-        let token = random_token();
         let expires_at_unix_seconds = now_unix_seconds
             .checked_add(ttl_seconds)
             .ok_or_else(|| MezError::invalid_args("remote invitation expiration overflow"))?;
         let verifier = invitation_verifier(token.expose_secret(), server_endpoint_id, role_ceiling);
-        self.mutate_database(|database| {
+        let invitation = self.mutate_database(|database| {
+            if let Some(existing) = database
+                .invitations
+                .iter()
+                .find(|invitation| invitation.id == invitation_id)
+            {
+                if existing.verifier != verifier
+                    || existing.server_endpoint_id != server_endpoint_id
+                    || existing.role_ceiling != role_ceiling
+                    || existing.host_routing != host_routing
+                    || existing
+                        .expires_at_unix_seconds
+                        .saturating_sub(existing.created_at_unix_seconds)
+                        != ttl_seconds
+                {
+                    return Err(MezError::conflict(
+                        "remote invitation idempotency identity was reused with different authority",
+                    ));
+                }
+                return Ok(existing.clone());
+            }
             prune_stale_invitations(database, now_unix_seconds);
             if database.invitations.len() >= MAX_INVITATION_RECORDS {
                 return Err(MezError::conflict(
                     "remote invitation record limit has been reached",
                 ));
             }
-            database.invitations.push(RemoteInvitationRecord {
+            let invitation = RemoteInvitationRecord {
                 id: invitation_id.clone(),
                 verifier,
                 server_endpoint_id: server_endpoint_id.to_string(),
@@ -265,16 +329,17 @@ impl RemoteTrustStore {
                 redeemed_at_unix_seconds: None,
                 redeemed_endpoint_id: None,
                 redeemed_record_id: None,
-            });
-            Ok(())
+            };
+            database.invitations.push(invitation.clone());
+            Ok(invitation)
         })?;
         Ok(RemotePairingInvitation {
-            invitation_id,
+            invitation_id: invitation.id,
             token,
-            server_endpoint_id: server_endpoint_id.to_string(),
-            role_ceiling,
-            host_routing,
-            expires_at_unix_seconds,
+            server_endpoint_id: invitation.server_endpoint_id,
+            role_ceiling: invitation.role_ceiling,
+            host_routing: invitation.host_routing,
+            expires_at_unix_seconds: invitation.expires_at_unix_seconds,
         })
     }
 

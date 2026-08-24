@@ -5,8 +5,8 @@ use std::io::Write;
 use clap::{Args, Subcommand, ValueEnum};
 
 use super::{
-    CliEnv, CliOutputFormat, ControlTargetSelection, MezError, Result, request_host,
-    serialize_json, write_json_or_plain,
+    CliEnv, CliOutputFormat, ControlTargetSelection, MezError, Result, cli_idempotency_key,
+    request_host, serialize_json, write_json_or_plain,
 };
 
 /// Typed process CLI arguments for `mez lease`.
@@ -118,22 +118,38 @@ pub(super) async fn run_lease<W: Write>(
             ("lease/list", params)
         }
         LeaseCliCommand::Show { target } => ("lease/get", serde_json::json!({"target": target})),
-        LeaseCliCommand::Checkpoint { target } => {
-            ("lease/checkpoint", serde_json::json!({"target": target}))
-        }
-        LeaseCliCommand::Recover { target } => {
-            ("lease/recover", serde_json::json!({"target": target}))
-        }
+        LeaseCliCommand::Checkpoint { target } => (
+            "lease/checkpoint",
+            serde_json::json!({
+                "target": target,
+                "idempotency_key": cli_idempotency_key("lease-checkpoint")
+            }),
+        ),
+        LeaseCliCommand::Recover { target } => (
+            "lease/recover",
+            serde_json::json!({
+                "target": target,
+                "idempotency_key": cli_idempotency_key("lease-recover")
+            }),
+        ),
         LeaseCliCommand::Release { target, terminate } => (
             "lease/release",
-            serde_json::json!({"target": target, "terminate": terminate}),
+            serde_json::json!({
+                "target": target,
+                "terminate": terminate,
+                "idempotency_key": cli_idempotency_key("lease-release")
+            }),
         ),
         LeaseCliCommand::Revoke {
             target,
             reason,
             terminate,
         } => {
-            let mut params = serde_json::json!({"target": target, "terminate": terminate});
+            let mut params = serde_json::json!({
+                "target": target,
+                "terminate": terminate,
+                "idempotency_key": cli_idempotency_key("lease-revoke")
+            });
             if let Some(reason) = reason {
                 params["reason"] = serde_json::Value::String(reason);
             }
@@ -145,6 +161,10 @@ pub(super) async fn run_lease<W: Write>(
             dry_run: _,
         } => {
             let mut params = serde_json::json!({"apply": apply});
+            if apply {
+                params["idempotency_key"] =
+                    serde_json::Value::String(cli_idempotency_key("lease-gc"));
+            }
             if let Some(older_than) = older_than {
                 params["older_than_seconds"] =
                     serde_json::Value::from(duration_seconds(&older_than)?);
