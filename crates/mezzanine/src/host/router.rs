@@ -101,9 +101,13 @@ impl HostSessionRouter {
         let leases = RemoteSessionLeaseRepository::new(default_remote_session_lease_directory(
             &config.config_root,
         ));
+        let completion_leases = leases.clone();
+        let supervisor = SessionSupervisor::with_runtime_completion_handler(move |completion| {
+            reconcile_runtime_completion(&completion_leases, completion)
+        });
         Self {
             config,
-            supervisor: SessionSupervisor::default(),
+            supervisor,
             registry,
             leases,
             creation_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -120,6 +124,7 @@ impl HostSessionRouter {
     /// Prunes stale live discovery and reports current durable lease states.
     pub(crate) fn reconcile(&self) -> Result<HostReconciliationReport> {
         let pruned_registry_records = self.registry.prune_stale()?;
+        self.reconcile_active_leases_without_runtimes()?;
         let leases = self.leases.list()?;
         let mut report = HostReconciliationReport {
             boot_generation: self.leases.boot_generation()?,
@@ -142,6 +147,24 @@ impl HostSessionRouter {
             }
         }
         Ok(report)
+    }
+
+    fn reconcile_active_leases_without_runtimes(&self) -> Result<()> {
+        for lease in self
+            .leases
+            .list()?
+            .into_iter()
+            .filter(|lease| lease.state == RemoteSessionLeaseState::Active)
+        {
+            if !self.supervisor.contains(&lease.session_id)? {
+                reconcile_active_lease_after_runtime_exit(
+                    &self.leases,
+                    lease,
+                    "supervised runtime was absent during host reconciliation".to_string(),
+                )?;
+            }
+        }
+        Ok(())
     }
 
     /// Creates one fresh local supervised session and publishes compatibility discovery.
@@ -837,6 +860,52 @@ fn recovery_failure(context: &str, error: &MezError) -> String {
     failure
 }
 
+fn reconcile_runtime_completion(
+    leases: &RemoteSessionLeaseRepository,
+    completion: &SessionSupervisorSnapshot,
+) -> Result<()> {
+    let Some(lease) = leases.get_by_session(&completion.session_id)? else {
+        return Ok(());
+    };
+    if lease.state != RemoteSessionLeaseState::Active {
+        return Ok(());
+    }
+    let diagnostic = completion
+        .failure
+        .clone()
+        .unwrap_or_else(|| match completion.runtime_state {
+            Some(state) => format!("supervised runtime completed in state {state:?}"),
+            None => "supervised runtime completed without a lifecycle state".to_string(),
+        });
+    reconcile_active_lease_after_runtime_exit(leases, lease, diagnostic)
+}
+
+fn reconcile_active_lease_after_runtime_exit(
+    leases: &RemoteSessionLeaseRepository,
+    lease: RemoteSessionLease,
+    diagnostic: String,
+) -> Result<()> {
+    let now = current_unix_seconds().unwrap_or(lease.updated_at_unix_seconds);
+    if lease.checkpoint.is_some() {
+        leases.mark_recoverable_after_runtime_exit(
+            &lease.lease_id,
+            lease.boot_generation,
+            lease.lease_generation,
+            now,
+            diagnostic,
+        )?;
+    } else {
+        leases.mark_failed(
+            &lease.lease_id,
+            lease.boot_generation,
+            lease.lease_generation,
+            now,
+            format!("supervised runtime completed without a committed checkpoint: {diagnostic}"),
+        )?;
+    }
+    Ok(())
+}
+
 fn require_active_lease_termination(lease: &RemoteSessionLease, terminate: bool) -> Result<()> {
     if lease.state == RemoteSessionLeaseState::Active && !terminate {
         return Err(MezError::conflict(
@@ -932,6 +1001,85 @@ mod tests {
     use crate::storage::lease::LeaseCheckpointReference;
 
     use super::*;
+
+    /// Runtime completion reconciles the matching durable lease after the
+    /// supervisor accepts that exact generation: checkpointed sessions remain
+    /// recoverable, while sessions without a recovery point become failed.
+    #[tokio::test(flavor = "current_thread")]
+    async fn supervised_runtime_exit_reconciles_active_durable_leases() {
+        let root = test_root("runtime-exit-lease");
+        let router = HostSessionRouter::new(test_config(&root));
+        let principal = test_principal("exit-owner", 2);
+        let checkpointed = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("checkpointed-exit".to_string()),
+                    idempotency_key: "checkpointed-exit".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let checkpointed_lease = router
+            .checkpoint_lease(&checkpointed.lease.lease_id)
+            .await
+            .unwrap();
+        let uncheckpointed = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("uncheckpointed-exit".to_string()),
+                    idempotency_key: "uncheckpointed-exit".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+
+        checkpointed
+            .runtime
+            .force_shutdown("test checkpointed runtime exit".to_string())
+            .await
+            .unwrap();
+        uncheckpointed
+            .runtime
+            .force_shutdown("test uncheckpointed runtime exit".to_string())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if router
+                    .supervisor
+                    .lookup(&checkpointed.lease.session_id)
+                    .is_err()
+                    && router
+                        .supervisor
+                        .lookup(&uncheckpointed.lease.session_id)
+                        .is_err()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let recovered = router.get_lease(&checkpointed_lease.lease_id).unwrap();
+        assert_eq!(recovered.state, RemoteSessionLeaseState::Recoverable);
+        assert!(recovered.checkpoint.is_some());
+        let failed = router.get_lease(&uncheckpointed.lease.lease_id).unwrap();
+        assert_eq!(failed.state, RemoteSessionLeaseState::Failed);
+        assert!(
+            failed
+                .failure
+                .as_deref()
+                .is_some_and(|failure| failure.contains("runtime completed"))
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
 
     /// Concurrent bare-CLI resolution must select or create one shared local
     /// session atomically, while explicit fresh creation remains non-deduplicated.

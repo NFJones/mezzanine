@@ -50,6 +50,20 @@ pub(crate) struct SessionSupervisorSnapshot {
     pub(crate) failure: Option<String>,
 }
 
+type RuntimeCompletionCallback =
+    dyn Fn(&SessionSupervisorSnapshot) -> Result<()> + Send + Sync + 'static;
+
+#[derive(Clone)]
+struct RuntimeCompletionHandler(Arc<RuntimeCompletionCallback>);
+
+impl std::fmt::Debug for RuntimeCompletionHandler {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeCompletionHandler")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Concurrent owner for independently running session runtimes.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionSupervisor {
@@ -63,6 +77,7 @@ struct SessionSupervisorInner {
     next_generation: AtomicU64,
     changed: Notify,
     terminal_history_limit: usize,
+    runtime_completion_handler: Option<RuntimeCompletionHandler>,
 }
 
 #[derive(Debug)]
@@ -95,6 +110,23 @@ impl Default for SessionSupervisor {
 impl SessionSupervisor {
     /// Creates a supervisor with a bounded terminal-status history.
     pub(crate) fn new(terminal_history_limit: usize) -> Self {
+        Self::new_with_runtime_completion_handler(terminal_history_limit, None)
+    }
+
+    /// Creates a supervisor that reports accepted current-generation runtime completions.
+    pub(crate) fn with_runtime_completion_handler(
+        handler: impl Fn(&SessionSupervisorSnapshot) -> Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        Self::new_with_runtime_completion_handler(
+            DEFAULT_TERMINAL_HISTORY_LIMIT,
+            Some(RuntimeCompletionHandler(Arc::new(handler))),
+        )
+    }
+
+    fn new_with_runtime_completion_handler(
+        terminal_history_limit: usize,
+        runtime_completion_handler: Option<RuntimeCompletionHandler>,
+    ) -> Self {
         Self {
             inner: Arc::new(SessionSupervisorInner {
                 entries: Mutex::new(HashMap::new()),
@@ -102,6 +134,7 @@ impl SessionSupervisor {
                 next_generation: AtomicU64::new(1),
                 changed: Notify::new(),
                 terminal_history_limit,
+                runtime_completion_handler,
             }),
         }
     }
@@ -251,6 +284,11 @@ impl SessionSupervisor {
                 "session `{session_id}` is stopping"
             ))),
         }
+    }
+
+    /// Returns whether this supervisor still owns any generation for one identity.
+    pub(crate) fn contains(&self, session_id: &str) -> Result<bool> {
+        Ok(self.inner.entries()?.contains_key(session_id))
     }
 
     /// Requests graceful or forced teardown without holding the map lock across actor awaits.
@@ -429,6 +467,23 @@ impl SessionSupervisorInner {
         runtime_state: Option<RuntimeLifecycleState>,
         failure: Option<String>,
     ) -> Result<()> {
+        let accepted = self
+            .entries()?
+            .get(session_id)
+            .is_some_and(|entry| entry.generation == generation);
+        if !accepted {
+            return Ok(());
+        }
+        let snapshot = SessionSupervisorSnapshot {
+            session_id: session_id.to_string(),
+            generation,
+            state,
+            runtime_state,
+            failure,
+        };
+        if let Some(handler) = &self.runtime_completion_handler {
+            let _ = (handler.0)(&snapshot);
+        }
         let removed = {
             let mut entries = self.entries()?;
             if entries
@@ -442,13 +497,7 @@ impl SessionSupervisorInner {
             }
         };
         if removed {
-            self.push_terminal(SessionSupervisorSnapshot {
-                session_id: session_id.to_string(),
-                generation,
-                state,
-                runtime_state,
-                failure,
-            })?;
+            self.push_terminal(snapshot)?;
             self.changed.notify_waiters();
         }
         Ok(())

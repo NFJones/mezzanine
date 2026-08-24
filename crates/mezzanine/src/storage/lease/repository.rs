@@ -261,6 +261,34 @@ impl RemoteSessionLeaseRepository {
         )
     }
 
+    /// Marks an active lease recoverable after its supervised runtime exits.
+    pub(crate) fn mark_recoverable_after_runtime_exit(
+        &self,
+        lease_id: &str,
+        expected_boot_generation: u64,
+        expected_lease_generation: u64,
+        now_unix_seconds: u64,
+        diagnostic: String,
+    ) -> Result<RemoteSessionLease> {
+        validate_optional_text(Some(&diagnostic), "runtime exit diagnostic", 1024)?;
+        self.transition(
+            lease_id,
+            expected_boot_generation,
+            expected_lease_generation,
+            now_unix_seconds,
+            |lease| {
+                require_state(
+                    lease,
+                    &[RemoteSessionLeaseState::Active],
+                    "mark recoverable after runtime exit",
+                )?;
+                lease.state = RemoteSessionLeaseState::Recoverable;
+                lease.failure = Some(diagnostic);
+                Ok(())
+            },
+        )
+    }
+
     pub(crate) fn mark_failed(
         &self,
         lease_id: &str,
