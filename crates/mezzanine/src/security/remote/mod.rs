@@ -16,6 +16,8 @@ pub(crate) use client::{
     write_remote_invitation_file_new,
 };
 pub(crate) use store::{RemoteEndpointIdentity, RemotePairingPreparation, RemoteTrustStore};
+#[cfg(test)]
+pub(crate) use types::RemotePairingInvitation;
 pub(crate) use types::{
     RemoteHostRoutingAuthority, RemotePairingRedemption, RemotePrincipal, RemoteRoleCeiling,
     RemoteSessionAttachScope, RemoteTrustRecord,

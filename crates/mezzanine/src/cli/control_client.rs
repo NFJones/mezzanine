@@ -618,8 +618,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
     let layers = super::load_runtime_config_layers(&paths)?;
     let structured = crate::runtime::runtime_effective_config_value(&layers)?;
     let configured_policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
-    let target = resolve_iroh_control_target(control_target, paths.root())?;
-    let policy = explicit_iroh_client_policy(&configured_policy, &target)?;
+    let mut target = resolve_iroh_control_target(control_target, paths.root())?;
     ensure_iroh_attach_role_allowed(target.role(), requested_role)?;
     if let IrohControlTarget::Invitation {
         expires_at_unix_seconds,
@@ -631,6 +630,27 @@ pub(super) async fn open_persistent_iroh_control_channel(
             "Iroh pairing invitation expired before connection setup",
         ));
     }
+
+    if matches!(
+        &target,
+        IrohControlTarget::Invitation {
+            scope: RemoteClientProfileScope::Host,
+            ..
+        }
+    ) {
+        let profile_name = target.profile_name().to_string();
+        exchange_iroh_host_only_initialize(paths.root(), &configured_policy, &target).await?;
+        let profile = RemoteClientProfileStore::under_config_root(paths.root())
+            .load(&profile_name)?
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "successful host pairing did not persist a reconnect profile",
+                )
+            })?;
+        target = IrohControlTarget::Profile(profile);
+    }
+
+    let policy = explicit_iroh_client_policy(&configured_policy, &target)?;
 
     let identity = RemoteClientIdentity::load_or_create(paths.root())?;
     let endpoint =
@@ -1190,6 +1210,18 @@ async fn exchange_iroh_control_request_as(
 
 #[cfg(test)]
 mod outbound_policy_tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+
+    use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
+    use crate::host::iroh::HostIrohRuntime;
+    use crate::host::router::{HostSessionRouter, HostSessionRouterConfig};
+    use crate::host::shell::{ResolvedShell, ShellSource};
+    use crate::security::remote::{
+        RemoteHostRoutingAuthority, RemoteSessionAttachScope, RemoteTrustStore,
+    };
+
     use super::*;
 
     async fn v1_only_server() -> (iroh::Endpoint, EndpointAddr) {
@@ -1214,6 +1246,210 @@ mod outbound_policy_tests {
             scope: RemoteClientProfileScope::LegacySession,
             expires_at_unix_seconds: u64::MAX,
         }
+    }
+
+    /// A fresh host invitation must redeem without session authority, persist
+    /// device proof, and reconnect before either create or attach is routed.
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_invitation_pairs_then_reconnects_for_create_and_attach() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-cli-two-step-pairing-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let host_config_root = root.join("host-config");
+        fs::create_dir_all(&host_config_root).unwrap();
+        fs::set_permissions(&host_config_root, fs::Permissions::from_mode(0o700)).unwrap();
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            identity: crate::runtime::RuntimeIrohIdentityPolicy::Host,
+            compression_codecs: vec![crate::runtime::RuntimeIrohCompressionCodec::None],
+            setup_timeout: std::time::Duration::from_secs(3),
+            idle_timeout: std::time::Duration::from_secs(3),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let host = HostIrohRuntime::bind(&host_config_root, policy)
+            .await
+            .unwrap()
+            .unwrap();
+        let router = HostSessionRouter::new(HostSessionRouterConfig {
+            runtime_root: root.join("runtime"),
+            owner_uid: crate::runtime::current_effective_uid(),
+            config_root: host_config_root.clone(),
+            config_layers: vec![ConfigLayer {
+                name: "two-step-pairing-test".to_string(),
+                path: None,
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: "[agents]\nshell_mode = \"pane\"\n[permissions]\nsandbox = \"policy-only\"\n"
+                    .to_string(),
+            }],
+            shell: ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+            max_sessions: 8,
+            max_live_sessions: 8,
+        });
+        let trust = RemoteTrustStore::under_host_config_root(&host_config_root).unwrap();
+        let now = super::current_unix_seconds_for_iroh_client().unwrap();
+        let create_invitation = trust
+            .create_host_invitation(
+                host.endpoint_id(),
+                RemoteRoleCeiling::Observer,
+                RemoteHostRoutingAuthority {
+                    session_create: true,
+                    session_list: true,
+                    session_attach_scope: RemoteSessionAttachScope::Own,
+                    max_active_leases: 2,
+                    max_live_sessions: 2,
+                    lease_lifetime_ceiling_seconds: None,
+                },
+                600,
+                now,
+            )
+            .unwrap();
+        let attach_invitation = trust
+            .create_host_invitation(
+                host.endpoint_id(),
+                RemoteRoleCeiling::Observer,
+                RemoteHostRoutingAuthority {
+                    session_create: false,
+                    session_list: true,
+                    session_attach_scope: RemoteSessionAttachScope::All,
+                    max_active_leases: 0,
+                    max_live_sessions: 0,
+                    lease_lifetime_ceiling_seconds: None,
+                },
+                600,
+                now,
+            )
+            .unwrap();
+        let server_addr = host.endpoint_addr().unwrap();
+        let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+        let server_stop = stop.clone();
+        let server_router = router.clone();
+        let server = host.serve_routed(server_router, async move { server_stop.notified().await });
+
+        let client_work = async {
+            let (create_env, create_target) =
+                invitation_client_fixture(&root, "creator", &server_addr, &create_invitation);
+            let create_routing = IrohSessionRouting::Create {
+                name: Some("from-invitation".to_string()),
+                idempotency_key: "two-step-create".to_string(),
+            };
+            let (create_channel, create_response) = open_persistent_iroh_control_channel(
+                &create_target,
+                &create_env,
+                "observer",
+                Some(&create_routing),
+                80,
+                24,
+                "xterm-256color",
+            )
+            .await
+            .unwrap();
+            let create_response: serde_json::Value =
+                serde_json::from_str(&create_response).unwrap();
+            let session_id = create_response["result"]["lease"]["session_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let lease_id = create_response["result"]["lease"]["lease_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            create_channel.close().await;
+            assert_eq!(
+                RemoteClientProfileStore::under_config_root(
+                    create_env.config_paths().unwrap().root()
+                )
+                .load("creator")
+                .unwrap()
+                .unwrap()
+                .scope,
+                RemoteClientProfileScope::Host
+            );
+
+            let (attach_env, attach_target) =
+                invitation_client_fixture(&root, "attacher", &server_addr, &attach_invitation);
+            let attach_routing = IrohSessionRouting::Attach { target: session_id };
+            let (attach_channel, attach_response) = open_persistent_iroh_control_channel(
+                &attach_target,
+                &attach_env,
+                "observer",
+                Some(&attach_routing),
+                80,
+                24,
+                "xterm-256color",
+            )
+            .await
+            .unwrap();
+            let attach_response: serde_json::Value =
+                serde_json::from_str(&attach_response).unwrap();
+            assert_eq!(attach_response["result"]["lease"]["lease_id"], lease_id);
+            attach_channel.close().await;
+            stop.notify_one();
+        };
+
+        let (served, ()) = tokio::join!(server, client_work);
+        assert!(
+            served.unwrap() >= 4,
+            "pairing and routed create/attach require at least four connections"
+        );
+        assert_eq!(trust.list_records().unwrap().len(), 2);
+        assert_eq!(router.snapshots().await.unwrap().len(), 1);
+        router
+            .shutdown_all(true, std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn invitation_client_fixture(
+        root: &Path,
+        name: &str,
+        server_addr: &EndpointAddr,
+        invitation: &crate::security::remote::RemotePairingInvitation,
+    ) -> (crate::cli::CliEnv, crate::cli::ControlTargetSelection) {
+        let home = root.join(name);
+        let runtime = home.join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        let path = home.join("invitation.json");
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "format_version": 1,
+                "profile_scope": "host",
+                "profile_name": name,
+                "server_endpoint_id": invitation.server_endpoint_id,
+                "server_addr": server_addr,
+                "token": invitation.token.expose_secret(),
+                "role": invitation.role_ceiling.as_str(),
+                "expires_at_unix_seconds": invitation.expires_at_unix_seconds,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        (
+            crate::cli::CliEnv {
+                home: Some(home),
+                shell: Some(std::ffi::OsString::from("/bin/sh")),
+                mez: None,
+                runtime: crate::runtime::RuntimeEnv {
+                    mez_tmpdir: Some(runtime.into_os_string()),
+                    xdg_runtime_dir: None,
+                    tmpdir: None,
+                    uid: crate::runtime::effective_uid_for_tests(),
+                },
+            },
+            crate::cli::ControlTargetSelection::IrohInvitation {
+                path,
+                save_as: None,
+            },
+        )
     }
 
     /// Verifies a new client may try compressed ALPNs and then select the
