@@ -13,7 +13,7 @@ use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use futures_util::StreamExt;
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use mez_mux::layout::Size;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
@@ -33,6 +33,8 @@ use crate::storage::registry::records_to_json;
 
 const HOST_SOCKET_FILE_NAME: &str = "host.sock";
 const HOST_CONTROL_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
+const HOST_CONTROL_CONNECTION_LIMIT: usize = 64;
+const HOST_CONTROL_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Construction inputs shared by every session created under one host.
 #[derive(Debug, Clone)]
@@ -141,10 +143,16 @@ impl HostServer {
         C: Future<Output = ()>,
     {
         tokio::pin!(cancellation);
+        let mut connections = FuturesUnordered::new();
         let shutdown = loop {
             tokio::select! {
                 () = &mut cancellation => break HostShutdownRequest { force: false },
-                accepted = self.listener.accept() => {
+                completed = connections.next(), if !connections.is_empty() => {
+                    if let Some(Some(shutdown)) = completed {
+                        break shutdown;
+                    }
+                }
+                accepted = self.listener.accept(), if connections.len() < HOST_CONTROL_CONNECTION_LIMIT => {
                     let (mut stream, _) = accepted?;
                     let Ok(peer_uid) = crate::runtime::authenticated_unix_peer_uid(
                         stream.as_raw_fd(),
@@ -155,17 +163,21 @@ impl HostServer {
                     if peer_uid != self.config.owner_uid {
                         continue;
                     }
-                    let served = tokio::time::timeout(
-                        Duration::from_secs(30),
-                        self.serve_connection(&mut stream),
-                    )
-                    .await;
-                    if let Ok(Ok(Some(shutdown))) = served {
-                        break shutdown;
-                    }
+                    connections.push(async move {
+                        match tokio::time::timeout(
+                            HOST_CONTROL_CONNECTION_TIMEOUT,
+                            self.serve_connection(&mut stream),
+                        )
+                        .await
+                        {
+                            Ok(Ok(shutdown)) => shutdown,
+                            Ok(Err(_)) | Err(_) => None,
+                        }
+                    });
                 }
             }
         };
+        drop(connections);
         self.router
             .shutdown_all(shutdown.force, self.config.shutdown_timeout)
             .await
@@ -830,6 +842,53 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// A client that connects without sending a frame cannot delay a second
+    /// management request or prevent prompt host shutdown.
+    #[tokio::test(flavor = "current_thread")]
+    async fn stalled_host_control_client_does_not_block_other_requests() {
+        let root = test_root("concurrent-control");
+        let host = std::sync::Arc::new(HostServer::bind(config(root.clone())).unwrap());
+        let serving_host = std::sync::Arc::clone(&host);
+        let server_task =
+            tokio::spawn(async move { serving_host.serve(std::future::pending()).await });
+
+        let stalled = tokio::net::UnixStream::connect(host.socket_path())
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        let status = tokio::time::timeout(
+            Duration::from_secs(1),
+            exchange_host_socket_request(host.socket_path(), "host/get", json!({})),
+        )
+        .await;
+        let status = match status {
+            Ok(status) => status,
+            Err(_) => {
+                drop(stalled);
+                server_task.abort();
+                let _ = server_task.await;
+                panic!("stalled host client blocked an independent status request");
+            }
+        };
+        assert_eq!(status["result"]["ready"], true);
+
+        let shutdown = exchange_host_socket_request(
+            host.socket_path(),
+            "host/shutdown",
+            json!({"force":true}),
+        )
+        .await;
+        assert_eq!(shutdown["result"]["shutting_down"], true);
+        tokio::time::timeout(Duration::from_secs(1), server_task)
+            .await
+            .expect("host shutdown should not wait for the stalled client")
+            .unwrap()
+            .unwrap();
+        drop(stalled);
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
     /// Create always allocates a fresh session while default resolution reuses
     /// the first eligible runtime and explicit misses never create.
     #[tokio::test(flavor = "current_thread")]
@@ -995,4 +1054,39 @@ mod tests {
         assert!(served.unwrap().is_none());
         response
     }
+
+    async fn exchange_host_socket_request(
+        socket_path: &Path,
+        method: &str,
+        params: Value,
+    ) -> Value {
+        let mut stream = tokio::net::UnixStream::connect(socket_path).await.unwrap();
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": "host-concurrency-test",
+            "method": method,
+            "params": params,
+        })
+        .to_string();
+        stream
+            .write_all(&crate::control::encode_control_body(&request))
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+        let mut bytes = Vec::new();
+        let mut buffer = [0u8; 8192];
+        loop {
+            let read = tokio::io::AsyncReadExt::read(&mut stream, &mut buffer)
+                .await
+                .unwrap();
+            assert!(read > 0, "host closed before returning a complete response");
+            bytes.extend_from_slice(&buffer[..read]);
+            if let Ok((body, _)) =
+                crate::control::decode_control_frame(&bytes, HOST_CONTROL_MAX_CONTENT_LENGTH)
+            {
+                return serde_json::from_str(&body).unwrap();
+            }
+        }
+    }
+
 }
