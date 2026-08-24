@@ -27,6 +27,7 @@ use super::{
     load_runtime_config_layers, resolve_shell, serialize_json, write_json_or_plain,
 };
 use crate::host::iroh::HostIrohRuntime;
+use crate::host::ownership::HostOwnershipGuard;
 use crate::host::server::{HostServer, HostServerConfig, host_socket_path};
 
 const HOST_RESPONSE_LIMIT: usize = 1024 * 1024;
@@ -126,22 +127,26 @@ async fn run_host_serve<W: Write>(
             .unwrap_or(10_000),
     );
     let runtime_root = default_socket_directory(&env.runtime)?.path;
+    let ownership = HostOwnershipGuard::acquire(paths.root(), env.runtime.uid)?;
     let iroh_policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
     let iroh = HostIrohRuntime::bind(paths.root(), iroh_policy).await?;
     let audit_log = crate::runtime::runtime_audit_log_from_config(&structured, Some(paths.root()))?;
-    let server = HostServer::bind(HostServerConfig {
-        runtime_root,
-        owner_uid: env.runtime.uid,
-        config_root: paths.root().to_path_buf(),
-        config_layers: layers,
-        shell: resolve_shell(env.shell)?,
-        max_sessions,
-        max_live_sessions,
-        shutdown_timeout,
-        iroh_invitation_issuer: iroh.as_ref().map(HostIrohRuntime::invitation_issuer),
-        max_remote_leases,
-        audit_log,
-    })?;
+    let server = HostServer::bind_with_ownership(
+        HostServerConfig {
+            runtime_root,
+            owner_uid: env.runtime.uid,
+            config_root: paths.root().to_path_buf(),
+            config_layers: layers,
+            shell: resolve_shell(env.shell)?,
+            max_sessions,
+            max_live_sessions,
+            shutdown_timeout,
+            iroh_invitation_issuer: iroh.as_ref().map(HostIrohRuntime::invitation_issuer),
+            max_remote_leases,
+            audit_log,
+        },
+        ownership,
+    )?;
     let started = serde_json::json!({
         "serving": true,
         "host": true,

@@ -28,9 +28,14 @@ pub(crate) use types::{
     LeaseReservation, LeaseReservationRequest, RemoteSessionLease, RemoteSessionLeaseState,
 };
 
-/// Returns the protected durable-lease directory below one config root.
+/// Returns the protected durable host-state directory below one config root.
+pub(crate) fn default_host_state_directory(config_root: impl AsRef<Path>) -> PathBuf {
+    config_root.as_ref().join("host")
+}
+
+/// Returns the protected durable-lease directory below one host-state root.
 pub(crate) fn default_remote_session_lease_directory(config_root: impl AsRef<Path>) -> PathBuf {
-    config_root.as_ref().join("host").join("leases")
+    default_host_state_directory(config_root).join("leases")
 }
 
 fn validate_nonempty_identifier(value: &str, field: &str) -> Result<()> {

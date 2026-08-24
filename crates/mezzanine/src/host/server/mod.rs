@@ -10,13 +10,11 @@
 use std::fs;
 use std::future::Future;
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use futures_util::StreamExt;
 use mez_mux::layout::Size;
-use rustix::fs::{FlockOperation, Mode, OFlags, flock, open};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio_util::codec::Framed;
@@ -24,6 +22,7 @@ use tokio_util::codec::Framed;
 use crate::config::ConfigLayer;
 use crate::error::{MezError, MezErrorKind, Result};
 use crate::host::iroh::HostIrohInvitationIssuer;
+use crate::host::ownership::HostOwnershipGuard;
 use crate::host::router::{HostSessionRouter, HostSessionRouterConfig};
 use crate::host::session::SessionSupervisorState;
 use crate::host::shell::ResolvedShell;
@@ -33,7 +32,6 @@ use crate::security::audit::{AuditActor, AuditLog, AuditRecord};
 use crate::storage::registry::records_to_json;
 
 const HOST_SOCKET_FILE_NAME: &str = "host.sock";
-const HOST_LOCK_FILE_NAME: &str = "host.lock";
 const HOST_CONTROL_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
 
 /// Construction inputs shared by every session created under one host.
@@ -71,7 +69,7 @@ pub(crate) struct HostServer {
     router: HostSessionRouter,
     audit_log: std::sync::Mutex<Option<AuditLog>>,
     socket_path: PathBuf,
-    _lock: fs::File,
+    _ownership: HostOwnershipGuard,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,14 +79,27 @@ struct HostShutdownRequest {
 
 impl HostServer {
     /// Acquires exclusive host ownership and binds the protected management socket.
+    #[cfg(test)]
     pub(crate) fn bind(config: HostServerConfig) -> Result<Self> {
+        let ownership = HostOwnershipGuard::acquire(&config.config_root, config.owner_uid)?;
+        Self::bind_with_ownership(config, ownership)
+    }
+
+    /// Binds a host after an earlier durable-root ownership acquisition.
+    ///
+    /// The CLI uses this entry point so ownership precedes host-scoped Iroh
+    /// identity and trust initialization as well as listener and router setup.
+    pub(crate) fn bind_with_ownership(
+        config: HostServerConfig,
+        ownership: HostOwnershipGuard,
+    ) -> Result<Self> {
         if config.max_sessions == 0 || config.max_live_sessions == 0 {
             return Err(MezError::invalid_args(
                 "host session limits must be greater than zero",
             ));
         }
+        ownership.validate_config_root(&config.config_root)?;
         crate::runtime::ensure_private_socket_directory(&config.runtime_root, config.owner_uid)?;
-        let lock = open_host_lock(&config.runtime_root, config.owner_uid)?;
         let socket_path = host_socket_path(&config.runtime_root)?;
         let listener = bind_control_socket(&socket_path, config.owner_uid)?;
         listener.set_nonblocking(true)?;
@@ -110,7 +121,7 @@ impl HostServer {
             router,
             audit_log,
             socket_path,
-            _lock: lock,
+            _ownership: ownership,
         })
     }
 
@@ -588,37 +599,12 @@ impl HostServer {
 impl Drop for HostServer {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.socket_path);
-        let _ = flock(&self._lock, FlockOperation::Unlock);
     }
 }
 
 /// Returns the canonical host socket below one private runtime directory.
 pub(crate) fn host_socket_path(runtime_root: &Path) -> Result<PathBuf> {
     socket_path_for_name(runtime_root, HOST_SOCKET_FILE_NAME)
-}
-
-fn open_host_lock(runtime_root: &Path, owner_uid: u32) -> Result<fs::File> {
-    let path = runtime_root.join(HOST_LOCK_FILE_NAME);
-    let descriptor = open(
-        &path,
-        OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::RUSR | Mode::WUSR,
-    )
-    .map_err(std::io::Error::from)?;
-    let file = fs::File::from(descriptor);
-    let metadata = file.metadata()?;
-    if metadata.uid() != owner_uid || metadata.permissions().mode() & 0o077 != 0 {
-        return Err(MezError::forbidden(
-            "host process lock must be private and owned by the current user",
-        ));
-    }
-    match flock(&file, FlockOperation::NonBlockingLockExclusive) {
-        Ok(()) => Ok(file),
-        Err(error) if error == rustix::io::Errno::WOULDBLOCK => Err(MezError::conflict(
-            "another persistent host is already running",
-        )),
-        Err(error) => Err(std::io::Error::from(error).into()),
-    }
 }
 
 fn optional_u16(params: &serde_json::Map<String, Value>, field: &str) -> Result<Option<u16>> {
@@ -803,16 +789,28 @@ mod tests {
         }
     }
 
-    /// The host lock permits one owner and stale socket cleanup never replaces
-    /// a live same-user host.
+    /// The durable host lock permits one owner across distinct runtime socket
+    /// roots and a rejected contender cannot advance the boot generation.
     #[tokio::test(flavor = "current_thread")]
     async fn host_bind_excludes_duplicate_live_owner() {
         let root = test_root("lock");
-        let host = HostServer::bind(config(root.clone())).unwrap();
-        let duplicate = HostServer::bind(config(root.clone())).unwrap_err();
+        let config_root = root.join("config");
+        let mut first_config = config(config_root.clone());
+        first_config.runtime_root = root.join("runtime-a");
+        let mut second_config = config(config_root.clone());
+        second_config.runtime_root = root.join("runtime-b");
+        let leases = crate::storage::lease::RemoteSessionLeaseRepository::new(
+            crate::storage::lease::default_remote_session_lease_directory(&config_root),
+        );
+
+        let host = HostServer::bind(first_config).unwrap();
+        assert_eq!(leases.boot_generation().unwrap(), 1);
+        let duplicate = HostServer::bind(second_config.clone()).unwrap_err();
         assert_eq!(duplicate.kind(), MezErrorKind::Conflict);
+        assert_eq!(leases.boot_generation().unwrap(), 1);
         drop(host);
-        let restarted = HostServer::bind(config(root.clone())).unwrap();
+        let restarted = HostServer::bind(second_config).unwrap();
+        assert_eq!(leases.boot_generation().unwrap(), 2);
         drop(restarted);
         let _ = fs::remove_dir_all(root);
     }
