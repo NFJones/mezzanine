@@ -62,6 +62,17 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<RuntimeLifecycleState>,
     },
+    /// Captures and persists one actor-consistent host checkpoint.
+    CreateHostCheckpoint {
+        /// Repository receiving the immutable checkpoint payload and manifest.
+        snapshots: SnapshotRepository,
+        /// Stable checkpoint identity selected by the host coordinator.
+        snapshot_id: String,
+        /// Optional operator-facing checkpoint label.
+        name: Option<String>,
+        /// Receives the committed snapshot metadata after asynchronous I/O.
+        reply: oneshot::Sender<Result<crate::storage::snapshot::SnapshotState>>,
+    },
     /// Represents the Metrics case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1086,7 +1097,8 @@ impl AsyncRuntimeRequest {
             | Self::TerminalClientLoopConfigSnapshot { .. } => Family::Render,
             Self::HandleControlInput { .. }
             | Self::HandleControlInputWithSnapshots { .. }
-            | Self::CompleteSnapshotControlInput { .. } => Family::Control,
+            | Self::CompleteSnapshotControlInput { .. }
+            | Self::CreateHostCheckpoint { .. } => Family::Control,
             #[cfg(test)]
             Self::EventWakeups { .. } => Family::Message,
             Self::HandleMessageInput { .. }

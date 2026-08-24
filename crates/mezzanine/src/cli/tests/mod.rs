@@ -257,6 +257,7 @@ mod auth;
 mod config;
 mod dispatch;
 mod issues;
+mod lease;
 mod mcp;
 mod memory;
 mod new_serve;

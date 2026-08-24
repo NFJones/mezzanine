@@ -137,6 +137,27 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(self.service.lifecycle_state());
                 false
             }
+            AsyncRuntimeRequest::CreateHostCheckpoint {
+                snapshots,
+                snapshot_id,
+                name,
+                reply,
+            } => {
+                let (session, context) = self.service.host_checkpoint_snapshot();
+                let task = tokio::spawn(async move {
+                    let result = snapshots
+                        .create_from_session_with_context_async(
+                            &snapshot_id,
+                            name,
+                            &session,
+                            context.as_creation_context(),
+                        )
+                        .await;
+                    let _ = reply.send(result);
+                });
+                std::mem::drop(task);
+                false
+            }
             AsyncRuntimeRequest::Metrics { reply } => {
                 let mut metrics = self.metrics.clone();
                 metrics.side_effect_queue_depth = self.side_effects.len();

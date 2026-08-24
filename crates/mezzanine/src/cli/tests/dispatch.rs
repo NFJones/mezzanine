@@ -64,6 +64,7 @@ fn help_mentions_mez_commands() {
     assert!(output.contains("detach-client"));
     assert!(output.contains("kill"));
     assert!(output.contains("kill-session"));
+    assert!(output.contains("lease"));
     assert!(output.contains("sandbox"));
     assert!(output.contains("version"));
     assert!(output.contains("--version"));

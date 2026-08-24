@@ -30,6 +30,22 @@ impl AsyncRuntimeSessionHandle {
             .await
     }
 
+    /// Captures and persists one host-admin checkpoint from serialized actor state.
+    pub(crate) async fn create_host_checkpoint(
+        &self,
+        snapshots: crate::storage::snapshot::SnapshotRepository,
+        snapshot_id: String,
+        name: Option<String>,
+    ) -> Result<crate::storage::snapshot::SnapshotState> {
+        self.request(|reply| AsyncRuntimeRequest::CreateHostCheckpoint {
+            snapshots,
+            snapshot_id,
+            name,
+            reply,
+        })
+        .await?
+    }
+
     /// Returns a watch receiver for actor-owned lifecycle state changes.
     ///
     /// Long-running socket services keep one receiver for their whole loop so

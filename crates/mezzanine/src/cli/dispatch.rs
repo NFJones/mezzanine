@@ -12,8 +12,8 @@ use super::{
     PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, ensure_host_available,
     ensure_private_socket_directory, host_create_session, host_list_sessions, host_resolve_session,
     io, json_escape, list_iroh_host_sessions, prune_stale_socket_files_in_directory, run_attach,
-    run_auth, run_config, run_control_request_for_target, run_host, run_issue, run_list, run_mcp,
-    run_memory, run_new, run_remote, run_sandbox, run_serve, run_snapshot,
+    run_auth, run_config, run_control_request_for_target, run_host, run_issue, run_lease, run_list,
+    run_mcp, run_memory, run_new, run_remote, run_sandbox, run_serve, run_snapshot,
 };
 
 // Top-level CLI run and command dispatch.
@@ -134,6 +134,7 @@ async fn run_with_inner<W: Write, E: Write>(
                     | CliCommand::List
                     | CliCommand::Kill(_)
                     | CliCommand::Detach(_)
+                    | CliCommand::Lease(_)
             )
         )
     {
@@ -224,6 +225,16 @@ async fn run_with_inner<W: Write, E: Write>(
         Some(CliCommand::Config(args)) => run_config(args, env, output_format, stdout)?,
         Some(CliCommand::Host(args)) => {
             Box::pin(run_host(args, env, output_format, stdout)).await?
+        }
+        Some(CliCommand::Lease(args)) => {
+            Box::pin(run_lease(
+                args,
+                &control_target,
+                &env,
+                output_format,
+                stdout,
+            ))
+            .await?
         }
         Some(CliCommand::New(args)) => {
             if !control_target.is_unix() {

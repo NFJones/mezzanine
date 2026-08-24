@@ -59,6 +59,8 @@ pub(super) enum CliCommand {
     Serve(super::serve::ServeCliArgs),
     /// Manages the persistent local host lifecycle.
     Host(super::host::HostCliArgs),
+    /// Inspects and manages durable remote-session leases.
+    Lease(super::lease::LeaseCliArgs),
     /// Lists resumable sessions known to this client.
     #[command(visible_alias = "list-sessions")]
     List,

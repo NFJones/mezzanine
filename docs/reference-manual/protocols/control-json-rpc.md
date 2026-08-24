@@ -168,7 +168,13 @@ The reserved host RPC catalog is `host/get`, `host/shutdown`,
 `host/session/resolve`. The lease catalog is `lease/list`, `lease/get`,
 `lease/checkpoint`, `lease/recover`, `lease/release`, `lease/revoke`, and
 `lease/gc`. Local Unix administration is authoritative by default; remote
-attach/create authority never implies lease administration.
+attach/create authority never implies lease administration. Lease targets may
+be exact lease IDs, session IDs, or unambiguous names. Active release/revoke
+requests require `terminate=true`; GC is a preview unless `apply=true` and can
+remove only released, revoked, or failed tombstones. Results omit create
+idempotency keys and creation fingerprints. Configured audit logging records
+the local host administrator, method, outcome, lease identity, and generation
+without request reasons, credentials, or other secret-bearing fields.
 
 The result contains `selected_version`, a secret-free `server` identity, the
 granted role, negotiated `capabilities`, `approval_pending`, and

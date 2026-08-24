@@ -115,6 +115,8 @@ mod issue;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod json;
+/// Exposes local durable lease administration through the host socket.
+mod lease;
 /// Exposes the mcp module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -178,6 +180,7 @@ use json::{
     CliOutputFormat, current_unix_seconds, diagnostics_json, json_escape, json_optional,
     serialize_json, write_control_response, write_json_or_plain,
 };
+use lease::run_lease;
 use mcp::{load_runtime_config_layers, run_mcp};
 use memory::run_memory;
 use project_trust::{ProjectTrustCliArgs, run_project_trust};

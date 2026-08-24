@@ -128,6 +128,7 @@ async fn run_host_serve<W: Write>(
     let runtime_root = default_socket_directory(&env.runtime)?.path;
     let iroh_policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
     let iroh = HostIrohRuntime::bind(paths.root(), iroh_policy).await?;
+    let audit_log = crate::runtime::runtime_audit_log_from_config(&structured, Some(paths.root()))?;
     let server = HostServer::bind(HostServerConfig {
         runtime_root,
         owner_uid: env.runtime.uid,
@@ -139,6 +140,7 @@ async fn run_host_serve<W: Write>(
         shutdown_timeout,
         iroh_invitation_issuer: iroh.as_ref().map(HostIrohRuntime::invitation_issuer),
         max_remote_leases,
+        audit_log,
     })?;
     let started = serde_json::json!({
         "serving": true,
@@ -550,6 +552,7 @@ mod tests {
             shutdown_timeout: Duration::from_secs(2),
             iroh_invitation_issuer: None,
             max_remote_leases: 8,
+            audit_log: None,
         })
         .unwrap();
 

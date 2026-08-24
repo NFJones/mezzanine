@@ -21,6 +21,30 @@ use super::snapshot::{
 };
 
 impl RuntimeSessionService {
+    /// Captures one actor-consistent session and owned snapshot context for
+    /// trusted host checkpoint administration.
+    pub(crate) fn host_checkpoint_snapshot(
+        &self,
+    ) -> (
+        mez_mux::session::Session,
+        crate::runtime::RuntimeSnapshotOwnedCreationContext,
+    ) {
+        (
+            (*self.session).clone(),
+            crate::runtime::RuntimeSnapshotOwnedCreationContext {
+                pane_captures: self.live_snapshot_pane_captures(),
+                navigation_source_client_id: None,
+                active_config_layers: self.live_snapshot_config_layers(),
+                frame_state: self.live_snapshot_frame_state(),
+                agent_sessions: self.live_snapshot_agent_sessions(),
+                approval_grants: self.live_snapshot_approval_grants(),
+                approval_requests: self.live_snapshot_approval_requests(),
+                message_state: self.live_snapshot_message_state(),
+                mcp_servers: self.live_snapshot_mcp_servers(),
+            },
+        )
+    }
+
     /// Captures live pane terminal state and process metadata for snapshots.
     pub fn live_snapshot_pane_captures(&self) -> Vec<SnapshotPaneCapture> {
         self.session

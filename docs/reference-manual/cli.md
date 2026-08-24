@@ -149,14 +149,22 @@ mez host status
 mez host stop [--timeout SECONDS]
 mez host reconcile
 
-mez lease list
-mez lease show <lease>
-mez lease checkpoint <lease>
-mez lease recover <lease>
-mez lease release <lease> [--terminate]
-mez lease revoke <lease> [--reason TEXT] [--terminate]
-mez lease gc [--older-than DURATION] [--dry-run]
+mez lease list [--state STATE] [--owner CLIENT_ID] [--all]
+mez lease show <lease-id|session-id|name>
+mez lease checkpoint <lease-id|session-id|name>
+mez lease recover <lease-id|session-id|name>
+mez lease release <lease-id|session-id|name> [--terminate]
+mez lease revoke <lease-id|session-id|name> [--reason TEXT] [--terminate]
+mez lease gc [--older-than DURATION] [--dry-run|--apply]
 ```
+
+Lease administration uses only the protected local host socket. Active release
+or revocation requires `--terminate`; neither operation revokes device trust.
+Garbage collection previews by default, removes only terminal lease tombstones,
+and requires `--apply` to mutate durable state. Durations accept plain seconds
+or `s`, `m`, `h`, and `d` suffixes. Checkpoint capture and recovery are
+generation-fenced, and recovery always starts fresh processes from the validated
+checkpoint rather than preserving the previous PTY or process tree.
 
 In that mode, bare local `mez` uses the protected local host, attaches to an
 eligible session, or immediately creates and attaches when none is eligible.

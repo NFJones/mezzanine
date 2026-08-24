@@ -134,9 +134,11 @@ Protected client profiles now carry an explicit scope: `host` or
 `legacy_session`. Profiles written before scope metadata existed are loaded as
 `legacy_session`; they are never silently broadened to host authority. A host
 profile uses `host_only` for pairing and health checks. Omitted-target `attach`
-and `new`, explicit lease attachment, and `attach --default` remain part of the
-dependent host-routing integration. Runtime kill, lease release, lease
-revocation, and device trust revocation are separate operations.
+and `new`, explicit lease attachment, and `attach --default` route through the
+persistent host. Lease administration remains local-only: active release or
+revocation requires explicit runtime termination, while device trust revocation
+continues to affect that device across leases. Runtime kill, lease release,
+lease revocation, and device trust revocation remain separate operations.
 
 Setup timeout errors name the failed stage and deadline, summarize pinned
 direct/relay route counts, and state when no Mezzanine authentication occurred.

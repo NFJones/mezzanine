@@ -29,6 +29,7 @@ use crate::host::session::SessionSupervisorState;
 use crate::host::shell::ResolvedShell;
 use crate::protocol::framing::ProtocolFrameCodec;
 use crate::runtime::{bind_control_socket, socket_path_for_name};
+use crate::security::audit::{AuditActor, AuditLog, AuditRecord};
 use crate::storage::registry::records_to_json;
 
 const HOST_SOCKET_FILE_NAME: &str = "host.sock";
@@ -58,6 +59,8 @@ pub(crate) struct HostServerConfig {
     pub(crate) iroh_invitation_issuer: Option<HostIrohInvitationIssuer>,
     /// Default and maximum active-lease grant for one remote principal.
     pub(crate) max_remote_leases: usize,
+    /// Configured append-only audit writer for protected host operations.
+    pub(crate) audit_log: Option<AuditLog>,
 }
 
 /// Ready local host with exclusive process and socket ownership.
@@ -66,6 +69,7 @@ pub(crate) struct HostServer {
     config: HostServerConfig,
     listener: tokio::net::UnixListener,
     router: HostSessionRouter,
+    audit_log: std::sync::Mutex<Option<AuditLog>>,
     socket_path: PathBuf,
     _lock: fs::File,
 }
@@ -99,10 +103,12 @@ impl HostServer {
             max_live_sessions: config.max_live_sessions,
         });
         let _ = router.reconcile_startup()?;
+        let audit_log = std::sync::Mutex::new(config.audit_log.clone());
         Ok(Self {
             config,
             listener,
             router,
+            audit_log,
             socket_path,
             _lock: lock,
         })
@@ -169,7 +175,23 @@ impl HostServer {
             MezError::invalid_args(format!("invalid host control JSON: {error}"))
         })?;
         let id = request.get("id").cloned().unwrap_or(Value::Null);
-        let result = self.dispatch_request(&request).await;
+        let lease_method = request
+            .get("method")
+            .and_then(Value::as_str)
+            .is_some_and(|method| method.starts_with("lease/"));
+        let result = if lease_method {
+            self.append_lease_audit(&request, None, "attempted")?;
+            let result = self.dispatch_request(&request).await;
+            let outcome = if result.is_ok() {
+                "succeeded"
+            } else {
+                "failed"
+            };
+            let _ = self.append_lease_audit(&request, Some(&result), outcome);
+            result
+        } else {
+            self.dispatch_request(&request).await
+        };
         let (body, shutdown) = match result {
             Ok((result, shutdown)) => (json!({"jsonrpc":"2.0","id":id,"result":result}), shutdown),
             Err(error) => (host_error_response(id, &error), None),
@@ -180,6 +202,69 @@ impl HostServer {
             .await?;
         framed.get_mut().flush().await?;
         Ok(shutdown)
+    }
+
+    fn append_lease_audit(
+        &self,
+        request: &Value,
+        result: Option<&Result<(Value, Option<HostShutdownRequest>)>>,
+        outcome: &str,
+    ) -> Result<()> {
+        let mut audit = self
+            .audit_log
+            .lock()
+            .map_err(|_| MezError::invalid_state("host audit lock was poisoned"))?;
+        let Some(audit) = audit.as_mut() else {
+            return Ok(());
+        };
+        let method = request
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or("lease/unknown");
+        let response = result.and_then(|result| result.as_ref().ok().map(|(value, _)| value));
+        let requested_lease = request
+            .pointer("/params/target")
+            .and_then(Value::as_str)
+            .and_then(|target| self.router.get_lease(target).ok());
+        let session_id = response
+            .and_then(|value| value.get("session_id"))
+            .and_then(Value::as_str)
+            .or_else(|| {
+                requested_lease
+                    .as_ref()
+                    .map(|lease| lease.session_id.as_str())
+            })
+            .unwrap_or("host");
+        let mut record = AuditRecord::new(
+            session_id,
+            AuditActor {
+                kind: "local_host_admin".to_string(),
+                id: self.config.owner_uid.to_string(),
+            },
+            "lease_administration",
+            method,
+        );
+        record.outcome = outcome.to_string();
+        if let Some(lease_id) = response
+            .and_then(|value| value.get("lease_id"))
+            .and_then(Value::as_str)
+            .or_else(|| {
+                requested_lease
+                    .as_ref()
+                    .map(|lease| lease.lease_id.as_str())
+            })
+        {
+            record = record.with_metadata("lease_id", lease_id);
+        }
+        if let Some(generation) = response
+            .and_then(|value| value.get("lease_generation"))
+            .and_then(Value::as_u64)
+            .or_else(|| requested_lease.as_ref().map(|lease| lease.lease_generation))
+        {
+            record = record.with_metadata("lease_generation", generation.to_string());
+        }
+        let _ = audit.append(record.sanitized())?;
+        Ok(())
     }
 
     async fn dispatch_request(
@@ -304,6 +389,98 @@ impl HostServer {
                         reason,
                         current_unix_seconds()?,
                     )?),
+                    None,
+                ))
+            }
+            "lease/list" => {
+                let state = params
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .map(parse_lease_state)
+                    .transpose()?;
+                let owner = params.get("owner").and_then(Value::as_str);
+                let include_terminal = params.get("all").and_then(Value::as_bool).unwrap_or(false);
+                let leases = self
+                    .router
+                    .list_leases(state, owner, include_terminal)?
+                    .iter()
+                    .map(remote_lease_json)
+                    .collect::<Vec<_>>();
+                Ok((json!({"leases": leases}), None))
+            }
+            "lease/get" => {
+                let target = required_string(&params, "target")?;
+                Ok((remote_lease_json(&self.router.get_lease(target)?), None))
+            }
+            "lease/checkpoint" => {
+                let target = required_string(&params, "target")?;
+                let lease = self.router.checkpoint_lease(target).await?;
+                Ok((remote_lease_json(&lease), None))
+            }
+            "lease/recover" => {
+                let target = required_string(&params, "target")?;
+                let binding = self.router.recover_lease(target).await?;
+                Ok((remote_lease_json(&binding.lease), None))
+            }
+            "lease/release" => {
+                let target = required_string(&params, "target")?;
+                let terminate = params
+                    .get("terminate")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let lease = self.router.release_lease(target, terminate).await?;
+                Ok((remote_lease_json(&lease), None))
+            }
+            "lease/revoke" => {
+                let target = required_string(&params, "target")?;
+                let terminate = params
+                    .get("terminate")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let reason = params
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let lease = self.router.revoke_lease(target, reason, terminate).await?;
+                Ok((remote_lease_json(&lease), None))
+            }
+            "lease/gc" => {
+                let now = current_unix_seconds()?;
+                let older_than_seconds = params
+                    .get("older_than_seconds")
+                    .map(|value| {
+                        value.as_u64().ok_or_else(|| {
+                            MezError::invalid_args(
+                                "lease gc older_than_seconds must be an unsigned integer",
+                            )
+                        })
+                    })
+                    .transpose()?
+                    .unwrap_or(30 * 24 * 60 * 60);
+                let cutoff = now.saturating_sub(older_than_seconds);
+                let apply = params
+                    .get("apply")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let report = self
+                    .router
+                    .garbage_collect_leases(
+                        crate::storage::lease::LeaseGarbageCollectionPolicy {
+                            released_before_unix_seconds: cutoff,
+                            revoked_before_unix_seconds: cutoff,
+                            failed_before_unix_seconds: cutoff,
+                        },
+                        apply,
+                    )
+                    .await?;
+                Ok((
+                    json!({
+                        "applied": report.applied,
+                        "lease_ids": report.preview.lease_ids,
+                        "checkpoint_snapshot_ids": report.preview.checkpoint_snapshot_ids,
+                        "deleted_snapshot_ids": report.deleted_snapshot_ids,
+                        "retained_snapshot_ids": report.retained_snapshot_ids,
+                    }),
                     None,
                 ))
             }
@@ -502,6 +679,51 @@ fn remote_trust_record_json(record: &crate::security::remote::RemoteTrustRecord)
     })
 }
 
+fn parse_lease_state(value: &str) -> Result<crate::storage::lease::RemoteSessionLeaseState> {
+    match value {
+        "pending" => Ok(crate::storage::lease::RemoteSessionLeaseState::Pending),
+        "active" => Ok(crate::storage::lease::RemoteSessionLeaseState::Active),
+        "recoverable" => Ok(crate::storage::lease::RemoteSessionLeaseState::Recoverable),
+        "released" => Ok(crate::storage::lease::RemoteSessionLeaseState::Released),
+        "revoked" => Ok(crate::storage::lease::RemoteSessionLeaseState::Revoked),
+        "failed" => Ok(crate::storage::lease::RemoteSessionLeaseState::Failed),
+        _ => Err(MezError::invalid_args(
+            "lease state must be pending, active, recoverable, released, revoked, or failed",
+        )),
+    }
+}
+
+fn remote_lease_json(lease: &crate::storage::lease::RemoteSessionLease) -> Value {
+    json!({
+        "lease_id": lease.lease_id,
+        "session_id": lease.session_id,
+        "owner_principal_id": lease.owner_principal_id,
+        "name": lease.name,
+        "default_for_owner": lease.default_for_owner,
+        "state": match lease.state {
+            crate::storage::lease::RemoteSessionLeaseState::Pending => "pending",
+            crate::storage::lease::RemoteSessionLeaseState::Active => "active",
+            crate::storage::lease::RemoteSessionLeaseState::Recoverable => "recoverable",
+            crate::storage::lease::RemoteSessionLeaseState::Released => "released",
+            crate::storage::lease::RemoteSessionLeaseState::Revoked => "revoked",
+            crate::storage::lease::RemoteSessionLeaseState::Failed => "failed",
+        },
+        "created_at_unix_seconds": lease.created_at_unix_seconds,
+        "updated_at_unix_seconds": lease.updated_at_unix_seconds,
+        "activated_at_unix_seconds": lease.activated_at_unix_seconds,
+        "terminal_at_unix_seconds": lease.terminal_at_unix_seconds,
+        "checkpoint": lease.checkpoint.as_ref().map(|checkpoint| json!({
+            "snapshot_id": checkpoint.snapshot_id,
+            "snapshot_version": checkpoint.snapshot_version,
+            "session_id": checkpoint.session_id,
+            "recorded_at_unix_seconds": checkpoint.recorded_at_unix_seconds,
+        })),
+        "failure": lease.failure,
+        "boot_generation": lease.boot_generation,
+        "lease_generation": lease.lease_generation,
+    })
+}
+
 fn session_record_json(record: &crate::storage::registry::SessionRecord) -> Value {
     json!({
         "session_id": record.session_id,
@@ -536,7 +758,12 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use crate::config::{ConfigFormat, ConfigScope};
+    use crate::control::RequestedRole;
     use crate::host::shell::{ResolvedShell, ShellSource};
+    use crate::security::audit::{AuditConfig, AuditLog};
+    use crate::security::remote::{
+        RemoteHostRoutingAuthority, RemotePrincipal, RemoteRoleCeiling, RemoteSessionAttachScope,
+    };
 
     use super::*;
 
@@ -572,6 +799,7 @@ mod tests {
             shutdown_timeout: Duration::from_secs(2),
             iroh_invitation_issuer: None,
             max_remote_leases: 8,
+            audit_log: None,
         }
     }
 
@@ -617,5 +845,141 @@ mod tests {
             .unwrap();
         drop(host);
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Lease RPCs preserve lifecycle distinctions, return secret-free records,
+    /// and emit configured local-host audit records for success and failure.
+    #[tokio::test(flavor = "current_thread")]
+    async fn lease_rpc_catalog_is_secret_safe_and_audited() {
+        let root = test_root("lease-rpc");
+        let audit_path = root.join("host-audit.jsonl");
+        let mut host_config = config(root.clone());
+        host_config.audit_log = Some(AuditLog::new(AuditConfig {
+            enabled: true,
+            path: audit_path.clone(),
+            hash_chain: false,
+            required: true,
+        }));
+        let host = HostServer::bind(host_config).unwrap();
+        let principal = RemotePrincipal {
+            trust_record_id: "owner-record".to_string(),
+            endpoint_id: "owner-endpoint".to_string(),
+            role_ceiling: RemoteRoleCeiling::Primary,
+            host_routing: RemoteHostRoutingAuthority {
+                session_create: true,
+                session_list: true,
+                session_attach_scope: RemoteSessionAttachScope::Own,
+                max_active_leases: 2,
+                max_live_sessions: 2,
+                lease_lifetime_ceiling_seconds: None,
+            },
+            requested_role: RequestedRole::Primary,
+        };
+        let created = host
+            .router
+            .create_remote(
+                &principal,
+                crate::host::router::RemoteSessionCreateRequest {
+                    name: Some("rpc-lease".to_string()),
+                    idempotency_key: "secret-create-key".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let listed = exchange_host_request(
+            &host,
+            "lease/list",
+            json!({"state":"active","owner":"owner-record"}),
+        )
+        .await;
+        assert_eq!(listed["result"]["leases"].as_array().unwrap().len(), 1);
+        let encoded = listed.to_string();
+        assert!(!encoded.contains("idempotency"), "{encoded}");
+        assert!(!encoded.contains("fingerprint"), "{encoded}");
+
+        let checkpointed =
+            exchange_host_request(&host, "lease/checkpoint", json!({"target":"rpc-lease"})).await;
+        assert!(checkpointed["result"]["checkpoint"]["snapshot_id"].is_string());
+        let refused = exchange_host_request(
+            &host,
+            "lease/release",
+            json!({"target":"rpc-lease","terminate":false}),
+        )
+        .await;
+        assert_eq!(refused["error"]["data"]["mezzanine_code"], "conflict");
+        let revoked = exchange_host_request(
+            &host,
+            "lease/revoke",
+            json!({
+                "target": created.lease.lease_id,
+                "reason": "operator maintenance",
+                "terminate": true
+            }),
+        )
+        .await;
+        assert_eq!(revoked["result"]["state"], "revoked");
+        let preview = exchange_host_request(
+            &host,
+            "lease/gc",
+            json!({"older_than_seconds":0,"apply":false}),
+        )
+        .await;
+        assert_eq!(preview["result"]["applied"], false);
+        assert_eq!(preview["result"]["lease_ids"].as_array().unwrap().len(), 1);
+
+        host.router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let audit = fs::read_to_string(audit_path).unwrap();
+        assert!(
+            audit.contains(r#""event_type":"lease_administration""#),
+            "{audit}"
+        );
+        assert!(audit.contains(r#""action":"lease/release""#), "{audit}");
+        assert!(audit.contains(r#""outcome":"failed""#), "{audit}");
+        assert!(audit.contains(r#""lease_id":"#), "{audit}");
+        assert!(!audit.contains("secret-create-key"), "{audit}");
+        assert!(!audit.contains("operator maintenance"), "{audit}");
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    async fn exchange_host_request(host: &HostServer, method: &str, params: Value) -> Value {
+        let (mut server_stream, mut client_stream) = tokio::net::UnixStream::pair().unwrap();
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": "lease-test",
+            "method": method,
+            "params": params,
+        })
+        .to_string();
+        let server = host.serve_connection(&mut server_stream);
+        let client = async {
+            client_stream
+                .write_all(&crate::control::encode_control_body(&request))
+                .await
+                .unwrap();
+            client_stream.flush().await.unwrap();
+            let mut bytes = Vec::new();
+            let mut buffer = [0u8; 8192];
+            loop {
+                let read = tokio::io::AsyncReadExt::read(&mut client_stream, &mut buffer)
+                    .await
+                    .unwrap();
+                assert!(read > 0, "host closed before returning a complete response");
+                bytes.extend_from_slice(&buffer[..read]);
+                if let Ok((body, _)) =
+                    crate::control::decode_control_frame(&bytes, HOST_CONTROL_MAX_CONTENT_LENGTH)
+                {
+                    return serde_json::from_str(&body).unwrap();
+                }
+            }
+        };
+        let (served, response) = tokio::join!(server, client);
+        assert!(served.unwrap().is_none());
+        response
     }
 }

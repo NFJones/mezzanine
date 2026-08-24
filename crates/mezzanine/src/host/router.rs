@@ -26,6 +26,7 @@ use crate::host::shell::ResolvedShell;
 use crate::runtime::socket_path_for_name;
 use crate::security::remote::{RemotePrincipal, RemoteSessionAttachScope};
 use crate::storage::lease::{
+    LeaseCheckpointReference, LeaseGarbageCollectionPolicy, LeaseGarbageCollectionPreview,
     LeaseReservation, LeaseReservationRequest, RemoteSessionLease, RemoteSessionLeaseRepository,
     RemoteSessionLeaseState, default_remote_session_lease_directory,
 };
@@ -73,6 +74,15 @@ pub(crate) struct HostReconciliationReport {
     pub(crate) revoked: usize,
     pub(crate) failed: usize,
     pub(crate) pruned_registry_records: usize,
+}
+
+/// Result of one safe lease garbage-collection preview or application.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HostLeaseGarbageCollectionReport {
+    pub(crate) preview: LeaseGarbageCollectionPreview,
+    pub(crate) applied: bool,
+    pub(crate) deleted_snapshot_ids: Vec<String>,
+    pub(crate) retained_snapshot_ids: Vec<String>,
 }
 
 /// Shared host owner for local discovery and remote durable routing.
@@ -363,6 +373,200 @@ impl HostSessionRouter {
         &self.registry
     }
 
+    /// Lists durable leases for local administration with optional filters.
+    pub(crate) fn list_leases(
+        &self,
+        state: Option<RemoteSessionLeaseState>,
+        owner: Option<&str>,
+        include_terminal: bool,
+    ) -> Result<Vec<RemoteSessionLease>> {
+        let include_terminal =
+            include_terminal || state.is_some_and(RemoteSessionLeaseState::is_garbage_collectable);
+        Ok(self
+            .leases
+            .list()?
+            .into_iter()
+            .filter(|lease| state.is_none_or(|state| lease.state == state))
+            .filter(|lease| owner.is_none_or(|owner| lease.owner_principal_id == owner))
+            .filter(|lease| include_terminal || !lease.state.is_garbage_collectable())
+            .collect())
+    }
+
+    /// Resolves one lease by lease id, session id, or exact name.
+    pub(crate) fn get_lease(&self, target: &str) -> Result<RemoteSessionLease> {
+        resolve_lease_target(self.leases.list()?, target)
+    }
+
+    /// Captures one actor-consistent checkpoint and generation-fences its lease reference.
+    pub(crate) async fn checkpoint_lease(&self, target: &str) -> Result<RemoteSessionLease> {
+        let _creation = self.creation_lock.lock().await;
+        let lease = self.get_lease(target)?;
+        if lease.state != RemoteSessionLeaseState::Active {
+            return Err(MezError::invalid_state(
+                "only an active remote session lease can be checkpointed",
+            ));
+        }
+        let runtime = self.supervisor.lookup(&lease.session_id)?;
+        let snapshot_id = format!(
+            "lease-checkpoint-{}-{}-{}",
+            lease.session_id.trim_start_matches('$'),
+            lease.boot_generation,
+            lease.lease_generation
+        );
+        let snapshots = SnapshotRepository::new(self.config.config_root.join("layouts"));
+        let snapshot = runtime
+            .actor()
+            .create_host_checkpoint(
+                snapshots.clone(),
+                snapshot_id,
+                Some(format!("lease checkpoint {}", lease.lease_id)),
+            )
+            .await?;
+        let now = current_unix_seconds()?;
+        let updated = self.leases.update_checkpoint(
+            &lease.lease_id,
+            lease.boot_generation,
+            lease.lease_generation,
+            LeaseCheckpointReference {
+                snapshot_id: snapshot.id.clone(),
+                snapshot_version: snapshot.version,
+                session_id: lease.session_id,
+                recorded_at_unix_seconds: now,
+            },
+            now,
+        );
+        if updated.is_err() {
+            let _ = snapshots.delete_async(&snapshot.id).await;
+        }
+        updated
+    }
+
+    /// Explicitly restores one recoverable lease or reports an already-live lease.
+    pub(crate) async fn recover_lease(&self, target: &str) -> Result<RemoteSessionBinding> {
+        let _creation = self.creation_lock.lock().await;
+        let lease = self.get_lease(target)?;
+        match lease.state {
+            RemoteSessionLeaseState::Active => {
+                let runtime = self.supervisor.lookup(&lease.session_id)?;
+                Ok(RemoteSessionBinding { lease, runtime })
+            }
+            RemoteSessionLeaseState::Recoverable => self.recover_lease_locked(lease).await,
+            RemoteSessionLeaseState::Released | RemoteSessionLeaseState::Revoked => Err(
+                MezError::forbidden("remote session lease cannot be recovered"),
+            ),
+            _ => Err(MezError::invalid_state(
+                "remote session lease is not recoverable",
+            )),
+        }
+    }
+
+    /// Releases a durable reservation, requiring explicit termination when live.
+    pub(crate) async fn release_lease(
+        &self,
+        target: &str,
+        terminate: bool,
+    ) -> Result<RemoteSessionLease> {
+        let _creation = self.creation_lock.lock().await;
+        let lease = self.get_lease(target)?;
+        if lease.state == RemoteSessionLeaseState::Released {
+            return Ok(lease);
+        }
+        if lease.state == RemoteSessionLeaseState::Revoked {
+            return Err(MezError::forbidden(
+                "revoked remote session lease cannot be released",
+            ));
+        }
+        self.stop_live_lease_if_requested(&lease, terminate).await?;
+        self.leases.release(
+            &lease.lease_id,
+            lease.boot_generation,
+            lease.lease_generation,
+            current_unix_seconds()?,
+        )
+    }
+
+    /// Revokes future attachment and recovery without revoking device trust.
+    pub(crate) async fn revoke_lease(
+        &self,
+        target: &str,
+        reason: Option<String>,
+        terminate: bool,
+    ) -> Result<RemoteSessionLease> {
+        let _creation = self.creation_lock.lock().await;
+        let lease = self.get_lease(target)?;
+        if lease.state == RemoteSessionLeaseState::Revoked {
+            return Ok(lease);
+        }
+        if lease.state == RemoteSessionLeaseState::Released {
+            return Err(MezError::forbidden(
+                "released remote session lease cannot be revoked",
+            ));
+        }
+        self.stop_live_lease_if_requested(&lease, terminate).await?;
+        self.leases.revoke(
+            &lease.lease_id,
+            lease.boot_generation,
+            lease.lease_generation,
+            current_unix_seconds()?,
+            reason,
+        )
+    }
+
+    /// Previews or applies terminal lease garbage collection and checkpoint cleanup.
+    pub(crate) async fn garbage_collect_leases(
+        &self,
+        policy: LeaseGarbageCollectionPolicy,
+        apply: bool,
+    ) -> Result<HostLeaseGarbageCollectionReport> {
+        let _creation = self.creation_lock.lock().await;
+        let preview = if apply {
+            self.leases.apply_gc(policy)?
+        } else {
+            self.leases.preview_gc(policy)?
+        };
+        let mut deleted_snapshot_ids = Vec::new();
+        let mut retained_snapshot_ids = Vec::new();
+        if apply {
+            let remaining = self.leases.list()?;
+            let snapshots = SnapshotRepository::new(self.config.config_root.join("layouts"));
+            for snapshot_id in &preview.checkpoint_snapshot_ids {
+                let still_referenced = remaining.iter().any(|lease| {
+                    lease
+                        .checkpoint
+                        .as_ref()
+                        .is_some_and(|checkpoint| checkpoint.snapshot_id == *snapshot_id)
+                });
+                if still_referenced || !snapshots.delete_async(snapshot_id).await.unwrap_or(false) {
+                    retained_snapshot_ids.push(snapshot_id.clone());
+                } else {
+                    deleted_snapshot_ids.push(snapshot_id.clone());
+                }
+            }
+        }
+        Ok(HostLeaseGarbageCollectionReport {
+            preview,
+            applied: apply,
+            deleted_snapshot_ids,
+            retained_snapshot_ids,
+        })
+    }
+
+    async fn stop_live_lease_if_requested(
+        &self,
+        lease: &RemoteSessionLease,
+        terminate: bool,
+    ) -> Result<()> {
+        if lease.state != RemoteSessionLeaseState::Active {
+            return Ok(());
+        }
+        if !terminate {
+            return Err(MezError::conflict(
+                "active remote session lease requires explicit termination",
+            ));
+        }
+        self.supervisor.stop(&lease.session_id, true).await
+    }
+
     async fn resolve_replayed_create(
         &self,
         mut lease: RemoteSessionLease,
@@ -613,6 +817,31 @@ fn recovery_failure(context: &str, error: &MezError) -> String {
         }
     }
     failure
+}
+
+fn resolve_lease_target(
+    leases: Vec<RemoteSessionLease>,
+    target: &str,
+) -> Result<RemoteSessionLease> {
+    if target.trim().is_empty() {
+        return Err(MezError::invalid_args(
+            "remote session lease target is required",
+        ));
+    }
+    let mut matches = leases.into_iter().filter(|lease| {
+        lease.lease_id == target
+            || lease.session_id == target
+            || lease.name.as_deref() == Some(target)
+    });
+    let lease = matches.next().ok_or_else(|| {
+        MezError::new(MezErrorKind::NotFound, "remote session lease was not found")
+    })?;
+    if matches.next().is_some() {
+        return Err(MezError::conflict(
+            "remote session lease target is ambiguous",
+        ));
+    }
+    Ok(lease)
 }
 
 fn validate_session_name(name: Option<&str>) -> Result<()> {
@@ -948,6 +1177,150 @@ mod tests {
             .unwrap();
         assert_eq!(failed_again.boot_generation, 2);
         assert!(third_router.snapshots().await.unwrap().is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Local lease administration captures a live checkpoint, restores it
+    /// after restart, requires explicit live termination, keeps release and
+    /// revoke distinct, and garbage-collects only terminal records.
+    #[tokio::test(flavor = "current_thread")]
+    async fn lease_administration_is_generation_fenced_and_gc_safe() {
+        let root = test_root("lease-administration");
+        let config = test_config(&root);
+        let principal = test_principal("owner", 2);
+        let first_router = HostSessionRouter::new(config.clone());
+        let created = first_router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("admin-one".to_string()),
+                    idempotency_key: "create-admin-one".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            first_router.list_leases(None, None, false).unwrap().len(),
+            1
+        );
+        assert_eq!(
+            first_router.get_lease("admin-one").unwrap().lease_id,
+            created.lease.lease_id
+        );
+        assert_eq!(
+            first_router
+                .get_lease(&created.lease.session_id)
+                .unwrap()
+                .lease_id,
+            created.lease.lease_id
+        );
+
+        let checkpointed = first_router
+            .checkpoint_lease(&created.lease.lease_id)
+            .await
+            .unwrap();
+        let checkpoint = checkpointed.checkpoint.clone().unwrap();
+        SnapshotRepository::new(config.config_root.join("layouts"))
+            .inspect(&checkpoint.snapshot_id)
+            .unwrap();
+        first_router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        drop(created);
+        drop(first_router);
+
+        let router = HostSessionRouter::new(config.clone());
+        assert_eq!(router.reconcile_startup().unwrap().recoverable, 1);
+        let recovered = router
+            .recover_lease(&checkpointed.session_id)
+            .await
+            .unwrap();
+        assert_eq!(recovered.lease.state, RemoteSessionLeaseState::Active);
+        let release_conflict = router
+            .release_lease(&recovered.lease.lease_id, false)
+            .await
+            .unwrap_err();
+        assert_eq!(release_conflict.kind(), MezErrorKind::Conflict);
+        let released = router
+            .release_lease(&recovered.lease.lease_id, true)
+            .await
+            .unwrap();
+        assert_eq!(released.state, RemoteSessionLeaseState::Released);
+        assert_eq!(
+            router
+                .release_lease(&released.lease_id, false)
+                .await
+                .unwrap()
+                .lease_generation,
+            released.lease_generation
+        );
+        assert!(router.list_leases(None, None, false).unwrap().is_empty());
+        assert_eq!(
+            router
+                .list_leases(Some(RemoteSessionLeaseState::Released), None, true)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let second = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("admin-two".to_string()),
+                    idempotency_key: "create-admin-two".to_string(),
+                    size: Size::new(100, 30).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let revoke_conflict = router
+            .revoke_lease(&second.lease.lease_id, None, false)
+            .await
+            .unwrap_err();
+        assert_eq!(revoke_conflict.kind(), MezErrorKind::Conflict);
+        let revoked = router
+            .revoke_lease(
+                &second.lease.lease_id,
+                Some("operator revoked lease".to_string()),
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(revoked.state, RemoteSessionLeaseState::Revoked);
+        assert_eq!(revoked.failure.as_deref(), Some("operator revoked lease"));
+        assert_eq!(
+            router
+                .revoke_lease(&revoked.lease_id, None, false)
+                .await
+                .unwrap()
+                .lease_generation,
+            revoked.lease_generation
+        );
+
+        let policy = LeaseGarbageCollectionPolicy {
+            released_before_unix_seconds: u64::MAX,
+            revoked_before_unix_seconds: u64::MAX,
+            failed_before_unix_seconds: u64::MAX,
+        };
+        let preview = router.garbage_collect_leases(policy, false).await.unwrap();
+        assert!(!preview.applied);
+        assert_eq!(preview.preview.lease_ids.len(), 2);
+        assert_eq!(
+            preview.preview.checkpoint_snapshot_ids,
+            vec![checkpoint.snapshot_id.clone()]
+        );
+        let applied = router.garbage_collect_leases(policy, true).await.unwrap();
+        assert!(applied.applied);
+        assert_eq!(applied.deleted_snapshot_ids, vec![checkpoint.snapshot_id]);
+        assert!(applied.retained_snapshot_ids.is_empty());
+        assert!(router.list_leases(None, None, true).unwrap().is_empty());
+        router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
         let _ = fs::remove_dir_all(root);
     }
 
