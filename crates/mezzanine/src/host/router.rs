@@ -420,74 +420,6 @@ impl HostSessionRouter {
         &self.registry
     }
 
-    /// Lists durable leases for local administration with optional filters.
-    pub(crate) fn list_leases(
-        &self,
-        state: Option<RemoteSessionLeaseState>,
-        owner: Option<&str>,
-        include_terminal: bool,
-    ) -> Result<Vec<RemoteSessionLease>> {
-        let include_terminal =
-            include_terminal || state.is_some_and(RemoteSessionLeaseState::is_garbage_collectable);
-        Ok(self
-            .leases
-            .list()?
-            .into_iter()
-            .filter(|lease| state.is_none_or(|state| lease.state == state))
-            .filter(|lease| owner.is_none_or(|owner| lease.owner_principal_id == owner))
-            .filter(|lease| include_terminal || !lease.state.is_garbage_collectable())
-            .collect())
-    }
-
-    /// Resolves one lease by lease id, session id, or exact name.
-    pub(crate) fn get_lease(&self, target: &str) -> Result<RemoteSessionLease> {
-        resolve_lease_target(self.leases.list()?, target)
-    }
-
-    /// Captures one actor-consistent checkpoint and generation-fences its lease reference.
-    pub(crate) async fn checkpoint_lease(&self, target: &str) -> Result<RemoteSessionLease> {
-        let _creation = self.creation_lock.lock().await;
-        let lease = self.get_lease(target)?;
-        if lease.state != RemoteSessionLeaseState::Active {
-            return Err(MezError::invalid_state(
-                "only an active remote session lease can be checkpointed",
-            ));
-        }
-        let runtime = self.supervisor.lookup(&lease.session_id)?;
-        let snapshot_id = format!(
-            "lease-checkpoint-{}-{}-{}",
-            lease.session_id.trim_start_matches('$'),
-            lease.boot_generation,
-            lease.lease_generation
-        );
-        let snapshots = SnapshotRepository::new(self.config.config_root.join("layouts"));
-        let snapshot = runtime
-            .actor()
-            .create_host_checkpoint(
-                snapshots.clone(),
-                snapshot_id,
-                Some(format!("lease checkpoint {}", lease.lease_id)),
-            )
-            .await?;
-        let now = current_unix_seconds()?;
-        let updated = self.leases.update_checkpoint(
-            &lease.lease_id,
-            lease.boot_generation,
-            lease.lease_generation,
-            LeaseCheckpointReference {
-                snapshot_id: snapshot.id.clone(),
-                snapshot_version: snapshot.version,
-                session_id: lease.session_id,
-                recorded_at_unix_seconds: now,
-            },
-            now,
-        );
-        if updated.is_err() {
-            let _ = snapshots.delete_async(&snapshot.id).await;
-        }
-        updated
-    }
-
     /// Requires a fresh checkpoint for every currently active durable lease.
     ///
     /// Periodic maintenance remains best-effort, but graceful host shutdown
@@ -517,60 +449,6 @@ impl HostSessionRouter {
                 failed.join(", ")
             )))
         }
-    }
-
-    /// Revokes due finite leases and stops any runtime that still backs them.
-    pub(crate) async fn expire_due_leases(&self) -> Result<usize> {
-        let _creation = self.creation_lock.lock().await;
-        self.expire_due_leases_locked(current_unix_seconds()?).await
-    }
-
-    pub(crate) fn registry(&self) -> &SessionRegistry {
-        &self.registry
-    }
-
-    async fn expire_due_leases_locked(&self, now_unix_seconds: u64) -> Result<usize> {
-        let expired = self.leases.expire_due(now_unix_seconds)?;
-        for lease in &expired {
-            if self.supervisor.lookup(&lease.session_id).is_ok() {
-                let _ = self.supervisor.stop(&lease.session_id, true).await;
-            }
-        }
-        Ok(expired.len())
-    }
-
-    fn admit_remote_create(&self, principal_id: &str, limit: usize) -> Result<()> {
-        let now = Instant::now();
-        let mut admission = self
-            .create_admission
-            .lock()
-            .map_err(|_| MezError::invalid_state("remote create admission lock was poisoned"))?;
-        admission.retain(|_, entry| {
-            now.saturating_duration_since(entry.window_started) < REMOTE_CREATE_RATE_WINDOW
-        });
-        if !admission.contains_key(principal_id) && admission.len() >= MAX_TRACKED_CREATE_PRINCIPALS
-        {
-            return Err(MezError::rate_limited(
-                "remote create admission tracking is at capacity",
-            ));
-        }
-        let entry = admission
-            .entry(principal_id.to_string())
-            .or_insert(PrincipalCreateAdmission {
-                window_started: now,
-                attempts: 0,
-            });
-        if now.saturating_duration_since(entry.window_started) >= REMOTE_CREATE_RATE_WINDOW {
-            entry.window_started = now;
-            entry.attempts = 0;
-        }
-        if entry.attempts >= limit {
-            return Err(MezError::rate_limited(
-                "remote principal create rate limit has been reached",
-            ));
-        }
-        entry.attempts = entry.attempts.saturating_add(1);
-        Ok(())
     }
 
     /// Lists durable leases for local administration with optional filters.
@@ -1094,9 +972,7 @@ enum RecoveryFailureDisposition {
 
 fn recovery_artifact_failure(error: MezError) -> (MezError, RecoveryFailureDisposition) {
     let disposition = match error.kind() {
-        MezErrorKind::Io | MezErrorKind::Conflict | MezErrorKind::RateLimited => {
-            RecoveryFailureDisposition::Retryable
-        }
+        MezErrorKind::Io | MezErrorKind::Conflict => RecoveryFailureDisposition::Retryable,
         _ => RecoveryFailureDisposition::Terminal,
     };
     (error, disposition)
