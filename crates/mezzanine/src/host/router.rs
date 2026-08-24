@@ -7,7 +7,7 @@
 //! matching targets so unauthorized callers cannot infer lease existence.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mez_core::ids::SessionId;
@@ -46,6 +46,33 @@ pub(crate) struct HostSessionRouterConfig {
     pub(crate) shell: ResolvedShell,
     pub(crate) max_sessions: usize,
     pub(crate) max_live_sessions: usize,
+}
+
+/// Shared admission lifecycle for every local and remote host front door.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum HostAdmissionState {
+    Serving = 0,
+    Draining = 1,
+    Stopped = 2,
+}
+
+impl HostAdmissionState {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::Serving,
+            1 => Self::Draining,
+            _ => Self::Stopped,
+        }
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Serving => "serving",
+            Self::Draining => "draining",
+            Self::Stopped => "stopped",
+        }
+    }
 }
 
 /// Inputs normalized before one remote create transaction.
@@ -101,6 +128,7 @@ pub(crate) struct HostSessionRouter {
     registry: SessionRegistry,
     leases: RemoteSessionLeaseRepository,
     creation_lock: Arc<tokio::sync::Mutex<()>>,
+    admission_state: Arc<AtomicU8>,
 }
 
 impl HostSessionRouter {
@@ -119,6 +147,75 @@ impl HostSessionRouter {
             registry,
             leases,
             creation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            admission_state: Arc::new(AtomicU8::new(HostAdmissionState::Serving as u8)),
+        }
+    }
+
+    /// Waits for in-flight serialized admission to settle, then fences all
+    /// later create, attach, and recovery operations across cloned routers.
+    pub(crate) async fn begin_draining(&self) -> Result<()> {
+        self.start_draining()?;
+        let _creation = self.creation_lock.lock().await;
+        Ok(())
+    }
+
+    /// Fences new admissions immediately. Callers then await `begin_draining`
+    /// while continuing to poll already admitted work to completion.
+    pub(crate) fn start_draining(&self) -> Result<()> {
+        loop {
+            match self.admission_state() {
+                HostAdmissionState::Serving => {
+                    if self
+                        .admission_state
+                        .compare_exchange(
+                            HostAdmissionState::Serving as u8,
+                            HostAdmissionState::Draining as u8,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return Ok(());
+                    }
+                }
+                HostAdmissionState::Draining => return Ok(()),
+                HostAdmissionState::Stopped => {
+                    return Err(MezError::conflict(
+                        "host session admission has already stopped",
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Marks the completed terminal lifecycle after all supervised runtimes
+    /// have settled.
+    pub(crate) fn mark_stopped(&self) -> Result<()> {
+        match self.admission_state() {
+            HostAdmissionState::Draining | HostAdmissionState::Stopped => {
+                self.admission_state
+                    .store(HostAdmissionState::Stopped as u8, Ordering::Release);
+                Ok(())
+            }
+            HostAdmissionState::Serving => Err(MezError::invalid_state(
+                "host session admission must drain before stopping",
+            )),
+        }
+    }
+
+    pub(crate) fn admission_state(&self) -> HostAdmissionState {
+        HostAdmissionState::from_u8(self.admission_state.load(Ordering::Acquire))
+    }
+
+    fn require_serving(&self) -> Result<()> {
+        match self.admission_state() {
+            HostAdmissionState::Serving => Ok(()),
+            HostAdmissionState::Draining => Err(MezError::conflict(
+                "host is draining and is not accepting session operations",
+            )),
+            HostAdmissionState::Stopped => Err(MezError::conflict(
+                "host has stopped accepting session operations",
+            )),
         }
     }
 
@@ -183,6 +280,7 @@ impl HostSessionRouter {
         size: Size,
     ) -> Result<SessionRecord> {
         let _creation = self.creation_lock.lock().await;
+        self.require_serving()?;
         self.create_local_locked(name, size).await
     }
 
@@ -190,7 +288,8 @@ impl HostSessionRouter {
     /// while holding the same synchronization boundary used by fresh creation.
     pub(crate) async fn resolve_or_create_local(&self, size: Size) -> Result<SessionRecord> {
         let _creation = self.creation_lock.lock().await;
-        match self.resolve_local(None, "primary") {
+        self.require_serving()?;
+        match self.resolve_local_locked(None, "primary") {
             Ok(record) => Ok(record),
             Err(error) if error.kind() == MezErrorKind::NotFound => {
                 self.create_local_locked(None, size).await
@@ -213,11 +312,22 @@ impl HostSessionRouter {
     }
 
     /// Resolves one live local session without creating a replacement.
-    pub(crate) fn resolve_local(
+    pub(crate) async fn resolve_local(
         &self,
         target: Option<&str>,
         requested_role: &str,
     ) -> Result<SessionRecord> {
+        let _creation = self.creation_lock.lock().await;
+        self.require_serving()?;
+        self.resolve_local_locked(target, requested_role)
+    }
+
+    fn resolve_local_locked(
+        &self,
+        target: Option<&str>,
+        requested_role: &str,
+    ) -> Result<SessionRecord> {
+        self.require_serving()?;
         let _ = self.registry.prune_stale()?;
         let records = self.registry.list()?;
         let record = match target {
@@ -256,6 +366,7 @@ impl HostSessionRouter {
         }
         validate_session_name(request.name.as_deref())?;
         let _creation = self.creation_lock.lock().await;
+        self.require_serving()?;
         let now = current_unix_seconds()?;
         let session_id = next_session_id()?;
         let lease_id = format!("lease-{}", session_id.trim_start_matches('$'));
@@ -334,6 +445,8 @@ impl HostSessionRouter {
         principal: &RemotePrincipal,
         target_json: Option<&str>,
     ) -> Result<RemoteSessionBinding> {
+        let _creation = self.creation_lock.lock().await;
+        self.require_serving()?;
         let mut visible = self.visible_leases(principal)?;
         visible.retain(|lease| {
             matches!(
@@ -376,7 +489,7 @@ impl HostSessionRouter {
                 Ok(RemoteSessionBinding { lease, runtime })
             }
             RemoteSessionLeaseState::Recoverable => {
-                let _creation = self.creation_lock.lock().await;
+                self.require_serving()?;
                 let lease = self.leases.get(&lease.lease_id)?.ok_or_else(|| {
                     MezError::new(MezErrorKind::NotFound, "remote session was not found")
                 })?;
@@ -537,6 +650,7 @@ impl HostSessionRouter {
     /// Explicitly restores one recoverable lease or reports an already-live lease.
     pub(crate) async fn recover_lease(&self, target: &str) -> Result<RemoteSessionBinding> {
         let _creation = self.creation_lock.lock().await;
+        self.require_serving()?;
         let lease = self.get_lease(target)?;
         match lease.state {
             RemoteSessionLeaseState::Active => {
@@ -2104,6 +2218,119 @@ mod tests {
         assert_eq!(cleanup.deleted_snapshot_ids, vec![checkpoint.snapshot_id]);
         assert!(cleanup.retained_snapshot_ids.is_empty());
         assert_eq!(router.reconcile().unwrap().snapshot_cleanup_pending, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Entering the shared drain barrier fences every local and remote path
+    /// that can admit or attach a session before shutdown enumerates runtimes.
+    #[tokio::test(flavor = "current_thread")]
+    async fn draining_fences_local_and_remote_session_admission() {
+        let root = test_root("drain-admission");
+        let router = HostSessionRouter::new(test_config(&root));
+        let principal = test_principal("drain-owner", 3);
+        let active = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("drain-active".to_string()),
+                    idempotency_key: "drain-active-create".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let recoverable = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("drain-recoverable".to_string()),
+                    idempotency_key: "drain-recoverable-create".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let recoverable_lease = router
+            .checkpoint_lease(&recoverable.lease.lease_id)
+            .await
+            .unwrap();
+        recoverable
+            .runtime
+            .force_shutdown("prepare drain recovery test".to_string())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if router
+                    .get_lease(&recoverable_lease.lease_id)
+                    .is_ok_and(|lease| lease.state == RemoteSessionLeaseState::Recoverable)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let snapshots_before_drain = router.snapshots().await.unwrap();
+        let in_flight_admission = router.creation_lock.lock().await;
+        let draining_router = router.clone();
+        let drain_task = tokio::spawn(async move { draining_router.begin_draining().await });
+        tokio::task::yield_now().await;
+        assert_eq!(router.admission_state(), HostAdmissionState::Draining);
+        assert!(!drain_task.is_finished());
+        drop(in_flight_admission);
+        drain_task.await.unwrap().unwrap();
+
+        let local_create = router
+            .create_local(Some("late-local".to_string()), Size::new(80, 24).unwrap())
+            .await
+            .unwrap_err();
+        assert_eq!(local_create.kind(), MezErrorKind::Conflict);
+        let local_resolve = router.resolve_local(None, "primary").await.unwrap_err();
+        assert_eq!(local_resolve.kind(), MezErrorKind::Conflict);
+        let remote_create = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("late-remote".to_string()),
+                    idempotency_key: "late-remote-create".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(remote_create.kind(), MezErrorKind::Conflict);
+        let active_attach = router
+            .resolve_remote(
+                &principal,
+                Some(&serde_json::json!({"lease_id":active.lease.lease_id}).to_string()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(active_attach.kind(), MezErrorKind::Conflict);
+        let recovery = router
+            .recover_lease(&recoverable_lease.lease_id)
+            .await
+            .unwrap_err();
+        assert_eq!(recovery.kind(), MezErrorKind::Conflict);
+        assert_eq!(router.snapshots().await.unwrap(), snapshots_before_drain);
+        assert_eq!(
+            router.get_lease(&active.lease.lease_id).unwrap().state,
+            RemoteSessionLeaseState::Active
+        );
+        assert_eq!(
+            router.get_lease(&recoverable_lease.lease_id).unwrap().state,
+            RemoteSessionLeaseState::Recoverable
+        );
+
+        router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        router.mark_stopped().unwrap();
+        assert_eq!(router.admission_state(), HostAdmissionState::Stopped);
         let _ = fs::remove_dir_all(root);
     }
 

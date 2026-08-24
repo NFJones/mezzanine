@@ -152,10 +152,15 @@ impl HostServer {
         let mut connections = FuturesUnordered::new();
         let shutdown = loop {
             tokio::select! {
-                () = &mut cancellation => break HostShutdownRequest { force: false },
+                () = &mut cancellation => {
+                    self.router.start_draining()?;
+                    break HostShutdownRequest { force: false };
+                }
                 completed = connections.next(), if !connections.is_empty() => {
-                    if let Some(Some(shutdown)) = completed {
-                        break shutdown;
+                    if let Some(Some(request)) = completed {
+                        let request: HostShutdownRequest = request;
+                        self.router.start_draining()?;
+                        break request;
                     }
                 }
                 accepted = self.listener.accept(), if connections.len() < HOST_CONTROL_CONNECTION_LIMIT => {
@@ -183,13 +188,25 @@ impl HostServer {
                 }
             }
         };
+        let draining = self.router.begin_draining();
+        tokio::pin!(draining);
+        loop {
+            tokio::select! {
+                result = &mut draining => {
+                    result?;
+                    break;
+                }
+                _ = connections.next(), if !connections.is_empty() => {}
+            }
+        }
         drop(connections);
         if !shutdown.force {
             self.router.checkpoint_active_leases_strict().await?;
         }
         self.router
             .shutdown_all(shutdown.force, self.config.shutdown_timeout)
-            .await
+            .await?;
+        self.router.mark_stopped()
     }
 
     async fn serve_connection(
@@ -549,7 +566,7 @@ impl HostServer {
                     .get("role")
                     .and_then(Value::as_str)
                     .unwrap_or("primary");
-                let record = self.resolve_session(target, requested_role)?;
+                let record = self.resolve_session(target, requested_role).await?;
                 Ok((session_record_json(&record), None))
             }
             "host/reconcile" => {
@@ -577,6 +594,7 @@ impl HostServer {
                     .get("force")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                self.router.start_draining()?;
                 Ok((
                     json!({"shutting_down":true,"force":force}),
                     Some(HostShutdownRequest { force }),
@@ -603,6 +621,7 @@ impl HostServer {
             "ready": true,
             "pid": std::process::id(),
             "socket": self.socket_path,
+            "admission_state": self.router.admission_state().as_str(),
             "running_sessions": running,
             "starting_sessions": starting,
             "snapshot_cleanup_pending": reconciliation.snapshot_cleanup_pending,
@@ -626,12 +645,12 @@ impl HostServer {
         self.router.resolve_or_create_local(size).await
     }
 
-    fn resolve_session(
+    async fn resolve_session(
         &self,
         target: Option<&str>,
         requested_role: &str,
     ) -> Result<crate::storage::registry::SessionRecord> {
-        self.router.resolve_local(target, requested_role)
+        self.router.resolve_local(target, requested_role).await
     }
 }
 
@@ -901,6 +920,42 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// The shutdown response is constructed only after shared local and remote
+    /// session admission is fenced, so a client cannot race acknowledgement
+    /// with a late create or attach request.
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_request_fences_admission_before_acknowledgement() {
+        let root = test_root("shutdown-admission");
+        let host = HostServer::bind(config(root.clone())).unwrap();
+        let (result, shutdown) = host
+            .dispatch_request(&json!({
+                "jsonrpc": "2.0",
+                "id": "shutdown-admission",
+                "method": "host/shutdown",
+                "params": {"force": true},
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(result["shutting_down"], true);
+        assert_eq!(result["force"], true);
+        assert_eq!(shutdown, Some(HostShutdownRequest { force: true }));
+        assert_eq!(host.router.admission_state().as_str(), "draining");
+        let late = host
+            .create_session(Some("late-local".to_string()), Size::new(80, 24).unwrap())
+            .await
+            .unwrap_err();
+        assert_eq!(late.kind(), MezErrorKind::Conflict);
+
+        host.router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        host.router.mark_stopped().unwrap();
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
     /// Create always allocates a fresh session while default resolution reuses
     /// the first eligible runtime and explicit misses never create.
     #[tokio::test(flavor = "current_thread")]
@@ -911,7 +966,7 @@ mod tests {
             .create_session(Some("one".to_string()), Size::new(80, 24).unwrap())
             .await
             .unwrap();
-        let resolved = host.resolve_session(None, "primary").unwrap();
+        let resolved = host.resolve_session(None, "primary").await.unwrap();
         assert_eq!(resolved.session_id, first.session_id);
         let second = host
             .create_session(Some("two".to_string()), Size::new(100, 30).unwrap())
@@ -920,6 +975,7 @@ mod tests {
         assert_ne!(second.session_id, first.session_id);
         let missing = host
             .resolve_session(Some("missing"), "primary")
+            .await
             .unwrap_err();
         assert_eq!(missing.kind(), MezErrorKind::NotFound);
         assert_eq!(host.router.registry().list().unwrap().len(), 2);
