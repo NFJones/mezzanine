@@ -277,24 +277,26 @@ impl SessionSupervisor {
                     };
                     Some((handle, cancel))
                 }
-                SupervisorEntryState::Stopping { .. } => return Ok(()),
+                SupervisorEntryState::Stopping { handle, cancel } => {
+                    Some((handle.clone(), cancel.clone()))
+                }
             }
         };
         self.inner.changed.notify_waiters();
         let Some((handle, cancel)) = action else {
             return Ok(());
         };
-        if force {
+        let shutdown = if force {
             handle
                 .force_shutdown(format!("session supervisor stopped `{session_id}`"))
-                .await?;
+                .await
         } else {
             handle
                 .graceful_shutdown(format!("session supervisor stopped `{session_id}`"))
-                .await?;
-        }
+                .await
+        };
         let _ = cancel.send(true);
-        Ok(())
+        shutdown
     }
 
     /// Stops every live runtime and waits boundedly for all matching tasks to settle.

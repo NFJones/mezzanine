@@ -486,6 +486,8 @@ impl HostSessionRouter {
         let _creation = self.creation_lock.lock().await;
         let lease = self.get_lease(target)?;
         if lease.state == RemoteSessionLeaseState::Released {
+            self.stop_terminal_lease_runtime_if_requested(&lease, terminate)
+                .await?;
             return Ok(lease);
         }
         if lease.state == RemoteSessionLeaseState::Revoked {
@@ -493,13 +495,16 @@ impl HostSessionRouter {
                 "revoked remote session lease cannot be released",
             ));
         }
-        self.stop_live_lease_if_requested(&lease, terminate).await?;
-        self.leases.release(
+        require_active_lease_termination(&lease, terminate)?;
+        let released = self.leases.release(
             &lease.lease_id,
             lease.boot_generation,
             lease.lease_generation,
             current_unix_seconds()?,
-        )
+        )?;
+        self.stop_terminal_lease_runtime_if_requested(&released, terminate)
+            .await?;
+        Ok(released)
     }
 
     /// Revokes future attachment and recovery without revoking device trust.
@@ -512,6 +517,8 @@ impl HostSessionRouter {
         let _creation = self.creation_lock.lock().await;
         let lease = self.get_lease(target)?;
         if lease.state == RemoteSessionLeaseState::Revoked {
+            self.stop_terminal_lease_runtime_if_requested(&lease, terminate)
+                .await?;
             return Ok(lease);
         }
         if lease.state == RemoteSessionLeaseState::Released {
@@ -519,14 +526,17 @@ impl HostSessionRouter {
                 "released remote session lease cannot be revoked",
             ));
         }
-        self.stop_live_lease_if_requested(&lease, terminate).await?;
-        self.leases.revoke(
+        require_active_lease_termination(&lease, terminate)?;
+        let revoked = self.leases.revoke(
             &lease.lease_id,
             lease.boot_generation,
             lease.lease_generation,
             current_unix_seconds()?,
             reason,
-        )
+        )?;
+        self.stop_terminal_lease_runtime_if_requested(&revoked, terminate)
+            .await?;
+        Ok(revoked)
     }
 
     /// Previews or applies terminal lease garbage collection and checkpoint cleanup.
@@ -568,20 +578,19 @@ impl HostSessionRouter {
         })
     }
 
-    async fn stop_live_lease_if_requested(
+    async fn stop_terminal_lease_runtime_if_requested(
         &self,
         lease: &RemoteSessionLease,
         terminate: bool,
     ) -> Result<()> {
-        if lease.state != RemoteSessionLeaseState::Active {
+        if !terminate {
             return Ok(());
         }
-        if !terminate {
-            return Err(MezError::conflict(
-                "active remote session lease requires explicit termination",
-            ));
+        match self.supervisor.stop(&lease.session_id, true).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == MezErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
         }
-        self.supervisor.stop(&lease.session_id, true).await
     }
 
     async fn resolve_replayed_create(
@@ -826,6 +835,15 @@ fn recovery_failure(context: &str, error: &MezError) -> String {
         }
     }
     failure
+}
+
+fn require_active_lease_termination(lease: &RemoteSessionLease, terminate: bool) -> Result<()> {
+    if lease.state == RemoteSessionLeaseState::Active && !terminate {
+        return Err(MezError::conflict(
+            "active remote session lease requires explicit termination",
+        ));
+    }
+    Ok(())
 }
 
 fn resolve_lease_target(
@@ -1272,6 +1290,76 @@ mod tests {
             .unwrap();
         assert_eq!(failed_again.boot_generation, 2);
         assert!(third_router.snapshots().await.unwrap().is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Release and revocation commit their authority fences even when the
+    /// supervised runtime has already exited before teardown can be requested.
+    #[tokio::test(flavor = "current_thread")]
+    async fn lease_authority_transitions_commit_before_runtime_cleanup() {
+        let root = test_root("authority-before-cleanup");
+        let router = HostSessionRouter::new(test_config(&root));
+        let principal = test_principal("owner", 2);
+        let released_runtime = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("release-first".to_string()),
+                    idempotency_key: "release-first".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let revoked_runtime = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("revoke-first".to_string()),
+                    idempotency_key: "revoke-first".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+
+        released_runtime
+            .runtime
+            .force_shutdown("test runtime exited before release".to_string())
+            .await
+            .unwrap();
+        revoked_runtime
+            .runtime
+            .force_shutdown("test runtime exited before revocation".to_string())
+            .await
+            .unwrap();
+
+        let _ = router
+            .release_lease(&released_runtime.lease.lease_id, true)
+            .await;
+        let _ = router
+            .revoke_lease(
+                &revoked_runtime.lease.lease_id,
+                Some("operator revoked lease".to_string()),
+                true,
+            )
+            .await;
+
+        assert_eq!(
+            router
+                .get_lease(&released_runtime.lease.lease_id)
+                .unwrap()
+                .state,
+            RemoteSessionLeaseState::Released
+        );
+        let revoked = router.get_lease(&revoked_runtime.lease.lease_id).unwrap();
+        assert_eq!(revoked.state, RemoteSessionLeaseState::Revoked);
+        assert_eq!(revoked.failure.as_deref(), Some("operator revoked lease"));
+
+        router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
         let _ = fs::remove_dir_all(root);
     }
 
