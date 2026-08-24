@@ -3932,12 +3932,46 @@ impl RuntimeSessionService {
         )
     }
 
+    /// Starts one user pane with explicit local-host environment overrides.
+    pub(super) fn start_pane_process_with_start_directory_and_environment(
+        &mut self,
+        descriptor: PaneDescriptor,
+        explicit_command: Option<&str>,
+        start_directory: Option<&Path>,
+        environment: Option<&[(String, String)]>,
+    ) -> Result<PaneProcessStart> {
+        self.start_pane_process_with_context_and_purpose(
+            descriptor,
+            explicit_command,
+            start_directory,
+            environment,
+            RuntimePaneProcessPurpose::UserShell,
+        )
+    }
+
     /// Starts one pane process under an explicit user-shell or agent-owned contract.
     pub(super) fn start_pane_process_with_start_directory_and_purpose(
         &mut self,
         descriptor: PaneDescriptor,
         explicit_command: Option<&str>,
         start_directory: Option<&Path>,
+        purpose: RuntimePaneProcessPurpose,
+    ) -> Result<PaneProcessStart> {
+        self.start_pane_process_with_context_and_purpose(
+            descriptor,
+            explicit_command,
+            start_directory,
+            None,
+            purpose,
+        )
+    }
+
+    fn start_pane_process_with_context_and_purpose(
+        &mut self,
+        descriptor: PaneDescriptor,
+        explicit_command: Option<&str>,
+        start_directory: Option<&Path>,
+        environment_overrides: Option<&[(String, String)]>,
         purpose: RuntimePaneProcessPurpose,
     ) -> Result<PaneProcessStart> {
         self.process
@@ -3967,10 +4001,16 @@ impl RuntimeSessionService {
             runtime_managed_pane || legacy_managed_startup,
             runtime_managed_pane,
         )?;
-        let launch = launch.with_environment_variable(
+        let mut launch = launch.with_environment_variable(
             "TERM_FEATURES",
             terminal_features_with_progress(std::env::var_os("TERM_FEATURES")),
         );
+        if let Some(environment_overrides) = environment_overrides {
+            launch = launch.with_cleared_environment();
+            for (key, value) in environment_overrides {
+                launch = launch.with_environment_variable(key, value);
+            }
+        }
         let primary_pid = self
             .process
             .pane_processes

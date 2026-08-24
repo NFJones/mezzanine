@@ -105,6 +105,9 @@ pub fn spawn_pane_process_with_start_directory(
 
     let mut command = CommandBuilder::new(&plan.program);
     command.args(&plan.args);
+    if launch.clears_environment() {
+        command.env_clear();
+    }
     let initial_working_directory = initial_working_directory(start_directory);
     if let Some(start_directory) = start_directory {
         validate_start_directory(start_directory)?;

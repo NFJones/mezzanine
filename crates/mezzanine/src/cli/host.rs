@@ -7,7 +7,8 @@
 //! paths.
 
 use std::fs;
-use std::io::Write;
+use std::io::{self, IsTerminal, Write};
+use std::os::fd::AsRawFd;
 #[cfg(not(test))]
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -24,7 +25,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::{
     CliEnv, CliOutputFormat, MezError, Result, default_socket_directory,
-    load_runtime_config_layers, resolve_shell, serialize_json, write_json_or_plain,
+    load_runtime_config_layers, resolve_shell, serialize_json,
+    terminal_size_from_fd_or_environment, write_json_or_plain,
 };
 use crate::host::iroh::HostIrohRuntime;
 use crate::host::ownership::HostOwnershipGuard;
@@ -311,10 +313,15 @@ fn acquire_host_startup_election(
 
 /// Creates a fresh supervised local session and returns its compatibility socket.
 pub(super) async fn host_create_session(env: &CliEnv, name: Option<&str>) -> Result<PathBuf> {
+    let mut params = local_host_launch_context(env)?;
+    params.insert(
+        "name".to_string(),
+        name.map_or(serde_json::Value::Null, |name| name.into()),
+    );
     let result = request_host(
         env,
         "host/session/create",
-        serde_json::json!({"name": name, "columns": 80, "rows": 24}),
+        serde_json::Value::Object(params),
     )
     .await?;
     host_result_socket(&result)
@@ -325,10 +332,60 @@ pub(super) async fn host_resolve_or_create_session(env: &CliEnv) -> Result<PathB
     let result = request_host(
         env,
         "host/session/resolve-or-create",
-        serde_json::json!({"columns": 80, "rows": 24}),
+        serde_json::Value::Object(local_host_launch_context(env)?),
     )
     .await?;
     host_result_socket(&result)
+}
+
+fn local_host_launch_context(env: &CliEnv) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let current_directory = std::env::current_dir()?.canonicalize()?;
+    let shell = resolve_shell(env.shell.clone())?;
+    let terminal_fd = io::stdout().is_terminal().then(|| io::stdout().as_raw_fd());
+    let (columns, rows) = terminal_size_from_fd_or_environment(terminal_fd);
+    let mut environment = serde_json::Map::new();
+    if let Some(home) = &env.home {
+        environment.insert(
+            "HOME".to_string(),
+            home.to_string_lossy().into_owned().into(),
+        );
+    }
+    environment.insert(
+        "SHELL".to_string(),
+        shell.path().to_string_lossy().into_owned().into(),
+    );
+    environment.insert("COLUMNS".to_string(), columns.to_string().into());
+    environment.insert("LINES".to_string(), rows.to_string().into());
+    for key in [
+        "PATH",
+        "USER",
+        "LOGNAME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "COLORTERM",
+        "TERM_PROGRAM",
+        "TERM_PROGRAM_VERSION",
+        "TERM_FEATURES",
+        "NO_COLOR",
+    ] {
+        if let Ok(value) = std::env::var(key) {
+            environment.insert(key.to_string(), value.into());
+        }
+    }
+    Ok(serde_json::Map::from_iter([
+        (
+            "cwd".to_string(),
+            current_directory.to_string_lossy().into_owned().into(),
+        ),
+        (
+            "shell".to_string(),
+            shell.path().to_string_lossy().into_owned().into(),
+        ),
+        ("columns".to_string(), columns.into()),
+        ("rows".to_string(), rows.into()),
+        ("environment".to_string(), environment.into()),
+    ]))
 }
 
 /// Resolves an existing supervised local session without creating one.

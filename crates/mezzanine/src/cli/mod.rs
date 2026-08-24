@@ -20,7 +20,7 @@ use serde::Serialize;
 use crate::config::{
     ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
     ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope, DEFAULT_CONFIG_TOML,
-    DEFAULT_PROJECT_CONFIG_TOML, EffectiveConfig, compose_effective_config, migrate_config_file,
+    DEFAULT_PROJECT_CONFIG_TOML, EffectiveConfig, compose_effective_config,
     persist_config_mutation, validate_config_file, validate_config_text,
 };
 use crate::control::{decode_control_frame, encode_control_body};
@@ -48,8 +48,7 @@ use crate::security::auth::{
     run_openai_browser_login_with_theme_async, run_openai_device_code_login_async,
 };
 use crate::security::project::{
-    ProjectTrustStore, TrustDecision, default_trust_database_path, discover_existing_overlays,
-    discover_project_root,
+    ProjectTrustStore, TrustDecision, default_trust_database_path, discover_project_root,
 };
 use crate::storage::memory::PersistentMemoryStore;
 use crate::storage::registry::{

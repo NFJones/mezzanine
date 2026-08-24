@@ -66,6 +66,10 @@ pub(crate) enum SessionRuntimeStartup {
     Initial {
         /// Explicit initial pane command.
         explicit_command: Option<String>,
+        /// Explicit caller launch directory, or the daemon directory for compatibility.
+        start_directory: Option<PathBuf>,
+        /// Bounded environment overrides accepted by the local host boundary.
+        environment: Option<Vec<(String, String)>>,
     },
     /// Seeds terminal state and starts fresh processes from a snapshot payload.
     RestoredSnapshot {
@@ -569,8 +573,16 @@ fn start_session(
     startup: SessionRuntimeStartup,
 ) -> Result<()> {
     match startup {
-        SessionRuntimeStartup::Initial { explicit_command } => {
-            service.start_initial_pane_process(explicit_command.as_deref())?;
+        SessionRuntimeStartup::Initial {
+            explicit_command,
+            start_directory,
+            environment,
+        } => {
+            service.start_initial_pane_process_with_launch_context(
+                explicit_command.as_deref(),
+                start_directory.as_deref(),
+                environment.as_deref(),
+            )?;
             service.restore_agent_sessions_from_transcript_store()?;
             Ok(())
         }
@@ -739,6 +751,47 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Initial session startup must use the caller launch directory carried
+    /// by the factory request instead of inheriting the persistent host cwd.
+    #[tokio::test(flavor = "current_thread")]
+    async fn session_factory_uses_explicit_initial_launch_directory() {
+        let root = test_root("launch-directory");
+        let launch_directory = root.join("caller-project");
+        fs::create_dir_all(&launch_directory).unwrap();
+        let observed = root.join("observed-cwd.txt");
+        let mut request = test_request("launch-directory", root.clone(), root.join("control.sock"));
+        request.startup = SessionRuntimeStartup::Initial {
+            explicit_command: Some(format!(
+                "printf '%s\\n%s\\n%s\\n%s\\n%s\\n' \"$PWD\" \"$HOME\" \"$COLUMNS\" \"$LINES\" \"${{CARGO_MANIFEST_DIR-unset}}\" > {}; sleep 30",
+                observed.to_string_lossy()
+            )),
+            start_directory: Some(launch_directory.clone()),
+            environment: Some(vec![
+                ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+                ("HOME".to_string(), root.to_string_lossy().into_owned()),
+                ("COLUMNS".to_string(), "101".to_string()),
+                ("LINES".to_string(), "37".to_string()),
+            ]),
+        };
+
+        let runtime = SessionFactory::create(request).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while fs::read_to_string(&observed).map_or(true, |value| value.trim().is_empty()) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let observed = fs::read_to_string(&observed).unwrap();
+        let lines = observed.lines().collect::<Vec<_>>();
+        assert_eq!(lines[0], launch_directory.to_string_lossy());
+        assert_eq!(lines[1], root.to_string_lossy());
+        assert_eq!(lines[2..], ["101", "37", "unset"]);
+
+        drop(runtime);
+        let _ = fs::remove_dir_all(root);
+    }
+
     async fn create_test_runtime(name: &str) -> SessionRuntime {
         let root = test_root(name);
         let control = root.join("control.sock");
@@ -781,6 +834,8 @@ mod tests {
             limits: SessionRuntimeLimits::default(),
             startup: SessionRuntimeStartup::Initial {
                 explicit_command: Some("cat >/dev/null".to_string()),
+                start_directory: None,
+                environment: None,
             },
         }
     }

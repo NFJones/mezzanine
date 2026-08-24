@@ -11,6 +11,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::{MezError, Result};
+use crate::security::project::{
+    ProjectTrustStore, TrustDecision, default_trust_database_path, discover_existing_overlays,
+    discover_project_root,
+};
 use mez_agent::permissions::{exact_command_sha256, normalize_exact_command_text};
 
 /// Exposes the defaults module boundary.
@@ -140,6 +144,67 @@ pub fn runtime_cpu_count_from_primary_config(paths: &ConfigPaths) -> Result<usiz
             .parse::<usize>()
             .map_err(|_| MezError::config("runtime.cpu_count must be a positive integer")),
     }
+}
+
+/// Loads primary and caller-directory project configuration using the
+/// persisted project-trust database below the supplied config root.
+pub(crate) fn load_runtime_config_layers_for_directory(
+    paths: &ConfigPaths,
+    current_dir: &Path,
+) -> Result<Vec<ConfigLayer>> {
+    let trust_store =
+        ProjectTrustStore::load_from_file(&default_trust_database_path(paths.root()))?;
+    load_runtime_config_layers_for_directory_with_trust(paths, &trust_store, current_dir)
+}
+
+/// Loads directory-scoped runtime layers against an explicit trust snapshot.
+pub(crate) fn load_runtime_config_layers_for_directory_with_trust(
+    paths: &ConfigPaths,
+    trust_store: &ProjectTrustStore,
+    current_dir: &Path,
+) -> Result<Vec<ConfigLayer>> {
+    let mut layers = load_primary_config_layers(paths)?;
+    let project_root = discover_project_root(current_dir);
+    let overlay_files = discover_existing_overlays(&project_root, current_dir)?;
+    let trusted = trust_store
+        .get(&project_root)
+        .is_some_and(|record| record.state == TrustDecision::Trusted);
+    let overlay_count = overlay_files.len();
+    for (index, overlay_path) in overlay_files.into_iter().enumerate() {
+        layers.push(ConfigLayer {
+            name: if overlay_count == 1 {
+                "project".to_string()
+            } else {
+                format!("project:{}", index + 1)
+            },
+            format: ConfigFormat::from_path(&overlay_path)?,
+            text: fs::read_to_string(&overlay_path)?,
+            path: Some(overlay_path),
+            scope: ConfigScope::ProjectOverlay,
+            trusted,
+        });
+    }
+    Ok(layers)
+}
+
+/// Loads the migrated primary user layer or the generated default.
+pub(crate) fn load_primary_config_layers(paths: &ConfigPaths) -> Result<Vec<ConfigLayer>> {
+    let (path, format, text) = if let Some(path) = paths.select_primary_file()? {
+        migrate_config_file(&path)?;
+        let format = ConfigFormat::from_path(&path)?;
+        let text = fs::read_to_string(&path)?;
+        (Some(path), format, text)
+    } else {
+        (None, ConfigFormat::Toml, DEFAULT_CONFIG_TOML.to_string())
+    };
+    Ok(vec![ConfigLayer {
+        name: "primary".to_string(),
+        path,
+        format,
+        scope: ConfigScope::Primary,
+        trusted: true,
+        text,
+    }])
 }
 
 /// Exposes the tests module boundary.

@@ -5,11 +5,10 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    Args, AuthPaths, AuthStore, BTreeSet, CliEnv, CliOutputFormat, ConfigFormat, ConfigLayer,
-    ConfigMutationPlan, ConfigPaths, ConfigScope, DEFAULT_CONFIG_TOML, EffectiveConfig,
-    McpRegistry, MezError, ProjectTrustStore, Result, Serialize, Subcommand, TrustDecision, Write,
-    compose_effective_config, default_trust_database_path, discover_existing_overlays,
-    discover_project_root, fs, migrate_config_file, serialize_json, write_json_or_plain,
+    Args, AuthPaths, AuthStore, BTreeSet, CliEnv, CliOutputFormat, ConfigLayer, ConfigMutationPlan,
+    ConfigPaths, EffectiveConfig, McpRegistry, MezError, ProjectTrustStore, Result, Serialize,
+    Subcommand, Write, compose_effective_config, default_trust_database_path, serialize_json,
+    write_json_or_plain,
 };
 use crate::integrations::mcp::{
     McpConfigCommand, McpConfigTransport, mcp_config_command_report, mcp_config_setting_from_user,
@@ -501,31 +500,11 @@ pub(super) fn load_runtime_config_layers_for_directory(
     trust_store: &ProjectTrustStore,
     current_dir: &std::path::Path,
 ) -> Result<Vec<ConfigLayer>> {
-    let mut layers = load_primary_config_layers(paths)?;
-    let project_root = discover_project_root(current_dir);
-    let overlay_files = discover_existing_overlays(&project_root, current_dir)?;
-    let trusted = trust_store
-        .get(&project_root)
-        .is_some_and(|record| record.state == TrustDecision::Trusted);
-    let overlay_count = overlay_files.len();
-
-    for (index, overlay_path) in overlay_files.into_iter().enumerate() {
-        let name = if overlay_count == 1 {
-            "project".to_string()
-        } else {
-            format!("project:{}", index + 1)
-        };
-        layers.push(ConfigLayer {
-            name,
-            format: ConfigFormat::from_path(&overlay_path)?,
-            text: fs::read_to_string(&overlay_path)?,
-            path: Some(overlay_path),
-            scope: ConfigScope::ProjectOverlay,
-            trusted,
-        });
-    }
-
-    Ok(layers)
+    crate::config::load_runtime_config_layers_for_directory_with_trust(
+        paths,
+        trust_store,
+        current_dir,
+    )
 }
 
 /// Runs the load primary config layers operation for this subsystem.
@@ -534,24 +513,7 @@ pub(super) fn load_runtime_config_layers_for_directory(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn load_primary_config_layers(paths: &ConfigPaths) -> Result<Vec<ConfigLayer>> {
-    let (layer_path, format, text) = if let Some(selected) = paths.select_primary_file()? {
-        migrate_config_file(&selected)?;
-        (
-            Some(selected.clone()),
-            ConfigFormat::from_path(&selected)?,
-            fs::read_to_string(selected)?,
-        )
-    } else {
-        (None, ConfigFormat::Toml, DEFAULT_CONFIG_TOML.to_string())
-    };
-    Ok(vec![ConfigLayer {
-        name: "primary".to_string(),
-        path: layer_path,
-        format,
-        scope: ConfigScope::Primary,
-        trusted: true,
-        text,
-    }])
+    crate::config::load_primary_config_layers(paths)
 }
 
 /// Runs the configured mcp servers operation for this subsystem.
@@ -1140,11 +1102,11 @@ fn mcp_inspect_json(server: ConfiguredMcpServerJson) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthCredentialState, ConfigFormat, ConfigLayer, ConfigScope, McpAuthBinding,
-        McpAuthMetadata, McpAuthStatus, McpRegistry, compose_effective_config,
-        configured_mcp_server_json, mcp_inspect_json, mcp_list_json, mcp_login_json,
-        mcp_status_json,
+        AuthCredentialState, ConfigLayer, McpAuthBinding, McpAuthMetadata, McpAuthStatus,
+        McpRegistry, compose_effective_config, configured_mcp_server_json, mcp_inspect_json,
+        mcp_list_json, mcp_login_json, mcp_status_json,
     };
+    use crate::config::{ConfigFormat, ConfigScope};
     use crate::security::auth::{CredentialStoreKind, McpCredentialKind};
 
     /// Verifies typed MCP status JSON preserves the existing secret-safe field

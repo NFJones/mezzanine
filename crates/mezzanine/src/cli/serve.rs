@@ -960,9 +960,11 @@ pub(super) async fn run_foreground_control_daemon(
             max_event_batches_per_connection: options.limits.max_event_batches_per_connection,
         },
         startup: match startup {
-            RuntimeDaemonStartup::Initial { explicit_command } => {
-                SessionRuntimeStartup::Initial { explicit_command }
-            }
+            RuntimeDaemonStartup::Initial { explicit_command } => SessionRuntimeStartup::Initial {
+                explicit_command,
+                start_directory: None,
+                environment: None,
+            },
             RuntimeDaemonStartup::RestoredSnapshot {
                 payload,
                 restart_command,

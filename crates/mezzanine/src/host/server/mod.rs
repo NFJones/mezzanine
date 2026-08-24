@@ -7,6 +7,7 @@
 //! live registry is discovery output only and is never treated as durable
 //! lease state.
 
+use std::ffi::OsString;
 use std::fs;
 use std::future::Future;
 use std::os::fd::AsRawFd;
@@ -19,13 +20,16 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio_util::codec::Framed;
 
-use crate::config::ConfigLayer;
+use crate::config::{ConfigLayer, ConfigPaths, load_runtime_config_layers_for_directory};
 use crate::error::{MezError, MezErrorKind, Result};
 use crate::host::iroh::HostIrohInvitationIssuer;
 use crate::host::ownership::HostOwnershipGuard;
-use crate::host::router::{HostSessionRouter, HostSessionRouterConfig};
+use crate::host::router::{
+    HostSessionRouter, HostSessionRouterConfig, LocalSessionLaunchContext,
+    local_launch_environment_key_allowed,
+};
 use crate::host::session::SessionSupervisorState;
-use crate::host::shell::ResolvedShell;
+use crate::host::shell::{ResolvedShell, resolve_shell};
 use crate::protocol::framing::ProtocolFrameCodec;
 use crate::runtime::{bind_control_socket, socket_path_for_name};
 use crate::security::audit::{AuditActor, AuditLog, AuditRecord};
@@ -549,15 +553,17 @@ impl HostServer {
                     .map(str::to_string);
                 let columns = optional_u16(&params, "columns")?.unwrap_or(80);
                 let rows = optional_u16(&params, "rows")?.unwrap_or(24);
-                let record = self.create_session(name, Size::new(columns, rows)?).await?;
+                let context =
+                    self.local_session_launch_context(&params, Size::new(columns, rows)?)?;
+                let record = self.create_session_with_context(name, context).await?;
                 Ok((session_record_json(&record), None))
             }
             "host/session/resolve-or-create" => {
                 let columns = optional_u16(&params, "columns")?.unwrap_or(80);
                 let rows = optional_u16(&params, "rows")?.unwrap_or(24);
-                let record = self
-                    .resolve_or_create_session(Size::new(columns, rows)?)
-                    .await?;
+                let context =
+                    self.local_session_launch_context(&params, Size::new(columns, rows)?)?;
+                let record = self.resolve_or_create_session_with_context(context).await?;
                 Ok((session_record_json(&record), None))
             }
             "host/session/resolve" => {
@@ -630,6 +636,10 @@ impl HostServer {
         }))
     }
 
+    #[allow(
+        dead_code,
+        reason = "compatibility tests exercise host admission without caller launch metadata"
+    )]
     async fn create_session(
         &self,
         name: Option<String>,
@@ -638,11 +648,101 @@ impl HostServer {
         self.router.create_local(name, size).await
     }
 
+    #[allow(
+        dead_code,
+        reason = "compatibility tests retain the daemon-scoped resolve-or-create boundary"
+    )]
     async fn resolve_or_create_session(
         &self,
         size: Size,
     ) -> Result<crate::storage::registry::SessionRecord> {
         self.router.resolve_or_create_local(size).await
+    }
+
+    async fn create_session_with_context(
+        &self,
+        name: Option<String>,
+        context: LocalSessionLaunchContext,
+    ) -> Result<crate::storage::registry::SessionRecord> {
+        self.router.create_local_with_context(name, context).await
+    }
+
+    async fn resolve_or_create_session_with_context(
+        &self,
+        context: LocalSessionLaunchContext,
+    ) -> Result<crate::storage::registry::SessionRecord> {
+        self.router
+            .resolve_or_create_local_with_context(context)
+            .await
+    }
+
+    fn local_session_launch_context(
+        &self,
+        params: &serde_json::Map<String, Value>,
+        size: Size,
+    ) -> Result<LocalSessionLaunchContext> {
+        let requested_directory = params
+            .get("cwd")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .unwrap_or(std::env::current_dir()?);
+        let current_directory = requested_directory.canonicalize().map_err(|error| {
+            MezError::invalid_args(format!(
+                "local session launch directory is unavailable: {error}"
+            ))
+        })?;
+        if !current_directory.is_dir() {
+            return Err(MezError::invalid_args(
+                "local session launch directory must be a directory",
+            ));
+        }
+        let shell = match params.get("shell").and_then(Value::as_str) {
+            Some(shell) => {
+                let requested = PathBuf::from(shell);
+                let resolved = resolve_shell(Some(OsString::from(shell)))?;
+                if resolved.path() != requested {
+                    return Err(MezError::invalid_args(
+                        "requested local session shell is unavailable",
+                    ));
+                }
+                resolved
+            }
+            None => self.config.shell.clone(),
+        };
+        let environment = params
+            .get("environment")
+            .map(|value| {
+                let object = value.as_object().ok_or_else(|| {
+                    MezError::invalid_args("local session environment must be an object")
+                })?;
+                object
+                    .iter()
+                    .map(|(key, value)| {
+                        if !local_launch_environment_key_allowed(key) {
+                            return Err(MezError::invalid_args(format!(
+                                "local session environment key `{key}` is not allowed"
+                            )));
+                        }
+                        let value = value.as_str().ok_or_else(|| {
+                            MezError::invalid_args(
+                                "local session environment values must be strings",
+                            )
+                        })?;
+                        Ok((key.clone(), value.to_string()))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?;
+        Ok(LocalSessionLaunchContext {
+            config_layers: load_runtime_config_layers_for_directory(
+                &ConfigPaths::from_root(self.config.config_root.clone()),
+                &current_directory,
+            )?,
+            current_directory,
+            shell,
+            size,
+            environment,
+        })
     }
 
     async fn resolve_session(
@@ -805,9 +905,11 @@ mod tests {
     use crate::control::RequestedRole;
     use crate::host::shell::{ResolvedShell, ShellSource};
     use crate::security::audit::{AuditConfig, AuditLog};
+    use crate::security::project::{ProjectTrustStore, TrustDecision, default_trust_database_path};
     use crate::security::remote::{
         RemoteHostRoutingAuthority, RemotePrincipal, RemoteRoleCeiling, RemoteSessionAttachScope,
     };
+    use crate::storage::snapshot::SnapshotRepository;
 
     use super::*;
 
@@ -845,6 +947,153 @@ mod tests {
             max_remote_leases: 8,
             audit_log: None,
         }
+    }
+
+    /// Local host creation must recompute caller-project layers and carry the
+    /// caller shell, terminal size, and canonical cwd into the live runtime.
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_create_uses_caller_launch_context_instead_of_host_start_context() {
+        let root = test_root("caller-context");
+        let config_root = root.join("config");
+        let runtime_root = root.join("runtime");
+        let host_project = root.join("project-a");
+        let caller_project = root.join("project-b");
+        let caller_directory = caller_project.join("src");
+        let host_overlay = host_project.join(".mezzanine/config.toml");
+        let caller_overlay = caller_project.join(".mezzanine/config.toml");
+        fs::create_dir_all(host_project.join(".git")).unwrap();
+        fs::create_dir_all(caller_project.join(".git")).unwrap();
+        fs::create_dir_all(host_overlay.parent().unwrap()).unwrap();
+        fs::create_dir_all(caller_overlay.parent().unwrap()).unwrap();
+        fs::create_dir_all(&caller_directory).unwrap();
+        fs::create_dir_all(&config_root).unwrap();
+        fs::set_permissions(&config_root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(&host_overlay, "version = 73\n[history]\nlines = 111\n").unwrap();
+        fs::write(&caller_overlay, "version = 73\n[history]\nlines = 222\n").unwrap();
+        let mut trust = ProjectTrustStore::default();
+        trust
+            .decide_at(
+                caller_project.clone(),
+                TrustDecision::Trusted,
+                Some(caller_project.join(".git")),
+                42,
+            )
+            .unwrap();
+        trust
+            .save_to_file(&default_trust_database_path(&config_root))
+            .unwrap();
+
+        let mut host_config = config(config_root.clone());
+        host_config.runtime_root = runtime_root;
+        host_config.shell =
+            ResolvedShell::new(PathBuf::from("/bin/false"), ShellSource::FallbackBinSh);
+        host_config.config_layers = vec![ConfigLayer {
+            name: "host-project-a".to_string(),
+            path: Some(host_overlay.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::ProjectOverlay,
+            trusted: true,
+            text: fs::read_to_string(&host_overlay).unwrap(),
+        }];
+        let host = HostServer::bind(host_config).unwrap();
+        let params = json!({
+            "name": "caller-context",
+            "cwd": caller_directory,
+            "shell": "/bin/sh",
+            "columns": 101,
+            "rows": 37,
+            "environment": {
+                "HOME": root,
+                "PATH": "/usr/bin:/bin",
+                "SHELL": "/bin/sh",
+                "COLUMNS": "101",
+                "LINES": "37"
+            }
+        });
+        let parsed_context = host
+            .local_session_launch_context(params.as_object().unwrap(), Size::new(101, 37).unwrap())
+            .unwrap();
+        assert!(parsed_context.config_layers.iter().any(|layer| {
+            layer.path.as_deref() == Some(caller_overlay.as_path()) && layer.trusted
+        }));
+        assert!(
+            parsed_context
+                .config_layers
+                .iter()
+                .all(|layer| layer.path.as_deref() != Some(host_overlay.as_path()))
+        );
+        let (created, shutdown) = host
+            .dispatch_request(&json!({
+                "jsonrpc": "2.0",
+                "id": "caller-context",
+                "method": "host/session/create",
+                "params": params
+            }))
+            .await
+            .unwrap();
+        assert_eq!(shutdown, None);
+        let session_id = created["session_id"].as_str().unwrap();
+        let runtime = host.router.runtime_for_tests(session_id).unwrap();
+        let snapshots = SnapshotRepository::new(config_root.join("test-layouts"));
+        runtime
+            .actor()
+            .create_host_checkpoint(
+                snapshots.clone(),
+                "caller-context".to_string(),
+                Some("caller context".to_string()),
+            )
+            .await
+            .unwrap();
+        let payload = snapshots.inspect_payload("caller-context").unwrap();
+        assert_eq!(payload.authoritative_columns, 101);
+        assert_eq!(payload.authoritative_rows, 37);
+        assert_eq!(payload.shell.path, "/bin/sh");
+        assert!(
+            payload
+                .windows
+                .iter()
+                .flat_map(|window| &window.panes)
+                .any(|pane| {
+                    pane.current_working_directory.as_deref()
+                        == Some(caller_directory.to_string_lossy().as_ref())
+                })
+        );
+
+        host.router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Malformed caller context is rejected before creating a local session.
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_create_rejects_invalid_cwd_and_environment() {
+        let root = test_root("invalid-caller-context");
+        let invalid_cwd = root.join("not-a-directory");
+        fs::write(&invalid_cwd, "file").unwrap();
+        let host = HostServer::bind(config(root.clone())).unwrap();
+        for params in [
+            json!({"cwd": invalid_cwd, "shell": "/bin/sh"}),
+            json!({"cwd": root, "shell": "/bin/sh", "environment": {"SECRET": "no"}}),
+            json!({"cwd": root, "shell": "/bin/sh", "environment": {"HOME": 7}}),
+            json!({"cwd": root, "shell": "/bin/sh", "environment": {"HOME": "x".repeat(4097)}}),
+        ] {
+            let error = host
+                .dispatch_request(&json!({
+                    "jsonrpc": "2.0",
+                    "id": "invalid-caller-context",
+                    "method": "host/session/create",
+                    "params": params,
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), MezErrorKind::InvalidArgs, "{error}");
+        }
+        assert!(host.router.registry().list().unwrap().is_empty());
+        drop(host);
+        let _ = fs::remove_dir_all(root);
     }
 
     /// The durable host lock permits one owner across distinct runtime socket
@@ -1264,5 +1513,4 @@ mod tests {
             }
         }
     }
-
 }

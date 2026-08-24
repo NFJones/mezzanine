@@ -83,6 +83,17 @@ pub(crate) struct RemoteSessionCreateRequest {
     pub(crate) size: Size,
 }
 
+/// Caller-scoped launch inputs accepted only through the owner-authenticated
+/// local host management socket.
+#[derive(Debug, Clone)]
+pub(crate) struct LocalSessionLaunchContext {
+    pub(crate) current_directory: std::path::PathBuf,
+    pub(crate) shell: ResolvedShell,
+    pub(crate) size: Size,
+    pub(crate) config_layers: Vec<ConfigLayer>,
+    pub(crate) environment: Option<Vec<(String, String)>>,
+}
+
 /// Durable and live binding selected for one authenticated remote connection.
 #[derive(Debug, Clone)]
 pub(crate) struct RemoteSessionBinding {
@@ -276,41 +287,87 @@ impl HostSessionRouter {
     }
 
     /// Creates one fresh local supervised session and publishes compatibility discovery.
+    #[allow(
+        dead_code,
+        reason = "compatibility callers and focused tests still use daemon-scoped launch defaults"
+    )]
     pub(crate) async fn create_local(
         &self,
         name: Option<String>,
         size: Size,
     ) -> Result<SessionRecord> {
+        self.create_local_with_context(name, self.compatibility_local_launch_context(size)?)
+            .await
+    }
+
+    /// Creates one local session using context captured by the invoking CLI.
+    pub(crate) async fn create_local_with_context(
+        &self,
+        name: Option<String>,
+        context: LocalSessionLaunchContext,
+    ) -> Result<SessionRecord> {
         let _creation = self.creation_lock.lock().await;
         self.require_serving()?;
-        self.create_local_locked(name, size).await
+        self.create_local_locked(name, context).await
     }
 
     /// Resolves the current primary-attachable local session or creates one
     /// while holding the same synchronization boundary used by fresh creation.
+    #[allow(
+        dead_code,
+        reason = "compatibility callers and focused tests still use daemon-scoped launch defaults"
+    )]
     pub(crate) async fn resolve_or_create_local(&self, size: Size) -> Result<SessionRecord> {
+        self.resolve_or_create_local_with_context(self.compatibility_local_launch_context(size)?)
+            .await
+    }
+
+    /// Resolves an existing local session or creates one from caller context.
+    pub(crate) async fn resolve_or_create_local_with_context(
+        &self,
+        context: LocalSessionLaunchContext,
+    ) -> Result<SessionRecord> {
         let _creation = self.creation_lock.lock().await;
         self.require_serving()?;
         match self.resolve_local_locked(None, "primary") {
             Ok(record) => Ok(record),
             Err(error) if error.kind() == MezErrorKind::NotFound => {
-                self.create_local_locked(None, size).await
+                self.create_local_locked(None, context).await
             }
             Err(error) => Err(error),
         }
     }
 
-    async fn create_local_locked(&self, name: Option<String>, size: Size) -> Result<SessionRecord> {
+    async fn create_local_locked(
+        &self,
+        name: Option<String>,
+        context: LocalSessionLaunchContext,
+    ) -> Result<SessionRecord> {
+        validate_local_launch_context(&context)?;
         self.ensure_global_session_capacity().await?;
         let now = current_unix_seconds()?;
         let session_id = next_session_id()?;
-        self.start_session(session_id.clone(), name, size, now)
+        self.start_local_session(session_id.clone(), name, context, now)
             .await?;
         self.registry
             .list()?
             .into_iter()
             .find(|record| record.session_id == session_id)
             .ok_or_else(|| MezError::invalid_state("created session was not published"))
+    }
+
+    #[allow(
+        dead_code,
+        reason = "compatibility callers and focused tests still use daemon-scoped launch defaults"
+    )]
+    fn compatibility_local_launch_context(&self, size: Size) -> Result<LocalSessionLaunchContext> {
+        Ok(LocalSessionLaunchContext {
+            current_directory: std::env::current_dir()?,
+            shell: self.config.shell.clone(),
+            size,
+            config_layers: self.config.config_layers.clone(),
+            environment: None,
+        })
     }
 
     /// Resolves one live local session without creating a replacement.
@@ -536,6 +593,11 @@ impl HostSessionRouter {
         self.supervisor.snapshots().await
     }
 
+    #[cfg(test)]
+    pub(crate) fn runtime_for_tests(&self, session_id: &str) -> Result<SessionRuntimeHandle> {
+        self.supervisor.lookup(session_id)
+    }
+
     pub(crate) async fn shutdown_all(&self, force: bool, timeout: Duration) -> Result<()> {
         self.supervisor.shutdown_all(force, timeout).await
     }
@@ -659,9 +721,7 @@ impl HostSessionRouter {
                 let runtime = self.supervisor.lookup(&lease.session_id)?;
                 Ok(RemoteSessionBinding { lease, runtime })
             }
-            RemoteSessionLeaseState::Recoverable => {
-                self.recover_lease_locked(lease, None).await
-            }
+            RemoteSessionLeaseState::Recoverable => self.recover_lease_locked(lease, None).await,
             RemoteSessionLeaseState::Released | RemoteSessionLeaseState::Revoked => Err(
                 MezError::forbidden("remote session lease cannot be recovered"),
             ),
@@ -1059,7 +1119,39 @@ impl HostSessionRouter {
             created_at_unix_seconds,
             SessionRuntimeStartup::Initial {
                 explicit_command: None,
+                start_directory: None,
+                environment: None,
             },
+        )
+        .await
+    }
+
+    async fn start_local_session(
+        &self,
+        session_id: String,
+        name: Option<String>,
+        context: LocalSessionLaunchContext,
+        created_at_unix_seconds: u64,
+    ) -> Result<SessionRuntimeHandle> {
+        validate_session_name(name.as_deref())?;
+        let numeric_id = session_id
+            .strip_prefix('$')
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(|| MezError::invalid_state("routed session id is invalid"))?;
+        let mut session = Session::new_default(context.shell, context.size);
+        session.id = SessionId::new('$', numeric_id);
+        if let Some(name) = name {
+            session.name = name;
+        }
+        self.start_prepared_session_with_layers(
+            session,
+            created_at_unix_seconds,
+            SessionRuntimeStartup::Initial {
+                explicit_command: None,
+                start_directory: Some(context.current_directory),
+                environment: context.environment,
+            },
+            context.config_layers,
         )
         .await
     }
@@ -1070,8 +1162,23 @@ impl HostSessionRouter {
         created_at_unix_seconds: u64,
         startup: SessionRuntimeStartup,
     ) -> Result<SessionRuntimeHandle> {
+        self.start_prepared_session_with_layers(
+            session,
+            created_at_unix_seconds,
+            startup,
+            self.config.config_layers.clone(),
+        )
+        .await
+    }
+
+    async fn start_prepared_session_with_layers(
+        &self,
+        session: Session,
+        created_at_unix_seconds: u64,
+        startup: SessionRuntimeStartup,
+        mut config_layers: Vec<ConfigLayer>,
+    ) -> Result<SessionRuntimeHandle> {
         let socket_path = hosted_session_socket_path(&self.config.runtime_root, &session.id)?;
-        let mut config_layers = self.config.config_layers.clone();
         config_layers.push(ConfigLayer {
             name: "persistent-host-session-transport".to_string(),
             path: None,
@@ -1217,6 +1324,69 @@ fn validate_session_name(name: Option<&str>) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn validate_local_launch_context(context: &LocalSessionLaunchContext) -> Result<()> {
+    let metadata = std::fs::metadata(&context.current_directory)?;
+    if !context.current_directory.is_absolute() || !metadata.is_dir() {
+        return Err(MezError::invalid_args(
+            "local session launch directory must be an absolute accessible directory",
+        ));
+    }
+    if !context.shell.path().is_absolute() || !context.shell.path().is_file() {
+        return Err(MezError::invalid_args(
+            "local session shell must be an absolute executable file",
+        ));
+    }
+    if context.config_layers.is_empty() || context.config_layers.len() > 32 {
+        return Err(MezError::invalid_args(
+            "local session launch context must contain between 1 and 32 config layers",
+        ));
+    }
+    let config_bytes = context
+        .config_layers
+        .iter()
+        .try_fold(0usize, |total, layer| total.checked_add(layer.text.len()))
+        .ok_or_else(|| MezError::invalid_args("local session config layers are too large"))?;
+    if config_bytes > 512 * 1024 {
+        return Err(MezError::invalid_args(
+            "local session config layers exceed the bounded request size",
+        ));
+    }
+    if let Some(environment) = &context.environment
+        && (environment.len() > 16
+            || environment.iter().any(|(key, value)| {
+                !local_launch_environment_key_allowed(key)
+                    || value.len() > 4096
+                    || value.contains('\0')
+            }))
+    {
+        return Err(MezError::invalid_args(
+            "local session environment contains an unsupported or oversized value",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn local_launch_environment_key_allowed(key: &str) -> bool {
+    matches!(
+        key,
+        "HOME"
+            | "PATH"
+            | "USER"
+            | "LOGNAME"
+            | "SHELL"
+            | "COLUMNS"
+            | "LINES"
+            | "LANG"
+            | "LC_ALL"
+            | "LC_CTYPE"
+            | "COLORTERM"
+            | "TERM_PROGRAM"
+            | "TERM_PROGRAM_VERSION"
+            | "TERM_FEATURES"
+            | "NO_COLOR"
+    )
 }
 
 fn creation_fingerprint(name: Option<&str>, size: Size) -> String {

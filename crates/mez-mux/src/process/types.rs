@@ -106,6 +106,7 @@ pub struct PaneProcessLaunch {
     program: PathBuf,
     environment: Vec<(OsString, OsString)>,
     interactive_arguments: Vec<OsString>,
+    clear_environment: bool,
 }
 
 impl PaneProcessLaunch {
@@ -115,7 +116,20 @@ impl PaneProcessLaunch {
             program,
             environment: Vec::new(),
             interactive_arguments: vec![OsString::from("-i")],
+            clear_environment: false,
         }
+    }
+
+    /// Clears the inherited daemon environment before applying explicit pane
+    /// launch variables.
+    pub fn with_cleared_environment(mut self) -> Self {
+        self.clear_environment = true;
+        self
+    }
+
+    /// Whether process spawn must discard the parent environment first.
+    pub fn clears_environment(&self) -> bool {
+        self.clear_environment
     }
 
     /// Returns the executable used to start the pane process.

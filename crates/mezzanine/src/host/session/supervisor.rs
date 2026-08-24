@@ -724,6 +724,8 @@ mod tests {
             limits: SessionRuntimeLimits::default(),
             startup: SessionRuntimeStartup::Initial {
                 explicit_command: Some("cat >/dev/null".to_string()),
+                start_directory: None,
+                environment: None,
             },
         }
     }
