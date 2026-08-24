@@ -630,10 +630,11 @@ async fn serve_routed_initialize_inner(
                 .and_then(Value::as_str)
                 .map(str::to_string)
         });
-    let binding = match intent {
+    let mut provisioning = None;
+    let mut binding = match intent {
         SessionIntent::Create => {
-            router
-                .create_remote(
+            let prepared = router
+                .prepare_remote(
                     &principal,
                     crate::host::router::RemoteSessionCreateRequest {
                         name: session_name,
@@ -643,7 +644,13 @@ async fn serve_routed_initialize_inner(
                         size,
                     },
                 )
-                .await?
+                .await?;
+            let binding = crate::host::router::RemoteSessionBinding {
+                lease: prepared.lease().clone(),
+                runtime: prepared.runtime()?.clone(),
+            };
+            provisioning = Some(prepared);
+            binding
         }
         SessionIntent::Attach => {
             router
@@ -692,6 +699,13 @@ async fn serve_routed_initialize_inner(
     let mut response: Value = serde_json::from_str(&actor_body).map_err(|_| {
         MezError::invalid_state("routed actor initialization returned invalid JSON")
     })?;
+    let actor_initialized = response.get("error").is_none();
+    if actor_initialized && let Some(prepared) = provisioning.take() {
+        binding = prepared.commit()?;
+    }
+    if !actor_initialized {
+        drop(provisioning.take());
+    }
     if let Some(result) = response.get_mut("result").and_then(Value::as_object_mut) {
         result.insert("selected_version".to_string(), Value::from(3));
         result.insert(
@@ -727,7 +741,7 @@ async fn serve_routed_initialize_inner(
         .await
         .map_err(|_| MezError::invalid_state("host routed initialize flush timed out"))??;
     *initialization_sent = true;
-    if response.get("error").is_some() {
+    if !actor_initialized {
         return Ok(());
     }
 

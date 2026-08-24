@@ -101,6 +101,96 @@ pub(crate) struct RemoteSessionBinding {
     pub(crate) runtime: SessionRuntimeHandle,
 }
 
+/// Pending remote create retained until routed actor initialization succeeds.
+pub(crate) struct RemoteSessionProvisioning {
+    leases: RemoteSessionLeaseRepository,
+    supervisor: SessionSupervisor,
+    lease: RemoteSessionLease,
+    runtime: Option<SessionRuntimeHandle>,
+    committed: bool,
+}
+
+impl RemoteSessionProvisioning {
+    fn pending(
+        leases: RemoteSessionLeaseRepository,
+        supervisor: SessionSupervisor,
+        lease: RemoteSessionLease,
+    ) -> Self {
+        Self {
+            leases,
+            supervisor,
+            lease,
+            runtime: None,
+            committed: false,
+        }
+    }
+
+    fn active(binding: RemoteSessionBinding) -> Self {
+        Self {
+            leases: RemoteSessionLeaseRepository::new(std::path::PathBuf::new()),
+            supervisor: SessionSupervisor::default(),
+            lease: binding.lease,
+            runtime: Some(binding.runtime),
+            committed: true,
+        }
+    }
+
+    pub(crate) fn lease(&self) -> &RemoteSessionLease {
+        &self.lease
+    }
+
+    pub(crate) fn runtime(&self) -> Result<&SessionRuntimeHandle> {
+        self.runtime.as_ref().ok_or_else(|| {
+            MezError::invalid_state("remote session provisioning runtime is unavailable")
+        })
+    }
+
+    pub(crate) fn commit(mut self) -> Result<RemoteSessionBinding> {
+        if !self.committed {
+            self.lease = self.leases.activate(
+                &self.lease.lease_id,
+                self.lease.boot_generation,
+                self.lease.lease_generation,
+                current_unix_seconds()?,
+            )?;
+            self.committed = true;
+        }
+        Ok(RemoteSessionBinding {
+            lease: self.lease.clone(),
+            runtime: self.runtime.take().ok_or_else(|| {
+                MezError::invalid_state("remote session provisioning runtime is unavailable")
+            })?,
+        })
+    }
+
+    fn set_runtime(&mut self, runtime: SessionRuntimeHandle) {
+        self.runtime = Some(runtime);
+    }
+}
+
+impl Drop for RemoteSessionProvisioning {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let now = current_unix_seconds().unwrap_or(self.lease.updated_at_unix_seconds);
+        let _ = self.leases.mark_failed(
+            &self.lease.lease_id,
+            self.lease.boot_generation,
+            self.lease.lease_generation,
+            now,
+            "remote session provisioning ended before routed initialization committed".to_string(),
+        );
+        let supervisor = self.supervisor.clone();
+        let session_id = self.lease.session_id.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = supervisor.stop(&session_id, true).await;
+            });
+        }
+    }
+}
+
 /// Secret-free durable state summary returned by host reconciliation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct HostReconciliationReport {
@@ -407,11 +497,25 @@ impl HostSessionRouter {
     }
 
     /// Reserves, starts, and activates one principal-owned remote session.
+    #[allow(
+        dead_code,
+        reason = "non-routed callers retain the prepare-and-immediately-commit compatibility boundary"
+    )]
     pub(crate) async fn create_remote(
         &self,
         principal: &RemotePrincipal,
         request: RemoteSessionCreateRequest,
     ) -> Result<RemoteSessionBinding> {
+        self.prepare_remote(principal, request).await?.commit()
+    }
+
+    /// Reserves and starts one remote session while retaining Pending authority
+    /// until the routed actor has accepted initialization.
+    pub(crate) async fn prepare_remote(
+        &self,
+        principal: &RemotePrincipal,
+        request: RemoteSessionCreateRequest,
+    ) -> Result<RemoteSessionProvisioning> {
         let authority = principal.host_routing;
         if !authority.session_create {
             return Err(MezError::forbidden(
@@ -448,18 +552,17 @@ impl HostSessionRouter {
             self.config.max_live_sessions,
         )?;
         match reservation {
-            LeaseReservation::Replay(lease) => self.resolve_replayed_create(lease).await,
+            LeaseReservation::Replay(lease) => self
+                .resolve_replayed_create(lease)
+                .await
+                .map(RemoteSessionProvisioning::active),
             LeaseReservation::Created(lease) => {
-                if let Err(error) = self.ensure_global_session_capacity().await {
-                    let _ = self.leases.mark_failed(
-                        &lease.lease_id,
-                        lease.boot_generation,
-                        lease.lease_generation,
-                        current_unix_seconds().unwrap_or(now),
-                        "host session capacity was exhausted".to_string(),
-                    );
-                    return Err(error);
-                }
+                let mut provisioning = RemoteSessionProvisioning::pending(
+                    self.leases.clone(),
+                    self.supervisor.clone(),
+                    lease.clone(),
+                );
+                self.ensure_global_session_capacity().await?;
                 let started = self
                     .start_session(
                         lease.session_id.clone(),
@@ -470,29 +573,10 @@ impl HostSessionRouter {
                     .await;
                 let runtime = match started {
                     Ok(runtime) => runtime,
-                    Err(error) => {
-                        let _ = self.leases.mark_failed(
-                            &lease.lease_id,
-                            lease.boot_generation,
-                            lease.lease_generation,
-                            current_unix_seconds().unwrap_or(now),
-                            "remote session runtime startup failed".to_string(),
-                        );
-                        return Err(error);
-                    }
+                    Err(error) => return Err(error),
                 };
-                match self.leases.activate(
-                    &lease.lease_id,
-                    lease.boot_generation,
-                    lease.lease_generation,
-                    current_unix_seconds()?,
-                ) {
-                    Ok(lease) => Ok(RemoteSessionBinding { lease, runtime }),
-                    Err(error) => {
-                        let _ = self.supervisor.stop(&lease.session_id, true).await;
-                        Err(error)
-                    }
-                }
+                provisioning.set_runtime(runtime);
+                Ok(provisioning)
             }
         }
     }
@@ -1439,6 +1523,106 @@ mod tests {
     use crate::storage::lease::LeaseCheckpointReference;
 
     use super::*;
+
+    /// Prepared remote authority remains non-routable until explicit commit.
+    #[tokio::test(flavor = "current_thread")]
+    async fn remote_provisioning_activates_only_after_commit() {
+        let root = test_root("provisioning-commit");
+        let router = HostSessionRouter::new(test_config(&root));
+        let principal = test_principal("provisioning-owner", 2);
+        let prepared = router
+            .prepare_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("prepared".to_string()),
+                    idempotency_key: "prepared-create".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let session_id = prepared.lease().session_id.clone();
+        assert_eq!(prepared.lease().state, RemoteSessionLeaseState::Pending);
+        assert_eq!(
+            router.get_lease(&prepared.lease().lease_id).unwrap().state,
+            RemoteSessionLeaseState::Pending
+        );
+        let unresolved = router
+            .resolve_remote(
+                &principal,
+                Some(&serde_json::json!({"session_id":session_id}).to_string()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(unresolved.kind(), MezErrorKind::NotFound);
+
+        let committed = prepared.commit().unwrap();
+        assert_eq!(committed.lease.state, RemoteSessionLeaseState::Active);
+        assert_eq!(
+            router
+                .resolve_remote(
+                    &principal,
+                    Some(&serde_json::json!({"session_id":session_id}).to_string()),
+                )
+                .await
+                .unwrap()
+                .lease
+                .lease_id,
+            committed.lease.lease_id
+        );
+        router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Dropping an uncommitted provisioning transaction terminalizes its
+    /// pending lease and cancels the allocated runtime without duplication.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dropped_remote_provisioning_fails_lease_and_stops_runtime() {
+        let root = test_root("provisioning-drop");
+        let router = HostSessionRouter::new(test_config(&root));
+        let principal = test_principal("drop-owner", 2);
+        let request = RemoteSessionCreateRequest {
+            name: Some("drop-before-commit".to_string()),
+            idempotency_key: "drop-before-commit".to_string(),
+            size: Size::new(80, 24).unwrap(),
+        };
+        let prepared = router
+            .prepare_remote(&principal, request.clone())
+            .await
+            .unwrap();
+        let lease_id = prepared.lease().lease_id.clone();
+        let session_id = prepared.lease().session_id.clone();
+        assert!(router.supervisor.lookup(&session_id).is_ok());
+        drop(prepared);
+
+        assert_eq!(
+            router.get_lease(&lease_id).unwrap().state,
+            RemoteSessionLeaseState::Failed
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while router.supervisor.lookup(&session_id).is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let replay = router.create_remote(&principal, request).await.unwrap_err();
+        assert_eq!(replay.kind(), MezErrorKind::InvalidState);
+        assert_eq!(
+            router
+                .leases
+                .list()
+                .unwrap()
+                .iter()
+                .filter(|lease| lease.idempotency_key == "drop-before-commit")
+                .count(),
+            1
+        );
+        let _ = fs::remove_dir_all(root);
+    }
 
     /// Runtime completion reconciles the matching durable lease after the
     /// supervisor accepts that exact generation: checkpointed sessions remain

@@ -78,6 +78,8 @@ struct SessionSupervisorInner {
     changed: Notify,
     terminal_history_limit: usize,
     runtime_completion_handler: Option<RuntimeCompletionHandler>,
+    #[cfg(test)]
+    start_reservation_probe: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
 }
 
 #[derive(Debug)]
@@ -99,6 +101,42 @@ enum SupervisorEntryState {
         handle: SessionRuntimeHandle,
         cancel: watch::Sender<bool>,
     },
+}
+
+/// Removes the exact startup generation if its construction future is
+/// cancelled before ownership transfers to the runtime supervision task.
+struct StartupReservationGuard {
+    inner: Arc<SessionSupervisorInner>,
+    session_id: String,
+    generation: u64,
+    armed: bool,
+}
+
+impl StartupReservationGuard {
+    fn new(inner: Arc<SessionSupervisorInner>, session_id: String, generation: u64) -> Self {
+        Self {
+            inner,
+            session_id,
+            generation,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StartupReservationGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.inner.finish_start_failure(
+                &self.session_id,
+                self.generation,
+                "session startup future was cancelled".to_string(),
+            );
+        }
+    }
 }
 
 impl Default for SessionSupervisor {
@@ -135,6 +173,8 @@ impl SessionSupervisor {
                 changed: Notify::new(),
                 terminal_history_limit,
                 runtime_completion_handler,
+                #[cfg(test)]
+                start_reservation_probe: Mutex::new(None),
             }),
         }
     }
@@ -166,6 +206,22 @@ impl SessionSupervisor {
             );
         }
         self.inner.changed.notify_waiters();
+
+        let mut reservation =
+            StartupReservationGuard::new(self.inner.clone(), session_id.clone(), generation);
+
+        #[cfg(test)]
+        let start_reservation_probe = self
+            .inner
+            .start_reservation_probe
+            .lock()
+            .map_err(|_| MezError::invalid_state("session startup probe lock was poisoned"))?
+            .clone();
+        #[cfg(test)]
+        if let Some((started, release)) = start_reservation_probe {
+            started.notify_waiters();
+            release.notified().await;
+        }
 
         let runtime = match SessionFactory::create(request).await {
             Ok(runtime) => runtime,
@@ -224,6 +280,7 @@ impl SessionSupervisor {
                 cancel,
             };
         }
+        reservation.disarm();
         self.inner.changed.notify_waiters();
 
         let inner = self.inner.clone();
@@ -613,6 +670,58 @@ mod tests {
         }));
         let retry = supervisor.start(test_request("retry", id)).await.unwrap();
         assert_eq!(retry.session_id(), SessionId::new('$', id).to_string());
+        supervisor
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+    }
+
+    /// Cancelling the start future after identity reservation must release the
+    /// exact generation so a retry can reuse the stable session identity.
+    #[tokio::test(flavor = "current_thread")]
+    async fn supervisor_cancellation_releases_start_reservation() {
+        let supervisor = SessionSupervisor::new(4);
+        let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
+        let session_id = SessionId::new('$', id).to_string();
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        *supervisor.inner.start_reservation_probe.lock().unwrap() =
+            Some((started.clone(), release));
+        let started_wait = started.notified();
+        let starting_supervisor = supervisor.clone();
+        let task = tokio::spawn(async move {
+            starting_supervisor
+                .start(test_request("cancelled", id))
+                .await
+        });
+
+        started_wait.await;
+        assert!(supervisor.contains(&session_id).unwrap());
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(!supervisor.contains(&session_id).unwrap());
+        assert!(
+            supervisor
+                .snapshots()
+                .await
+                .unwrap()
+                .iter()
+                .any(|snapshot| {
+                    snapshot.session_id == session_id
+                        && snapshot.state == SessionSupervisorState::Failed
+                        && snapshot
+                            .failure
+                            .as_deref()
+                            .is_some_and(|failure| failure.contains("future was cancelled"))
+                })
+        );
+
+        *supervisor.inner.start_reservation_probe.lock().unwrap() = None;
+        let retry = supervisor
+            .start(test_request("cancelled-retry", id))
+            .await
+            .unwrap();
+        assert_eq!(retry.session_id(), session_id);
         supervisor
             .shutdown_all(true, Duration::from_secs(2))
             .await
