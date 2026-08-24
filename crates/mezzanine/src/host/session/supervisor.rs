@@ -80,6 +80,8 @@ struct SessionSupervisorInner {
     runtime_completion_handler: Option<RuntimeCompletionHandler>,
     #[cfg(test)]
     start_reservation_probe: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
+    #[cfg(test)]
+    fail_next_stop: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -175,6 +177,8 @@ impl SessionSupervisor {
                 runtime_completion_handler,
                 #[cfg(test)]
                 start_reservation_probe: Mutex::new(None),
+                #[cfg(test)]
+                fail_next_stop: AtomicU64::new(0),
             }),
         }
     }
@@ -350,6 +354,12 @@ impl SessionSupervisor {
 
     /// Requests graceful or forced teardown without holding the map lock across actor awaits.
     pub(crate) async fn stop(&self, session_id: &str, force: bool) -> Result<()> {
+        #[cfg(test)]
+        if self.inner.fail_next_stop.swap(0, Ordering::SeqCst) != 0 {
+            return Err(MezError::invalid_state(
+                "injected session supervisor stop failure",
+            ));
+        }
         let action = {
             let mut entries = self.inner.entries()?;
             let entry = entries.get_mut(session_id).ok_or_else(|| {
@@ -392,6 +402,11 @@ impl SessionSupervisor {
         };
         let _ = cancel.send(true);
         shutdown
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_stop(&self) {
+        self.inner.fail_next_stop.store(1, Ordering::SeqCst);
     }
 
     /// Stops every live runtime and waits boundedly for all matching tasks to settle.

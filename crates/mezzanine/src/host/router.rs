@@ -6,8 +6,9 @@
 //! terminal failure when startup fails. Resolution filters authority before
 //! matching targets so unauthorized callers cannot infer lease existence.
 
-use std::sync::Arc;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mez_core::ids::SessionId;
@@ -105,6 +106,7 @@ pub(crate) struct RemoteSessionBinding {
 pub(crate) struct RemoteSessionProvisioning {
     leases: RemoteSessionLeaseRepository,
     supervisor: SessionSupervisor,
+    authority_epoch: Arc<tokio::sync::watch::Sender<u64>>,
     lease: RemoteSessionLease,
     runtime: Option<SessionRuntimeHandle>,
     committed: bool,
@@ -114,11 +116,13 @@ impl RemoteSessionProvisioning {
     fn pending(
         leases: RemoteSessionLeaseRepository,
         supervisor: SessionSupervisor,
+        authority_epoch: Arc<tokio::sync::watch::Sender<u64>>,
         lease: RemoteSessionLease,
     ) -> Self {
         Self {
             leases,
             supervisor,
+            authority_epoch,
             lease,
             runtime: None,
             committed: false,
@@ -129,6 +133,7 @@ impl RemoteSessionProvisioning {
         Self {
             leases: RemoteSessionLeaseRepository::new(std::path::PathBuf::new()),
             supervisor: SessionSupervisor::default(),
+            authority_epoch: Arc::new(tokio::sync::watch::channel(0).0),
             lease: binding.lease,
             runtime: Some(binding.runtime),
             committed: true,
@@ -153,6 +158,9 @@ impl RemoteSessionProvisioning {
                 self.lease.lease_generation,
                 current_unix_seconds()?,
             )?;
+            self.authority_epoch.send_modify(|epoch| {
+                *epoch = epoch.saturating_add(1);
+            });
             self.committed = true;
         }
         Ok(RemoteSessionBinding {
@@ -230,6 +238,8 @@ pub(crate) struct HostSessionRouter {
     leases: RemoteSessionLeaseRepository,
     creation_lock: Arc<tokio::sync::Mutex<()>>,
     admission_state: Arc<AtomicU8>,
+    authority_epoch: Arc<tokio::sync::watch::Sender<u64>>,
+    terminal_runtime_cleanup: Arc<Mutex<HashSet<String>>>,
 }
 
 impl HostSessionRouter {
@@ -242,6 +252,7 @@ impl HostSessionRouter {
         let supervisor = SessionSupervisor::with_runtime_completion_handler(move |completion| {
             reconcile_runtime_completion(&completion_leases, completion)
         });
+        let (authority_epoch, _) = tokio::sync::watch::channel(0);
         Self {
             config,
             supervisor,
@@ -249,7 +260,74 @@ impl HostSessionRouter {
             leases,
             creation_lock: Arc::new(tokio::sync::Mutex::new(())),
             admission_state: Arc::new(AtomicU8::new(HostAdmissionState::Serving as u8)),
+            authority_epoch: Arc::new(authority_epoch),
+            terminal_runtime_cleanup: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    /// Subscribes to live lease-authority transitions for routed connection
+    /// fencing and nearest-expiry rescheduling.
+    pub(crate) fn authority_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.authority_epoch.subscribe()
+    }
+
+    /// Returns the duration until the nearest finite non-terminal lease expiry
+    /// or the next retry for a runtime whose durable authority is terminal.
+    pub(crate) fn time_until_next_lease_expiry(&self) -> Result<Option<Duration>> {
+        let now = current_unix_seconds()?;
+        let expiry = self
+            .leases
+            .list()?
+            .into_iter()
+            .filter(|lease| !lease.state.is_garbage_collectable())
+            .filter_map(|lease| lease.expires_at_unix_seconds)
+            .min()
+            .map(|expires_at| Duration::from_secs(expires_at.saturating_sub(now)));
+        let cleanup_pending = !self
+            .terminal_runtime_cleanup
+            .lock()
+            .map_err(|_| MezError::invalid_state("terminal runtime cleanup lock was poisoned"))?
+            .is_empty();
+        Ok(match (expiry, cleanup_pending) {
+            (Some(delay), true) => Some(delay.min(Duration::from_secs(1))),
+            (None, true) => Some(Duration::from_secs(1)),
+            (delay, false) => delay,
+        })
+    }
+
+    /// Revalidates the exact lease selected when a routed connection was
+    /// initialized. Checkpoint-only generation changes do not invalidate
+    /// otherwise unchanged active authority.
+    pub(crate) fn validate_bound_lease(
+        &self,
+        principal: &RemotePrincipal,
+        binding: &RemoteSessionLease,
+    ) -> Result<()> {
+        let current = self
+            .leases
+            .get(&binding.lease_id)?
+            .ok_or_else(|| MezError::forbidden("remote session lease no longer exists"))?;
+        let now = current_unix_seconds()?;
+        let principal_may_attach = match principal.host_routing.session_attach_scope {
+            RemoteSessionAttachScope::Own | RemoteSessionAttachScope::Shared => {
+                current.owner_principal_id == principal.trust_record_id
+            }
+            RemoteSessionAttachScope::All => true,
+        };
+        if current.state != RemoteSessionLeaseState::Active
+            || current.session_id != binding.session_id
+            || current.owner_principal_id != binding.owner_principal_id
+            || !principal_may_attach
+            || current.boot_generation != binding.boot_generation
+            || current
+                .expires_at_unix_seconds
+                .is_some_and(|expires_at| expires_at <= now)
+        {
+            return Err(MezError::forbidden(
+                "remote session lease authority is no longer valid",
+            ));
+        }
+        Ok(())
     }
 
     /// Waits for in-flight serialized admission to settle, then fences all
@@ -324,8 +402,9 @@ impl HostSessionRouter {
     pub(crate) fn reconcile_startup(&self) -> Result<HostReconciliationReport> {
         SnapshotRepository::new(self.config.config_root.join("layouts"))
             .reconcile_publication_temporaries()?;
-        self.leases
-            .advance_boot_generation(current_unix_seconds()?)?;
+        let now = current_unix_seconds()?;
+        self.leases.advance_boot_generation(now)?;
+        let _ = self.leases.expire_due(now)?;
         self.reconcile()
     }
 
@@ -531,6 +610,7 @@ impl HostSessionRouter {
         let _creation = self.creation_lock.lock().await;
         self.require_serving()?;
         let now = current_unix_seconds()?;
+        let _ = self.expire_due_leases_locked(now).await?;
         let session_id = next_session_id()?;
         let lease_id = format!("lease-{}", session_id.trim_start_matches('$'));
         let fingerprint = creation_fingerprint(request.name.as_deref(), request.size);
@@ -542,6 +622,10 @@ impl HostSessionRouter {
                 owner_live_session_limit: authority.max_live_sessions,
                 name: request.name.clone(),
                 default_for_owner: false,
+                expires_at_unix_seconds: authority
+                    .lease_lifetime_ceiling_seconds
+                    .filter(|seconds| *seconds > 0)
+                    .map(|seconds| now.saturating_add(seconds)),
                 idempotency_key: request.idempotency_key,
                 creation_fingerprint: fingerprint,
                 now_unix_seconds: now,
@@ -560,6 +644,7 @@ impl HostSessionRouter {
                 let mut provisioning = RemoteSessionProvisioning::pending(
                     self.leases.clone(),
                     self.supervisor.clone(),
+                    self.authority_epoch.clone(),
                     lease.clone(),
                 );
                 self.ensure_global_session_capacity().await?;
@@ -590,6 +675,9 @@ impl HostSessionRouter {
     ) -> Result<RemoteSessionBinding> {
         let _creation = self.creation_lock.lock().await;
         self.require_serving()?;
+        let _ = self
+            .expire_due_leases_locked(current_unix_seconds()?)
+            .await?;
         let mut visible = self.visible_leases(principal)?;
         visible.retain(|lease| {
             matches!(
@@ -721,6 +809,81 @@ impl HostSessionRouter {
         }
     }
 
+    /// Revokes due finite leases and stops any runtime that still backs them.
+    pub(crate) async fn expire_due_leases(&self) -> Result<usize> {
+        let _creation = self.creation_lock.lock().await;
+        self.expire_due_leases_locked(current_unix_seconds()?).await
+    }
+
+    async fn expire_due_leases_locked(&self, now_unix_seconds: u64) -> Result<usize> {
+        let expired = self.leases.expire_due(now_unix_seconds)?;
+        if !expired.is_empty() {
+            self.notify_authority_change();
+        }
+        for lease in &expired {
+            if self.supervisor.lookup(&lease.session_id).is_ok() {
+                self.stop_or_track_terminal_runtime(&lease.session_id).await;
+            }
+        }
+        Ok(expired.len())
+    }
+
+    /// Retries runtime teardown that could not complete after durable lease
+    /// authority was already released, revoked, or expired.
+    pub(crate) async fn reconcile_terminal_runtime_cleanup(&self) -> Result<usize> {
+        let pending = self
+            .terminal_runtime_cleanup
+            .lock()
+            .map_err(|_| MezError::invalid_state("terminal runtime cleanup lock was poisoned"))?
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut completed = 0usize;
+        for session_id in pending {
+            match self.supervisor.stop(&session_id, true).await {
+                Ok(()) => {
+                    self.terminal_runtime_cleanup
+                        .lock()
+                        .map_err(|_| {
+                            MezError::invalid_state("terminal runtime cleanup lock was poisoned")
+                        })?
+                        .remove(&session_id);
+                    completed = completed.saturating_add(1);
+                }
+                Err(error) if error.kind() == MezErrorKind::NotFound => {
+                    self.terminal_runtime_cleanup
+                        .lock()
+                        .map_err(|_| {
+                            MezError::invalid_state("terminal runtime cleanup lock was poisoned")
+                        })?
+                        .remove(&session_id);
+                    completed = completed.saturating_add(1);
+                }
+                Err(_) => {}
+            }
+        }
+        Ok(completed)
+    }
+
+    async fn stop_or_track_terminal_runtime(&self, session_id: &str) {
+        match self.supervisor.stop(session_id, true).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == MezErrorKind::NotFound => {}
+            Err(_) => {
+                if let Ok(mut cleanup) = self.terminal_runtime_cleanup.lock() {
+                    cleanup.insert(session_id.to_string());
+                }
+                self.notify_authority_change();
+            }
+        }
+    }
+
+    fn notify_authority_change(&self) {
+        self.authority_epoch.send_modify(|epoch| {
+            *epoch = epoch.saturating_add(1);
+        });
+    }
+
     /// Lists durable leases for local administration with optional filters.
     pub(crate) fn list_leases(
         &self,
@@ -840,6 +1003,7 @@ impl HostSessionRouter {
             lease.lease_generation,
             current_unix_seconds()?,
         )?;
+        self.notify_authority_change();
         self.stop_terminal_lease_runtime_if_requested(&released, terminate)
             .await?;
         Ok(released)
@@ -872,6 +1036,7 @@ impl HostSessionRouter {
             current_unix_seconds()?,
             reason,
         )?;
+        self.notify_authority_change();
         self.stop_terminal_lease_runtime_if_requested(&revoked, terminate)
             .await?;
         Ok(revoked)
@@ -946,7 +1111,16 @@ impl HostSessionRouter {
         match self.supervisor.stop(&lease.session_id, true).await {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == MezErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
+            Err(error) => {
+                self.terminal_runtime_cleanup
+                    .lock()
+                    .map_err(|_| {
+                        MezError::invalid_state("terminal runtime cleanup lock was poisoned")
+                    })?
+                    .insert(lease.session_id.clone());
+                self.notify_authority_change();
+                Err(error)
+            }
         }
     }
 
@@ -995,9 +1169,15 @@ impl HostSessionRouter {
     }
 
     fn visible_leases(&self, principal: &RemotePrincipal) -> Result<Vec<RemoteSessionLease>> {
+        let now = current_unix_seconds()?;
         let leases = self.leases.list()?;
         Ok(leases
             .into_iter()
+            .filter(|lease| {
+                lease
+                    .expires_at_unix_seconds
+                    .is_none_or(|expires_at| expires_at > now)
+            })
             .filter(|lease| match principal.host_routing.session_attach_scope {
                 RemoteSessionAttachScope::Own | RemoteSessionAttachScope::Shared => {
                     lease.owner_principal_id == principal.trust_record_id
@@ -2284,6 +2464,58 @@ mod tests {
             .shutdown_all(true, Duration::from_secs(2))
             .await
             .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A teardown failure after durable revocation remains tracked until a
+    /// later maintenance pass successfully stops the fenced runtime.
+    #[tokio::test(flavor = "current_thread")]
+    async fn terminal_runtime_cleanup_retries_after_stop_failure() {
+        let root = test_root("terminal-cleanup-retry");
+        let router = HostSessionRouter::new(test_config(&root));
+        let principal = test_principal("cleanup-owner", 1);
+        let created = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("cleanup-retry".to_string()),
+                    idempotency_key: "cleanup-retry".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+
+        router.supervisor.fail_next_stop();
+        let error = router
+            .revoke_lease(
+                &created.lease.lease_id,
+                Some("test cleanup retry".to_string()),
+                true,
+            )
+            .await
+            .unwrap_err();
+        assert!(error.message().contains("injected"), "{error}");
+        assert_eq!(
+            router.get_lease(&created.lease.lease_id).unwrap().state,
+            RemoteSessionLeaseState::Revoked
+        );
+        assert!(router.supervisor.lookup(&created.lease.session_id).is_ok());
+        assert_eq!(
+            router.reconcile_terminal_runtime_cleanup().await.unwrap(),
+            1
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while router.supervisor.lookup(&created.lease.session_id).is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            router.reconcile_terminal_runtime_cleanup().await.unwrap(),
+            0
+        );
         let _ = fs::remove_dir_all(root);
     }
 

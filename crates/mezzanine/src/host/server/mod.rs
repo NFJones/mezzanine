@@ -184,11 +184,31 @@ impl HostServer {
     {
         tokio::pin!(cancellation);
         let mut connections = FuturesUnordered::new();
+        let mut authority_changes = self.router.authority_changes();
         let shutdown = loop {
+            let authority_delay = self.router.time_until_next_lease_expiry()?;
+            let authority_maintenance = async move {
+                match authority_delay {
+                    Some(delay) => tokio::time::sleep(delay).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
             tokio::select! {
                 () = &mut cancellation => {
                     self.router.start_draining()?;
                     break HostShutdownRequest { force: false };
+                }
+                () = authority_maintenance => {
+                    let _ = self.router.expire_due_leases().await;
+                    let _ = self.router.reconcile_terminal_runtime_cleanup().await;
+                }
+                changed = authority_changes.changed() => {
+                    if changed.is_err() {
+                        return Err(MezError::invalid_state(
+                            "host lease authority scheduler stopped unexpectedly",
+                        ));
+                    }
+                    let _ = self.router.reconcile_terminal_runtime_cleanup().await;
                 }
                 completed = connections.next(), if !connections.is_empty() => {
                     if let Some(Some(request)) = completed {
@@ -1518,6 +1538,86 @@ mod tests {
             .unwrap()
             .unwrap();
         drop(stalled);
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Lease expiry follows the nearest durable authority deadline while the
+    /// host would otherwise be idle indefinitely.
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_expires_finite_lease_at_nearest_deadline() {
+        let root = test_root("nearest-lease-expiry");
+        let host = std::sync::Arc::new(HostServer::bind(config(root.clone())).unwrap());
+        let principal = RemotePrincipal {
+            trust_record_id: "expiry-owner".to_string(),
+            endpoint_id: "expiry-endpoint".to_string(),
+            role_ceiling: RemoteRoleCeiling::Observer,
+            host_routing: RemoteHostRoutingAuthority {
+                session_create: true,
+                session_list: true,
+                session_attach_scope: RemoteSessionAttachScope::Own,
+                max_active_leases: 1,
+                max_live_sessions: 1,
+                lease_lifetime_ceiling_seconds: Some(1),
+            },
+            requested_role: RequestedRole::Observer,
+        };
+        let created = host
+            .router
+            .create_remote(
+                &principal,
+                crate::host::router::RemoteSessionCreateRequest {
+                    name: Some("short-lived".to_string()),
+                    idempotency_key: "short-lived".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let serving_host = std::sync::Arc::clone(&host);
+        let server_task =
+            tokio::spawn(async move { serving_host.serve(std::future::pending()).await });
+
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let lease = host.router.get_lease(&created.lease.lease_id).unwrap();
+                if lease.state == crate::storage::lease::RemoteSessionLeaseState::Revoked
+                    && host
+                        .router
+                        .snapshots()
+                        .await
+                        .unwrap()
+                        .iter()
+                        .all(|snapshot| {
+                            snapshot.session_id != lease.session_id
+                                || !matches!(
+                                    snapshot.state,
+                                    SessionSupervisorState::Starting
+                                        | SessionSupervisorState::Running
+                                        | SessionSupervisorState::Stopping
+                                )
+                        })
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("finite lease should expire at its nearest deadline");
+
+        let shutdown = exchange_host_socket_request(
+            host.socket_path(),
+            "host/shutdown",
+            json!({"force":true}),
+        )
+        .await;
+        assert_eq!(shutdown["result"]["shutting_down"], true);
+        tokio::time::timeout(Duration::from_secs(2), server_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         drop(host);
         let _ = fs::remove_dir_all(root);
     }

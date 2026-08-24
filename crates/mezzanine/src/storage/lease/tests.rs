@@ -373,6 +373,65 @@ fn lease_gc_is_previewable_and_preserves_live_authority() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Finite lease lifetimes revoke due live authority atomically while retaining
+/// unlimited and already-terminal records unchanged.
+#[test]
+fn lease_expiry_revokes_only_due_non_terminal_authority() {
+    let root = test_root("expiry");
+    let repository = RemoteSessionLeaseRepository::new(root.clone());
+    let mut finite_request = reservation(
+        "lease-finite",
+        "$1",
+        "device-1",
+        "create-finite",
+        "fingerprint-finite",
+    );
+    finite_request.expires_at_unix_seconds = Some(20);
+    let finite = repository
+        .reserve_pending(finite_request)
+        .unwrap()
+        .lease()
+        .clone();
+    let finite = repository
+        .activate(
+            &finite.lease_id,
+            finite.boot_generation,
+            finite.lease_generation,
+            11,
+        )
+        .unwrap();
+    let unlimited = repository
+        .reserve_pending(reservation(
+            "lease-unlimited",
+            "$2",
+            "device-2",
+            "create-unlimited",
+            "fingerprint-unlimited",
+        ))
+        .unwrap()
+        .lease()
+        .clone();
+
+    assert!(repository.expire_due(19).unwrap().is_empty());
+    let expired = repository.expire_due(20).unwrap();
+    assert_eq!(expired.len(), 1);
+    assert_eq!(expired[0].lease_id, finite.lease_id);
+    assert_eq!(expired[0].state, RemoteSessionLeaseState::Revoked);
+    assert_eq!(
+        expired[0].failure.as_deref(),
+        Some("remote session lease lifetime expired")
+    );
+    assert_eq!(expired[0].terminal_at_unix_seconds, Some(20));
+    assert_eq!(expired[0].lease_generation, finite.lease_generation + 1);
+    assert_eq!(
+        repository.get(&unlimited.lease_id).unwrap().unwrap().state,
+        RemoteSessionLeaseState::Pending
+    );
+    assert!(repository.expire_due(21).unwrap().is_empty());
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Malformed durable data fails closed without being replaced or silently
 /// interpreted as an empty lease database.
 #[test]
@@ -461,6 +520,7 @@ fn reservation(
         owner_live_session_limit: usize::MAX,
         name: None,
         default_for_owner: false,
+        expires_at_unix_seconds: None,
         idempotency_key: idempotency_key.to_string(),
         creation_fingerprint: fingerprint.to_string(),
         now_unix_seconds: 10,

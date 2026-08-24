@@ -10,6 +10,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use base64::Engine;
 use iroh::SecretKey;
@@ -128,6 +129,7 @@ impl RemoteEndpointIdentity {
 #[derive(Debug, Clone)]
 pub(crate) struct RemoteTrustStore {
     directory: PathBuf,
+    authority_epoch: Arc<tokio::sync::watch::Sender<u64>>,
 }
 
 /// Validated invitation material that has not yet consumed persistent state.
@@ -171,8 +173,10 @@ impl RemotePairingPreparation {
 impl RemoteTrustStore {
     /// Creates a store beneath the primary-user configuration root.
     pub(crate) fn under_config_root(config_root: &Path, session_id: &str) -> Result<Self> {
+        let (authority_epoch, _) = tokio::sync::watch::channel(0);
         Ok(Self {
             directory: session_remote_directory(config_root, session_id)?,
+            authority_epoch: Arc::new(authority_epoch),
         })
     }
 
@@ -182,8 +186,43 @@ impl RemoteTrustStore {
         reason = "the persistent local host consumes the completed host trust owner in the next architecture phase"
     )]
     pub(crate) fn under_host_config_root(config_root: &Path) -> Result<Self> {
+        let (authority_epoch, _) = tokio::sync::watch::channel(0);
         Ok(Self {
             directory: host_remote_directory(config_root),
+            authority_epoch: Arc::new(authority_epoch),
+        })
+    }
+
+    /// Subscribes to durable trust mutations made through this live store.
+    pub(crate) fn authority_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.authority_epoch.subscribe()
+    }
+
+    /// Revalidates an initialization-time principal against the current
+    /// durable trust record without requiring the device credential again.
+    pub(crate) fn validate_bound_principal(
+        &self,
+        server_endpoint_id: &str,
+        principal: &RemotePrincipal,
+    ) -> Result<()> {
+        self.with_locked_database(|database| {
+            let record = database
+                .records
+                .iter()
+                .find(|record| record.id == principal.trust_record_id)
+                .ok_or_else(|| MezError::forbidden("remote endpoint trust no longer exists"))?;
+            if record.revoked()
+                || record.endpoint_id != principal.endpoint_id
+                || record.server_endpoint_id != server_endpoint_id
+                || record.role_ceiling != principal.role_ceiling
+                || record.host_routing != principal.host_routing
+                || !record.role_ceiling.permits(principal.requested_role)
+            {
+                return Err(MezError::forbidden(
+                    "remote endpoint trust authority is no longer valid",
+                ));
+            }
+            Ok(())
         })
     }
 
@@ -738,6 +777,9 @@ impl RemoteTrustStore {
         let mut database = self.load_database()?;
         let result = operation(&mut database)?;
         self.write_database(&database)?;
+        self.authority_epoch.send_modify(|epoch| {
+            *epoch = epoch.saturating_add(1);
+        });
         Ok(result)
     }
 

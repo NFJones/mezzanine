@@ -26,7 +26,7 @@ use crate::error::{MezError, MezErrorKind, Result};
 use crate::host::administration::{HostAuditLog, administration_request_fingerprint};
 use crate::host::async_runtime::{
     AsyncRuntimeControlConnectionConfig,
-    serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush,
+    serve_authenticated_async_runtime_control_connection_loop_with_snapshots_hooks_and_cancellation,
 };
 use crate::host::router::HostSessionRouter;
 use crate::runtime::{
@@ -763,8 +763,46 @@ async fn serve_routed_initialize_inner(
         });
     let control_config =
         AsyncRuntimeControlConnectionConfig::new(HOST_CONTROL_MAX_CONTENT_LENGTH, 0)?;
+    let authority_principal = principal.clone();
+    let authority_lease = binding.lease.clone();
+    let request_trust = trust.clone();
+    let request_router = router.clone();
+    let request_server_endpoint_id = server_endpoint_id.to_string();
+    let mut trust_changes = trust.authority_changes();
+    let mut lease_changes = router.authority_changes();
+    let cancellation_trust = trust.clone();
+    let cancellation_router = router.clone();
+    let cancellation_principal = principal.clone();
+    let cancellation_lease = binding.lease.clone();
+    let cancellation_server_endpoint_id = server_endpoint_id.to_string();
+    let authority_cancelled = async move {
+        loop {
+            if cancellation_trust
+                .validate_bound_principal(&cancellation_server_endpoint_id, &cancellation_principal)
+                .and_then(|()| {
+                    cancellation_router
+                        .validate_bound_lease(&cancellation_principal, &cancellation_lease)
+                })
+                .is_err()
+            {
+                return;
+            }
+            tokio::select! {
+                changed = trust_changes.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                }
+                changed = lease_changes.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    };
     let control_result =
-        serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush(
+        serve_authenticated_async_runtime_control_connection_loop_with_snapshots_hooks_and_cancellation(
             bridge.stream_mut(),
             peer,
             binding.runtime.actor(),
@@ -779,7 +817,15 @@ async fn serve_routed_initialize_inner(
                         | RuntimeLifecycleState::Failed
                 )
             },
+            move |_| {
+                request_trust.validate_bound_principal(
+                    &request_server_endpoint_id,
+                    &authority_principal,
+                )?;
+                request_router.validate_bound_lease(&authority_principal, &authority_lease)
+            },
             |_| Ok(()),
+            authority_cancelled,
         )
         .await;
     let _ = event_stop_tx.send(true);
@@ -1688,11 +1734,66 @@ mod tests {
                 "{denied_list}"
             );
             assert_eq!(router.snapshots().await.unwrap().len(), 1);
+
+            let (persistent_connection, mut persistent_bridge, persistent_attach) =
+                open_test_routed_attach(&client, &server_addr, &credential, &session_id).await;
+            assert_eq!(
+                persistent_attach["result"]["lease"]["lease_id"], lease_id,
+                "{persistent_attach}"
+            );
+            let record_id = host
+                .trust
+                .list_records()
+                .unwrap()
+                .into_iter()
+                .find(|record| record.host_routing.session_create && !record.revoked())
+                .unwrap()
+                .id;
+            host.trust
+                .revoke_record(
+                    &record_id,
+                    Some("test active connection fence"),
+                    current_unix_seconds().unwrap(),
+                )
+                .unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                let mut buffer = [0u8; 1024];
+                loop {
+                    match persistent_bridge.stream_mut().read(&mut buffer).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
+            })
+            .await
+            .expect("trust revocation should close an idle routed connection");
+            let _ = persistent_bridge
+                .shutdown(std::time::Duration::from_secs(2))
+                .await;
+            persistent_connection.close(
+                iroh::endpoint::VarInt::from_u32(0),
+                b"revoked test complete",
+            );
+
+            let revoked_reconnect = exchange_test_routed_initialize(
+                &client,
+                &server_addr,
+                &credential,
+                "attach",
+                None,
+                Some(json!({"session_id": session_id})),
+                None,
+            )
+            .await;
+            assert_eq!(
+                revoked_reconnect["error"]["data"]["mezzanine_code"], "forbidden",
+                "{revoked_reconnect}"
+            );
             stop.notify_one();
         };
 
         let (served, ()) = tokio::join!(server, client_work);
-        assert_eq!(served.unwrap(), 10);
+        assert_eq!(served.unwrap(), 12);
         router
             .shutdown_all(true, std::time::Duration::from_secs(2))
             .await
@@ -1788,6 +1889,62 @@ mod tests {
             params["session_target"] = target;
         }
         exchange_test_initialize_params(client, server_addr, params).await
+    }
+
+    async fn open_test_routed_attach(
+        client: &iroh::Endpoint,
+        server_addr: &iroh::EndpointAddr,
+        credential: &str,
+        session_id: &str,
+    ) -> (iroh::endpoint::Connection, IrohCompressionBridge, Value) {
+        let connection = client
+            .connect(server_addr.clone(), crate::runtime::MEZZANINE_IROH_ALPN)
+            .await
+            .unwrap();
+        let (send, recv) = connection.open_bi().await.unwrap();
+        let compression = IrohCompressionPolicy::new(
+            RuntimeIrohCompressionCodec::None,
+            512,
+            3,
+            HOST_CONTROL_MAX_CONTENT_LENGTH + 1024,
+        )
+        .unwrap();
+        let mut bridge =
+            IrohCompressionBridge::spawn(recv, send, compression, HOST_CONTROL_MAX_CONTENT_LENGTH)
+                .unwrap();
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": "test-persistent-attach",
+            "method": "control/initialize",
+            "params": {
+                "client_name": "test-client",
+                "requested_version": 3,
+                "requested_role": "observer",
+                "session_intent": "attach",
+                "session_target": {"session_id": session_id},
+                "client": {
+                    "name": "test-client",
+                    "interactive": false,
+                    "terminal": {"columns": 80, "rows": 24, "term": "xterm-256color"}
+                },
+                "authentication": {
+                    "mechanism": "extension:iroh_device",
+                    "token": credential
+                }
+            }
+        })
+        .to_string();
+        bridge
+            .stream_mut()
+            .write_all(&encode_control_body(&request))
+            .await
+            .unwrap();
+        bridge.stream_mut().flush().await.unwrap();
+        let response =
+            read_one_control_frame(bridge.stream_mut(), std::time::Duration::from_secs(3))
+                .await
+                .unwrap();
+        (connection, bridge, serde_json::from_str(&response).unwrap())
     }
 
     async fn exchange_test_initialize_params(

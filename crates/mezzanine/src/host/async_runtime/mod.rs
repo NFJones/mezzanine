@@ -173,6 +173,7 @@ pub use actor_types::{
     serve_async_runtime_control_listener_with_snapshots,
     serve_async_runtime_message_listener_concurrent,
     serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush,
+    serve_authenticated_async_runtime_control_connection_loop_with_snapshots_hooks_and_cancellation,
 };
 #[cfg(test)]
 pub use client::build_async_attached_terminal_client_service;

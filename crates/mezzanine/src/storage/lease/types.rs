@@ -75,6 +75,8 @@ pub(crate) struct RemoteSessionLease {
     pub(crate) updated_at_unix_seconds: u64,
     pub(crate) activated_at_unix_seconds: Option<u64>,
     pub(crate) terminal_at_unix_seconds: Option<u64>,
+    #[serde(default)]
+    pub(crate) expires_at_unix_seconds: Option<u64>,
     pub(crate) idempotency_key: String,
     pub(crate) creation_fingerprint: String,
     pub(crate) checkpoint: Option<LeaseCheckpointReference>,
@@ -109,6 +111,9 @@ impl RemoteSessionLease {
             || self
                 .terminal_at_unix_seconds
                 .is_some_and(|value| value < self.created_at_unix_seconds)
+            || self
+                .expires_at_unix_seconds
+                .is_some_and(|value| value <= self.created_at_unix_seconds)
         {
             return Err(crate::error::MezError::invalid_state(
                 "remote session lease timestamps are not monotonic",
@@ -135,6 +140,7 @@ pub(crate) struct LeaseReservationRequest {
     pub(crate) owner_live_session_limit: usize,
     pub(crate) name: Option<String>,
     pub(crate) default_for_owner: bool,
+    pub(crate) expires_at_unix_seconds: Option<u64>,
     pub(crate) idempotency_key: String,
     pub(crate) creation_fingerprint: String,
     pub(crate) now_unix_seconds: u64,

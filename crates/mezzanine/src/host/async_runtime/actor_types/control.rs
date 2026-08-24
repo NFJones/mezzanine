@@ -193,18 +193,65 @@ pub async fn serve_authenticated_async_runtime_control_connection_loop_with_snap
     connection: &mut ControlConnectionState,
     config: AsyncRuntimeControlConnectionConfig,
     snapshots: Option<&SnapshotRepository>,
-    mut should_stop: F,
-    mut post_flush: H,
+    should_stop: F,
+    post_flush: H,
 ) -> Result<u64>
 where
     S: AsyncRead + AsyncWrite + Unpin,
     F: FnMut(u64, RuntimeLifecycleState) -> bool,
     H: FnMut(&mut ControlConnectionState) -> Result<()>,
 {
+    serve_authenticated_async_runtime_control_connection_loop_with_snapshots_hooks_and_cancellation(
+        stream,
+        peer,
+        handle,
+        connection,
+        config,
+        snapshots,
+        should_stop,
+        |_| Ok(()),
+        post_flush,
+        std::future::pending(),
+    )
+    .await
+}
+
+/// Serves authenticated control with validation immediately before dispatch
+/// and prompt external cancellation while waiting for the next frame.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "transport authentication, actor ownership, framing, snapshots, lifecycle, authority validation, post-flush state, and external cancellation are independent adapter inputs"
+)]
+pub async fn serve_authenticated_async_runtime_control_connection_loop_with_snapshots_hooks_and_cancellation<
+    S,
+    F,
+    P,
+    H,
+    C,
+>(
+    stream: &mut S,
+    peer: AuthenticatedPeer,
+    handle: &AsyncRuntimeSessionHandle,
+    connection: &mut ControlConnectionState,
+    config: AsyncRuntimeControlConnectionConfig,
+    snapshots: Option<&SnapshotRepository>,
+    mut should_stop: F,
+    mut pre_dispatch: P,
+    mut post_flush: H,
+    cancellation: C,
+) -> Result<u64>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    F: FnMut(u64, RuntimeLifecycleState) -> bool,
+    P: FnMut(&ControlConnectionState) -> Result<()>,
+    H: FnMut(&mut ControlConnectionState) -> Result<()>,
+    C: std::future::Future<Output = ()>,
+{
     connection.bind_authenticated_peer(peer)?;
     let mut framed = Framed::new(stream, ProtocolFrameCodec::new(config.max_content_length)?);
     let mut served = 0u64;
     let mut lifecycle = handle.lifecycle_state_watcher();
+    tokio::pin!(cancellation);
     loop {
         let state = *lifecycle.borrow();
         if should_stop(served, state) {
@@ -224,6 +271,10 @@ where
                         return Err(error);
                     }
                 };
+                if let Err(error) = pre_dispatch(connection) {
+                    submit_control_connection_disconnect_event(handle, connection).await?;
+                    return Err(error);
+                }
                 let input = encode_frame(&frame);
                 let result = match handle_control_input_with_optional_snapshots(
                     handle,
@@ -256,6 +307,10 @@ where
                 if changed.is_err() {
                     return Ok(served);
                 }
+            }
+            () = &mut cancellation => {
+                submit_control_connection_disconnect_event(handle, connection).await?;
+                return Err(MezError::forbidden("control connection authority is no longer valid"));
             }
         }
     }

@@ -208,6 +208,7 @@ impl RemoteSessionLeaseRepository {
                 updated_at_unix_seconds: request.now_unix_seconds,
                 activated_at_unix_seconds: None,
                 terminal_at_unix_seconds: None,
+                expires_at_unix_seconds: request.expires_at_unix_seconds,
                 idempotency_key: request.idempotency_key,
                 creation_fingerprint: request.creation_fingerprint,
                 checkpoint: None,
@@ -562,6 +563,29 @@ impl RemoteSessionLeaseRepository {
                 lease.lease_generation = lease.lease_generation.saturating_add(1);
             }
             Ok(database.boot_generation)
+        })
+    }
+
+    /// Revokes every non-terminal lease whose finite lifetime has elapsed.
+    pub(crate) fn expire_due(&self, now_unix_seconds: u64) -> Result<Vec<RemoteSessionLease>> {
+        self.mutate_database(|database| {
+            let mut expired = Vec::new();
+            for lease in &mut database.leases {
+                if !lease.state.is_garbage_collectable()
+                    && lease
+                        .expires_at_unix_seconds
+                        .is_some_and(|expires_at| expires_at <= now_unix_seconds)
+                {
+                    lease.state = RemoteSessionLeaseState::Revoked;
+                    lease.failure = Some("remote session lease lifetime expired".to_string());
+                    lease.updated_at_unix_seconds = now_unix_seconds;
+                    lease.terminal_at_unix_seconds = Some(now_unix_seconds);
+                    lease.lease_generation = lease.lease_generation.saturating_add(1);
+                    lease.validate()?;
+                    expired.push(lease.clone());
+                }
+            }
+            Ok(expired)
         })
     }
 
