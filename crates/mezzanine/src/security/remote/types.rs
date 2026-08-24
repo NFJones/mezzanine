@@ -37,6 +37,39 @@ impl RemoteRoleCeiling {
     }
 }
 
+/// Sessions one paired remote principal may resolve through the host router.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RemoteSessionAttachScope {
+    /// Only leases created for this exact durable trust principal.
+    #[default]
+    Own,
+    /// Own leases plus leases explicitly shared with this principal.
+    Shared,
+    /// Every lease visible to host-wide administrators.
+    All,
+}
+
+/// Explicit host-routing authority persisted with invitations and trust records.
+///
+/// The default is intentionally non-provisioning so trust databases written
+/// before these fields existed never gain host-wide authority during decode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct RemoteHostRoutingAuthority {
+    /// Whether this principal may reserve and start new lease-backed sessions.
+    pub session_create: bool,
+    /// Whether this principal may enumerate its visible leases.
+    pub session_list: bool,
+    /// Which existing leases this principal may resolve.
+    pub session_attach_scope: RemoteSessionAttachScope,
+    /// Maximum non-terminal leases retained for this principal; zero denies creation.
+    pub max_active_leases: usize,
+    /// Maximum concurrently live runtimes owned by this principal; zero denies creation.
+    pub max_live_sessions: usize,
+    /// Optional upper bound for a newly created lease lifetime.
+    pub lease_lifetime_ceiling_seconds: Option<u64>,
+}
+
 /// Durable, endpoint-bound Mezzanine authorization record.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RemoteTrustRecord {
@@ -50,6 +83,9 @@ pub(crate) struct RemoteTrustRecord {
     pub label: String,
     /// Maximum Mezzanine role the device may request.
     pub role_ceiling: RemoteRoleCeiling,
+    /// Host-level session routing and provisioning authority.
+    #[serde(default)]
+    pub host_routing: RemoteHostRoutingAuthority,
     /// Record creation time.
     pub created_at_unix_seconds: u64,
     /// Most recent successful trust resolution.
@@ -73,6 +109,7 @@ impl std::fmt::Debug for RemoteTrustRecord {
             .field("server_endpoint_id", &self.server_endpoint_id)
             .field("label", &self.label)
             .field("role_ceiling", &self.role_ceiling)
+            .field("host_routing", &self.host_routing)
             .field("created_at_unix_seconds", &self.created_at_unix_seconds)
             .field("last_used_at_unix_seconds", &self.last_used_at_unix_seconds)
             .field("revoked_at_unix_seconds", &self.revoked_at_unix_seconds)
@@ -101,6 +138,8 @@ pub(crate) struct RemotePairingInvitation {
     pub server_endpoint_id: String,
     /// Maximum role granted on redemption.
     pub role_ceiling: RemoteRoleCeiling,
+    /// Host routing authority granted when this invitation is redeemed.
+    pub host_routing: RemoteHostRoutingAuthority,
     /// Expiration time.
     pub expires_at_unix_seconds: u64,
 }
@@ -113,6 +152,7 @@ impl std::fmt::Debug for RemotePairingInvitation {
             .field("token", &"[REDACTED]")
             .field("server_endpoint_id", &self.server_endpoint_id)
             .field("role_ceiling", &self.role_ceiling)
+            .field("host_routing", &self.host_routing)
             .field("expires_at_unix_seconds", &self.expires_at_unix_seconds)
             .finish()
     }
@@ -152,6 +192,8 @@ pub(crate) struct RemotePrincipal {
     pub endpoint_id: String,
     /// Role ceiling applied to this principal.
     pub role_ceiling: RemoteRoleCeiling,
+    /// Host-level session routing and provisioning authority.
+    pub host_routing: RemoteHostRoutingAuthority,
     /// Requested role accepted beneath the ceiling.
     pub requested_role: RequestedRole,
 }
@@ -163,6 +205,8 @@ pub(super) struct RemoteInvitationRecord {
     pub verifier: String,
     pub server_endpoint_id: String,
     pub role_ceiling: RemoteRoleCeiling,
+    #[serde(default)]
+    pub host_routing: RemoteHostRoutingAuthority,
     pub created_at_unix_seconds: u64,
     pub expires_at_unix_seconds: u64,
     pub redeemed_at_unix_seconds: Option<u64>,

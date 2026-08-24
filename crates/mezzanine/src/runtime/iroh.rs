@@ -1232,6 +1232,36 @@ async fn serve_runtime_iroh_event_stream(
     Ok(delivered)
 }
 
+/// Serves the event stream for a host-routed, already initialized session.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "routed transport ownership, actor binding, event identity, compression, timeouts, and cancellation are independent adapter inputs"
+)]
+pub(crate) async fn serve_host_routed_iroh_event_stream(
+    connection: iroh::endpoint::Connection,
+    handle: AsyncRuntimeSessionHandle,
+    caller_client_id: ClientId,
+    version: u32,
+    compression: IrohCompressionPolicy,
+    setup_timeout: std::time::Duration,
+    idle_timeout: std::time::Duration,
+    stop: tokio::sync::watch::Receiver<bool>,
+) -> Result<u64> {
+    let metrics = IrohCompressionMetrics::new(compression.codec());
+    serve_runtime_iroh_event_stream(
+        connection,
+        handle,
+        caller_client_id,
+        version,
+        compression,
+        metrics,
+        setup_timeout,
+        idle_timeout,
+        stop,
+    )
+    .await
+}
+
 async fn drain_iroh_control_tasks(tasks: &mut JoinSet<Result<u64>>) -> Result<()> {
     while let Some(joined) = tasks.join_next().await {
         let _connection_result = joined.map_err(|error| {

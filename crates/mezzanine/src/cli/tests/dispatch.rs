@@ -586,11 +586,7 @@ fn invocation_parses_explicit_iroh_target_without_unix_fallback() {
     assert!(error.message().contains("cannot be used with"), "{error}");
 }
 
-/// Verifies rejected commands name the complete command surface supported by
-/// explicit Iroh targets.
-///
-/// The guidance must include `attach` alongside the lifecycle commands so a
-/// rejected invocation does not incorrectly hide a working remote workflow.
+/// Verifies explicit Iroh targets accept the host-routed session command surface.
 #[test]
 fn explicit_iroh_rejection_lists_every_supported_command() {
     let (env, home) = test_env("explicit-iroh-supported-command-guidance");
@@ -611,10 +607,8 @@ fn explicit_iroh_rejection_lists_every_supported_command() {
     )
     .unwrap_err();
 
-    assert_eq!(
-        error.message(),
-        "explicit Iroh targets currently support only attach, kill, and detach"
-    );
+    assert_eq!(error.kind(), crate::error::MezErrorKind::NotFound);
+    assert!(error.message().contains("profile"), "{error}");
     assert!(stdout.is_empty());
     assert!(stderr.is_empty());
 

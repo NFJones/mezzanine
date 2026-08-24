@@ -125,6 +125,13 @@ impl RuntimeSessionService {
         request: &JsonRpcRequest,
         connection: &ControlConnectionState,
     ) -> Result<Option<PreparedRemoteInitializeAuthority>> {
+        // A persistent host authenticates protocol-v3 requests before routing
+        // the stream to one actor. Preserve that already bound authority
+        // instead of re-reading session-scoped trust or requiring the host to
+        // forward a bearer credential into the selected runtime.
+        if connection.remote_principal().is_some() {
+            return Ok(None);
+        }
         let endpoint_id = match connection.authenticated_peer() {
             Some(AuthenticatedPeer::UnixUser { .. }) | None => return Ok(None),
             Some(AuthenticatedPeer::IrohEndpoint { endpoint_id }) => endpoint_id.clone(),

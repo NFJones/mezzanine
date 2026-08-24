@@ -504,6 +504,56 @@ async fn refresh_authenticated_profile_route(
     })
 }
 
+/// Session selection carried by one host-scoped protocol-v3 initialization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum IrohSessionRouting {
+    /// Creates one fresh lease-backed session.
+    Create {
+        name: Option<String>,
+        idempotency_key: String,
+    },
+    /// Attaches one existing lease by stable session id or exact name.
+    Attach { target: String },
+    /// Selects one existing default and never creates.
+    Default,
+}
+
+impl IrohSessionRouting {
+    fn intent(&self) -> &'static str {
+        match self {
+            Self::Create { .. } => "create",
+            Self::Attach { .. } => "attach",
+            Self::Default => "default",
+        }
+    }
+
+    fn session_target(&self) -> Option<serde_json::Value> {
+        match self {
+            Self::Attach { target } if target.starts_with('$') => {
+                Some(serde_json::json!({"session_id": target}))
+            }
+            Self::Attach { target } => Some(serde_json::json!({"name": target})),
+            Self::Create { .. } | Self::Default => None,
+        }
+    }
+
+    fn idempotency_key(&self) -> Option<&str> {
+        match self {
+            Self::Create {
+                idempotency_key, ..
+            } => Some(idempotency_key),
+            Self::Attach { .. } | Self::Default => None,
+        }
+    }
+
+    fn session_name(&self) -> Option<&str> {
+        match self {
+            Self::Create { name, .. } => name.as_deref(),
+            Self::Attach { .. } | Self::Default => None,
+        }
+    }
+}
+
 /// One initialized, long-lived Iroh control stream for interactive attach.
 pub(super) struct PersistentIrohControlChannel {
     _identity: RemoteClientIdentity,
@@ -559,6 +609,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
     control_target: &super::ControlTargetSelection,
     env: &super::CliEnv,
     requested_role: &str,
+    routing: Option<&IrohSessionRouting>,
     columns: u16,
     rows: u16,
     term: &str,
@@ -598,30 +649,52 @@ pub(super) async fn open_persistent_iroh_control_channel(
     let mut bridge =
         IrohCompressionBridge::spawn(recv, send, compression, CLI_CONTROL_MAX_CONTENT_LENGTH)?;
     let (mechanism, credential) = target.authentication();
+    let host_scoped = target.scope() == RemoteClientProfileScope::Host;
+    let routing = if host_scoped {
+        Some(routing.ok_or_else(|| {
+            MezError::invalid_args("host-scoped Iroh control requires explicit session routing")
+        })?)
+    } else {
+        None
+    };
+    let mut client = serde_json::json!({
+        "name": "remote-cli",
+        "interactive": true,
+        "terminal": {
+            "columns": columns,
+            "rows": rows,
+            "term": term
+        }
+    });
+    if let Some(session_name) = routing.and_then(IrohSessionRouting::session_name) {
+        client["metadata"] = serde_json::json!({"session_name": session_name});
+    }
+    let mut params = serde_json::json!({
+        "client_name": "remote-cli",
+        "requested_version": if host_scoped { 3 } else { 2 },
+        "requested_role": requested_role,
+        "detach_primary_on_disconnect": requested_role == "primary",
+        "event_stream_version": 1,
+        "client": client,
+        "authentication": {
+            "mechanism": mechanism,
+            "token": credential.expose_secret()
+        }
+    });
+    if let Some(routing) = routing {
+        params["session_intent"] = serde_json::Value::String(routing.intent().to_string());
+        if let Some(target) = routing.session_target() {
+            params["session_target"] = target;
+        }
+        if let Some(idempotency_key) = routing.idempotency_key() {
+            params["idempotency_key"] = serde_json::Value::String(idempotency_key.to_string());
+        }
+    }
     let initialize = serde_json::json!({
         "jsonrpc": "2.0",
         "id": "cli-init",
         "method": "control/initialize",
-        "params": {
-            "client_name": "remote-cli",
-            "requested_version": 2,
-            "requested_role": requested_role,
-            "detach_primary_on_disconnect": requested_role == "primary",
-            "event_stream_version": 1,
-            "client": {
-                "name": "remote-cli",
-                "interactive": true,
-                "terminal": {
-                    "columns": columns,
-                    "rows": rows,
-                    "term": term
-                }
-            },
-            "authentication": {
-                "mechanism": mechanism,
-                "token": credential.expose_secret()
-            }
-        }
+        "params": params
     })
     .to_string();
     tokio::time::timeout(
@@ -658,7 +731,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
             name: profile_name.clone(),
             server_addr,
             role: *role,
-            scope: RemoteClientProfileScope::LegacySession,
+            scope: target.scope(),
             device_credential: issued_credential,
         })?;
     } else {
@@ -827,6 +900,125 @@ pub(super) async fn check_iroh_profile(
     RemoteClientProfileStore::under_config_root(paths.root())
         .summary(profile_name)?
         .ok_or_else(|| MezError::invalid_state("authenticated Iroh profile disappeared"))
+}
+
+/// Lists sessions visible to one paired host profile without selecting a session.
+pub(super) async fn list_iroh_host_sessions(
+    control_target: &super::ControlTargetSelection,
+    env: &super::CliEnv,
+) -> Result<String> {
+    let paths = env.config_paths()?;
+    let layers = super::load_runtime_config_layers(&paths)?;
+    let structured = crate::runtime::runtime_effective_config_value(&layers)?;
+    let configured_policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
+    let target = resolve_iroh_control_target(control_target, paths.root())?;
+    if target.scope() != RemoteClientProfileScope::Host {
+        return Err(MezError::invalid_args(
+            "remote session listing requires a host-scoped Iroh profile",
+        ));
+    }
+    let policy = explicit_iroh_client_policy(&configured_policy, &target)?;
+    if let IrohControlTarget::Invitation {
+        expires_at_unix_seconds,
+        ..
+    } = &target
+        && current_unix_seconds_for_iroh_client()? > *expires_at_unix_seconds
+    {
+        return Err(MezError::forbidden(
+            "Iroh pairing invitation expired before connection setup",
+        ));
+    }
+    let identity = RemoteClientIdentity::load_or_create(paths.root())?;
+    let endpoint =
+        bind_runtime_iroh_client_endpoint(&policy, identity.secret_key().clone()).await?;
+    let result =
+        exchange_bound_iroh_host_session_list(paths.root(), &policy, &target, &endpoint).await;
+    let _ = tokio::time::timeout(policy.setup_timeout, endpoint.close()).await;
+    result
+}
+
+async fn exchange_bound_iroh_host_session_list(
+    config_root: &Path,
+    policy: &RuntimeIrohTransportPolicy,
+    target: &IrohControlTarget,
+    endpoint: &iroh::Endpoint,
+) -> Result<String> {
+    let (connection, compression) = connect_iroh_with_compression(endpoint, policy, target).await?;
+    if connection.remote_id() != target.server_addr().id {
+        return Err(MezError::forbidden(
+            "Iroh connection authenticated an unexpected server identity",
+        ));
+    }
+    let (send, recv) = tokio::time::timeout(policy.setup_timeout, connection.open_bi())
+        .await
+        .map_err(|_| MezError::invalid_state("Iroh host list stream setup timed out"))?
+        .map_err(|_| MezError::invalid_state("failed to open Iroh host list stream"))?;
+    let mut bridge =
+        IrohCompressionBridge::spawn(recv, send, compression, CLI_CONTROL_MAX_CONTENT_LENGTH)?;
+    let (mechanism, credential) = target.authentication();
+    let initialize = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "cli-init",
+        "method": "control/initialize",
+        "params": {
+            "client_name": "remote-cli",
+            "requested_version": 3,
+            "requested_role": "observer",
+            "session_intent": "host_only",
+            "client": {
+                "name": "remote-cli",
+                "interactive": false,
+                "purpose": "session-list"
+            },
+            "authentication": {
+                "mechanism": mechanism,
+                "token": credential.expose_secret()
+            }
+        }
+    })
+    .to_string();
+    write_iroh_control_frame(bridge.stream_mut(), &initialize, policy.idle_timeout).await?;
+    let initialize_body = read_iroh_control_frame(bridge.stream_mut(), policy.idle_timeout).await?;
+    let issued_credential = validate_iroh_host_only_initialize_response(&initialize_body)?;
+    if let IrohControlTarget::Invitation {
+        profile_name,
+        server_addr,
+        role,
+        ..
+    } = target
+    {
+        let issued_credential = issued_credential.ok_or_else(|| {
+            MezError::invalid_state("successful host pairing response omitted device credential")
+        })?;
+        let server_addr = authenticated_remote_addr(endpoint, server_addr.id)
+            .await
+            .unwrap_or_else(|| server_addr.clone());
+        RemoteClientProfileStore::under_config_root(config_root).save(&RemoteClientProfile {
+            name: profile_name.clone(),
+            server_addr,
+            role: *role,
+            scope: RemoteClientProfileScope::Host,
+            device_credential: issued_credential,
+        })?;
+    } else {
+        refresh_authenticated_profile_route(config_root, endpoint, target).await?;
+    }
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "cli",
+        "method": "host/session/list",
+        "params": {}
+    })
+    .to_string();
+    write_iroh_control_frame(bridge.stream_mut(), &request, policy.idle_timeout).await?;
+    tokio::io::AsyncWriteExt::shutdown(bridge.stream_mut())
+        .await
+        .map_err(|_| MezError::invalid_state("failed to finish Iroh host list request"))?;
+    let body = read_iroh_control_frame(bridge.stream_mut(), policy.idle_timeout).await?;
+    ensure_iroh_follow_up_success(&body, "session list")?;
+    bridge.shutdown(policy.setup_timeout).await?;
+    connection.close(iroh::endpoint::VarInt::from_u32(0), b"host list complete");
+    Ok(body)
 }
 
 /// Authenticates one host-scoped target without selecting or creating a session.

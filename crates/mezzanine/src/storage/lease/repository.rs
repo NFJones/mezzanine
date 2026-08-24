@@ -87,6 +87,19 @@ impl RemoteSessionLeaseRepository {
         &self,
         request: LeaseReservationRequest,
     ) -> Result<LeaseReservation> {
+        self.reserve_pending_with_limits(request, usize::MAX, usize::MAX, usize::MAX, usize::MAX)
+    }
+
+    /// Reserves one pending lease while enforcing principal and global quotas
+    /// in the same locked transaction as idempotency and uniqueness checks.
+    pub(crate) fn reserve_pending_with_limits(
+        &self,
+        request: LeaseReservationRequest,
+        max_leases_for_owner: usize,
+        max_live_for_owner: usize,
+        max_leases_global: usize,
+        max_live_global: usize,
+    ) -> Result<LeaseReservation> {
         validate_reservation_request(&request)?;
         self.mutate_database(|database| {
             if let Some(existing) = database.leases.iter().find(|lease| {
@@ -98,6 +111,69 @@ impl RemoteSessionLeaseRepository {
                 }
                 return Err(MezError::conflict(
                     "remote session lease idempotency key was reused with different creation inputs",
+                ));
+            }
+            let active_global = database
+                .leases
+                .iter()
+                .filter(|lease| !lease.state.is_garbage_collectable())
+                .count();
+            if active_global >= max_leases_global {
+                return Err(MezError::conflict(
+                    "global remote session lease limit has been reached",
+                ));
+            }
+            let active_for_owner = database
+                .leases
+                .iter()
+                .filter(|lease| {
+                    lease.owner_principal_id == request.owner_principal_id
+                        && !lease.state.is_garbage_collectable()
+                })
+                .count();
+            if active_for_owner >= max_leases_for_owner {
+                return Err(MezError::conflict(
+                    "remote principal lease limit has been reached",
+                ));
+            }
+            let live_global = database
+                .leases
+                .iter()
+                .filter(|lease| {
+                    matches!(
+                        lease.state,
+                        RemoteSessionLeaseState::Pending | RemoteSessionLeaseState::Active
+                    )
+                })
+                .count();
+            if live_global >= max_live_global {
+                return Err(MezError::conflict(
+                    "global remote live-session limit has been reached",
+                ));
+            }
+            let live_for_owner = database
+                .leases
+                .iter()
+                .filter(|lease| {
+                    lease.owner_principal_id == request.owner_principal_id
+                        && matches!(
+                            lease.state,
+                            RemoteSessionLeaseState::Pending | RemoteSessionLeaseState::Active
+                        )
+                })
+                .count();
+            if live_for_owner >= max_live_for_owner {
+                return Err(MezError::conflict(
+                    "remote principal live-session limit has been reached",
+                ));
+            }
+            if request.name.as_ref().is_some_and(|name| {
+                database.leases.iter().any(|lease| {
+                    lease.name.as_ref() == Some(name) && !lease.state.is_garbage_collectable()
+                })
+            }) {
+                return Err(MezError::conflict(
+                    "remote session lease name is already reserved",
                 ));
             }
             if database.leases.iter().any(|lease| lease.lease_id == request.lease_id) {

@@ -127,7 +127,7 @@ pub(super) fn negotiate_protocol_version(requested_version: u32) -> Result<u32> 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn initialize_params_from_json(params: &str) -> Result<InitializeParams> {
+pub(crate) fn initialize_params_from_json(params: &str) -> Result<InitializeParams> {
     reject_unknown_json_fields(
         params,
         "control/initialize params",

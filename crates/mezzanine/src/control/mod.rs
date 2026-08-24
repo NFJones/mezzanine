@@ -159,7 +159,8 @@ pub(crate) use config::{
     dispatch_config_parsed_to_response_cached, is_config_control_method, persist_target_from_json,
     validate_config_control_params_schema,
 };
-use initialize::{initialize_params_from_json, initialize_result_json, negotiate_protocol_version};
+pub(crate) use initialize::initialize_params_from_json;
+use initialize::{initialize_result_json, negotiate_protocol_version};
 pub(crate) use json::unix_seconds_to_rfc3339;
 use json::{
     current_rfc3339_seconds, effective_uid, error_code, field_value, json_bool_field, json_escape,

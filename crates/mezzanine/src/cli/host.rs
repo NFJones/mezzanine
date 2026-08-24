@@ -26,6 +26,7 @@ use super::{
     CliEnv, CliOutputFormat, MezError, Result, default_socket_directory,
     load_runtime_config_layers, resolve_shell, serialize_json, write_json_or_plain,
 };
+use crate::host::iroh::HostIrohRuntime;
 use crate::host::server::{HostServer, HostServerConfig, host_socket_path};
 
 const HOST_RESPONSE_LIMIT: usize = 1024 * 1024;
@@ -112,12 +113,21 @@ async fn run_host_serve<W: Write>(
     let max_live_sessions = max_live_sessions_override
         .or_else(|| host_usize(host, "max_live_sessions"))
         .unwrap_or(16);
+    let max_remote_leases = host
+        .and_then(|host| host.get("leases"))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|leases| leases.get("max_per_remote_client"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(8);
     let shutdown_timeout = Duration::from_millis(
         host.and_then(|host| host.get("shutdown_timeout_ms"))
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(10_000),
     );
     let runtime_root = default_socket_directory(&env.runtime)?.path;
+    let iroh_policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
+    let iroh = HostIrohRuntime::bind(paths.root(), iroh_policy).await?;
     let server = HostServer::bind(HostServerConfig {
         runtime_root,
         owner_uid: env.runtime.uid,
@@ -127,16 +137,57 @@ async fn run_host_serve<W: Write>(
         max_sessions,
         max_live_sessions,
         shutdown_timeout,
+        iroh_invitation_issuer: iroh.as_ref().map(HostIrohRuntime::invitation_issuer),
+        max_remote_leases,
     })?;
     let started = serde_json::json!({
         "serving": true,
         "host": true,
         "socket": server.socket_path(),
         "config": config_path,
+        "iroh_enabled": iroh.is_some(),
+        "iroh_endpoint_id": iroh.as_ref().map(HostIrohRuntime::endpoint_id),
     });
     write_json_or_plain(stdout, output_format, &serialize_json(&started)?)?;
     stdout.flush()?;
-    server.serve(host_shutdown_signal()).await
+    let Some(iroh) = iroh else {
+        return server.serve(host_shutdown_signal()).await;
+    };
+    let (shutdown, _) = tokio::sync::watch::channel(false);
+    let mut local_shutdown = shutdown.subscribe();
+    let mut remote_shutdown = shutdown.subscribe();
+    let local = server.serve(async move {
+        if *local_shutdown.borrow() {
+            return;
+        }
+        let _ = local_shutdown.changed().await;
+    });
+    let remote = iroh.serve_routed(server.router(), async move {
+        if *remote_shutdown.borrow() {
+            return;
+        }
+        let _ = remote_shutdown.changed().await;
+    });
+    tokio::pin!(local);
+    tokio::pin!(remote);
+    tokio::select! {
+        result = &mut local => {
+            let _ = shutdown.send(true);
+            result?;
+            remote.await.map(|_| ())
+        }
+        result = &mut remote => {
+            let _ = shutdown.send(true);
+            result?;
+            local.await
+        }
+        () = host_shutdown_signal() => {
+            let _ = shutdown.send(true);
+            let (local_result, remote_result) = tokio::join!(local, remote);
+            local_result?;
+            remote_result.map(|_| ())
+        }
+    }
 }
 
 fn host_usize(
@@ -293,7 +344,7 @@ fn host_result_socket(result: &serde_json::Value) -> Result<PathBuf> {
         .ok_or_else(|| MezError::invalid_state("host response omitted session socket"))
 }
 
-async fn request_host(
+pub(super) async fn request_host(
     env: &CliEnv,
     method: &str,
     params: serde_json::Value,
@@ -497,6 +548,8 @@ mod tests {
             max_sessions: 8,
             max_live_sessions: 4,
             shutdown_timeout: Duration::from_secs(2),
+            iroh_invitation_issuer: None,
+            max_remote_leases: 8,
         })
         .unwrap();
 

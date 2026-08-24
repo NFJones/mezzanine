@@ -56,11 +56,25 @@ pub(in crate::cli) async fn run_attach<W: Write>(
     } else {
         "primary"
     };
-    if !control_target.is_unix() && parsed.session_id.is_some() {
-        return Err(MezError::invalid_args(
-            "an explicit Iroh target already selects the remote session",
-        ));
-    }
+    let remote_routing = if control_target.is_unix() {
+        None
+    } else if parsed.create_name.is_some() {
+        Some(super::super::control_client::IrohSessionRouting::Create {
+            name: parsed.create_name.clone(),
+            idempotency_key: super::super::cli_idempotency_key("remote-session-create"),
+        })
+    } else if parsed.default {
+        Some(super::super::control_client::IrohSessionRouting::Default)
+    } else if let Some(target) = parsed.session_id.as_deref() {
+        Some(super::super::control_client::IrohSessionRouting::Attach {
+            target: target.to_string(),
+        })
+    } else {
+        Some(super::super::control_client::IrohSessionRouting::Create {
+            name: None,
+            idempotency_key: super::super::cli_idempotency_key("remote-session-create"),
+        })
+    };
     let request = if control_target.is_unix() {
         attach_request(socket_selection, parsed, env.runtime.uid)?
     } else {
@@ -86,6 +100,7 @@ pub(in crate::cli) async fn run_attach<W: Write>(
             control_target,
             &env,
             request.requested_role,
+            remote_routing.as_ref(),
             columns,
             rows,
             &term,
@@ -251,8 +266,14 @@ pub(in crate::cli) struct AttachCliArgs {
     /// Requests observer access instead of primary access.
     #[arg(long, alias = "observe")]
     pub(in crate::cli) observer: bool,
+    /// Selects an existing host default without creating a session.
+    #[arg(long, conflicts_with = "session_id")]
+    pub(in crate::cli) default: bool,
     /// Optional registered session id or creation-order index alias to attach to.
     pub(in crate::cli) session_id: Option<String>,
+    /// Internal fresh-session name supplied by `mez new` for remote routing.
+    #[arg(skip)]
+    pub(in crate::cli) create_name: Option<String>,
 }
 
 /// Runs the socket selection for registry session operation for this subsystem.

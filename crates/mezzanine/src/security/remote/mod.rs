@@ -17,7 +17,8 @@ pub(crate) use client::{
 };
 pub(crate) use store::{RemoteEndpointIdentity, RemotePairingPreparation, RemoteTrustStore};
 pub(crate) use types::{
-    RemotePairingRedemption, RemotePrincipal, RemoteRoleCeiling, RemoteTrustRecord,
+    RemoteHostRoutingAuthority, RemotePairingRedemption, RemotePrincipal, RemoteRoleCeiling,
+    RemoteSessionAttachScope, RemoteTrustRecord,
 };
 
 #[cfg(test)]

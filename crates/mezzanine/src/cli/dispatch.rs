@@ -11,9 +11,9 @@ use super::{
     CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, MezError, OsString,
     PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, ensure_host_available,
     ensure_private_socket_directory, host_create_session, host_list_sessions, host_resolve_session,
-    io, json_escape, prune_stale_socket_files_in_directory, run_attach, run_auth, run_config,
-    run_control_request_for_target, run_host, run_issue, run_list, run_mcp, run_memory, run_new,
-    run_remote, run_sandbox, run_serve, run_snapshot,
+    io, json_escape, list_iroh_host_sessions, prune_stale_socket_files_in_directory, run_attach,
+    run_auth, run_config, run_control_request_for_target, run_host, run_issue, run_list, run_mcp,
+    run_memory, run_new, run_remote, run_sandbox, run_serve, run_snapshot,
 };
 
 // Top-level CLI run and command dispatch.
@@ -128,11 +128,17 @@ async fn run_with_inner<W: Write, E: Write>(
     if !invocation.control_target.is_unix()
         && !matches!(
             invocation.command.as_ref(),
-            Some(CliCommand::Attach(_) | CliCommand::Kill(_) | CliCommand::Detach(_))
+            Some(
+                CliCommand::Attach(_)
+                    | CliCommand::New(_)
+                    | CliCommand::List
+                    | CliCommand::Kill(_)
+                    | CliCommand::Detach(_)
+            )
         )
     {
         return Err(MezError::invalid_args(
-            "explicit Iroh targets currently support only attach, kill, and detach",
+            "explicit Iroh targets support attach, new, list, kill, and detach",
         ));
     }
     if invocation.control_target.is_unix()
@@ -163,7 +169,9 @@ async fn run_with_inner<W: Write, E: Write>(
                     &control_target,
                     super::attach::AttachCliArgs {
                         observer: false,
+                        default: false,
                         session_id: None,
+                        create_name: None,
                     },
                     env,
                     interactive,
@@ -186,7 +194,9 @@ async fn run_with_inner<W: Write, E: Write>(
                     &control_target,
                     super::attach::AttachCliArgs {
                         observer: false,
+                        default: false,
                         session_id: None,
+                        create_name: None,
                     },
                     env,
                     interactive,
@@ -216,6 +226,29 @@ async fn run_with_inner<W: Write, E: Write>(
             Box::pin(run_host(args, env, output_format, stdout)).await?
         }
         Some(CliCommand::New(args)) => {
+            if !control_target.is_unix() {
+                if args.dry_run {
+                    return Err(MezError::invalid_args(
+                        "remote session creation does not support --dry-run",
+                    ));
+                }
+                return run_attach(
+                    &socket_selection,
+                    &control_target,
+                    super::attach::AttachCliArgs {
+                        observer: false,
+                        default: false,
+                        session_id: None,
+                        create_name: args.name,
+                    },
+                    env,
+                    interactive,
+                    output_format,
+                    stdout,
+                )
+                .await
+                .map(|()| 0);
+            }
             if prefer_host && !args.dry_run && ensure_host_available(&env).await? {
                 if !interactive {
                     return Err(MezError::forbidden(
@@ -228,7 +261,9 @@ async fn run_with_inner<W: Write, E: Write>(
                     &control_target,
                     super::attach::AttachCliArgs {
                         observer: false,
+                        default: false,
                         session_id: None,
+                        create_name: None,
                     },
                     env,
                     interactive,
@@ -260,7 +295,10 @@ async fn run_with_inner<W: Write, E: Write>(
             .await?
         }
         Some(CliCommand::List) => {
-            if prefer_host && ensure_host_available(&env).await? {
+            if !control_target.is_unix() {
+                let body = list_iroh_host_sessions(&control_target, &env).await?;
+                super::write_control_response(stdout, output_format, &body)?;
+            } else if prefer_host && ensure_host_available(&env).await? {
                 let sessions = host_list_sessions(&env).await?;
                 let output = super::serialize_json(&sessions)?;
                 super::write_json_or_plain(stdout, output_format, &output)?;
@@ -277,7 +315,9 @@ async fn run_with_inner<W: Write, E: Write>(
                     &control_target,
                     super::attach::AttachCliArgs {
                         observer: args.observer,
+                        default: false,
                         session_id: None,
+                        create_name: None,
                     },
                     env,
                     interactive,

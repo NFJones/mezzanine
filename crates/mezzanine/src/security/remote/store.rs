@@ -23,8 +23,9 @@ use crate::error::{MezError, MezErrorKind, Result};
 use crate::runtime::current_effective_uid;
 
 use super::types::{
-    RemoteInvitationRecord, RemotePairingInvitation, RemotePairingRedemption, RemotePrincipal,
-    RemoteRoleCeiling, RemoteTrustDatabase, RemoteTrustRecord,
+    RemoteHostRoutingAuthority, RemoteInvitationRecord, RemotePairingInvitation,
+    RemotePairingRedemption, RemotePrincipal, RemoteRoleCeiling, RemoteTrustDatabase,
+    RemoteTrustRecord,
 };
 
 const REMOTE_DIRECTORY_NAME: &str = "remote";
@@ -161,6 +162,7 @@ impl RemotePairingPreparation {
             trust_record_id: self.record.id.clone(),
             endpoint_id: self.record.endpoint_id.clone(),
             role_ceiling: self.record.role_ceiling,
+            host_routing: self.record.host_routing,
             requested_role: self.requested_role,
         }
     }
@@ -198,6 +200,41 @@ impl RemoteTrustStore {
         ttl_seconds: u64,
         now_unix_seconds: u64,
     ) -> Result<RemotePairingInvitation> {
+        self.create_invitation_with_authority(
+            server_endpoint_id,
+            role_ceiling,
+            RemoteHostRoutingAuthority::default(),
+            ttl_seconds,
+            now_unix_seconds,
+        )
+    }
+
+    /// Creates a host-scoped invitation with explicit session-routing authority.
+    pub(crate) fn create_host_invitation(
+        &self,
+        server_endpoint_id: &str,
+        role_ceiling: RemoteRoleCeiling,
+        host_routing: RemoteHostRoutingAuthority,
+        ttl_seconds: u64,
+        now_unix_seconds: u64,
+    ) -> Result<RemotePairingInvitation> {
+        self.create_invitation_with_authority(
+            server_endpoint_id,
+            role_ceiling,
+            host_routing,
+            ttl_seconds,
+            now_unix_seconds,
+        )
+    }
+
+    fn create_invitation_with_authority(
+        &self,
+        server_endpoint_id: &str,
+        role_ceiling: RemoteRoleCeiling,
+        host_routing: RemoteHostRoutingAuthority,
+        ttl_seconds: u64,
+        now_unix_seconds: u64,
+    ) -> Result<RemotePairingInvitation> {
         validate_endpoint_id(server_endpoint_id)?;
         if !(30..=86_400).contains(&ttl_seconds) {
             return Err(MezError::invalid_args(
@@ -222,6 +259,7 @@ impl RemoteTrustStore {
                 verifier,
                 server_endpoint_id: server_endpoint_id.to_string(),
                 role_ceiling,
+                host_routing,
                 created_at_unix_seconds: now_unix_seconds,
                 expires_at_unix_seconds,
                 redeemed_at_unix_seconds: None,
@@ -235,6 +273,7 @@ impl RemoteTrustStore {
             token,
             server_endpoint_id: server_endpoint_id.to_string(),
             role_ceiling,
+            host_routing,
             expires_at_unix_seconds,
         })
     }
@@ -319,6 +358,7 @@ impl RemoteTrustStore {
                 invitation.id,
                 invitation.verifier,
                 invitation.role_ceiling,
+                invitation.host_routing,
                 record_id,
                 device_credential,
                 resumed_record,
@@ -328,6 +368,7 @@ impl RemoteTrustStore {
             invitation_id,
             invitation_verifier,
             role_ceiling,
+            host_routing,
             record_id,
             device_credential,
             resumed_record,
@@ -341,6 +382,7 @@ impl RemoteTrustStore {
                     server_endpoint_id: server_endpoint_id.to_string(),
                     label: label.to_string(),
                     role_ceiling,
+                    host_routing,
                     created_at_unix_seconds: now_unix_seconds,
                     last_used_at_unix_seconds: None,
                     revoked_at_unix_seconds: None,
@@ -384,9 +426,11 @@ impl RemoteTrustStore {
                 .ok_or_else(|| MezError::forbidden("remote pairing invitation is invalid"))?;
             let invitation = database.invitations[invitation_index].clone();
             validate_invitation_request(&invitation, preparation.requested_role, now_unix_seconds)?;
-            if invitation.role_ceiling != preparation.record.role_ceiling {
+            if invitation.role_ceiling != preparation.record.role_ceiling
+                || invitation.host_routing != preparation.record.host_routing
+            {
                 return Err(MezError::forbidden(
-                    "remote pairing invitation role changed before redemption",
+                    "remote pairing invitation authority changed before redemption",
                 ));
             }
             if let Some(redeemed_at) = invitation.redeemed_at_unix_seconds {
@@ -413,9 +457,11 @@ impl RemoteTrustStore {
                     &preparation.device_credential,
                     preparation.requested_role,
                 )?;
-                if record.role_ceiling != invitation.role_ceiling {
+                if record.role_ceiling != invitation.role_ceiling
+                    || record.host_routing != invitation.host_routing
+                {
                     return Err(MezError::invalid_state(
-                        "redeemed remote trust role does not match its invitation",
+                        "redeemed remote trust authority does not match its invitation",
                     ));
                 }
                 return Ok(RemotePairingRedemption {
@@ -535,6 +581,7 @@ impl RemoteTrustStore {
                 trust_record_id: record.id.clone(),
                 endpoint_id: endpoint_id.to_string(),
                 role_ceiling: record.role_ceiling,
+                host_routing: record.host_routing,
                 requested_role,
             })
         })
@@ -570,6 +617,7 @@ impl RemoteTrustStore {
                 trust_record_id: record.id.clone(),
                 endpoint_id: endpoint_id.to_string(),
                 role_ceiling: record.role_ceiling,
+                host_routing: record.host_routing,
                 requested_role,
             })
         })

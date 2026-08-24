@@ -12,13 +12,10 @@ use std::future::Future;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use futures_util::StreamExt;
-use mez_core::ids::SessionId;
 use mez_mux::layout::Size;
-use mez_mux::session::Session;
 use rustix::fs::{FlockOperation, Mode, OFlags, flock, open};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
@@ -26,19 +23,17 @@ use tokio_util::codec::Framed;
 
 use crate::config::ConfigLayer;
 use crate::error::{MezError, MezErrorKind, Result};
-use crate::host::session::{
-    SessionFactoryRequest, SessionRuntimeConfig, SessionRuntimeLimits, SessionRuntimeStartup,
-    SessionSocketPublication, SessionSupervisor, SessionSupervisorState,
-};
+use crate::host::iroh::HostIrohInvitationIssuer;
+use crate::host::router::{HostSessionRouter, HostSessionRouterConfig};
+use crate::host::session::SessionSupervisorState;
 use crate::host::shell::ResolvedShell;
 use crate::protocol::framing::ProtocolFrameCodec;
 use crate::runtime::{bind_control_socket, socket_path_for_name};
-use crate::storage::registry::{SessionRegistry, records_to_json, resolve_session_record_target};
+use crate::storage::registry::records_to_json;
 
 const HOST_SOCKET_FILE_NAME: &str = "host.sock";
 const HOST_LOCK_FILE_NAME: &str = "host.lock";
 const HOST_CONTROL_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
-static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Construction inputs shared by every session created under one host.
 #[derive(Debug, Clone)]
@@ -59,6 +54,10 @@ pub(crate) struct HostServerConfig {
     pub(crate) max_live_sessions: usize,
     /// Bounded host shutdown interval.
     pub(crate) shutdown_timeout: Duration,
+    /// Live host-scoped Iroh invitation and trust administration, when enabled.
+    pub(crate) iroh_invitation_issuer: Option<HostIrohInvitationIssuer>,
+    /// Default and maximum active-lease grant for one remote principal.
+    pub(crate) max_remote_leases: usize,
 }
 
 /// Ready local host with exclusive process and socket ownership.
@@ -66,8 +65,7 @@ pub(crate) struct HostServerConfig {
 pub(crate) struct HostServer {
     config: HostServerConfig,
     listener: tokio::net::UnixListener,
-    supervisor: SessionSupervisor,
-    registry: SessionRegistry,
+    router: HostSessionRouter,
     socket_path: PathBuf,
     _lock: fs::File,
 }
@@ -91,12 +89,19 @@ impl HostServer {
         let listener = bind_control_socket(&socket_path, config.owner_uid)?;
         listener.set_nonblocking(true)?;
         let listener = tokio::net::UnixListener::from_std(listener)?;
-        let registry = SessionRegistry::new(config.runtime_root.clone(), config.owner_uid);
+        let router = HostSessionRouter::new(HostSessionRouterConfig {
+            runtime_root: config.runtime_root.clone(),
+            owner_uid: config.owner_uid,
+            config_root: config.config_root.clone(),
+            config_layers: config.config_layers.clone(),
+            shell: config.shell.clone(),
+            max_sessions: config.max_sessions,
+            max_live_sessions: config.max_live_sessions,
+        });
         Ok(Self {
             config,
             listener,
-            supervisor: SessionSupervisor::default(),
-            registry,
+            router,
             socket_path,
             _lock: lock,
         })
@@ -105,6 +110,11 @@ impl HostServer {
     /// Returns the protected host management socket.
     pub(crate) fn socket_path(&self) -> &Path {
         &self.socket_path
+    }
+
+    /// Returns the shared session router used by local and remote front doors.
+    pub(crate) fn router(&self) -> HostSessionRouter {
+        self.router.clone()
     }
 
     /// Serves local management requests until cancellation or `host/shutdown`.
@@ -138,7 +148,7 @@ impl HostServer {
                 }
             }
         };
-        self.supervisor
+        self.router
             .shutdown_all(shutdown.force, self.config.shutdown_timeout)
             .await
     }
@@ -186,12 +196,123 @@ impl HostServer {
             .unwrap_or_default();
         match method {
             "host/get" => Ok((self.status_json().await?, None)),
-            "host/session/list" => {
-                let _ = self.registry.prune_stale()?;
-                let records: Value = serde_json::from_str(&records_to_json(&self.registry.list()?))
-                    .map_err(|error| {
-                        MezError::invalid_state(format!("invalid registry JSON: {error}"))
+            "remote/status" => {
+                let issuer = self.config.iroh_invitation_issuer.as_ref();
+                Ok((
+                    json!({
+                        "enabled": issuer.is_some(),
+                        "endpoint_id": issuer.map(HostIrohInvitationIssuer::endpoint_id),
+                    }),
+                    None,
+                ))
+            }
+            "remote/invite" => {
+                let issuer =
+                    self.config.iroh_invitation_issuer.as_ref().ok_or_else(|| {
+                        MezError::invalid_state("host Iroh listener is not enabled")
                     })?;
+                let role = match params
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("observer")
+                {
+                    "observer" => crate::security::remote::RemoteRoleCeiling::Observer,
+                    "primary" => crate::security::remote::RemoteRoleCeiling::Primary,
+                    _ => {
+                        return Err(MezError::invalid_args(
+                            "remote invitation role must be observer or primary",
+                        ));
+                    }
+                };
+                let allow_create = params
+                    .get("allow_create")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let max_leases = optional_positive_usize(&params, "max_leases")?
+                    .unwrap_or(self.config.max_remote_leases);
+                let max_live_sessions = optional_positive_usize(&params, "max_live_sessions")?
+                    .unwrap_or(self.config.max_live_sessions.min(max_leases));
+                let authority = crate::security::remote::RemoteHostRoutingAuthority {
+                    session_create: allow_create,
+                    session_list: true,
+                    session_attach_scope: crate::security::remote::RemoteSessionAttachScope::Own,
+                    max_active_leases: if allow_create { max_leases } else { 0 },
+                    max_live_sessions: if allow_create { max_live_sessions } else { 0 },
+                    lease_lifetime_ceiling_seconds: None,
+                };
+                let ttl_seconds = params
+                    .get("expires_seconds")
+                    .map(|value| {
+                        value.as_u64().ok_or_else(|| {
+                            MezError::invalid_args(
+                                "remote invitation expires_seconds must be an unsigned integer",
+                            )
+                        })
+                    })
+                    .transpose()?
+                    .unwrap_or(600);
+                let profile_name = params
+                    .get("profile_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("mez-host");
+                Ok((
+                    issuer.create_invitation(
+                        profile_name,
+                        role,
+                        authority,
+                        ttl_seconds,
+                        current_unix_seconds()?,
+                    )?,
+                    None,
+                ))
+            }
+            "remote/client/list" => {
+                let issuer =
+                    self.config.iroh_invitation_issuer.as_ref().ok_or_else(|| {
+                        MezError::invalid_state("host Iroh listener is not enabled")
+                    })?;
+                let clients = issuer
+                    .list_clients()?
+                    .iter()
+                    .map(remote_trust_record_json)
+                    .collect::<Vec<_>>();
+                Ok((json!({"clients": clients}), None))
+            }
+            "remote/client/rename" => {
+                let issuer =
+                    self.config.iroh_invitation_issuer.as_ref().ok_or_else(|| {
+                        MezError::invalid_state("host Iroh listener is not enabled")
+                    })?;
+                let client_id = required_string(&params, "client_id")?;
+                let label = required_string(&params, "label")?;
+                Ok((
+                    remote_trust_record_json(&issuer.rename_client(client_id, label)?),
+                    None,
+                ))
+            }
+            "remote/client/revoke" => {
+                let issuer =
+                    self.config.iroh_invitation_issuer.as_ref().ok_or_else(|| {
+                        MezError::invalid_state("host Iroh listener is not enabled")
+                    })?;
+                let client_id = required_string(&params, "client_id")?;
+                let reason = params.get("reason").and_then(Value::as_str);
+                Ok((
+                    remote_trust_record_json(&issuer.revoke_client(
+                        client_id,
+                        reason,
+                        current_unix_seconds()?,
+                    )?),
+                    None,
+                ))
+            }
+            "host/session/list" => {
+                let _ = self.router.registry().prune_stale()?;
+                let records: Value =
+                    serde_json::from_str(&records_to_json(&self.router.registry().list()?))
+                        .map_err(|error| {
+                            MezError::invalid_state(format!("invalid registry JSON: {error}"))
+                        })?;
                 Ok((json!({"sessions": records}), None))
             }
             "host/session/create" => {
@@ -214,7 +335,7 @@ impl HostServer {
                 Ok((session_record_json(&record), None))
             }
             "host/reconcile" => {
-                let pruned = self.registry.prune_stale()?;
+                let pruned = self.router.registry().prune_stale()?;
                 Ok((
                     json!({"reconciled":true,"pruned_registry_records":pruned}),
                     None,
@@ -237,7 +358,7 @@ impl HostServer {
     }
 
     async fn status_json(&self) -> Result<Value> {
-        let snapshots = self.supervisor.snapshots().await?;
+        let snapshots = self.router.snapshots().await?;
         let running = snapshots
             .iter()
             .filter(|snapshot| snapshot.state == SessionSupervisorState::Running)
@@ -262,71 +383,7 @@ impl HostServer {
         name: Option<String>,
         size: Size,
     ) -> Result<crate::storage::registry::SessionRecord> {
-        let snapshots = self.supervisor.snapshots().await?;
-        let _ = self.registry.prune_stale()?;
-        if self.registry.list()?.len() >= self.config.max_sessions {
-            return Err(MezError::conflict("host session limit has been reached"));
-        }
-        let live = snapshots
-            .iter()
-            .filter(|snapshot| {
-                matches!(
-                    snapshot.state,
-                    SessionSupervisorState::Starting
-                        | SessionSupervisorState::Running
-                        | SessionSupervisorState::Stopping
-                )
-            })
-            .count();
-        if live >= self.config.max_live_sessions {
-            return Err(MezError::conflict(
-                "host live session limit has been reached",
-            ));
-        }
-        let numeric_id = next_session_numeric_id()?;
-        let session_id = SessionId::new('$', numeric_id.max(1));
-        let socket_path = socket_path_for_name(
-            &self.config.runtime_root,
-            &format!("session-{numeric_id:016x}.sock"),
-        )?;
-        let mut session = Session::new_default(self.config.shell.clone(), size);
-        session.id = session_id;
-        if let Some(name) = name {
-            if name.trim().is_empty() || name.chars().any(char::is_control) {
-                return Err(MezError::invalid_args(
-                    "session name must be non-empty printable text",
-                ));
-            }
-            session.name = name;
-        }
-        let session_id = session.id.to_string();
-        self.supervisor
-            .start(SessionFactoryRequest {
-                session,
-                owner_uid: self.config.owner_uid,
-                created_at_unix_seconds: current_unix_seconds()?,
-                config: SessionRuntimeConfig {
-                    layers: self.config.config_layers.clone(),
-                    root: self.config.config_root.clone(),
-                },
-                sockets: SessionSocketPublication {
-                    control_path: socket_path,
-                    publish_control: true,
-                    message_path: None,
-                    event_path: None,
-                    publish_registry: true,
-                },
-                limits: SessionRuntimeLimits::default(),
-                startup: SessionRuntimeStartup::Initial {
-                    explicit_command: None,
-                },
-            })
-            .await?;
-        self.registry
-            .list()?
-            .into_iter()
-            .find(|record| record.session_id == session_id)
-            .ok_or_else(|| MezError::invalid_state("created session was not published"))
+        self.router.create_local(name, size).await
     }
 
     fn resolve_session(
@@ -334,23 +391,7 @@ impl HostServer {
         target: Option<&str>,
         requested_role: &str,
     ) -> Result<crate::storage::registry::SessionRecord> {
-        let _ = self.registry.prune_stale()?;
-        let records = self.registry.list()?;
-        let record = match target {
-            Some(target) => resolve_session_record_target(&records, target),
-            None if requested_role == "observer" => records.first(),
-            None => records.iter().find(|record| record.accepts_primary),
-        };
-        record.cloned().ok_or_else(|| {
-            MezError::new(
-                MezErrorKind::NotFound,
-                if target.is_some() {
-                    "requested session was not found"
-                } else {
-                    "no attachable session is available"
-                },
-            )
-        })
+        self.router.resolve_local(target, requested_role)
     }
 }
 
@@ -403,24 +444,49 @@ fn optional_u16(params: &serde_json::Map<String, Value>, field: &str) -> Result<
         .transpose()
 }
 
-fn next_session_numeric_id() -> Result<u64> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| MezError::invalid_state("system clock is before the Unix epoch"))?;
-    let counter = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
-    Ok(now
-        .as_secs()
-        .saturating_mul(1_000_000_000)
-        .saturating_add(u64::from(now.subsec_nanos()))
-        ^ (u64::from(std::process::id()) << 32)
-        ^ counter)
+fn optional_positive_usize(
+    params: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<Option<usize>> {
+    params
+        .get(field)
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .ok_or_else(|| MezError::invalid_args(format!("remote {field} must be positive")))
+        })
+        .transpose()
+}
+
+fn required_string<'a>(params: &'a serde_json::Map<String, Value>, field: &str) -> Result<&'a str> {
+    params
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| MezError::invalid_args(format!("remote request requires {field}")))
 }
 
 fn current_unix_seconds() -> Result<u64> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .map_err(|_| MezError::invalid_state("system clock is before the Unix epoch"))
+}
+
+fn remote_trust_record_json(record: &crate::security::remote::RemoteTrustRecord) -> Value {
+    json!({
+        "client_id": record.id,
+        "label": record.label,
+        "role": record.role_ceiling.as_str(),
+        "routing": record.host_routing,
+        "revoked": record.revoked(),
+        "created_at_unix_seconds": record.created_at_unix_seconds,
+        "last_used_at_unix_seconds": record.last_used_at_unix_seconds,
+        "revoked_at_unix_seconds": record.revoked_at_unix_seconds,
+        "revocation_reason": record.revocation_reason,
+    })
 }
 
 fn session_record_json(record: &crate::storage::registry::SessionRecord) -> Value {
@@ -465,7 +531,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mez-host-server-{}-{name}-{}",
             std::process::id(),
-            NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed)
+            rand::random::<u64>()
         ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
@@ -491,6 +557,8 @@ mod tests {
             max_sessions: 8,
             max_live_sessions: 4,
             shutdown_timeout: Duration::from_secs(2),
+            iroh_invitation_issuer: None,
+            max_remote_leases: 8,
         }
     }
 
@@ -529,8 +597,8 @@ mod tests {
             .resolve_session(Some("missing"), "primary")
             .unwrap_err();
         assert_eq!(missing.kind(), MezErrorKind::NotFound);
-        assert_eq!(host.registry.list().unwrap().len(), 2);
-        host.supervisor
+        assert_eq!(host.router.registry().list().unwrap().len(), 2);
+        host.router
             .shutdown_all(true, Duration::from_secs(2))
             .await
             .unwrap();

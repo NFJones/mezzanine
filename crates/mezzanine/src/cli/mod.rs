@@ -160,8 +160,9 @@ use config::{json_string_array, run_config};
 pub(crate) use control_client::{IrohControlTarget, exchange_iroh_control_request};
 use control_client::{
     check_iroh_profile, incomplete_control_response_error, inspect_iroh_invitation_file,
-    open_persistent_iroh_control_channel, pair_iroh_invitation, read_control_response_frames,
-    request_control_body, run_control_request, run_control_request_for_target,
+    list_iroh_host_sessions, open_persistent_iroh_control_channel, pair_iroh_invitation,
+    read_control_response_frames, request_control_body, run_control_request,
+    run_control_request_for_target,
 };
 use env::{
     CliCommand, CliInvocation, CliInvocationParse, ControlTargetSelection, SocketSelection,
@@ -169,7 +170,8 @@ use env::{
     terminal_size_from_fd_or_environment,
 };
 use host::{
-    ensure_host_available, host_create_session, host_list_sessions, host_resolve_session, run_host,
+    ensure_host_available, host_create_session, host_list_sessions, host_resolve_session,
+    request_host, run_host,
 };
 use issue::run_issue;
 use json::{

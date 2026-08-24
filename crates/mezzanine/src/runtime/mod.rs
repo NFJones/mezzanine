@@ -535,7 +535,7 @@ pub(crate) use iroh::{
     MEZZANINE_IROH_ALPN, MEZZANINE_IROH_EVENT_STREAM_PREFACE, RuntimeIrohConnectionQualitySnapshot,
     RuntimeIrohDiagnostics, RuntimeIrohDiagnosticsSnapshot, RuntimeIrohEndpoint,
     RuntimeIrohShutdownHandle, bind_runtime_iroh_client_endpoint, bind_runtime_iroh_endpoint,
-    build_runtime_iroh_control_service,
+    build_runtime_iroh_control_service, serve_host_routed_iroh_event_stream,
 };
 pub(crate) use iroh_compression::{
     IrohCompressionBridge, IrohCompressionMetrics, IrohCompressionPolicy, IrohFrameCompressionMode,

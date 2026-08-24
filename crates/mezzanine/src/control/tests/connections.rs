@@ -505,7 +505,7 @@ fn same_named_primary_initialization_creates_independent_owned_client() {
 /// than reusing or taking over a same-named live primary.
 #[test]
 fn iroh_primary_with_same_display_name_gets_independent_client() {
-    use crate::security::remote::{RemotePrincipal, RemoteRoleCeiling};
+    use crate::security::remote::{RemoteHostRoutingAuthority, RemotePrincipal, RemoteRoleCeiling};
 
     let mut session = Session::new_default(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
@@ -521,6 +521,7 @@ fn iroh_primary_with_same_display_name_gets_independent_client() {
             trust_record_id: "trust-b".to_string(),
             endpoint_id: "endpoint-b".to_string(),
             role_ceiling: RemoteRoleCeiling::Primary,
+            host_routing: RemoteHostRoutingAuthority::default(),
             requested_role: RequestedRole::Primary,
         })
         .unwrap();

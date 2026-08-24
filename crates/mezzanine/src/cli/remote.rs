@@ -7,8 +7,8 @@ use clap::{Args, Subcommand, ValueEnum};
 
 use super::{
     CliEnv, CliOutputFormat, MezError, Result, SocketSelection, check_iroh_profile,
-    cli_idempotency_key, inspect_iroh_invitation_file, json_escape, pair_iroh_invitation,
-    request_control_body, serialize_json, write_control_response, write_json_or_plain,
+    cli_idempotency_key, inspect_iroh_invitation_file, pair_iroh_invitation, request_control_body,
+    request_host, serialize_json, write_control_response, write_json_or_plain,
 };
 use crate::security::remote::{RemoteClientProfileStore, write_remote_invitation_file_new};
 
@@ -30,6 +30,15 @@ enum RemoteCliCommand {
         /// Maximum role granted by the invitation.
         #[arg(long, value_enum, default_value_t = RemoteInviteRole::Observer)]
         role: RemoteInviteRole,
+        /// Permits this paired device to create lease-backed host sessions.
+        #[arg(long)]
+        allow_create: bool,
+        /// Maximum active leases granted to this paired device.
+        #[arg(long, value_name = "N", requires = "allow_create")]
+        max_leases: Option<usize>,
+        /// Maximum concurrently live sessions granted to this paired device.
+        #[arg(long, value_name = "N", requires = "allow_create")]
+        max_live_sessions: Option<usize>,
         /// Optional invitation lifetime in seconds; the server policy supplies the default.
         #[arg(long = "expires")]
         expires_seconds: Option<u64>,
@@ -131,24 +140,42 @@ pub(super) async fn run_remote<W: Write>(
 ) -> Result<()> {
     match args.command {
         RemoteCliCommand::Status => {
-            let body = request_control_body(socket_selection, "remote/status", "{}")?;
+            let body = request_remote_administration(
+                env,
+                socket_selection,
+                "remote/status",
+                serde_json::json!({}),
+            )
+            .await?;
             write_control_response(stdout, output_format, &body)
         }
         RemoteCliCommand::Invite {
             role,
+            allow_create,
+            max_leases,
+            max_live_sessions,
             expires_seconds,
             output,
         } => {
-            let expires = expires_seconds
-                .map(|seconds| format!(",\"expires_seconds\":{seconds}"))
-                .unwrap_or_default();
-            let params = format!(
-                r#"{{"role":"{}"{},"idempotency_key":"{}"}}"#,
-                role.as_str(),
-                expires,
-                cli_idempotency_key("remote-invite")
-            );
-            let body = request_control_body(socket_selection, "remote/invite", &params)?;
+            let mut params = serde_json::json!({
+                "role": role.as_str(),
+                "idempotency_key": cli_idempotency_key("remote-invite"),
+            });
+            if allow_create {
+                params["allow_create"] = serde_json::Value::Bool(true);
+            }
+            if let Some(max_leases) = max_leases {
+                params["max_leases"] = serde_json::Value::from(max_leases);
+            }
+            if let Some(max_live_sessions) = max_live_sessions {
+                params["max_live_sessions"] = serde_json::Value::from(max_live_sessions);
+            }
+            if let Some(expires_seconds) = expires_seconds {
+                params["expires_seconds"] = serde_json::Value::from(expires_seconds);
+            }
+            let body =
+                request_remote_administration(env, socket_selection, "remote/invite", params)
+                    .await?;
             if let Some(path) = output {
                 write_remote_invitation_file_new(&path, body.as_bytes())?;
                 let result = serialize_json(&serde_json::json!({
@@ -214,33 +241,81 @@ pub(super) async fn run_remote<W: Write>(
             write_json_or_plain(stdout, output_format, &result)
         }
         RemoteCliCommand::Clients => {
-            let body = request_control_body(socket_selection, "remote/client/list", "{}")?;
+            let body = request_remote_administration(
+                env,
+                socket_selection,
+                "remote/client/list",
+                serde_json::json!({}),
+            )
+            .await?;
             write_control_response(stdout, output_format, &body)
         }
         RemoteCliCommand::Rename { client_id, label } => {
-            let params = format!(
-                r#"{{"client_id":"{}","label":"{}","idempotency_key":"{}"}}"#,
-                json_escape(&client_id),
-                json_escape(&label),
-                cli_idempotency_key("remote-client-rename")
-            );
-            let body = request_control_body(socket_selection, "remote/client/rename", &params)?;
+            let params = serde_json::json!({
+                "client_id": client_id,
+                "label": label,
+                "idempotency_key": cli_idempotency_key("remote-client-rename"),
+            });
+            let body = request_remote_administration(
+                env,
+                socket_selection,
+                "remote/client/rename",
+                params,
+            )
+            .await?;
             write_control_response(stdout, output_format, &body)
         }
         RemoteCliCommand::Revoke { client_id, reason } => {
-            let reason = reason
-                .as_deref()
-                .map(|reason| format!(r#", "reason":"{}""#, json_escape(reason)))
-                .unwrap_or_default();
-            let params = format!(
-                r#"{{"client_id":"{}"{},"idempotency_key":"{}"}}"#,
-                json_escape(&client_id),
-                reason,
-                cli_idempotency_key("remote-client-revoke")
-            );
-            let body = request_control_body(socket_selection, "remote/client/revoke", &params)?;
+            let mut params = serde_json::json!({
+                "client_id": client_id,
+                "idempotency_key": cli_idempotency_key("remote-client-revoke"),
+            });
+            if let Some(reason) = reason {
+                params["reason"] = serde_json::Value::String(reason);
+            }
+            let body = request_remote_administration(
+                env,
+                socket_selection,
+                "remote/client/revoke",
+                params,
+            )
+            .await?;
             write_control_response(stdout, output_format, &body)
         }
+    }
+}
+
+/// Prefers the persistent host administration socket while retaining the
+/// direct-session compatibility path when no host process is present.
+async fn request_remote_administration(
+    env: &CliEnv,
+    socket_selection: &SocketSelection,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<String> {
+    if !matches!(socket_selection, SocketSelection::Default(_)) {
+        return request_control_body(socket_selection, method, &params.to_string());
+    }
+    match request_host(env, method, params.clone()).await {
+        Ok(result) => Ok(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "cli",
+            "result": result,
+        })
+        .to_string()),
+        Err(error)
+            if matches!(
+                error.io_kind(),
+                Some(
+                    std::io::ErrorKind::NotFound
+                        | std::io::ErrorKind::ConnectionRefused
+                        | std::io::ErrorKind::ConnectionReset
+                )
+            ) =>
+        {
+            request_control_body(socket_selection, method, &params.to_string())
+        }
+        Err(error) => Err(error),
     }
 }
 
