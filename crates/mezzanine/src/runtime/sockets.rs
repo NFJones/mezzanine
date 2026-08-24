@@ -122,6 +122,23 @@ pub fn socket_path_for_name(directory: &Path, name: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Returns the compact compatibility socket path for one hosted session.
+///
+/// Hosted session identifiers are bounded numeric IDs. Encoding the complete
+/// value as unpadded hexadecimal keeps the filename collision-free while using
+/// at most 22 bytes (`h` + 16 hex digits + `.sock`) of the Unix socket budget.
+pub(crate) fn hosted_session_socket_path(
+    directory: &Path,
+    session_id: &SessionId,
+) -> Result<PathBuf> {
+    let numeric_id = session_id
+        .as_str()
+        .strip_prefix('$')
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| MezError::invalid_args("hosted session id must use a numeric $ prefix"))?;
+    socket_path_for_name(directory, &format!("h{numeric_id:x}.sock"))
+}
+
 /// Runs the auxiliary socket path for control socket operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

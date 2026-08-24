@@ -23,7 +23,7 @@ use crate::host::session::{
     SessionSupervisorState,
 };
 use crate::host::shell::ResolvedShell;
-use crate::runtime::socket_path_for_name;
+use crate::runtime::hosted_session_socket_path;
 use crate::security::remote::{RemotePrincipal, RemoteSessionAttachScope};
 use crate::storage::lease::{
     LeaseCheckpointReference, LeaseGarbageCollectionPolicy, LeaseGarbageCollectionPreview,
@@ -784,15 +784,7 @@ impl HostSessionRouter {
         created_at_unix_seconds: u64,
         startup: SessionRuntimeStartup,
     ) -> Result<SessionRuntimeHandle> {
-        let session_id = session.id.to_string();
-        let numeric_id = session_id
-            .strip_prefix('$')
-            .and_then(|value| value.parse::<u64>().ok())
-            .ok_or_else(|| MezError::invalid_state("routed session id is invalid"))?;
-        let socket_path = socket_path_for_name(
-            &self.config.runtime_root,
-            &format!("session-{numeric_id:016x}.sock"),
-        )?;
+        let socket_path = hosted_session_socket_path(&self.config.runtime_root, &session.id)?;
         let mut config_layers = self.config.config_layers.clone();
         config_layers.push(ConfigLayer {
             name: "persistent-host-session-transport".to_string(),
@@ -966,6 +958,46 @@ mod tests {
             .shutdown_all(true, Duration::from_secs(2))
             .await
             .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Hosted session publication uses a compact, collision-free socket name
+    /// so the longest cross-platform runtime root that can fit that name still
+    /// creates, discovers, and cleans up distinct sessions successfully.
+    #[tokio::test(flavor = "current_thread")]
+    async fn hosted_session_sockets_fit_the_cross_platform_path_budget() {
+        let root = test_root("socket-budget");
+        let mut component = format!("mez-hsp-{}-{:x}", std::process::id(), rand::random::<u64>());
+        component.push_str(&"x".repeat(75usize.saturating_sub(component.len())));
+        assert_eq!(component.len(), 75);
+        let runtime_root = PathBuf::from("/tmp").join(component);
+        fs::create_dir_all(&runtime_root).unwrap();
+        fs::set_permissions(&runtime_root, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(runtime_root.as_os_str().as_encoded_bytes().len(), 80);
+
+        let mut config = test_config(&root);
+        config.runtime_root = runtime_root.clone();
+        let router = HostSessionRouter::new(config);
+        let first = router
+            .create_local(Some("first".to_string()), Size::new(80, 24).unwrap())
+            .await
+            .unwrap();
+        let second = router
+            .create_local(Some("second".to_string()), Size::new(80, 24).unwrap())
+            .await
+            .unwrap();
+        assert_ne!(first.socket_path, second.socket_path);
+        assert!(first.socket_path.starts_with(&runtime_root));
+        assert!(second.socket_path.starts_with(&runtime_root));
+        assert_eq!(router.registry().list().unwrap().len(), 2);
+
+        router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert!(!first.socket_path.exists());
+        assert!(!second.socket_path.exists());
+        let _ = fs::remove_dir_all(runtime_root);
         let _ = fs::remove_dir_all(root);
     }
 

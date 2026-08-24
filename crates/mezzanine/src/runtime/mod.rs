@@ -423,6 +423,7 @@ pub(crate) use service_state::{
     RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork,
     RuntimeMcpDiscoveryOutcome, RuntimeMcpDiscoverySuccess,
 };
+pub(crate) use sockets::hosted_session_socket_path;
 pub use sockets::{
     apply_registry_update, apply_registry_update_async, authenticated_unix_peer_uid,
     auxiliary_socket_path_for_control_socket, bind_control_socket, current_effective_uid,

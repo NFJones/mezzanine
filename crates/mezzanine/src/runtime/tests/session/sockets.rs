@@ -199,6 +199,49 @@ fn socket_path_for_name_rejects_paths_beyond_the_platform_limit() {
     assert!(error.message().contains("Unix socket limit"));
 }
 
+/// Hosted session names encode the complete numeric identity compactly, so
+/// distinct and maximum-width IDs remain collision-free without consuming the
+/// verbose compatibility prefix used by older hosted paths.
+#[test]
+fn hosted_session_socket_names_are_compact_and_collision_free() {
+    let directory = Path::new("/tmp/mez-hosted");
+    let first = crate::runtime::hosted_session_socket_path(
+        directory,
+        &mez_core::ids::SessionId::new('$', 1),
+    )
+    .unwrap();
+    let second = crate::runtime::hosted_session_socket_path(
+        directory,
+        &mez_core::ids::SessionId::new('$', 2),
+    )
+    .unwrap();
+    let maximum = crate::runtime::hosted_session_socket_path(
+        directory,
+        &mez_core::ids::SessionId::new('$', u64::MAX),
+    )
+    .unwrap();
+
+    assert_eq!(first.file_name().unwrap(), "h1.sock");
+    assert_eq!(second.file_name().unwrap(), "h2.sock");
+    assert_eq!(maximum.file_name().unwrap(), "hffffffffffffffff.sock");
+    assert_ne!(first, second);
+}
+
+/// A runtime root that cannot fit even the compact maximum-width hosted name
+/// fails before bind with the standard actionable Unix pathname diagnostic.
+#[test]
+fn hosted_session_socket_path_rejects_an_impossible_runtime_root() {
+    let directory = Path::new("/").join("a".repeat(128));
+    let error = crate::runtime::hosted_session_socket_path(
+        &directory,
+        &mez_core::ids::SessionId::new('$', u64::MAX),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(error.message().contains("Unix socket limit"));
+}
+
 /// Verifies auxiliary socket paths are derived from control socket name.
 ///
 /// This regression scenario documents the behavior being protected so a
