@@ -241,6 +241,59 @@ async fn async_message_listener_can_schedule_multiple_connections() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// A one-connection limit bounds simultaneous message work rather than the
+/// listener's lifetime, so a completed client immediately frees capacity for
+/// a second sequential client.
+#[tokio::test(flavor = "current_thread")]
+async fn async_message_listener_reuses_capacity_after_disconnect() {
+    use crate::protocol::message::{decode_mmp_frame, encode_mmp_body};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{UnixListener, UnixStream};
+
+    let path =
+        std::env::temp_dir().join(format!("mez-message-cap-{}-reuse.sock", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let hello = encode_mmp_body(r#"{"protocol":"mmp/1","type":"hello","role":"default"}"#);
+
+    let clients = async {
+        for _ in 0..2 {
+            let mut stream = UnixStream::connect(&path).await.unwrap();
+            stream.write_all(&hello).await.unwrap();
+            let mut output = vec![0; 4096];
+            let read =
+                tokio::time::timeout(std::time::Duration::from_secs(1), stream.read(&mut output))
+                    .await
+                    .expect("sequential client should receive listener capacity")
+                    .unwrap();
+            output.truncate(read);
+            let (body, _) = decode_mmp_frame(&output, 4096).unwrap();
+            assert!(body.contains(r#""type":"welcome""#), "{body}");
+            stream.shutdown().await.unwrap();
+        }
+    };
+    let server = async {
+        let served = serve_async_runtime_message_listener_concurrent(
+            &listener,
+            &handle,
+            AsyncRuntimeMessageConnectionConfig::new(4096, 100).unwrap(),
+            10,
+            1,
+            |served, _| served >= 2,
+        )
+        .await
+        .unwrap();
+        assert_eq!(served, 2);
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), (), _exit) = tokio::join!(clients, server, actor.run());
+    let _ = std::fs::remove_file(&path);
+}
+
 /// Verifies a completed message connection failure is reaped while the
 /// listener remains open instead of being retained until accept-loop shutdown.
 #[tokio::test(flavor = "current_thread")]

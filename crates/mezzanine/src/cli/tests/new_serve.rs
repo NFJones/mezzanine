@@ -304,15 +304,24 @@ fn serve_starts_foreground_control_daemon() {
         connect_when_ready(&socket).expect("serve command did not accept socket connections");
     let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":2,"requested_role":"primary","client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
     let get = r#"{"jsonrpc":"2.0","id":"get","method":"session/get","params":{}}"#;
+    let kill = r#"{"jsonrpc":"2.0","id":"kill","method":"session/kill","params":{"force":true,"idempotency_key":"kill-control-test"}}"#;
     stream.write_all(&encode_control_body(initialize)).unwrap();
     stream.write_all(&encode_control_body(get)).unwrap();
+    stream.write_all(&encode_control_body(kill)).unwrap();
     stream.flush().unwrap();
 
-    let response = read_control_response_frames(&mut stream, 1024 * 1024, 2).unwrap();
+    let response = read_control_response_frames(&mut stream, 1024 * 1024, 3).unwrap();
     let (initialize_response, consumed) = decode_control_frame(&response, 1024 * 1024).unwrap();
-    let (session_response, _) = decode_control_frame(&response[consumed..], 1024 * 1024).unwrap();
+    let (session_response, session_consumed) =
+        decode_control_frame(&response[consumed..], 1024 * 1024).unwrap();
+    let (kill_response, _) =
+        decode_control_frame(&response[consumed + session_consumed..], 1024 * 1024).unwrap();
     assert!(initialize_response.contains(r#""granted_role":"primary""#));
     assert!(session_response.contains(r#""session_id":"$"#));
+    assert!(
+        kill_response.contains(r#""killed":true"#),
+        "{kill_response}"
+    );
     drop(stream);
 
     let (result, stdout, stderr) = server.join().unwrap();
@@ -581,6 +590,7 @@ fn serve_can_start_message_protocol_socket() {
     let mut control_stream =
         connect_when_ready(&control_socket).expect("control socket did not accept connections");
     let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":2,"requested_role":"primary","client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
+    let kill = r#"{"jsonrpc":"2.0","id":"kill","method":"session/kill","params":{"force":true,"idempotency_key":"kill-message-test"}}"#;
     control_stream
         .write_all(&encode_control_body(initialize))
         .unwrap();
@@ -589,7 +599,6 @@ fn serve_can_start_message_protocol_socket() {
         read_control_response_frames(&mut control_stream, 1024 * 1024, 1).unwrap();
     let (control_body, _) = decode_control_frame(&control_response, 1024 * 1024).unwrap();
     assert!(control_body.contains(r#""granted_role":"primary""#));
-    drop(control_stream);
 
     let mut message_stream = UnixStream::connect(&message_socket).unwrap();
     message_stream
@@ -605,6 +614,15 @@ fn serve_can_start_message_protocol_socket() {
         crate::protocol::message::decode_mmp_frame(&message_response, 4096).unwrap();
     assert!(message_body.contains(r#""type":"welcome""#));
     drop(message_stream);
+
+    control_stream
+        .write_all(&encode_control_body(kill))
+        .unwrap();
+    control_stream.flush().unwrap();
+    let kill_response = read_control_response_frames(&mut control_stream, 1024 * 1024, 1).unwrap();
+    let (kill_body, _) = decode_control_frame(&kill_response, 1024 * 1024).unwrap();
+    assert!(kill_body.contains(r#""killed":true"#), "{kill_body}");
+    drop(control_stream);
 
     let (result, stdout, stderr) = server.join().unwrap();
     result.unwrap();

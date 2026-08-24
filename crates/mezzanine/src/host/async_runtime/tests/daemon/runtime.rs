@@ -131,6 +131,11 @@ async fn async_runtime_daemon_supervises_named_control_and_message_listeners() {
         let (body, _) = decode_mmp_frame(&output, 4096).unwrap();
         assert!(body.contains(r#""type":"welcome""#));
     };
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+    let clients = async move {
+        let ((), ()) = tokio::join!(control_client, message_client);
+        cancel_tx.send(()).unwrap();
+    };
     let daemon_handle = handle.clone();
     let daemon = async move {
         let report = run_async_runtime_daemon(
@@ -148,7 +153,9 @@ async fn async_runtime_daemon_supervises_named_control_and_message_listeners() {
                 max_message_connections: 1,
                 ..AsyncRuntimeDaemonConfig::default()
             },
-            std::future::pending(),
+            async {
+                let _ = cancel_rx.await;
+            },
         )
         .await
         .unwrap();
@@ -159,22 +166,22 @@ async fn async_runtime_daemon_supervises_named_control_and_message_listeners() {
         report
     };
 
-    let ((), (), report, _exit) = tokio::join!(control_client, message_client, daemon, actor.run());
+    let ((), report, _exit) = tokio::join!(clients, daemon, actor.run());
     let mut services = report.services;
     services.sort_by(|left, right| left.name.cmp(&right.name));
 
-    assert!(!report.shutdown_requested);
+    assert!(report.shutdown_requested);
     assert_eq!(services.len(), 9);
     assert_eq!(services[0].name, "agent-provider");
     assert_eq!(services[0].exit.work_units, 0);
     assert_eq!(services[1].name, "control");
-    assert_eq!(services[1].exit.work_units, 1);
+    assert_eq!(services[1].exit.work_units, 0);
     assert_eq!(services[2].name, "hook");
     assert_eq!(services[2].exit.work_units, 0);
     assert_eq!(services[3].name, "host-clipboard");
     assert_eq!(services[3].exit.work_units, 0);
     assert_eq!(services[4].name, "message");
-    assert_eq!(services[4].exit.work_units, 1);
+    assert_eq!(services[4].exit.work_units, 0);
     assert_eq!(services[5].name, "pane-process-supervisor");
     assert_eq!(services[5].exit.work_units, 0);
     assert_eq!(services[6].name, "persistence");

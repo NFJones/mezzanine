@@ -299,8 +299,15 @@ pub async fn serve_async_runtime_control_listener<F>(
 where
     F: FnMut(u64, RuntimeLifecycleState) -> bool,
 {
-    serve_async_runtime_control_listener_with_snapshots(listener, handle, config, None, should_stop)
-        .await
+    serve_async_runtime_control_listener_with_snapshots(
+        listener,
+        handle,
+        config,
+        None,
+        u64::MAX,
+        should_stop,
+    )
+    .await
 }
 
 /// Runs the serve async runtime control listener with snapshots operation for this subsystem.
@@ -313,11 +320,17 @@ pub async fn serve_async_runtime_control_listener_with_snapshots<F>(
     handle: &AsyncRuntimeSessionHandle,
     config: AsyncRuntimeControlConnectionConfig,
     snapshots: Option<SnapshotRepository>,
+    max_connections: u64,
     mut should_stop: F,
 ) -> Result<u64>
 where
     F: FnMut(u64, RuntimeLifecycleState) -> bool,
 {
+    if max_connections == 0 {
+        return Err(MezError::invalid_args(
+            "async control listener max connections must be greater than zero",
+        ));
+    }
     let mut accepted = 0u64;
     let mut tasks = JoinSet::new();
     let mut lifecycle = handle.lifecycle_state_watcher();
@@ -328,7 +341,7 @@ where
         }
 
         let (mut stream, _addr) = tokio::select! {
-            accepted = listener.accept() => accepted?,
+            accepted = listener.accept(), if (tasks.len() as u64) < max_connections => accepted?,
             changed = lifecycle.changed() => {
                 if changed.is_err() {
                     break;

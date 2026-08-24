@@ -271,12 +271,12 @@ where
     let mut lifecycle = handle.lifecycle_state_watcher();
     loop {
         let state = *lifecycle.borrow();
-        if accepted >= max_connections || should_stop(accepted, state) {
+        if should_stop(accepted, state) {
             break;
         }
 
         let (mut stream, _addr) = tokio::select! {
-            accepted = listener.accept() => accepted?,
+            accepted = listener.accept(), if (tasks.len() as u64) < max_connections => accepted?,
             changed = lifecycle.changed() => {
                 if changed.is_err() {
                     break;

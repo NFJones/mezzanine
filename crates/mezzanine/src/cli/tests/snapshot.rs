@@ -275,17 +275,26 @@ fn snapshot_resume_can_serve_restored_session_over_control_socket() {
         connect_when_ready(&socket).expect("snapshot resume socket did not accept connections");
     let initialize = r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"mez-test","requested_version":2,"requested_role":"primary","client":{"name":"mez-test","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#;
     let view = r#"{"jsonrpc":"2.0","id":"view","method":"terminal/view","params":{"client_size":{"columns":80,"rows":24}}}"#;
+    let kill = r#"{"jsonrpc":"2.0","id":"kill","method":"session/kill","params":{"force":true,"idempotency_key":"kill-snapshot-serve-test"}}"#;
     stream.write_all(&encode_control_body(initialize)).unwrap();
     stream.write_all(&encode_control_body(view)).unwrap();
+    stream.write_all(&encode_control_body(kill)).unwrap();
     stream.flush().unwrap();
 
-    let response = read_control_response_frames(&mut stream, 1024 * 1024, 2).unwrap();
+    let response = read_control_response_frames(&mut stream, 1024 * 1024, 3).unwrap();
     let (initialize_response, consumed) = decode_control_frame(&response, 1024 * 1024).unwrap();
-    let (view_response, _) = decode_control_frame(&response[consumed..], 1024 * 1024).unwrap();
+    let (view_response, view_consumed) =
+        decode_control_frame(&response[consumed..], 1024 * 1024).unwrap();
+    let (kill_response, _) =
+        decode_control_frame(&response[consumed + view_consumed..], 1024 * 1024).unwrap();
     assert!(initialize_response.contains(r#""granted_role":"primary""#));
     assert!(
         view_response.contains("pane restarted with a fresh primary PID"),
         "{view_response}"
+    );
+    assert!(
+        kill_response.contains(r#""killed":true"#),
+        "{kill_response}"
     );
     drop(stream);
 

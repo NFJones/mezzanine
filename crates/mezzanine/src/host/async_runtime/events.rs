@@ -299,11 +299,17 @@ pub async fn serve_bound_async_runtime_event_listener<F>(
     listener: &UnixListener,
     handle: &AsyncRuntimeSessionHandle,
     config: AsyncRuntimeEventConnectionConfig,
+    max_connections: u64,
     should_stop: F,
 ) -> Result<u64>
 where
     F: Fn(u64, u64, RuntimeLifecycleState) -> bool + Send + Sync + 'static,
 {
+    if max_connections == 0 {
+        return Err(MezError::invalid_args(
+            "async event listener max connections must be greater than zero",
+        ));
+    }
     let mut accepted_connections = 0u64;
     let mut tasks = JoinSet::new();
     let should_stop = Arc::new(should_stop);
@@ -314,7 +320,7 @@ where
             break;
         }
         let (mut stream, _addr) = tokio::select! {
-            accepted = listener.accept() => accepted?,
+            accepted = listener.accept(), if (tasks.len() as u64) < max_connections => accepted?,
             changed = lifecycle.changed() => {
                 if changed.is_err() {
                     break;

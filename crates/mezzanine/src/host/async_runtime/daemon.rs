@@ -44,7 +44,8 @@ pub fn build_async_runtime_daemon_services(
                 &handle,
                 control_config,
                 snapshots,
-                |served, state| served >= max_connections || is_terminal_daemon_state(state),
+                max_connections,
+                |_, state| is_terminal_daemon_state(state),
             )
             .await?;
             Ok(AsyncRuntimeServiceExit::completed(served))
@@ -83,10 +84,9 @@ pub fn build_async_runtime_daemon_services(
                 &listener,
                 &handle,
                 event_config,
-                move |served, delivered, state| {
-                    served >= max_connections
-                        || delivered >= max_batches
-                        || is_terminal_daemon_state(state)
+                max_connections,
+                move |_, delivered, state| {
+                    delivered >= max_batches || is_terminal_daemon_state(state)
                 },
             )
             .await?;

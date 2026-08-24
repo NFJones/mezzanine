@@ -668,6 +668,7 @@ async fn bound_unix_event_listener_delivers_refreshes_to_concurrent_primaries() 
             &listener,
             &handle,
             AsyncRuntimeEventConnectionConfig::new(10, peer_uid).unwrap(),
+            u64::MAX,
             |_, _, state| {
                 matches!(
                     state,
