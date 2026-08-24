@@ -172,8 +172,8 @@ use env::{
     terminal_size_from_fd_or_environment,
 };
 use host::{
-    ensure_host_available, host_create_session, host_list_sessions, host_resolve_session,
-    request_host, run_host,
+    ensure_host_available, host_create_session, host_list_sessions, host_resolve_or_create_session,
+    host_resolve_session, request_host, run_host,
 };
 use issue::run_issue;
 use json::{

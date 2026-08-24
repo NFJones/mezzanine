@@ -151,6 +151,23 @@ impl HostSessionRouter {
         size: Size,
     ) -> Result<SessionRecord> {
         let _creation = self.creation_lock.lock().await;
+        self.create_local_locked(name, size).await
+    }
+
+    /// Resolves the current primary-attachable local session or creates one
+    /// while holding the same synchronization boundary used by fresh creation.
+    pub(crate) async fn resolve_or_create_local(&self, size: Size) -> Result<SessionRecord> {
+        let _creation = self.creation_lock.lock().await;
+        match self.resolve_local(None, "primary") {
+            Ok(record) => Ok(record),
+            Err(error) if error.kind() == MezErrorKind::NotFound => {
+                self.create_local_locked(None, size).await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn create_local_locked(&self, name: Option<String>, size: Size) -> Result<SessionRecord> {
         self.ensure_global_session_capacity().await?;
         let now = current_unix_seconds()?;
         let session_id = next_session_id()?;
@@ -905,6 +922,52 @@ mod tests {
     use crate::storage::lease::LeaseCheckpointReference;
 
     use super::*;
+
+    /// Concurrent bare-CLI resolution must select or create one shared local
+    /// session atomically, while explicit fresh creation remains non-deduplicated.
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_resolve_or_create_is_atomic_while_create_remains_fresh() {
+        let root = test_root("local-roc");
+        let router = HostSessionRouter::new(test_config(&root));
+        let mut requests = tokio::task::JoinSet::new();
+        for _ in 0..8 {
+            let router = router.clone();
+            requests.spawn(async move {
+                router
+                    .resolve_or_create_local(Size::new(80, 24).unwrap())
+                    .await
+            });
+        }
+
+        let mut selected_session_ids = Vec::new();
+        while let Some(result) = requests.join_next().await {
+            selected_session_ids.push(result.unwrap().unwrap().session_id);
+        }
+        assert_eq!(selected_session_ids.len(), 8);
+        assert!(
+            selected_session_ids
+                .iter()
+                .all(|session_id| session_id == &selected_session_ids[0])
+        );
+        assert_eq!(router.registry().list().unwrap().len(), 1);
+
+        let first_fresh = router
+            .create_local(Some("fresh-one".to_string()), Size::new(80, 24).unwrap())
+            .await
+            .unwrap();
+        let second_fresh = router
+            .create_local(Some("fresh-two".to_string()), Size::new(80, 24).unwrap())
+            .await
+            .unwrap();
+        assert_ne!(first_fresh.session_id, second_fresh.session_id);
+        assert_eq!(router.registry().list().unwrap().len(), 3);
+
+        router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn remote_create_is_idempotent_quota_bounded_and_owner_scoped() {

@@ -514,6 +514,14 @@ impl HostServer {
                 let record = self.create_session(name, Size::new(columns, rows)?).await?;
                 Ok((session_record_json(&record), None))
             }
+            "host/session/resolve-or-create" => {
+                let columns = optional_u16(&params, "columns")?.unwrap_or(80);
+                let rows = optional_u16(&params, "rows")?.unwrap_or(24);
+                let record = self
+                    .resolve_or_create_session(Size::new(columns, rows)?)
+                    .await?;
+                Ok((session_record_json(&record), None))
+            }
             "host/session/resolve" => {
                 let target = params.get("target").and_then(Value::as_str);
                 let requested_role = params
@@ -585,6 +593,13 @@ impl HostServer {
         size: Size,
     ) -> Result<crate::storage::registry::SessionRecord> {
         self.router.create_local(name, size).await
+    }
+
+    async fn resolve_or_create_session(
+        &self,
+        size: Size,
+    ) -> Result<crate::storage::registry::SessionRecord> {
+        self.router.resolve_or_create_local(size).await
     }
 
     fn resolve_session(

@@ -319,6 +319,17 @@ pub(super) async fn host_create_session(env: &CliEnv, name: Option<&str>) -> Res
     host_result_socket(&result)
 }
 
+/// Atomically resolves the primary-attachable hosted session or creates one.
+pub(super) async fn host_resolve_or_create_session(env: &CliEnv) -> Result<PathBuf> {
+    let result = request_host(
+        env,
+        "host/session/resolve-or-create",
+        serde_json::json!({"columns": 80, "rows": 24}),
+    )
+    .await?;
+    host_result_socket(&result)
+}
+
 /// Resolves an existing supervised local session without creating one.
 pub(super) async fn host_resolve_session(
     env: &CliEnv,
@@ -569,7 +580,9 @@ mod tests {
             assert_eq!(status["ready"], true);
             assert_eq!(status["running_sessions"], 0);
 
-            let first = host_create_session(&env, Some("first")).await.unwrap();
+            let first = host_resolve_or_create_session(&env).await.unwrap();
+            let selected_again = host_resolve_or_create_session(&env).await.unwrap();
+            assert_eq!(selected_again, first);
             let resolved = host_resolve_session(&env, None, "primary").await.unwrap();
             assert_eq!(resolved, first);
             let second = host_create_session(&env, Some("second")).await.unwrap();

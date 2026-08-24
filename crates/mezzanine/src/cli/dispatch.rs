@@ -10,10 +10,11 @@ use super::env::CliArgv;
 use super::{
     CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, MezError, OsString,
     PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, ensure_host_available,
-    ensure_private_socket_directory, host_create_session, host_list_sessions, host_resolve_session,
-    io, json_escape, list_iroh_host_sessions, prune_stale_socket_files_in_directory, run_attach,
-    run_auth, run_config, run_control_request_for_target, run_host, run_issue, run_lease, run_list,
-    run_mcp, run_memory, run_new, run_remote, run_sandbox, run_serve, run_snapshot,
+    ensure_private_socket_directory, host_create_session, host_list_sessions,
+    host_resolve_or_create_session, host_resolve_session, io, json_escape, list_iroh_host_sessions,
+    prune_stale_socket_files_in_directory, run_attach, run_auth, run_config,
+    run_control_request_for_target, run_host, run_issue, run_lease, run_list, run_mcp, run_memory,
+    run_new, run_remote, run_sandbox, run_serve, run_snapshot,
 };
 
 // Top-level CLI run and command dispatch.
@@ -158,13 +159,7 @@ async fn run_with_inner<W: Write, E: Write>(
     match command {
         None => {
             if prefer_host && ensure_host_available(&env).await? {
-                let socket = match host_resolve_session(&env, None, "primary").await {
-                    Ok(socket) => socket,
-                    Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {
-                        host_create_session(&env, None).await?
-                    }
-                    Err(error) => return Err(error),
-                };
+                let socket = host_resolve_or_create_session(&env).await?;
                 return run_attach(
                     &super::SocketSelection::Explicit(socket),
                     &control_target,
