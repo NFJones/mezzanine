@@ -389,6 +389,45 @@ fn malformed_lease_database_fails_closed() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Injected lease database publication failures preserve either the complete
+/// previous database or the complete replacement and never retain a temp file.
+#[test]
+fn lease_database_publication_is_complete_at_every_failure_phase() {
+    let root = test_root("publication-phases");
+    let old = b"old complete database\n";
+    let new = b"new complete database\n";
+    for (index, phase) in [
+        LeasePublicationFailurePhase::AfterWrite,
+        LeasePublicationFailurePhase::AfterFileSync,
+        LeasePublicationFailurePhase::BeforeRename,
+        LeasePublicationFailurePhase::BeforeDirectorySync,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = root.join(format!("leases-{index}.json"));
+        fs::write(&path, old).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        write_private_atomic_failing(&path, new, phase).unwrap_err();
+        let expected = if phase == LeasePublicationFailurePhase::BeforeDirectorySync {
+            new.as_slice()
+        } else {
+            old.as_slice()
+        };
+        assert_eq!(fs::read(&path).unwrap(), expected, "{phase:?}");
+        assert!(fs::read_dir(&root).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+    }
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Lease database and lock paths must reject symlink substitution rather than
 /// following attacker-selected files outside the protected lease directory.
 #[test]

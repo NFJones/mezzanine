@@ -5,19 +5,18 @@
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use tokio::io::AsyncWriteExt;
 
 use crate::error::{MezError, Result};
 use mez_mux::session::Session;
 
 use super::encoding::{
-    current_rfc3339_utc, has_manifest_control_character, set_private_dir_permissions,
-    set_private_dir_permissions_async, set_private_file_permissions,
-    set_private_file_permissions_async, validate_snapshot_id,
+    current_rfc3339_utc, has_manifest_control_character, reconcile_publication_temporaries,
+    sync_directory, sync_directory_async, validate_snapshot_id, write_private_new_atomic,
+    write_private_new_atomic_async, write_private_replace_atomic,
+    write_private_replace_atomic_async,
 };
 use super::types::{
     SessionSnapshotPayload, SnapshotCreationContext, SnapshotKind, SnapshotManifest,
@@ -32,9 +31,6 @@ struct LatestSnapshotIndex {
     latest_all: Option<String>,
     latest_by_session: BTreeMap<String, String>,
 }
-
-/// Process-local suffix used to avoid collisions between atomic index writers.
-static NEXT_LATEST_INDEX_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 impl SnapshotRepository {
     /// Runs the new operation for this subsystem.
@@ -58,6 +54,12 @@ impl SnapshotRepository {
     )]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Removes abandoned repository-owned temp files left before atomic
+    /// publication completed.
+    pub fn reconcile_publication_temporaries(&self) -> Result<usize> {
+        reconcile_publication_temporaries(&self.root)
     }
 
     /// Runs the write operation for this subsystem.
@@ -90,17 +92,9 @@ impl SnapshotRepository {
     ) -> Result<PathBuf> {
         validate_snapshot_id(snapshot_id)?;
         payload.validate()?;
-        fs::create_dir_all(&self.root)?;
-        set_private_dir_permissions(&self.root)?;
         let path = self.payload_path(snapshot_id)?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
         let encoded = payload.encode()?;
-        file.write_all(encoded.as_bytes())?;
-        set_private_file_permissions(&path)?;
-        Ok(path)
+        write_private_new_atomic(&path, encoded.as_bytes())
     }
 
     /// Writes a snapshot payload through Tokio filesystem APIs.
@@ -111,18 +105,9 @@ impl SnapshotRepository {
     ) -> Result<PathBuf> {
         validate_snapshot_id(snapshot_id)?;
         payload.validate()?;
-        tokio::fs::create_dir_all(&self.root).await?;
-        set_private_dir_permissions_async(&self.root).await?;
         let path = self.payload_path(snapshot_id)?;
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .await?;
         let encoded = payload.encode()?;
-        file.write_all(encoded.as_bytes()).await?;
-        set_private_file_permissions_async(&path).await?;
-        Ok(path)
+        write_private_new_atomic_async(&path, encoded.as_bytes()).await
     }
 
     /// Runs the inspect payload operation for this subsystem.
@@ -425,7 +410,11 @@ impl SnapshotRepository {
         match self.write(&manifest) {
             Ok(_) => Ok(manifest.state),
             Err(error) => {
-                let _ = fs::remove_file(self.payload_path(snapshot_id)?);
+                if !self.manifest_path(snapshot_id)?.exists()
+                    && fs::remove_file(self.payload_path(snapshot_id)?).is_ok()
+                {
+                    let _ = sync_directory(&self.root);
+                }
                 Err(error)
             }
         }
@@ -488,7 +477,15 @@ impl SnapshotRepository {
         match self.write_async(&manifest).await {
             Ok(_) => Ok(manifest.state),
             Err(error) => {
-                let _ = tokio::fs::remove_file(self.payload_path(snapshot_id)?).await;
+                if tokio::fs::metadata(self.manifest_path(snapshot_id)?)
+                    .await
+                    .is_err()
+                    && tokio::fs::remove_file(self.payload_path(snapshot_id)?)
+                        .await
+                        .is_ok()
+                {
+                    let _ = sync_directory_async(&self.root).await;
+                }
                 Err(error)
             }
         }
@@ -664,16 +661,6 @@ impl SnapshotRepository {
         self.root.join("latest.index")
     }
 
-    /// Returns a unique sibling path for atomic latest-index replacement.
-    fn latest_index_temp_path(&self) -> PathBuf {
-        let suffix = NEXT_LATEST_INDEX_TEMP_ID.fetch_add(1, AtomicOrdering::Relaxed);
-        self.root.join(format!(
-            ".latest.index.{}.{}.tmp",
-            std::process::id(),
-            suffix
-        ))
-    }
-
     /// Reads one snapshot id from the latest index file.
     fn read_latest_index(&self, session_id: Option<&str>) -> Result<Option<String>> {
         let Some(index) = self.read_latest_index_state()? else {
@@ -778,61 +765,16 @@ impl SnapshotRepository {
 
     /// Atomically replaces the latest index with private durable contents.
     fn write_latest_index_state(&self, index: &LatestSnapshotIndex) -> Result<()> {
-        fs::create_dir_all(&self.root)?;
-        set_private_dir_permissions(&self.root)?;
         let path = self.latest_index_path();
-        let temporary = self.latest_index_temp_path();
         let output = Self::encode_latest_index(index)?;
-        let write_result = (|| {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temporary)?;
-            file.write_all(output.as_bytes())?;
-            file.sync_all()?;
-            set_private_file_permissions(&temporary)?;
-            fs::rename(&temporary, &path)?;
-            set_private_file_permissions(&path)?;
-            if let Ok(directory) = fs::File::open(&self.root) {
-                let _ = directory.sync_all();
-            }
-            Ok(())
-        })();
-        if write_result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        write_result
+        write_private_replace_atomic(&path, output.as_bytes())
     }
 
     /// Async counterpart to [`Self::write_latest_index_state`].
     async fn write_latest_index_state_async(&self, index: &LatestSnapshotIndex) -> Result<()> {
-        tokio::fs::create_dir_all(&self.root).await?;
-        set_private_dir_permissions_async(&self.root).await?;
         let path = self.latest_index_path();
-        let temporary = self.latest_index_temp_path();
         let output = Self::encode_latest_index(index)?;
-        let write_result = async {
-            let mut file = tokio::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temporary)
-                .await?;
-            file.write_all(output.as_bytes()).await?;
-            file.flush().await?;
-            file.sync_all().await?;
-            set_private_file_permissions_async(&temporary).await?;
-            tokio::fs::rename(&temporary, &path).await?;
-            set_private_file_permissions_async(&path).await?;
-            if let Ok(directory) = tokio::fs::File::open(&self.root).await {
-                let _ = directory.sync_all().await;
-            }
-            Ok(())
-        }
-        .await;
-        if write_result.is_err() {
-            let _ = tokio::fs::remove_file(&temporary).await;
-        }
-        write_result
+        write_private_replace_atomic_async(&path, output.as_bytes()).await
     }
 
     /// Writes the latest index file for global and per-session lookups.
@@ -841,6 +783,7 @@ impl SnapshotRepository {
         if snapshots.is_empty() {
             if path.exists() {
                 fs::remove_file(path)?;
+                sync_directory(&self.root)?;
             }
             return Ok(());
         }
@@ -874,7 +817,7 @@ impl SnapshotRepository {
     async fn write_latest_index_file_async(&self, snapshots: &[SnapshotState]) -> Result<()> {
         if snapshots.is_empty() {
             match tokio::fs::remove_file(self.latest_index_path()).await {
-                Ok(()) => {}
+                Ok(()) => sync_directory_async(&self.root).await?,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }

@@ -19,6 +19,8 @@ mod types;
     reason = "host routing, administration, and recovery consume these lease contracts in subsequent architecture phases"
 )]
 pub(crate) use repository::RemoteSessionLeaseRepository;
+#[cfg(test)]
+use repository::{LeasePublicationFailurePhase, write_private_atomic_failing};
 #[allow(
     unused_imports,
     reason = "host routing, administration, and recovery consume these lease contracts in subsequent architecture phases"

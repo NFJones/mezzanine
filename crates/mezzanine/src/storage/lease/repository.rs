@@ -23,6 +23,15 @@ const LOCK_FILE_NAME: &str = "leases.lock";
 const MAX_DATABASE_BYTES: u64 = 4 * 1024 * 1024;
 static NEXT_TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LeasePublicationFailurePhase {
+    AfterWrite,
+    AfterFileSync,
+    BeforeRename,
+    BeforeDirectorySync,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct LeaseDatabase {
     version: u32,
@@ -801,6 +810,7 @@ fn validate_database(database: &LeaseDatabase) -> Result<()> {
 }
 
 fn ensure_private_directory(path: &Path) -> Result<()> {
+    let existed = path.exists();
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true).mode(0o700);
     builder.create(path)?;
@@ -813,6 +823,9 @@ fn ensure_private_directory(path: &Path) -> Result<()> {
         return Err(MezError::forbidden(
             "remote session lease directory must be private and owned by the current user",
         ));
+    }
+    if !existed && let Some(parent) = path.parent() {
+        fs::File::open(parent)?.sync_all()?;
     }
     Ok(())
 }
@@ -856,6 +869,28 @@ fn validate_private_file(path: &Path, metadata: &fs::Metadata) -> Result<()> {
 }
 
 fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_private_atomic_impl(path, bytes, None)
+}
+
+#[cfg(test)]
+pub(super) fn write_private_atomic_failing(
+    path: &Path,
+    bytes: &[u8],
+    phase: LeasePublicationFailurePhase,
+) -> Result<()> {
+    write_private_atomic_impl(path, bytes, Some(phase))
+}
+
+#[cfg(test)]
+type ConfiguredLeasePublicationFailure = Option<LeasePublicationFailurePhase>;
+#[cfg(not(test))]
+type ConfiguredLeasePublicationFailure = Option<()>;
+
+fn write_private_atomic_impl(
+    path: &Path,
+    bytes: &[u8],
+    _failure: ConfiguredLeasePublicationFailure,
+) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| MezError::invalid_args("remote session lease path has no parent"))?;
@@ -876,18 +911,37 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
             .open(&temporary)?;
         file.write_all(bytes)?;
         file.flush()?;
+        #[cfg(test)]
+        fail_lease_publication_at(_failure, LeasePublicationFailurePhase::AfterWrite)?;
         file.sync_all()?;
+        #[cfg(test)]
+        fail_lease_publication_at(_failure, LeasePublicationFailurePhase::AfterFileSync)?;
         drop(file);
+        #[cfg(test)]
+        fail_lease_publication_at(_failure, LeasePublicationFailurePhase::BeforeRename)?;
         fs::rename(&temporary, path)?;
         let metadata = fs::symlink_metadata(path)?;
         validate_private_file(path, &metadata)?;
-        if let Ok(directory) = fs::File::open(parent) {
-            let _ = directory.sync_all();
-        }
+        #[cfg(test)]
+        fail_lease_publication_at(_failure, LeasePublicationFailurePhase::BeforeDirectorySync)?;
+        fs::File::open(parent)?.sync_all()?;
         Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(temporary);
     }
     result
+}
+
+#[cfg(test)]
+fn fail_lease_publication_at(
+    configured: ConfiguredLeasePublicationFailure,
+    phase: LeasePublicationFailurePhase,
+) -> Result<()> {
+    if configured == Some(phase) {
+        return Err(MezError::invalid_state(format!(
+            "injected lease publication failure at {phase:?}"
+        )));
+    }
+    Ok(())
 }

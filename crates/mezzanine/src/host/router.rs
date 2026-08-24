@@ -221,6 +221,8 @@ impl HostSessionRouter {
 
     /// Advances the durable boot generation before either host listener starts.
     pub(crate) fn reconcile_startup(&self) -> Result<HostReconciliationReport> {
+        SnapshotRepository::new(self.config.config_root.join("layouts"))
+            .reconcile_publication_temporaries()?;
         self.leases
             .advance_boot_generation(current_unix_seconds()?)?;
         self.reconcile()

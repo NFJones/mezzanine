@@ -3,17 +3,15 @@
 //! Manifests carry user-facing snapshot metadata and safety flags. Persistence
 //! validates that credentials and active approval authority are never restored.
 
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use tokio::io::AsyncWriteExt;
 
 use crate::error::{MezError, Result};
 
 use super::encoding::{
     manifest_string_array, non_empty_optional, parse_bool, parse_string_array, parse_u32,
-    parse_usize, required, set_private_dir_permissions, set_private_dir_permissions_async,
-    set_private_file_permissions, set_private_file_permissions_async,
+    parse_usize, required, write_private_new_atomic, write_private_new_atomic_async,
 };
 use super::types::{SnapshotKind, SnapshotManifest, SnapshotState};
 
@@ -44,33 +42,15 @@ impl SnapshotManifest {
     /// on duplicated control-flow logic.
     pub fn write_to_dir(&self, dir: &Path) -> Result<PathBuf> {
         self.validate_for_persistence()?;
-        fs::create_dir_all(dir)?;
-        set_private_dir_permissions(dir)?;
         let path = dir.join(format!("{}.manifest", self.state.id));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
-        file.write_all(self.encode().as_bytes())?;
-        set_private_file_permissions(&path)?;
-        Ok(path)
+        write_private_new_atomic(&path, self.encode().as_bytes())
     }
 
     /// Writes the manifest through Tokio filesystem APIs with private permissions.
     pub async fn write_to_dir_async(&self, dir: &Path) -> Result<PathBuf> {
         self.validate_for_persistence()?;
-        tokio::fs::create_dir_all(dir).await?;
-        set_private_dir_permissions_async(dir).await?;
         let path = dir.join(format!("{}.manifest", self.state.id));
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .await?;
-        file.write_all(self.encode().as_bytes()).await?;
-        file.flush().await?;
-        set_private_file_permissions_async(&path).await?;
-        Ok(path)
+        write_private_new_atomic_async(&path, self.encode().as_bytes()).await
     }
 
     /// Runs the read from file operation for this subsystem.

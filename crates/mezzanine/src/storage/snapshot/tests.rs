@@ -21,6 +21,8 @@ use mez_terminal::{
 use std::fs;
 use std::path::PathBuf;
 
+use super::encoding::{PublicationFailurePhase, write_private_new_atomic_failing};
+
 /// Runs the manifest operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -217,6 +219,77 @@ async fn snapshot_repository_async_persists_lists_and_deletes_snapshots() {
     assert_eq!(payload.session_id, session.id.to_string());
     assert!(deleted);
     assert!(repo.list_async().await.unwrap().is_empty());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Startup reconciliation removes only repository-owned abandoned publication
+/// temporaries before subsequent durable snapshot writes become visible.
+#[test]
+fn snapshot_repository_reconciles_abandoned_publication_temporaries() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-publication-reconcile-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let abandoned_payload = root.join(".snapshot-publish.abandoned.payload.tmp");
+    let abandoned_manifest = root.join(".snapshot-publish.abandoned.manifest.tmp");
+    let incomplete_payload = root.join("incomplete.payload");
+    let unrelated = root.join(".unrelated.tmp");
+    fs::write(&abandoned_payload, b"partial payload\n").unwrap();
+    fs::write(&abandoned_manifest, b"partial manifest\n").unwrap();
+    fs::write(&incomplete_payload, b"uncommitted payload\n").unwrap();
+    fs::write(&unrelated, b"preserve\n").unwrap();
+    let repo = SnapshotRepository::new(root.clone());
+
+    assert_eq!(repo.reconcile_publication_temporaries().unwrap(), 3);
+    assert!(!abandoned_payload.exists());
+    assert!(!abandoned_manifest.exists());
+    assert!(!incomplete_payload.exists());
+    assert_eq!(fs::read(&unrelated).unwrap(), b"preserve\n");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Every injected crash boundary exposes either no destination or the complete
+/// newly published bytes, and repository-owned temporary files are recoverable.
+#[test]
+fn snapshot_publication_is_complete_or_absent_at_every_failure_phase() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-publication-phases-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let bytes = b"complete snapshot artifact\n";
+    for (index, phase) in [
+        PublicationFailurePhase::AfterWrite,
+        PublicationFailurePhase::AfterFileSync,
+        PublicationFailurePhase::BeforePublish,
+        PublicationFailurePhase::BeforeDirectorySync,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = root.join(format!("phase-{index}.payload"));
+        write_private_new_atomic_failing(&path, bytes, phase).unwrap_err();
+        if phase == PublicationFailurePhase::BeforeDirectorySync {
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        } else {
+            assert!(!path.exists(), "{phase:?} exposed a partial destination");
+        }
+    }
+    let repository = SnapshotRepository::new(root.clone());
+    repository.reconcile_publication_temporaries().unwrap();
+    assert!(fs::read_dir(&root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".snapshot-publish.")
+    }));
 
     let _ = fs::remove_dir_all(root);
 }

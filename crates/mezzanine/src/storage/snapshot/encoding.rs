@@ -5,11 +5,28 @@
 //! and private filesystem permissions.
 
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::Path;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rustix::fs::{CWD, RenameFlags, renameat_with};
+use tokio::io::AsyncWriteExt;
+
 use crate::error::{MezError, Result};
+
+const PUBLICATION_TEMP_PREFIX: &str = ".snapshot-publish.";
+static NEXT_PUBLICATION_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PublicationFailurePhase {
+    AfterWrite,
+    AfterFileSync,
+    BeforePublish,
+    BeforeDirectorySync,
+}
 
 /// Runs the required operation for this subsystem.
 ///
@@ -357,4 +374,252 @@ pub(super) async fn set_private_file_permissions_async(path: &Path) -> Result<()
         let _ = path;
     }
     Ok(())
+}
+
+fn publication_temporary_path(path: &Path) -> Result<PathBuf> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| MezError::invalid_args("snapshot publication path has no parent"))?;
+    let kind = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("file");
+    Ok(parent.join(format!(
+        "{PUBLICATION_TEMP_PREFIX}{}.{}.{}.tmp",
+        std::process::id(),
+        NEXT_PUBLICATION_TEMP_ID.fetch_add(1, Ordering::Relaxed),
+        kind,
+    )))
+}
+
+pub(super) fn sync_directory(path: &Path) -> Result<()> {
+    fs::File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+pub(super) async fn sync_directory_async(path: &Path) -> Result<()> {
+    tokio::fs::File::open(path).await?.sync_all().await?;
+    Ok(())
+}
+
+fn ensure_private_directory_durable(path: &Path) -> Result<()> {
+    let existed = path.exists();
+    fs::create_dir_all(path)?;
+    set_private_dir_permissions(path)?;
+    if !existed && let Some(parent) = path.parent() {
+        sync_directory(parent)?;
+    }
+    Ok(())
+}
+
+async fn ensure_private_directory_durable_async(path: &Path) -> Result<()> {
+    let existed = tokio::fs::metadata(path).await.is_ok();
+    tokio::fs::create_dir_all(path).await?;
+    set_private_dir_permissions_async(path).await?;
+    if !existed && let Some(parent) = path.parent() {
+        sync_directory_async(parent).await?;
+    }
+    Ok(())
+}
+
+fn publish_new(temporary: &Path, path: &Path) -> Result<()> {
+    renameat_with(CWD, temporary, CWD, path, RenameFlags::NOREPLACE)
+        .map_err(std::io::Error::from)?;
+    Ok(())
+}
+
+async fn publish_new_async(temporary: PathBuf, path: PathBuf) -> Result<()> {
+    tokio::task::spawn_blocking(move || publish_new(&temporary, &path))
+        .await
+        .map_err(|error| {
+            MezError::invalid_state(format!("snapshot publication rename task failed: {error}"))
+        })??;
+    Ok(())
+}
+
+#[cfg(test)]
+fn fail_publication_at(
+    configured: Option<PublicationFailurePhase>,
+    phase: PublicationFailurePhase,
+) -> Result<()> {
+    if configured == Some(phase) {
+        return Err(MezError::invalid_state(format!(
+            "injected snapshot publication failure at {phase:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// Publishes one new private file without exposing partially written bytes or
+/// replacing an existing destination.
+pub(super) fn write_private_new_atomic(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
+    write_private_new_atomic_impl(path, bytes, None)
+}
+
+#[cfg(test)]
+pub(super) fn write_private_new_atomic_failing(
+    path: &Path,
+    bytes: &[u8],
+    phase: PublicationFailurePhase,
+) -> Result<PathBuf> {
+    write_private_new_atomic_impl(path, bytes, Some(phase))
+}
+
+#[cfg(test)]
+type ConfiguredPublicationFailure = Option<PublicationFailurePhase>;
+#[cfg(not(test))]
+type ConfiguredPublicationFailure = Option<()>;
+
+fn write_private_new_atomic_impl(
+    path: &Path,
+    bytes: &[u8],
+    _failure: ConfiguredPublicationFailure,
+) -> Result<PathBuf> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| MezError::invalid_args("snapshot publication path has no parent"))?;
+    ensure_private_directory_durable(parent)?;
+    let temporary = publication_temporary_path(path)?;
+    let result = (|| -> Result<PathBuf> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        set_private_file_permissions(&temporary)?;
+        file.write_all(bytes)?;
+        file.flush()?;
+        #[cfg(test)]
+        fail_publication_at(_failure, PublicationFailurePhase::AfterWrite)?;
+        file.sync_all()?;
+        #[cfg(test)]
+        fail_publication_at(_failure, PublicationFailurePhase::AfterFileSync)?;
+        drop(file);
+        #[cfg(test)]
+        fail_publication_at(_failure, PublicationFailurePhase::BeforePublish)?;
+        publish_new(&temporary, path)?;
+        #[cfg(test)]
+        fail_publication_at(_failure, PublicationFailurePhase::BeforeDirectorySync)?;
+        sync_directory(parent)?;
+        Ok(path.to_path_buf())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+/// Tokio counterpart to [`write_private_new_atomic`].
+pub(super) async fn write_private_new_atomic_async(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| MezError::invalid_args("snapshot publication path has no parent"))?;
+    ensure_private_directory_durable_async(parent).await?;
+    let temporary = publication_temporary_path(path)?;
+    let result = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .await?;
+        set_private_file_permissions_async(&temporary).await?;
+        file.write_all(bytes).await?;
+        file.flush().await?;
+        file.sync_all().await?;
+        drop(file);
+        publish_new_async(temporary.clone(), path.to_path_buf()).await?;
+        sync_directory_async(parent).await?;
+        Ok(path.to_path_buf())
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+    }
+    result
+}
+
+/// Atomically replaces a derived private file and requires its renamed
+/// directory entry to reach stable storage before returning.
+pub(super) fn write_private_replace_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| MezError::invalid_args("snapshot publication path has no parent"))?;
+    ensure_private_directory_durable(parent)?;
+    let temporary = publication_temporary_path(path)?;
+    let result = (|| -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        set_private_file_permissions(&temporary)?;
+        file.write_all(bytes)?;
+        file.flush()?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temporary, path)?;
+        sync_directory(parent)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+/// Tokio counterpart to [`write_private_replace_atomic`].
+pub(super) async fn write_private_replace_atomic_async(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| MezError::invalid_args("snapshot publication path has no parent"))?;
+    ensure_private_directory_durable_async(parent).await?;
+    let temporary = publication_temporary_path(path)?;
+    let result = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .await?;
+        set_private_file_permissions_async(&temporary).await?;
+        file.write_all(bytes).await?;
+        file.flush().await?;
+        file.sync_all().await?;
+        drop(file);
+        tokio::fs::rename(&temporary, path).await?;
+        sync_directory_async(parent).await
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+    }
+    result
+}
+
+pub(super) fn reconcile_publication_temporaries(root: &Path) -> Result<usize> {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.into()),
+    };
+    let mut removed = 0usize;
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let publication_temporary =
+            name.starts_with(PUBLICATION_TEMP_PREFIX) && name.ends_with(".tmp");
+        let legacy_index_temporary = name.starts_with(".latest.index.") && name.ends_with(".tmp");
+        let orphan_payload = name.ends_with(".payload")
+            && !root
+                .join(format!("{}.manifest", name.trim_end_matches(".payload")))
+                .exists();
+        if publication_temporary || legacy_index_temporary || orphan_payload {
+            let file_type = entry.file_type()?;
+            if file_type.is_file() || file_type.is_symlink() {
+                fs::remove_file(entry.path())?;
+                removed = removed.saturating_add(1);
+            }
+        }
+    }
+    if removed > 0 {
+        sync_directory(root)?;
+    }
+    Ok(removed)
 }
