@@ -339,11 +339,11 @@ where
                 let Some(joined) = joined else {
                     continue;
                 };
-                joined.map_err(|error| {
+                let _connection_result = joined.map_err(|error| {
                     MezError::invalid_state(format!(
                         "async control connection task failed: {error}"
                     ))
-                })??;
+                })?;
                 continue;
             }
         };
@@ -406,13 +406,16 @@ where
     Ok(accepted)
 }
 
-/// Joins all accepted control connections and propagates task or service
-/// failures after their response loops finish.
+/// Joins all accepted control connections after their response loops finish.
+///
+/// Connection-loop failures are local to the peer that supplied malformed
+/// input or disconnected during a response. Task failures still indicate a
+/// listener infrastructure fault and propagate to the supervising service.
 async fn drain_control_connection_tasks(tasks: &mut JoinSet<Result<u64>>) -> Result<()> {
     while let Some(joined) = tasks.join_next().await {
-        joined.map_err(|error| {
+        let _connection_result = joined.map_err(|error| {
             MezError::invalid_state(format!("async control connection task failed: {error}"))
-        })??;
+        })?;
     }
     Ok(())
 }

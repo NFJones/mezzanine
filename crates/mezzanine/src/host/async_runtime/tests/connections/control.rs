@@ -178,11 +178,12 @@ async fn async_control_listener_serves_stateful_connection_until_client_closes()
     let _ = std::fs::remove_file(&path);
 }
 
-/// Verifies a completed control connection failure is reaped while the
-/// listener remains open instead of being retained until accept-loop shutdown.
+/// Verifies malformed input affects only its connection and the listener still
+/// accepts a valid client for the same live session afterward.
 #[tokio::test(flavor = "current_thread")]
-async fn async_control_listener_reaps_failed_connection_tasks_during_accept() {
-    use tokio::io::AsyncWriteExt;
+async fn async_control_listener_isolates_malformed_connection_input() {
+    use crate::control::{decode_control_frame, encode_control_body};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{UnixListener, UnixStream};
 
     let path = std::env::temp_dir().join(format!(
@@ -194,31 +195,41 @@ async fn async_control_listener_reaps_failed_connection_tasks_during_accept() {
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
         .build()
         .unwrap();
+    let initialize = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+    );
 
     let client = async {
-        let mut stream = UnixStream::connect(&path).await.unwrap();
-        stream
+        let mut malformed = UnixStream::connect(&path).await.unwrap();
+        malformed
             .write_all(b"Content-Length: invalid\r\n\r\n")
             .await
             .unwrap();
+        malformed.shutdown().await.unwrap();
+        drop(malformed);
+
+        let mut valid = UnixStream::connect(&path).await.unwrap();
+        valid.write_all(&initialize).await.unwrap();
+        let mut output = vec![0; 4096];
+        let read = valid.read(&mut output).await.unwrap();
+        output.truncate(read);
+        let (body, _) = decode_control_frame(&output, 4096).unwrap();
+        assert!(body.contains(r#""control/initialize""#), "{body}");
     };
     let server = async {
-        let error = tokio::time::timeout(
+        let served = tokio::time::timeout(
             std::time::Duration::from_secs(1),
             serve_async_runtime_control_listener(
                 &listener,
                 &handle,
                 AsyncRuntimeControlConnectionConfig::new(4096, current_effective_uid()).unwrap(),
-                |_, _| false,
+                |served, _| served >= 2,
             ),
         )
         .await
-        .expect("failed control task should be reaped before another accept")
-        .unwrap_err();
-        assert!(
-            error.message().contains("invalid Content-Length"),
-            "{error}"
-        );
+        .expect("listener should isolate malformed input and serve the valid client")
+        .unwrap();
+        assert_eq!(served, 2);
         assert_eq!(
             handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running
