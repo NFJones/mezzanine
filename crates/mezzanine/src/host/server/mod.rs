@@ -178,6 +178,9 @@ impl HostServer {
             }
         };
         drop(connections);
+        if !shutdown.force {
+            self.router.checkpoint_active_leases_strict().await?;
+        }
         self.router
             .shutdown_all(shutdown.force, self.config.shutdown_timeout)
             .await
@@ -911,6 +914,114 @@ mod tests {
             .unwrap_err();
         assert_eq!(missing.kind(), MezErrorKind::NotFound);
         assert_eq!(host.router.registry().list().unwrap().len(), 2);
+        host.router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A graceful host stop captures the latest active lease checkpoint before
+    /// runtime teardown, while a forced stop retains the explicit no-checkpoint
+    /// escape hatch used for emergency shutdown.
+    #[tokio::test(flavor = "current_thread")]
+    async fn graceful_host_shutdown_checkpoints_active_leases() {
+        let root = test_root("graceful-checkpoint");
+        let host = HostServer::bind(config(root.clone())).unwrap();
+        let principal = RemotePrincipal {
+            trust_record_id: "checkpoint-owner".to_string(),
+            endpoint_id: "checkpoint-endpoint".to_string(),
+            role_ceiling: RemoteRoleCeiling::Primary,
+            host_routing: RemoteHostRoutingAuthority {
+                session_create: true,
+                session_list: true,
+                session_attach_scope: RemoteSessionAttachScope::Own,
+                max_active_leases: 1,
+                max_live_sessions: 1,
+                lease_lifetime_ceiling_seconds: None,
+            },
+            requested_role: RequestedRole::Primary,
+        };
+        let created = host
+            .router
+            .create_remote(
+                &principal,
+                crate::host::router::RemoteSessionCreateRequest {
+                    name: Some("graceful".to_string()),
+                    idempotency_key: "graceful-create".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+
+        host.serve(async {}).await.unwrap();
+        let checkpointed = host.router.get_lease(&created.lease.lease_id).unwrap();
+        let checkpoint = checkpointed.checkpoint.expect("graceful checkpoint");
+        crate::storage::snapshot::SnapshotRepository::new(root.join("layouts"))
+            .inspect(&checkpoint.snapshot_id)
+            .unwrap();
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Graceful shutdown fails before runtime teardown when a required lease
+    /// checkpoint cannot commit, while explicit forced teardown remains
+    /// available as the data-loss escape hatch.
+    #[tokio::test(flavor = "current_thread")]
+    async fn graceful_host_shutdown_preserves_runtime_after_checkpoint_failure() {
+        let root = test_root("failed-graceful-checkpoint");
+        let host = HostServer::bind(config(root.clone())).unwrap();
+        let principal = RemotePrincipal {
+            trust_record_id: "failed-checkpoint-owner".to_string(),
+            endpoint_id: "failed-checkpoint-endpoint".to_string(),
+            role_ceiling: RemoteRoleCeiling::Primary,
+            host_routing: RemoteHostRoutingAuthority {
+                session_create: true,
+                session_list: true,
+                session_attach_scope: RemoteSessionAttachScope::Own,
+                max_active_leases: 1,
+                max_live_sessions: 1,
+                lease_lifetime_ceiling_seconds: None,
+            },
+            requested_role: RequestedRole::Primary,
+        };
+        let created = host
+            .router
+            .create_remote(
+                &principal,
+                crate::host::router::RemoteSessionCreateRequest {
+                    name: Some("failed-graceful".to_string()),
+                    idempotency_key: "failed-graceful-create".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        fs::write(root.join("layouts"), b"not a directory\n").unwrap();
+
+        let error = host.serve(async {}).await.unwrap_err();
+        assert!(error.message().contains(&created.lease.lease_id), "{error}");
+        assert_eq!(
+            host.router
+                .get_lease(&created.lease.lease_id)
+                .unwrap()
+                .state,
+            crate::storage::lease::RemoteSessionLeaseState::Active
+        );
+        assert!(
+            host.router
+                .snapshots()
+                .await
+                .unwrap()
+                .iter()
+                .any(|snapshot| {
+                    snapshot.session_id == created.lease.session_id
+                        && snapshot.state == SessionSupervisorState::Running
+                })
+        );
+
         host.router
             .shutdown_all(true, Duration::from_secs(2))
             .await
