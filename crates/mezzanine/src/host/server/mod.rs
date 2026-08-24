@@ -98,6 +98,7 @@ impl HostServer {
             max_sessions: config.max_sessions,
             max_live_sessions: config.max_live_sessions,
         });
+        let _ = router.reconcile_startup()?;
         Ok(Self {
             config,
             listener,
@@ -335,9 +336,21 @@ impl HostServer {
                 Ok((session_record_json(&record), None))
             }
             "host/reconcile" => {
-                let pruned = self.router.registry().prune_stale()?;
+                let report = self.router.reconcile()?;
                 Ok((
-                    json!({"reconciled":true,"pruned_registry_records":pruned}),
+                    json!({
+                        "reconciled": true,
+                        "boot_generation": report.boot_generation,
+                        "leases": {
+                            "pending": report.pending,
+                            "active": report.active,
+                            "recoverable": report.recoverable,
+                            "released": report.released,
+                            "revoked": report.revoked,
+                            "failed": report.failed,
+                        },
+                        "pruned_registry_records": report.pruned_registry_records,
+                    }),
                     None,
                 ))
             }

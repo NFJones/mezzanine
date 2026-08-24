@@ -530,9 +530,11 @@ async fn serve_routed_initialize_inner(
                 .await?
         }
         SessionIntent::Attach => {
-            router.resolve_remote(&principal, init.session_target_json.as_deref())?
+            router
+                .resolve_remote(&principal, init.session_target_json.as_deref())
+                .await?
         }
-        SessionIntent::Default => router.resolve_remote(&principal, None)?,
+        SessionIntent::Default => router.resolve_remote(&principal, None).await?,
         SessionIntent::HostOnly => unreachable!("host-only intent returned above"),
     };
 

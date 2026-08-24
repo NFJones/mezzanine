@@ -30,6 +30,7 @@ use crate::storage::lease::{
     RemoteSessionLeaseState, default_remote_session_lease_directory,
 };
 use crate::storage::registry::{SessionRecord, SessionRegistry, resolve_session_record_target};
+use crate::storage::snapshot::SnapshotRepository;
 
 static NEXT_ROUTED_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 const REMOTE_REPLAY_WAIT: Duration = Duration::from_secs(5);
@@ -61,6 +62,19 @@ pub(crate) struct RemoteSessionBinding {
     pub(crate) runtime: SessionRuntimeHandle,
 }
 
+/// Secret-free durable state summary returned by host reconciliation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HostReconciliationReport {
+    pub(crate) boot_generation: u64,
+    pub(crate) pending: usize,
+    pub(crate) active: usize,
+    pub(crate) recoverable: usize,
+    pub(crate) released: usize,
+    pub(crate) revoked: usize,
+    pub(crate) failed: usize,
+    pub(crate) pruned_registry_records: usize,
+}
+
 /// Shared host owner for local discovery and remote durable routing.
 #[derive(Debug, Clone)]
 pub(crate) struct HostSessionRouter {
@@ -84,6 +98,40 @@ impl HostSessionRouter {
             leases,
             creation_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    /// Advances the durable boot generation before either host listener starts.
+    pub(crate) fn reconcile_startup(&self) -> Result<HostReconciliationReport> {
+        self.leases
+            .advance_boot_generation(current_unix_seconds()?)?;
+        self.reconcile()
+    }
+
+    /// Prunes stale live discovery and reports current durable lease states.
+    pub(crate) fn reconcile(&self) -> Result<HostReconciliationReport> {
+        let pruned_registry_records = self.registry.prune_stale()?;
+        let leases = self.leases.list()?;
+        let mut report = HostReconciliationReport {
+            boot_generation: self.leases.boot_generation()?,
+            pending: 0,
+            active: 0,
+            recoverable: 0,
+            released: 0,
+            revoked: 0,
+            failed: 0,
+            pruned_registry_records,
+        };
+        for lease in leases {
+            match lease.state {
+                RemoteSessionLeaseState::Pending => report.pending += 1,
+                RemoteSessionLeaseState::Active => report.active += 1,
+                RemoteSessionLeaseState::Recoverable => report.recoverable += 1,
+                RemoteSessionLeaseState::Released => report.released += 1,
+                RemoteSessionLeaseState::Revoked => report.revoked += 1,
+                RemoteSessionLeaseState::Failed => report.failed += 1,
+            }
+        }
+        Ok(report)
     }
 
     /// Creates one fresh local supervised session and publishes compatibility discovery.
@@ -219,14 +267,20 @@ impl HostSessionRouter {
         }
     }
 
-    /// Resolves an explicit target or an existing deterministic default.
-    pub(crate) fn resolve_remote(
+    /// Resolves an explicit target or deterministic default, lazily restoring
+    /// one authorized recoverable lease from its validated checkpoint.
+    pub(crate) async fn resolve_remote(
         &self,
         principal: &RemotePrincipal,
         target_json: Option<&str>,
     ) -> Result<RemoteSessionBinding> {
         let mut visible = self.visible_leases(principal)?;
-        visible.retain(|lease| lease.state == RemoteSessionLeaseState::Active);
+        visible.retain(|lease| {
+            matches!(
+                lease.state,
+                RemoteSessionLeaseState::Active | RemoteSessionLeaseState::Recoverable
+            )
+        });
         visible.sort_by(|left, right| {
             left.created_at_unix_seconds
                 .cmp(&right.created_at_unix_seconds)
@@ -256,8 +310,32 @@ impl HostSessionRouter {
         }
         .cloned()
         .ok_or_else(|| MezError::new(MezErrorKind::NotFound, "remote session was not found"))?;
-        let runtime = self.supervisor.lookup(&lease.session_id)?;
-        Ok(RemoteSessionBinding { lease, runtime })
+        match lease.state {
+            RemoteSessionLeaseState::Active => {
+                let runtime = self.supervisor.lookup(&lease.session_id)?;
+                Ok(RemoteSessionBinding { lease, runtime })
+            }
+            RemoteSessionLeaseState::Recoverable => {
+                let _creation = self.creation_lock.lock().await;
+                let lease = self.leases.get(&lease.lease_id)?.ok_or_else(|| {
+                    MezError::new(MezErrorKind::NotFound, "remote session was not found")
+                })?;
+                match lease.state {
+                    RemoteSessionLeaseState::Active => {
+                        let runtime = self.supervisor.lookup(&lease.session_id)?;
+                        Ok(RemoteSessionBinding { lease, runtime })
+                    }
+                    RemoteSessionLeaseState::Recoverable => self.recover_lease_locked(lease).await,
+                    RemoteSessionLeaseState::Released | RemoteSessionLeaseState::Revoked => Err(
+                        MezError::new(MezErrorKind::NotFound, "remote session was not found"),
+                    ),
+                    _ => Err(MezError::invalid_state(
+                        "remote session is not currently recoverable",
+                    )),
+                }
+            }
+            _ => unreachable!("remote selection retained only active or recoverable leases"),
+        }
     }
 
     /// Lists only leases visible to a principal with explicit list authority.
@@ -369,6 +447,89 @@ impl HostSessionRouter {
         Ok(())
     }
 
+    async fn recover_lease_locked(
+        &self,
+        lease: RemoteSessionLease,
+    ) -> Result<RemoteSessionBinding> {
+        let recovery = async {
+            self.ensure_global_session_capacity().await?;
+            let checkpoint = lease.checkpoint.as_ref().ok_or_else(|| {
+                MezError::invalid_state("recoverable remote session has no checkpoint")
+            })?;
+            let snapshots = SnapshotRepository::new(self.config.config_root.join("layouts"));
+            let manifest = snapshots.inspect_async(&checkpoint.snapshot_id).await?;
+            if manifest.state.version != checkpoint.snapshot_version {
+                return Err(MezError::invalid_state(
+                    "remote session checkpoint manifest version does not match its lease",
+                ));
+            }
+            if manifest.state.session_id != lease.session_id {
+                return Err(MezError::invalid_state(
+                    "remote session checkpoint belongs to a different session",
+                ));
+            }
+            if !manifest.state.restorable {
+                return Err(MezError::invalid_state(
+                    "remote session checkpoint is not restorable",
+                ));
+            }
+            let payload = snapshots
+                .inspect_payload_async(&checkpoint.snapshot_id)
+                .await?;
+            let restored = snapshots
+                .restore_session_from_payload_async(
+                    &checkpoint.snapshot_id,
+                    &payload,
+                    self.config.shell.clone(),
+                )
+                .await?;
+            if restored.session.id.to_string() != lease.session_id {
+                return Err(MezError::invalid_state(
+                    "restored checkpoint produced a different session identity",
+                ));
+            }
+            let runtime = self
+                .start_prepared_session(
+                    restored.session,
+                    lease.created_at_unix_seconds,
+                    SessionRuntimeStartup::RestoredSnapshot {
+                        payload: Box::new(payload),
+                        restart_command: None,
+                    },
+                )
+                .await?;
+            match self.leases.activate(
+                &lease.lease_id,
+                lease.boot_generation,
+                lease.lease_generation,
+                current_unix_seconds()?,
+            ) {
+                Ok(lease) => Ok(RemoteSessionBinding { lease, runtime }),
+                Err(error) => {
+                    let _ = self.supervisor.stop(&lease.session_id, true).await;
+                    Err(error)
+                }
+            }
+        }
+        .await;
+        match recovery {
+            Ok(binding) => Ok(binding),
+            Err(error) => {
+                let failure = recovery_failure("failed", &error);
+                match self.leases.mark_failed(
+                    &lease.lease_id,
+                    lease.boot_generation,
+                    lease.lease_generation,
+                    current_unix_seconds().unwrap_or(lease.updated_at_unix_seconds),
+                    failure,
+                ) {
+                    Ok(_) => Err(error),
+                    Err(fence_error) => Err(fence_error),
+                }
+            }
+        }
+    }
+
     async fn start_session(
         &self,
         session_id: String,
@@ -381,15 +542,36 @@ impl HostSessionRouter {
             .strip_prefix('$')
             .and_then(|value| value.parse::<u64>().ok())
             .ok_or_else(|| MezError::invalid_state("routed session id is invalid"))?;
-        let socket_path = socket_path_for_name(
-            &self.config.runtime_root,
-            &format!("session-{numeric_id:016x}.sock"),
-        )?;
         let mut session = Session::new_default(self.config.shell.clone(), size);
         session.id = SessionId::new('$', numeric_id);
         if let Some(name) = name {
             session.name = name;
         }
+        self.start_prepared_session(
+            session,
+            created_at_unix_seconds,
+            SessionRuntimeStartup::Initial {
+                explicit_command: None,
+            },
+        )
+        .await
+    }
+
+    async fn start_prepared_session(
+        &self,
+        session: Session,
+        created_at_unix_seconds: u64,
+        startup: SessionRuntimeStartup,
+    ) -> Result<SessionRuntimeHandle> {
+        let session_id = session.id.to_string();
+        let numeric_id = session_id
+            .strip_prefix('$')
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(|| MezError::invalid_state("routed session id is invalid"))?;
+        let socket_path = socket_path_for_name(
+            &self.config.runtime_root,
+            &format!("session-{numeric_id:016x}.sock"),
+        )?;
         let mut config_layers = self.config.config_layers.clone();
         config_layers.push(ConfigLayer {
             name: "persistent-host-session-transport".to_string(),
@@ -416,12 +598,21 @@ impl HostSessionRouter {
                     publish_registry: true,
                 },
                 limits: SessionRuntimeLimits::default(),
-                startup: SessionRuntimeStartup::Initial {
-                    explicit_command: None,
-                },
+                startup,
             })
             .await
     }
+}
+
+fn recovery_failure(context: &str, error: &MezError) -> String {
+    let mut failure = format!("remote session recovery {context}: {}", error.message());
+    if failure.len() > 1024 {
+        failure.truncate(1024);
+        while !failure.is_char_boundary(failure.len()) {
+            failure.pop();
+        }
+    }
+    failure
 }
 
 fn validate_session_name(name: Option<&str>) -> Result<()> {
@@ -482,6 +673,7 @@ mod tests {
     use crate::security::remote::{
         RemoteHostRoutingAuthority, RemoteRoleCeiling, RemoteSessionAttachScope,
     };
+    use crate::storage::lease::LeaseCheckpointReference;
 
     use super::*;
 
@@ -559,9 +751,10 @@ mod tests {
                 &principal,
                 Some(&serde_json::json!({"name":"second"}).to_string()),
             )
+            .await
             .unwrap();
         assert_eq!(explicit.lease.lease_id, second.lease.lease_id);
-        let default = router.resolve_remote(&principal, None).unwrap();
+        let default = router.resolve_remote(&principal, None).await.unwrap();
         assert_eq!(default.lease.lease_id, first.lease.lease_id);
 
         let other = test_principal("other", 2);
@@ -570,6 +763,7 @@ mod tests {
                 &other,
                 Some(&serde_json::json!({"session_id":first.lease.session_id}).to_string()),
             )
+            .await
             .unwrap_err();
         assert_eq!(denied.kind(), MezErrorKind::NotFound);
 
@@ -577,6 +771,183 @@ mod tests {
             .shutdown_all(true, Duration::from_secs(2))
             .await
             .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Startup reconciliation advances the durable boot generation, fences
+    /// callbacks from the prior host, and lets concurrent authorized attaches
+    /// restore exactly one fresh runtime from the retained checkpoint.
+    #[tokio::test(flavor = "current_thread")]
+    async fn restart_reconciliation_lazily_restores_once_and_fences_stale_callbacks() {
+        let root = test_root("restart-recovery");
+        let config = test_config(&root);
+        let principal = test_principal("owner", 2);
+        let first_router = HostSessionRouter::new(config.clone());
+        let created = first_router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("recover-me".to_string()),
+                    idempotency_key: "create-recoverable".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let mut checkpoint_session =
+            Session::new_default(config.shell.clone(), Size::new(80, 24).unwrap());
+        checkpoint_session.id = SessionId::parse('$', created.lease.session_id.clone()).unwrap();
+        checkpoint_session.name = "recover-me".to_string();
+        let snapshots = SnapshotRepository::new(config.config_root.join("layouts"));
+        let snapshot = snapshots
+            .create_from_session(
+                "restart-checkpoint",
+                Some("restart".to_string()),
+                &checkpoint_session,
+            )
+            .unwrap();
+        let checkpointed = first_router
+            .leases
+            .update_checkpoint(
+                &created.lease.lease_id,
+                created.lease.boot_generation,
+                created.lease.lease_generation,
+                LeaseCheckpointReference {
+                    snapshot_id: snapshot.id,
+                    snapshot_version: snapshot.version,
+                    session_id: created.lease.session_id.clone(),
+                    recorded_at_unix_seconds: current_unix_seconds().unwrap(),
+                },
+                current_unix_seconds().unwrap(),
+            )
+            .unwrap();
+        first_router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        drop(created);
+        drop(first_router);
+
+        let recovered_router = HostSessionRouter::new(config);
+        let report = recovered_router.reconcile_startup().unwrap();
+        assert_eq!(report.boot_generation, 1);
+        assert_eq!(report.recoverable, 1);
+        assert_eq!(report.active, 0);
+        let stale = recovered_router
+            .leases
+            .mark_failed(
+                &checkpointed.lease_id,
+                checkpointed.boot_generation,
+                checkpointed.lease_generation,
+                current_unix_seconds().unwrap(),
+                "stale prior-host callback".to_string(),
+            )
+            .unwrap_err();
+        assert_eq!(stale.kind(), MezErrorKind::Conflict);
+
+        let first_attach = recovered_router.resolve_remote(&principal, None);
+        let second_attach = recovered_router.resolve_remote(&principal, None);
+        let (first_attach, second_attach) = tokio::join!(first_attach, second_attach);
+        let first_attach = first_attach.unwrap();
+        let second_attach = second_attach.unwrap();
+        assert_eq!(first_attach.lease.lease_id, checkpointed.lease_id);
+        assert_eq!(second_attach.lease.lease_id, checkpointed.lease_id);
+        assert_eq!(
+            first_attach.runtime.session_id(),
+            second_attach.runtime.session_id()
+        );
+        assert_eq!(recovered_router.snapshots().await.unwrap().len(), 1);
+        let active = recovered_router
+            .leases
+            .get(&checkpointed.lease_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(active.state, RemoteSessionLeaseState::Active);
+        assert_eq!(active.boot_generation, 1);
+
+        recovered_router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A missing checkpoint fails closed without allocating a replacement
+    /// runtime, while a second restart deterministically retains the terminal
+    /// failure and advances its generation fence.
+    #[tokio::test(flavor = "current_thread")]
+    async fn missing_checkpoint_fails_recovery_without_runtime_allocation() {
+        let root = test_root("missing-checkpoint");
+        let config = test_config(&root);
+        let principal = test_principal("owner", 1);
+        let first_router = HostSessionRouter::new(config.clone());
+        let created = first_router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("missing".to_string()),
+                    idempotency_key: "create-missing".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let checkpointed = first_router
+            .leases
+            .update_checkpoint(
+                &created.lease.lease_id,
+                created.lease.boot_generation,
+                created.lease.lease_generation,
+                LeaseCheckpointReference {
+                    snapshot_id: "absent-checkpoint".to_string(),
+                    snapshot_version: 1,
+                    session_id: created.lease.session_id.clone(),
+                    recorded_at_unix_seconds: current_unix_seconds().unwrap(),
+                },
+                current_unix_seconds().unwrap(),
+            )
+            .unwrap();
+        first_router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        drop(created);
+        drop(first_router);
+
+        let second_router = HostSessionRouter::new(config.clone());
+        assert_eq!(second_router.reconcile_startup().unwrap().recoverable, 1);
+        let error = second_router
+            .resolve_remote(&principal, None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), MezErrorKind::NotFound);
+        assert!(second_router.snapshots().await.unwrap().is_empty());
+        let failed = second_router
+            .leases
+            .get(&checkpointed.lease_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed.state, RemoteSessionLeaseState::Failed);
+        assert!(
+            failed
+                .failure
+                .as_deref()
+                .is_some_and(|failure| failure.contains("snapshot not found"))
+        );
+        drop(second_router);
+
+        let third_router = HostSessionRouter::new(config);
+        let report = third_router.reconcile_startup().unwrap();
+        assert_eq!(report.boot_generation, 2);
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.recoverable, 0);
+        let failed_again = third_router
+            .leases
+            .get(&checkpointed.lease_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed_again.boot_generation, 2);
+        assert!(third_router.snapshots().await.unwrap().is_empty());
         let _ = fs::remove_dir_all(root);
     }
 
