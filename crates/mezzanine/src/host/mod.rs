@@ -15,6 +15,7 @@ pub(crate) mod iroh;
 )]
 pub(crate) mod power_inhibition;
 pub(crate) mod process;
+pub(crate) mod server;
 pub(crate) mod session;
 pub(crate) mod shell;
 pub(crate) mod terminal;

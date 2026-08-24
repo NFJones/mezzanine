@@ -57,6 +57,8 @@ pub(super) enum CliCommand {
     /// Starts a foreground control daemon for a new session.
     #[command(visible_alias = "daemon")]
     Serve(super::serve::ServeCliArgs),
+    /// Manages the persistent local host lifecycle.
+    Host(super::host::HostCliArgs),
     /// Lists resumable sessions known to this client.
     #[command(visible_alias = "list-sessions")]
     List,

@@ -65,6 +65,7 @@ pub(super) async fn run_new<W: Write>(
     stdout: &mut W,
 ) -> Result<()> {
     let dry_run = parsed.dry_run;
+    let session_name = parsed.name;
     if !interactive && !dry_run {
         return Err(MezError::forbidden(
             "creating a primary-attached session requires an interactive terminal; use --dry-run for validation",
@@ -89,11 +90,16 @@ pub(super) async fn run_new<W: Write>(
     };
     let launch_directory = std::env::current_dir()?;
     let mut session = Session::new_default(shell, size);
+    apply_requested_session_name(&mut session, session_name.as_deref())?;
     if interactive && !dry_run {
         let new_socket_selection = socket_selection_for_new_session(socket_selection)?;
         let socket_path = selected_socket_path(&new_socket_selection).clone();
-        let mut daemon =
-            spawn_background_control_daemon(socket_path.as_path(), &env, &launch_directory)?;
+        let mut daemon = spawn_background_control_daemon(
+            socket_path.as_path(),
+            &env,
+            &launch_directory,
+            session_name.as_deref(),
+        )?;
         wait_for_background_control_daemon(socket_path.as_path(), &mut daemon).await?;
         return super::run_attach(
             &new_socket_selection,
@@ -133,6 +139,9 @@ pub(super) struct NewCliArgs {
     /// Validate session construction without starting or attaching to a daemon.
     #[arg(long)]
     pub(super) dry_run: bool,
+    /// Optional name assigned to a newly created supervised session.
+    #[arg(long, value_name = "NAME")]
+    pub(super) name: Option<String>,
 }
 
 /// Runs the socket selection for new session operation for this subsystem.
@@ -215,6 +224,7 @@ fn spawn_background_control_daemon(
     socket_path: &std::path::Path,
     env: &CliEnv,
     launch_directory: &std::path::Path,
+    session_name: Option<&str>,
 ) -> Result<BackgroundControlDaemon> {
     let executable = std::env::current_exe()?;
     let diagnostic_path = background_daemon_diagnostic_path(socket_path)?;
@@ -226,6 +236,9 @@ fn spawn_background_control_daemon(
         .current_dir(launch_directory)
         .stdin(Stdio::null())
         .stdout(Stdio::null());
+    if let Some(session_name) = session_name {
+        command.arg("--session-name").arg(session_name);
+    }
     if std::env::var_os("RUST_BACKTRACE").is_none() {
         command.env("RUST_BACKTRACE", "1");
     }
@@ -525,6 +538,9 @@ pub(super) struct ParsedServeOptions {
 /// Typed process CLI options shared by `mez serve` and snapshot resume serving.
 #[derive(Debug, Clone, Default, Args)]
 pub(super) struct ServeCliArgs {
+    /// Internal session name forwarded by the `mez new` compatibility launcher.
+    #[arg(long, hide = true, value_name = "NAME")]
+    session_name: Option<String>,
     /// Enables an auxiliary message socket at an explicit absolute path.
     #[arg(long, value_name = "PATH")]
     message_socket: Option<PathBuf>,
@@ -718,6 +734,7 @@ pub(super) async fn run_serve<W: Write>(
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
+    let session_name = args.session_name.clone();
     let mut options = args.into_parsed()?;
     let paths = env.config_paths()?;
     let config_path = paths.ensure_default_config()?;
@@ -729,6 +746,7 @@ pub(super) async fn run_serve<W: Write>(
     };
     let (columns, rows) = terminal_size_from_fd_or_environment(terminal_size_fd);
     let mut session = Session::new_default(shell, Size::new(columns, rows)?);
+    apply_requested_session_name(&mut session, session_name.as_deref())?;
     assign_unique_live_session_id(&mut session)?;
     let socket_path = selected_socket_path(socket_selection).clone();
     if options.attach_primary && !interactive {
@@ -782,6 +800,19 @@ pub(super) async fn run_serve<W: Write>(
         },
     )
     .await
+}
+
+fn apply_requested_session_name(session: &mut Session, name: Option<&str>) -> Result<()> {
+    let Some(name) = name else {
+        return Ok(());
+    };
+    if name.trim().is_empty() || name.chars().any(char::is_control) {
+        return Err(MezError::invalid_args(
+            "session name must be non-empty printable text",
+        ));
+    }
+    session.name = name.to_string();
+    Ok(())
 }
 
 /// Runs the assign unique live session id operation for this subsystem.

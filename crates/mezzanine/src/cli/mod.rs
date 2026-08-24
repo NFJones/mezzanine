@@ -103,6 +103,8 @@ mod dispatch;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod env;
+/// Exposes persistent local host lifecycle and routing commands.
+mod host;
 /// Exposes the issue module boundary.
 ///
 /// The nested module keeps local issue tracking CLI behavior isolated while this
@@ -165,6 +167,9 @@ use env::{
     CliCommand, CliInvocation, CliInvocationParse, ControlTargetSelection, SocketSelection,
     cli_idempotency_key, registry_root, render_cli_help, render_cli_version, selected_socket_path,
     terminal_size_from_fd_or_environment,
+};
+use host::{
+    ensure_host_available, host_create_session, host_list_sessions, host_resolve_session, run_host,
 };
 use issue::run_issue;
 use json::{

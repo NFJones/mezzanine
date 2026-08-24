@@ -9,10 +9,11 @@ use clap::CommandFactory;
 use super::env::CliArgv;
 use super::{
     CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, MezError, OsString,
-    PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, ensure_private_socket_directory, io,
-    json_escape, prune_stale_socket_files_in_directory, run_attach, run_auth, run_config,
-    run_control_request_for_target, run_issue, run_list, run_mcp, run_memory, run_new, run_remote,
-    run_sandbox, run_serve, run_snapshot,
+    PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, ensure_host_available,
+    ensure_private_socket_directory, host_create_session, host_list_sessions, host_resolve_session,
+    io, json_escape, prune_stale_socket_files_in_directory, run_attach, run_auth, run_config,
+    run_control_request_for_target, run_host, run_issue, run_list, run_mcp, run_memory, run_new,
+    run_remote, run_sandbox, run_serve, run_snapshot,
 };
 
 // Top-level CLI run and command dispatch.
@@ -95,7 +96,22 @@ impl CliEnv {
 }
 
 /// Runs one CLI invocation and preserves command-specific process exit status.
-pub async fn run_with<W: Write, E: Write>(
+///
+/// The complete command dispatcher is boxed because command-specific async
+/// state includes foreground servers and framed management clients. Keeping
+/// that state on the heap prevents unrelated short-lived CLI commands from
+/// exhausting bounded caller stacks merely because they share this dispatcher.
+pub fn run_with<'a, W: Write + 'a, E: Write + 'a>(
+    args: Vec<String>,
+    env: CliEnv,
+    interactive: bool,
+    stdout: &'a mut W,
+    stderr: &'a mut E,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<u8>> + 'a>> {
+    Box::pin(run_with_inner(args, env, interactive, stdout, stderr))
+}
+
+async fn run_with_inner<W: Write, E: Write>(
     args: Vec<String>,
     env: CliEnv,
     interactive: bool,
@@ -128,10 +144,35 @@ pub async fn run_with<W: Write, E: Write>(
     let control_target = invocation.control_target;
     let command = invocation.command;
     let output_format = invocation.output_format;
+    let prefer_host =
+        control_target.is_unix() && matches!(socket_selection, super::SocketSelection::Default(_));
     let mut exit_code = 0;
 
     match command {
         None => {
+            if prefer_host && ensure_host_available(&env).await? {
+                let socket = match host_resolve_session(&env, None, "primary").await {
+                    Ok(socket) => socket,
+                    Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {
+                        host_create_session(&env, None).await?
+                    }
+                    Err(error) => return Err(error),
+                };
+                return run_attach(
+                    &super::SocketSelection::Explicit(socket),
+                    &control_target,
+                    super::attach::AttachCliArgs {
+                        observer: false,
+                        session_id: None,
+                    },
+                    env,
+                    interactive,
+                    output_format,
+                    stdout,
+                )
+                .await
+                .map(|()| 0);
+            }
             let uid = env.runtime.uid;
             let registry = crate::storage::registry::SessionRegistry::new(
                 super::registry_root(&socket_selection)?,
@@ -171,7 +212,32 @@ pub async fn run_with<W: Write, E: Write>(
             clap_complete::generate(args.shell, &mut command, "mez", stdout);
         }
         Some(CliCommand::Config(args)) => run_config(args, env, output_format, stdout)?,
+        Some(CliCommand::Host(args)) => {
+            Box::pin(run_host(args, env, output_format, stdout)).await?
+        }
         Some(CliCommand::New(args)) => {
+            if prefer_host && !args.dry_run && ensure_host_available(&env).await? {
+                if !interactive {
+                    return Err(MezError::forbidden(
+                        "creating a primary-attached session requires an interactive terminal",
+                    ));
+                }
+                let socket = host_create_session(&env, args.name.as_deref()).await?;
+                run_attach(
+                    &super::SocketSelection::Explicit(socket),
+                    &control_target,
+                    super::attach::AttachCliArgs {
+                        observer: false,
+                        session_id: None,
+                    },
+                    env,
+                    interactive,
+                    output_format,
+                    stdout,
+                )
+                .await?;
+                return Ok(0);
+            }
             run_new(
                 &socket_selection,
                 args,
@@ -193,8 +259,34 @@ pub async fn run_with<W: Write, E: Write>(
             )
             .await?
         }
-        Some(CliCommand::List) => run_list(&socket_selection, env, output_format, stdout)?,
+        Some(CliCommand::List) => {
+            if prefer_host && ensure_host_available(&env).await? {
+                let sessions = host_list_sessions(&env).await?;
+                let output = super::serialize_json(&sessions)?;
+                super::write_json_or_plain(stdout, output_format, &output)?;
+            } else {
+                run_list(&socket_selection, env, output_format, stdout)?;
+            }
+        }
         Some(CliCommand::Attach(args)) => {
+            if prefer_host && ensure_host_available(&env).await? {
+                let role = if args.observer { "observer" } else { "primary" };
+                let socket = host_resolve_session(&env, args.session_id.as_deref(), role).await?;
+                run_attach(
+                    &super::SocketSelection::Explicit(socket),
+                    &control_target,
+                    super::attach::AttachCliArgs {
+                        observer: args.observer,
+                        session_id: None,
+                    },
+                    env,
+                    interactive,
+                    output_format,
+                    stdout,
+                )
+                .await?;
+                return Ok(0);
+            }
             run_attach(
                 &socket_selection,
                 &control_target,
@@ -236,13 +328,19 @@ pub async fn run_with<W: Write, E: Write>(
                     "an explicit Iroh target already selects the remote session",
                 ));
             }
-            let socket_selection = match args.session_id.as_deref() {
-                Some(session_id) => super::attach::socket_selection_for_registry_session(
-                    &socket_selection,
-                    env.runtime.uid,
-                    session_id,
-                )?,
-                None => socket_selection,
+            let socket_selection = if prefer_host && ensure_host_available(&env).await? {
+                super::SocketSelection::Explicit(
+                    host_resolve_session(&env, args.session_id.as_deref(), "primary").await?,
+                )
+            } else {
+                match args.session_id.as_deref() {
+                    Some(session_id) => super::attach::socket_selection_for_registry_session(
+                        &socket_selection,
+                        env.runtime.uid,
+                        session_id,
+                    )?,
+                    None => socket_selection,
+                }
             };
             let params = format!(
                 r#"{{"idempotency_key":"{}","force":{force}}}"#,
