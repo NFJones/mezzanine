@@ -42,6 +42,7 @@ const HOST_SOCKET_FILE_NAME: &str = "host.sock";
 const HOST_CONTROL_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
 const HOST_CONTROL_CONNECTION_LIMIT: usize = 64;
 const HOST_CONTROL_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
+const HOST_LOCAL_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(300);
 
 /// Construction inputs shared by every session created under one host.
 #[derive(Debug, Clone)]
@@ -184,6 +185,10 @@ impl HostServer {
     {
         tokio::pin!(cancellation);
         let mut connections = FuturesUnordered::new();
+        let mut local_checkpoint_timer = tokio::time::interval_at(
+            tokio::time::Instant::now() + HOST_LOCAL_CHECKPOINT_INTERVAL,
+            HOST_LOCAL_CHECKPOINT_INTERVAL,
+        );
         let mut authority_changes = self.router.authority_changes();
         let shutdown = loop {
             let authority_delay = self.router.time_until_next_lease_expiry()?;
@@ -209,6 +214,9 @@ impl HostServer {
                         ));
                     }
                     let _ = self.router.reconcile_terminal_runtime_cleanup().await;
+                }
+                _ = local_checkpoint_timer.tick() => {
+                    let _ = Box::pin(self.router.checkpoint_active_local_assignments()).await;
                 }
                 completed = connections.next(), if !connections.is_empty() => {
                     if let Some(Some(request)) = completed {
@@ -256,6 +264,7 @@ impl HostServer {
         drop(connections);
         if !shutdown.force {
             self.router.checkpoint_active_leases_strict().await?;
+            Box::pin(self.router.checkpoint_active_local_assignments_strict()).await?;
         }
         self.router
             .shutdown_all(shutdown.force, self.config.shutdown_timeout)
@@ -263,32 +272,37 @@ impl HostServer {
         self.router.mark_stopped()
     }
 
-    async fn serve_connection(
-        &self,
-        stream: &mut tokio::net::UnixStream,
-    ) -> Result<Option<HostShutdownRequest>> {
-        let mut framed = Framed::new(
-            stream,
-            ProtocolFrameCodec::new(HOST_CONTROL_MAX_CONTENT_LENGTH)?,
-        );
-        let frame = framed.next().await.ok_or_else(|| {
-            MezError::invalid_state("host control connection closed before request")
-        })??;
-        let request: Value = serde_json::from_str(&frame.body).map_err(|error| {
-            MezError::invalid_args(format!("invalid host control JSON: {error}"))
-        })?;
-        let id = request.get("id").cloned().unwrap_or(Value::Null);
-        let result = self.dispatch_managed_request(&request).await;
-        let (body, shutdown) = match result {
-            Ok((result, shutdown)) => (json!({"jsonrpc":"2.0","id":id,"result":result}), shutdown),
-            Err(error) => (host_error_response(id, &error), None),
-        };
-        framed
-            .get_mut()
-            .write_all(&crate::control::encode_control_body(&body.to_string()))
-            .await?;
-        framed.get_mut().flush().await?;
-        Ok(shutdown)
+    fn serve_connection<'a>(
+        &'a self,
+        stream: &'a mut tokio::net::UnixStream,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<Option<HostShutdownRequest>>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let mut framed = Framed::new(
+                stream,
+                ProtocolFrameCodec::new(HOST_CONTROL_MAX_CONTENT_LENGTH)?,
+            );
+            let frame = framed.next().await.ok_or_else(|| {
+                MezError::invalid_state("host control connection closed before request")
+            })??;
+            let request: Value = serde_json::from_str(&frame.body).map_err(|error| {
+                MezError::invalid_args(format!("invalid host control JSON: {error}"))
+            })?;
+            let id = request.get("id").cloned().unwrap_or(Value::Null);
+            let result = self.dispatch_managed_request(&request).await;
+            let (body, shutdown) = match result {
+                Ok((result, shutdown)) => {
+                    (json!({"jsonrpc":"2.0","id":id,"result":result}), shutdown)
+                }
+                Err(error) => (host_error_response(id, &error), None),
+            };
+            framed
+                .get_mut()
+                .write_all(&crate::control::encode_control_body(&body.to_string()))
+                .await?;
+            framed.get_mut().flush().await?;
+            Ok(shutdown)
+        })
     }
 
     async fn dispatch_managed_request(
@@ -843,11 +857,26 @@ impl HostServer {
             }
             "host/session/list" => {
                 let _ = self.router.registry().prune_stale()?;
-                let records: Value =
+                let mut records: Vec<Value> =
                     serde_json::from_str(&records_to_json(&self.router.registry().list()?))
                         .map_err(|error| {
                             MezError::invalid_state(format!("invalid registry JSON: {error}"))
                         })?;
+                records.extend(
+                    self.router
+                        .list_recoverable_local_assignments()?
+                        .into_iter()
+                        .map(|assignment| {
+                            json!({
+                                "session_id": assignment.session_id,
+                                "name": assignment.name,
+                                "state": "recoverable",
+                                "socket": Value::Null,
+                                "accepts_primary": false,
+                                "recoverable": true,
+                            })
+                        }),
+                );
                 Ok((json!({"sessions": records}), None))
             }
             "host/session/create" => {
@@ -859,7 +888,7 @@ impl HostServer {
                 let rows = optional_u16(&params, "rows")?.unwrap_or(24);
                 let context =
                     self.local_session_launch_context(&params, Size::new(columns, rows)?)?;
-                let record = self.create_session_with_context(name, context).await?;
+                let record = Box::pin(self.create_session_with_context(name, context)).await?;
                 Ok((session_record_json(&record), None))
             }
             "host/session/resolve-or-create" => {
@@ -867,7 +896,7 @@ impl HostServer {
                 let rows = optional_u16(&params, "rows")?.unwrap_or(24);
                 let context =
                     self.local_session_launch_context(&params, Size::new(columns, rows)?)?;
-                let record = self.resolve_or_create_session_with_context(context).await?;
+                let record = Box::pin(self.resolve_or_create_session_with_context(context)).await?;
                 Ok((session_record_json(&record), None))
             }
             "host/session/resolve" => {
@@ -876,7 +905,7 @@ impl HostServer {
                     .get("role")
                     .and_then(Value::as_str)
                     .unwrap_or("primary");
-                let record = self.resolve_session(target, requested_role).await?;
+                let record = Box::pin(self.resolve_session(target, requested_role)).await?;
                 Ok((session_record_json(&record), None))
             }
             "host/reconcile" => {

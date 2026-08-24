@@ -9,6 +9,7 @@ pub(crate) mod issues;
     reason = "host routing, administration, and recovery consume the completed durable lease repository in subsequent architecture phases"
 )]
 pub(crate) mod lease;
+pub(crate) mod local_assignment;
 pub(crate) mod memory;
 pub(crate) mod registry;
 pub(crate) mod snapshot;

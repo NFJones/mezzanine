@@ -31,6 +31,11 @@ use crate::storage::lease::{
     LeaseReservation, LeaseReservationRequest, RemoteSessionLease, RemoteSessionLeaseRepository,
     RemoteSessionLeaseState, default_remote_session_lease_directory,
 };
+use crate::storage::local_assignment::{
+    LocalAssignmentCheckpoint, LocalAssignmentReservationRequest, LocalSessionAssignment,
+    LocalSessionAssignmentRepository, LocalSessionAssignmentState,
+    default_local_assignment_directory,
+};
 use crate::storage::registry::{SessionRecord, SessionRegistry, resolve_session_record_target};
 use crate::storage::snapshot::SnapshotRepository;
 
@@ -235,6 +240,7 @@ pub(crate) struct HostSessionRouter {
     config: HostSessionRouterConfig,
     supervisor: SessionSupervisor,
     registry: SessionRegistry,
+    local_assignments: LocalSessionAssignmentRepository,
     leases: RemoteSessionLeaseRepository,
     creation_lock: Arc<tokio::sync::Mutex<()>>,
     admission_state: Arc<AtomicU8>,
@@ -245,18 +251,27 @@ pub(crate) struct HostSessionRouter {
 impl HostSessionRouter {
     pub(crate) fn new(config: HostSessionRouterConfig) -> Self {
         let registry = SessionRegistry::new(config.runtime_root.clone(), config.owner_uid);
+        let local_assignments = LocalSessionAssignmentRepository::new(
+            default_local_assignment_directory(&config.config_root),
+        );
         let leases = RemoteSessionLeaseRepository::new(default_remote_session_lease_directory(
             &config.config_root,
         ));
         let completion_leases = leases.clone();
+        let completion_local_assignments = local_assignments.clone();
         let supervisor = SessionSupervisor::with_runtime_completion_handler(move |completion| {
-            reconcile_runtime_completion(&completion_leases, completion)
+            reconcile_runtime_completion(
+                &completion_leases,
+                &completion_local_assignments,
+                completion,
+            )
         });
         let (authority_epoch, _) = tokio::sync::watch::channel(0);
         Self {
             config,
             supervisor,
             registry,
+            local_assignments,
             leases,
             creation_lock: Arc::new(tokio::sync::Mutex::new(())),
             admission_state: Arc::new(AtomicU8::new(HostAdmissionState::Serving as u8)),
@@ -405,6 +420,7 @@ impl HostSessionRouter {
         let now = current_unix_seconds()?;
         self.leases.advance_boot_generation(now)?;
         let _ = self.leases.expire_due(now)?;
+        self.local_assignments.advance_boot_generation(now)?;
         self.reconcile()
     }
 
@@ -501,7 +517,13 @@ impl HostSessionRouter {
         match self.resolve_local_locked(None, "primary") {
             Ok(record) => Ok(record),
             Err(error) if error.kind() == MezErrorKind::NotFound => {
-                self.create_local_locked(None, context).await
+                match self.recover_local_locked(None).await {
+                    Ok(record) => Ok(record),
+                    Err(error) if error.kind() == MezErrorKind::NotFound => {
+                        self.create_local_locked(None, context).await
+                    }
+                    Err(error) => Err(error),
+                }
             }
             Err(error) => Err(error),
         }
@@ -516,8 +538,39 @@ impl HostSessionRouter {
         self.ensure_global_session_capacity().await?;
         let now = current_unix_seconds()?;
         let session_id = next_session_id()?;
-        self.start_local_session(session_id.clone(), name, context, now)
-            .await?;
+        let assignment =
+            self.local_assignments
+                .reserve_pending(LocalAssignmentReservationRequest {
+                    session_id: session_id.clone(),
+                    name: name.clone().unwrap_or_else(|| "default".to_string()),
+                    default_for_host: true,
+                    now_unix_seconds: now,
+                })?;
+        let runtime = match self
+            .start_local_session(session_id.clone(), name, context, now)
+            .await
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let _ = self.local_assignments.mark_failed(
+                    &assignment.session_id,
+                    assignment.boot_generation,
+                    assignment.assignment_generation,
+                    current_unix_seconds().unwrap_or(now),
+                    "local session runtime startup failed".to_string(),
+                );
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.local_assignments.activate(
+            &assignment.session_id,
+            assignment.boot_generation,
+            assignment.assignment_generation,
+            current_unix_seconds()?,
+        ) {
+            let _ = self.supervisor.stop(runtime.session_id(), true).await;
+            return Err(error);
+        }
         self.registry
             .list()?
             .into_iter()
@@ -547,7 +600,13 @@ impl HostSessionRouter {
     ) -> Result<SessionRecord> {
         let _creation = self.creation_lock.lock().await;
         self.require_serving()?;
-        self.resolve_local_locked(target, requested_role)
+        match self.resolve_local_locked(target, requested_role) {
+            Ok(record) => Ok(record),
+            Err(error) if error.kind() == MezErrorKind::NotFound => {
+                self.recover_local_locked(target).await
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn resolve_local_locked(
@@ -573,6 +632,183 @@ impl HostSessionRouter {
                 },
             )
         })
+    }
+
+    async fn recover_local_locked(&self, target: Option<&str>) -> Result<SessionRecord> {
+        let assignment = self.select_recoverable_local_assignment(target)?;
+        let recovery = async {
+            self.ensure_global_session_capacity()
+                .await
+                .map_err(|error| (error, RecoveryFailureDisposition::Retryable))?;
+            let checkpoint = assignment.checkpoint.as_ref().ok_or_else(|| {
+                (
+                    MezError::invalid_state(
+                        "recoverable local session assignment has no checkpoint",
+                    ),
+                    RecoveryFailureDisposition::Terminal,
+                )
+            })?;
+            let snapshots = SnapshotRepository::new(self.config.config_root.join("layouts"));
+            let manifest = snapshots
+                .inspect_async(&checkpoint.snapshot_id)
+                .await
+                .map_err(recovery_artifact_failure)?;
+            if manifest.state.version != checkpoint.snapshot_version {
+                return Err((
+                    MezError::invalid_state(
+                        "local session checkpoint manifest version does not match its assignment",
+                    ),
+                    RecoveryFailureDisposition::Terminal,
+                ));
+            }
+            if manifest.state.session_id != assignment.session_id || !manifest.state.restorable {
+                return Err((
+                    MezError::invalid_state(
+                        "local session checkpoint is not restorable for its assignment",
+                    ),
+                    RecoveryFailureDisposition::Terminal,
+                ));
+            }
+            let payload = snapshots
+                .inspect_payload_async(&checkpoint.snapshot_id)
+                .await
+                .map_err(recovery_artifact_failure)?;
+            let restored = snapshots
+                .restore_session_from_payload_async(
+                    &checkpoint.snapshot_id,
+                    &payload,
+                    self.config.shell.clone(),
+                )
+                .await
+                .map_err(|error| (error, RecoveryFailureDisposition::Terminal))?;
+            if restored.session.id.to_string() != assignment.session_id {
+                return Err((
+                    MezError::invalid_state(
+                        "restored local checkpoint produced a different session identity",
+                    ),
+                    RecoveryFailureDisposition::Terminal,
+                ));
+            }
+            let runtime = self
+                .start_prepared_session(
+                    restored.session,
+                    assignment.created_at_unix_seconds,
+                    SessionRuntimeStartup::RestoredSnapshot {
+                        payload: Box::new(payload),
+                        restart_command: None,
+                    },
+                )
+                .await
+                .map_err(|error| (error, RecoveryFailureDisposition::Retryable))?;
+            let record = match self
+                .registry
+                .list()
+                .map_err(|error| (error, RecoveryFailureDisposition::Retryable))?
+                .into_iter()
+                .find(|record| record.session_id == assignment.session_id)
+            {
+                Some(record) => record,
+                None => {
+                    let _ = self.supervisor.stop(runtime.session_id(), true).await;
+                    return Err((
+                        MezError::invalid_state(
+                            "restored local session was not published to live discovery",
+                        ),
+                        RecoveryFailureDisposition::Retryable,
+                    ));
+                }
+            };
+            if let Err(error) = self.local_assignments.activate(
+                &assignment.session_id,
+                assignment.boot_generation,
+                assignment.assignment_generation,
+                current_unix_seconds()
+                    .map_err(|error| (error, RecoveryFailureDisposition::Retryable))?,
+            ) {
+                let _ = self.supervisor.stop(runtime.session_id(), true).await;
+                return Err((error, RecoveryFailureDisposition::Retryable));
+            }
+            Ok(record)
+        }
+        .await;
+        match recovery {
+            Ok(record) => Ok(record),
+            Err((error, disposition)) => {
+                let now = current_unix_seconds().unwrap_or(assignment.updated_at_unix_seconds);
+                let persisted = match disposition {
+                    RecoveryFailureDisposition::Retryable => {
+                        self.local_assignments.record_retryable_recovery_failure(
+                            &assignment.session_id,
+                            assignment.boot_generation,
+                            assignment.assignment_generation,
+                            now,
+                            local_recovery_failure("retryable", &error),
+                        )
+                    }
+                    RecoveryFailureDisposition::Terminal => self.local_assignments.mark_failed(
+                        &assignment.session_id,
+                        assignment.boot_generation,
+                        assignment.assignment_generation,
+                        now,
+                        local_recovery_failure("terminal", &error),
+                    ),
+                };
+                match persisted {
+                    Ok(_) => Err(error),
+                    Err(fence_error) => Err(fence_error),
+                }
+            }
+        }
+    }
+
+    fn select_recoverable_local_assignment(
+        &self,
+        target: Option<&str>,
+    ) -> Result<LocalSessionAssignment> {
+        let mut assignments = self
+            .local_assignments
+            .list()?
+            .into_iter()
+            .filter(|assignment| assignment.state == LocalSessionAssignmentState::Recoverable)
+            .collect::<Vec<_>>();
+        match target {
+            Some(target) => {
+                let mut matches = assignments.into_iter().filter(|assignment| {
+                    assignment.session_id == target || assignment.name == target
+                });
+                let assignment = matches.next().ok_or_else(|| {
+                    MezError::new(
+                        MezErrorKind::NotFound,
+                        "recoverable local session was not found",
+                    )
+                })?;
+                if matches.next().is_some() {
+                    return Err(MezError::conflict(
+                        "recoverable local session target is ambiguous",
+                    ));
+                }
+                Ok(assignment)
+            }
+            None => {
+                assignments.sort_by(|left, right| {
+                    right
+                        .default_for_host
+                        .cmp(&left.default_for_host)
+                        .then_with(|| {
+                            right
+                                .updated_at_unix_seconds
+                                .cmp(&left.updated_at_unix_seconds)
+                        })
+                        .then_with(|| left.session_id.cmp(&right.session_id))
+                });
+                assignments.into_iter().next().ok_or_else(|| {
+                    MezError::new(
+                        MezErrorKind::NotFound,
+                        "no recoverable local session is available",
+                    )
+                })
+            }
+        }
     }
 
     /// Reserves, starts, and activates one principal-owned remote session.
@@ -765,6 +1001,29 @@ impl HostSessionRouter {
         self.supervisor.snapshots().await
     }
 
+    /// Lists recoverable hosted-local assignments that have no live socket
+    /// after host restart but can be restored on explicit/default resolution.
+    pub(crate) fn list_recoverable_local_assignments(&self) -> Result<Vec<LocalSessionAssignment>> {
+        let mut assignments = self
+            .local_assignments
+            .list()?
+            .into_iter()
+            .filter(|assignment| assignment.state == LocalSessionAssignmentState::Recoverable)
+            .collect::<Vec<_>>();
+        assignments.sort_by(|left, right| {
+            right
+                .default_for_host
+                .cmp(&left.default_for_host)
+                .then_with(|| {
+                    right
+                        .updated_at_unix_seconds
+                        .cmp(&left.updated_at_unix_seconds)
+                })
+                .then_with(|| left.session_id.cmp(&right.session_id))
+        });
+        Ok(assignments)
+    }
+
     #[cfg(test)]
     pub(crate) fn runtime_for_tests(&self, session_id: &str) -> Result<SessionRuntimeHandle> {
         self.supervisor.lookup(session_id)
@@ -806,6 +1065,112 @@ impl HostSessionRouter {
                 "graceful host shutdown could not commit checkpoints for active leases: {}",
                 failed.join(", ")
             )))
+        }
+    }
+
+    /// Captures checkpoints for every active durable local assignment.
+    pub(crate) async fn checkpoint_active_local_assignments(&self) -> Result<(usize, usize)> {
+        let session_ids = self
+            .local_assignments
+            .list()?
+            .into_iter()
+            .filter(|assignment| assignment.state == LocalSessionAssignmentState::Active)
+            .map(|assignment| assignment.session_id)
+            .collect::<Vec<_>>();
+        let mut checkpointed = 0usize;
+        let mut failed = 0usize;
+        for session_id in session_ids {
+            match self.checkpoint_local_assignment(&session_id).await {
+                Ok(_) => checkpointed = checkpointed.saturating_add(1),
+                Err(_) => failed = failed.saturating_add(1),
+            }
+        }
+        Ok((checkpointed, failed))
+    }
+
+    /// Requires fresh checkpoints for all active durable local assignments.
+    pub(crate) async fn checkpoint_active_local_assignments_strict(&self) -> Result<usize> {
+        let session_ids = self
+            .local_assignments
+            .list()?
+            .into_iter()
+            .filter(|assignment| assignment.state == LocalSessionAssignmentState::Active)
+            .map(|assignment| assignment.session_id)
+            .collect::<Vec<_>>();
+        let mut checkpointed = 0usize;
+        let mut failed = Vec::new();
+        for session_id in session_ids {
+            match self.checkpoint_local_assignment(&session_id).await {
+                Ok(_) => checkpointed = checkpointed.saturating_add(1),
+                Err(_) => failed.push(session_id),
+            }
+        }
+        if failed.is_empty() {
+            Ok(checkpointed)
+        } else {
+            Err(MezError::invalid_state(format!(
+                "graceful host shutdown could not commit local checkpoints: {}",
+                failed.join(", ")
+            )))
+        }
+    }
+
+    async fn checkpoint_local_assignment(
+        &self,
+        session_id: &str,
+    ) -> Result<LocalSessionAssignment> {
+        let _creation = self.creation_lock.lock().await;
+        let assignment = self
+            .local_assignments
+            .get(session_id)?
+            .ok_or_else(|| MezError::new(MezErrorKind::NotFound, "local assignment not found"))?;
+        if assignment.state != LocalSessionAssignmentState::Active {
+            return Err(MezError::invalid_state(
+                "only an active local assignment can be checkpointed",
+            ));
+        }
+        let runtime = self.supervisor.lookup(&assignment.session_id)?;
+        let snapshot_id = format!(
+            "local-checkpoint-{}-{}-{}",
+            assignment.session_id.trim_start_matches('$'),
+            assignment.boot_generation,
+            assignment.assignment_generation
+        );
+        let snapshots = SnapshotRepository::new(self.config.config_root.join("layouts"));
+        let snapshot = runtime
+            .actor()
+            .create_host_checkpoint(
+                snapshots.clone(),
+                snapshot_id,
+                Some(format!("local checkpoint {}", assignment.session_id)),
+            )
+            .await?;
+        let now = current_unix_seconds()?;
+        let updated = self.local_assignments.update_checkpoint(
+            &assignment.session_id,
+            assignment.boot_generation,
+            assignment.assignment_generation,
+            LocalAssignmentCheckpoint {
+                snapshot_id: snapshot.id.clone(),
+                snapshot_version: snapshot.version,
+                session_id: assignment.session_id.clone(),
+                recorded_at_unix_seconds: now,
+            },
+            now,
+        );
+        match updated {
+            Ok(updated) => {
+                if let Some(prior) = assignment.checkpoint
+                    && prior.snapshot_id != snapshot.id
+                {
+                    let _ = snapshots.delete_async(&prior.snapshot_id).await;
+                }
+                Ok(updated)
+            }
+            Err(error) => {
+                let _ = snapshots.delete_async(&snapshot.id).await;
+                Err(error)
+            }
         }
     }
 
@@ -1485,6 +1850,17 @@ fn recovery_failure(context: &str, error: &MezError) -> String {
     failure
 }
 
+fn local_recovery_failure(context: &str, error: &MezError) -> String {
+    let mut failure = format!("local session recovery {context}: {}", error.message());
+    if failure.len() > 1024 {
+        failure.truncate(1024);
+        while !failure.is_char_boundary(failure.len()) {
+            failure.pop();
+        }
+    }
+    failure
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RecoveryFailureDisposition {
     Retryable,
@@ -1501,14 +1877,9 @@ fn recovery_artifact_failure(error: MezError) -> (MezError, RecoveryFailureDispo
 
 fn reconcile_runtime_completion(
     leases: &RemoteSessionLeaseRepository,
+    local_assignments: &LocalSessionAssignmentRepository,
     completion: &SessionSupervisorSnapshot,
 ) -> Result<()> {
-    let Some(lease) = leases.get_by_session(&completion.session_id)? else {
-        return Ok(());
-    };
-    if lease.state != RemoteSessionLeaseState::Active {
-        return Ok(());
-    }
     let diagnostic = completion
         .failure
         .clone()
@@ -1516,7 +1887,37 @@ fn reconcile_runtime_completion(
             Some(state) => format!("supervised runtime completed in state {state:?}"),
             None => "supervised runtime completed without a lifecycle state".to_string(),
         });
-    reconcile_active_lease_after_runtime_exit(leases, lease, diagnostic)
+    if let Some(lease) = leases.get_by_session(&completion.session_id)? {
+        if lease.state == RemoteSessionLeaseState::Active {
+            reconcile_active_lease_after_runtime_exit(leases, lease, diagnostic)?;
+        }
+        return Ok(());
+    }
+    let Some(assignment) = local_assignments.get(&completion.session_id)? else {
+        return Ok(());
+    };
+    if assignment.state != LocalSessionAssignmentState::Active {
+        return Ok(());
+    }
+    let now = current_unix_seconds().unwrap_or(assignment.updated_at_unix_seconds);
+    if assignment.checkpoint.is_some() {
+        local_assignments.mark_recoverable_after_runtime_exit(
+            &assignment.session_id,
+            assignment.boot_generation,
+            assignment.assignment_generation,
+            now,
+            diagnostic,
+        )?;
+    } else {
+        local_assignments.mark_failed(
+            &assignment.session_id,
+            assignment.boot_generation,
+            assignment.assignment_generation,
+            now,
+            format!("local runtime completed without a committed checkpoint: {diagnostic}"),
+        )?;
+    }
+    Ok(())
 }
 
 fn reconcile_active_lease_after_runtime_exit(
@@ -1926,6 +2327,124 @@ mod tests {
             .shutdown_all(true, Duration::from_secs(2))
             .await
             .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A checkpointed hosted-local assignment survives host restart as
+    /// recoverable metadata and lazily restores the same stable session ID.
+    #[tokio::test(flavor = "current_thread")]
+    async fn hosted_local_assignment_restores_same_identity_after_restart() {
+        let root = test_root("local-restart-recovery");
+        let config = test_config(&root);
+        let initial = HostSessionRouter::new(config.clone());
+        let created = initial
+            .create_local(
+                Some("durable-local".to_string()),
+                Size::new(91, 33).unwrap(),
+            )
+            .await
+            .unwrap();
+        let checkpointed = initial
+            .checkpoint_local_assignment(&created.session_id)
+            .await
+            .unwrap();
+        assert!(checkpointed.checkpoint.is_some());
+        initial
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        drop(initial);
+
+        let restarted = HostSessionRouter::new(config);
+        restarted.reconcile_startup().unwrap();
+        let recoverable = restarted.list_recoverable_local_assignments().unwrap();
+        assert_eq!(recoverable.len(), 1);
+        assert_eq!(recoverable[0].session_id, created.session_id);
+        assert_eq!(recoverable[0].name, "durable-local");
+
+        let restored = restarted
+            .resolve_local(Some(&created.session_id), "primary")
+            .await
+            .unwrap();
+        assert_eq!(restored.session_id, created.session_id);
+        assert_eq!(restored.name, "durable-local");
+        assert!(restored.socket_path.exists());
+        assert_eq!(
+            restarted
+                .local_assignments
+                .get(&created.session_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            LocalSessionAssignmentState::Active
+        );
+        assert!(restarted.list_leases(None, None, true).unwrap().is_empty());
+
+        restarted
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A missing hosted-local checkpoint fails closed, terminalizes only its
+    /// durable assignment, and never allocates a replacement runtime.
+    #[tokio::test(flavor = "current_thread")]
+    async fn hosted_local_missing_checkpoint_fails_without_runtime_allocation() {
+        let root = test_root("local-missing-checkpoint");
+        let config = test_config(&root);
+        let initial = HostSessionRouter::new(config.clone());
+        let created = initial
+            .create_local(
+                Some("missing-local".to_string()),
+                Size::new(80, 24).unwrap(),
+            )
+            .await
+            .unwrap();
+        let checkpointed = initial
+            .checkpoint_local_assignment(&created.session_id)
+            .await
+            .unwrap();
+        let checkpoint = checkpointed.checkpoint.as_ref().unwrap().clone();
+        initial
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        drop(initial);
+        SnapshotRepository::new(config.config_root.join("layouts"))
+            .delete(&checkpoint.snapshot_id)
+            .unwrap();
+
+        let restarted = HostSessionRouter::new(config);
+        restarted.reconcile_startup().unwrap();
+        let error = restarted
+            .resolve_local(Some(&created.session_id), "primary")
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), MezErrorKind::NotFound);
+        let failed = restarted
+            .local_assignments
+            .get(&created.session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed.state, LocalSessionAssignmentState::Failed);
+        assert!(
+            failed
+                .failure
+                .as_deref()
+                .is_some_and(|failure| failure.contains("terminal"))
+        );
+        assert!(restarted.registry().list().unwrap().is_empty());
+        assert!(restarted.snapshots().await.unwrap().iter().all(|snapshot| {
+            snapshot.session_id != created.session_id
+                || !matches!(
+                    snapshot.state,
+                    SessionSupervisorState::Starting
+                        | SessionSupervisorState::Running
+                        | SessionSupervisorState::Stopping
+                )
+        }));
+
         let _ = fs::remove_dir_all(root);
     }
 
