@@ -18,10 +18,12 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinSet;
+use tokio_util::bytes::BytesMut;
+use tokio_util::codec::Decoder;
 
 use crate::control::{
-    AuthenticatedPeer, AuthenticationMechanism, ControlConnectionState, SessionIntent,
-    decode_control_frame, encode_control_body, initialize_params_from_json,
+    AuthenticatedPeer, AuthenticationMechanism, CONTROL_CONTENT_TYPE, ControlConnectionState,
+    SessionIntent, decode_control_frame, encode_control_body, initialize_params_from_json,
 };
 use crate::error::{MezError, MezErrorKind, Result};
 use crate::host::administration::{HostAuditLog, administration_request_fingerprint};
@@ -30,6 +32,7 @@ use crate::host::async_runtime::{
     serve_authenticated_async_runtime_control_connection_loop_with_snapshots_hooks_and_cancellation,
 };
 use crate::host::router::HostSessionRouter;
+use crate::protocol::framing::ProtocolFrameCodec;
 use crate::runtime::{
     IrohCompressionBridge, IrohCompressionMetrics, IrohCompressionPolicy,
     RuntimeIrohCompressionCodec, RuntimeIrohDiagnostics, RuntimeIrohEndpoint,
@@ -1191,15 +1194,24 @@ where
     S: tokio::io::AsyncRead + Unpin,
 {
     tokio::time::timeout(timeout, async {
-        let mut input = Vec::new();
+        let mut input = BytesMut::new();
+        let mut decoder = ProtocolFrameCodec::new(HOST_CONTROL_MAX_CONTENT_LENGTH)?;
         let mut buffer = [0u8; 8192];
         loop {
+            if let Some(body) = decode_host_control_frame(
+                &mut decoder,
+                &mut input,
+                "host Iroh accepts one host-only follow-up frame",
+            )? {
+                return Ok(Some(body));
+            }
             let read = stream.read(&mut buffer).await?;
             if read == 0 {
                 if input.is_empty() {
                     return Ok(None);
                 }
-                return Err(MezError::invalid_state(
+                return Err(host_control_frame_eof_error(
+                    &input,
                     "host Iroh stream closed during a follow-up request",
                 ));
             }
@@ -1208,16 +1220,6 @@ where
                 return Err(MezError::invalid_args(
                     "host Iroh follow-up frame exceeds limit",
                 ));
-            }
-            if let Ok((body, consumed)) =
-                decode_control_frame(&input, HOST_CONTROL_MAX_CONTENT_LENGTH)
-            {
-                if consumed != input.len() {
-                    return Err(MezError::invalid_args(
-                        "host Iroh accepts one host-only follow-up frame",
-                    ));
-                }
-                return Ok(Some(body));
             }
         }
     })
@@ -1327,12 +1329,21 @@ where
     S: tokio::io::AsyncRead + Unpin,
 {
     tokio::time::timeout(timeout, async {
-        let mut input = Vec::new();
+        let mut input = BytesMut::new();
+        let mut decoder = ProtocolFrameCodec::new(HOST_CONTROL_MAX_CONTENT_LENGTH)?;
         let mut buffer = [0u8; 8192];
         loop {
+            if let Some(body) = decode_host_control_frame(
+                &mut decoder,
+                &mut input,
+                "host Iroh accepts exactly one setup frame",
+            )? {
+                return Ok(body);
+            }
             let read = stream.read(&mut buffer).await?;
             if read == 0 {
-                return Err(MezError::invalid_state(
+                return Err(host_control_frame_eof_error(
+                    &input,
                     "host Iroh stream closed before initialize",
                 ));
             }
@@ -1342,20 +1353,43 @@ where
                     "host Iroh initialize frame exceeds limit",
                 ));
             }
-            if let Ok((body, consumed)) =
-                decode_control_frame(&input, HOST_CONTROL_MAX_CONTENT_LENGTH)
-            {
-                if consumed != input.len() {
-                    return Err(MezError::invalid_args(
-                        "host Iroh accepts exactly one setup frame",
-                    ));
-                }
-                return Ok(body);
-            }
         }
     })
     .await
     .map_err(|_| MezError::invalid_state("host Iroh initialize read timed out"))?
+}
+
+/// Incrementally decodes one control frame while preserving terminal framing
+/// failures and rejecting bytes buffered after the single allowed frame.
+fn decode_host_control_frame(
+    decoder: &mut ProtocolFrameCodec,
+    input: &mut BytesMut,
+    trailing_frame_message: &str,
+) -> Result<Option<String>> {
+    let Some(frame) = decoder.decode(input)? else {
+        return Ok(None);
+    };
+    if frame.content_type != CONTROL_CONTENT_TYPE {
+        return Err(MezError::invalid_args(
+            "unexpected control frame content type",
+        ));
+    }
+    if !input.is_empty() {
+        return Err(MezError::invalid_args(trailing_frame_message));
+    }
+    Ok(Some(frame.body))
+}
+
+/// Converts incomplete buffered input at EOF into the decoder's specific
+/// framing error while retaining the established empty-stream diagnostic.
+fn host_control_frame_eof_error(input: &[u8], empty_stream_message: &str) -> MezError {
+    if input.is_empty() {
+        return MezError::invalid_state(empty_stream_message);
+    }
+    match decode_control_frame(input, HOST_CONTROL_MAX_CONTENT_LENGTH) {
+        Err(error) => error,
+        Ok(_) => MezError::invalid_state(empty_stream_message),
+    }
 }
 
 fn request_id(body: &str) -> Value {
@@ -1449,6 +1483,94 @@ mod tests {
             std::process::id(),
             rand::random::<u64>()
         ))
+    }
+
+    /// A complete malformed setup header is terminal and must fail before the
+    /// much longer setup timeout even when the peer keeps its stream open.
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_setup_reader_rejects_malformed_header_immediately() {
+        let (mut peer, mut host) = tokio::io::duplex(1024);
+        peer.write_all(b"Content-Length: invalid\r\n\r\n")
+            .await
+            .unwrap();
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            read_one_control_frame(&mut host, std::time::Duration::from_secs(5)),
+        )
+        .await
+        .expect("terminal malformed setup frame should fail before timeout")
+        .unwrap_err();
+
+        assert_eq!(error.kind(), MezErrorKind::InvalidArgs);
+        assert!(
+            error.message().contains("invalid Content-Length"),
+            "{error:?}"
+        );
+    }
+
+    /// Follow-up frame decoding must propagate a terminal duplicate length
+    /// error without retaining the authenticated connection until idle expiry.
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_follow_up_reader_rejects_malformed_header_immediately() {
+        let (mut peer, mut host) = tokio::io::duplex(1024);
+        peer.write_all(b"Content-Length: 2\r\nContent-Length: 3\r\n\r\n{}!")
+            .await
+            .unwrap();
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            read_optional_control_frame(&mut host, std::time::Duration::from_secs(5)),
+        )
+        .await
+        .expect("terminal malformed follow-up frame should fail before timeout")
+        .unwrap_err();
+
+        assert_eq!(error.kind(), MezErrorKind::InvalidArgs);
+        assert!(
+            error.message().contains("duplicate Content-Length"),
+            "{error:?}"
+        );
+    }
+
+    /// EOF after a declared but incomplete body must retain the framing error
+    /// instead of replacing it with a generic stream-closure diagnostic.
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_setup_reader_reports_truncated_frame_at_eof() {
+        let (mut peer, mut host) = tokio::io::duplex(1024);
+        peer.write_all(b"Content-Length: 4\r\n\r\n{").await.unwrap();
+        peer.shutdown().await.unwrap();
+
+        let error = read_one_control_frame(&mut host, std::time::Duration::from_secs(1))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.kind(), MezErrorKind::InvalidArgs);
+        assert!(
+            error.message().contains("incomplete protocol frame body"),
+            "{error:?}"
+        );
+    }
+
+    /// A valid setup frame split across reads remains incomplete until its
+    /// final bytes arrive and is then decoded exactly once.
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_setup_reader_accepts_fragmented_valid_frame() {
+        let (mut peer, mut host) = tokio::io::duplex(1024);
+        let encoded = encode_control_body(r#"{"jsonrpc":"2.0","id":1}"#);
+        let split_at = encoded.len() - 3;
+        let writer = async {
+            peer.write_all(&encoded[..split_at]).await.unwrap();
+            tokio::task::yield_now().await;
+            peer.write_all(&encoded[split_at..]).await.unwrap();
+        };
+
+        let (body, ()) = tokio::join!(
+            read_one_control_frame(&mut host, std::time::Duration::from_secs(1)),
+            writer,
+        );
+
+        assert_eq!(body.unwrap(), r#"{"jsonrpc":"2.0","id":1}"#);
     }
 
     /// Connection lifecycle logs retain the direct client socket address so an
