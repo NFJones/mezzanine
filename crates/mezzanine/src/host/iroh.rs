@@ -428,10 +428,11 @@ async fn serve_host_only_connection(
     remote_route: &str,
 ) -> Result<()> {
     let setup_started = std::time::Instant::now();
+    let setup_deadline = tokio::time::Instant::now() + policy.setup_timeout;
     let mut accepting = incoming
         .accept()
         .map_err(|error| MezError::invalid_state(format!("host Iroh accept failed: {error}")))?;
-    let alpn = tokio::time::timeout(policy.setup_timeout, accepting.alpn())
+    let alpn = tokio::time::timeout_at(setup_deadline, accepting.alpn())
         .await
         .map_err(|_| MezError::invalid_state("host Iroh ALPN setup timed out"))?
         .map_err(|error| MezError::invalid_state(format!("host Iroh ALPN failed: {error}")))?;
@@ -445,7 +446,7 @@ async fn serve_host_only_connection(
         policy.compression_zstd_level,
         HOST_CONTROL_MAX_CONTENT_LENGTH + 1024,
     )?;
-    let connection = tokio::time::timeout(policy.setup_timeout, accepting)
+    let connection = tokio::time::timeout_at(setup_deadline, accepting)
         .await
         .map_err(|_| MezError::invalid_state("host Iroh connection setup timed out"))?
         .map_err(|error| {
@@ -461,7 +462,7 @@ async fn serve_host_only_connection(
         endpoint_id: client_endpoint_id.clone(),
         route: remote_route.to_owned(),
     };
-    let (send, recv) = tokio::time::timeout(policy.setup_timeout, connection.accept_bi())
+    let (send, recv) = tokio::time::timeout_at(setup_deadline, connection.accept_bi())
         .await
         .map_err(|_| MezError::invalid_state("host Iroh control stream setup timed out"))?
         .map_err(|error| MezError::invalid_state(format!("host Iroh stream failed: {error}")))?;
@@ -473,7 +474,12 @@ async fn serve_host_only_connection(
         compression_metrics.clone(),
         HOST_CONTROL_MAX_CONTENT_LENGTH,
     )?;
-    let request = read_one_control_frame(bridge.stream_mut(), policy.idle_timeout).await?;
+    let request = tokio::time::timeout_at(
+        setup_deadline,
+        read_one_control_frame(bridge.stream_mut(), policy.idle_timeout),
+    )
+    .await
+    .map_err(|_| MezError::invalid_state("host Iroh initialize read timed out"))??;
     if let Some(router) = router.as_ref()
         && request_session_intent(&request).as_deref() != Some("host_only")
     {
@@ -1599,7 +1605,7 @@ mod tests {
             enabled: true,
             identity: RuntimeIrohIdentityPolicy::Host,
             compression_codecs: vec![RuntimeIrohCompressionCodec::None],
-            setup_timeout: std::time::Duration::from_secs(2),
+            setup_timeout: std::time::Duration::from_secs(10),
             idle_timeout: std::time::Duration::from_secs(2),
             ..RuntimeIrohTransportPolicy::default()
         };
@@ -1683,6 +1689,83 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// A peer that opens its control stream but withholds the mandatory first
+    /// frame must release its sole admission slot within the setup deadline so
+    /// a valid peer can initialize without waiting for application-idle expiry.
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_connection_times_out_when_first_frame_is_withheld() {
+        let root = test_root("withheld-first-frame");
+        let endpoint_policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            identity: RuntimeIrohIdentityPolicy::Host,
+            compression_codecs: vec![RuntimeIrohCompressionCodec::None],
+            max_connections: 1,
+            setup_timeout: std::time::Duration::from_secs(10),
+            idle_timeout: std::time::Duration::from_secs(5),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let host = HostIrohRuntime::bind(&root, endpoint_policy.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        let server_addr = host.endpoint_addr().unwrap();
+        let client = crate::runtime::bind_runtime_iroh_client_endpoint(
+            &endpoint_policy,
+            iroh::SecretKey::generate(),
+        )
+        .await
+        .unwrap();
+        let mut handler_policy = endpoint_policy;
+        handler_policy.setup_timeout = std::time::Duration::from_millis(250);
+        let client_endpoint = client.clone();
+        let client_setup = tokio::spawn(async move {
+            let connection = client_endpoint
+                .connect(server_addr.clone(), crate::runtime::MEZZANINE_IROH_ALPN)
+                .await
+                .unwrap();
+            let (mut send, recv) = connection.open_bi().await.unwrap();
+            send.write_all(&[0]).await.unwrap();
+            send.flush().await.unwrap();
+            (connection, (send, recv))
+        });
+        let incoming = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            host.endpoint.endpoint().accept(),
+        )
+        .await
+        .expect("host should accept the silent peer")
+        .expect("host endpoint should remain open");
+        let remote_route = remote_client_route(incoming.remote_addr());
+        let handler = serve_host_only_connection(
+            incoming,
+            handler_policy,
+            host.trust.clone(),
+            host.endpoint_id().to_string(),
+            None,
+            host.endpoint.diagnostics(),
+            None,
+            &remote_route,
+        );
+        let error = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            let (server_result, client_result) = tokio::join!(handler, client_setup);
+            let (connection, streams) = client_result.unwrap();
+            drop(streams);
+            connection.close(iroh::endpoint::VarInt::from_u32(0), b"test complete");
+            server_result
+        })
+        .await
+        .expect("silent first frame must not outlive the setup deadline")
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("initialize read timed out"),
+            "{error}"
+        );
+
+        client.close().await;
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
     /// A capability-bearing host invitation pairs without provisioning, then
     /// routes create replay, conflict, explicit attach, default selection, and
     /// principal-filtered listing through one persistent front door. The live
@@ -1698,7 +1781,7 @@ mod tests {
             enabled: true,
             identity: RuntimeIrohIdentityPolicy::Host,
             compression_codecs: vec![RuntimeIrohCompressionCodec::None],
-            setup_timeout: std::time::Duration::from_secs(3),
+            setup_timeout: std::time::Duration::from_secs(10),
             idle_timeout: std::time::Duration::from_secs(3),
             ..RuntimeIrohTransportPolicy::default()
         };
