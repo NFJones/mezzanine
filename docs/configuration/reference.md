@@ -248,10 +248,20 @@ rollout](../operations/iroh-production-operations-and-rollout.md).
 | `terminal.mouse` | boolean | `true` | Enable mouse reporting, selection, scrolling, UI clicks, and explicit visible alternate-screen selection when pane applications have not captured mouse input. |
 | `terminal.bracketed_paste` | boolean | `true` | Enable bracketed paste handling. |
 | `terminal.clipboard` | string | `"external"` | Pane-originated OSC 52 write policy: `external` stores internally then attempts a best-effort host copy, `internal` stores only in the internal `osc52` buffer, and `disabled` rejects the write. Clipboard queries are not answered. |
-| `terminal.clipboard_copy_command` | string or string array | omitted | Host copy command; receives content on stdin. |
+| `terminal.clipboard_copy_command` | string or string array | omitted | Local host copy command; receives content on stdin. For negotiated Iroh primary attachments, this command is selected and executed on the attaching client machine, never supplied by the server. |
 | `terminal.clipboard_paste_command` | string or string array | omitted | Host paste command; writes content to stdout. |
 | `terminal.clipboard_read_timeout_ms` | integer | `250` | Maximum time to wait for a host clipboard helper to return pasted content; must be positive. |
 | `terminal.clipboard_read_max_bytes` | integer | `1048576` | Maximum bytes accepted from a host clipboard read; must be positive. |
+
+An Iroh primary that negotiates event-stream v2 and the explicit
+`client_clipboard_write` capability also writes completed copy-mode selections
+to the attaching machine's clipboard. The server still updates its internal
+paste buffer and attempts its own host clipboard write independently. Client
+writes are best-effort, bounded to 8 MiB, and use only the attaching client's
+local clipboard command configuration. Observers, Unix attachments, legacy v1
+peers, headless clients without a working clipboard provider, and
+capability-disabled sessions retain existing behavior. Clipboard reads and
+remote paste are not part of this feature.
 | `terminal.alternate_screen` | boolean | `true` | Support alternate-screen applications. |
 | `terminal.focus_events` | boolean | `true` | Enable focus event reporting when supported. |
 | `terminal.nested_multiplexer` | string | `"auto"` | Nested multiplexer handling mode. |

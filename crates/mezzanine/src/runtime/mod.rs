@@ -529,6 +529,13 @@ pub(crate) use config::{
     runtime_iroh_transport_policy_from_config,
 };
 pub use config::{runtime_effective_config_value, runtime_ui_theme_from_config};
+
+/// Builds the client machine's clipboard adapter from its local effective configuration.
+pub(crate) fn runtime_client_host_clipboard_from_config(
+    root: &serde_json::Value,
+) -> Result<crate::host::terminal::HostClipboard> {
+    config::runtime_host_clipboard_from_config(root)
+}
 #[cfg(test)]
 use hook_support::run_external_shell_hook_command;
 use hook_support::{
@@ -537,7 +544,8 @@ use hook_support::{
     runtime_hook_event_for_lifecycle, runtime_hook_event_name,
 };
 pub(crate) use iroh::{
-    MEZZANINE_IROH_ALPN, MEZZANINE_IROH_EVENT_STREAM_PREFACE, RuntimeIrohConnectionGuard,
+    MEZZANINE_IROH_ALPN, MEZZANINE_IROH_EVENT_STREAM_PREFACE,
+    MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE, RuntimeIrohConnectionGuard,
     RuntimeIrohConnectionQualitySnapshot, RuntimeIrohDiagnostics, RuntimeIrohDiagnosticsSnapshot,
     RuntimeIrohEndpoint, RuntimeIrohShutdownHandle, bind_runtime_iroh_client_endpoint,
     bind_runtime_iroh_endpoint, build_runtime_iroh_control_service,

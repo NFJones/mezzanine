@@ -626,6 +626,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
     let layers = super::load_runtime_config_layers(&paths)?;
     let structured = crate::runtime::runtime_effective_config_value(&layers)?;
     let configured_policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
+    let client_clipboard = crate::runtime::runtime_client_host_clipboard_from_config(&structured)?;
     let mut target = resolve_iroh_control_target(control_target, paths.root())?;
     ensure_iroh_attach_role_allowed(target.role(), requested_role)?;
     if let IrohControlTarget::Invitation {
@@ -697,12 +698,13 @@ pub(super) async fn open_persistent_iroh_control_channel(
     if let Some(session_name) = routing.and_then(IrohSessionRouting::session_name) {
         client["metadata"] = serde_json::json!({"session_name": session_name});
     }
+    let mut requested_event_stream_version = if requested_role == "primary" { 2 } else { 1 };
     let mut params = serde_json::json!({
         "client_name": "remote-cli",
         "requested_version": if host_scoped { 3 } else { 2 },
         "requested_role": requested_role,
         "detach_primary_on_disconnect": requested_role == "primary",
-        "event_stream_version": 1,
+        "event_stream_version": requested_event_stream_version,
         "client": client,
         "authentication": {
             "mechanism": mechanism,
@@ -718,30 +720,32 @@ pub(super) async fn open_persistent_iroh_control_channel(
             params["idempotency_key"] = serde_json::Value::String(idempotency_key.to_string());
         }
     }
-    let initialize = serde_json::json!({
+    let mut initialize = serde_json::json!({
         "jsonrpc": "2.0",
         "id": "cli-init",
         "method": "control/initialize",
         "params": params
     })
     .to_string();
-    tokio::time::timeout(
-        policy.idle_timeout,
-        tokio::io::AsyncWriteExt::write_all(bridge.stream_mut(), &encode_control_body(&initialize)),
-    )
-    .await
-    .map_err(|_| MezError::invalid_state("Iroh attach initialization write timed out"))?
-    .map_err(|_| MezError::invalid_state("Iroh attach initialization write failed"))?;
-    tokio::time::timeout(
-        policy.idle_timeout,
-        tokio::io::AsyncWriteExt::flush(bridge.stream_mut()),
-    )
-    .await
-    .map_err(|_| MezError::invalid_state("Iroh attach initialization flush timed out"))?
-    .map_err(|_| MezError::invalid_state("Iroh attach initialization flush failed"))?;
-    let response =
+    write_iroh_control_frame(bridge.stream_mut(), &initialize, policy.idle_timeout).await?;
+    let mut response =
         read_persistent_iroh_control_frame(bridge.stream_mut(), policy.idle_timeout).await?;
+    if requested_event_stream_version == 2 && iroh_initialize_rejected_event_stream_v2(&response) {
+        requested_event_stream_version = 1;
+        let mut initialize_value: serde_json::Value = serde_json::from_str(&initialize)
+            .map_err(|_| MezError::invalid_state("invalid local Iroh initialize request"))?;
+        initialize_value["params"]["event_stream_version"] = serde_json::Value::from(1);
+        initialize = initialize_value.to_string();
+        write_iroh_control_frame(bridge.stream_mut(), &initialize, policy.idle_timeout).await?;
+        response =
+            read_persistent_iroh_control_frame(bridge.stream_mut(), policy.idle_timeout).await?;
+    }
     let issued_credential = validate_iroh_initialize_response(&response, requested_role)?;
+    let client_clipboard_negotiated = iroh_client_clipboard_negotiated(
+        &response,
+        requested_role,
+        requested_event_stream_version,
+    )?;
     if let IrohControlTarget::Invitation {
         profile_name,
         server_addr,
@@ -769,6 +773,8 @@ pub(super) async fn open_persistent_iroh_control_channel(
         connection.clone(),
         compression,
         policy.setup_timeout,
+        requested_event_stream_version,
+        client_clipboard_negotiated.then_some(client_clipboard),
     );
     Ok((
         PersistentIrohControlChannel {
@@ -2033,6 +2039,43 @@ fn validate_iroh_initialize_response(
         .map(|credential| SecretString::from(credential.to_string())))
 }
 
+/// Returns whether a failed initialize response permits a same-connection v1 retry.
+fn iroh_initialize_rejected_event_stream_v2(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("error").cloned())
+        .and_then(|error| error.get("message").cloned())
+        .and_then(|message| message.as_str().map(str::to_string))
+        .is_some_and(|message| message == "unsupported event stream version")
+}
+
+/// Returns whether client clipboard effects were explicitly negotiated.
+fn iroh_client_clipboard_negotiated(
+    body: &str,
+    requested_role: &str,
+    event_stream_version: u32,
+) -> Result<bool> {
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_state("invalid Iroh initialize response"))?;
+    let result = value
+        .get("result")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| MezError::invalid_state("Iroh initialize response omitted result"))?;
+    let granted_role = result
+        .get("granted_role")
+        .and_then(serde_json::Value::as_str);
+    let clipboard_capable = result
+        .get("capabilities")
+        .and_then(|capabilities| capabilities.get("features"))
+        .and_then(|features| features.get("client_clipboard_write"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    Ok(event_stream_version == 2
+        && requested_role == "primary"
+        && granted_role == Some("primary")
+        && clipboard_capable)
+}
+
 fn validate_iroh_host_only_initialize_response(body: &str) -> Result<Option<SecretString>> {
     let value: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_state("invalid host-only Iroh initialize response"))?;
@@ -2173,7 +2216,8 @@ pub(super) fn incomplete_control_response_error(
 #[cfg(test)]
 mod tests {
     use super::{
-        RemoteRoleCeiling, ensure_iroh_attach_role_allowed, validate_iroh_initialize_response,
+        RemoteRoleCeiling, ensure_iroh_attach_role_allowed, iroh_client_clipboard_negotiated,
+        iroh_initialize_rejected_event_stream_v2, validate_iroh_initialize_response,
     };
 
     #[test]
@@ -2209,5 +2253,29 @@ mod tests {
             error.message().contains("unexpected remote role"),
             "{error:?}"
         );
+    }
+
+    /// Verifies only an explicitly capability-confirmed primary enables the
+    /// client-effect event stream while observers and legacy peers remain v1.
+    #[test]
+    fn iroh_initialize_negotiates_clipboard_event_stream_only_for_capable_primary() {
+        let capable_primary = r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary","capabilities":{"features":{"client_clipboard_write":true}}}}"#;
+        let legacy_primary = r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary","capabilities":{"features":{}}}}"#;
+        let observer = r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"observer","capabilities":{"features":{"client_clipboard_write":true}}}}"#;
+
+        assert!(iroh_client_clipboard_negotiated(capable_primary, "primary", 2).unwrap());
+        assert!(!iroh_client_clipboard_negotiated(legacy_primary, "primary", 2).unwrap());
+        assert!(!iroh_client_clipboard_negotiated(observer, "observer", 1).unwrap());
+    }
+
+    /// Verifies fallback is limited to the exact legacy event-version rejection.
+    #[test]
+    fn iroh_initialize_v2_fallback_rejects_unrelated_failures() {
+        assert!(iroh_initialize_rejected_event_stream_v2(
+            r#"{"jsonrpc":"2.0","id":"cli-init","error":{"code":-32602,"message":"unsupported event stream version"}}"#,
+        ));
+        assert!(!iroh_initialize_rejected_event_stream_v2(
+            r#"{"jsonrpc":"2.0","id":"cli-init","error":{"code":-32001,"message":"authentication failed"}}"#,
+        ));
     }
 }

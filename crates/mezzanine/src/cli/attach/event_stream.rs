@@ -6,10 +6,192 @@ use super::{
     attached_terminal_output_disconnected, auxiliary_socket_path_for_control_socket,
     decode_control_frame, encode_control_body,
 };
+use base64::Engine as _;
 use std::io::Write;
 use tokio::io::AsyncReadExt;
 
 use crate::runtime::{IrohCompressionPolicy, RuntimeIrohCompressionCodec};
+
+const IROH_CLIENT_CLIPBOARD_MAX_BYTES: usize = 8 * 1024 * 1024;
+const IROH_CLIENT_CLIPBOARD_MAX_CHUNK_BYTES: usize = 256 * 1024;
+const IROH_CLIENT_CLIPBOARD_MAX_CHUNKS: usize =
+    IROH_CLIENT_CLIPBOARD_MAX_BYTES / IROH_CLIENT_CLIPBOARD_MAX_CHUNK_BYTES;
+
+/// One bounded in-progress client clipboard transfer.
+struct IrohClipboardTransfer {
+    sequence: u64,
+    total_bytes: usize,
+    chunk_count: usize,
+    next_index: usize,
+    bytes: Vec<u8>,
+    started_at: tokio::time::Instant,
+}
+
+/// Strict connection-local assembler for negotiated clipboard effect frames.
+#[derive(Default)]
+struct IrohClipboardAssembler {
+    last_sequence: u64,
+    transfer: Option<IrohClipboardTransfer>,
+}
+
+impl IrohClipboardAssembler {
+    /// Applies one clipboard notification and returns completed UTF-8 content.
+    fn apply(&mut self, body: &str) -> Result<Option<String>> {
+        self.discard_expired();
+        let value: serde_json::Value = serde_json::from_str(body)
+            .map_err(|_| MezError::invalid_args("invalid Iroh clipboard effect JSON"))?;
+        let method = value
+            .get("method")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| MezError::invalid_args("Iroh clipboard effect omitted method"))?;
+        let params = value
+            .get("params")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| MezError::invalid_args("Iroh clipboard effect omitted params"))?;
+        let sequence = params
+            .get("sequence")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| MezError::invalid_args("Iroh clipboard effect omitted sequence"))?;
+
+        match method {
+            "client/clipboard.begin" => {
+                self.transfer = None;
+                let total_bytes = params
+                    .get("total_bytes")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .ok_or_else(|| {
+                        MezError::invalid_args("Iroh clipboard begin omitted total byte count")
+                    })?;
+                let chunk_count = params
+                    .get("chunks")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .ok_or_else(|| {
+                        MezError::invalid_args("Iroh clipboard begin omitted chunk count")
+                    })?;
+                if sequence <= self.last_sequence
+                    || total_bytes > IROH_CLIENT_CLIPBOARD_MAX_BYTES
+                    || chunk_count == 0
+                    || chunk_count > IROH_CLIENT_CLIPBOARD_MAX_CHUNKS
+                {
+                    return Err(MezError::invalid_args(
+                        "Iroh clipboard begin exceeds sequence or size bounds",
+                    ));
+                }
+                self.transfer = Some(IrohClipboardTransfer {
+                    sequence,
+                    total_bytes,
+                    chunk_count,
+                    next_index: 0,
+                    bytes: Vec::with_capacity(total_bytes),
+                    started_at: tokio::time::Instant::now(),
+                });
+                Ok(None)
+            }
+            "client/clipboard.chunk" => {
+                let index = params
+                    .get("index")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .ok_or_else(|| MezError::invalid_args("Iroh clipboard chunk omitted index"))?;
+                let encoded = params
+                    .get("data_base64")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| {
+                        MezError::invalid_args("Iroh clipboard chunk omitted encoded data")
+                    })?;
+                let transfer = self.transfer.as_mut().ok_or_else(|| {
+                    MezError::invalid_args("Iroh clipboard chunk has no active transfer")
+                })?;
+                if sequence != transfer.sequence
+                    || index != transfer.next_index
+                    || index >= transfer.chunk_count
+                {
+                    self.transfer = None;
+                    return Err(MezError::invalid_args(
+                        "Iroh clipboard chunk ordering is invalid",
+                    ));
+                }
+                let chunk = base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .map_err(|_| MezError::invalid_args("Iroh clipboard chunk is not base64"))?;
+                if chunk.len() > IROH_CLIENT_CLIPBOARD_MAX_CHUNK_BYTES
+                    || transfer.bytes.len().saturating_add(chunk.len()) > transfer.total_bytes
+                {
+                    self.transfer = None;
+                    return Err(MezError::invalid_args(
+                        "Iroh clipboard chunk exceeds declared bounds",
+                    ));
+                }
+                transfer.bytes.extend_from_slice(&chunk);
+                transfer.next_index += 1;
+                Ok(None)
+            }
+            "client/clipboard.commit" => {
+                let transfer = self.transfer.take().ok_or_else(|| {
+                    MezError::invalid_args("Iroh clipboard commit has no active transfer")
+                })?;
+                if sequence != transfer.sequence
+                    || transfer.next_index != transfer.chunk_count
+                    || transfer.bytes.len() != transfer.total_bytes
+                {
+                    return Err(MezError::invalid_args(
+                        "Iroh clipboard commit does not match the declared transfer",
+                    ));
+                }
+                let content = String::from_utf8(transfer.bytes).map_err(|_| {
+                    MezError::invalid_args("Iroh clipboard transfer is not valid UTF-8")
+                })?;
+                self.last_sequence = sequence;
+                Ok(Some(content))
+            }
+            _ => Err(MezError::invalid_args(
+                "unsupported Iroh clipboard effect method",
+            )),
+        }
+    }
+
+    /// Discards a partial transfer after the bounded completion deadline.
+    fn discard_expired(&mut self) {
+        const TRANSFER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+        if self
+            .transfer
+            .as_ref()
+            .is_some_and(|transfer| transfer.started_at.elapsed() >= TRANSFER_TIMEOUT)
+        {
+            self.transfer = None;
+        }
+    }
+
+    /// Returns the deadline for the current partial transfer, when present.
+    fn expiration_deadline(&self) -> Option<tokio::time::Instant> {
+        const TRANSFER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+        self.transfer
+            .as_ref()
+            .map(|transfer| transfer.started_at + TRANSFER_TIMEOUT)
+    }
+}
+
+/// Starts one single-pending-value worker for client-local clipboard writes.
+fn spawn_iroh_client_clipboard_worker(
+    clipboard: crate::host::terminal::HostClipboard,
+) -> (
+    tokio::sync::watch::Sender<Option<String>>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (sender, mut receiver) = tokio::sync::watch::channel(None::<String>);
+    let task = tokio::spawn(async move {
+        while receiver.changed().await.is_ok() {
+            let Some(content) = receiver.borrow_and_update().clone() else {
+                continue;
+            };
+            let clipboard = clipboard.clone();
+            let _ = tokio::task::spawn_blocking(move || clipboard.copy(content.as_str())).await;
+        }
+    });
+    (sender, task)
+}
 
 /// Carries Attached Client Input Poll state for this subsystem.
 ///
@@ -227,14 +409,32 @@ pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
     connection: iroh::endpoint::Connection,
     compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
+    event_stream_version: u32,
+    clipboard: Option<crate::host::terminal::HostClipboard>,
 ) -> (
     tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>,
     tokio::task::JoinHandle<()>,
 ) {
     let (sender, receiver) = tokio::sync::mpsc::channel(8);
     let task = tokio::spawn(async move {
-        let result =
-            receive_iroh_runtime_events(connection, compression, setup_timeout, &sender).await;
+        let clipboard_worker = clipboard.map(spawn_iroh_client_clipboard_worker);
+        let clipboard_sender = clipboard_worker
+            .as_ref()
+            .map(|(clipboard_sender, _)| clipboard_sender.clone());
+        let result = receive_iroh_runtime_events(
+            connection,
+            compression,
+            setup_timeout,
+            event_stream_version,
+            clipboard_sender.as_ref(),
+            &sender,
+        )
+        .await;
+        if let Some((clipboard_sender, clipboard_task)) = clipboard_worker {
+            drop(clipboard_sender);
+            clipboard_task.abort();
+            let _ = clipboard_task.await;
+        }
         if let Err(error) = result {
             let _ = sender.send(Err(error)).await;
         }
@@ -246,8 +446,15 @@ async fn receive_iroh_runtime_events(
     connection: iroh::endpoint::Connection,
     compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
+    event_stream_version: u32,
+    clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
     sender: &tokio::sync::mpsc::Sender<Result<AttachRenderAction>>,
 ) -> Result<()> {
+    if !matches!(event_stream_version, 1 | 2) {
+        return Err(MezError::invalid_args(
+            "unsupported negotiated Iroh event stream version",
+        ));
+    }
     let setup = async {
         let mut stream = tokio::select! {
             accepted = connection.accept_uni() => accepted.map_err(|_| {
@@ -259,12 +466,17 @@ async fn receive_iroh_runtime_events(
                 ));
             }
         };
-        let mut preface = vec![0u8; crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE.len()];
+        let expected_preface = if event_stream_version == 2 {
+            crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE
+        } else {
+            crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE
+        };
+        let mut preface = vec![0u8; expected_preface.len()];
         stream
             .read_exact(&mut preface)
             .await
             .map_err(|_| MezError::invalid_state("Iroh event stream preface was truncated"))?;
-        if preface != crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE {
+        if preface != expected_preface {
             return Err(MezError::invalid_state(
                 "Iroh event stream used an unsupported preface or version",
             ));
@@ -285,15 +497,35 @@ async fn receive_iroh_runtime_events(
     };
 
     let mut pending = Vec::new();
+    let mut clipboard_assembler = (event_stream_version == 2).then(IrohClipboardAssembler::default);
     let mut buffer = [0u8; ATTACH_EVENT_STREAM_READ_BUFFER_BYTES];
     loop {
-        let read = tokio::select! {
-            read = stream.read(&mut buffer) => read.map_err(|_| {
-                MezError::invalid_state("Iroh event stream read failed")
-            })?,
-            _ = connection.closed() => None,
-        }
-        .unwrap_or(0);
+        let read = if let Some(deadline) = clipboard_assembler
+            .as_ref()
+            .and_then(IrohClipboardAssembler::expiration_deadline)
+        {
+            tokio::select! {
+                read = stream.read(&mut buffer) => read.map_err(|_| {
+                    MezError::invalid_state("Iroh event stream read failed")
+                })?,
+                _ = connection.closed() => None,
+                _ = tokio::time::sleep_until(deadline) => {
+                    if let Some(assembler) = clipboard_assembler.as_mut() {
+                        assembler.discard_expired();
+                    }
+                    continue;
+                }
+            }
+            .unwrap_or(0)
+        } else {
+            tokio::select! {
+                read = stream.read(&mut buffer) => read.map_err(|_| {
+                    MezError::invalid_state("Iroh event stream read failed")
+                })?,
+                _ = connection.closed() => None,
+            }
+            .unwrap_or(0)
+        };
         if read == 0 {
             if !pending.is_empty() {
                 return Err(MezError::invalid_state(
@@ -309,7 +541,12 @@ async fn receive_iroh_runtime_events(
                 "Iroh event stream frame exceeds limit",
             ));
         }
-        let action = drain_negotiated_iroh_event_frames(&mut pending, compression)?;
+        let action = drain_negotiated_iroh_event_frames(
+            &mut pending,
+            compression,
+            clipboard_assembler.as_mut(),
+            clipboard_sender,
+        )?;
         if action != AttachRenderAction::None && sender.send(Ok(action)).await.is_err() {
             return Ok(());
         }
@@ -320,6 +557,8 @@ async fn receive_iroh_runtime_events(
 fn drain_negotiated_iroh_event_frames(
     pending: &mut Vec<u8>,
     compression: IrohCompressionPolicy,
+    mut clipboard_assembler: Option<&mut IrohClipboardAssembler>,
+    clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
 ) -> Result<AttachRenderAction> {
     let mut action = AttachRenderAction::None;
     loop {
@@ -329,7 +568,11 @@ fn drain_negotiated_iroh_event_frames(
             else {
                 return Ok(action);
             };
-            action = action.combine(strict_iroh_attach_render_action(body.as_str())?);
+            action = action.combine(apply_negotiated_iroh_attach_frame(
+                body.as_str(),
+                clipboard_assembler.as_deref_mut(),
+                clipboard_sender,
+            )?);
             pending.drain(..consumed);
             continue;
         } else {
@@ -352,9 +595,48 @@ fn drain_negotiated_iroh_event_frames(
                 "negotiated Iroh event envelope must contain exactly one frame",
             ));
         }
-        action = action.combine(strict_iroh_attach_render_action(body.as_str())?);
+        action = action.combine(apply_negotiated_iroh_attach_frame(
+            body.as_str(),
+            clipboard_assembler.as_deref_mut(),
+            clipboard_sender,
+        )?);
         pending.drain(..consumed);
     }
+}
+
+/// Applies one decoded event or negotiated transient client-effect frame.
+fn apply_negotiated_iroh_attach_frame(
+    body: &str,
+    clipboard_assembler: Option<&mut IrohClipboardAssembler>,
+    clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
+) -> Result<AttachRenderAction> {
+    let method = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("method")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        });
+    if method
+        .as_deref()
+        .is_some_and(|method| method.starts_with("client/clipboard."))
+    {
+        let Some(assembler) = clipboard_assembler else {
+            return Ok(AttachRenderAction::None);
+        };
+        match assembler.apply(body) {
+            Ok(Some(content)) => {
+                if let Some(sender) = clipboard_sender {
+                    sender.send_replace(Some(content));
+                }
+            }
+            Ok(None) => {}
+            Err(_) => assembler.transfer = None,
+        }
+        return Ok(AttachRenderAction::None);
+    }
+    strict_iroh_attach_render_action(body)
 }
 
 fn strict_iroh_attach_render_action(body: &str) -> Result<AttachRenderAction> {
@@ -598,9 +880,24 @@ pub(super) fn attach_render_action_for_event_type(event_type: &str) -> AttachRen
 mod iroh_setup_tests {
     use iroh::endpoint::{QuicTransportConfig, VarInt};
     use iroh::{Endpoint, RelayMode, SecretKey, endpoint::presets};
+    use std::sync::Mutex;
     use tokio::io::AsyncWriteExt;
 
     use super::*;
+
+    static IROH_CLIENT_CLIPBOARD_WRITES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    fn record_iroh_client_clipboard_write(content: &str) -> bool {
+        IROH_CLIENT_CLIPBOARD_WRITES
+            .lock()
+            .unwrap()
+            .push(content.to_string());
+        true
+    }
+
+    fn empty_iroh_client_clipboard_read() -> Option<String> {
+        None
+    }
 
     /// Creates one connected local Iroh pair with server-opened unidirectional
     /// streams enabled on the attach-side client endpoint.
@@ -668,6 +965,8 @@ mod iroh_setup_tests {
             )
             .unwrap(),
             std::time::Duration::from_millis(50),
+            1,
+            None,
         );
 
         let error = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
@@ -704,6 +1003,8 @@ mod iroh_setup_tests {
             )
             .unwrap(),
             std::time::Duration::from_secs(1),
+            1,
+            None,
         );
         let mut stream = server_connection.open_uni().await.unwrap();
         stream
@@ -724,6 +1025,78 @@ mod iroh_setup_tests {
             .unwrap()
             .unwrap();
         assert_eq!(action, AttachRenderAction::View);
+
+        client_connection.close(VarInt::from_u32(0), b"test complete");
+        task.await.unwrap();
+        client.close().await;
+        server.close().await;
+    }
+
+    /// Verifies a negotiated v2 stream assembles one client-local clipboard
+    /// write, executes it through the client-owned adapter, and continues to
+    /// deliver later render events after a malformed transfer is discarded.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_v2_event_receiver_executes_clipboard_and_survives_malformed_effects() {
+        IROH_CLIENT_CLIPBOARD_WRITES.lock().unwrap().clear();
+        let (server, client, server_connection, client_connection) =
+            connected_iroh_event_pair().await;
+        let clipboard = crate::host::terminal::HostClipboard::new(
+            record_iroh_client_clipboard_write,
+            empty_iroh_client_clipboard_read,
+        );
+        let (mut receiver, task) = spawn_iroh_runtime_event_receiver(
+            client_connection.clone(),
+            IrohCompressionPolicy::new(
+                RuntimeIrohCompressionCodec::None,
+                1,
+                3,
+                ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+            )
+            .unwrap(),
+            std::time::Duration::from_secs(1),
+            2,
+            Some(clipboard),
+        );
+        let mut stream = server_connection.open_uni().await.unwrap();
+        stream
+            .write_all(crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE)
+            .await
+            .unwrap();
+        for body in [
+            r#"{"jsonrpc":"2.0","method":"client/clipboard.begin","params":{"sequence":1,"total_bytes":6,"chunks":1}}"#,
+            r#"{"jsonrpc":"2.0","method":"client/clipboard.chunk","params":{"sequence":1,"index":1,"data_base64":"c2VjcmV0"}}"#,
+            r#"{"jsonrpc":"2.0","method":"client/clipboard.begin","params":{"sequence":2,"total_bytes":5,"chunks":1}}"#,
+            r#"{"jsonrpc":"2.0","method":"client/clipboard.chunk","params":{"sequence":2,"index":0,"data_base64":"aGVsbG8="}}"#,
+            r#"{"jsonrpc":"2.0","method":"client/clipboard.commit","params":{"sequence":2}}"#,
+            r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed"}}"#,
+        ] {
+            stream
+                .write_all(&crate::control::encode_control_body(body))
+                .await
+                .unwrap();
+        }
+        stream.flush().await.unwrap();
+
+        let action = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(action, AttachRenderAction::View);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if !IROH_CLIENT_CLIPBOARD_WRITES.lock().unwrap().is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            IROH_CLIENT_CLIPBOARD_WRITES.lock().unwrap().as_slice(),
+            ["hello"]
+        );
 
         client_connection.close(VarInt::from_u32(0), b"test complete");
         task.await.unwrap();
@@ -880,12 +1253,12 @@ mod iroh_tests {
             let split = encoded.as_bytes().len() - 1;
             let mut pending = encoded.as_bytes()[..split].to_vec();
             assert_eq!(
-                drain_negotiated_iroh_event_frames(&mut pending, compression).unwrap(),
+                drain_negotiated_iroh_event_frames(&mut pending, compression, None, None).unwrap(),
                 AttachRenderAction::None
             );
             pending.extend_from_slice(&encoded.as_bytes()[split..]);
             assert_eq!(
-                drain_negotiated_iroh_event_frames(&mut pending, compression).unwrap(),
+                drain_negotiated_iroh_event_frames(&mut pending, compression, None, None).unwrap(),
                 AttachRenderAction::View
             );
             assert!(pending.is_empty());
@@ -909,5 +1282,68 @@ mod iroh_tests {
         let response = strict_iroh_attach_render_action(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)
             .expect_err("control responses must not be accepted on the event stream");
         assert!(response.message().contains("non-event frame"));
+    }
+
+    /// Verifies a negotiated v2 assembler accepts contiguous single- and
+    /// multi-chunk transfers while retaining the original UTF-8 bytes.
+    #[test]
+    fn iroh_clipboard_assembler_completes_ordered_bounded_transfers() {
+        let mut assembler = IrohClipboardAssembler::default();
+        assert!(assembler
+            .apply(r#"{"jsonrpc":"2.0","method":"client/clipboard.begin","params":{"sequence":7,"total_bytes":5,"chunks":2}}"#)
+            .unwrap()
+            .is_none());
+        assert!(assembler
+            .apply(r#"{"jsonrpc":"2.0","method":"client/clipboard.chunk","params":{"sequence":7,"index":0,"data_base64":"aGU="}}"#)
+            .unwrap()
+            .is_none());
+        assert!(assembler
+            .apply(r#"{"jsonrpc":"2.0","method":"client/clipboard.chunk","params":{"sequence":7,"index":1,"data_base64":"bGxv"}}"#)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            assembler
+                .apply(r#"{"jsonrpc":"2.0","method":"client/clipboard.commit","params":{"sequence":7}}"#)
+                .unwrap()
+                .as_deref(),
+            Some("hello")
+        );
+    }
+
+    /// Verifies malformed sequencing is discarded without exposing payload
+    /// bytes through errors or producing a clipboard write.
+    #[test]
+    fn iroh_clipboard_assembler_discards_malformed_private_transfers() {
+        let mut assembler = IrohClipboardAssembler::default();
+        assembler
+            .apply(r#"{"jsonrpc":"2.0","method":"client/clipboard.begin","params":{"sequence":9,"total_bytes":6,"chunks":1}}"#)
+            .unwrap();
+        let error = assembler
+            .apply(r#"{"jsonrpc":"2.0","method":"client/clipboard.chunk","params":{"sequence":9,"index":1,"data_base64":"c2VjcmV0"}}"#)
+            .unwrap_err();
+
+        assert!(error.message().contains("ordering"), "{error:?}");
+        assert!(!error.message().contains("secret"), "{error:?}");
+        assert!(assembler
+            .apply(r#"{"jsonrpc":"2.0","method":"client/clipboard.commit","params":{"sequence":9}}"#)
+            .is_err());
+    }
+
+    /// Verifies incomplete sensitive payloads expire without requiring a new
+    /// begin frame and cannot later be committed.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn iroh_clipboard_assembler_expires_incomplete_transfer() {
+        let mut assembler = IrohClipboardAssembler::default();
+        assembler
+            .apply(r#"{"jsonrpc":"2.0","method":"client/clipboard.begin","params":{"sequence":11,"total_bytes":6,"chunks":1}}"#)
+            .unwrap();
+
+        tokio::time::advance(std::time::Duration::from_secs(5)).await;
+        assembler.discard_expired();
+
+        assert!(assembler.transfer.is_none());
+        assert!(assembler
+            .apply(r#"{"jsonrpc":"2.0","method":"client/clipboard.commit","params":{"sequence":11}}"#)
+            .is_err());
     }
 }
