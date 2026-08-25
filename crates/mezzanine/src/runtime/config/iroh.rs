@@ -36,6 +36,16 @@ pub(crate) enum RuntimeIrohIdentityPolicy {
     Host,
 }
 
+impl RuntimeIrohIdentityPolicy {
+    /// Returns the stable configuration name for this identity policy.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::PerSession => "per_session",
+            Self::Host => "host",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimeIrohAddressLookupPolicy {
     Disabled,
@@ -100,7 +110,7 @@ impl Default for RuntimeIrohTransportPolicy {
             enabled: false,
             outbound_enabled: true,
             bind_port: 0,
-            identity: RuntimeIrohIdentityPolicy::PerSession,
+            identity: RuntimeIrohIdentityPolicy::Host,
             address_lookup: RuntimeIrohAddressLookupPolicy::Disabled,
             relay: RuntimeIrohRelayPolicy::Disabled,
             direct_connections: true,
@@ -134,7 +144,7 @@ pub(crate) fn runtime_iroh_transport_policy_from_config(
     };
     let defaults = RuntimeIrohTransportPolicy::default();
 
-    let identity_name = string_value(iroh, "identity", "per_session")?;
+    let identity_name = string_value(iroh, "identity", defaults.identity.as_str())?;
     let identity = match identity_name.as_str() {
         "per_session" => RuntimeIrohIdentityPolicy::PerSession,
         "host" => RuntimeIrohIdentityPolicy::Host,
@@ -417,12 +427,15 @@ fn bounded_i32_value(
 mod tests {
     use super::*;
 
+    /// Omitted Iroh policy uses the persistent-host identity declared by the
+    /// generated schema while explicit legacy per-session policy remains valid.
     #[test]
     fn iroh_transport_policy_defaults_disabled_and_materializes_explicit_values() {
         let defaults = runtime_iroh_transport_policy_from_config(&serde_json::json!({})).unwrap();
         assert_eq!(defaults, RuntimeIrohTransportPolicy::default());
         assert!(defaults.outbound_enabled);
         assert_eq!(defaults.bind_port, 0);
+        assert_eq!(defaults.identity, RuntimeIrohIdentityPolicy::Host);
         assert_eq!(defaults.max_streams_per_connection, 1);
         assert_eq!(
             defaults.compression_codecs,
@@ -463,6 +476,7 @@ mod tests {
         assert!(policy.enabled);
         assert!(!policy.outbound_enabled);
         assert_eq!(policy.bind_port, 4242);
+        assert_eq!(policy.identity, RuntimeIrohIdentityPolicy::PerSession);
         assert_eq!(
             policy.address_lookup,
             RuntimeIrohAddressLookupPolicy::CustomDns {
@@ -498,6 +512,13 @@ mod tests {
         .unwrap();
         assert_eq!(host.identity, RuntimeIrohIdentityPolicy::Host);
         assert!(!host.enabled);
+
+        let omitted_identity = runtime_iroh_transport_policy_from_config(&serde_json::json!({
+            "transport": { "iroh": { "enabled": true } }
+        }))
+        .unwrap();
+        assert!(omitted_identity.enabled);
+        assert_eq!(omitted_identity.identity, RuntimeIrohIdentityPolicy::Host);
     }
 
     #[test]
