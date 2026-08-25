@@ -142,6 +142,64 @@ fn initial_macos_config_uses_auto_allow_with_policy_only_sandboxing() {
     );
 }
 
+/// Verifies newly generated Linux configuration uses unrestricted approval
+/// inside Bubblewrap when the configured executable is available.
+///
+/// The availability input is injected so this contract remains testable on
+/// builders that do not have Bubblewrap installed at the code-owned path.
+#[test]
+fn initial_linux_config_uses_full_access_with_available_bubblewrap() {
+    let config = initial_config_toml_for_platform(GeneratedConfigPlatform::Linux {
+        bubblewrap_available: true,
+    })
+    .unwrap();
+    let parsed: toml::Value = toml::from_str(&config).unwrap();
+    let permissions = parsed
+        .get("permissions")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    assert_eq!(
+        permissions
+            .get("approval_policy")
+            .and_then(toml::Value::as_str),
+        Some("full-access")
+    );
+    assert_eq!(
+        permissions.get("sandbox").and_then(toml::Value::as_str),
+        Some("bubblewrap")
+    );
+}
+
+/// Verifies newly generated Linux configuration falls back to model-gated
+/// approval and policy-only execution when Bubblewrap is unavailable.
+///
+/// Selecting both values together prevents an unusable fail-closed Bubblewrap
+/// backend from being persisted into first-run configuration.
+#[test]
+fn initial_linux_config_uses_auto_allow_without_bubblewrap() {
+    let config = initial_config_toml_for_platform(GeneratedConfigPlatform::Linux {
+        bubblewrap_available: false,
+    })
+    .unwrap();
+    let parsed: toml::Value = toml::from_str(&config).unwrap();
+    let permissions = parsed
+        .get("permissions")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    assert_eq!(
+        permissions
+            .get("approval_policy")
+            .and_then(toml::Value::as_str),
+        Some("auto-allow")
+    );
+    assert_eq!(
+        permissions.get("sandbox").and_then(toml::Value::as_str),
+        Some("policy-only")
+    );
+}
+
 /// Verifies the first-run configuration does not retain references to model
 /// profiles that are deliberately withheld until provider authentication.
 ///
@@ -265,7 +323,18 @@ fn default_config_matches_documented_example() {
             "sandbox = \"policy-only\""
         },
     );
-    if cfg!(target_os = "macos") {
+    if cfg!(target_os = "linux") {
+        documented = documented.replace(
+            "approval_policy = \"ask\"",
+            if crate::security::sandbox::bubblewrap_executable_available(std::path::Path::new(
+                "/usr/bin/bwrap",
+            )) {
+                "approval_policy = \"full-access\""
+            } else {
+                "approval_policy = \"auto-allow\""
+            },
+        );
+    } else if cfg!(target_os = "macos") {
         documented = documented.replace(
             "approval_policy = \"ask\"",
             "approval_policy = \"auto-allow\"",

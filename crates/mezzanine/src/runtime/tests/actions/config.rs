@@ -1480,7 +1480,20 @@ fn runtime_config_change_resumes_after_full_access_change() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let config_root = temp_root("runtime-agent-config-change-persist");
+    let config_path = config_root.join("config.toml");
+    fs::create_dir_all(&config_root).unwrap();
+    fs::write(&config_path, crate::config::DEFAULT_CONFIG_TOML).unwrap();
     service.set_config_root(config_root.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(config_path),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: crate::config::DEFAULT_CONFIG_TOML.to_string(),
+        }])
+        .unwrap();
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();

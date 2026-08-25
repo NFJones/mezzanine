@@ -16,6 +16,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 
 use mez_agent::permissions::{
@@ -82,6 +84,18 @@ pub(crate) fn bubblewrap_failure_remediation(message: &str) -> String {
         "{}. Run `mez sandbox status --verbose` to inspect the executable, authority, and configuration remedies.",
         message.trim().trim_end_matches('.')
     )
+}
+
+/// Returns whether a configured Bubblewrap path names an executable file.
+///
+/// This side-effect-free check is shared by first-run configuration selection
+/// and sandbox diagnostics. Full runtime capability remains verified per pane
+/// before any sandboxed workload starts.
+pub(crate) fn bubblewrap_executable_available(path: &Path) -> bool {
+    match std::fs::metadata(path) {
+        Ok(metadata) => metadata.is_file() && metadata.permissions().mode() & 0o111 != 0,
+        Err(_) => false,
+    }
 }
 
 /// Inputs required to compile one authorized command into a launch plan.

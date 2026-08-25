@@ -10,7 +10,10 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GeneratedConfigPlatform {
     /// Linux, where Bubblewrap can provide operating-system confinement.
-    Linux,
+    Linux {
+        /// Whether the code-owned Bubblewrap executable is available.
+        bubblewrap_available: bool,
+    },
     /// macOS, where first-run actions use model-gated automatic approval.
     MacOs,
     /// Any other supported platform without a native sandbox backend.
@@ -21,7 +24,11 @@ impl GeneratedConfigPlatform {
     /// Returns the platform targeted by the current build.
     fn current() -> Self {
         if cfg!(target_os = "linux") {
-            Self::Linux
+            Self::Linux {
+                bubblewrap_available: crate::security::sandbox::bubblewrap_executable_available(
+                    std::path::Path::new("/usr/bin/bwrap"),
+                ),
+            }
         } else if cfg!(target_os = "macos") {
             Self::MacOs
         } else {
@@ -90,7 +97,13 @@ pub(crate) fn initial_config_toml_for_platform(
         })?;
     *approval_policy = toml_edit::Value::from(match platform {
         GeneratedConfigPlatform::MacOs => "auto-allow",
-        GeneratedConfigPlatform::Linux | GeneratedConfigPlatform::Other => "ask",
+        GeneratedConfigPlatform::Linux {
+            bubblewrap_available: true,
+        } => "full-access",
+        GeneratedConfigPlatform::Linux {
+            bubblewrap_available: false,
+        } => "auto-allow",
+        GeneratedConfigPlatform::Other => "ask",
     });
     let sandbox = permissions
         .get_mut("sandbox")
@@ -101,7 +114,12 @@ pub(crate) fn initial_config_toml_for_platform(
             )
         })?;
     *sandbox = toml_edit::Value::from(match platform {
-        GeneratedConfigPlatform::Linux => "bubblewrap",
+        GeneratedConfigPlatform::Linux {
+            bubblewrap_available: true,
+        } => "bubblewrap",
+        GeneratedConfigPlatform::Linux {
+            bubblewrap_available: false,
+        } => "policy-only",
         GeneratedConfigPlatform::MacOs | GeneratedConfigPlatform::Other => "policy-only",
     });
     Ok(document.to_string())
@@ -875,18 +893,19 @@ auto_sizing_large_model_profile = "anthropic-default"
 allowed_reasoning_efforts = ["high"]
 
 [permissions]
-# macOS-generated configuration selects auto-allow; this Linux template uses
-# ask. auto-allow uses the model gate; full-access skips prompts but stays
-# sandboxed. host-access is primary-user-only and executes
+# Generated Linux configuration selects full-access when Bubblewrap is
+# available and auto-allow otherwise. macOS also selects auto-allow.
+# auto-allow uses the model gate; full-access skips prompts but stays sandboxed.
+# host-access is primary-user-only and executes
 # local shell actions on the host outside the configured sandbox.
 # Sandbox, scope, network, and approval settings are also primary-user-only;
 # trusted project overlays may not change this execution boundary.
 approval_policy = "ask"
 # Optional named permission preset applied before explicit settings.
 # preset = "default"
-# Linux-generated configuration uses Bubblewrap for OS-level confinement.
-# macOS and other platforms use policy-only execution until they provide an
-# equivalent sandbox backend.
+# Generated Linux configuration uses Bubblewrap for OS-level confinement when
+# its code-owned executable is available, and policy-only otherwise. macOS and
+# other platforms use policy-only until they provide an equivalent backend.
 sandbox = "bubblewrap"
 # Scope paths may name files or directories. A Unix-domain socket may also be
 # placed in read_scopes for an explicitly trusted service endpoint; a read-only

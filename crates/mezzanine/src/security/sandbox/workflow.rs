@@ -5,8 +5,8 @@
 //! performs no capability probes and creates no managed-home directories;
 //! commands that mutate sandbox policy build on this projection separately.
 
+#[cfg(test)]
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -16,7 +16,9 @@ use mez_agent::ApprovalPolicy;
 use crate::runtime::{ConfiguredPermissions, SandboxConfig};
 use crate::security::project::{ProjectRootDiscovery, ProjectRootMarkerKind, TrustDecision};
 
-use super::{BUBBLEWRAP_RESTRICTION_IDS, inspect_bubblewrap_managed_home};
+use super::{
+    BUBBLEWRAP_RESTRICTION_IDS, bubblewrap_executable_available, inspect_bubblewrap_managed_home,
+};
 
 /// Inputs used to build one side-effect-free sandbox workflow projection.
 pub(crate) struct SandboxWorkflowRequest<'a> {
@@ -236,7 +238,11 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
         SandboxConfig::PolicyOnly => (None, "not-configured", "not-applicable", 0, false, false),
         SandboxConfig::Bubblewrap(config) => {
             let executable = PathBuf::from(&config.executable);
-            let executable_state = inspect_executable(&executable);
+            let executable_state = if bubblewrap_executable_available(&executable) {
+                "available"
+            } else {
+                "unavailable"
+            };
             let (managed_home_state, managed_home_bytes, managed_home_active) = if trusted {
                 inspect_managed_home_state(request.config_root, &request.discovery.canonical_root)
             } else {
@@ -406,16 +412,6 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             reason: None,
         },
         diagnostics,
-    }
-}
-
-fn inspect_executable(path: &Path) -> &'static str {
-    match fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 => {
-            "available"
-        }
-        Ok(_) => "unavailable",
-        Err(_) => "unavailable",
     }
 }
 

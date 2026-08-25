@@ -3743,7 +3743,10 @@ The `permissions` table MUST support `approval_policy`, `sandbox`,
 `network_policy`, `destructive_action_policy`, `bypass_mode`, and the typed
 `bubblewrap` table. Newly generated macOS configuration MUST pair
 `approval_policy = "auto-allow"` with `sandbox = "policy-only"`. Generated
-Linux configuration MUST default to fail-closed `bubblewrap`; generated
+Linux configuration MUST pair `approval_policy = "full-access"` with
+`sandbox = "bubblewrap"` when `/usr/bin/bwrap` is an executable regular file.
+When that executable is unavailable, generated Linux configuration MUST pair
+`approval_policy = "auto-allow"` with `sandbox = "policy-only"`. Generated
 configuration on other platforms MUST use `policy-only`. Policy-only execution provides approval
 classification and auditing, not operating-system filesystem or shell-network
 confinement. Under policy-only execution, configured and subagent scopes are
