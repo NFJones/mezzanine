@@ -1412,7 +1412,7 @@ mod outbound_policy_tests {
                 name: Some("from-invitation".to_string()),
                 idempotency_key: "two-step-create".to_string(),
             };
-            let (create_channel, create_response) = open_persistent_iroh_control_channel(
+            let (mut create_channel, create_response) = open_persistent_iroh_control_channel(
                 &create_target,
                 &create_env,
                 "primary",
@@ -1443,11 +1443,33 @@ mod outbound_policy_tests {
                 .scope,
                 RemoteClientProfileScope::Host
             );
+            let view_request = r#"{"jsonrpc":"2.0","id":"host-routed-view","method":"terminal/view","params":{"client_size":{"columns":80,"rows":24}}}"#;
+            tokio::io::AsyncWriteExt::write_all(
+                create_channel.stream_mut(),
+                &encode_control_body(view_request),
+            )
+            .await
+            .unwrap();
+            tokio::io::AsyncWriteExt::flush(create_channel.stream_mut())
+                .await
+                .unwrap();
+            let create_view = read_persistent_iroh_control_frame(
+                create_channel.stream_mut(),
+                std::time::Duration::from_secs(3),
+            )
+            .await
+            .unwrap();
+            let create_view: serde_json::Value = serde_json::from_str(&create_view).unwrap();
+            assert_eq!(
+                create_view["result"]["view"]["iroh_status_slot"]["width"],
+                crate::host::terminal::TERMINAL_IROH_STATUS_SLOT_WIDTH,
+                "{create_view}"
+            );
 
             let (attach_env, attach_target) =
                 invitation_client_fixture(&root, "attacher", &server_addr, &attach_invitation);
             let attach_routing = IrohSessionRouting::Attach { target: session_id };
-            let (attach_channel, attach_response) = open_persistent_iroh_control_channel(
+            let (mut attach_channel, attach_response) = open_persistent_iroh_control_channel(
                 &attach_target,
                 &attach_env,
                 "observer",
@@ -1461,6 +1483,28 @@ mod outbound_policy_tests {
             let attach_response: serde_json::Value =
                 serde_json::from_str(&attach_response).unwrap();
             assert_eq!(attach_response["result"]["lease"]["lease_id"], lease_id);
+            let view_request = r#"{"jsonrpc":"2.0","id":"host-routed-view","method":"terminal/view","params":{"client_size":{"columns":80,"rows":24}}}"#;
+            tokio::io::AsyncWriteExt::write_all(
+                attach_channel.stream_mut(),
+                &encode_control_body(view_request),
+            )
+            .await
+            .unwrap();
+            tokio::io::AsyncWriteExt::flush(attach_channel.stream_mut())
+                .await
+                .unwrap();
+            let attach_view = read_persistent_iroh_control_frame(
+                attach_channel.stream_mut(),
+                std::time::Duration::from_secs(3),
+            )
+            .await
+            .unwrap();
+            let attach_view: serde_json::Value = serde_json::from_str(&attach_view).unwrap();
+            assert_eq!(
+                attach_view["result"]["view"]["iroh_status_slot"]["width"],
+                crate::host::terminal::TERMINAL_IROH_STATUS_SLOT_WIDTH,
+                "{attach_view}"
+            );
             attach_channel.close().await;
             create_channel.close().await;
             stop.notify_one();
