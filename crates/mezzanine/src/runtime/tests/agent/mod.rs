@@ -15,3 +15,4 @@ mod prompt;
 mod scheduling;
 mod shell;
 mod skills;
+mod subagent_pane_close;

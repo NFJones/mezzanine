@@ -1007,6 +1007,14 @@ impl RuntimeSessionService {
             .remove(pane_id)
     }
 
+    /// Marks one terminal subagent pane for deferred close in focused tests.
+    #[cfg(test)]
+    pub(crate) fn mark_terminal_subagent_pane_close_for_tests(&mut self, pane_id: &str) {
+        self.agent
+            .pending_terminal_subagent_pane_closes
+            .insert(pane_id.to_string());
+    }
+
     /// Reports whether one terminal subagent pane is awaiting deferred close.
     #[cfg(test)]
     pub(crate) fn has_pending_terminal_subagent_pane_close(&self, pane_id: &str) -> bool {

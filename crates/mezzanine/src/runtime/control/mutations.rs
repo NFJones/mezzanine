@@ -506,10 +506,10 @@ impl RuntimeSessionService {
                 "pane closed",
             )?;
         }
-        let removed = self
-            .session
-            .kill_pane(primary_client_id, target.as_deref(), force)?;
-        let terminated = if let Some(pane) = removed {
+        let transition =
+            self.session
+                .kill_pane_with_effects(primary_client_id, target.as_deref(), force)?;
+        let terminated = if let Some(pane) = transition.pane {
             let pane_id = pane.id.to_string();
             let _ = self.stop_active_pane_pipe(pane.id.as_str());
             let terminated = usize::from(self.terminate_runtime_pane_process(&pane_id, force)?);
@@ -518,6 +518,7 @@ impl RuntimeSessionService {
         } else {
             0
         };
+        self.sync_pane_resize_effects(&transition.effects)?;
         self.session
             .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
                 self.session.state,
