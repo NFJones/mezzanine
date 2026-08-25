@@ -256,7 +256,7 @@ where
             return Err(MezError::forbidden("Iroh terminal input was rejected"));
         }
         let refresh_requirement = terminal_step_response_refresh_requirement(body.as_str())?;
-        if refresh_requirement.session_terminated {
+        if refresh_requirement.client_detached || refresh_requirement.session_terminated {
             return Ok(());
         }
         if refresh_requirement.full_redraw_required {
@@ -377,7 +377,7 @@ where
             break Ok(());
         }
         let refresh_requirement = terminal_step_response_refresh_requirement(body.as_str())?;
-        if refresh_requirement.session_terminated {
+        if refresh_requirement.client_detached || refresh_requirement.session_terminated {
             break Ok(());
         }
         if refresh_requirement.full_redraw_required {
@@ -502,7 +502,7 @@ where
             break Ok(());
         }
         let refresh_requirement = terminal_step_response_refresh_requirement(body.as_str())?;
-        if refresh_requirement.session_terminated {
+        if refresh_requirement.client_detached || refresh_requirement.session_terminated {
             break Ok(());
         }
         if refresh_requirement.full_redraw_required {

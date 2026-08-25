@@ -41,7 +41,7 @@ mez remote status
 mez remote invite --role observer
 ```
 
-`status` reports the public per-session endpoint identity and, while the listener
+`status` reports the public persistent-host endpoint identity and, while the listener
 is bound, its current dialable endpoint address. `invite` returns a short-lived
 bearer token once together with that pinned address, role, expiry, and profile
 name. The versioned invitation envelope currently uses format version 1. Its

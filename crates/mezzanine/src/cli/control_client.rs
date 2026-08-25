@@ -1280,7 +1280,9 @@ mod outbound_policy_tests {
 
     use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
     use crate::host::iroh::HostIrohRuntime;
-    use crate::host::router::{HostSessionRouter, HostSessionRouterConfig};
+    use crate::host::router::{
+        HostDefaultSessionPolicy, HostRecoveryPolicy, HostSessionRouter, HostSessionRouterConfig,
+    };
     use crate::host::shell::{ResolvedShell, ShellSource};
     use crate::security::remote::{
         RemoteHostRoutingAuthority, RemoteSessionAttachScope, RemoteTrustStore,
@@ -1352,6 +1354,9 @@ mod outbound_policy_tests {
             shell: ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
             max_sessions: 8,
             max_live_sessions: 8,
+            recovery_policy: HostRecoveryPolicy::Lazy,
+            default_session_policy: HostDefaultSessionPolicy::MostRecentAttachable,
+            default_lease_lifetime_seconds: 0,
         });
         let trust = RemoteTrustStore::under_host_config_root(&host_config_root).unwrap();
         let now = super::current_unix_seconds_for_iroh_client().unwrap();

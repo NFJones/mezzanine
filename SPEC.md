@@ -6,6 +6,8 @@
   - [3. Terminology](#3-terminology)
   - [4. System Model](#4-system-model)
   - [5. Session, Client, and Process Lifecycle](#5-session-client-and-process-lifecycle)
+    - [5.1 Persistent Host and Session Supervision](#51-persistent-host-and-session-supervision)
+    - [5.2 Durable Remote Session Leases](#52-durable-remote-session-leases)
   - [6. Terminal Multiplexing](#6-terminal-multiplexing)
     - [6.1 Windows](#61-windows)
     - [6.2 Panes](#62-panes)
@@ -8214,7 +8216,7 @@ The baseline control methods are:
 | `buffer/delete` | `{ "name": string, "idempotency_key": string }` | `{ "name": string, "deleted": true }` | Primary-only mutation; unknown names return `not_found`. |
 | `frame/read` | `{ "target": WindowTarget \| PaneTarget }` | `{ "fields": object, "rendered": string }` | Read-only and naturally idempotent. |
 | `terminal/view` | `{ "client_size": { "columns": integer, "rows": integer } \| null, "view_offset": { "row": integer, "column": integer } \| null }` | `{ "view": RenderedClientView \| null }` | Read-only for an attached primary or approved observer. Pending observers MUST receive no session view. `viewport` MAY be accepted as a compatibility alias for `view_offset`. |
-| `terminal/step` | `{ "idempotency_key": string, "client_size": { "columns": integer, "rows": integer } \| null, "render": boolean \| null, "input_bytes": [integer] }` | `{ "input_bytes": integer, "application": object, "view": RenderedClientView \| null, "ui_theme": object \| null, "session_terminated": boolean }` | Primary-only mutating input and resize step. Every input byte MUST be in `0..255`; `render` defaults to true. |
+| `terminal/step` | `{ "idempotency_key": string, "client_size": { "columns": integer, "rows": integer } \| null, "render": boolean \| null, "input_bytes": [integer] }` | `{ "input_bytes": integer, "application": object, "view": RenderedClientView \| null, "ui_theme": object \| null, "client_detached": boolean, "session_terminated": boolean }` | Primary-only mutating input and resize step. Every input byte MUST be in `0..255`; `render` defaults to true. `client_detached` reports that this acknowledged step detached the invoking client while leaving the session available for reattachment. |
 | `terminal/command` | `{ "idempotency_key": string, "input": string }` | `{ "executed": integer, "outcomes": [CommandOutcome] }` | Primary-only mutating command-prompt execution. `input` MUST use the terminal command language rather than a JSON-RPC method alias. |
 | `agent/shell/show` | `{ "target": PaneTarget, "idempotency_key": string }` | `{ "agent": AgentState, "visible": true }` | Mutating UI state. |
 | `agent/shell/hide` | `{ "target": PaneTarget, "idempotency_key": string }` | `{ "agent": AgentState, "visible": false }` | Mutating UI state. MUST stop active pane-local agent work before hiding. |

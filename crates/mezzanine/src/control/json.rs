@@ -44,6 +44,7 @@ pub(super) fn error_code(kind: crate::error::MezErrorKind) -> i32 {
         crate::error::MezErrorKind::Conflict => -32006,
         crate::error::MezErrorKind::NotFound => -32005,
         crate::error::MezErrorKind::Forbidden => -32002,
+        crate::error::MezErrorKind::RateLimited => -32011,
         crate::error::MezErrorKind::NotImplemented => -32601,
         crate::error::MezErrorKind::Config | crate::error::MezErrorKind::Io => -32000,
     }
@@ -61,6 +62,7 @@ pub(super) fn mezzanine_error_code(kind: crate::error::MezErrorKind) -> &'static
         crate::error::MezErrorKind::Conflict => "conflict",
         crate::error::MezErrorKind::NotFound => "not_found",
         crate::error::MezErrorKind::Forbidden => "forbidden",
+        crate::error::MezErrorKind::RateLimited => "rate_limited",
         crate::error::MezErrorKind::NotImplemented => "method_not_found",
         crate::error::MezErrorKind::Config | crate::error::MezErrorKind::Io => "internal_error",
     }

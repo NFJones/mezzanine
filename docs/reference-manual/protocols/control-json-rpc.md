@@ -153,7 +153,7 @@ Every v3 initialize request includes one intent. V2 requests omit the v3
 fields, and a direct session endpoint rejects v3. The host authenticates and
 authorizes the paired device before target lookup, lease reservation, runtime
 allocation, or session disclosure. `host_only` returns null `session` and
-`lease` and permits no session method. After future session routing, the
+`lease` and permits no session method. After successful session routing, the
 connection is permanently bound to one session actor and later targets must
 continue to match it.
 
@@ -163,7 +163,7 @@ reusing it with different inputs is a conflict. Pairing, invitation redemption,
 profile checks, and host administration use `host_only`, so those operations
 cannot accidentally provision a session.
 
-The reserved host RPC catalog is `host/get`, `host/shutdown`,
+The implemented host RPC catalog is `host/get`, `host/shutdown`,
 `host/reconcile`, `host/session/list`, `host/session/create`, and
 `host/session/resolve`. The lease catalog is `lease/list`, `lease/get`,
 `lease/checkpoint`, `lease/recover`, `lease/release`, `lease/revoke`, and
@@ -304,7 +304,9 @@ Send user input through `terminal/step`, with bytes as integers in `0..255`.
 Include `client_size` whenever geometry changes and set `render` false only
 when the caller deliberately wants no immediate view. Its result reports input
 count, forwarded bytes, multiplexer/agent/mouse actions, redraw requirements,
-unsupported actions, optional `view`, UI theme, and session termination.
+unsupported actions, optional `view`, UI theme, acknowledged client detach,
+and session termination. A true `client_detached` ends that attach loop cleanly
+without implying that the durable session was terminated.
 
 ```json
 {"jsonrpc":"2.0","id":3,"method":"terminal/step","params":{"idempotency_key":"ui-step-0001","client_size":{"columns":120,"rows":40},"render":true,"input_bytes":[108,115,13]}}

@@ -126,6 +126,12 @@ fn remote_invite_sends_bounded_params_and_renders_plain_output() {
         assert!(invite.contains(r#""expires_seconds":120"#), "{invite}");
         assert!(invite.contains(r#""allow_create":true"#), "{invite}");
         assert!(invite.contains(r#""allow_kill":true"#), "{invite}");
+        assert!(invite.contains(r#""max_leases":3"#), "{invite}");
+        assert!(invite.contains(r#""max_live_sessions":2"#), "{invite}");
+        assert!(
+            invite.contains(r#""lease_lifetime_ceiling_seconds":3600"#),
+            "{invite}"
+        );
         assert!(invite.contains(r#""idempotency_key":""#), "{invite}");
         stream
             .write_all(&encode_control_body(
@@ -147,6 +153,12 @@ fn remote_invite_sends_bounded_params_and_renders_plain_output() {
             "primary".to_string(),
             "--allow-create".to_string(),
             "--allow-kill".to_string(),
+            "--max-leases".to_string(),
+            "3".to_string(),
+            "--max-live-sessions".to_string(),
+            "2".to_string(),
+            "--lease-lifetime-ceiling".to_string(),
+            "3600".to_string(),
             "--expires".to_string(),
             "120".to_string(),
         ],

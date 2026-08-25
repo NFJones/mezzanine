@@ -42,6 +42,9 @@ enum RemoteCliCommand {
         /// Maximum concurrently live sessions granted to this paired device.
         #[arg(long, value_name = "N", requires = "allow_create")]
         max_live_sessions: Option<usize>,
+        /// Maximum lifetime in seconds for leases created by this paired device.
+        #[arg(long, value_name = "SECONDS", requires = "allow_create")]
+        lease_lifetime_ceiling: Option<u64>,
         /// Optional invitation lifetime in seconds; the server policy supplies the default.
         #[arg(long = "expires")]
         expires_seconds: Option<u64>,
@@ -158,6 +161,7 @@ pub(super) async fn run_remote<W: Write>(
             allow_kill,
             max_leases,
             max_live_sessions,
+            lease_lifetime_ceiling,
             expires_seconds,
             output,
         } => {
@@ -181,6 +185,10 @@ pub(super) async fn run_remote<W: Write>(
             }
             if let Some(max_live_sessions) = max_live_sessions {
                 params["max_live_sessions"] = serde_json::Value::from(max_live_sessions);
+            }
+            if let Some(lease_lifetime_ceiling) = lease_lifetime_ceiling {
+                params["lease_lifetime_ceiling_seconds"] =
+                    serde_json::Value::from(lease_lifetime_ceiling);
             }
             if let Some(expires_seconds) = expires_seconds {
                 params["expires_seconds"] = serde_json::Value::from(expires_seconds);

@@ -55,6 +55,6 @@ node_modules/
 /target
 .aider*
 .codex
-
+.cargo-loc
 
 docs/reference

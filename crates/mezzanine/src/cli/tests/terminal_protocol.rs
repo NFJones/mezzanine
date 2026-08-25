@@ -1339,6 +1339,86 @@ async fn iroh_primary_attach_loop_orders_resize_input_and_view() {
     assert_eq!(io.written_frames[0].lines, vec!["remote ordered"]);
 }
 
+/// Verifies an acknowledged remote detach exits cleanly without issuing a
+/// follow-up terminal view request against the now-detached client.
+#[tokio::test(flavor = "current_thread")]
+async fn iroh_primary_attach_loop_stops_after_acknowledged_detach() {
+    let (mut client_stream, mut server_stream) = tokio::io::duplex(64 * 1024);
+    let server = tokio::spawn(async move {
+        let request = crate::cli::attach::read_async_control_response_frames(
+            &mut server_stream,
+            1024 * 1024,
+            1,
+        )
+        .await
+        .unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/step")
+        );
+        assert_eq!(
+            parsed
+                .get("params")
+                .and_then(|params| params.get("input_bytes"))
+                .and_then(serde_json::Value::as_array)
+                .map(|bytes| bytes
+                    .iter()
+                    .filter_map(serde_json::Value::as_u64)
+                    .collect::<Vec<_>>()),
+            Some(vec![1, u64::from(b'd')])
+        );
+        let id = parsed.get("id").cloned().unwrap();
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "application": {
+                    "view_refresh_required": true,
+                    "full_redraw_required": false
+                },
+                "client_detached": true,
+                "session_terminated": false
+            }
+        })
+        .to_string();
+        tokio::io::AsyncWriteExt::write_all(&mut server_stream, &encode_control_body(&response))
+            .await
+            .unwrap();
+        tokio::io::AsyncWriteExt::flush(&mut server_stream)
+            .await
+            .unwrap();
+        let mut unexpected = [0u8; 256];
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(50),
+                tokio::io::AsyncReadExt::read(&mut server_stream, &mut unexpected),
+            )
+            .await
+            .is_err(),
+            "remote detach issued an unexpected follow-up request"
+        );
+    });
+
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_input(b"\x01d".to_vec());
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    run_iroh_attached_primary_client_loop_async(
+        &mut client_stream,
+        &mut io,
+        primary_client_id,
+        Size::new(80, 24).unwrap(),
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+
+    assert_eq!(io.presentation_entries, 1);
+    assert!(io.written_frames.is_empty());
+}
+
 /// Verifies a lost acknowledgement after remote terminal input is visible and
 /// never causes the client to reconnect or replay the buffered input.
 #[tokio::test(flavor = "current_thread")]

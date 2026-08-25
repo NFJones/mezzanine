@@ -1195,6 +1195,7 @@ fn remote_lease_summary(lease: &RemoteSessionLease) -> Value {
         "name": lease.name,
         "state": remote_lease_state_name(lease.state),
         "created_at_unix_seconds": lease.created_at_unix_seconds,
+        "expires_at_unix_seconds": lease.expires_at_unix_seconds,
     })
 }
 
@@ -1258,6 +1259,7 @@ fn host_json_rpc_error(id: Value, error: &MezError) -> String {
         MezErrorKind::Forbidden => -32002,
         MezErrorKind::Conflict => -32006,
         MezErrorKind::NotFound => -32005,
+        MezErrorKind::RateLimited => -32011,
         _ => -32004,
     };
     json!({
@@ -1266,10 +1268,23 @@ fn host_json_rpc_error(id: Value, error: &MezError) -> String {
         "error": {
             "code": code,
             "message": error.message(),
-            "data": { "mezzanine_code": format!("{:?}", error.kind()).to_lowercase() }
+            "data": { "mezzanine_code": host_error_name(error.kind()) }
         }
     })
     .to_string()
+}
+
+fn host_error_name(kind: MezErrorKind) -> &'static str {
+    match kind {
+        MezErrorKind::InvalidArgs => "invalid_params",
+        MezErrorKind::InvalidState => "invalid_state",
+        MezErrorKind::Config | MezErrorKind::Io => "internal_error",
+        MezErrorKind::Conflict => "conflict",
+        MezErrorKind::NotFound => "not_found",
+        MezErrorKind::Forbidden => "forbidden",
+        MezErrorKind::RateLimited => "rate_limited",
+        MezErrorKind::NotImplemented => "method_not_found",
+    }
 }
 
 fn current_unix_seconds() -> Result<u64> {
@@ -1596,6 +1611,10 @@ mod tests {
             shell: ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
             max_sessions: 8,
             max_live_sessions: 8,
+            recovery_policy: crate::host::router::HostRecoveryPolicy::Lazy,
+            default_session_policy:
+                crate::host::router::HostDefaultSessionPolicy::MostRecentAttachable,
+            default_lease_lifetime_seconds: 0,
         });
         let invitation = host
             .trust

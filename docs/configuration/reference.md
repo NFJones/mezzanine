@@ -143,7 +143,7 @@ does not require Iroh pairing.
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
 | `host.enabled` | boolean | `false` | Enable persistent-host startup policy. |
-| `host.auto_start_local` | boolean | `true` | Allow ordinary local commands to start the host when the host command integration is available. |
+| `host.auto_start_local` | boolean | `true` | Allow ordinary local commands to start the host when `host.enabled` is true. |
 | `host.max_sessions` | integer | `64` | Maximum durable session assignments; must be positive. |
 | `host.max_live_sessions` | integer | `16` | Maximum concurrently live session runtimes; must be positive. |
 | `host.shutdown_timeout_ms` | integer | `10000` | Bounded graceful host shutdown interval; must be positive. |
@@ -214,9 +214,8 @@ the lower-CPU alternative. Keep these defaults unless a comparable release-mode
 run of the checked-in fixtures contradicts the documented budgets in the Iroh
 operations guide.
 
-Running `mez remote status` through local Unix control ensures the protected
-per-session endpoint identity exists and reports its public endpoint ID and the
-current bound endpoint address when available. The private endpoint key, client
+Running `mez remote status` through local Unix control reports the persistent
+host endpoint identity when Iroh is enabled. The private endpoint key, client
 endpoint key, protected profiles, device credentials, and trust database are
 not configuration fields and must not be edited directly. See [Remote pairing
 and recovery](../safety-and-trust/remote-pairing-and-recovery.md).

@@ -116,18 +116,57 @@ async fn run_host_serve<W: Write>(
     let max_live_sessions = max_live_sessions_override
         .or_else(|| host_usize(host, "max_live_sessions"))
         .unwrap_or(16);
-    let max_remote_leases = host
+    let leases = host
         .and_then(|host| host.get("leases"))
-        .and_then(serde_json::Value::as_object)
+        .and_then(serde_json::Value::as_object);
+    let max_remote_leases = leases
         .and_then(|leases| leases.get("max_per_remote_client"))
         .and_then(serde_json::Value::as_u64)
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(8);
+    let default_lease_lifetime_seconds = leases
+        .and_then(|leases| leases.get("default_ttl_seconds"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let failed_lease_retention_seconds = leases
+        .and_then(|leases| leases.get("failed_retention_seconds"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(604_800);
+    let released_lease_retention_seconds = leases
+        .and_then(|leases| leases.get("released_retention_seconds"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(604_800);
     let shutdown_timeout = Duration::from_millis(
         host.and_then(|host| host.get("shutdown_timeout_ms"))
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(10_000),
     );
+    let checkpoint_interval = Duration::from_secs(
+        host.and_then(|host| host.get("checkpoint_interval_seconds"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(300),
+    );
+    let recovery_policy = match host
+        .and_then(|host| host.get("recover_on_start"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("lazy")
+    {
+        "lazy" => crate::host::router::HostRecoveryPolicy::Lazy,
+        "eager" => crate::host::router::HostRecoveryPolicy::Eager,
+        "disabled" => crate::host::router::HostRecoveryPolicy::Disabled,
+        _ => return Err(MezError::config("invalid host.recover_on_start policy")),
+    };
+    let default_session_policy = match host
+        .and_then(|host| host.get("default_session_policy"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("most_recent_attachable")
+    {
+        "most_recent_attachable" => {
+            crate::host::router::HostDefaultSessionPolicy::MostRecentAttachable
+        }
+        "none" => crate::host::router::HostDefaultSessionPolicy::None,
+        _ => return Err(MezError::config("invalid host.default_session_policy")),
+    };
     let runtime_root = default_socket_directory(&env.runtime)?.path;
     let ownership = HostOwnershipGuard::acquire(paths.root(), env.runtime.uid)?;
     let iroh_policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
@@ -143,6 +182,12 @@ async fn run_host_serve<W: Write>(
             max_sessions,
             max_live_sessions,
             shutdown_timeout,
+            checkpoint_interval,
+            recovery_policy,
+            default_session_policy,
+            default_lease_lifetime_seconds,
+            failed_lease_retention_seconds,
+            released_lease_retention_seconds,
             iroh_invitation_issuer: iroh.as_ref().map(HostIrohRuntime::invitation_issuer),
             max_remote_leases,
             audit_log,
@@ -152,7 +197,7 @@ async fn run_host_serve<W: Write>(
     if let Some(iroh) = iroh.as_mut() {
         iroh.set_audit_log(server.audit_log_handle());
     }
-    server.prepare_startup().await?;
+    let _ = server.prepare_startup().await?;
     let started = serde_json::json!({
         "serving": true,
         "host": true,
@@ -636,6 +681,13 @@ mod tests {
             max_sessions: 8,
             max_live_sessions: 4,
             shutdown_timeout: Duration::from_secs(2),
+            checkpoint_interval: Duration::from_secs(300),
+            recovery_policy: crate::host::router::HostRecoveryPolicy::Lazy,
+            default_session_policy:
+                crate::host::router::HostDefaultSessionPolicy::MostRecentAttachable,
+            default_lease_lifetime_seconds: 0,
+            failed_lease_retention_seconds: 604_800,
+            released_lease_retention_seconds: 604_800,
             iroh_invitation_issuer: None,
             max_remote_leases: 8,
             audit_log: None,
@@ -648,7 +700,13 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(status["ready"], true);
+            assert_eq!(status["boot_generation"], 1);
+            assert_eq!(status["iroh"]["enabled"], false);
             assert_eq!(status["running_sessions"], 0);
+            assert_eq!(status["stopping_sessions"], 0);
+            assert_eq!(status["failed_sessions"], 0);
+            assert_eq!(status["leases"]["active"], 0);
+            assert_eq!(status["leases"]["recoverable"], 0);
 
             let first = host_resolve_or_create_session(&env).await.unwrap();
             let selected_again = host_resolve_or_create_session(&env).await.unwrap();
@@ -706,6 +764,13 @@ mod tests {
             max_sessions: 8,
             max_live_sessions: 4,
             shutdown_timeout: Duration::from_secs(2),
+            checkpoint_interval: Duration::from_secs(300),
+            recovery_policy: crate::host::router::HostRecoveryPolicy::Lazy,
+            default_session_policy:
+                crate::host::router::HostDefaultSessionPolicy::MostRecentAttachable,
+            default_lease_lifetime_seconds: 0,
+            failed_lease_retention_seconds: 604_800,
+            released_lease_retention_seconds: 604_800,
             iroh_invitation_issuer: None,
             max_remote_leases: 8,
             audit_log: None,

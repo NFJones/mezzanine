@@ -24,6 +24,7 @@ impl From<MezErrorKind> for mez_agent::ProviderErrorKind {
             MezErrorKind::Conflict => Self::Conflict,
             MezErrorKind::NotFound => Self::NotFound,
             MezErrorKind::Forbidden => Self::Forbidden,
+            MezErrorKind::RateLimited => Self::InvalidState,
             MezErrorKind::NotImplemented => Self::NotImplemented,
         }
     }
@@ -482,6 +483,8 @@ pub enum MezErrorKind {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     Forbidden,
+    /// The authenticated caller exceeded a bounded admission budget.
+    RateLimited,
     /// Represents the Not Implemented case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -588,6 +591,11 @@ impl MezError {
     /// on duplicated control-flow logic.
     pub fn forbidden(message: impl Into<String>) -> Self {
         Self::new(MezErrorKind::Forbidden, message)
+    }
+
+    /// Returns a stable rate-limited failure for bounded admission controls.
+    pub fn rate_limited(message: impl Into<String>) -> Self {
+        Self::new(MezErrorKind::RateLimited, message)
     }
 
     /// Runs the not implemented operation for this subsystem.

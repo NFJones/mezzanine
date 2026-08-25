@@ -156,7 +156,7 @@ must never exceed its input; compressible fixtures should remain at or below
 1. Confirm the private Unix control socket works and retain a local primary
    administration path.
 2. Validate configuration before restart.
-3. Start one canary session with Iroh enabled.
+3. Start one canary persistent host with Iroh enabled.
 4. Run `mez --json remote status` through local Unix control.
 5. Confirm `enabled`, `listener_active`, configured route flags, and the bound
    endpoint address match the intended policy.
@@ -293,9 +293,37 @@ same-commit non-Iroh binary, and WSL2 is not a supported-platform packaging
 result. Do not use these numbers as package impact, acceptance thresholds, or
 native Linux/macOS evidence.
 
+### Persistent-host local acceptance sample (not a release gate)
+
+One isolated Linux/WSL2 acceptance run used owner-only temporary configuration
+and runtime roots, direct-only Iroh with a stable bind port, and the repository
+debug binary. It verified host start, status, reconcile, and graceful stop;
+host-only invitation pairing; remote create and detach through a real pseudo-
+terminal; remote and local session listing; lease show, checkpoint, release,
+revoke, garbage-collection preview, restart reconciliation, and explicit
+recovery; client trust revocation; and denial of reconnect after revocation.
+The host endpoint identity remained stable while the boot generation advanced
+from 1 to 2. A rejected noninteractive primary create left no durable lease.
+
+That run exposed and fixed a remote detach result bug: an acknowledged
+`Ctrl+A d` detached the client and preserved its active lease, but the client
+then treated the expected control-stream closure as a failed terminal-view
+read. `terminal/step` now reports `client_detached`, allowing an acknowledged
+detach to exit cleanly without weakening the existing fail-visible behavior
+for ambiguous unacknowledged input.
+
+The same worktree passed the schema 72-to-73 migration regression and a serial
+all-target, all-feature workspace test run. A report-only release workload with
+two runtime workers processed 1,083,050 output bytes in 97,951 microseconds
+(11,057,059 bytes/second), used 126,038,016 bytes maximum RSS, and measured PTY
+output-apply p95 at 1,615 microseconds, pane-input p95 at 402 microseconds, and
+render-frame p95 at 543 microseconds. These are local functional and
+responsiveness samples only; they do not satisfy packaged native-platform,
+production network, relay, lookup, or upgrade/rollback gates.
+
 | Gate | Current repository evidence | Required release evidence | Status |
 | --- | --- | --- | --- |
-| Disabled default and Unix recovery | Configuration and coexistence regressions preserve Unix control. | Packaged daemon rollback drill. | Locally verified; packaged drill pending. |
+| Disabled default and Unix recovery | Configuration and coexistence regressions preserve Unix control; isolated host restart and lease recovery pass. | Packaged daemon rollback drill. | Locally verified; packaged drill pending. |
 | Policy validation | Schema and effective runtime reject contradictory route, relay, lookup, type, and bound combinations. | Validate approved production configuration. | Locally verified. |
 | Direct local path | Direct Iroh control, events, reconnect, malformed traffic, timeout, abrupt loss, and stream limits have focused tests. | Native Linux and macOS controlled runs. | Local Linux environment only; macOS pending. |
 | Relay-required and direct-plus-relay | Explicit configuration paths exist. | Approved custom relay, outage, migration, latency, throughput, and reconnect runs. | Pending; no production relay approved. |
@@ -303,7 +331,7 @@ native Linux/macOS evidence.
 | Network diversity | No repository unit test proves real NAT, IPv6, proxy, captive, loss, or reordering behavior. | LAN, representative NAT, IPv4 and IPv6, proxy and CA, latency, loss, and reordering matrix. | Pending. |
 | Abuse and bounds | Connection, stream, frame, queue, setup, idle, slow-consumer, and shutdown bounds have local regressions. | Descriptor, memory, CPU, and connection-flood measurements. | Functional bounds verified; measurements pending. |
 | Privacy | Aggregate status and metrics have redaction regressions; documentation states direct and relay metadata exposure. | Production telemetry schema and retention review. | Local redaction verified; production review pending. |
-| Performance and package impact | Focused tests provide behavior evidence only. | Cold startup, memory, CPU, release binary and package size, direct and relay latency and throughput, reconnect, observer fan-out, and concurrent-session baseline. | Pending. |
+| Performance and package impact | Local report-only release workload records throughput, RSS, and PTY/input/render latency; isolated direct create, detach, reconnect, and revocation paths pass. | Cold startup, memory, CPU, release binary and package size, direct and relay latency and throughput, reconnect, observer fan-out, and concurrent-session baseline. | Local sample recorded; packaged and network baselines pending. |
 | Compatibility | ALPN and protocol version are fixed and explicit targets never fall back. | Supported client/server upgrade and rollback matrix. | Protocol behavior verified; packaged upgrade matrix pending. |
 
 Do not label the Iroh transport supported for production while any pending gate

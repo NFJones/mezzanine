@@ -6,10 +6,10 @@
 //! terminal failure when startup fails. Resolution filters authority before
 //! matching targets so unauthorized callers cannot infer lease existence.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mez_core::ids::SessionId;
 use mez_mux::layout::Size;
@@ -41,6 +41,9 @@ use crate::storage::snapshot::SnapshotRepository;
 
 static NEXT_ROUTED_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 const REMOTE_REPLAY_WAIT: Duration = Duration::from_secs(5);
+const REMOTE_CREATE_RATE_WINDOW: Duration = Duration::from_secs(60);
+const REMOTE_CREATE_RATE_LIMIT: usize = 32;
+const MAX_TRACKED_CREATE_PRINCIPALS: usize = 4096;
 
 /// Construction inputs shared by local and remote supervised sessions.
 #[derive(Debug, Clone)]
@@ -52,6 +55,24 @@ pub(crate) struct HostSessionRouterConfig {
     pub(crate) shell: ResolvedShell,
     pub(crate) max_sessions: usize,
     pub(crate) max_live_sessions: usize,
+    pub(crate) recovery_policy: HostRecoveryPolicy,
+    pub(crate) default_session_policy: HostDefaultSessionPolicy,
+    pub(crate) default_lease_lifetime_seconds: u64,
+}
+
+/// Automatic recovery behavior selected by primary-user host policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostRecoveryPolicy {
+    Lazy,
+    Eager,
+    Disabled,
+}
+
+/// Existing-session selection behavior for protocol-v3 `default` intent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostDefaultSessionPolicy {
+    MostRecentAttachable,
+    None,
 }
 
 /// Shared admission lifecycle for every local and remote host front door.
@@ -243,9 +264,16 @@ pub(crate) struct HostSessionRouter {
     local_assignments: LocalSessionAssignmentRepository,
     leases: RemoteSessionLeaseRepository,
     creation_lock: Arc<tokio::sync::Mutex<()>>,
+    create_admission: Arc<Mutex<HashMap<String, PrincipalCreateAdmission>>>,
     admission_state: Arc<AtomicU8>,
     authority_epoch: Arc<tokio::sync::watch::Sender<u64>>,
     terminal_runtime_cleanup: Arc<Mutex<HashSet<String>>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PrincipalCreateAdmission {
+    window_started: Instant,
+    attempts: usize,
 }
 
 impl HostSessionRouter {
@@ -274,6 +302,7 @@ impl HostSessionRouter {
             local_assignments,
             leases,
             creation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            create_admission: Arc::new(Mutex::new(HashMap::new())),
             admission_state: Arc::new(AtomicU8::new(HostAdmissionState::Serving as u8)),
             authority_epoch: Arc::new(authority_epoch),
             terminal_runtime_cleanup: Arc::new(Mutex::new(HashSet::new())),
@@ -286,8 +315,7 @@ impl HostSessionRouter {
         self.authority_epoch.subscribe()
     }
 
-    /// Returns the duration until the nearest finite non-terminal lease expiry
-    /// or the next retry for a runtime whose durable authority is terminal.
+    /// Returns the duration until the nearest finite non-terminal lease expiry.
     pub(crate) fn time_until_next_lease_expiry(&self) -> Result<Option<Duration>> {
         let now = current_unix_seconds()?;
         let expiry = self
@@ -311,8 +339,8 @@ impl HostSessionRouter {
     }
 
     /// Revalidates the exact lease selected when a routed connection was
-    /// initialized. Checkpoint-only generation changes do not invalidate
-    /// otherwise unchanged active authority.
+    /// initialized. Checkpoint-only generation changes intentionally do not
+    /// invalidate otherwise unchanged active authority.
     pub(crate) fn validate_bound_lease(
         &self,
         principal: &RemotePrincipal,
@@ -469,6 +497,27 @@ impl HostSessionRouter {
             }
         }
         Ok(())
+    }
+
+    /// Applies eager startup recovery before either host listener accepts work.
+    pub(crate) async fn apply_startup_recovery_policy(&self) -> Result<usize> {
+        if self.config.recovery_policy != HostRecoveryPolicy::Eager {
+            return Ok(0);
+        }
+        let lease_ids = self
+            .leases
+            .list()?
+            .into_iter()
+            .filter(|lease| lease.state == RemoteSessionLeaseState::Recoverable)
+            .map(|lease| lease.lease_id)
+            .collect::<Vec<_>>();
+        let mut recovered = 0usize;
+        for lease_id in lease_ids {
+            if self.recover_lease(&lease_id).await.is_ok() {
+                recovered = recovered.saturating_add(1);
+            }
+        }
+        Ok(recovered)
     }
 
     /// Creates one fresh local supervised session and publishes compatibility discovery.
@@ -847,6 +896,13 @@ impl HostSessionRouter {
         self.require_serving()?;
         let now = current_unix_seconds()?;
         let _ = self.expire_due_leases_locked(now).await?;
+        let prior_key = self.leases.list()?.iter().any(|lease| {
+            lease.owner_principal_id == principal.trust_record_id
+                && lease.idempotency_key == request.idempotency_key
+        });
+        if !prior_key {
+            self.admit_remote_create(&principal.trust_record_id, REMOTE_CREATE_RATE_LIMIT)?;
+        }
         let session_id = next_session_id()?;
         let lease_id = format!("lease-{}", session_id.trim_start_matches('$'));
         let fingerprint = creation_fingerprint(request.name.as_deref(), request.size);
@@ -858,10 +914,11 @@ impl HostSessionRouter {
                 owner_live_session_limit: authority.max_live_sessions,
                 name: request.name.clone(),
                 default_for_owner: false,
-                expires_at_unix_seconds: authority
-                    .lease_lifetime_ceiling_seconds
-                    .filter(|seconds| *seconds > 0)
-                    .map(|seconds| now.saturating_add(seconds)),
+                expires_at_unix_seconds: effective_lease_expiry(
+                    now,
+                    self.config.default_lease_lifetime_seconds,
+                    authority.lease_lifetime_ceiling_seconds,
+                ),
                 idempotency_key: request.idempotency_key,
                 creation_fingerprint: fingerprint,
                 now_unix_seconds: now,
@@ -922,11 +979,18 @@ impl HostSessionRouter {
             )
         });
         visible.sort_by(|left, right| {
-            left.created_at_unix_seconds
-                .cmp(&right.created_at_unix_seconds)
+            right
+                .default_for_owner
+                .cmp(&left.default_for_owner)
+                .then_with(|| {
+                    right
+                        .updated_at_unix_seconds
+                        .cmp(&left.updated_at_unix_seconds)
+                })
                 .then_with(|| left.lease_id.cmp(&right.lease_id))
         });
         let lease = match target_json {
+            None if self.config.default_session_policy == HostDefaultSessionPolicy::None => None,
             None => visible.first(),
             Some(target_json) => {
                 let target: serde_json::Value =
@@ -960,6 +1024,11 @@ impl HostSessionRouter {
                 Ok(RemoteSessionBinding { lease, runtime })
             }
             RemoteSessionLeaseState::Recoverable => {
+                if self.config.recovery_policy == HostRecoveryPolicy::Disabled {
+                    return Err(MezError::invalid_state(
+                        "automatic remote session recovery is disabled by host policy",
+                    ));
+                }
                 self.require_serving()?;
                 let lease = self.leases.get(&lease.lease_id)?.ok_or_else(|| {
                     MezError::new(MezErrorKind::NotFound, "remote session was not found")
@@ -1092,8 +1161,25 @@ impl HostSessionRouter {
         self.supervisor.shutdown_all(force, timeout).await
     }
 
-    pub(crate) fn registry(&self) -> &SessionRegistry {
-        &self.registry
+    /// Captures checkpoints for every active durable lease, retaining prior
+    /// references when an individual capture fails.
+    pub(crate) async fn checkpoint_active_leases(&self) -> Result<(usize, usize)> {
+        let lease_ids = self
+            .leases
+            .list()?
+            .into_iter()
+            .filter(|lease| lease.state == RemoteSessionLeaseState::Active)
+            .map(|lease| lease.lease_id)
+            .collect::<Vec<_>>();
+        let mut checkpointed = 0usize;
+        let mut failed = 0usize;
+        for lease_id in lease_ids {
+            match self.checkpoint_lease(&lease_id).await {
+                Ok(_) => checkpointed = checkpointed.saturating_add(1),
+                Err(_) => failed = failed.saturating_add(1),
+            }
+        }
+        Ok((checkpointed, failed))
     }
 
     /// Requires a fresh checkpoint for every currently active durable lease.
@@ -1239,6 +1325,10 @@ impl HostSessionRouter {
         self.expire_due_leases_locked(current_unix_seconds()?).await
     }
 
+    pub(crate) fn registry(&self) -> &SessionRegistry {
+        &self.registry
+    }
+
     async fn expire_due_leases_locked(&self, now_unix_seconds: u64) -> Result<usize> {
         let expired = self.leases.expire_due(now_unix_seconds)?;
         if !expired.is_empty() {
@@ -1306,6 +1396,40 @@ impl HostSessionRouter {
         self.authority_epoch.send_modify(|epoch| {
             *epoch = epoch.saturating_add(1);
         });
+    }
+
+    fn admit_remote_create(&self, principal_id: &str, limit: usize) -> Result<()> {
+        let now = Instant::now();
+        let mut admission = self
+            .create_admission
+            .lock()
+            .map_err(|_| MezError::invalid_state("remote create admission lock was poisoned"))?;
+        admission.retain(|_, entry| {
+            now.saturating_duration_since(entry.window_started) < REMOTE_CREATE_RATE_WINDOW
+        });
+        if !admission.contains_key(principal_id) && admission.len() >= MAX_TRACKED_CREATE_PRINCIPALS
+        {
+            return Err(MezError::rate_limited(
+                "remote create admission tracking is at capacity",
+            ));
+        }
+        let entry = admission
+            .entry(principal_id.to_string())
+            .or_insert(PrincipalCreateAdmission {
+                window_started: now,
+                attempts: 0,
+            });
+        if now.saturating_duration_since(entry.window_started) >= REMOTE_CREATE_RATE_WINDOW {
+            entry.window_started = now;
+            entry.attempts = 0;
+        }
+        if entry.attempts >= limit {
+            return Err(MezError::rate_limited(
+                "remote principal create rate limit has been reached",
+            ));
+        }
+        entry.attempts = entry.attempts.saturating_add(1);
+        Ok(())
     }
 
     /// Lists durable leases for local administration with optional filters.
@@ -1928,7 +2052,9 @@ enum RecoveryFailureDisposition {
 
 fn recovery_artifact_failure(error: MezError) -> (MezError, RecoveryFailureDisposition) {
     let disposition = match error.kind() {
-        MezErrorKind::Io | MezErrorKind::Conflict => RecoveryFailureDisposition::Retryable,
+        MezErrorKind::Io | MezErrorKind::Conflict | MezErrorKind::RateLimited => {
+            RecoveryFailureDisposition::Retryable
+        }
         _ => RecoveryFailureDisposition::Terminal,
     };
     (error, disposition)
@@ -2125,6 +2251,22 @@ fn creation_fingerprint(name: Option<&str>, size: Size) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn effective_lease_expiry(
+    now_unix_seconds: u64,
+    configured_lifetime_seconds: u64,
+    principal_ceiling_seconds: Option<u64>,
+) -> Option<u64> {
+    let configured = (configured_lifetime_seconds > 0).then_some(configured_lifetime_seconds);
+    let ceiling = principal_ceiling_seconds.filter(|seconds| *seconds > 0);
+    let lifetime = match (configured, ceiling) {
+        (Some(configured), Some(ceiling)) => Some(configured.min(ceiling)),
+        (Some(configured), None) => Some(configured),
+        (None, Some(ceiling)) => Some(ceiling),
+        (None, None) => None,
+    }?;
+    Some(now_unix_seconds.saturating_add(lifetime))
 }
 
 fn next_session_id() -> Result<String> {
@@ -3434,6 +3576,159 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Host policy can disable implicit default selection, eagerly recover
+    /// checkpointed leases before serving, or leave automatic recovery
+    /// disabled while retaining explicit operator recovery.
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_policy_controls_default_and_automatic_recovery() {
+        let root = test_root("host-policy");
+        let principal = test_principal("owner", 2);
+        let mut initial_config = test_config(&root);
+        initial_config.default_session_policy = HostDefaultSessionPolicy::None;
+        let initial = HostSessionRouter::new(initial_config.clone());
+        let created = initial
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("policy-session".to_string()),
+                    idempotency_key: "policy-create".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let no_default = initial.resolve_remote(&principal, None).await.unwrap_err();
+        assert_eq!(no_default.kind(), MezErrorKind::NotFound);
+        assert_eq!(
+            initial
+                .resolve_remote(
+                    &principal,
+                    Some(&serde_json::json!({"name":"policy-session"}).to_string()),
+                )
+                .await
+                .unwrap()
+                .lease
+                .lease_id,
+            created.lease.lease_id
+        );
+        let checkpointed = initial
+            .checkpoint_lease(&created.lease.lease_id)
+            .await
+            .unwrap();
+        initial
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        drop(created);
+        drop(initial);
+
+        let mut eager_config = initial_config.clone();
+        eager_config.recovery_policy = HostRecoveryPolicy::Eager;
+        eager_config.default_session_policy = HostDefaultSessionPolicy::MostRecentAttachable;
+        let eager = HostSessionRouter::new(eager_config.clone());
+        assert_eq!(eager.reconcile_startup().unwrap().recoverable, 1);
+        assert_eq!(eager.apply_startup_recovery_policy().await.unwrap(), 1);
+        assert_eq!(
+            eager.get_lease(&checkpointed.lease_id).unwrap().state,
+            RemoteSessionLeaseState::Active
+        );
+        eager
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        drop(eager);
+
+        let mut disabled_config = eager_config;
+        disabled_config.recovery_policy = HostRecoveryPolicy::Disabled;
+        let disabled = HostSessionRouter::new(disabled_config);
+        assert_eq!(disabled.reconcile_startup().unwrap().recoverable, 1);
+        assert_eq!(disabled.apply_startup_recovery_policy().await.unwrap(), 0);
+        let automatic = disabled.resolve_remote(&principal, None).await.unwrap_err();
+        assert_eq!(automatic.kind(), MezErrorKind::InvalidState);
+        assert_eq!(
+            disabled
+                .recover_lease(&checkpointed.lease_id)
+                .await
+                .unwrap()
+                .lease
+                .state,
+            RemoteSessionLeaseState::Active
+        );
+        disabled
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Novel create attempts are bounded per principal while retries using an
+    /// already durable idempotency key bypass the admission counter.
+    #[tokio::test(flavor = "current_thread")]
+    async fn remote_create_rate_limit_preserves_idempotent_replay() {
+        let root = test_root("create-rate-limit");
+        let router = HostSessionRouter::new(test_config(&root));
+        let principal = test_principal("rate-owner", 2);
+        let created = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("rate-session".to_string()),
+                    idempotency_key: "durable-rate-key".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        router.create_admission.lock().unwrap().insert(
+            principal.trust_record_id.clone(),
+            PrincipalCreateAdmission {
+                window_started: Instant::now(),
+                attempts: REMOTE_CREATE_RATE_LIMIT,
+            },
+        );
+        let replay = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("rate-session".to_string()),
+                    idempotency_key: "durable-rate-key".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(replay.lease.lease_id, created.lease.lease_id);
+        let limited = router
+            .create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: Some("novel-rate-session".to_string()),
+                    idempotency_key: "novel-rate-key".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(limited.kind(), MezErrorKind::RateLimited);
+        assert_eq!(router.snapshots().await.unwrap().len(), 1);
+        router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Configured lease lifetime and per-principal ceilings combine by taking
+    /// the strictest finite bound while zero retains an unlimited lease.
+    #[test]
+    fn lease_expiry_uses_strictest_configured_and_principal_bound() {
+        assert_eq!(effective_lease_expiry(100, 0, None), None);
+        assert_eq!(effective_lease_expiry(100, 300, None), Some(400));
+        assert_eq!(effective_lease_expiry(100, 0, Some(120)), Some(220));
+        assert_eq!(effective_lease_expiry(100, 300, Some(120)), Some(220));
+        assert_eq!(effective_lease_expiry(100, 60, Some(120)), Some(160));
+    }
+
     /// Entering the shared drain barrier fences every local and remote path
     /// that can admit or attach a session before shutdown enumerates runtimes.
     #[tokio::test(flavor = "current_thread")]
@@ -3582,6 +3877,9 @@ mod tests {
             shell: ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
             max_sessions: 8,
             max_live_sessions: 8,
+            recovery_policy: HostRecoveryPolicy::Lazy,
+            default_session_policy: HostDefaultSessionPolicy::MostRecentAttachable,
+            default_lease_lifetime_seconds: 0,
         }
     }
 

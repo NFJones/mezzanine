@@ -28,8 +28,8 @@ use crate::host::administration::{
 use crate::host::iroh::HostIrohInvitationIssuer;
 use crate::host::ownership::HostOwnershipGuard;
 use crate::host::router::{
-    HostSessionRouter, HostSessionRouterConfig, LocalSessionLaunchContext,
-    local_launch_environment_key_allowed,
+    HostDefaultSessionPolicy, HostRecoveryPolicy, HostSessionRouter, HostSessionRouterConfig,
+    LocalSessionLaunchContext, local_launch_environment_key_allowed,
 };
 use crate::host::session::SessionSupervisorState;
 use crate::host::shell::{ResolvedShell, resolve_shell};
@@ -42,7 +42,6 @@ const HOST_SOCKET_FILE_NAME: &str = "host.sock";
 const HOST_CONTROL_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
 const HOST_CONTROL_CONNECTION_LIMIT: usize = 64;
 const HOST_CONTROL_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
-const HOST_LOCAL_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(300);
 
 /// Construction inputs shared by every session created under one host.
 #[derive(Debug, Clone)]
@@ -63,6 +62,18 @@ pub(crate) struct HostServerConfig {
     pub(crate) max_live_sessions: usize,
     /// Bounded host shutdown interval.
     pub(crate) shutdown_timeout: Duration,
+    /// Interval between best-effort checkpoints of active durable leases.
+    pub(crate) checkpoint_interval: Duration,
+    /// Automatic startup and attach recovery behavior.
+    pub(crate) recovery_policy: HostRecoveryPolicy,
+    /// Existing-session selection behavior for remote default intent.
+    pub(crate) default_session_policy: HostDefaultSessionPolicy,
+    /// Default finite lifetime for newly created leases; zero disables expiry.
+    pub(crate) default_lease_lifetime_seconds: u64,
+    /// Failed-lease retention before default garbage collection eligibility.
+    pub(crate) failed_lease_retention_seconds: u64,
+    /// Released/revoked lease retention before default garbage collection eligibility.
+    pub(crate) released_lease_retention_seconds: u64,
     /// Live host-scoped Iroh invitation and trust administration, when enabled.
     pub(crate) iroh_invitation_issuer: Option<HostIrohInvitationIssuer>,
     /// Default and maximum active-lease grant for one remote principal.
@@ -132,6 +143,9 @@ impl HostServer {
             shell: config.shell.clone(),
             max_sessions: config.max_sessions,
             max_live_sessions: config.max_live_sessions,
+            recovery_policy: config.recovery_policy,
+            default_session_policy: config.default_session_policy,
+            default_lease_lifetime_seconds: config.default_lease_lifetime_seconds,
         });
         let _ = router.reconcile_startup()?;
         let audit_log = std::sync::Arc::new(std::sync::Mutex::new(config.audit_log.clone()));
@@ -172,10 +186,10 @@ impl HostServer {
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// Reconciles durable snapshot cleanup before listeners start serving.
-    pub(crate) async fn prepare_startup(&self) -> Result<()> {
+    /// Applies configured eager recovery before listeners start serving.
+    pub(crate) async fn prepare_startup(&self) -> Result<usize> {
         let _ = self.router.reconcile_snapshot_cleanup().await?;
-        Ok(())
+        self.router.apply_startup_recovery_policy().await
     }
 
     /// Serves local management requests until cancellation or `host/shutdown`.
@@ -185,9 +199,9 @@ impl HostServer {
     {
         tokio::pin!(cancellation);
         let mut connections = FuturesUnordered::new();
-        let mut local_checkpoint_timer = tokio::time::interval_at(
-            tokio::time::Instant::now() + HOST_LOCAL_CHECKPOINT_INTERVAL,
-            HOST_LOCAL_CHECKPOINT_INTERVAL,
+        let mut checkpoint_timer = tokio::time::interval_at(
+            tokio::time::Instant::now() + self.config.checkpoint_interval,
+            self.config.checkpoint_interval,
         );
         let mut authority_changes = self.router.authority_changes();
         let shutdown = loop {
@@ -215,8 +229,11 @@ impl HostServer {
                     }
                     let _ = self.router.reconcile_terminal_runtime_cleanup().await;
                 }
-                _ = local_checkpoint_timer.tick() => {
+                _ = checkpoint_timer.tick() => {
+                    let _ = self.router.checkpoint_active_leases().await;
                     let _ = Box::pin(self.router.checkpoint_active_local_assignments()).await;
+                    let _ = self.router.reconcile_snapshot_cleanup().await;
+                    let _ = self.router.reconcile_terminal_runtime_cleanup().await;
                 }
                 completed = connections.next(), if !connections.is_empty() => {
                     if let Some(Some(request)) = completed {
@@ -694,6 +711,16 @@ impl HostServer {
                     .unwrap_or(self.config.max_remote_leases);
                 let max_live_sessions = optional_positive_usize(&params, "max_live_sessions")?
                     .unwrap_or(self.config.max_live_sessions.min(max_leases));
+                let lease_lifetime_ceiling_seconds = params
+                    .get("lease_lifetime_ceiling_seconds")
+                    .map(|value| {
+                        value.as_u64().filter(|value| *value > 0).ok_or_else(|| {
+                            MezError::invalid_args(
+                                "remote lease_lifetime_ceiling_seconds must be positive",
+                            )
+                        })
+                    })
+                    .transpose()?;
                 let authority = crate::security::remote::RemoteHostRoutingAuthority {
                     session_create: allow_create,
                     session_kill: allow_kill,
@@ -701,7 +728,11 @@ impl HostServer {
                     session_attach_scope: crate::security::remote::RemoteSessionAttachScope::Own,
                     max_active_leases: if allow_create { max_leases } else { 0 },
                     max_live_sessions: if allow_create { max_live_sessions } else { 0 },
-                    lease_lifetime_ceiling_seconds: None,
+                    lease_lifetime_ceiling_seconds: if allow_create {
+                        lease_lifetime_ceiling_seconds
+                    } else {
+                        None
+                    },
                 };
                 let ttl_seconds = params
                     .get("expires_seconds")
@@ -841,9 +872,13 @@ impl HostServer {
                             )
                         })
                     })
-                    .transpose()?
-                    .unwrap_or(30 * 24 * 60 * 60);
-                let cutoff = now.saturating_sub(older_than_seconds);
+                    .transpose()?;
+                let released_cutoff = now.saturating_sub(
+                    older_than_seconds.unwrap_or(self.config.released_lease_retention_seconds),
+                );
+                let failed_cutoff = now.saturating_sub(
+                    older_than_seconds.unwrap_or(self.config.failed_lease_retention_seconds),
+                );
                 let apply = params
                     .get("apply")
                     .and_then(Value::as_bool)
@@ -852,9 +887,9 @@ impl HostServer {
                     .router
                     .garbage_collect_leases(
                         crate::storage::lease::LeaseGarbageCollectionPolicy {
-                            released_before_unix_seconds: cutoff,
-                            revoked_before_unix_seconds: cutoff,
-                            failed_before_unix_seconds: cutoff,
+                            released_before_unix_seconds: released_cutoff,
+                            revoked_before_unix_seconds: released_cutoff,
+                            failed_before_unix_seconds: failed_cutoff,
                         },
                         apply,
                     )
@@ -906,25 +941,29 @@ impl HostServer {
                             record.insert("scope".to_string(), Value::String("local".to_string()));
                         }
                     }
-                    records.extend(remote_leases.iter().map(|lease| {
-                        json!({
-                            "scope": "remote",
-                            "lease_id": lease.lease_id,
-                            "session_id": lease.session_id,
-                            "name": lease.name,
-                            "state": match lease.state {
-                                crate::storage::lease::RemoteSessionLeaseState::Pending => "pending",
-                                crate::storage::lease::RemoteSessionLeaseState::Active => "active",
-                                crate::storage::lease::RemoteSessionLeaseState::Recoverable => "recoverable",
-                                crate::storage::lease::RemoteSessionLeaseState::Released => "released",
-                                crate::storage::lease::RemoteSessionLeaseState::Revoked => "revoked",
-                                crate::storage::lease::RemoteSessionLeaseState::Failed => "failed",
-                            },
-                            "socket": Value::Null,
-                            "accepts_primary": false,
-                            "recoverable": lease.state == crate::storage::lease::RemoteSessionLeaseState::Recoverable,
-                        })
-                    }));
+                    records.extend(
+                        remote_leases
+                            .iter()
+                            .map(|lease| {
+                                json!({
+                                    "scope": "remote",
+                                    "lease_id": lease.lease_id,
+                                    "session_id": lease.session_id,
+                                    "name": lease.name,
+                                    "state": match lease.state {
+                                        crate::storage::lease::RemoteSessionLeaseState::Pending => "pending",
+                                        crate::storage::lease::RemoteSessionLeaseState::Active => "active",
+                                        crate::storage::lease::RemoteSessionLeaseState::Recoverable => "recoverable",
+                                        crate::storage::lease::RemoteSessionLeaseState::Released => "released",
+                                        crate::storage::lease::RemoteSessionLeaseState::Revoked => "revoked",
+                                        crate::storage::lease::RemoteSessionLeaseState::Failed => "failed",
+                                    },
+                                    "socket": Value::Null,
+                                    "accepts_primary": false,
+                                    "recoverable": lease.state == crate::storage::lease::RemoteSessionLeaseState::Recoverable,
+                                })
+                            }),
+                    );
                 }
                 Ok((json!({"sessions": records}), None))
             }
@@ -1005,14 +1044,54 @@ impl HostServer {
             .iter()
             .filter(|snapshot| snapshot.state == SessionSupervisorState::Starting)
             .count();
+        let stopping = snapshots
+            .iter()
+            .filter(|snapshot| snapshot.state == SessionSupervisorState::Stopping)
+            .count();
+        let failed = snapshots
+            .iter()
+            .filter(|snapshot| snapshot.state == SessionSupervisorState::Failed)
+            .count();
+        let iroh = self.config.iroh_invitation_issuer.as_ref();
         Ok(json!({
             "ready": true,
             "pid": std::process::id(),
             "socket": self.socket_path,
             "admission_state": self.router.admission_state().as_str(),
+            "boot_generation": reconciliation.boot_generation,
+            "iroh": {
+                "enabled": iroh.is_some(),
+                "endpoint_id": iroh.map(HostIrohInvitationIssuer::endpoint_id),
+            },
             "running_sessions": running,
             "starting_sessions": starting,
+            "stopping_sessions": stopping,
+            "failed_sessions": failed,
+            "leases": {
+                "pending": reconciliation.pending,
+                "active": reconciliation.active,
+                "recoverable": reconciliation.recoverable,
+                "released": reconciliation.released,
+                "revoked": reconciliation.revoked,
+                "failed": reconciliation.failed,
+            },
             "snapshot_cleanup_pending": reconciliation.snapshot_cleanup_pending,
+            "policy": {
+                "checkpoint_interval_seconds": self.config.checkpoint_interval.as_secs(),
+                "recover_on_start": match self.config.recovery_policy {
+                    HostRecoveryPolicy::Lazy => "lazy",
+                    HostRecoveryPolicy::Eager => "eager",
+                    HostRecoveryPolicy::Disabled => "disabled",
+                },
+                "default_session_policy": match self.config.default_session_policy {
+                    HostDefaultSessionPolicy::MostRecentAttachable => "most_recent_attachable",
+                    HostDefaultSessionPolicy::None => "none",
+                },
+                "default_lease_lifetime_seconds": self.config.default_lease_lifetime_seconds,
+                "failed_lease_retention_seconds": self.config.failed_lease_retention_seconds,
+                "released_lease_retention_seconds": self.config.released_lease_retention_seconds,
+            },
+            "pruned_registry_records": reconciliation.pruned_registry_records,
             "max_sessions": self.config.max_sessions,
             "max_live_sessions": self.config.max_live_sessions,
         }))
@@ -1295,6 +1374,7 @@ fn remote_lease_json(lease: &crate::storage::lease::RemoteSessionLease) -> Value
         "updated_at_unix_seconds": lease.updated_at_unix_seconds,
         "activated_at_unix_seconds": lease.activated_at_unix_seconds,
         "terminal_at_unix_seconds": lease.terminal_at_unix_seconds,
+        "expires_at_unix_seconds": lease.expires_at_unix_seconds,
         "checkpoint": lease.checkpoint.as_ref().map(|checkpoint| json!({
             "snapshot_id": checkpoint.snapshot_id,
             "snapshot_version": checkpoint.snapshot_version,
@@ -1322,6 +1402,7 @@ fn host_error_response(id: Value, error: &MezError) -> Value {
         MezErrorKind::Forbidden => -32002,
         MezErrorKind::Conflict => -32006,
         MezErrorKind::NotFound => -32005,
+        MezErrorKind::RateLimited => -32011,
         MezErrorKind::NotImplemented => -32601,
         _ => -32004,
     };
@@ -1344,6 +1425,7 @@ fn host_error_name(kind: MezErrorKind) -> &'static str {
         MezErrorKind::Conflict => "conflict",
         MezErrorKind::NotFound => "not_found",
         MezErrorKind::Forbidden => "forbidden",
+        MezErrorKind::RateLimited => "rate_limited",
         MezErrorKind::NotImplemented => "method_not_found",
     }
 }
@@ -1394,6 +1476,12 @@ mod tests {
             max_sessions: 8,
             max_live_sessions: 4,
             shutdown_timeout: Duration::from_secs(2),
+            checkpoint_interval: Duration::from_secs(300),
+            recovery_policy: HostRecoveryPolicy::Lazy,
+            default_session_policy: HostDefaultSessionPolicy::MostRecentAttachable,
+            default_lease_lifetime_seconds: 0,
+            failed_lease_retention_seconds: 604_800,
+            released_lease_retention_seconds: 604_800,
             iroh_invitation_issuer: None,
             max_remote_leases: 8,
             audit_log: None,
@@ -1471,7 +1559,7 @@ mod tests {
             parsed_context
                 .config_layers
                 .iter()
-                .all(|layer| layer.path.as_deref() != Some(host_overlay.as_path()))
+                .all(|layer| { layer.path.as_deref() != Some(host_overlay.as_path()) })
         );
         let (created, shutdown) = host
             .dispatch_request(&json!({
@@ -1620,12 +1708,15 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// Lease expiry follows the nearest durable authority deadline while the
-    /// host would otherwise be idle indefinitely.
+    /// Lease expiry follows the nearest durable authority deadline rather
+    /// than waiting for the much longer checkpoint maintenance interval.
     #[tokio::test(flavor = "current_thread")]
-    async fn host_expires_finite_lease_at_nearest_deadline() {
+    async fn host_expires_finite_lease_before_checkpoint_tick() {
         let root = test_root("nearest-lease-expiry");
-        let host = std::sync::Arc::new(HostServer::bind(config(root.clone())).unwrap());
+        let mut host_config = config(root.clone());
+        host_config.checkpoint_interval = Duration::from_secs(300);
+        host_config.default_lease_lifetime_seconds = 1;
+        let host = std::sync::Arc::new(HostServer::bind(host_config).unwrap());
         let principal = RemotePrincipal {
             trust_record_id: "expiry-owner".to_string(),
             endpoint_id: "expiry-endpoint".to_string(),
@@ -1637,7 +1728,7 @@ mod tests {
                 session_attach_scope: RemoteSessionAttachScope::Own,
                 max_active_leases: 1,
                 max_live_sessions: 1,
-                lease_lifetime_ceiling_seconds: Some(1),
+                lease_lifetime_ceiling_seconds: None,
             },
             requested_role: RequestedRole::Observer,
         };
@@ -1683,7 +1774,7 @@ mod tests {
             }
         })
         .await
-        .expect("finite lease should expire at its nearest deadline");
+        .expect("finite lease should expire before the checkpoint timer");
 
         let shutdown = exchange_host_socket_request(
             host.socket_path(),

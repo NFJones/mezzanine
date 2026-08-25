@@ -40,6 +40,8 @@ pub(super) struct TerminalStepRefreshRequirement {
     /// Whether the attached client must discard its retained output frame before
     /// rendering the fresh terminal view.
     pub full_redraw_required: bool,
+    /// Whether the acknowledged terminal step detached this client.
+    pub client_detached: bool,
     /// Whether the completed terminal step terminated the daemon session.
     pub session_terminated: bool,
 }

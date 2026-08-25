@@ -918,10 +918,12 @@ impl RuntimeSessionService {
             self.lifecycle_state(),
             RuntimeLifecycleState::Killed | RuntimeLifecycleState::Failed
         );
+        let client_detached = !self.session.is_attached_primary(primary_client_id);
         Ok(runtime_terminal_step_result_json(
             input.len(),
             &application,
             view.as_ref(),
+            client_detached,
             session_terminated,
         ))
     }
