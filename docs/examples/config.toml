@@ -430,16 +430,18 @@ fallback_policy = "use-default-profile"
 [personalities]
 
 [permissions]
-# ask prompts when required; auto-allow uses the model gate; full-access skips
-# prompts but stays sandboxed. host-access is primary-user-only and executes
+# macOS-generated configuration selects auto-allow; this Linux template uses
+# ask. auto-allow uses the model gate; full-access skips prompts but stays
+# sandboxed. host-access is primary-user-only and executes
 # local shell actions on the host outside the configured sandbox.
 # Sandbox, scope, network, and approval settings are also primary-user-only;
 # trusted project overlays may not change this execution boundary.
 approval_policy = "ask"
 # Optional named permission preset applied before explicit settings.
 # preset = "default"
-# Linux uses Bubblewrap by default for OS-level confinement. Other platforms
-# use policy-only execution until they provide an equivalent sandbox backend.
+# Linux-generated configuration uses Bubblewrap for OS-level confinement.
+# macOS and other platforms use policy-only execution until they provide an
+# equivalent sandbox backend.
 sandbox = "bubblewrap"
 # Scope paths may name files or directories. A Unix-domain socket may also be
 # placed in read_scopes for an explicitly trusted service endpoint; a read-only

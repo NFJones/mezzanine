@@ -882,9 +882,9 @@ profiles when changing provider, model, or provider options.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `permissions.approval_policy` | string | `"ask"` | Default approval policy: `ask`, `auto-allow`, `full-access`, or primary-user-only `host-access`. `full-access` remains sandboxed; `host-access` executes local shell actions on the host outside the configured sandbox. |
+| `permissions.approval_policy` | string | `"auto-allow"` in generated macOS config; `"ask"` otherwise | Default approval policy: `ask`, `auto-allow`, `full-access`, or primary-user-only `host-access`. macOS pairs model-gated `auto-allow` with policy-only execution. `full-access` remains sandboxed; `host-access` executes local shell actions on the host outside the configured sandbox. |
 | `permissions.preset` | string | omitted | Optional preset, such as `read-only` or `auto`. |
-| `permissions.sandbox` | string | `"bubblewrap"` on Linux; `"policy-only"` otherwise | Additive confinement backend. Linux defaults to fail-closed `bubblewrap`; platforms without Bubblewrap support default to `policy-only`, which does not provide OS-level isolation. |
+| `permissions.sandbox` | string | `"bubblewrap"` in generated Linux config; `"policy-only"` otherwise | Additive confinement backend. Generated Linux config defaults to fail-closed `bubblewrap`; platforms without Bubblewrap support use `policy-only`, which does not provide OS-level isolation. |
 | `permissions.read_scopes` | string array | omitted | Maximum pane-resolved read authority for the primary agent. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. Paths unavailable on the active pane are omitted with a warning. |
 | `permissions.write_scopes` | string array | omitted | Maximum pane-resolved write authority; write also implies read. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. Paths unavailable on the active pane are omitted with a warning. |
 | `permissions.bubblewrap.executable` | string | `"/usr/bin/bwrap"` | Absolute Bubblewrap path resolved and probed in the pane environment. |

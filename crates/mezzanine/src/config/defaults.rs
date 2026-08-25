@@ -6,6 +6,30 @@
 
 // Generated default configuration.
 
+/// Target platform used to select first-run permission defaults.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GeneratedConfigPlatform {
+    /// Linux, where Bubblewrap can provide operating-system confinement.
+    Linux,
+    /// macOS, where first-run actions use model-gated automatic approval.
+    MacOs,
+    /// Any other supported platform without a native sandbox backend.
+    Other,
+}
+
+impl GeneratedConfigPlatform {
+    /// Returns the platform targeted by the current build.
+    fn current() -> Self {
+        if cfg!(target_os = "linux") {
+            Self::Linux
+        } else if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else {
+            Self::Other
+        }
+    }
+}
+
 /// Returns the initial primary configuration without provider-specific entries.
 ///
 /// Provider connection, model-profile, and preset defaults are materialized
@@ -13,6 +37,16 @@
 /// catalog here lets the first-run configuration remain compact while one
 /// source still defines the provider defaults copied after authentication.
 pub(crate) fn initial_config_toml() -> crate::error::Result<String> {
+    initial_config_toml_for_platform(GeneratedConfigPlatform::current())
+}
+
+/// Returns the initial primary configuration for one target platform.
+///
+/// Keeping platform selection injectable lets non-macOS builders verify the
+/// generated macOS security posture without changing explicit user settings.
+pub(crate) fn initial_config_toml_for_platform(
+    platform: GeneratedConfigPlatform,
+) -> crate::error::Result<String> {
     let mut document = DEFAULT_CONFIG_TOML
         .parse::<toml_edit::DocumentMut>()
         .map_err(|error| {
@@ -40,20 +74,35 @@ pub(crate) fn initial_config_toml() -> crate::error::Result<String> {
     ] {
         auto_sizing.insert(key, toml_edit::value("default"));
     }
-    let sandbox = root
+    let permissions = root
         .get_mut("permissions")
         .and_then(toml_edit::Item::as_table_mut)
-        .and_then(|permissions| permissions.get_mut("sandbox"))
+        .ok_or_else(|| {
+            crate::error::MezError::config("built-in default config is missing `permissions` table")
+        })?;
+    let approval_policy = permissions
+        .get_mut("approval_policy")
+        .and_then(toml_edit::Item::as_value_mut)
+        .ok_or_else(|| {
+            crate::error::MezError::config(
+                "built-in default config is missing `permissions.approval_policy`",
+            )
+        })?;
+    *approval_policy = toml_edit::Value::from(match platform {
+        GeneratedConfigPlatform::MacOs => "auto-allow",
+        GeneratedConfigPlatform::Linux | GeneratedConfigPlatform::Other => "ask",
+    });
+    let sandbox = permissions
+        .get_mut("sandbox")
         .and_then(toml_edit::Item::as_value_mut)
         .ok_or_else(|| {
             crate::error::MezError::config(
                 "built-in default config is missing `permissions.sandbox`",
             )
         })?;
-    *sandbox = toml_edit::Value::from(if cfg!(target_os = "linux") {
-        "bubblewrap"
-    } else {
-        "policy-only"
+    *sandbox = toml_edit::Value::from(match platform {
+        GeneratedConfigPlatform::Linux => "bubblewrap",
+        GeneratedConfigPlatform::MacOs | GeneratedConfigPlatform::Other => "policy-only",
     });
     Ok(document.to_string())
 }
@@ -826,16 +875,18 @@ auto_sizing_large_model_profile = "anthropic-default"
 allowed_reasoning_efforts = ["high"]
 
 [permissions]
-# ask prompts when required; auto-allow uses the model gate; full-access skips
-# prompts but stays sandboxed. host-access is primary-user-only and executes
+# macOS-generated configuration selects auto-allow; this Linux template uses
+# ask. auto-allow uses the model gate; full-access skips prompts but stays
+# sandboxed. host-access is primary-user-only and executes
 # local shell actions on the host outside the configured sandbox.
 # Sandbox, scope, network, and approval settings are also primary-user-only;
 # trusted project overlays may not change this execution boundary.
 approval_policy = "ask"
 # Optional named permission preset applied before explicit settings.
 # preset = "default"
-# Linux uses Bubblewrap by default for OS-level confinement. Other platforms
-# use policy-only execution until they provide an equivalent sandbox backend.
+# Linux-generated configuration uses Bubblewrap for OS-level confinement.
+# macOS and other platforms use policy-only execution until they provide an
+# equivalent sandbox backend.
 sandbox = "bubblewrap"
 # Scope paths may name files or directories. A Unix-domain socket may also be
 # placed in read_scopes for an explicitly trusted service endpoint; a read-only

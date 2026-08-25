@@ -1,6 +1,7 @@
 //! Config defaults tests.
 
 use super::*;
+use crate::config::defaults::{GeneratedConfigPlatform, initial_config_toml_for_platform};
 use crate::config::initial_config_toml;
 
 /// Verifies creates default config file.
@@ -111,6 +112,33 @@ fn initial_config_uses_native_shell_and_platform_sandbox_defaults() {
         } else {
             "policy-only"
         })
+    );
+}
+
+/// Verifies newly generated macOS configuration pairs model-gated automatic
+/// approval with policy-only execution because Bubblewrap is Linux-specific.
+///
+/// Keeping both values in one platform-targeted regression prevents first-run
+/// macOS configuration from combining policy-only execution with the template's
+/// more restrictive interactive approval default.
+#[test]
+fn initial_macos_config_uses_auto_allow_with_policy_only_sandboxing() {
+    let config = initial_config_toml_for_platform(GeneratedConfigPlatform::MacOs).unwrap();
+    let parsed: toml::Value = toml::from_str(&config).unwrap();
+    let permissions = parsed
+        .get("permissions")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    assert_eq!(
+        permissions
+            .get("approval_policy")
+            .and_then(toml::Value::as_str),
+        Some("auto-allow")
+    );
+    assert_eq!(
+        permissions.get("sandbox").and_then(toml::Value::as_str),
+        Some("policy-only")
     );
 }
 
@@ -229,7 +257,7 @@ fn rejects_ambiguous_primary_config_files() {
 fn default_config_matches_documented_example() {
     let documented = include_str!("../../../../../docs/examples/config.toml");
 
-    let documented = documented.replace(
+    let mut documented = documented.replace(
         "sandbox = \"bubblewrap\"",
         if cfg!(target_os = "linux") {
             "sandbox = \"bubblewrap\""
@@ -237,6 +265,12 @@ fn default_config_matches_documented_example() {
             "sandbox = \"policy-only\""
         },
     );
+    if cfg!(target_os = "macos") {
+        documented = documented.replace(
+            "approval_policy = \"ask\"",
+            "approval_policy = \"auto-allow\"",
+        );
+    }
     assert_eq!(initial_config_toml().unwrap().trim(), documented.trim());
 }
 

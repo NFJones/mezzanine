@@ -3741,7 +3741,10 @@ non-actionable empty state.
 The `permissions` table MUST support `approval_policy`, `sandbox`,
 `read_scopes`, `write_scopes`, `command_rules`, `session_command_rules`, `global_command_rules`,
 `network_policy`, `destructive_action_policy`, `bypass_mode`, and the typed
-`bubblewrap` table. `sandbox` MUST default to fail-closed `bubblewrap` on Linux and `policy-only` on other platforms. Policy-only execution provides approval
+`bubblewrap` table. Newly generated macOS configuration MUST pair
+`approval_policy = "auto-allow"` with `sandbox = "policy-only"`. Generated
+Linux configuration MUST default to fail-closed `bubblewrap`; generated
+configuration on other platforms MUST use `policy-only`. Policy-only execution provides approval
 classification and auditing, not operating-system filesystem or shell-network
 confinement. Under policy-only execution, configured and subagent scopes are
 advisory approval and coordination metadata. When Bubblewrap is active,
