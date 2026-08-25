@@ -108,13 +108,20 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         .await?;
         ensure_control_response_success(&initialize_body)?;
         let event_receiver = channel.take_event_receiver()?;
+        let connection = channel.connection();
         let run_result = if request.requested_role == "observer" {
-            run_iroh_attached_observer_client(channel.stream_mut(), terminal_size, event_receiver)
-                .await
+            run_iroh_attached_observer_client(
+                channel.stream_mut(),
+                &connection,
+                terminal_size,
+                event_receiver,
+            )
+            .await
         } else {
             let primary_client_id = primary_client_id_from_initialize_response(&initialize_body)?;
             run_iroh_attached_primary_client(
                 channel.stream_mut(),
+                &connection,
                 primary_client_id,
                 terminal_size,
                 std::time::Duration::from_secs(30),

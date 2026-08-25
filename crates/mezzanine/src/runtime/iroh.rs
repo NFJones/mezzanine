@@ -138,6 +138,31 @@ impl RuntimeIrohConnectionQualitySnapshot {
     }
 }
 
+/// Classifies one privacy-safe Iroh transport sample for diagnostics and UI.
+pub(crate) fn classify_runtime_iroh_connection_quality(
+    rtt_micros: u64,
+    jitter_micros: u64,
+    lost_packets: u64,
+    congestion_events: u64,
+    sample_age: std::time::Duration,
+) -> crate::host::terminal::TerminalIrohStatusQuality {
+    use crate::host::terminal::TerminalIrohStatusQuality;
+
+    if sample_age > std::time::Duration::from_secs(5) {
+        TerminalIrohStatusQuality::Unknown
+    } else if rtt_micros >= 500_000 || lost_packets >= 4 || congestion_events >= 4 {
+        TerminalIrohStatusQuality::Poor
+    } else if rtt_micros >= 200_000
+        || jitter_micros >= 75_000
+        || lost_packets > 0
+        || congestion_events > 0
+    {
+        TerminalIrohStatusQuality::Degraded
+    } else {
+        TerminalIrohStatusQuality::Good
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RuntimeIrohPathSample {
     sampled_at: Instant,
@@ -1284,6 +1309,45 @@ fn relay_mode(policy: &RuntimeIrohRelayPolicy) -> Result<RelayMode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the shared Iroh quality classifier preserves every threshold
+    /// and treats stale samples as unknown before considering measurements.
+    #[test]
+    fn iroh_connection_quality_classifier_covers_thresholds_and_staleness() {
+        use crate::host::terminal::TerminalIrohStatusQuality;
+
+        let classify = |rtt, jitter, loss, congestion, age_seconds| {
+            classify_runtime_iroh_connection_quality(
+                rtt,
+                jitter,
+                loss,
+                congestion,
+                std::time::Duration::from_secs(age_seconds),
+            )
+        };
+        assert_eq!(
+            classify(42_000, 6_000, 0, 0, 0),
+            TerminalIrohStatusQuality::Good
+        );
+        assert_eq!(
+            classify(200_000, 0, 0, 0, 0),
+            TerminalIrohStatusQuality::Degraded
+        );
+        assert_eq!(
+            classify(0, 75_000, 0, 0, 0),
+            TerminalIrohStatusQuality::Degraded
+        );
+        assert_eq!(classify(0, 0, 1, 0, 0), TerminalIrohStatusQuality::Degraded);
+        assert_eq!(
+            classify(500_000, 0, 0, 0, 0),
+            TerminalIrohStatusQuality::Poor
+        );
+        assert_eq!(classify(0, 0, 4, 0, 0), TerminalIrohStatusQuality::Poor);
+        assert_eq!(
+            classify(900_000, 0, 9, 9, 6),
+            TerminalIrohStatusQuality::Unknown
+        );
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn iroh_endpoint_construction_is_disabled_by_default() {

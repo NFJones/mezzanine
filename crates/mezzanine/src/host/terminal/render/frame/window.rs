@@ -85,8 +85,8 @@ pub(in crate::host::terminal::render) enum WindowStatusSegmentKind {
     DateTime,
     /// Represents a configured command-backed status pill.
     StatusPill,
-    /// Represents the exact-client Iroh connection quality pill.
-    Iroh(crate::host::terminal::TerminalIrohStatusQuality),
+    /// Reserved semantic slot rendered from attach-client Iroh health.
+    IrohSlot,
 }
 
 impl WindowStatusSegmentKind {
@@ -94,7 +94,7 @@ impl WindowStatusSegmentKind {
     fn action(&self) -> Option<&WindowFrameAction> {
         match self {
             Self::Action { action, .. } => Some(action),
-            Self::Uptime | Self::DateTime | Self::StatusPill | Self::Iroh(_) => None,
+            Self::Uptime | Self::DateTime | Self::StatusPill | Self::IrohSlot => None,
         }
     }
 }
@@ -152,24 +152,12 @@ pub(in crate::host::terminal::render) fn window_status_field_component(
     field: &str,
 ) -> WindowStatusFieldComponent {
     if field == "iroh.status" {
-        let Some(quality) = frame_context.iroh_status_quality else {
-            return WindowStatusFieldComponent {
-                text: String::new(),
-                segments: Vec::new(),
-            };
-        };
-        let text = match quality {
-            crate::host::terminal::TerminalIrohStatusQuality::Good => " good ",
-            crate::host::terminal::TerminalIrohStatusQuality::Degraded => " degraded ",
-            crate::host::terminal::TerminalIrohStatusQuality::Poor => " poor ",
-            crate::host::terminal::TerminalIrohStatusQuality::Unknown => " unknown ",
-        }
-        .to_string();
+        let text = " ".repeat(crate::host::terminal::TERMINAL_IROH_STATUS_SLOT_WIDTH);
         return WindowStatusFieldComponent {
             segments: vec![WindowStatusSegment {
                 start: 0,
                 width: fitted_text_width(&text, usize::MAX),
-                key: WindowStatusSegmentKind::Iroh(quality),
+                key: WindowStatusSegmentKind::IrohSlot,
                 value: text.clone(),
             }],
             text,
@@ -347,23 +335,22 @@ pub(in crate::host::terminal::render) fn window_status_style_spans(
                 WindowStatusSegmentKind::StatusPill => {
                     ui_theme.colors.window_status_uptime.rendition()
                 }
-                WindowStatusSegmentKind::Iroh(quality) => match quality {
-                    crate::host::terminal::TerminalIrohStatusQuality::Good => {
-                        ui_theme.colors.iroh_status_good.rendition()
-                    }
-                    crate::host::terminal::TerminalIrohStatusQuality::Degraded => {
-                        ui_theme.colors.iroh_status_degraded.rendition()
-                    }
-                    crate::host::terminal::TerminalIrohStatusQuality::Poor => {
-                        ui_theme.colors.iroh_status_poor.rendition()
-                    }
-                    crate::host::terminal::TerminalIrohStatusQuality::Unknown => {
-                        ui_theme.colors.iroh_status_unknown.rendition()
-                    }
-                },
+                WindowStatusSegmentKind::IrohSlot => mez_terminal::GraphicRendition::default(),
             },
         })
         .collect()
+}
+
+/// Returns the absolute reserved Iroh slot inside the window frame row.
+pub(crate) fn window_iroh_status_slot_layout(
+    frame_context: &TerminalFrameContext,
+    width: usize,
+) -> Option<(usize, usize)> {
+    let status = window_right_status_layout(frame_context, width)?;
+    status.segments.into_iter().find_map(|segment| {
+        matches!(segment.key, WindowStatusSegmentKind::IrohSlot)
+            .then_some((segment.start, segment.width))
+    })
 }
 
 /// Returns rendered cells occupied by each default window-frame pill.

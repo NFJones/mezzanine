@@ -106,6 +106,65 @@ pub(super) fn terminal_step_response_lines(body: &str) -> Result<Vec<String>> {
         .collect()
 }
 
+/// Decodes one terminal view for client-local semantic overlays.
+pub(super) fn terminal_step_response_client_frame(
+    body: &str,
+) -> Result<Option<super::AttachClientFrame>> {
+    let parsed: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_args("terminal step response is not valid JSON"))?;
+    if let Some(error) = parsed.get("error") {
+        return Err(MezError::invalid_state(format!(
+            "terminal step failed: {}",
+            json_escape(&error.to_string())
+        )));
+    }
+    let Some(view) = parsed.get("result").and_then(|result| result.get("view")) else {
+        return Ok(None);
+    };
+    let iroh_status_slot = view
+        .get("iroh_status_slot")
+        .filter(|slot| !slot.is_null())
+        .map(parse_terminal_iroh_status_slot)
+        .transpose()?;
+    Ok(Some(super::AttachClientFrame {
+        lines: terminal_step_response_lines(body)?,
+        line_style_spans: terminal_step_response_line_style_spans(body)?,
+        modes: terminal_step_response_output_modes(body)?.unwrap_or_default(),
+        iroh_status_slot,
+    }))
+}
+
+/// Decodes one server-owned client-space Iroh status slot.
+fn parse_terminal_iroh_status_slot(
+    value: &serde_json::Value,
+) -> Result<crate::host::terminal::TerminalIrohStatusSlot> {
+    let number = |field: &str| {
+        value
+            .get(field)
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| MezError::invalid_state("terminal Iroh status slot is incomplete"))
+            .and_then(|value| {
+                usize::try_from(value)
+                    .map_err(|_| MezError::invalid_state("terminal Iroh status slot is too large"))
+            })
+    };
+    let rendition = |field: &str| {
+        value
+            .get(field)
+            .ok_or_else(|| MezError::invalid_state("terminal Iroh status rendition is missing"))
+            .and_then(parse_terminal_graphic_rendition)
+    };
+    Ok(crate::host::terminal::TerminalIrohStatusSlot {
+        row: number("row")?,
+        column: number("column")?,
+        width: number("width")?,
+        good: rendition("good")?,
+        degraded: rendition("degraded")?,
+        poor: rendition("poor")?,
+        unknown: rendition("unknown")?,
+    })
+}
+
 /// Returns the redraw requirements reported by a terminal step response.
 pub(in crate::cli) fn terminal_step_response_refresh_requirement(
     body: &str,
@@ -404,4 +463,59 @@ pub(in crate::cli) fn terminal_step_response_output_modes(
         cursor_visible,
         ..AttachedTerminalOutputModes::default()
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::terminal::TerminalIrohStatusQuality;
+
+    /// Verifies semantic slot decoding and local composition use only the
+    /// connected/disconnected labels while quality changes rendition colors.
+    #[test]
+    fn terminal_view_iroh_slot_decodes_and_composes_local_state() {
+        let response = r#"{"result":{"view":{"lines":["base              "],"line_style_spans":[[]],"cursor":{"row":0,"column":0,"visible":false},"output_modes":{},"iroh_status_slot":{"row":0,"column":4,"width":14,"good":{"foreground":null,"background":{"kind":"indexed","index":2}},"degraded":{"foreground":null,"background":{"kind":"indexed","index":3}},"poor":{"foreground":null,"background":{"kind":"indexed","index":1}},"unknown":{"foreground":null,"background":{"kind":"indexed","index":8}}}}}}"#;
+        let frame = terminal_step_response_client_frame(response)
+            .unwrap()
+            .expect("view should decode");
+
+        for (quality, expected_background) in [
+            (TerminalIrohStatusQuality::Good, TerminalColor::Indexed(2)),
+            (
+                TerminalIrohStatusQuality::Degraded,
+                TerminalColor::Indexed(3),
+            ),
+            (TerminalIrohStatusQuality::Poor, TerminalColor::Indexed(1)),
+            (
+                TerminalIrohStatusQuality::Unknown,
+                TerminalColor::Indexed(8),
+            ),
+        ] {
+            let (lines, spans) = frame.with_iroh_status(true, quality);
+            assert_eq!(lines, ["base connected    "]);
+            assert_eq!(
+                spans[0].last().unwrap().rendition.background,
+                Some(expected_background)
+            );
+        }
+
+        let (lines, spans) = frame.with_iroh_status(false, TerminalIrohStatusQuality::Poor);
+        assert_eq!(lines, ["base disconnected "]);
+        assert_eq!(
+            spans[0].last().unwrap().rendition.background,
+            Some(TerminalColor::Indexed(8))
+        );
+    }
+
+    /// Verifies ordinary Unix-compatible frames omit local Iroh composition.
+    #[test]
+    fn terminal_view_without_iroh_slot_remains_unchanged() {
+        let response = r#"{"result":{"view":{"lines":["plain"],"line_style_spans":[[]],"cursor":{"row":0,"column":0,"visible":false},"output_modes":{}}}}"#;
+        let frame = terminal_step_response_client_frame(response)
+            .unwrap()
+            .expect("view should decode");
+        let (lines, spans) = frame.with_iroh_status(true, TerminalIrohStatusQuality::Good);
+        assert_eq!(lines, ["plain"]);
+        assert_eq!(spans, [Vec::new()]);
+    }
 }

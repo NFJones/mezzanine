@@ -28,7 +28,7 @@ pub(crate) fn runtime_terminal_step_result_json(
         .map(|action| format!(r#""{}""#, json_escape(action)))
         .collect::<Vec<_>>();
     let view_json = view
-        .map(rendered_client_view_json)
+        .map(|view| rendered_client_view_json(view, None))
         .unwrap_or_else(|| "null".to_string());
     let ui_theme = view
         .map(|view| super::presentation::ui_theme_json(&view.ui_theme))

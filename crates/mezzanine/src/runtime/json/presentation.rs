@@ -11,7 +11,10 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(crate) fn rendered_client_view_json(view: &RenderedClientView) -> String {
+pub(crate) fn rendered_client_view_json(
+    view: &RenderedClientView,
+    iroh_status_slot: Option<&crate::host::terminal::TerminalIrohStatusSlot>,
+) -> String {
     let (presentation_lines, presentation_spans) =
         compose_client_presentation_with_styles(view, None);
     let lines = presentation_lines
@@ -28,8 +31,22 @@ pub(crate) fn rendered_client_view_json(view: &RenderedClientView) -> String {
             )
         })
         .unwrap_or_else(|| "null".to_string());
+    let iroh_status_slot = iroh_status_slot
+        .map(|slot| {
+            format!(
+                r#"{{"row":{},"column":{},"width":{},"good":{},"degraded":{},"poor":{},"unknown":{}}}"#,
+                slot.row,
+                slot.column,
+                slot.width,
+                terminal_rendition_json(slot.good),
+                terminal_rendition_json(slot.degraded),
+                terminal_rendition_json(slot.poor),
+                terminal_rendition_json(slot.unknown),
+            )
+        })
+        .unwrap_or_else(|| "null".to_string());
     format!(
-        r#"{{"role":"{}","authoritative_size":{{"columns":{},"rows":{}}},"client_size":{{"columns":{},"rows":{}}},"requires_client_scroll":{},"viewport":{{"row":{},"column":{},"max_row":{},"max_column":{}}},"cursor":{{"row":{},"column":{},"visible":{},"style":"{}","blink":{},"blink_interval_ms":{}}},"output_modes":{{"application_keypad":{},"bracketed_paste":{},"host_mouse_reporting":{},"animation_refresh_interval_ms":{}}},"agent_prompt_region":{},"primary_prompt_active":{},"readline_input_active":{},"lines":[{}],"line_style_spans":{}}}"#,
+        r#"{{"role":"{}","authoritative_size":{{"columns":{},"rows":{}}},"client_size":{{"columns":{},"rows":{}}},"requires_client_scroll":{},"viewport":{{"row":{},"column":{},"max_row":{},"max_column":{}}},"cursor":{{"row":{},"column":{},"visible":{},"style":"{}","blink":{},"blink_interval_ms":{}}},"output_modes":{{"application_keypad":{},"bracketed_paste":{},"host_mouse_reporting":{},"animation_refresh_interval_ms":{}}},"agent_prompt_region":{},"iroh_status_slot":{},"primary_prompt_active":{},"readline_input_active":{},"lines":[{}],"line_style_spans":{}}}"#,
         client_view_role_name(view.role),
         view.authoritative_size.columns,
         view.authoritative_size.rows,
@@ -51,6 +68,7 @@ pub(crate) fn rendered_client_view_json(view: &RenderedClientView) -> String {
         view.host_mouse_reporting,
         view.animation_refresh_interval_ms,
         agent_prompt_region,
+        iroh_status_slot,
         view.primary_prompt_active,
         view.readline_input_active,
         lines.join(","),

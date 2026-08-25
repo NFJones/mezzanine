@@ -46,6 +46,173 @@ pub(super) struct TerminalStepRefreshRequirement {
     pub session_terminated: bool,
 }
 
+/// One decoded terminal frame retained for client-local presentation overlays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AttachClientFrame {
+    /// Flattened server-owned base rows.
+    lines: Vec<String>,
+    /// Server-owned style spans aligned with `lines`.
+    line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+    /// Host terminal modes associated with this frame.
+    modes: AttachedTerminalOutputModes,
+    /// Optional client-space Iroh status slot.
+    iroh_status_slot: Option<crate::host::terminal::TerminalIrohStatusSlot>,
+}
+
+impl AttachClientFrame {
+    /// Composes one local Iroh state pill without mutating the cached base frame.
+    fn with_iroh_status(
+        &self,
+        connected: bool,
+        quality: crate::host::terminal::TerminalIrohStatusQuality,
+    ) -> (Vec<String>, Vec<Vec<TerminalStyleSpan>>) {
+        let mut lines = self.lines.clone();
+        let mut spans = self.line_style_spans.clone();
+        let Some(slot) = self.iroh_status_slot else {
+            return (lines, spans);
+        };
+        let Some(line) = lines.get_mut(slot.row) else {
+            return (lines, spans);
+        };
+        let label = if connected {
+            " connected "
+        } else {
+            " disconnected "
+        };
+        let prefix = mez_mux::render::line_slice(line, 0, slot.column);
+        let suffix =
+            mez_mux::render::line_slice(line, slot.column.saturating_add(slot.width), usize::MAX);
+        *line = format!(
+            "{prefix}{}{suffix}",
+            mez_mux::render::fit_width(label, slot.width)
+        );
+        spans.resize(lines.len(), Vec::new());
+        let row_spans = &mut spans[slot.row];
+        *row_spans = row_spans
+            .iter()
+            .flat_map(|span| {
+                mez_mux::render::style_span_segments_outside_range(
+                    *span,
+                    slot.column,
+                    slot.column.saturating_add(slot.width),
+                )
+            })
+            .collect();
+        let rendition = if connected {
+            match quality {
+                crate::host::terminal::TerminalIrohStatusQuality::Good => slot.good,
+                crate::host::terminal::TerminalIrohStatusQuality::Degraded => slot.degraded,
+                crate::host::terminal::TerminalIrohStatusQuality::Poor => slot.poor,
+                crate::host::terminal::TerminalIrohStatusQuality::Unknown => slot.unknown,
+            }
+        } else {
+            slot.unknown
+        };
+        row_spans.push(TerminalStyleSpan {
+            start: slot.column,
+            length: slot.width,
+            rendition,
+        });
+        row_spans.sort_unstable_by_key(|span| span.start);
+        (lines, spans)
+    }
+}
+
+/// Previous selected-path counters retained for client-local health deltas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AttachIrohPathSample {
+    path_id: String,
+    rtt_micros: u64,
+    jitter_micros: u64,
+    lost_packets: u64,
+    congestion_events: u64,
+}
+
+/// Samples and classifies one attach client's retained Iroh connection.
+#[derive(Debug)]
+struct AttachIrohHealthTracker {
+    previous: Option<AttachIrohPathSample>,
+    quality: crate::host::terminal::TerminalIrohStatusQuality,
+    deadline: tokio::time::Instant,
+}
+
+impl Default for AttachIrohHealthTracker {
+    fn default() -> Self {
+        Self {
+            previous: None,
+            quality: crate::host::terminal::TerminalIrohStatusQuality::Unknown,
+            deadline: tokio::time::Instant::now(),
+        }
+    }
+}
+
+impl AttachIrohHealthTracker {
+    const REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+    fn deadline(&self) -> tokio::time::Instant {
+        self.deadline
+    }
+
+    fn quality(&self) -> crate::host::terminal::TerminalIrohStatusQuality {
+        self.quality
+    }
+
+    /// Samples the selected path and reports whether visible quality changed.
+    fn sample(&mut self, connection: &iroh::endpoint::Connection) -> bool {
+        let previous_quality = self.quality;
+        let paths = connection.paths();
+        let Some(path) = paths.iter().find(|path| path.is_selected()) else {
+            self.quality = crate::host::terminal::TerminalIrohStatusQuality::Unknown;
+            self.deadline = tokio::time::Instant::now() + Self::REFRESH_INTERVAL;
+            return self.quality != previous_quality;
+        };
+        let stats = path.stats();
+        let path_id = format!("{:?}", path.id());
+        let rtt_micros = u64::try_from(stats.rtt.as_micros()).unwrap_or(u64::MAX);
+        let same_path = self
+            .previous
+            .as_ref()
+            .is_some_and(|previous| previous.path_id == path_id);
+        let jitter_micros = self
+            .previous
+            .as_ref()
+            .filter(|_| same_path)
+            .map(|previous| {
+                previous
+                    .jitter_micros
+                    .saturating_mul(3)
+                    .saturating_add(rtt_micros.abs_diff(previous.rtt_micros))
+                    / 4
+            })
+            .unwrap_or(0);
+        let delta = |current: u64, previous: fn(&AttachIrohPathSample) -> u64| {
+            self.previous
+                .as_ref()
+                .filter(|_| same_path)
+                .map(|sample| current.saturating_sub(previous(sample)))
+                .unwrap_or(0)
+        };
+        let lost_packets = delta(stats.lost_packets, |sample| sample.lost_packets);
+        let congestion_events = delta(stats.congestion_events, |sample| sample.congestion_events);
+        self.quality = crate::runtime::classify_runtime_iroh_connection_quality(
+            rtt_micros,
+            jitter_micros,
+            lost_packets,
+            congestion_events,
+            std::time::Duration::ZERO,
+        );
+        self.previous = Some(AttachIrohPathSample {
+            path_id,
+            rtt_micros,
+            jitter_micros,
+            lost_packets: stats.lost_packets,
+            congestion_events: stats.congestion_events,
+        });
+        self.deadline = tokio::time::Instant::now() + Self::REFRESH_INTERVAL;
+        self.quality != previous_quality
+    }
+}
+
 /// Outcome from rendering one explicit primary terminal view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PrimaryViewRenderOutcome {

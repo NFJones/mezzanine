@@ -17,6 +17,7 @@ use mez_mux::input::{
 };
 use mez_mux::layout::Size;
 use mez_mux::theme::UiTheme;
+use mez_terminal::GraphicRendition;
 #[cfg(test)]
 use rustix::event::{PollFd as RustixPollFd, PollFlags, Timespec, poll as rustix_poll};
 #[cfg(test)]
@@ -73,8 +74,6 @@ pub struct TerminalFrameContext {
     pub approval_attention_groups: std::collections::BTreeSet<String>,
     /// Right-side status fields rendered into the active pane frame.
     pub window_status: Option<TerminalWindowStatusContext>,
-    /// Exact-client Iroh connection quality projected for `iroh.status`.
-    pub iroh_status_quality: Option<TerminalIrohStatusQuality>,
     /// Per-pane runtime metadata keyed by stable pane id.
     pub panes: BTreeMap<String, TerminalPaneFrameContext>,
 }
@@ -90,6 +89,28 @@ pub enum TerminalIrohStatusQuality {
     Poor,
     /// Missing or stale live measurements on an established Iroh connection.
     Unknown,
+}
+
+/// Maximum fixed width reserved for the client-rendered Iroh state pill.
+pub const TERMINAL_IROH_STATUS_SLOT_WIDTH: usize = " disconnected ".len();
+
+/// Client-space semantic slot for one locally rendered Iroh status pill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalIrohStatusSlot {
+    /// Visible client row containing the reserved pill cells.
+    pub row: usize,
+    /// First visible client column reserved for the pill.
+    pub column: usize,
+    /// Number of cells reserved by the server-owned layout.
+    pub width: usize,
+    /// Healthy connection rendition from the remote session theme.
+    pub good: GraphicRendition,
+    /// Degraded connection rendition from the remote session theme.
+    pub degraded: GraphicRendition,
+    /// Poor connection rendition from the remote session theme.
+    pub poor: GraphicRendition,
+    /// Unknown or stale connection rendition from the remote session theme.
+    pub unknown: GraphicRendition,
 }
 
 /// Product specialization of the mux-owned pane presentation input.

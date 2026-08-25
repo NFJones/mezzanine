@@ -722,9 +722,12 @@ impl RuntimeSessionService {
         {
             mez_mux::presentation::apply_client_view_offset(view, row, column);
         }
+        let iroh_status_slot = view
+            .as_ref()
+            .and_then(|view| self.terminal_iroh_status_slot(view, &terminal_config));
         let view_json = view
             .as_ref()
-            .map(rendered_client_view_json)
+            .map(|view| rendered_client_view_json(view, iroh_status_slot.as_ref()))
             .unwrap_or_else(|| "null".to_string());
         Ok(format!(r#"{{"view":{view_json}}}"#))
     }

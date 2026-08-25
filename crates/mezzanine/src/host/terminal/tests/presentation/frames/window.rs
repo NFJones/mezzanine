@@ -3,9 +3,8 @@
 use crate::host::terminal::{
     BTreeMap, DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE,
     DEFAULT_WINDOW_FRAME_TEMPLATE, PaneRenderInput, TerminalClientLoopConfig, TerminalFrameContext,
-    TerminalFrameRenderOptions, TerminalIrohStatusQuality, WindowFrameAction,
-    render_attached_client_view, render_window_with_pane_frame_template,
-    window_frame_action_pillbox_cells,
+    TerminalFrameRenderOptions, WindowFrameAction, render_attached_client_view,
+    render_window_with_pane_frame_template, window_frame_action_pillbox_cells,
 };
 use mez_core::ids::IdFactory;
 use mez_mux::layout::{Size, SplitDirection, Window};
@@ -385,7 +384,20 @@ fn render_window_status_uses_right_aligned_themed_segments() {
     assert!(view.lines[2].find(" ~/repo ").unwrap() < view.lines[2].find(" + ").unwrap());
     assert!(view.lines[2].contains(" 2d 03h 04m "));
     assert!(view.lines[2].contains(" 2026-05-05 10:11:12 "));
-    assert!(view.lines[2].ends_with(" 2026-05-05 10:11:12  "));
+    let trailing_spaces = view.lines[2].len() - view.lines[2].trim_end_matches(' ').len();
+    assert!(
+        trailing_spaces >= crate::host::terminal::TERMINAL_IROH_STATUS_SLOT_WIDTH,
+        "{}",
+        view.lines[2]
+    );
+    assert_eq!(
+        super::super::super::super::render::window_iroh_status_slot_layout(
+            &config.frame_context,
+            96,
+        )
+        .map(|(_, width)| width),
+        Some(crate::host::terminal::TERMINAL_IROH_STATUS_SLOT_WIDTH)
+    );
     assert_eq!(view.lines[2].chars().last(), Some(' '), "{}", view.lines[2]);
     let uptime_start_bytes = view.lines[2].find(" 2d 03h 04m ").unwrap();
     let uptime_start = UnicodeWidthStr::width(&view.lines[2][..uptime_start_bytes]);
@@ -485,20 +497,19 @@ fn render_window_frame_fits_single_row_window() {
     assert_eq!(rendered, vec!["0:main      "]);
 }
 
-/// Verifies that `iroh.status` is an opt-in, exact-client plain-text quality
-/// segment with quality-specific styling and no action hit target. The absent
-/// projection must leave no separator or padding behind for Unix and
-/// never-Iroh clients.
+/// Verifies that `iroh.status` reserves one semantic client-rendered slot with
+/// stable geometry and no action hit target. Daemon quality samples must not
+/// change the flattened server frame because quality is composed locally by
+/// Iroh attach clients.
 #[test]
 fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
     let mut ids = IdFactory::default();
     let window = Window::new(&mut ids, 0, "work", Size::new(40, 3).unwrap());
-    let render = |quality| {
+    let render = |template: &str| {
         let config = TerminalClientLoopConfig {
             frame_context: TerminalFrameContext {
-                iroh_status_quality: quality,
                 window_status: Some(TerminalWindowStatusContext {
-                    template: "#{datetime.local}#{iroh.status}".to_string(),
+                    template: template.to_string(),
                     active_pane_working_directory: None,
                     status_pills: BTreeMap::new(),
                     system_uptime: String::new(),
@@ -523,58 +534,25 @@ fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
         (config, view)
     };
 
-    let (absent_config, absent) = render(None);
-    assert!(!absent.lines[2].contains("Iroh:"), "{}", absent.lines[2]);
-    assert!(absent.lines[2].ends_with(" now  "), "{}", absent.lines[2]);
-    assert!(window_frame_action_pillbox_cells(&absent_config.frame_context, 2, 40).is_empty());
-
-    for (quality, expected_text, expected_background) in [
-        (
-            TerminalIrohStatusQuality::Good,
-            " good ",
-            TerminalClientLoopConfig::default()
-                .ui_theme
-                .colors
-                .iroh_status_good
-                .background,
-        ),
-        (
-            TerminalIrohStatusQuality::Degraded,
-            " degraded ",
-            TerminalClientLoopConfig::default()
-                .ui_theme
-                .colors
-                .iroh_status_degraded
-                .background,
-        ),
-        (
-            TerminalIrohStatusQuality::Poor,
-            " poor ",
-            TerminalClientLoopConfig::default()
-                .ui_theme
-                .colors
-                .iroh_status_poor
-                .background,
-        ),
-        (
-            TerminalIrohStatusQuality::Unknown,
-            " unknown ",
-            TerminalClientLoopConfig::default()
-                .ui_theme
-                .colors
-                .iroh_status_unknown
-                .background,
-        ),
-    ] {
-        let (config, view) = render(Some(quality));
-        let status_start =
-            UnicodeWidthStr::width(&view.lines[2][..view.lines[2].find(expected_text).unwrap()]);
-        assert_eq!(view.lines[2].chars().last(), Some(' '), "{}", view.lines[2]);
-        assert!(view.line_style_spans[2].iter().any(|span| {
-            span.start == status_start
-                && span.length == UnicodeWidthStr::width(expected_text)
-                && span.rendition.background == Some(expected_background)
-        }));
-        assert!(window_frame_action_pillbox_cells(&config.frame_context, 2, 40).is_empty());
-    }
+    let (config, base) = render("#{datetime.local}#{iroh.status}");
+    let slot = super::super::super::super::render::window_iroh_status_slot_layout(
+        &config.frame_context,
+        40,
+    )
+    .expect("configured iroh.status should reserve a slot");
+    assert_eq!(
+        slot.1,
+        crate::host::terminal::TERMINAL_IROH_STATUS_SLOT_WIDTH
+    );
+    assert_eq!(base.lines[2], " 0 work              now                ");
+    assert!(window_frame_action_pillbox_cells(&config.frame_context, 2, 40).is_empty());
+    let (without_slot_config, without_slot) = render("#{datetime.local}");
+    assert!(
+        super::super::super::super::render::window_iroh_status_slot_layout(
+            &without_slot_config.frame_context,
+            40,
+        )
+        .is_none()
+    );
+    assert_ne!(without_slot.lines, base.lines);
 }

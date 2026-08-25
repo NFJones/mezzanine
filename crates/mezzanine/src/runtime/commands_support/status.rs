@@ -779,21 +779,25 @@ fn iroh_connection_quality(
     status: crate::runtime::RuntimeIrohConnectionQualitySnapshot,
     sample_age: std::time::Duration,
 ) -> (&'static str, &'static str) {
-    if sample_age > std::time::Duration::from_secs(5) {
-        ("unknown", "transport sample is stale")
-    } else if status.rtt_micros >= 500_000
-        || status.lost_packets >= 4
-        || status.congestion_events >= 4
-    {
-        ("poor", "high RTT or sustained recent transport trouble")
-    } else if status.rtt_micros >= 200_000
-        || status.jitter_micros >= 75_000
-        || status.lost_packets > 0
-        || status.congestion_events > 0
-    {
-        ("degraded", "elevated RTT, jitter, loss, or congestion")
-    } else {
-        ("good", "stable RTT with no recent loss or congestion")
+    match crate::runtime::classify_runtime_iroh_connection_quality(
+        status.rtt_micros,
+        status.jitter_micros,
+        status.lost_packets,
+        status.congestion_events,
+        sample_age,
+    ) {
+        crate::host::terminal::TerminalIrohStatusQuality::Good => {
+            ("good", "stable RTT with no recent loss or congestion")
+        }
+        crate::host::terminal::TerminalIrohStatusQuality::Degraded => {
+            ("degraded", "elevated RTT, jitter, loss, or congestion")
+        }
+        crate::host::terminal::TerminalIrohStatusQuality::Poor => {
+            ("poor", "high RTT or sustained recent transport trouble")
+        }
+        crate::host::terminal::TerminalIrohStatusQuality::Unknown => {
+            ("unknown", "transport sample is stale")
+        }
     }
 }
 

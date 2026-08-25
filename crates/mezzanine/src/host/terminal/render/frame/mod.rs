@@ -36,6 +36,7 @@ pub(in crate::host::terminal::render) use style::{
     pane_frame_right_status_style_spans, styled_group_frame_line, styled_pane_frame_line,
     styled_window_frame_line, window_pillbox_rendition,
 };
+pub(crate) use window::window_iroh_status_slot_layout;
 pub(in crate::host::terminal::render) use window::{
     WindowStatusSegmentKind, render_window_frame_text, render_window_status_template,
     window_right_status_layout, window_status_style_spans,

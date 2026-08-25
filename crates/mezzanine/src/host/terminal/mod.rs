@@ -79,9 +79,10 @@ pub use fd::PaneRenderInput;
 #[cfg(test)]
 pub use fd::poll_attached_terminal_fd_readiness;
 pub use fd::{
-    AttachedTerminalFdReadiness, AttachedTerminalFdRole, TerminalClientLoopConfig,
-    TerminalFdInterest, TerminalFrameContext, TerminalIrohStatusQuality, TerminalPaneFrameContext,
-    TerminalRawModeGuard, read_attached_terminal_size,
+    AttachedTerminalFdReadiness, AttachedTerminalFdRole, TERMINAL_IROH_STATUS_SLOT_WIDTH,
+    TerminalClientLoopConfig, TerminalFdInterest, TerminalFrameContext, TerminalIrohStatusQuality,
+    TerminalIrohStatusSlot, TerminalPaneFrameContext, TerminalRawModeGuard,
+    read_attached_terminal_size,
 };
 pub use host_clipboard::{
     DEFAULT_HOST_CLIPBOARD_READ_MAX_BYTES, DEFAULT_HOST_CLIPBOARD_READ_TIMEOUT, HostClipboard,
@@ -114,7 +115,7 @@ pub(crate) use screen::parse_mez_shell_transaction_osc;
 use client_loop::borrow_raw_fd;
 pub(crate) use render::{
     DEFAULT_AGENT_WRAP_COLUMN_CAP, agent_log_wrap_width, agent_wrap_column_cap,
-    set_agent_wrap_column_cap, wrap_agent_log_lines,
+    set_agent_wrap_column_cap, window_iroh_status_slot_layout, wrap_agent_log_lines,
 };
 
 /// Exposes the tests module boundary.

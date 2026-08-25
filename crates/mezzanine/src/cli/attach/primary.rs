@@ -8,8 +8,9 @@ use super::event_stream::{
 };
 use super::requests::{
     read_async_control_response_frames, read_async_control_response_frames_or_disconnected,
-    refresh_attached_client_size_async, request_and_render_primary_view_async,
-    request_primary_resize_async, terminal_step_control_request,
+    refresh_attached_client_size_async, render_iroh_attach_client_frame_async,
+    request_and_render_primary_view_async, request_primary_resize_async,
+    request_primary_view_frame_async, terminal_step_control_request,
     write_async_control_body_or_disconnected,
 };
 use super::responses::{control_response_forbidden, terminal_step_response_refresh_requirement};
@@ -61,6 +62,7 @@ pub(in crate::cli) async fn run_control_socket_attached_primary_client(
 /// Runs a primary attach over one persistent Iroh control stream.
 pub(in crate::cli) async fn run_iroh_attached_primary_client<S>(
     stream: &mut S,
+    connection: &iroh::endpoint::Connection,
     primary_client_id: ClientId,
     client_size: Size,
     request_timeout: std::time::Duration,
@@ -76,6 +78,7 @@ where
     let run_result = run_iroh_attached_primary_client_loop_async_with_events(
         stream,
         terminal_guard.io_mut(),
+        Some(connection),
         primary_client_id,
         client_size,
         request_timeout,
@@ -108,6 +111,7 @@ where
     run_iroh_attached_primary_client_loop_async_with_events(
         stream,
         terminal_io,
+        None,
         primary_client_id,
         client_size,
         request_timeout,
@@ -119,6 +123,7 @@ where
 async fn run_iroh_attached_primary_client_loop_async_with_events<I, S>(
     stream: &mut S,
     terminal_io: &mut I,
+    connection: Option<&iroh::endpoint::Connection>,
     primary_client_id: ClientId,
     mut client_size: Size,
     request_timeout: std::time::Duration,
@@ -133,6 +138,8 @@ where
     let cursor_blink_epoch = std::time::Instant::now();
     let mut render_requested = true;
     let mut size_refresh = AttachTerminalSizeRefresh::default();
+    let mut health = super::AttachIrohHealthTracker::default();
+    let mut cached_frame = None;
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
@@ -153,24 +160,22 @@ where
             }
             render_requested = true;
         }
+        let wake_deadline = connection
+            .map(|_| health.deadline().min(size_refresh.deadline()))
+            .unwrap_or_else(|| size_refresh.deadline());
         let input = match event_receiver.as_deref_mut() {
             Some(event_receiver) => {
                 read_attached_client_input_or_iroh_event(
                     terminal_io,
                     event_receiver,
                     4096,
-                    size_refresh.deadline(),
+                    wake_deadline,
                 )
                 .await?
             }
             None => {
-                read_attached_client_input_or_deadline(
-                    terminal_io,
-                    4096,
-                    None,
-                    size_refresh.deadline(),
-                )
-                .await?
+                read_attached_client_input_or_deadline(terminal_io, 4096, None, wake_deadline)
+                    .await?
             }
         };
         size_refresh.reschedule();
@@ -182,6 +187,16 @@ where
                 render_requested = true;
             }
             AttachRenderAction::Disconnect => {
+                if let Some(frame) = cached_frame.as_ref() {
+                    let _ = render_iroh_attach_client_frame_async(
+                        terminal_io,
+                        frame,
+                        false,
+                        health.quality(),
+                        cursor_blink_epoch,
+                    )
+                    .await;
+                }
                 return Err(MezError::invalid_state(
                     "Iroh event stream disconnected; reattach required",
                 ));
@@ -191,27 +206,62 @@ where
             return Ok(());
         }
         if input.bytes.is_empty() {
-            let outcome = tokio::time::timeout(
+            let quality_changed = connection.is_some_and(|connection| {
+                health.deadline() <= tokio::time::Instant::now() && health.sample(connection)
+            });
+            if !render_requested && quality_changed {
+                if let Some(frame) = cached_frame.as_ref() {
+                    let outcome = render_iroh_attach_client_frame_async(
+                        terminal_io,
+                        frame,
+                        true,
+                        health.quality(),
+                        cursor_blink_epoch,
+                    )
+                    .await?;
+                    if !outcome.connected {
+                        return Err(MezError::invalid_state(
+                            "Iroh attach terminal disconnected during local status repaint",
+                        ));
+                    }
+                }
+                continue;
+            }
+            if !render_requested {
+                continue;
+            }
+            let frame = tokio::time::timeout(
                 request_timeout,
-                request_and_render_primary_view_async(
-                    stream,
-                    terminal_io,
-                    client_size,
-                    iteration,
-                    cursor_blink_epoch,
-                ),
+                request_primary_view_frame_async(stream, client_size, iteration),
             )
             .await
             .map_err(|_| {
                 MezError::invalid_state(
                     "Iroh terminal view acknowledgement timed out; reattach required",
                 )
-            })??;
+            })??
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "Iroh attach disconnected while reading a terminal view; reattach required",
+                )
+            })?;
+            if let Some(connection) = connection {
+                health.sample(connection);
+            }
+            let outcome = render_iroh_attach_client_frame_async(
+                terminal_io,
+                &frame,
+                true,
+                health.quality(),
+                cursor_blink_epoch,
+            )
+            .await?;
             if !outcome.connected {
                 return Err(MezError::invalid_state(
                     "Iroh attach disconnected while reading a terminal view; reattach required",
                 ));
             }
+            cached_frame = Some(frame);
             render_requested = false;
             iteration = iteration.saturating_add(1);
             continue;
@@ -263,27 +313,38 @@ where
             terminal_io.invalidate_output_frame().await?;
         }
         if render_requested || refresh_requirement.view_refresh_required {
-            let outcome = tokio::time::timeout(
+            let frame = tokio::time::timeout(
                 request_timeout,
-                request_and_render_primary_view_async(
-                    stream,
-                    terminal_io,
-                    client_size,
-                    iteration,
-                    cursor_blink_epoch,
-                ),
+                request_primary_view_frame_async(stream, client_size, iteration),
             )
             .await
             .map_err(|_| {
                 MezError::invalid_state(
                     "Iroh terminal view acknowledgement timed out; reattach required",
                 )
-            })??;
+            })??
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "Iroh attach disconnected while reading a terminal view; reattach required",
+                )
+            })?;
+            if let Some(connection) = connection {
+                health.sample(connection);
+            }
+            let outcome = render_iroh_attach_client_frame_async(
+                terminal_io,
+                &frame,
+                true,
+                health.quality(),
+                cursor_blink_epoch,
+            )
+            .await?;
             if !outcome.connected {
                 return Err(MezError::invalid_state(
                     "Iroh attach disconnected while reading a terminal view; reattach required",
                 ));
             }
+            cached_frame = Some(frame);
         }
         render_requested = false;
         iteration = iteration.saturating_add(1);

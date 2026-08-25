@@ -28,7 +28,6 @@ use super::{
     window_frame_action_pillbox_cells, window_frame_pillbox_cells,
     window_group_frame_pillbox_cells,
 };
-use crate::host::terminal::TerminalIrohStatusQuality;
 
 /// Runs the apply copy mode selection spans operation for this subsystem.
 ///
@@ -126,6 +125,46 @@ pub(super) fn copy_selection_rendition(
 }
 
 impl RuntimeSessionService {
+    /// Resolves the fully visible client-space Iroh status slot for one view.
+    pub(crate) fn terminal_iroh_status_slot(
+        &self,
+        view: &RenderedClientView,
+        config: &TerminalClientLoopConfig,
+    ) -> Option<crate::host::terminal::TerminalIrohStatusSlot> {
+        let window = self.session.active_window()?;
+        let row = self.window_presentation_plan(window)?.window_frame_row?;
+        let (column, width) = crate::host::terminal::window_iroh_status_slot_layout(
+            &config.frame_context,
+            usize::from(window.size.columns),
+        )?;
+        let row_offset = usize::from(view.requires_client_scroll) * view.viewport_row;
+        let column_offset = usize::from(view.requires_client_scroll) * view.viewport_column;
+        let visible_row = usize::from(row).checked_sub(row_offset)?;
+        let visible_column = column.checked_sub(column_offset)?;
+        let visible_rows = if view.requires_client_scroll {
+            usize::from(view.client_size.rows)
+        } else {
+            usize::from(view.authoritative_size.rows)
+        };
+        let visible_columns = if view.requires_client_scroll {
+            usize::from(view.client_size.columns)
+        } else {
+            usize::from(view.authoritative_size.columns)
+        };
+        if visible_row >= visible_rows || visible_column.saturating_add(width) > visible_columns {
+            return None;
+        }
+        Some(crate::host::terminal::TerminalIrohStatusSlot {
+            row: visible_row,
+            column: visible_column,
+            width,
+            good: config.ui_theme.colors.iroh_status_good.rendition(),
+            degraded: config.ui_theme.colors.iroh_status_degraded.rendition(),
+            poor: config.ui_theme.colors.iroh_status_poor.rendition(),
+            unknown: config.ui_theme.colors.iroh_status_unknown.rendition(),
+        })
+    }
+
     /// Prepares compatibility focus and transient state for one exact client.
     pub(crate) fn prepare_client_render(
         &mut self,
@@ -1271,28 +1310,6 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Projects only the exact client's privacy-safe live Iroh quality.
-    fn runtime_iroh_status_quality(&self) -> Option<TerminalIrohStatusQuality> {
-        let client_id = self.presentation.projected_client_id.as_ref()?;
-        let status = self.integration.remote_iroh_connection_quality(client_id)?;
-        if status.sample_age() > std::time::Duration::from_secs(5) {
-            Some(TerminalIrohStatusQuality::Unknown)
-        } else if status.rtt_micros >= 500_000
-            || status.lost_packets >= 4
-            || status.congestion_events >= 4
-        {
-            Some(TerminalIrohStatusQuality::Poor)
-        } else if status.rtt_micros >= 200_000
-            || status.jitter_micros >= 75_000
-            || status.lost_packets > 0
-            || status.congestion_events > 0
-        {
-            Some(TerminalIrohStatusQuality::Degraded)
-        } else {
-            Some(TerminalIrohStatusQuality::Good)
-        }
-    }
-
     /// Runs the terminal frame context operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1315,7 +1332,6 @@ impl RuntimeSessionService {
                 .settings
                 .terminal_completion_attention_flashing,
             window_status: self.runtime_window_status_context(),
-            iroh_status_quality: self.runtime_iroh_status_quality(),
             ..TerminalFrameContext::default()
         };
         let active_window_id = self

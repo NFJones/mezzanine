@@ -574,6 +574,11 @@ impl PersistentIrohControlChannel {
         self.bridge.stream_mut()
     }
 
+    /// Returns a clone of the retained connection for local attach health sampling.
+    pub(super) fn connection(&self) -> iroh::endpoint::Connection {
+        self.connection.clone()
+    }
+
     /// Takes the negotiated event receiver exactly once for the attach loop.
     pub(super) fn take_event_receiver(
         &mut self,

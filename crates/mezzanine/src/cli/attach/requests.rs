@@ -1,10 +1,6 @@
 //! Attached-client JSON-RPC request construction and control transport helpers.
 
-use super::responses::{
-    control_response_forbidden, terminal_step_response_line_style_spans,
-    terminal_step_response_lines, terminal_step_response_output_modes,
-    terminal_step_response_refresh_requirement,
-};
+use super::responses::{control_response_forbidden, terminal_step_response_refresh_requirement};
 use super::{
     AsyncAttachedTerminalIo, AttachedTerminalOutputModes, ClientId, MezError,
     PrimaryResizeRequestOutcome, PrimaryViewRenderOutcome, Result, Size, TerminalStyleSpan,
@@ -105,21 +101,38 @@ where
     I: AsyncAttachedTerminalIo,
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
+    let Some(frame) = request_primary_view_frame_async(stream, client_size, iteration).await?
+    else {
+        return Ok(PrimaryViewRenderOutcome::disconnected());
+    };
+    render_attach_client_frame_async(terminal_io, &frame, cursor_blink_epoch).await
+}
+
+/// Requests and decodes one terminal view without presenting it locally.
+pub(super) async fn request_primary_view_frame_async<S>(
+    stream: &mut S,
+    client_size: Size,
+    iteration: u64,
+) -> Result<Option<super::AttachClientFrame>>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let request = terminal_view_control_request(iteration, client_size);
     if !write_async_control_body_or_disconnected(stream, &request).await? {
-        return Ok(PrimaryViewRenderOutcome::disconnected());
+        return Ok(None);
     }
     let Some(response) =
         read_async_control_response_frames_or_disconnected(stream, 1024 * 1024, 1).await?
     else {
-        return Ok(PrimaryViewRenderOutcome::disconnected());
+        return Ok(None);
     };
     let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
     if control_response_forbidden(body.as_str())? {
-        return Ok(PrimaryViewRenderOutcome::disconnected());
+        return Ok(None);
     }
-    render_primary_view_response_async(terminal_io, body.as_str(), cursor_blink_epoch).await
+    super::responses::terminal_step_response_client_frame(body.as_str())
 }
+
 /// Notifies the runtime that the attached primary terminal size changed.
 pub(super) async fn request_primary_resize_async<S>(
     stream: &mut S,
@@ -147,23 +160,48 @@ where
     Ok(PrimaryResizeRequestOutcome { connected: true })
 }
 
-/// Writes a rendered terminal view response to the attached terminal.
-pub(super) async fn render_primary_view_response_async<I: AsyncAttachedTerminalIo>(
+/// Presents one decoded base frame without applying Iroh-local semantics.
+pub(super) async fn render_attach_client_frame_async<I: AsyncAttachedTerminalIo>(
     terminal_io: &mut I,
-    body: &str,
+    frame: &super::AttachClientFrame,
     cursor_blink_epoch: std::time::Instant,
 ) -> Result<PrimaryViewRenderOutcome> {
-    let lines = terminal_step_response_lines(body)?;
-    let line_style_spans = terminal_step_response_line_style_spans(body)?;
-    let modes = terminal_step_response_output_modes(body)?.unwrap_or_default();
-    let animation_refresh_interval_ms = modes.animation_refresh_interval_ms;
-    if lines.is_empty() {
+    let animation_refresh_interval_ms = frame.modes.animation_refresh_interval_ms;
+    if frame.lines.is_empty() {
         return Ok(PrimaryViewRenderOutcome {
             connected: true,
             animation_refresh_interval_ms,
         });
     }
-    let modes = control_socket_cursor_blink_elapsed(modes, cursor_blink_epoch);
+    let modes = control_socket_cursor_blink_elapsed(frame.modes, cursor_blink_epoch);
+    let connected = write_styled_output_or_disconnected_async(
+        terminal_io,
+        &frame.lines,
+        &frame.line_style_spans,
+        modes,
+    )
+    .await?;
+    Ok(PrimaryViewRenderOutcome {
+        connected,
+        animation_refresh_interval_ms: if connected {
+            animation_refresh_interval_ms
+        } else {
+            0
+        },
+    })
+}
+
+/// Presents one decoded frame with an attach-client-local Iroh state pill.
+pub(super) async fn render_iroh_attach_client_frame_async<I: AsyncAttachedTerminalIo>(
+    terminal_io: &mut I,
+    frame: &super::AttachClientFrame,
+    connected: bool,
+    quality: crate::host::terminal::TerminalIrohStatusQuality,
+    cursor_blink_epoch: std::time::Instant,
+) -> Result<PrimaryViewRenderOutcome> {
+    let (lines, line_style_spans) = frame.with_iroh_status(connected, quality);
+    let animation_refresh_interval_ms = frame.modes.animation_refresh_interval_ms;
+    let modes = control_socket_cursor_blink_elapsed(frame.modes, cursor_blink_epoch);
     let connected =
         write_styled_output_or_disconnected_async(terminal_io, &lines, &line_style_spans, modes)
             .await?;
