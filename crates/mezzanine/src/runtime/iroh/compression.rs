@@ -476,12 +476,18 @@ impl IrohCompressionBridge {
             })?,
             Err(_) => {
                 self.task.abort();
-                let _ = self.task.await;
+                let _ = (&mut self.task).await;
                 Err(MezError::invalid_state(
                     "Iroh compression bridge shutdown timed out",
                 ))
             }
         }
+    }
+}
+
+impl Drop for IrohCompressionBridge {
+    fn drop(&mut self) {
+        self.task.abort();
     }
 }
 
@@ -746,6 +752,47 @@ mod tests {
             client_send,
             client_recv,
         )
+    }
+
+    /// Dropping bridge ownership on an early connection error must cancel its
+    /// bidirectional pump task instead of detaching work past the connection.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dropped_bridge_aborts_pending_pump_task() {
+        let (
+            server,
+            client,
+            server_connection,
+            client_connection,
+            server_send,
+            server_recv,
+            mut client_send,
+            _client_recv,
+        ) = test_iroh_stream_pair().await;
+        client_send.finish().unwrap();
+        let bridge = IrohCompressionBridge::spawn(
+            server_recv,
+            server_send,
+            policy(RuntimeIrohCompressionCodec::None, 1),
+            4096,
+        )
+        .unwrap();
+        let task = bridge.task.abort_handle();
+
+        drop(bridge);
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !task.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("dropped bridge pump task should be cancelled");
+        assert!(task.is_finished());
+
+        server_connection.close(0u32.into(), b"test complete");
+        client_connection.close(0u32.into(), b"test complete");
+        server.close().await;
+        client.close().await;
     }
 
     /// Finishing the outbound pump succeeds only after the peer has received
