@@ -274,9 +274,6 @@ pub fn render_attached_client_view_with_screen_and_row_resolvers<'a>(
     config: &TerminalClientLoopConfig,
     client_size: Size,
 ) -> Result<Option<RenderedClientView>> {
-    if role == ClientViewRole::PendingObserver {
-        return Ok(None);
-    }
     let styled_lines = panes::draw_styled_window_from_screen_and_row_resolvers(
         window,
         config,

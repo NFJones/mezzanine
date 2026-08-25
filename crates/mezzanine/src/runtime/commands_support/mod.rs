@@ -17,12 +17,12 @@ mod status;
 use super::{
     CommandInvocation, CommandOutcome, ConfigMutation, ConfigMutationOperation,
     ConfigMutationValue, CopyMode, EventAudience, EventKind, HookExecutionStatus, KeyChord,
-    KeyCode, MezError, ObserverDecisionState, PaneReadinessState, PasteBuffer, PathBuf, Result,
-    RuntimeSessionService, SearchDirection, Session, TerminalScreen,
-    agent_shell_visibility_json_name, bind_key_args, binding_config_key, compose_effective_config,
-    current_unix_seconds, event_type_name, execute_command, fs, json_escape, key_chord_input_bytes,
-    key_chord_notation, parse_command_sequence, runtime_config_apply_event_payload,
-    runtime_hook_event_name, runtime_hook_execution_status_name, runtime_pane_readiness_state_name,
+    KeyCode, MezError, PaneReadinessState, PasteBuffer, PathBuf, Result, RuntimeSessionService,
+    SearchDirection, Session, TerminalScreen, agent_shell_visibility_json_name, bind_key_args,
+    binding_config_key, compose_effective_config, current_unix_seconds, event_type_name,
+    execute_command, fs, json_escape, key_chord_input_bytes, key_chord_notation,
+    parse_command_sequence, runtime_config_apply_event_payload, runtime_hook_event_name,
+    runtime_hook_execution_status_name, runtime_pane_readiness_state_name,
 };
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 use std::collections::BTreeMap;
@@ -31,9 +31,9 @@ pub(super) use agent_export::*;
 pub(super) use buffers::*;
 pub(super) use config::*;
 use displays::{
-    runtime_choose_client_display, runtime_choose_group_display, runtime_choose_observer_display,
-    runtime_choose_window_display, runtime_display_panes_display, runtime_list_clients_display,
-    runtime_list_groups_display, runtime_list_observers_display, runtime_list_panes_display,
+    runtime_choose_client_display, runtime_choose_group_display, runtime_choose_window_display,
+    runtime_display_panes_display, runtime_list_clients_display, runtime_list_groups_display,
+    runtime_list_panes_display,
 };
 pub(super) use keybindings::*;
 use layout::{
@@ -190,14 +190,6 @@ pub(super) fn execute_runtime_live_terminal_command(
             command: invocation.name.clone(),
             body: runtime_display_panes_display(service)?,
         })),
-        "list-observers" => Ok(Some(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: runtime_list_observers_display(service),
-        })),
-        "choose-observer" => Ok(Some(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: runtime_choose_observer_display(service),
-        })),
         "choose-client" => Ok(Some(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: runtime_choose_client_display(service),
@@ -301,51 +293,6 @@ pub(super) fn execute_runtime_live_terminal_command(
             primary_client_id,
             invocation,
         )?)),
-        "approve-observer" => {
-            let observer_id = invocation
-                .target_arg()
-                .or_else(|| runtime_positional_args(invocation).first().copied())
-                .ok_or_else(|| MezError::invalid_args("approve-observer requires a target"))?
-                .to_string();
-            let _ = service.apply_observer_approval_transaction(
-                primary_client_id,
-                observer_id,
-                primary_client_id.clone(),
-            )?;
-            Ok(Some(CommandOutcome::Mutated {
-                command: invocation.name.clone(),
-            }))
-        }
-        "reject-observer" => {
-            let observer_id = invocation
-                .target_arg()
-                .or_else(|| runtime_positional_args(invocation).first().copied())
-                .ok_or_else(|| MezError::invalid_args("reject-observer requires a target"))?
-                .to_string();
-            let _ = service.apply_observer_rejection_transaction(
-                primary_client_id,
-                observer_id,
-                None,
-            )?;
-            Ok(Some(CommandOutcome::Mutated {
-                command: invocation.name.clone(),
-            }))
-        }
-        "revoke-observer" => {
-            let client_id = invocation
-                .target_arg()
-                .or_else(|| runtime_positional_args(invocation).first().copied())
-                .ok_or_else(|| MezError::invalid_args("revoke-observer requires a client id"))?
-                .to_string();
-            let _ = service.apply_observer_revocation_transaction(
-                primary_client_id,
-                client_id,
-                None,
-            )?;
-            Ok(Some(CommandOutcome::Mutated {
-                command: invocation.name.clone(),
-            }))
-        }
         "agent-shell" => {
             let (pane_id, conversation_id, visibility) = service.toggle_active_agent_shell()?;
             Ok(Some(CommandOutcome::Display {

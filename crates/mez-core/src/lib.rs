@@ -7,7 +7,4 @@
 /// Stable opaque identifiers shared across Mezzanine subsystems.
 pub mod ids;
 
-pub use ids::{
-    AgentId, ClientId, IdFactory, ObserverRequestId, PaneId, SessionId, StableId, WindowGroupId,
-    WindowId,
-};
+pub use ids::{AgentId, ClientId, IdFactory, PaneId, SessionId, StableId, WindowGroupId, WindowId};

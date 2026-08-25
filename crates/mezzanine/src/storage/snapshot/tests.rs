@@ -1595,7 +1595,7 @@ fn session_restores_layout_from_snapshot_payload_and_seeds_ids() {
     assert_eq!(session.name, "restored");
     assert_eq!(session.state, SessionState::Detached);
     assert!(session.clients().is_empty());
-    assert!(session.observers().is_empty());
+    assert!(session.observer_attachments().is_empty());
     assert_eq!(session.layout_owner_client_id(), None);
     assert_eq!(session.authoritative_size, Size::new(100, 40).unwrap());
     assert_eq!(session.active_window().unwrap().id.as_str(), "@8");

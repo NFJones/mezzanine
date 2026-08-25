@@ -221,6 +221,5 @@ pub(crate) fn client_view_role_name(role: ClientViewRole) -> &'static str {
     match role {
         ClientViewRole::Primary => "primary",
         ClientViewRole::Observer => "observer",
-        ClientViewRole::PendingObserver => "pending_observer",
     }
 }

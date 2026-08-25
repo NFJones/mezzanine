@@ -42,9 +42,9 @@ use crate::control::{
     dispatch_control_request_with_approvals_and_audit, dispatch_control_request_with_captures,
     dispatch_control_request_with_mcp, dispatch_event_list_request,
     dispatch_snapshot_request_with_context_async, encode_control_body,
-    frame_read_json_with_context, layout_state_json, observer_json, observers_json,
-    pane_target_checked_resolved, parse_json_rpc_request, project_trust_state_filter_from_params,
-    session_state_name, snapshot_id_for_idempotency_key, source_pane_target_checked_resolved,
+    frame_read_json_with_context, layout_state_json, pane_target_checked_resolved,
+    parse_json_rpc_request, project_trust_state_filter_from_params, session_state_name,
+    snapshot_id_for_idempotency_key, source_pane_target_checked_resolved,
     state_request_pane_list_window_ids, state_request_session_target_matches,
     unix_seconds_to_rfc3339, window_target_checked_resolved,
 };
@@ -184,7 +184,7 @@ use mez_mux::process::{
     shell_command_from_argv,
 };
 use mez_mux::readline::ReadlineOutcome;
-use mez_mux::session::{ClientRole, ClientState, ObserverDecisionState, Session};
+use mez_mux::session::{ClientRole, ClientState, Session};
 use mez_mux::theme::{UiThemeDefinition, builtin_ui_theme_definition, resolve_ui_theme};
 #[cfg(test)]
 use mez_terminal::DEFAULT_PANE_TERM;

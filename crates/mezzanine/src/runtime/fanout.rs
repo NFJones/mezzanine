@@ -441,11 +441,6 @@ impl RuntimeEventConnectionTable {
         {
             return Err(MezError::conflict("event connection id already exists"));
         }
-        if matches!(audience, EventAudience::PendingObserver { .. }) {
-            return Err(MezError::forbidden(
-                "pending observer event streams are not allowed before approval",
-            ));
-        }
         self.connections.push(RuntimeEventConnection {
             connection_id,
             audience,

@@ -1363,7 +1363,7 @@ mod outbound_policy_tests {
         let create_invitation = trust
             .create_host_invitation(
                 host.endpoint_id(),
-                RemoteRoleCeiling::Observer,
+                RemoteRoleCeiling::Primary,
                 RemoteHostRoutingAuthority {
                     session_create: true,
                     session_kill: false,
@@ -1410,7 +1410,7 @@ mod outbound_policy_tests {
             let (create_channel, create_response) = open_persistent_iroh_control_channel(
                 &create_target,
                 &create_env,
-                "observer",
+                "primary",
                 Some(&create_routing),
                 80,
                 24,
@@ -1428,7 +1428,6 @@ mod outbound_policy_tests {
                 .as_str()
                 .unwrap()
                 .to_string();
-            create_channel.close().await;
             assert_eq!(
                 RemoteClientProfileStore::under_config_root(
                     create_env.config_paths().unwrap().root()
@@ -1458,6 +1457,7 @@ mod outbound_policy_tests {
                 serde_json::from_str(&attach_response).unwrap();
             assert_eq!(attach_response["result"]["lease"]["lease_id"], lease_id);
             attach_channel.close().await;
+            create_channel.close().await;
             stop.notify_one();
         };
 
@@ -1966,7 +1966,7 @@ fn validate_iroh_initialize_response(
         .ok_or_else(|| MezError::invalid_state("Iroh initialize response omitted result"))?;
     let expected_grant = match requested_role {
         "primary" => "primary",
-        "observer" => "pending_observer",
+        "observer" => "observer",
         _ => return Err(MezError::invalid_args("unsupported Iroh requested role")),
     };
     if result
@@ -2146,13 +2146,13 @@ mod tests {
         )
         .unwrap();
         validate_iroh_initialize_response(
-            r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"pending_observer"}}"#,
+            r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"observer"}}"#,
             "observer",
         )
         .unwrap();
 
         let error = validate_iroh_initialize_response(
-            r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"pending_observer"}}"#,
+            r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"observer"}}"#,
             "primary",
         )
         .expect_err("primary attach must reject a downgraded grant");

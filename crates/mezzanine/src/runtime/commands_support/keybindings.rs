@@ -330,7 +330,6 @@ pub(crate) fn runtime_default_prefix_bindings(escape: KeyChord) -> Vec<(KeyChord
         (KeyChord::new(KeyCode::Char('#')), "list-buffers"),
         (KeyChord::new(KeyCode::Char('=')), "choose-buffer"),
         (KeyChord::new(KeyCode::Char('-')), "delete-buffer"),
-        (KeyChord::new(KeyCode::Char('O')), "choose-observer"),
         (KeyChord::new(KeyCode::Char('~')), "show-messages"),
     ]
 }

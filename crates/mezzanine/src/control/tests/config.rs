@@ -410,7 +410,9 @@ fn config_control_mutations_can_emit_required_audit_records() {
 #[test]
 fn config_control_mutations_are_primary_only() {
     let (mut session, _primary) = test_session();
-    let (observer_client, _observer_request) = session.request_observer("observer");
+    let observer_client = session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
     let root = temp_root("config-observer");
     let path = root.join("config.toml");
     fs::write(&path, "[history]\nlines = 10000\n").unwrap();

@@ -18,7 +18,8 @@ fn dispatches_control_initialize_method() {
 
     assert!(response.contains(r#""granted_role":"primary""#));
     assert!(response.contains(r#""control/initialize""#));
-    assert!(response.contains(r#""approval_pending":false"#));
+    assert!(!response.contains("approval_pending"));
+    assert!(!response.contains("observer_request"));
     assert!(response.contains(r#""session":{"id":"$1""#), "{response}");
     assert!(response.contains(r#""window_count":1"#), "{response}");
     assert!(

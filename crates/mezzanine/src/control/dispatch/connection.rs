@@ -5,11 +5,11 @@ use super::method_dispatch::dispatch_parsed_to_response;
 use super::{
     AuthenticationMaterial, AuthenticationMechanism, Capabilities, ClientId, ClientRole,
     ControlIdempotencyCache, GrantedRole, InitializeContext, InitializeResult, JsonRpcRequest,
-    MezError, ObserverRequestSummary, RequestedRole, Result, ServerIdentity, Session,
-    authorize_control_request, client_json, error_code, initialize, initialize_params_from_json,
-    initialize_result_json, json_rpc_error, json_rpc_success, json_string_field,
-    mezzanine_error_code, negotiate_protocol_version, observer_json, parse_json_rpc_request,
-    require_session_target_matches_value, session_summary_json,
+    MezError, RequestedRole, Result, ServerIdentity, Session, authorize_control_request,
+    client_json, error_code, initialize, initialize_params_from_json, initialize_result_json,
+    json_rpc_error, json_rpc_success, json_string_field, mezzanine_error_code,
+    negotiate_protocol_version, parse_json_rpc_request, require_session_target_matches_value,
+    session_summary_json,
 };
 #[cfg(test)]
 use super::{decode_control_frame, encode_control_body};
@@ -56,6 +56,8 @@ pub struct ControlConnectionState {
     pub(super) detach_client_on_disconnect: bool,
     /// Negotiated server-opened event stream version for this connection.
     pub(super) event_stream_version: Option<u32>,
+    /// First runtime event visible to an observer initialized on this connection.
+    pub(super) observer_visible_from_event_id: Option<u64>,
     /// Whether the negotiated event stream start was already consumed.
     pub(super) event_stream_started: bool,
     /// Whether this connection has already emitted its primary disconnect.
@@ -78,6 +80,7 @@ impl ControlConnectionState {
             caller_client_id: None,
             detach_client_on_disconnect: false,
             event_stream_version: None,
+            observer_visible_from_event_id: None,
             event_stream_started: false,
             disconnect_submitted: false,
         }
@@ -98,6 +101,7 @@ impl ControlConnectionState {
             caller_client_id: Some(caller_client_id),
             detach_client_on_disconnect: false,
             event_stream_version: None,
+            observer_visible_from_event_id: None,
             event_stream_started: false,
             disconnect_submitted: false,
         }
@@ -199,6 +203,11 @@ impl ControlConnectionState {
     /// on duplicated control-flow logic.
     pub fn initialized(&self) -> bool {
         self.initialized
+    }
+
+    /// Sets the first runtime event that a newly attached observer may receive.
+    pub(crate) fn set_observer_visible_from_event_id(&mut self, event_id: Option<u64>) {
+        self.observer_visible_from_event_id = event_id;
     }
 
     /// Takes the negotiated event-stream start exactly once after initialization.
@@ -457,17 +466,20 @@ pub(super) fn initialize_control_connection(
                 client: Some(client_json),
                 granted_role: GrantedRole::Primary,
                 capabilities: Capabilities::primary(),
-                approval_pending: false,
-                observer_request: None,
             })
         }
         RequestedRole::Observer => {
             let terminal = init.client.as_ref().and_then(|client| {
                 client_terminal_descriptor_from_control(client.terminal.as_ref())
             });
-            let (client_id, observer_id) =
-                session.request_observer_with_terminal(init.client_name, terminal);
-            let observer_state = observer_json(session, observer_id.as_str())?;
+            let visible_from_event_id = connection
+                .observer_visible_from_event_id
+                .unwrap_or_else(|| session.mutation_revision().saturating_add(1));
+            let client_id = session.attach_observer_with_terminal(
+                init.client_name,
+                terminal,
+                visible_from_event_id,
+            )?;
             connection.initialized = true;
             connection.caller_client_id = Some(client_id.clone());
             connection.detach_client_on_disconnect = true;
@@ -475,20 +487,14 @@ pub(super) fn initialize_control_connection(
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),
-                session: None,
+                session: Some(session_summary_json(session)),
                 client: session
                     .clients()
                     .iter()
                     .find(|client| client.id == client_id)
                     .map(|client| client_json(session, client)),
-                granted_role: GrantedRole::PendingObserver,
-                capabilities: Capabilities::pending_observer(),
-                approval_pending: true,
-                observer_request: Some(ObserverRequestSummary {
-                    request_id: observer_id.to_string(),
-                    state: "pending",
-                    state_json: Some(observer_state),
-                }),
+                granted_role: GrantedRole::Observer,
+                capabilities: Capabilities::observer(),
             })
         }
         RequestedRole::Agent => {
@@ -513,8 +519,6 @@ pub(super) fn initialize_control_connection(
                     .map(|client| client_json(session, client)),
                 granted_role: GrantedRole::Agent,
                 capabilities: Capabilities::agent(),
-                approval_pending: false,
-                observer_request: None,
             })
         }
         RequestedRole::Automation => {
@@ -539,8 +543,6 @@ pub(super) fn initialize_control_connection(
                     .map(|client| client_json(session, client)),
                 granted_role: GrantedRole::Automation,
                 capabilities: Capabilities::automation(),
-                approval_pending: false,
-                observer_request: None,
             })
         }
     }

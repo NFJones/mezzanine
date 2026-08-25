@@ -5,8 +5,7 @@
 //! product stores; callers wrap these strings in their own command outcomes.
 
 use crate::session::{
-    Client, ClientRole, ClientState, MAX_ATTACHED_PRIMARY_CLIENTS, ObserverDecisionState,
-    ObserverRequest, Session, SessionState,
+    ClientRole, ClientState, MAX_ATTACHED_PRIMARY_CLIENTS, Session, SessionState,
 };
 use crate::{MuxError, Result};
 
@@ -158,16 +157,16 @@ pub fn display_panes(session: &Session) -> Result<String> {
 /// Renders attached and observer clients as a pager-friendly Markdown table.
 pub fn list_clients(session: &Session) -> String {
     let mut lines = vec![
-        "| client | name | role | state | interactive | attached at | last seen at | terminal | approval |".to_string(),
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |".to_string(),
+        "| client | name | role | state | interactive | attached at | last seen at | terminal |"
+            .to_string(),
+        "| --- | --- | --- | --- | --- | --- | --- | --- |".to_string(),
     ];
     if session.clients().is_empty() {
-        lines.push("| — | no clients | — | — | — | — | — | — | — |".to_string());
+        lines.push("| — | no clients | — | — | — | — | — | — |".to_string());
     } else {
         lines.extend(session.clients().iter().map(|client| {
-            let observer = observer_for_client(session, client);
             format!(
-                "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} | {} | {} | {} |",
                 markdown_table_cell(&client.id.to_string()),
                 markdown_table_cell(&client.name),
                 markdown_table_cell(client_role_name(client.role)),
@@ -175,8 +174,7 @@ pub fn list_clients(session: &Session) -> String {
                 client.interactive,
                 markdown_table_cell(&optional_unix_seconds(client.attached_at_unix_seconds)),
                 markdown_table_cell(&optional_unix_seconds(client.last_seen_at_unix_seconds)),
-                markdown_table_cell(&client_terminal_display(session, client, observer)),
-                markdown_table_cell(&client_approval_display(observer))
+                markdown_table_cell(&client_terminal_display(session, client))
             )
         }));
     }
@@ -192,86 +190,27 @@ pub fn choose_client_display(session: &Session) -> String {
     let lines = clients
         .iter()
         .map(|client| {
-            let observer = observer_for_client(session, client);
             format!(
-                "client={}:name={}:role={}:state={}:interactive={}:approval={}:action=detach-client -t {}",
+                "client={}:name={}:role={}:state={}:interactive={}:action=detach-client -t {}",
                 client.id,
                 escaped(&client.name),
                 client_role_name(client.role),
                 client_state_name(client.state),
                 client.interactive,
-                client_approval_display(observer),
                 client.id
             )
         })
         .collect::<Vec<_>>();
+    let observer_count = clients
+        .iter()
+        .filter(|client| client.role == ClientRole::Observer)
+        .count();
     format!(
         "clients={}:observers={}:chooser=detach-client:source=session\n{}",
         clients.len(),
-        session.observers().len(),
+        observer_count,
         lines.join("\n")
     )
-}
-
-/// Renders observer requests and their decision metadata.
-pub fn list_observers(session: &Session) -> String {
-    session
-        .observers()
-        .iter()
-        .map(|observer| {
-            format!(
-                "{}:client={}:state={}:requested_at={}:decided_at={}:decided_by={}:visible_from={}:visible_from_time={}:descriptor={}:interactive={}:terminal={}:reason={}",
-                observer.id,
-                observer.client_id,
-                observer_state_name(observer.state),
-                optional_unix_seconds(observer.requested_at_unix_seconds),
-                optional_unix_seconds(observer.decided_at_unix_seconds),
-                observer
-                    .decided_by_client_id
-                    .as_deref()
-                    .map(escaped)
-                    .unwrap_or_else(|| "none".to_string()),
-                observer
-                    .visible_from_event_id
-                    .map(|id| id.to_string())
-                    .unwrap_or_else(|| "none".to_string()),
-                optional_unix_seconds(observer.visible_from_unix_seconds),
-                escaped(&observer.descriptor_name),
-                observer.descriptor_interactive,
-                observer_terminal_display(observer),
-                observer
-                    .reason
-                    .as_deref()
-                    .map(escaped)
-                    .unwrap_or_else(|| "none".to_string())
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Renders observer requests with concrete approval, rejection, and revoke actions.
-pub fn choose_observer_display(session: &Session) -> String {
-    if session.observers().is_empty() {
-        return "observers=0 actions=none".to_string();
-    }
-    session
-        .observers()
-        .iter()
-        .map(|observer| {
-            format!(
-                "{}:client={}:state={}:requested_at={}:terminal={}:actions={}:commands={}",
-                observer.id,
-                observer.client_id,
-                observer_state_name(observer.state),
-                optional_unix_seconds(observer.requested_at_unix_seconds),
-                observer_terminal_display(observer),
-                observer_actions(observer.state),
-                observer_action_commands(observer)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// Renders the current session as a single-row pager-friendly Markdown table.
@@ -323,18 +262,7 @@ pub fn attach_session_display(session: &Session) -> String {
     )
 }
 
-fn observer_for_client<'a>(session: &'a Session, client: &Client) -> Option<&'a ObserverRequest> {
-    session
-        .observers()
-        .iter()
-        .find(|observer| observer.client_id == client.id)
-}
-
-fn client_terminal_display(
-    session: &Session,
-    client: &Client,
-    observer: Option<&ObserverRequest>,
-) -> String {
+fn client_terminal_display(session: &Session, client: &crate::session::Client) -> String {
     if session.is_attached_primary(&client.id) && client.terminal.is_none() {
         return format!(
             "{}x{}:term={}",
@@ -351,58 +279,7 @@ fn client_terminal_display(
             escaped(&terminal.term)
         );
     }
-    if let Some(terminal) = observer.and_then(|observer| observer.descriptor_terminal.as_ref()) {
-        return format!(
-            "{}x{}:term={}",
-            terminal.columns,
-            terminal.rows,
-            escaped(&terminal.term)
-        );
-    }
     "none".to_string()
-}
-
-fn client_approval_display(observer: Option<&ObserverRequest>) -> String {
-    observer
-        .map(|observer| format!("{}:{}", observer.id, observer_state_name(observer.state)))
-        .unwrap_or_else(|| "none".to_string())
-}
-
-fn observer_terminal_display(observer: &ObserverRequest) -> String {
-    observer
-        .descriptor_terminal
-        .as_ref()
-        .map(|terminal| {
-            format!(
-                "{}x{}:term={}",
-                terminal.columns,
-                terminal.rows,
-                escaped(&terminal.term)
-            )
-        })
-        .unwrap_or_else(|| "none".to_string())
-}
-
-fn observer_actions(state: ObserverDecisionState) -> &'static str {
-    match state {
-        ObserverDecisionState::Pending => "inspect,approve,reject",
-        ObserverDecisionState::Approved => "inspect,revoke,detach",
-        ObserverDecisionState::Rejected | ObserverDecisionState::Revoked => "inspect",
-    }
-}
-
-fn observer_action_commands(observer: &ObserverRequest) -> String {
-    match observer.state {
-        ObserverDecisionState::Pending => format!(
-            "approve-observer -t {}|reject-observer -t {}",
-            observer.id, observer.id
-        ),
-        ObserverDecisionState::Approved => format!(
-            "revoke-observer -t {}|detach-client -t {}",
-            observer.client_id, observer.client_id
-        ),
-        ObserverDecisionState::Rejected | ObserverDecisionState::Revoked => "none".to_string(),
-    }
 }
 
 fn optional_unix_seconds(value: Option<u64>) -> String {
@@ -423,7 +300,6 @@ fn escaped(value: &str) -> String {
 fn client_role_name(role: ClientRole) -> &'static str {
     match role {
         ClientRole::Primary => "primary",
-        ClientRole::PendingObserver => "pending_observer",
         ClientRole::Observer => "observer",
         ClientRole::Agent => "agent",
         ClientRole::Automation => "automation",
@@ -437,15 +313,6 @@ fn client_state_name(state: ClientState) -> &'static str {
         ClientState::Detached => "detached",
         ClientState::Revoked => "revoked",
         ClientState::Failed => "failed",
-    }
-}
-
-fn observer_state_name(state: ObserverDecisionState) -> &'static str {
-    match state {
-        ObserverDecisionState::Pending => "pending",
-        ObserverDecisionState::Approved => "approved",
-        ObserverDecisionState::Rejected => "rejected",
-        ObserverDecisionState::Revoked => "revoked",
     }
 }
 
@@ -476,11 +343,13 @@ mod tests {
     }
 
     /// Verifies lower command presentation renders session topology, client
-    /// metadata, observer actions, and concrete chooser commands together.
+    /// metadata, and concrete generic client actions together.
     #[test]
     fn renders_session_state_and_chooser_actions() {
         let (mut session, _primary) = test_session();
-        let (observer_client, observer_request) = session.request_observer("observer");
+        let observer_client = session
+            .attach_observer_with_terminal("observer", None, 1)
+            .unwrap();
 
         assert!(list_windows(&session).contains("active=true:panes=1:size=80x24"));
         assert!(choose_group_display(&session).contains("action=select-group -t"));
@@ -502,16 +371,13 @@ mod tests {
             choose_client_display(&session)
                 .contains(&format!("action=detach-client -t {observer_client}"))
         );
-        assert!(choose_observer_display(&session).contains(&format!(
-            "approve-observer -t {observer_request}|reject-observer -t {observer_request}"
-        )));
         let session_row = list_current_session(&session);
         assert!(
             session_row.starts_with("| session | name | state |"),
             "{session_row}"
         );
         assert!(
-            session_row.contains("| 1 | 2 | 1 | 1 | 16 | true | c1 |"),
+            session_row.contains("| 1 | 2 | 2 | 1 | 16 | true | c1 |"),
             "{session_row}"
         );
         assert!(attach_session_display(&session).contains("attach=already-attached"));
@@ -528,7 +394,7 @@ mod tests {
 
         assert_eq!(
             list_clients(&session),
-            "| client | name | role | state | interactive | attached at | last seen at | terminal | approval |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| — | no clients | — | — | — | — | — | — | — |"
+            "| client | name | role | state | interactive | attached at | last seen at | terminal |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| — | no clients | — | — | — | — | — | — |"
         );
     }
 

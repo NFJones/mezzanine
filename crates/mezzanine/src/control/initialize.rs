@@ -6,9 +6,9 @@
 
 use super::{
     AuthenticationMaterial, AuthenticationMechanism, Capabilities, ClientDescriptor, GrantedRole,
-    InitializeContext, InitializeParams, InitializeResult, MezError, ObserverRequestSummary,
-    RequestedRole, Result, ServerIdentity, SessionIntent, TerminalDescriptor, granted_role_name,
-    json_escape, json_optional_string, json_string_field, reject_unknown_json_fields,
+    InitializeContext, InitializeParams, InitializeResult, MezError, RequestedRole, Result,
+    ServerIdentity, SessionIntent, TerminalDescriptor, granted_role_name, json_escape,
+    json_optional_string, json_string_field, reject_unknown_json_fields,
 };
 
 // Control initialization parsing and serialization.
@@ -39,14 +39,12 @@ pub fn initialize(
             session: None,
             client: None,
             granted_role: match params.requested_role {
-                RequestedRole::Observer => GrantedRole::PendingObserver,
+                RequestedRole::Observer => GrantedRole::Observer,
                 RequestedRole::Primary => GrantedRole::Automation,
                 RequestedRole::Agent => GrantedRole::Agent,
                 RequestedRole::Automation => GrantedRole::Automation,
             },
             capabilities: Capabilities::unauthenticated(),
-            approval_pending: params.requested_role == RequestedRole::Observer,
-            observer_request: None,
         });
     }
 
@@ -67,8 +65,6 @@ pub fn initialize(
                 client: None,
                 granted_role: GrantedRole::Primary,
                 capabilities: Capabilities::primary(),
-                approval_pending: false,
-                observer_request: None,
             })
         }
         RequestedRole::Observer => Ok(InitializeResult {
@@ -76,14 +72,8 @@ pub fn initialize(
             server: ServerIdentity::current(),
             session: None,
             client: None,
-            granted_role: GrantedRole::PendingObserver,
-            capabilities: Capabilities::pending_observer(),
-            approval_pending: true,
-            observer_request: Some(ObserverRequestSummary {
-                request_id: "pending".to_string(),
-                state: "pending",
-                state_json: None,
-            }),
+            granted_role: GrantedRole::Observer,
+            capabilities: Capabilities::observer(),
         }),
         RequestedRole::Agent => Ok(InitializeResult {
             selected_version,
@@ -92,8 +82,6 @@ pub fn initialize(
             client: None,
             granted_role: GrantedRole::Agent,
             capabilities: Capabilities::agent(),
-            approval_pending: false,
-            observer_request: None,
         }),
         RequestedRole::Automation => Ok(InitializeResult {
             selected_version,
@@ -102,8 +90,6 @@ pub fn initialize(
             client: None,
             granted_role: GrantedRole::Automation,
             capabilities: Capabilities::automation(),
-            approval_pending: false,
-            observer_request: None,
         }),
     }
 }
@@ -777,27 +763,13 @@ pub(super) fn authentication_from_json(body: &str) -> Result<AuthenticationMater
 /// on duplicated control-flow logic.
 pub(super) fn initialize_result_json(result: &InitializeResult) -> String {
     format!(
-        r#"{{"selected_version":{},"server":{},"session":{},"client":{},"granted_role":"{}","capabilities":{},"approval_pending":{},"observer_request":{}}}"#,
+        r#"{{"selected_version":{},"server":{},"session":{},"client":{},"granted_role":"{}","capabilities":{}}}"#,
         result.selected_version,
         server_identity_json(&result.server),
         result.session.as_deref().unwrap_or("null"),
         result.client.as_deref().unwrap_or("null"),
         granted_role_name(result.granted_role),
-        capabilities_json(&result.capabilities),
-        result.approval_pending,
-        result
-            .observer_request
-            .as_ref()
-            .map(|observer| {
-                observer.state_json.clone().unwrap_or_else(|| {
-                    format!(
-                        r#"{{"request_id":"{}","state":"{}"}}"#,
-                        json_escape(&observer.request_id),
-                        json_escape(observer.state)
-                    )
-                })
-            })
-            .unwrap_or_else(|| "null".to_string())
+        capabilities_json(&result.capabilities)
     )
 }
 

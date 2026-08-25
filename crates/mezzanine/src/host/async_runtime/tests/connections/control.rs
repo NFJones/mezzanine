@@ -240,12 +240,11 @@ async fn async_control_listener_isolates_malformed_connection_input() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// Verifies the control listener can accept an observer while another control
-/// connection remains open. Observer attachment uses a long-lived control
-/// socket, so the accept loop must dispatch each connection independently or a
-/// pending observer request can never be registered for the primary to review.
+/// Verifies the control listener can attach an observer while another control
+/// connection remains open. The accept loop must dispatch each long-lived
+/// connection independently.
 #[tokio::test(flavor = "current_thread")]
-async fn async_control_listener_registers_observer_while_primary_connection_remains_open() {
+async fn async_control_listener_attaches_observer_while_primary_connection_remains_open() {
     use crate::control::{decode_control_frame, encode_control_body};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{UnixListener, UnixStream};
@@ -272,9 +271,8 @@ async fn async_control_listener_registers_observer_while_primary_connection_rema
     let observer_initialize = encode_control_body(
         r#"{"jsonrpc":"2.0","id":"observer-init","method":"control/initialize","params":{"client_name":"observer-cli","requested_version":2,"requested_role":"observer","client":{"name":"observer-cli","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
-    let list_observers = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":"list","method":"observer/list","params":{}}"#,
-    );
+    let list_clients =
+        encode_control_body(r#"{"jsonrpc":"2.0","id":"list","method":"client/list","params":{}}"#);
     let (primary_ready_tx, primary_ready_rx) = oneshot::channel();
     let (observer_ready_tx, observer_ready_rx) = oneshot::channel();
     let (observer_listed_tx, observer_listed_rx) = oneshot::channel();
@@ -287,10 +285,11 @@ async fn async_control_listener_registers_observer_while_primary_connection_rema
         primary_ready_tx.send(()).unwrap();
         observer_ready_rx.await.unwrap();
 
-        stream.write_all(&list_observers).await.unwrap();
+        stream.write_all(&list_clients).await.unwrap();
         let body = read_control_body(&mut stream).await;
-        assert!(body.contains(r#""observers""#), "{body}");
-        assert!(body.contains(r#""state":"pending""#), "{body}");
+        assert!(body.contains(r#""clients""#), "{body}");
+        assert!(body.contains(r#""role":"observer""#), "{body}");
+        assert!(body.contains(r#""state":"attached""#), "{body}");
         assert!(body.contains("observer-cli"), "{body}");
         observer_listed_tx.send(()).unwrap();
     };
@@ -299,10 +298,7 @@ async fn async_control_listener_registers_observer_while_primary_connection_rema
         let mut stream = UnixStream::connect(&path).await.unwrap();
         stream.write_all(&observer_initialize).await.unwrap();
         let body = read_control_body(&mut stream).await;
-        assert!(
-            body.contains(r#""granted_role":"pending_observer""#),
-            "{body}"
-        );
+        assert!(body.contains(r#""granted_role":"observer""#), "{body}");
         observer_ready_tx.send(()).unwrap();
         observer_listed_rx.await.unwrap();
     };

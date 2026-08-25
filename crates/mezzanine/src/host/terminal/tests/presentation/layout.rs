@@ -229,13 +229,14 @@ fn client_view_offsets_style_spans_across_side_by_side_panes() {
     }));
 }
 
-/// Verifies client view hides pending observers and keeps primary dimensions.
+/// Verifies observer views use local dimensions while primary views keep
+/// authoritative dimensions.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn client_view_hides_pending_observers_and_keeps_primary_dimensions() {
+fn client_view_uses_role_appropriate_dimensions() {
     let mut ids = mez_core::ids::IdFactory::default();
     let window = Window::new(&mut ids, 0, "main", Size::new(20, 4).unwrap());
     let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
@@ -244,14 +245,6 @@ fn client_view_hides_pending_observers_and_keeps_primary_dimensions() {
     screens.insert(window.active_pane().id.to_string(), screen);
     let config = TerminalClientLoopConfig::default();
 
-    let pending = render_attached_client_view(
-        ClientViewRole::PendingObserver,
-        &window,
-        &screens,
-        &config,
-        Size::new(10, 2).unwrap(),
-    )
-    .unwrap();
     let observer = render_attached_client_view(
         ClientViewRole::Observer,
         &window,
@@ -271,7 +264,6 @@ fn client_view_hides_pending_observers_and_keeps_primary_dimensions() {
     .unwrap()
     .unwrap();
 
-    assert!(pending.is_none());
     assert_eq!(observer.authoritative_size, Size::new(20, 4).unwrap());
     assert_eq!(observer.client_size, Size::new(10, 2).unwrap());
     assert!(observer.requires_client_scroll);

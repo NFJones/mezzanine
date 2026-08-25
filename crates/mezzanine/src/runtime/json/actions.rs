@@ -55,9 +55,6 @@ pub(crate) fn runtime_mutating_method(method: &str) -> bool {
             | "buffer/delete"
             | "client/detach"
             | "client/set_layout_owner"
-            | "observer/approve"
-            | "observer/reject"
-            | "observer/revoke"
             | "terminal/step"
             | "terminal/command"
             | "agent/shell/command"
@@ -368,7 +365,6 @@ pub(crate) fn mux_action_name(action: MuxAction) -> &'static str {
         MuxAction::PasteBuffer(_) => "paste-buffer",
         MuxAction::ListPasteBuffers => "list-buffers",
         MuxAction::DeleteMostRecentPasteBuffer => "delete-buffer",
-        MuxAction::ChoosePendingObservers => "choose-observer",
         MuxAction::ShowMessages => "show-messages",
         MuxAction::ToggleAgentShell => "agent-shell",
     }

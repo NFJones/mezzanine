@@ -12,12 +12,12 @@ use super::{
     BlockedApprovalState, ClientId, ClientRole, ClientState, EventAudience, EventKind, EventLog,
     FrameContext, FrameOverflow, GrantedRole, JsonRpcRequest, LayoutLoadPlan,
     MAX_EVENT_REPLAY_RETENTION, McpRegistry, McpServerKind, McpServerStatus, MezError,
-    ObserverDecisionState, PaneCaptureSource, Result, Session, SessionState, SnapshotKind,
-    SnapshotState, TrustDecision, VisibleEvent, Window, json_escape, json_raw_field,
-    json_string_field, pane_by_id, pane_target_checked_resolved, parse_json_object_value,
-    reject_unknown_json_fields, render_frame_template, require_idempotency_key,
-    require_session_target_matches_value, resolve_pane_target_value, resolve_window_target_value,
-    target_or_active_pane, target_value_has_pane_shape, unix_seconds_to_rfc3339, window_by_id,
+    PaneCaptureSource, Result, Session, SessionState, SnapshotKind, SnapshotState, TrustDecision,
+    VisibleEvent, Window, json_escape, json_raw_field, json_string_field, pane_by_id,
+    pane_target_checked_resolved, parse_json_object_value, reject_unknown_json_fields,
+    render_frame_template, require_idempotency_key, require_session_target_matches_value,
+    resolve_pane_target_value, resolve_window_target_value, target_or_active_pane,
+    target_value_has_pane_shape, unix_seconds_to_rfc3339, window_by_id,
 };
 use crate::host::terminal::TerminalFrameContext;
 use crate::integrations::agent::slash::{AgentShellCommandOutcome, execute_agent_shell_command};
@@ -57,12 +57,10 @@ pub(in crate::control) use approvals::{
     parse_approval_decision, parse_trust_decision,
 };
 pub(in crate::control) use clients::client_json;
-pub(crate) use clients::observers_json;
 pub(crate) use events::{control_event_audience, dispatch_event_list_request};
-pub(crate) use mcp::observer_json;
 pub(in crate::control) use mcp::{mcp_servers_json, mcp_tools_json};
 pub(in crate::control) use session::{
-    clients_json_for_params, granted_role_name, observers_json_for_params, panes_json_for_params,
+    clients_json_for_params, granted_role_name, panes_json_for_params,
     session_state_json_for_params, session_summary_json, windows_json_for_params,
 };
 pub(crate) use session::{

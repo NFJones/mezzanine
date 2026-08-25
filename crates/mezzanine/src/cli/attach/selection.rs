@@ -9,7 +9,7 @@ use super::primary::{
 };
 use super::responses::{
     ensure_control_response_success, event_binding_token_from_initialize_response,
-    observer_request_id_from_initialize_response, primary_client_id_from_initialize_response,
+    primary_client_id_from_initialize_response,
 };
 use super::{
     Args, AsRawFd, CliEnv, CliOutputFormat, IsTerminal, MezError, Result, SessionRecord,
@@ -109,15 +109,8 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         ensure_control_response_success(&initialize_body)?;
         let event_receiver = channel.take_event_receiver()?;
         let run_result = if request.requested_role == "observer" {
-            let observer_request_id =
-                observer_request_id_from_initialize_response(&initialize_body)?;
-            run_iroh_attached_observer_client(
-                channel.stream_mut(),
-                observer_request_id,
-                terminal_size,
-                event_receiver,
-            )
-            .await
+            run_iroh_attached_observer_client(channel.stream_mut(), terminal_size, event_receiver)
+                .await
         } else {
             let primary_client_id = primary_client_id_from_initialize_response(&initialize_body)?;
             run_iroh_attached_primary_client(
@@ -150,12 +143,10 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
         if io::stdin().is_terminal() && io::stdout().is_terminal() {
             ensure_control_response_success(body.as_str())?;
-            let observer_request_id = observer_request_id_from_initialize_response(body.as_str())?;
             let event_binding_token = event_binding_token_from_initialize_response(body.as_str())?;
             return run_control_socket_attached_observer_client(
                 &mut stream,
                 socket_path,
-                observer_request_id,
                 Size::new(columns, rows)?,
                 event_binding_token,
             )

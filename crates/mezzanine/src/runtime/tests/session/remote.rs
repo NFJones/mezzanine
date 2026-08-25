@@ -259,7 +259,7 @@ fn runtime_iroh_initialize_requires_pairing_then_accepts_device_proof() {
         paired_response
             .pointer("/result/granted_role")
             .and_then(serde_json::Value::as_str),
-        Some("pending_observer")
+        Some("observer")
     );
     assert!(paired.remote_principal().is_some());
     let trust_text = fs::read_to_string(
@@ -306,7 +306,7 @@ fn runtime_iroh_initialize_requires_pairing_then_accepts_device_proof() {
         reconnect_response
             .pointer("/result/granted_role")
             .and_then(serde_json::Value::as_str),
-        Some("pending_observer")
+        Some("observer")
     );
     assert!(reconnect.remote_principal().is_some());
 
@@ -412,7 +412,7 @@ fn runtime_failed_remote_initialize_does_not_consume_invitation() {
         .and_then(serde_json::Value::as_str)
         .unwrap();
     let endpoint_id = SecretKey::generate().public().to_string();
-    let observers_before = service.session().observers().len();
+    let observers_before = service.session().observer_attachments().len();
     let clients_before = service.session().clients().len();
 
     let mut failed = ControlConnectionState::new(true, true);
@@ -432,7 +432,10 @@ fn runtime_failed_remote_initialize_does_not_consume_invitation() {
     );
     assert!(!failed.initialized());
     assert!(failed.remote_principal().is_none());
-    assert_eq!(service.session().observers().len(), observers_before);
+    assert_eq!(
+        service.session().observer_attachments().len(),
+        observers_before
+    );
     assert_eq!(service.session().clients().len(), clients_before);
     let store = crate::security::remote::RemoteTrustStore::under_config_root(
         &root,
@@ -454,7 +457,7 @@ fn runtime_failed_remote_initialize_does_not_consume_invitation() {
         accepted
             .pointer("/result/granted_role")
             .and_then(serde_json::Value::as_str),
-        Some("pending_observer")
+        Some("observer")
     );
     assert!(accepted.pointer("/result/device_credential").is_some());
     assert!(retry.remote_principal().is_some());

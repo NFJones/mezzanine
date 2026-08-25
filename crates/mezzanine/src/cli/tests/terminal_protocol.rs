@@ -1137,50 +1137,34 @@ async fn control_socket_primary_attach_loop_exits_on_incomplete_response_eof() {
 /// Verifies the interactive observer attach loop polls observer-local status
 /// before reading the terminal view.
 ///
-/// Pending observers are not authorized for `terminal/view`; this regression
-/// ensures the attach client waits on `observer/inspect` until the request is
-/// approved, then switches to rendered live view requests.
+/// Immediately attached observers issue rendered live view requests without
+/// polling an approval endpoint.
 #[tokio::test(flavor = "current_thread")]
-async fn control_socket_observer_attach_loop_waits_for_approval_before_view() {
+async fn control_socket_observer_attach_loop_renders_immediately() {
     let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
     client_stream.set_nonblocking(true).unwrap();
     let mut client_stream = tokio::net::UnixStream::from_std(client_stream).unwrap();
     let server = thread::spawn(move || {
-        for expected in ["observer/inspect", "observer/inspect", "terminal/view"] {
-            let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
-            let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
-            let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
-            assert_eq!(
-                parsed.get("method").and_then(serde_json::Value::as_str),
-                Some(expected)
-            );
-            let response = match expected {
-                "observer/inspect" if body.contains("cli-observer-inspect-0") => {
-                    r#"{"jsonrpc":"2.0","id":"cli-observer-inspect-0","result":{"observer":{"id":"o1","observer_request_id":"o1","client_id":"c2","state":"pending"}}}"#
-                }
-                "observer/inspect" => {
-                    r#"{"jsonrpc":"2.0","id":"cli-observer-inspect-1","result":{"observer":{"id":"o1","observer_request_id":"o1","client_id":"c2","state":"approved"}}}"#
-                }
-                _ => {
-                    r#"{"jsonrpc":"2.0","id":"cli-terminal-view-2","result":{"view":{"lines":["observer live view"],"line_style_spans":[[]],"cursor":{"row":0,"column":18,"visible":true,"style":"block","blink":false},"output_modes":{"application_keypad":false}}}}"#
-                }
-            };
-            server_stream
-                .write_all(&encode_control_body(response))
-                .unwrap();
-            server_stream.flush().unwrap();
-        }
+        let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/view")
+        );
+        let response = r#"{"jsonrpc":"2.0","id":"cli-terminal-view-0","result":{"view":{"lines":["observer live view"],"line_style_spans":[[]],"cursor":{"row":0,"column":18,"visible":true,"style":"block","blink":false},"output_modes":{"application_keypad":false}}}}"#;
+        server_stream
+            .write_all(&encode_control_body(response))
+            .unwrap();
+        server_stream.flush().unwrap();
     });
 
     let mut io = AsyncFakeAttachedTerminalIo::default();
     io.push_input(b"x".to_vec());
-    io.push_input(b"y".to_vec());
-    io.push_input(b"z".to_vec());
 
     run_control_socket_attached_observer_client_loop_async(
         &mut client_stream,
         &mut io,
-        "o1".to_string(),
         Size::new(80, 24).unwrap(),
     )
     .await
@@ -1188,12 +1172,8 @@ async fn control_socket_observer_attach_loop_waits_for_approval_before_view() {
     server.join().unwrap();
 
     assert_eq!(io.presentation_entries, 1);
-    assert_eq!(io.written_frames.len(), 2);
-    assert_eq!(
-        io.written_frames[0].lines,
-        vec!["observer pending approval"]
-    );
-    assert_eq!(io.written_frames[1].lines, vec!["observer live view"]);
+    assert_eq!(io.written_frames.len(), 1);
+    assert_eq!(io.written_frames[0].lines, vec!["observer live view"]);
 }
 
 /// Verifies remote primary attach serializes resize, input, and view requests

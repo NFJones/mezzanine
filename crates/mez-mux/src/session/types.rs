@@ -4,9 +4,7 @@
 //! session container. Behavior is implemented in focused sibling modules.
 
 use crate::layout::{LayoutNode, LayoutPolicy, PaneGeometry, Size, Window};
-use mez_core::{
-    ClientId, IdFactory, ObserverRequestId, PaneId, SessionId, WindowGroupId, WindowId,
-};
+use mez_core::{ClientId, IdFactory, PaneId, SessionId, WindowGroupId, WindowId};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -184,11 +182,6 @@ pub enum ClientRole {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     Primary,
-    /// Represents the Pending Observer case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    PendingObserver,
     /// Represents the Observer case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -397,102 +390,15 @@ pub struct PrimaryMembershipTransition {
     pub lifecycle_edge: PrimaryLifecycleEdge,
 }
 
-/// Carries Observer Decision State state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObserverDecisionState {
-    /// Represents the Pending case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Pending,
-    /// Represents the Approved case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Approved,
-    /// Represents the Rejected case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Rejected,
-    /// Represents the Revoked case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Revoked,
-}
-
-/// Carries Observer Request state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
+/// Read-only attachment metadata for an observer client.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ObserverRequest {
-    /// Stores the id value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub id: ObserverRequestId,
-    /// Stores the client id value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+pub struct ObserverAttachment {
+    /// Attached observer client.
     pub client_id: ClientId,
-    /// Stores the state value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub state: ObserverDecisionState,
-    /// Stores the descriptor name value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub descriptor_name: String,
-    /// Stores the descriptor interactive value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub descriptor_interactive: bool,
-    /// Stores the descriptor terminal value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub descriptor_terminal: Option<ClientTerminalDescriptor>,
-    /// Stores the requested at unix seconds value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub requested_at_unix_seconds: Option<u64>,
-    /// Stores the decided at unix seconds value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub decided_at_unix_seconds: Option<u64>,
-    /// Stores the decided by client id value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub decided_by_client_id: Option<String>,
     /// Exact attached primary whose navigation and live pane content this observer follows.
-    pub view_source_client_id: Option<ClientId>,
-    /// Stores the visible from event id value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub visible_from_event_id: Option<u64>,
-    /// Stores the visible from unix seconds value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub visible_from_unix_seconds: Option<u64>,
-    /// Stores the reason value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub reason: Option<String>,
+    pub view_source_client_id: ClientId,
+    /// Earliest retained event visible to this observer.
+    pub visible_from_event_id: u64,
 }
 
 /// Carries Session State state for this subsystem.
@@ -694,11 +600,8 @@ pub struct Session {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) clients: Vec<Client>,
-    /// Stores the observers value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) observers: Vec<ObserverRequest>,
+    /// Read-only observer attachments keyed by client identity.
+    pub(super) observer_attachments: Vec<ObserverAttachment>,
     /// Client-independent landing navigation used to seed primary views.
     pub(super) landing_navigation: LandingNavigationState,
     /// Attached primary whose terminal size owns canonical layout geometry.

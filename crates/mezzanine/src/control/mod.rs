@@ -34,7 +34,7 @@ use mez_agent::{
 };
 use mez_core::ids::ClientId;
 use mez_mux::layout::{PaneSizeSpec, ResizeAxis, ResizeDirection, SplitDirection, Window};
-use mez_mux::session::{ClientRole, ClientState, ObserverDecisionState, Session, SessionState};
+use mez_mux::session::{ClientRole, ClientState, Session, SessionState};
 
 /// Exposes the authz module boundary.
 ///
@@ -141,13 +141,12 @@ pub(crate) use targets::{
 };
 pub(crate) use types::{
     AGENT_CONTROL_METHODS, AUTOMATION_CONTROL_METHODS, OBSERVER_CONTROL_METHODS,
-    PENDING_OBSERVER_CONTROL_METHODS,
 };
 pub use types::{
     AuthenticationMaterial, AuthenticationMechanism, CONTROL_CONTENT_TYPE, Capabilities,
     ClientDescriptor, ClientStdioDescriptor, GrantedRole, InitializeContext, InitializeParams,
-    InitializeResult, MAX_EVENT_REPLAY_RETENTION, ObserverRequestSummary, PaneCaptureSource,
-    RequestedRole, ServerIdentity, SessionIntent, TerminalDescriptor,
+    InitializeResult, MAX_EVENT_REPLAY_RETENTION, PaneCaptureSource, RequestedRole, ServerIdentity,
+    SessionIntent, TerminalDescriptor,
 };
 
 use authz::require_idempotency_key;
@@ -181,16 +180,16 @@ use state_json::{
     dispatch_agent_list_with_store_and_model_profiles, dispatch_agent_shell_command_with_store,
     dispatch_agent_shell_visibility_with_store, dispatch_agent_task_list_with_ledger,
     frame_read_json, granted_role_name, json_optional_string, mcp_servers_json, mcp_tools_json,
-    observers_json_for_params, pane_state_json, pane_state_json_with_capture,
-    panes_json_for_params, parse_approval_decision, parse_trust_decision, resume_plan_json,
-    session_state_json_for_params, session_summary_json, snapshot_state_json, snapshots_json,
-    string_array_json, validate_agent_task_list_params, window_state_json, windows_json_for_params,
+    pane_state_json, pane_state_json_with_capture, panes_json_for_params, parse_approval_decision,
+    parse_trust_decision, resume_plan_json, session_state_json_for_params, session_summary_json,
+    snapshot_state_json, snapshots_json, string_array_json, validate_agent_task_list_params,
+    window_state_json, windows_json_for_params,
 };
 pub(crate) use state_json::{
     control_event_audience, dispatch_event_list_request, frame_read_json_with_context,
-    layout_state_json, nullable_state_request_session_target_matches, observer_json,
-    observers_json, project_trust_state_filter_from_params, session_state_name,
-    state_request_pane_list_window_ids, state_request_session_target_matches,
+    layout_state_json, nullable_state_request_session_target_matches,
+    project_trust_state_filter_from_params, session_state_name, state_request_pane_list_window_ids,
+    state_request_session_target_matches,
 };
 use targets::{
     pane_by_id, parse_join_position, parse_json_object_value, parse_split_direction,

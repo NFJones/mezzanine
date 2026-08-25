@@ -8,10 +8,10 @@
 use super::super::{
     ClientState, ConfigScope, MezError, PaneProcessStart, PaneResizeUpdate, Result,
     RuntimeSessionService, TrustDecision, dispatch_event_list_request,
-    frame_read_json_with_context, json_escape, layout_state_json, observers_json,
-    runtime_approval_policy_name, runtime_json_string_field, runtime_pane_by_id,
-    runtime_pane_readiness_state_name, runtime_permission_preset_name, runtime_string_array_json,
-    session_state_name, state_request_pane_list_window_ids, state_request_session_target_matches,
+    frame_read_json_with_context, json_escape, layout_state_json, runtime_approval_policy_name,
+    runtime_json_string_field, runtime_pane_by_id, runtime_pane_readiness_state_name,
+    runtime_permission_preset_name, runtime_string_array_json, session_state_name,
+    state_request_pane_list_window_ids, state_request_session_target_matches,
 };
 use super::protocol::{
     runtime_client_requested_role_name, runtime_client_role_name, runtime_client_state_name,
@@ -298,7 +298,7 @@ impl RuntimeSessionService {
             .last_attach_at_unix_seconds()
             .unwrap_or(self.session.created_at_unix_seconds());
         Ok(format!(
-            r#"{{"id":"{}","version":2,"session_id":"{}","name":"{}","state":"{}","created_at":{},"updated_at":{},"primary_client_ids":[{}],"attached_primary_count":{},"max_attached_primaries":{},"layout_owner_client_id":{},"authoritative_size":{{"columns":{},"rows":{}}},"navigation":{{"active_group_id":{},"active_window_id":{},"active_pane_id":{},"revision":{}}},"windows":{},"window_count":{},"clients":{},"observers":{},"config_generation":{},"permission_summary":{}}}"#,
+            r#"{{"id":"{}","version":2,"session_id":"{}","name":"{}","state":"{}","created_at":{},"updated_at":{},"primary_client_ids":[{}],"attached_primary_count":{},"max_attached_primaries":{},"layout_owner_client_id":{},"authoritative_size":{{"columns":{},"rows":{}}},"navigation":{{"active_group_id":{},"active_window_id":{},"active_pane_id":{},"revision":{}}},"windows":{},"window_count":{},"clients":{},"config_generation":{},"permission_summary":{}}}"#,
             json_escape(session.id.as_str()),
             json_escape(session.id.as_str()),
             json_escape(&session.name),
@@ -318,7 +318,6 @@ impl RuntimeSessionService {
             self.runtime_windows_state_json(),
             session.windows().len(),
             self.runtime_clients_json(),
-            observers_json(session),
             session.config_generation,
             self.runtime_permission_summary_json()
         ))
@@ -737,7 +736,7 @@ mod tests {
     use crate::security::audit::{AuditConfig, AuditLog};
     use crate::test_support::runtime::RuntimeServiceFixture;
     use mez_mux::layout::Size;
-    use mez_mux::session::{ClientRole, ClientState, ObserverDecisionState};
+    use mez_mux::session::ClientState;
     use std::path::PathBuf;
 
     #[test]
@@ -818,32 +817,26 @@ mod tests {
     }
 
     #[test]
-    fn authorized_event_wakeups_revalidates_observer_approval_and_revocation() {
+    fn authorized_event_wakeups_enforce_observer_cutoff_and_detachment() {
         let mut service = RuntimeServiceFixture::new().build();
         let primary = service
             .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
             .unwrap();
-        let (observer_client, observer_request) =
-            service.session.request_observer("remote-observer");
         service
             .append_lifecycle_event(
                 EventKind::PaneChanged,
-                r#"{"phase":"before-approval"}"#.to_string(),
+                r#"{"phase":"before-attachment"}"#.to_string(),
             )
             .unwrap();
-
-        let pending = service
-            .authorized_event_wakeups(&observer_client, "remote-events", 0, 8)
-            .expect_err("pending observers must not receive a remote event stream");
-        assert!(pending.message().contains("pending observer event streams"));
-
-        service
-            .approve_observer_with_runtime_cutoff(&primary, observer_request.as_str())
+        let visible_from_event_id = service.event_log().unwrap().latest_event_id() + 1;
+        let observer_client = service
+            .session
+            .attach_observer_with_terminal("remote-observer", None, visible_from_event_id)
             .unwrap();
         service
             .append_lifecycle_event(
                 EventKind::PaneChanged,
-                r#"{"phase":"after-approval"}"#.to_string(),
+                r#"{"phase":"after-attachment"}"#.to_string(),
             )
             .unwrap();
         let wakeups = service
@@ -857,17 +850,17 @@ mod tests {
         assert!(
             payloads
                 .iter()
-                .any(|payload| payload.contains("after-approval"))
+                .any(|payload| payload.contains("after-attachment"))
         );
         assert!(
             !payloads
                 .iter()
-                .any(|payload| payload.contains("before-approval"))
+                .any(|payload| payload.contains("before-attachment"))
         );
 
         service
             .session
-            .revoke_observer_client(&primary, observer_client.as_str())
+            .detach_client_target(&primary, observer_client.as_str())
             .unwrap();
         let revoked = service
             .authorized_event_wakeups(&observer_client, "remote-events", 0, 8)
@@ -887,13 +880,14 @@ mod tests {
         let source = service
             .attach_primary("source", true, Size::new(100, 30).unwrap(), 121)
             .unwrap();
-        let (observer_client, observer_request) = service.session.request_observer("observer");
         service
-            .apply_observer_approval_transaction(
-                &decider,
-                observer_request.to_string(),
-                source.clone(),
-            )
+            .session
+            .select_layout_owner_transition(Some(&decider), source.as_str())
+            .unwrap();
+        let visible_from_event_id = service.event_log().unwrap().latest_event_id() + 1;
+        let observer_client = service
+            .session
+            .attach_observer_with_terminal("observer", None, visible_from_event_id)
             .unwrap();
         let peer_uid = 1000;
         let (binding_token, _) = service.mint_unix_event_binding(observer_client.clone(), peer_uid);
@@ -902,15 +896,20 @@ mod tests {
             .detach_primary(&source, Size::new(100, 30).unwrap())
             .unwrap();
 
-        let observer = service
+        assert!(
+            service
+                .session()
+                .observer_attachments()
+                .iter()
+                .all(|observer| observer.client_id != observer_client)
+        );
+        let observer_client_state = service
             .session()
-            .observers()
+            .clients()
             .iter()
-            .find(|observer| observer.client_id == observer_client)
+            .find(|client| client.id == observer_client)
             .unwrap();
-        assert_eq!(observer.state, ObserverDecisionState::Revoked);
-        assert_eq!(observer.reason.as_deref(), Some("view source detached"));
-        assert_eq!(observer.view_source_client_id, Some(source.clone()));
+        assert_eq!(observer_client_state.state, ClientState::Revoked);
         assert!(
             service
                 .consume_unix_event_binding(&binding_token, peer_uid)
@@ -925,7 +924,7 @@ mod tests {
             .unwrap()
             .replay_for(&EventAudience::PrimaryClient(decider));
         assert!(primary_events.iter().any(|event| {
-            event.kind == EventKind::ObserverDecided
+            event.kind == EventKind::ClientDetached
                 && event.payload.contains(observer_client.as_str())
                 && event.payload.contains("view source detached")
                 && event.payload.contains(source.as_str())
@@ -943,13 +942,14 @@ mod tests {
         let source = service
             .attach_primary("source", true, Size::new(100, 30).unwrap(), 121)
             .unwrap();
-        let (observer_client, observer_request) = service.session.request_observer("observer");
         service
-            .apply_observer_approval_transaction(
-                &decider,
-                observer_request.to_string(),
-                source.clone(),
-            )
+            .session
+            .select_layout_owner_transition(Some(&decider), source.as_str())
+            .unwrap();
+        let visible_from_event_id = service.event_log().unwrap().latest_event_id() + 1;
+        let observer_client = service
+            .session
+            .attach_observer_with_terminal("observer", None, visible_from_event_id)
             .unwrap();
         service.set_audit_log(AuditLog::new(AuditConfig {
             enabled: false,
@@ -967,199 +967,11 @@ mod tests {
         assert!(service.session().is_attached_primary(&source));
         let observer = service
             .session()
-            .observers()
+            .observer_attachments()
             .iter()
             .find(|observer| observer.client_id == observer_client)
             .unwrap();
-        assert_eq!(observer.state, ObserverDecisionState::Approved);
-        assert_eq!(observer.view_source_client_id, Some(source));
+        assert_eq!(observer.view_source_client_id, source);
         assert_eq!(service.event_log().unwrap().len(), event_count_before);
-    }
-
-    /// Verifies observer-management decisions remain visible only to primaries.
-    ///
-    /// An approved observer may receive later session-view events, but must not
-    /// learn another observer's request or client identifiers through approve,
-    /// reject, or revoke notifications emitted after its visibility marker.
-    #[test]
-    fn observer_decisions_do_not_leak_to_other_approved_observers() {
-        let mut service = RuntimeServiceFixture::new().build();
-        let primary = service
-            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-            .unwrap();
-        let (first_client, first_request) = service.session.request_observer("first-observer");
-        let first_approval = service.dispatch_runtime_control_body(
-            &format!(
-                r#"{{"jsonrpc":"2.0","id":"approve-first","method":"observer/approve","params":{{"observer_request_id":"{first_request}","idempotency_key":"approve-first"}}}}"#
-            ),
-            &primary,
-        );
-        assert!(
-            first_approval.contains(r#""state":"approved""#),
-            "{first_approval}"
-        );
-
-        let (second_client, second_request) = service.session.request_observer("second-observer");
-        let second_approval = service.dispatch_runtime_control_body(
-            &format!(
-                r#"{{"jsonrpc":"2.0","id":"approve-second","method":"observer/approve","params":{{"observer_request_id":"{second_request}","idempotency_key":"approve-second"}}}}"#
-            ),
-            &primary,
-        );
-        assert!(
-            second_approval.contains(r#""state":"approved""#),
-            "{second_approval}"
-        );
-        let second_revocation = service.dispatch_runtime_control_body(
-            &format!(
-                r#"{{"jsonrpc":"2.0","id":"revoke-second","method":"observer/revoke","params":{{"client_id":"{second_client}","reason":"done","idempotency_key":"revoke-second"}}}}"#
-            ),
-            &primary,
-        );
-        assert!(
-            second_revocation.contains(r#""revoked":true"#),
-            "{second_revocation}"
-        );
-
-        let (_third_client, third_request) = service.session.request_observer("third-observer");
-        let third_rejection = service.dispatch_runtime_control_body(
-            &format!(
-                r#"{{"jsonrpc":"2.0","id":"reject-third","method":"observer/reject","params":{{"observer_request_id":"{third_request}","reason":"denied","idempotency_key":"reject-third"}}}}"#
-            ),
-            &primary,
-        );
-        assert!(
-            third_rejection.contains(r#""state":"rejected""#),
-            "{third_rejection}"
-        );
-
-        let observer_events = service
-            .authorized_event_wakeups(&first_client, "first-observer-events", 0, 64)
-            .unwrap()
-            .into_iter()
-            .flat_map(|wakeup| wakeup.events)
-            .collect::<Vec<_>>();
-        assert!(!observer_events.iter().any(|event| {
-            event.kind == EventKind::ObserverDecided
-                && (event.payload.contains(second_request.as_str())
-                    || event.payload.contains(second_client.as_str())
-                    || event.payload.contains(third_request.as_str()))
-        }));
-
-        let primary_events = service
-            .event_log()
-            .unwrap()
-            .replay_for(&EventAudience::AllPrimaries);
-        assert!(primary_events.iter().any(|event| {
-            event.kind == EventKind::ObserverDecided
-                && event.payload.contains(second_request.as_str())
-                && event.payload.contains(r#""decision":"approved""#)
-        }));
-        assert!(primary_events.iter().any(|event| {
-            event.kind == EventKind::ObserverDecided
-                && event.payload.contains(second_client.as_str())
-                && event.payload.contains(r#""decision":"revoked""#)
-        }));
-        assert!(primary_events.iter().any(|event| {
-            event.kind == EventKind::ObserverDecided
-                && event.payload.contains(third_request.as_str())
-                && event.payload.contains(r#""decision":"rejected""#)
-        }));
-    }
-
-    /// Verifies mandatory audit failures roll back every observer decision.
-    ///
-    /// Authority, visibility markers, client state, event retention, and the
-    /// cached retry response must agree when required audit publication fails.
-    /// Approve, reject, and revoke are exercised independently so no terminal
-    /// transition can survive behind an RPC error.
-    #[test]
-    fn observer_decision_audit_failures_leave_authority_and_events_unchanged() {
-        let mut service = RuntimeServiceFixture::new().build();
-        let primary = service
-            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-            .unwrap();
-        let (approve_client, approve_request) = service.session.request_observer("approve");
-        let (reject_client, reject_request) = service.session.request_observer("reject");
-        let (revoke_client, revoke_request) = service.session.request_observer("revoke");
-        service
-            .approve_observer_with_runtime_cutoff(&primary, revoke_request.as_str())
-            .unwrap();
-        service.set_audit_log(AuditLog::new(AuditConfig {
-            enabled: false,
-            path: PathBuf::from("/tmp/unused-observer-decision-audit.jsonl"),
-            hash_chain: false,
-            required: true,
-        }));
-        let event_count_before = service.event_log().unwrap().len();
-
-        let approve = format!(
-            r#"{{"jsonrpc":"2.0","id":"approve","method":"observer/approve","params":{{"observer_request_id":"{approve_request}","idempotency_key":"audit-fail-approve"}}}}"#
-        );
-        let approve_response = service.dispatch_runtime_control_body(&approve, &primary);
-        assert!(approve_response.contains(r#""mezzanine_code":"forbidden""#));
-        assert_eq!(
-            service.dispatch_runtime_control_body(&approve, &primary),
-            approve_response
-        );
-
-        let reject = format!(
-            r#"{{"jsonrpc":"2.0","id":"reject","method":"observer/reject","params":{{"observer_request_id":"{reject_request}","reason":"denied","idempotency_key":"audit-fail-reject"}}}}"#
-        );
-        let reject_response = service.dispatch_runtime_control_body(&reject, &primary);
-        assert!(reject_response.contains(r#""mezzanine_code":"forbidden""#));
-        assert_eq!(
-            service.dispatch_runtime_control_body(&reject, &primary),
-            reject_response
-        );
-
-        let revoke = format!(
-            r#"{{"jsonrpc":"2.0","id":"revoke","method":"observer/revoke","params":{{"client_id":"{revoke_client}","reason":"done","idempotency_key":"audit-fail-revoke"}}}}"#
-        );
-        let revoke_response = service.dispatch_runtime_control_body(&revoke, &primary);
-        assert!(revoke_response.contains(r#""mezzanine_code":"forbidden""#));
-        assert_eq!(
-            service.dispatch_runtime_control_body(&revoke, &primary),
-            revoke_response
-        );
-
-        assert_eq!(service.event_log().unwrap().len(), event_count_before);
-        for request_id in [&approve_request, &reject_request] {
-            let observer = service
-                .session()
-                .observers()
-                .iter()
-                .find(|observer| observer.id == *request_id)
-                .unwrap();
-            assert_eq!(observer.state, ObserverDecisionState::Pending);
-            assert_eq!(observer.decided_at_unix_seconds, None);
-            assert_eq!(observer.decided_by_client_id, None);
-            assert_eq!(observer.visible_from_event_id, None);
-        }
-        for client_id in [&approve_client, &reject_client] {
-            let client = service
-                .session()
-                .clients()
-                .iter()
-                .find(|client| client.id == *client_id)
-                .unwrap();
-            assert_eq!(client.role, ClientRole::PendingObserver);
-            assert_eq!(client.state, ClientState::Pending);
-        }
-        let revoked_observer = service
-            .session()
-            .observers()
-            .iter()
-            .find(|observer| observer.id == revoke_request)
-            .unwrap();
-        assert_eq!(revoked_observer.state, ObserverDecisionState::Approved);
-        let revoked_client = service
-            .session()
-            .clients()
-            .iter()
-            .find(|client| client.id == revoke_client)
-            .unwrap();
-        assert_eq!(revoked_client.role, ClientRole::Observer);
-        assert_eq!(revoked_client.state, ClientState::Attached);
     }
 }

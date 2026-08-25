@@ -90,12 +90,13 @@ fn help_command_describes_mezzanine_command_set() {
     assert!(!help.contains("bypass-approvals"), "{help}");
     assert!(!help.contains("permissions"), "{help}");
     assert!(!help.contains("approval              "), "{help}");
+    assert!(!help.contains("approve-observer"), "{help}");
+    assert!(!help.contains("reject-observer"), "{help}");
+    assert!(!help.contains("revoke-observer"), "{help}");
+    assert!(!help.contains("list-observers"), "{help}");
+    assert!(!help.contains("choose-observer"), "{help}");
     assert!(
-        help.find("agent-shell").unwrap() < help.find("approve-observer").unwrap(),
-        "{help}"
-    );
-    assert!(
-        help.find("approve-observer").unwrap() < help.find("attach-session").unwrap(),
+        help.find("agent-shell").unwrap() < help.find("attach-session").unwrap(),
         "{help}"
     );
     assert!(

@@ -312,22 +312,6 @@ pub(super) fn terminal_view_control_request(iteration: u64, client_size: Size) -
     )
 }
 
-/// Builds the request a pending observer uses to inspect only its own approval
-/// state while waiting for the primary client.
-///
-/// # Parameters
-/// - `iteration`: A monotonically increasing request sequence.
-/// - `observer_request_id`: The observer request id returned by initialization.
-pub(super) fn observer_inspect_control_request(
-    iteration: u64,
-    observer_request_id: &str,
-) -> String {
-    format!(
-        r#"{{"jsonrpc":"2.0","id":"cli-observer-inspect-{iteration}","method":"observer/inspect","params":{{"observer_request_id":"{}"}}}}"#,
-        json_escape(observer_request_id)
-    )
-}
-
 /// Runs the control socket cursor blink elapsed operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

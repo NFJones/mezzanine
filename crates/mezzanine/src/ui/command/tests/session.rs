@@ -200,15 +200,18 @@ fn move_window_command_rejects_out_of_range_target_without_reordering() {
 #[test]
 fn list_commands_return_session_state() {
     let (mut session, primary) = test_session();
-    let (observer_client, observer_request) = session.request_observer_with_terminal(
-        "observer",
-        Some(mez_mux::session::ClientTerminalDescriptor {
-            columns: 100,
-            rows: 30,
-            term: "xterm-256color".to_string(),
-            features: vec!["rgb".to_string()],
-        }),
-    );
+    let observer_client = session
+        .attach_observer_with_terminal(
+            "observer",
+            Some(mez_mux::session::ClientTerminalDescriptor {
+                columns: 100,
+                rows: 30,
+                term: "xterm-256color".to_string(),
+                features: vec!["rgb".to_string()],
+            }),
+            1,
+        )
+        .unwrap();
     execute_command_sequence(&mut session, &primary, "split-window --select").unwrap();
 
     let windows = execute_command(
@@ -227,18 +230,6 @@ fn list_commands_return_session_state() {
         &mut session,
         &primary,
         &parse_command_sequence("list-clients").unwrap()[0],
-    )
-    .unwrap();
-    let observers = execute_command(
-        &mut session,
-        &primary,
-        &parse_command_sequence("list-observers").unwrap()[0],
-    )
-    .unwrap();
-    let choose_observer = execute_command(
-        &mut session,
-        &primary,
-        &parse_command_sequence("choose-observer").unwrap()[0],
     )
     .unwrap();
     let sessions = execute_command(
@@ -288,16 +279,12 @@ fn list_commands_return_session_state() {
         "{clients}"
     );
     assert!(
-        clients.contains("| 80x24:term=xterm-256color | none |"),
-        "{clients}"
-    );
-    assert!(
-        clients.contains(&format!("| {observer_request}:pending |")),
+        clients.contains("| 80x24:term=xterm-256color |"),
         "{clients}"
     );
     assert!(
         clients.contains(&format!(
-            "| {observer_client} | observer | pending_observer | pending |"
+            "| {observer_client} | observer | observer | attached |"
         )),
         "{clients}"
     );
@@ -305,38 +292,13 @@ fn list_commands_return_session_state() {
         clients.contains("| 100x30:term=xterm-256color |"),
         "{clients}"
     );
-    let observers = display_body(observers);
-    assert!(observers.contains("state=pending"), "{observers}");
-    assert!(observers.contains("requested_at="), "{observers}");
-    assert!(observers.contains("decided_at=none"), "{observers}");
-    assert!(observers.contains("decided_by=none"), "{observers}");
-    assert!(observers.contains("visible_from_time=none"), "{observers}");
-    assert!(
-        observers.contains("terminal=100x30:term=xterm-256color"),
-        "{observers}"
-    );
-    let choose_observer = display_body(choose_observer);
-    assert!(
-        choose_observer.contains("actions=inspect,approve,reject"),
-        "{choose_observer}"
-    );
-    assert!(
-        choose_observer.contains(&format!(
-            "commands=approve-observer -t {observer_request}|reject-observer -t {observer_request}"
-        )),
-        "{choose_observer}"
-    );
-    assert!(
-        choose_observer.contains(&format!("{observer_request}:client={observer_client}")),
-        "{choose_observer}"
-    );
     let sessions = display_body(sessions);
     assert!(
         sessions.starts_with("| session | name | state | created at |"),
         "{sessions}"
     );
     assert!(
-        sessions.contains("| 1 | 2 | 1 | 1 | 16 | true | c1 |"),
+        sessions.contains("| 1 | 2 | 2 | 1 | 16 | true | c1 |"),
         "{sessions}"
     );
     let pane_selector = display_body(pane_selector);

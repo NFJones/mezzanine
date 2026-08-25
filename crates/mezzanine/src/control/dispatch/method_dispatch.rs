@@ -15,10 +15,10 @@ use super::{
     error_code, frame_read_json, initialize_result_json, json_bool_field, json_escape,
     json_object_field, json_raw_field, json_rpc_error, json_rpc_success, json_string_field,
     layout_state_json, mcp_servers_json, mcp_tools_json, mezzanine_error_code,
-    nullable_state_request_session_target_matches, observer_json, observers_json_for_params,
-    pane_by_id, pane_state_json, pane_target_checked_resolved, panes_json_for_params,
-    parse_approval_decision, parse_join_position, parse_json_rpc_request, parse_split_direction,
-    parse_trust_decision, project_trust_state_filter_from_params, require_idempotency_key,
+    nullable_state_request_session_target_matches, pane_by_id, pane_state_json,
+    pane_target_checked_resolved, panes_json_for_params, parse_approval_decision,
+    parse_join_position, parse_json_rpc_request, parse_split_direction, parse_trust_decision,
+    project_trust_state_filter_from_params, require_idempotency_key,
     require_session_target_matches, session_state_json_for_params, session_summary_json,
     source_pane_target_checked_resolved, target_or_active_pane, validate_agent_task_list_params,
     window_by_id, window_id_for_target, window_state_json, window_target_checked_resolved,
@@ -152,23 +152,6 @@ pub(super) fn dispatch_parsed_request(
             r#"{{"clients":{}}}"#,
             clients_json_for_params(session, request.params.as_deref())?
         )),
-        ControlDispatchKind::ObserverList => Ok(format!(
-            r#"{{"observers":{}}}"#,
-            observers_json_for_params(session, request.params.as_deref())?
-        )),
-        ControlDispatchKind::ObserverInspect => {
-            let params = request.params.as_deref().ok_or_else(|| {
-                MezError::invalid_args("observer/inspect requires a params object")
-            })?;
-            let observer_id =
-                json_string_field(params, "observer_request_id").ok_or_else(|| {
-                    MezError::invalid_args("observer/inspect requires observer_request_id")
-                })?;
-            Ok(format!(
-                r#"{{"observer":{}}}"#,
-                observer_json(session, &observer_id)?
-            ))
-        }
         ControlDispatchKind::WindowCreate => {
             let params = request
                 .params
@@ -621,60 +604,6 @@ pub(super) fn dispatch_parsed_request(
                 json_escape(selected.client_id.as_str()),
                 session.layout_revision()
             ))
-        }
-        ControlDispatchKind::ObserverApprove => {
-            let params = request.params.as_deref().ok_or_else(|| {
-                MezError::invalid_args("observer/approve requires a params object")
-            })?;
-            require_idempotency_key(params)?;
-            let observer_id =
-                json_string_field(params, "observer_request_id").ok_or_else(|| {
-                    MezError::invalid_args("observer/approve requires observer_request_id")
-                })?;
-            let view_source_client_id = json_string_field(params, "view_source_client_id")
-                .map(|client_id| {
-                    ClientId::parse('c', client_id).ok_or_else(|| {
-                        MezError::invalid_args("observer/approve view_source_client_id is invalid")
-                    })
-                })
-                .transpose()?
-                .unwrap_or_else(|| primary_client_id.clone());
-            session.approve_observer_target_with_source(
-                primary_client_id,
-                &observer_id,
-                &view_source_client_id,
-            )?;
-            Ok(format!(
-                r#"{{"observer":{}}}"#,
-                observer_json(session, &observer_id)?
-            ))
-        }
-        ControlDispatchKind::ObserverReject => {
-            let params = request.params.as_deref().ok_or_else(|| {
-                MezError::invalid_args("observer/reject requires a params object")
-            })?;
-            require_idempotency_key(params)?;
-            let observer_id =
-                json_string_field(params, "observer_request_id").ok_or_else(|| {
-                    MezError::invalid_args("observer/reject requires observer_request_id")
-                })?;
-            let reason = json_string_field(params, "reason");
-            session.reject_observer_target_with_reason(primary_client_id, &observer_id, reason)?;
-            Ok(format!(
-                r#"{{"observer":{}}}"#,
-                observer_json(session, &observer_id)?
-            ))
-        }
-        ControlDispatchKind::ObserverRevoke => {
-            let params = request.params.as_deref().ok_or_else(|| {
-                MezError::invalid_args("observer/revoke requires a params object")
-            })?;
-            require_idempotency_key(params)?;
-            let client_id = json_string_field(params, "client_id")
-                .ok_or_else(|| MezError::invalid_args("observer/revoke requires client_id"))?;
-            let reason = json_string_field(params, "reason");
-            session.revoke_observer_client_with_reason(primary_client_id, &client_id, reason)?;
-            Ok(r#"{"revoked":true}"#.to_string())
         }
         ControlDispatchKind::AgentList => Ok(format!(
             r#"{{"agents":{}}}"#,

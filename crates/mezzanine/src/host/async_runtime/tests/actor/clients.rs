@@ -155,19 +155,20 @@ async fn async_actor_applies_primary_client_disconnect_events() {
     assert_eq!(exit.commands_processed, 2);
 }
 
-/// Verifies connection-loss events clean up pending and approved observers.
+/// Verifies connection-loss events clean up immediately attached observers.
 ///
 /// Observer connections own their exact client attachment. Actor-ordered
-/// disconnects must terminalize pending requests, revoke approved observers,
-/// preserve the primary lifecycle, and make duplicate cleanup harmless.
+/// disconnects must remove attachment metadata, preserve the primary
+/// lifecycle, and make duplicate cleanup harmless.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_cleans_up_observers_on_connection_loss() {
     let mut session = SessionFixture::new().build();
     let primary = session.attach_primary("primary", true).unwrap();
-    let (pending_client, pending_request) = session.request_observer("pending");
-    let (approved_client, approved_request) = session.request_observer("approved");
-    session
-        .approve_observer(&primary, &approved_request)
+    let first_client = session
+        .attach_observer_with_terminal("first", None, 1)
+        .unwrap();
+    let second_client = session
+        .attach_observer_with_terminal("second", None, 1)
         .unwrap();
     let service = RuntimeServiceFixture::new().build_with_session(session);
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
@@ -177,15 +178,15 @@ async fn async_actor_cleans_up_observers_on_connection_loss() {
     let client = async {
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::Client(ClientEvent::Disconnected {
-            client_id: pending_client.clone(),
-            reason: "pending observer socket closed".to_string(),
+            client_id: first_client.clone(),
+            reason: "first observer socket closed".to_string(),
         }));
         batch.push(RuntimeEvent::Client(ClientEvent::Disconnected {
-            client_id: approved_client.clone(),
-            reason: "approved observer socket closed".to_string(),
+            client_id: second_client.clone(),
+            reason: "second observer socket closed".to_string(),
         }));
         batch.push(RuntimeEvent::Client(ClientEvent::Disconnected {
-            client_id: approved_client,
+            client_id: second_client.clone(),
             reason: "duplicate observer cleanup".to_string(),
         }));
 
@@ -207,29 +208,8 @@ async fn async_actor_cleans_up_observers_on_connection_loss() {
         exit.service.session().layout_owner_client_id(),
         Some(&primary)
     );
-    let pending = exit
-        .service
-        .session()
-        .observers()
-        .iter()
-        .find(|observer| observer.id == pending_request)
-        .unwrap();
-    let approved = exit
-        .service
-        .session()
-        .observers()
-        .iter()
-        .find(|observer| observer.id == approved_request)
-        .unwrap();
-    assert_eq!(
-        pending.state,
-        mez_mux::session::ObserverDecisionState::Rejected
-    );
-    assert_eq!(
-        approved.state,
-        mez_mux::session::ObserverDecisionState::Revoked
-    );
-    for observer_client in [pending.client_id.clone(), approved.client_id.clone()] {
+    assert!(exit.service.session().observer_attachments().is_empty());
+    for observer_client in [first_client, second_client] {
         assert_eq!(
             exit.service
                 .session()

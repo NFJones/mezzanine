@@ -109,11 +109,6 @@ pub type PaneId = StableId;
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub type ClientId = StableId;
-/// Defines the Observer Request Id type used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-pub type ObserverRequestId = StableId;
 /// Defines the Agent Id type used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -151,11 +146,6 @@ pub struct IdFactory {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     next_client: u64,
-    /// Stores the next observer value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    next_observer: u64,
     /// Stores the next agent value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -176,7 +166,6 @@ impl Default for IdFactory {
             next_window_group: 1,
             next_pane: 1,
             next_client: 1,
-            next_observer: 1,
             next_agent: 1,
         }
     }
@@ -201,7 +190,6 @@ impl IdFactory {
                 'g' => factory.next_window_group = factory.next_window_group.max(next),
                 '%' => factory.next_pane = factory.next_pane.max(next),
                 'c' => factory.next_client = factory.next_client.max(next),
-                'o' => factory.next_observer = factory.next_observer.max(next),
                 'a' => factory.next_agent = factory.next_agent.max(next),
                 _ => {}
             }
@@ -257,17 +245,6 @@ impl IdFactory {
     pub fn client(&mut self) -> ClientId {
         let id = StableId::new('c', self.next_client);
         self.next_client += 1;
-        id
-    }
-
-    /// Runs the observer request operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn observer_request(&mut self) -> ObserverRequestId {
-        let id = StableId::new('o', self.next_observer);
-        self.next_observer += 1;
         id
     }
 
@@ -343,7 +320,6 @@ mod tests {
         assert_eq!(factory.window().as_str(), "@8");
         assert_eq!(factory.pane().as_str(), "%10");
         assert_eq!(factory.client().as_str(), "c3");
-        assert_eq!(factory.observer_request().as_str(), "o1");
         assert_eq!(factory.agent().as_str(), "a1");
     }
 }

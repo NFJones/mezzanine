@@ -1303,7 +1303,7 @@ async fn async_attached_terminal_loop_renders_observer_without_applying_input() 
             },
             |_| {
                 Ok(Some(ClientStatusLine {
-                    kind: ClientStatusKind::PendingObserver,
+                    kind: ClientStatusKind::Diagnostic,
                     text: "observe".to_string(),
                 }))
             },
@@ -1314,7 +1314,7 @@ async fn async_attached_terminal_loop_renders_observer_without_applying_input() 
         assert!(report.actions.is_empty());
         assert_eq!(report.output_frames, 1);
         assert_eq!(io.input_batches.len(), 0);
-        assert_eq!(io.written_batches[0][23].trim_end(), "observer: observe");
+        assert_eq!(io.written_batches[0][23].trim_end(), "status: observe");
         assert_eq!(
             handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running

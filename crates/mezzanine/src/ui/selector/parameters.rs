@@ -40,7 +40,6 @@ pub(super) fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {
         "search-history" => Some(" [-t target-pane] <query>"),
         "export-history" | "pipe-pane" => Some(" [-t target-pane] <target>"),
         "mark-pane-ready" => Some(" <ready|unknown|blocked>"),
-        "approve-observer" | "reject-observer" | "revoke-observer" => Some(" <observer-id>"),
         _ => None,
     }
 }

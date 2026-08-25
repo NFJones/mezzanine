@@ -556,10 +556,11 @@ pub(super) fn event_type_from_notification(value: &serde_json::Value) -> Option<
 pub(super) fn attach_render_action_for_event_type(event_type: &str) -> AttachRenderAction {
     match event_type {
         "diagnostic" | "snapshot_changed" => AttachRenderAction::None,
-        "client_attached" | "client_detached" | "config_changed" | "observer_decided"
-        | "window_changed" => AttachRenderAction::InvalidateAndView,
+        "client_attached" | "client_detached" | "config_changed" | "window_changed" => {
+            AttachRenderAction::InvalidateAndView
+        }
         "agent_status" | "approval_changed" | "hook_failed" | "mcp_server_changed" | "message"
-        | "observer_requested" | "pane_changed" => AttachRenderAction::View,
+        | "pane_changed" => AttachRenderAction::View,
         _ => AttachRenderAction::View,
     }
 }

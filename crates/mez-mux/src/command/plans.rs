@@ -78,12 +78,6 @@ pub enum CommandPlan {
     BreakPane(BreakPanePlan),
     /// Join a pane into another pane.
     JoinPane(JoinPanePlan),
-    /// Approve an observer request.
-    ApproveObserver(ObserverTargetPlan),
-    /// Reject an observer request.
-    RejectObserver(ObserverTargetPlan),
-    /// Revoke observer access for a client.
-    RevokeObserver(ObserverTargetPlan),
     /// Rename the session.
     RenameSession(SessionNamePlan),
     /// Kill the session.
@@ -403,18 +397,6 @@ pub fn command_plan_from_invocation(invocation: &CommandInvocation) -> Result<Co
         "swap-pane" | "swapp" => Ok(CommandPlan::SwapPane(swap_pane_plan(invocation)?)),
         "break-pane" | "breakp" => Ok(CommandPlan::BreakPane(break_pane_plan(invocation))),
         "join-pane" | "joinp" => Ok(CommandPlan::JoinPane(join_pane_plan(invocation)?)),
-        "approve-observer" => Ok(CommandPlan::ApproveObserver(observer_target_plan(
-            invocation,
-            "approve-observer requires a target",
-        )?)),
-        "reject-observer" => Ok(CommandPlan::RejectObserver(observer_target_plan(
-            invocation,
-            "reject-observer requires a target",
-        )?)),
-        "revoke-observer" => Ok(CommandPlan::RevokeObserver(observer_target_plan(
-            invocation,
-            "revoke-observer requires a client id",
-        )?)),
         "rename-session" | "renames" => Ok(CommandPlan::RenameSession(session_name_plan(
             invocation,
             "rename-session requires a name",
@@ -641,20 +623,6 @@ pub fn join_pane_plan(invocation: &CommandInvocation) -> Result<JoinPanePlan> {
             .args
             .iter()
             .any(|argument| argument == "--select"),
-    })
-}
-
-fn observer_target_plan(
-    invocation: &CommandInvocation,
-    missing: &'static str,
-) -> Result<ObserverTargetPlan> {
-    let target = invocation
-        .target_arg()
-        .or_else(|| invocation.positional_args().first().copied())
-        .ok_or_else(|| MuxError::invalid_args(missing))?;
-    Ok(ObserverTargetPlan {
-        command: invocation.name.clone(),
-        target: target.to_string(),
     })
 }
 
@@ -1046,10 +1014,6 @@ mod tests {
                 selection: PaneSelectionPlan::Direction(PaneNavigationDirection::Left),
                 ..
             })
-        ));
-        assert!(matches!(
-            command_plan_from_invocation(&invocation("approve-observer 7")).unwrap(),
-            CommandPlan::ApproveObserver(ObserverTargetPlan { target, .. }) if target == "7"
         ));
         assert!(matches!(
             command_plan_from_invocation(&invocation("synchronize-panes status")).unwrap(),

@@ -456,20 +456,6 @@ fn audit_helpers_include_required_metadata_and_redact_secrets() {
     assert_metadata(&prompt, "action_kind", "shell_command");
     assert_eq!(prompt.approval_state, "pending");
 
-    let observer = AuditRecord::observer_decision(
-        "$1",
-        actor(),
-        "observer_request",
-        "o1",
-        "approved",
-        "succeeded",
-    );
-    assert_event(&observer, "observer", "decision", "succeeded");
-    assert_metadata(&observer, "target_kind", "observer_request");
-    assert_metadata(&observer, "observer_request_id", "o1");
-    assert_metadata(&observer, "decision", "approved");
-    assert_eq!(observer.approval_state, "approved");
-
     let auth = AuditRecord::auth_change(
         "$1",
         actor(),

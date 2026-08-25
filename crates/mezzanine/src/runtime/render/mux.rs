@@ -166,9 +166,6 @@ impl RuntimeSessionService {
                     &format!("delete-buffer {name}"),
                 )?;
             }
-            MuxAction::ChoosePendingObservers => {
-                self.execute_attached_display_command(primary_client_id, "choose-observer")?;
-            }
             MuxAction::ToggleAgentShell => {
                 self.toggle_active_agent_shell()?;
             }
@@ -243,37 +240,6 @@ impl RuntimeSessionService {
         };
         self.swap_panes_and_sync_pty_sizes(primary_client_id, None, &target.to_string())?;
         Ok(true)
-    }
-
-    /// Runs the approve observer with runtime cutoff operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    #[cfg(test)]
-    pub(crate) fn approve_observer_with_runtime_cutoff(
-        &mut self,
-        primary_client_id: &mez_core::ids::ClientId,
-        observer_id: &str,
-    ) -> Result<()> {
-        if let Some(visible_from_event_id) = self
-            .control
-            .event_log()
-            .map(|event_log| event_log.latest_event_id().saturating_add(1))
-        {
-            Ok(self
-                .session
-                .approve_observer_target_with_visible_from_event_id_and_source(
-                    primary_client_id,
-                    observer_id,
-                    visible_from_event_id,
-                    primary_client_id,
-                )?)
-        } else {
-            Ok(self
-                .session
-                .approve_observer_target(primary_client_id, observer_id)?)
-        }
     }
 
     /// Runs the active pane id operation for this subsystem.

@@ -225,11 +225,6 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "export-history",
     "pipe-pane",
     "mark-pane-ready",
-    "list-observers",
-    "choose-observer",
-    "approve-observer",
-    "reject-observer",
-    "revoke-observer",
 ];
 
 /// Runs the baseline command status operation for this subsystem.
@@ -242,8 +237,7 @@ fn baseline_command_status(name: &str) -> BaselineCommandStatus {
         "copy-mode" | "copy-selection" | "paste-clipboard" | "paste-buffer" | "create-buffer"
         | "list-buffers" | "choose-buffer" | "delete-buffer" | "capture-pane" | "save-buffer"
         | "clear-history" | "search-history" | "export-history" | "pipe-pane"
-        | "refresh-client" | "show-metrics" | "show-iroh-status" | "agent-shell"
-        | "approve-observer" | "reject-observer" | "revoke-observer" => {
+        | "refresh-client" | "show-metrics" | "show-iroh-status" | "agent-shell" => {
             BaselineCommandStatus::RuntimeRequired
         }
         "bind-key" | "unbind-key" | "set-key-preset" | "set-theme" | "set-option"

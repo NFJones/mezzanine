@@ -35,9 +35,8 @@ use mez_mux::command::plans::{
     SynchronizePanesMode, command_plan_from_invocation,
 };
 use mez_mux::command::presentation::{
-    attach_session_display, choose_client_display, choose_group_display, choose_observer_display,
-    choose_window_display, display_panes, list_clients, list_current_session, list_groups,
-    list_observers, list_panes, list_windows,
+    attach_session_display, choose_client_display, choose_group_display, choose_window_display,
+    display_panes, list_clients, list_current_session, list_groups, list_panes, list_windows,
 };
 
 // In-memory command execution entry points.
@@ -541,24 +540,6 @@ fn execute_command_plan(
                 command: plan.command,
             }
         }
-        CommandPlan::ApproveObserver(plan) => {
-            session.approve_observer_target(primary_client_id, &plan.target)?;
-            CommandOutcome::Mutated {
-                command: plan.command,
-            }
-        }
-        CommandPlan::RejectObserver(plan) => {
-            session.reject_observer_target(primary_client_id, &plan.target)?;
-            CommandOutcome::Mutated {
-                command: plan.command,
-            }
-        }
-        CommandPlan::RevokeObserver(plan) => {
-            session.revoke_observer_client(primary_client_id, &plan.target)?;
-            CommandOutcome::Mutated {
-                command: plan.command,
-            }
-        }
         CommandPlan::RenameSession(plan) => {
             session.rename_session(primary_client_id, plan.name)?;
             CommandOutcome::Mutated {
@@ -641,14 +622,6 @@ pub fn execute_command(
         "choose-window" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: choose_window_display(session),
-        }),
-        "list-observers" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: list_observers(session),
-        }),
-        "choose-observer" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: choose_observer_display(session),
         }),
         "list-sessions" | "lists" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),

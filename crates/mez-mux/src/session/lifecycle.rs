@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::time::current_unix_seconds;
 use super::types::{
-    Client, ClientNavigationState, FocusCursor, LandingNavigationState, ObserverRequest,
+    Client, ClientNavigationState, FocusCursor, LandingNavigationState, ObserverAttachment,
     PaneStateMetadata, Session, SessionShell, SessionState, WindowGroup,
 };
 
@@ -55,7 +55,7 @@ impl Session {
             synchronized_window_ids: BTreeSet::new(),
             pane_state_metadata: BTreeMap::new(),
             clients: Vec::new(),
-            observers: Vec::new(),
+            observer_attachments: Vec::new(),
             landing_navigation,
             layout_owner_client_id: None,
             layout_revision: 0,
@@ -258,13 +258,9 @@ impl Session {
         &self.clients
     }
 
-    /// Runs the observers operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn observers(&self) -> &[ObserverRequest] {
-        &self.observers
+    /// Returns read-only observer attachments.
+    pub fn observer_attachments(&self) -> &[ObserverAttachment] {
+        &self.observer_attachments
     }
 
     /// Runs the pane state metadata operation for this subsystem.

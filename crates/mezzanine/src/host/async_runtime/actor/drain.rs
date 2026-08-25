@@ -636,7 +636,6 @@ impl AsyncRuntimeSessionActor {
         {
             Some(mez_mux::session::ClientRole::Primary) => ClientViewRole::Primary,
             Some(mez_mux::session::ClientRole::Observer) => ClientViewRole::Observer,
-            Some(mez_mux::session::ClientRole::PendingObserver) => ClientViewRole::PendingObserver,
             _ => return Ok(None),
         };
         self.service.prepare_client_render(&client_id, role)?;

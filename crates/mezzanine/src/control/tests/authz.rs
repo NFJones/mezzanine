@@ -34,13 +34,10 @@ fn none_authentication_gets_no_session_data() {
     assert_eq!(result.capabilities, Capabilities::unauthenticated());
 }
 
-/// Verifies pending observer receives only request local status.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
+/// Verifies authenticated observer negotiation advertises the attached
+/// read-only capability set without pending request state.
 #[test]
-fn pending_observer_receives_only_request_local_status() {
+fn observer_negotiation_uses_attached_read_only_capabilities() {
     let result = initialize(
         InitializeParams {
             client_name: "observer".to_string(),
@@ -62,13 +59,12 @@ fn pending_observer_receives_only_request_local_status() {
     )
     .unwrap();
 
-    assert_eq!(result.granted_role, GrantedRole::PendingObserver);
+    assert_eq!(result.granted_role, GrantedRole::Observer);
     assert_eq!(result.session, None);
-    assert!(result.observer_request.is_some());
-    assert!(result.approval_pending);
-    assert!(!result.capabilities.methods.contains(&"event/list"));
-    assert!(result.capabilities.methods.contains(&"observer/inspect"));
-    assert!(!result.capabilities.features.event_replay);
+    assert!(result.capabilities.methods.contains(&"terminal/view"));
+    assert!(result.capabilities.methods.contains(&"event/list"));
+    assert!(!result.capabilities.methods.contains(&"observer/inspect"));
+    assert!(result.capabilities.features.event_replay);
     assert!(!result.capabilities.features.mcp);
     assert!(!result.capabilities.features.snapshots);
 }
@@ -194,31 +190,29 @@ fn primary_capabilities_include_config_control_surface() {
     }
 }
 
-/// Verifies pending observer capabilities exclude session and terminal view methods.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
+/// Verifies attached observer capabilities expose read-only view and event
+/// methods while excluding primary-only session and MCP authority.
 #[test]
-fn pending_observer_capabilities_exclude_session_and_terminal_view_methods() {
-    let capabilities = Capabilities::pending_observer();
+fn observer_capabilities_are_read_only_and_view_enabled() {
+    let capabilities = Capabilities::observer();
 
-    for method in ["session/get", "terminal/view", "event/list", "mcp/list"] {
+    for method in ["session/get", "mcp/list", "observer/inspect"] {
         assert!(
             !capabilities.methods.contains(&method),
-            "{method} must not be exposed to pending observers"
+            "{method} must not be exposed to observers"
         );
     }
     for method in [
         "control/initialize",
-        "observer/inspect",
         "client/detach",
         "control/cancel",
         "control/shutdown",
+        "terminal/view",
+        "event/list",
     ] {
         assert!(
             capabilities.methods.contains(&method),
-            "{method} missing from pending observer capabilities"
+            "{method} missing from observer capabilities"
         );
     }
 }
@@ -229,9 +223,11 @@ fn pending_observer_capabilities_exclude_session_and_terminal_view_methods() {
 /// another client id must remain forbidden so the helper cannot become remote
 /// client-administration authority.
 #[test]
-fn pending_observer_self_detach_cannot_target_another_client() {
+fn observer_self_detach_cannot_target_another_client() {
     let (mut session, primary) = test_session();
-    let (observer, _request) = session.request_observer("pairing-check");
+    let observer = session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
     let own = parse_json_rpc_request(&format!(
         r#"{{"jsonrpc":"2.0","id":1,"method":"client/detach","params":{{"client_id":"{}","idempotency_key":"self-detach"}}}}"#,
         observer
@@ -254,10 +250,6 @@ fn pending_observer_self_detach_cannot_target_another_client() {
 /// requests that will be accepted before method-specific parameter checks.
 #[test]
 fn restricted_role_capabilities_match_authorization_method_sets() {
-    assert_eq!(
-        Capabilities::pending_observer().methods,
-        PENDING_OBSERVER_CONTROL_METHODS
-    );
     assert_eq!(Capabilities::observer().methods, OBSERVER_CONTROL_METHODS);
     assert_eq!(Capabilities::agent().methods, AGENT_CONTROL_METHODS);
     assert_eq!(

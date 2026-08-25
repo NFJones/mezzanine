@@ -229,9 +229,6 @@ pub(crate) fn runtime_display_choice_label(command_name: &str) -> String {
     match command_name {
         "select-window" | "select-group" | "select-pane" | "select-layout" => "select",
         "detach-client" => "detach",
-        "approve-observer" => "approve",
-        "reject-observer" => "reject",
-        "revoke-observer" => "revoke",
         "paste-buffer" | "paste-clipboard" => "paste",
         "delete-buffer" => "delete",
         "copy-selection" => "copy",
@@ -243,8 +240,8 @@ pub(crate) fn runtime_display_choice_label(command_name: &str) -> String {
 /// Returns the themed visual category for one command name.
 pub(crate) fn runtime_display_choice_kind(command_name: &str) -> OverlaySelectionKind {
     match command_name {
-        "delete-buffer" | "detach-client" | "reject-observer" | "revoke-observer" | "kill-pane"
-        | "kill-window" | "kill-group" | "kill-session" => OverlaySelectionKind::Danger,
+        "delete-buffer" | "detach-client" | "kill-pane" | "kill-window" | "kill-group"
+        | "kill-session" => OverlaySelectionKind::Danger,
         "paste-buffer" | "paste-clipboard" | "copy-selection" => OverlaySelectionKind::Secondary,
         _ => OverlaySelectionKind::Primary,
     }

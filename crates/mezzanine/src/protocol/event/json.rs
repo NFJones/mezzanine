@@ -10,8 +10,6 @@ pub fn event_method_name(kind: EventKind) -> &'static str {
     match kind {
         EventKind::ClientAttached => "event/client_attached",
         EventKind::ClientDetached => "event/client_detached",
-        EventKind::ObserverRequested => "event/observer_requested",
-        EventKind::ObserverDecided => "event/observer_decided",
         EventKind::WindowChanged => "event/window_changed",
         EventKind::PaneChanged => "event/pane_changed",
         EventKind::AgentStatus => "event/agent_status",
@@ -30,8 +28,6 @@ pub fn event_type_name(kind: EventKind) -> &'static str {
     match kind {
         EventKind::ClientAttached => "client_attached",
         EventKind::ClientDetached => "client_detached",
-        EventKind::ObserverRequested => "observer_requested",
-        EventKind::ObserverDecided => "observer_decided",
         EventKind::WindowChanged => "window_changed",
         EventKind::PaneChanged => "pane_changed",
         EventKind::AgentStatus => "agent_status",

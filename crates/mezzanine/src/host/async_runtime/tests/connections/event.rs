@@ -369,13 +369,13 @@ async fn unix_event_binding_is_peer_bound_and_single_use() {
     let ((), _exit) = tokio::join!(client, actor.run());
 }
 
-/// Verifies a bound Unix observer stream starts at its approval marker.
+/// Verifies a bound Unix observer stream starts at its attachment marker.
 ///
-/// The auxiliary socket must not replay pre-approval session-view events. Its
+/// The auxiliary socket must not replay pre-attachment session-view events. Its
 /// first delivered event is selected through exact-client authorization after
 /// consuming the one-time control-issued binding credential.
 #[tokio::test(flavor = "current_thread")]
-async fn bound_unix_observer_stream_excludes_preapproval_events() {
+async fn bound_unix_observer_stream_excludes_preattachment_events() {
     use crate::control::{decode_control_frame, encode_control_body};
     use crate::test_support::runtime::{RuntimeServiceFixture, SessionFixture};
     use mez_mux::session::ClientRole;
@@ -383,23 +383,22 @@ async fn bound_unix_observer_stream_excludes_preapproval_events() {
     use tokio::net::UnixStream;
 
     let mut session = SessionFixture::new().build();
-    let primary = session.attach_primary("primary", true).unwrap();
-    let (observer_client, observer_request) = session.request_observer("observer");
+    session.attach_primary("primary", true).unwrap();
     let before_client = session
         .attach_control_client("before", ClientRole::Automation, false)
         .unwrap();
     let after_client = session
         .attach_control_client("after", ClientRole::Automation, false)
         .unwrap();
+    let observer_client = session
+        .attach_observer_with_terminal("observer", None, 2)
+        .unwrap();
     let mut service = RuntimeServiceFixture::new().build_with_session(session);
     service
-        .apply_client_disconnect_event(&before_client, "before-approval")
+        .apply_client_disconnect_event(&before_client, "before-attachment")
         .unwrap();
     service
-        .approve_observer_with_runtime_cutoff(&primary, observer_request.as_str())
-        .unwrap();
-    service
-        .apply_client_disconnect_event(&after_client, "after-approval")
+        .apply_client_disconnect_event(&after_client, "after-attachment")
         .unwrap();
     let peer_uid = current_effective_uid();
     let (token, _expires_at) = service.mint_unix_event_binding(observer_client, peer_uid);
@@ -426,8 +425,8 @@ async fn bound_unix_observer_stream_excludes_preapproval_events() {
         let read = client_stream.read(&mut output).await.unwrap();
         output.truncate(read);
         let (body, _) = decode_control_frame(&output, 4096).unwrap();
-        assert!(body.contains("after-approval"), "{body}");
-        assert!(!body.contains("before-approval"), "{body}");
+        assert!(body.contains("after-attachment"), "{body}");
+        assert!(!body.contains("before-attachment"), "{body}");
     };
     let server = async {
         let delivered = serve_bound_async_runtime_event_connection(
@@ -461,15 +460,14 @@ async fn bound_unix_observer_stream_stops_after_revocation() {
     use tokio::sync::oneshot;
 
     let mut session = SessionFixture::new().build();
-    let primary = session.attach_primary("primary", true).unwrap();
-    let (observer_client, observer_request) = session.request_observer("observer");
+    session.attach_primary("primary", true).unwrap();
     let first_event_client = session
         .attach_control_client("first", ClientRole::Automation, false)
         .unwrap();
-    let mut service = RuntimeServiceFixture::new().build_with_session(session);
-    service
-        .approve_observer_with_runtime_cutoff(&primary, observer_request.as_str())
+    let observer_client = session
+        .attach_observer_with_terminal("observer", None, 1)
         .unwrap();
+    let mut service = RuntimeServiceFixture::new().build_with_session(session);
     service
         .apply_client_disconnect_event(&first_event_client, "first-event")
         .unwrap();

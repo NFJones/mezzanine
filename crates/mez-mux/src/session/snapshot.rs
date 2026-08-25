@@ -178,7 +178,7 @@ impl Session {
             synchronized_window_ids: BTreeSet::new(),
             pane_state_metadata,
             clients: Vec::new(),
-            observers: Vec::new(),
+            observer_attachments: Vec::new(),
             landing_navigation,
             layout_owner_client_id: None,
             layout_revision: 0,

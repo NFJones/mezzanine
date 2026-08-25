@@ -144,13 +144,13 @@ fn attach_uses_selected_control_socket() {
     let _ = fs::remove_dir_all(home);
 }
 
-/// Verifies attach observer requests pending observer without session data.
+/// Verifies observer attach reports immediate session attachment.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn attach_observer_requests_pending_observer_without_session_data() {
+fn attach_observer_reports_immediate_session_attachment() {
     let (env, home) = test_env("attach-observer-control");
     fs::create_dir_all(&home).unwrap();
     let root = home.join("runtime");
@@ -169,7 +169,7 @@ fn attach_observer_requests_pending_observer_without_session_data() {
     let server = spawn_noninteractive_attach_stub_server(
         listener,
         None,
-        r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"pending_observer","approval_pending":true,"session":null}}"#,
+        r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"observer","session":{"id":"$1"},"client":{"id":"c2","role":"observer","state":"attached"}}}"#,
         None,
     );
     let mut stdout = Vec::new();
@@ -192,9 +192,11 @@ fn attach_observer_requests_pending_observer_without_session_data() {
     server.join().unwrap();
 
     let output = String::from_utf8(stdout).unwrap();
-    assert!(output.contains(r#""granted_role":"pending_observer""#));
-    assert!(output.contains(r#""approval_pending":true"#));
-    assert!(output.contains(r#""session":null"#));
+    assert!(output.contains(r#""granted_role":"observer""#));
+    assert!(output.contains(r#""session":{"id":"$1""#));
+    assert!(output.contains(r#""role":"observer""#));
+    assert!(!output.contains("approval_pending"));
+    assert!(!output.contains("observer_request"));
     assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);

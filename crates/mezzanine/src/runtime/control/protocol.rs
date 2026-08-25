@@ -113,7 +113,6 @@ pub(super) fn runtime_optional_timestamp_json(value: Option<u64>) -> String {
 pub(super) fn runtime_client_role_name(role: ClientRole) -> &'static str {
     match role {
         ClientRole::Primary => "primary",
-        ClientRole::PendingObserver => "pending_observer",
         ClientRole::Observer => "observer",
         ClientRole::Agent => "agent",
         ClientRole::Automation => "automation",
@@ -123,7 +122,6 @@ pub(super) fn runtime_client_role_name(role: ClientRole) -> &'static str {
 /// Returns the control JSON name for a requested client role.
 pub(super) fn runtime_client_requested_role_name(role: ClientRole) -> &'static str {
     match role {
-        ClientRole::PendingObserver => "observer",
         ClientRole::Primary => "primary",
         ClientRole::Observer => "observer",
         ClientRole::Agent => "agent",

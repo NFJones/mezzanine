@@ -100,7 +100,9 @@ fn kill_commands_require_force_for_live_targets() {
 #[test]
 fn detach_client_command_honors_target_client() {
     let (mut session, primary) = test_session();
-    let (observer_client, _observer_request) = session.request_observer("observer");
+    let observer_client = session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
 
     execute_command_sequence(
         &mut session,

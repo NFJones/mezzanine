@@ -96,10 +96,10 @@ fn terminal_command_category(name: &str) -> &'static str {
         }
         "help" | "mark-pane-ready" | "refresh-client" | "show-messages" | "show-metrics"
         | "show-iroh-status" => "diagnostics and help",
-        "approve-observer" | "attach-session" | "choose-observer" | "detach-client" | "exit"
-        | "kill-session" | "list-clients" | "list-observers" | "list-sessions"
-        | "reject-observer" | "rename-session" | "load-layout" | "revoke-observer"
-        | "save-layout" => "sessions and clients",
+        "attach-session" | "detach-client" | "exit" | "kill-session" | "list-clients"
+        | "list-sessions" | "rename-session" | "load-layout" | "save-layout" => {
+            "sessions and clients"
+        }
         _ => "windows, groups, and panes",
     }
 }
@@ -109,14 +109,12 @@ fn terminal_command_description(name: &str) -> &'static str {
     match name {
         "add-options" => "show the live configuration option reference.",
         "agent-shell" => "toggle the pane-local agent shell.",
-        "approve-observer" => "approve a pending observer.",
         "attach-session" => "attach to an existing session.",
         "bind-key" => "add or replace a live key binding.",
         "break-pane" => "move a pane into a new window.",
         "capture-pane" => "capture visible or historical pane text.",
         "choose-buffer" => "pick the active copy/paste buffer interactively.",
         "choose-group" => "pick a window group interactively.",
-        "choose-observer" => "select observer actions interactively.",
         "clear-history" => "clear pane history.",
         "copy-mode" => "enter pane-local cursor selection mode.",
         "copy-selection" => "copy the active copy-mode selection to the active buffer.",
@@ -136,11 +134,10 @@ fn terminal_command_description(name: &str) -> &'static str {
         "last-pane" => "focus the previously active pane.",
         "last-window" => "focus the previously active window.",
         "list-buffers" => "show paste buffers.",
-        "list-clients" => "show attached clients and pending observers.",
+        "list-clients" => "show attached clients, including observers.",
         "list-groups" => "show window group identities, names, and active state.",
         "list-key-presets" => "show built-in and configured key presets.",
         "list-keys" => "show effective key bindings.",
-        "list-observers" => "show observer requests and approved observers.",
         "list-panes" => "show pane identities, active state, size, pid, and agent data.",
         "list-sessions" => "show resumable sessions.",
         "list-themes" => "show built-in and configured UI themes.",
@@ -160,14 +157,12 @@ fn terminal_command_description(name: &str) -> &'static str {
         "previous-window" => "focus the previous window.",
         "rebalance-window" => "reapply the active window layout.",
         "refresh-client" => "redraw the client.",
-        "reject-observer" => "reject a pending observer.",
         "rename-group" => "rename a window group.",
         "rename-pane" => "rename the active or target pane.",
         "rename-session" => "rename the current or target session.",
         "rename-window" => "rename a window.",
         "resize-pane" => "resize a pane.",
         "load-layout" => "resume a saved session or snapshot.",
-        "revoke-observer" => "revoke an approved observer.",
         "rotate-pane" => "rotate panes in the active window.",
         "save-buffer" => "save a paste buffer.",
         "search-history" => "search pane history.",
@@ -593,7 +588,6 @@ pub(super) fn list_default_key_bindings() -> String {
             ("#", "list-buffers"),
             ("=", "choose-buffer"),
             ("-", "delete-buffer"),
-            ("O", "choose-observer"),
             ("~", "show-messages"),
         ]
         .into_iter()

@@ -729,11 +729,6 @@ pub enum MuxAction {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     DeleteMostRecentPasteBuffer,
-    /// Represents the Choose Pending Observers case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    ChoosePendingObservers,
     /// Represents the Show Messages case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -991,7 +986,6 @@ pub fn classify_prefix_binding(chord: KeyChord, bindings: &KeyBindings) -> Optio
             PasteBufferTarget::ChooseInteractively,
         )),
         KeyCode::Char('-') => Some(MuxAction::DeleteMostRecentPasteBuffer),
-        KeyCode::Char('O') => Some(MuxAction::ChoosePendingObservers),
         KeyCode::Char('~') => Some(MuxAction::ShowMessages),
         _ => None,
     }

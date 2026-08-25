@@ -262,54 +262,13 @@ fn read_only_state_requests_validate_and_apply_targets() {
     );
 }
 
-/// Verifies that `observer/list` applies the spec-defined state filter in
-/// addition to SessionTarget validation. Without this, callers asking for one
-/// observer decision state receive unrelated pending or decided requests.
-#[test]
-fn observer_list_filters_by_requested_state() {
-    let (mut session, primary) = test_session();
-    session.request_observer("pending");
-    let (_rejected_client, rejected_request) = session.request_observer("rejected");
-    session
-        .reject_observer_target_with_reason(&primary, rejected_request.as_str(), Some("no".into()))
-        .unwrap();
-
-    let rejected = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":1,"method":"observer/list","params":{"target":{"default":true},"state":"rejected"}}"#,
-        &mut session,
-        &primary,
-    );
-    let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
-    let observers = rejected["result"]["observers"].as_array().unwrap();
-    assert_eq!(observers.len(), 1, "{rejected}");
-    assert_eq!(observers[0]["state"], "rejected");
-
-    let all = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":2,"method":"observer/list","params":{"state":null}}"#,
-        &mut session,
-        &primary,
-    );
-    let all: serde_json::Value = serde_json::from_str(&all).unwrap();
-    assert_eq!(all["result"]["observers"].as_array().unwrap().len(), 2);
-
-    let invalid = dispatch_control_request(
-        r#"{"jsonrpc":"2.0","id":3,"method":"observer/list","params":{"state":"missing"}}"#,
-        &mut session,
-        &primary,
-    );
-    assert!(
-        invalid.contains(r#""mezzanine_code":"invalid_params""#),
-        "{invalid}"
-    );
-}
-
 /// Verifies the unbound v1 attachment method is absent from protocol v2 and
-/// cannot mutate client or observer membership.
+/// cannot mutate client membership.
 #[test]
 fn session_attach_is_removed_without_mutation() {
     let (mut session, primary) = test_session();
     let clients_before = session.clients().len();
-    let observers_before = session.observers().len();
+    let observers_before = session.observer_attachments().len();
     let response = dispatch_control_request(
         r#"{"jsonrpc":"2.0","id":1,"method":"session/attach","params":{"target":{"default":true},"role":"observer","client":{"name":"watch","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"idempotency_key":"removed"}}"#,
         &mut session,
@@ -320,13 +279,13 @@ fn session_attach_is_removed_without_mutation() {
         "{response}"
     );
     assert_eq!(session.clients().len(), clients_before);
-    assert_eq!(session.observers().len(), observers_before);
+    assert_eq!(session.observer_attachments().len(), observers_before);
 }
 
-/// Verifies pending observers cannot invoke the removed unbound attachment
-/// method after initialize has already created their exact client and request.
+/// Verifies an immediately attached observer cannot allocate another client
+/// through the removed unbound attachment method.
 #[test]
-fn pending_observer_cannot_use_removed_session_attach() {
+fn observer_cannot_use_removed_session_attach() {
     let (mut session, _primary) = test_session();
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
@@ -349,7 +308,7 @@ fn pending_observer_cannot_use_removed_session_attach() {
     let (attach_body, _) = decode_control_frame(&output[first_len..], 4096).unwrap();
     let initialized_observer_client = connection.caller_client_id().unwrap().clone();
 
-    assert!(init_body.contains(r#""granted_role":"pending_observer""#));
+    assert!(init_body.contains(r#""granted_role":"observer""#));
     assert!(
         attach_body.contains(r#""mezzanine_code":"forbidden""#),
         "{attach_body}"
@@ -357,57 +316,10 @@ fn pending_observer_cannot_use_removed_session_attach() {
     assert!(!attach_body.contains(r#""windows""#));
     assert!(!attach_body.contains(r#""panes""#));
     assert_eq!(session.clients().len(), 2);
-    assert_eq!(session.observers().len(), 1);
     assert_eq!(
-        session.observers()[0].client_id,
+        session.observer_attachments()[0].client_id,
         initialized_observer_client
     );
-}
-
-/// Verifies an approved observer remains bound to its initialized client and
-/// cannot allocate another client through the removed attachment method.
-#[test]
-fn approved_observer_cannot_use_removed_session_attach() {
-    let (mut session, primary) = test_session();
-    let mut connection = ControlConnectionState::new(true, true);
-    let mut cache = ControlIdempotencyCache::default();
-    let initialize = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"observer","requested_version":2,"requested_role":"observer","client":{"name":"observer","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
-    );
-    handle_control_frames_for_connection(
-        &initialize,
-        4096,
-        &mut session,
-        &mut connection,
-        &mut cache,
-    )
-    .unwrap();
-    let observer_client = connection.caller_client_id().unwrap().clone();
-    let observer_request = session.observers()[0].id.clone();
-    session
-        .approve_observer(&primary, &observer_request)
-        .unwrap();
-
-    let attach = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":2,"method":"session/attach","params":{"target":{"default":true},"role":"observer","client":{"name":"observer","interactive":true,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}},"idempotency_key":"approved-observer-attach"}}"#,
-    );
-    let (output, _) = handle_control_frames_for_connection(
-        &attach,
-        4096,
-        &mut session,
-        &mut connection,
-        &mut cache,
-    )
-    .unwrap();
-    let (attach_body, _) = decode_control_frame(&output, 4096).unwrap();
-
-    assert!(
-        attach_body.contains(r#""mezzanine_code":"forbidden""#),
-        "{attach_body}"
-    );
-    assert_eq!(session.clients().len(), 2);
-    assert_eq!(session.observers().len(), 1);
-    assert_eq!(session.observers()[0].client_id, observer_client);
 }
 
 /// Verifies dispatches mutating window and pane methods.

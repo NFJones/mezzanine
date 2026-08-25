@@ -158,34 +158,6 @@ impl AuditRecord {
         record.sanitized()
     }
 
-    /// Runs the observer decision operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn observer_decision(
-        session_id: impl Into<String>,
-        actor: AuditActor,
-        target_kind: impl Into<String>,
-        target_id: impl Into<String>,
-        decision: impl Into<String>,
-        outcome: impl Into<String>,
-    ) -> Self {
-        let target_kind = target_kind.into();
-        let target_id = target_id.into();
-        let decision = decision.into();
-        let mut record = Self::new(session_id, actor, "observer", "decision")
-            .with_metadata("target_kind", target_kind.clone())
-            .with_metadata("decision", decision.clone());
-        record = match target_kind.as_str() {
-            "client" => record.with_metadata("client_id", target_id),
-            _ => record.with_metadata("observer_request_id", target_id),
-        };
-        record.approval_state = decision;
-        record.outcome = outcome.into();
-        record.sanitized()
-    }
-
     /// Runs the auth change operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

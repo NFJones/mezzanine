@@ -86,98 +86,6 @@ pub(super) fn runtime_display_panes_display(service: &RuntimeSessionService) -> 
     ))
 }
 
-/// Runs the runtime list observers display operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_list_observers_display(service: &RuntimeSessionService) -> String {
-    let observers = service.session.observers();
-    if observers.is_empty() {
-        return "observers=0 pending=0 chooser=empty source=runtime\nNo observer requests or approved observers.".to_string();
-    }
-    let pending = observers
-        .iter()
-        .filter(|observer| observer.state == mez_mux::session::ObserverDecisionState::Pending)
-        .count();
-    let lines = observers
-        .iter()
-        .map(|observer| {
-            format!(
-                "observer={}:client={}:state={}:requested_at={}:decided_at={}:decided_by={}:visible_from={}:visible_from_time={}:descriptor={}:interactive={}:terminal={}:reason={}:actions={}:commands={}",
-                observer.id,
-                observer.client_id,
-                runtime_observer_state_name(observer.state),
-                runtime_optional_unix_seconds(observer.requested_at_unix_seconds),
-                runtime_optional_unix_seconds(observer.decided_at_unix_seconds),
-                observer
-                    .decided_by_client_id
-                    .as_deref()
-                    .map(json_escape)
-                    .unwrap_or_else(|| "none".to_string()),
-                observer
-                    .visible_from_event_id
-                    .map(|id| id.to_string())
-                    .unwrap_or_else(|| "none".to_string()),
-                runtime_optional_unix_seconds(observer.visible_from_unix_seconds),
-                json_escape(&observer.descriptor_name),
-                observer.descriptor_interactive,
-                runtime_observer_terminal_display(observer),
-                observer
-                    .reason
-                    .as_deref()
-                    .map(json_escape)
-                    .unwrap_or_else(|| "none".to_string()),
-                runtime_observer_actions(observer.state),
-                runtime_observer_action_commands(observer)
-            )
-        })
-        .collect::<Vec<_>>();
-    format!(
-        "observers={} pending={pending} chooser=select-observer-action source=runtime\n{}",
-        observers.len(),
-        lines.join("\n")
-    )
-}
-
-/// Runs the runtime choose observer display operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_choose_observer_display(service: &RuntimeSessionService) -> String {
-    let observers = service.session.observers();
-    if observers.is_empty() {
-        return "observers=0 pending=0 chooser=empty source=runtime".to_string();
-    }
-    let pending = observers
-        .iter()
-        .filter(|observer| observer.state == mez_mux::session::ObserverDecisionState::Pending)
-        .count();
-    let lines = observers
-        .iter()
-        .map(|observer| {
-            format!(
-                "observer={}:client={}:state={}:requested_at={}:terminal={}:descriptor={}:interactive={}:actions={}:commands={}",
-                observer.id,
-                observer.client_id,
-                runtime_observer_state_name(observer.state),
-                runtime_optional_unix_seconds(observer.requested_at_unix_seconds),
-                runtime_observer_terminal_display(observer),
-                json_escape(&observer.descriptor_name),
-                observer.descriptor_interactive,
-                runtime_observer_actions(observer.state),
-                runtime_observer_action_commands(observer)
-            )
-        })
-        .collect::<Vec<_>>();
-    format!(
-        "observers={}:pending={pending}:chooser=select-observer-action:source=runtime\n{}",
-        observers.len(),
-        lines.join("\n")
-    )
-}
-
 /// Runs the runtime choose client display operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -185,41 +93,23 @@ pub(super) fn runtime_choose_observer_display(service: &RuntimeSessionService) -
 /// on duplicated control-flow logic.
 pub(super) fn runtime_choose_client_display(service: &RuntimeSessionService) -> String {
     let clients = service.session.clients();
-    let observers = service.session.observers();
     if clients.is_empty() {
-        return format!(
-            "clients=0 observers={} chooser=empty source=runtime",
-            observers.len()
-        );
+        return "clients=0 observers=0 chooser=empty source=runtime".to_string();
     }
-    let observer_context = observers
+    let observer_count = clients
         .iter()
-        .map(|observer| {
-            (
-                observer.client_id.to_string(),
-                format!(
-                    "{}:{}",
-                    observer.id,
-                    runtime_observer_state_name(observer.state)
-                ),
-            )
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .filter(|client| client.role == mez_mux::session::ClientRole::Observer)
+        .count();
     let lines = clients
         .iter()
         .map(|client| {
-            let observer = observer_context
-                .get(&client.id.to_string())
-                .cloned()
-                .unwrap_or_else(|| "none".to_string());
             format!(
-                "client={}:name={}:role={}:state={}:interactive={}:observer={}:action=detach-client -t {}",
+                "client={}:name={}:role={}:state={}:interactive={}:action=detach-client -t {}",
                 client.id,
                 json_escape(&client.name),
                 runtime_client_role_name(client.role),
                 runtime_client_state_name(client.state),
                 client.interactive,
-                observer,
                 client.id
             )
         })
@@ -227,7 +117,7 @@ pub(super) fn runtime_choose_client_display(service: &RuntimeSessionService) -> 
     format!(
         "clients={}:observers={}:chooser=detach-client:source=runtime\n{}",
         clients.len(),
-        observers.len(),
+        observer_count,
         lines.join("\n")
     )
 }
@@ -245,13 +135,8 @@ pub(super) fn runtime_list_clients_display(service: &RuntimeSessionService) -> S
     let lines = clients
         .iter()
         .map(|client| {
-            let observer = service
-                .session
-                .observers()
-                .iter()
-                .find(|observer| observer.client_id == client.id);
             format!(
-                "client={}:name={}:role={}:state={}:interactive={}:attached_at={}:last_seen_at={}:terminal={}:approval={}",
+                "client={}:name={}:role={}:state={}:interactive={}:attached_at={}:last_seen_at={}:terminal={}",
                 client.id,
                 json_escape(&client.name),
                 runtime_client_role_name(client.role),
@@ -259,15 +144,18 @@ pub(super) fn runtime_list_clients_display(service: &RuntimeSessionService) -> S
                 client.interactive,
                 runtime_optional_unix_seconds(client_attached_at_for_display(service, client)),
                 runtime_optional_unix_seconds(client_last_seen_at_for_display(service, client)),
-                runtime_client_terminal_display(service, client, observer),
-                runtime_client_approval_display(observer)
+                runtime_client_terminal_display(service, client)
             )
         })
         .collect::<Vec<_>>();
+    let observer_count = clients
+        .iter()
+        .filter(|client| client.role == mez_mux::session::ClientRole::Observer)
+        .count();
     format!(
         "clients={}:observers={}:source=runtime\n{}",
         clients.len(),
-        service.session.observers().len(),
+        observer_count,
         lines.join("\n")
     )
 }
@@ -427,7 +315,6 @@ fn runtime_optional_unix_seconds(value: Option<u64>) -> String {
 fn runtime_client_terminal_display(
     service: &RuntimeSessionService,
     client: &mez_mux::session::Client,
-    observer: Option<&mez_mux::session::ObserverRequest>,
 ) -> String {
     if service
         .session
@@ -449,52 +336,7 @@ fn runtime_client_terminal_display(
             json_escape(&terminal.term)
         );
     }
-    if let Some(terminal) = observer.and_then(|observer| observer.descriptor_terminal.as_ref()) {
-        return format!(
-            "{}x{}:term={}",
-            terminal.columns,
-            terminal.rows,
-            json_escape(&terminal.term)
-        );
-    }
     "none".to_string()
-}
-
-/// Runs the runtime client approval display operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_client_approval_display(observer: Option<&mez_mux::session::ObserverRequest>) -> String {
-    observer
-        .map(|observer| {
-            format!(
-                "{}:{}",
-                observer.id,
-                runtime_observer_state_name(observer.state)
-            )
-        })
-        .unwrap_or_else(|| "none".to_string())
-}
-
-/// Runs the runtime observer terminal display operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_observer_terminal_display(observer: &mez_mux::session::ObserverRequest) -> String {
-    observer
-        .descriptor_terminal
-        .as_ref()
-        .map(|terminal| {
-            format!(
-                "{}x{}:term={}",
-                terminal.columns,
-                terminal.rows,
-                json_escape(&terminal.term)
-            )
-        })
-        .unwrap_or_else(|| "none".to_string())
 }
 
 /// Runs the runtime client role name operation for this subsystem.
@@ -505,7 +347,6 @@ fn runtime_observer_terminal_display(observer: &mez_mux::session::ObserverReques
 fn runtime_client_role_name(role: mez_mux::session::ClientRole) -> &'static str {
     match role {
         mez_mux::session::ClientRole::Primary => "primary",
-        mez_mux::session::ClientRole::PendingObserver => "pending_observer",
         mez_mux::session::ClientRole::Observer => "observer",
         mez_mux::session::ClientRole::Agent => "agent",
         mez_mux::session::ClientRole::Automation => "automation",
@@ -524,53 +365,5 @@ fn runtime_client_state_name(state: mez_mux::session::ClientState) -> &'static s
         mez_mux::session::ClientState::Detached => "detached",
         mez_mux::session::ClientState::Revoked => "revoked",
         mez_mux::session::ClientState::Failed => "failed",
-    }
-}
-
-/// Runs the runtime observer state name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_observer_state_name(state: mez_mux::session::ObserverDecisionState) -> &'static str {
-    match state {
-        mez_mux::session::ObserverDecisionState::Pending => "pending",
-        mez_mux::session::ObserverDecisionState::Approved => "approved",
-        mez_mux::session::ObserverDecisionState::Rejected => "rejected",
-        mez_mux::session::ObserverDecisionState::Revoked => "revoked",
-    }
-}
-
-/// Runs the runtime observer actions operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_observer_actions(state: mez_mux::session::ObserverDecisionState) -> &'static str {
-    match state {
-        mez_mux::session::ObserverDecisionState::Pending => "inspect,approve,reject",
-        mez_mux::session::ObserverDecisionState::Approved => "inspect,revoke,detach",
-        mez_mux::session::ObserverDecisionState::Rejected => "inspect",
-        mez_mux::session::ObserverDecisionState::Revoked => "inspect",
-    }
-}
-
-/// Runs the runtime observer action commands operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_observer_action_commands(observer: &mez_mux::session::ObserverRequest) -> String {
-    match observer.state {
-        mez_mux::session::ObserverDecisionState::Pending => format!(
-            "approve-observer -t {}|reject-observer -t {}",
-            observer.id, observer.id
-        ),
-        mez_mux::session::ObserverDecisionState::Approved => format!(
-            "revoke-observer -t {}|detach-client -t {}",
-            observer.client_id, observer.client_id
-        ),
-        mez_mux::session::ObserverDecisionState::Rejected
-        | mez_mux::session::ObserverDecisionState::Revoked => "none".to_string(),
     }
 }

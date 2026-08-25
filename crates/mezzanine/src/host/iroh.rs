@@ -1022,8 +1022,6 @@ fn handle_host_only_initialize_with_audit(
         "client": null,
         "granted_role": "observer",
         "capabilities": { "methods": methods, "features": { "host_only": true } },
-        "approval_pending": false,
-        "observer_request": null,
         "principal_id": principal.trust_record_id,
     });
     if let Some(credential) = issued_credential {
@@ -1625,7 +1623,7 @@ mod tests {
             .trust
             .create_host_invitation(
                 host.endpoint_id(),
-                RemoteRoleCeiling::Observer,
+                RemoteRoleCeiling::Primary,
                 RemoteHostRoutingAuthority {
                     session_create: true,
                     session_kill: false,
@@ -1941,7 +1939,7 @@ mod tests {
     ) -> Value {
         let mut client_metadata = json!({
             "name": "test-client",
-            "interactive": false,
+            "interactive": true,
             "terminal": {"columns": 80, "rows": 24, "term": "xterm-256color"}
         });
         if let Some(session_name) = session_name {
@@ -1950,7 +1948,7 @@ mod tests {
         let mut params = json!({
             "client_name": "test-client",
             "requested_version": 3,
-            "requested_role": "observer",
+            "requested_role": "primary",
             "session_intent": intent,
             "client": client_metadata,
             "authentication": {
@@ -1995,12 +1993,12 @@ mod tests {
             "params": {
                 "client_name": "test-client",
                 "requested_version": 3,
-                "requested_role": "observer",
+                "requested_role": "primary",
                 "session_intent": "attach",
                 "session_target": {"session_id": session_id},
                 "client": {
                     "name": "test-client",
-                    "interactive": false,
+                    "interactive": true,
                     "terminal": {"columns": 80, "rows": 24, "term": "xterm-256color"}
                 },
                 "authentication": {

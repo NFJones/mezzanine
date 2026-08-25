@@ -177,8 +177,8 @@ the local host administrator, method, outcome, lease identity, and generation
 without request reasons, credentials, or other secret-bearing fields.
 
 The result contains `selected_version`, a secret-free `server` identity, the
-granted role, negotiated `capabilities`, `approval_pending`, and
-`observer_request`; it includes `session` except for a pending observer.
+granted role, negotiated `capabilities`, the attached `client`, and `session`
+state. Observer initialization attaches a read-only client immediately.
 Capabilities list available methods, event types, roles, transports, limits,
 and feature flags. Treat this advertised set—not this page—as the available
 surface for the connection.
@@ -267,9 +267,8 @@ the [baseline method table in `SPEC.md`](../../../SPEC.md#13-control-endpoint).
 | Namespace | Methods | Access and purpose |
 | --- | --- | --- |
 | Control | `control/initialize`, `control/shutdown`, `control/cancel` | Negotiate a connection, close it, or cancel an owned request. Shutdown is naturally idempotent. |
-| Session | `session/list`, `session/get`, `session/attach`, `session/rename`, `session/kill` | List/get sessions (RO), attach as primary/observer, rename a session, or terminate it; termination requires `force` while live panes remain. Observer attach creates pending metadata only. |
+| Session | `session/list`, `session/get`, `session/attach`, `session/rename`, `session/kill` | Historical v1 session operations retained only for migration reference. |
 | Client | `client/list`, `client/detach`, `client/select_primary` | Inspect clients, detach a client, or atomically transfer primary ownership. |
-| Observer | `observer/list`, `observer/inspect`, `observer/approve`, `observer/reject`, `observer/revoke` | Inspect and primary-manage observer requests. Pending/approved observers can inspect only their own request-local status. |
 | Window | `window/list`, `window/create`, `window/rename`, `window/select`, `window/close`, `window/layout`, `window/rebalance` | Inspect, create, name, select, close, or arrange windows. List is RO; rename is naturally idempotent when unchanged. Layout and rebalance are primary-only presentation mutations. |
 | Pane | `pane/list`, `pane/create`, `pane/select`, `pane/resize`, `pane/move`, `pane/swap`, `pane/break`, `pane/join`, `pane/close`, `pane/rename`, `pane/zoom`, `pane/input-sync`, `pane/attention`, `pane/status`, `pane/notice`, `pane/capture` | Inspect panes, mutate layout and presentation, control synchronized input, completion attention, source-owned status, or bounded notices, or capture pane content. List is RO; capture is RO when policy permits. Status and notices are available to primary and automation clients; rename, zoom, and input synchronization are primary-only. |
 | Buffer | `buffer/list`, `buffer/create`, `buffer/read`, `buffer/delete` | Primary-only bounded internal paste-buffer inspection and mutation. List/read are RO; create requires explicit replacement for existing names. |

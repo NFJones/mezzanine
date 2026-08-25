@@ -4,12 +4,12 @@
 //! control-client role restrictions, and detach semantics.
 
 use crate::{MuxError as MezError, MuxErrorKind, Result};
-use mez_core::{ClientId, ObserverRequestId};
+use mez_core::ClientId;
 
 use super::time::current_unix_seconds;
 use super::types::{
     Client, ClientRole, ClientState, ClientTerminalDescriptor, MAX_ATTACHED_PRIMARY_CLIENTS,
-    MAX_RETAINED_DETACHED_CLIENTS, ObserverDecisionState, ObserverRequest, PrimaryLifecycleEdge,
+    MAX_RETAINED_DETACHED_CLIENTS, ObserverAttachment, PrimaryLifecycleEdge,
     PrimaryMembershipTransition, Session, SessionState,
 };
 
@@ -196,56 +196,48 @@ impl Session {
         })
     }
 
-    /// Runs the request observer operation for this subsystem.
+    /// Attaches one read-only observer to the current exact layout-owner primary.
     ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn request_observer(&mut self, name: impl Into<String>) -> (ClientId, ObserverRequestId) {
-        self.request_observer_with_terminal(name, None)
-    }
-
-    /// Runs the request observer with terminal operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn request_observer_with_terminal(
+    /// Validation and source-navigation capture complete before any identifier
+    /// allocation or session mutation, so a missing or stale layout owner leaves
+    /// no client, observer, or event residue. The supplied event id is the first
+    /// event visible to the attached observer.
+    pub fn attach_observer_with_terminal(
         &mut self,
         name: impl Into<String>,
         terminal: Option<ClientTerminalDescriptor>,
-    ) -> (ClientId, ObserverRequestId) {
+        visible_from_event_id: u64,
+    ) -> Result<ClientId> {
+        let source_client_id = self.layout_owner_client_id.clone().ok_or_else(|| {
+            MezError::conflict("observer attachment requires an attached layout-owner primary")
+        })?;
+        self.require_primary(&source_client_id)?;
+        if let Some(terminal) = terminal.as_ref() {
+            validate_client_terminal_descriptor(terminal)?;
+        }
+        let navigation = self.navigation_from_primary_source(&source_client_id)?;
+
         let name = name.into();
         let client_id = self.ids.client();
-        let observer_id = self.ids.observer_request();
+        let attached_at = current_unix_seconds();
         self.clients.push(Client {
             id: client_id.clone(),
-            name: name.clone(),
-            role: ClientRole::PendingObserver,
-            state: ClientState::Pending,
+            name,
+            role: ClientRole::Observer,
+            state: ClientState::Attached,
             interactive: false,
-            terminal: None,
-            attached_at_unix_seconds: None,
-            last_seen_at_unix_seconds: None,
-            navigation: None,
+            terminal,
+            attached_at_unix_seconds: Some(attached_at),
+            last_seen_at_unix_seconds: Some(attached_at),
+            navigation: Some(navigation),
         });
-        self.observers.push(ObserverRequest {
-            id: observer_id.clone(),
+        self.observer_attachments.push(ObserverAttachment {
             client_id: client_id.clone(),
-            state: ObserverDecisionState::Pending,
-            descriptor_name: name,
-            descriptor_interactive: false,
-            descriptor_terminal: terminal,
-            requested_at_unix_seconds: Some(current_unix_seconds()),
-            decided_at_unix_seconds: None,
-            decided_by_client_id: None,
-            view_source_client_id: None,
-            visible_from_event_id: None,
-            visible_from_unix_seconds: None,
-            reason: None,
+            view_source_client_id: source_client_id,
+            visible_from_event_id,
         });
         self.record_event();
-        (client_id, observer_id)
+        Ok(client_id)
     }
 
     /// Runs the attach control client operation for this subsystem.
@@ -259,10 +251,7 @@ impl Session {
         role: ClientRole,
         interactive: bool,
     ) -> Result<ClientId> {
-        if matches!(
-            role,
-            ClientRole::Primary | ClientRole::PendingObserver | ClientRole::Observer
-        ) {
+        if matches!(role, ClientRole::Primary | ClientRole::Observer) {
             return Err(MezError::invalid_args(
                 "attach_control_client supports only agent and automation roles",
             ));
@@ -282,240 +271,6 @@ impl Session {
         });
         self.record_event();
         Ok(client_id)
-    }
-
-    /// Runs the approve observer operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn approve_observer(
-        &mut self,
-        primary_client_id: &ClientId,
-        observer_id: &ObserverRequestId,
-    ) -> Result<()> {
-        self.approve_observer_target(primary_client_id, observer_id.as_str())
-    }
-
-    /// Runs the approve observer target operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn approve_observer_target(
-        &mut self,
-        primary_client_id: &ClientId,
-        observer_id: &str,
-    ) -> Result<()> {
-        self.approve_observer_target_with_source(primary_client_id, observer_id, primary_client_id)
-    }
-
-    /// Approves an observer with one explicit attached-primary view source.
-    pub fn approve_observer_target_with_source(
-        &mut self,
-        primary_client_id: &ClientId,
-        observer_id: &str,
-        view_source_client_id: &ClientId,
-    ) -> Result<()> {
-        self.require_primary(primary_client_id)?;
-        self.require_primary(view_source_client_id)?;
-        let observer_index =
-            self.require_observer_transition(observer_id, ObserverDecisionState::Approved)?;
-        let visible_from_event_id = self.record_event();
-        self.approve_observer_target_with_visible_from(
-            primary_client_id,
-            observer_index,
-            visible_from_event_id,
-            view_source_client_id,
-        )
-    }
-
-    /// Runs the approve observer target with visible from event id operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn approve_observer_target_with_visible_from_event_id(
-        &mut self,
-        primary_client_id: &ClientId,
-        observer_id: &str,
-        visible_from_event_id: u64,
-    ) -> Result<()> {
-        self.approve_observer_target_with_visible_from_event_id_and_source(
-            primary_client_id,
-            observer_id,
-            visible_from_event_id,
-            primary_client_id,
-        )
-    }
-
-    /// Approves an observer with an explicit visibility marker and view source.
-    pub fn approve_observer_target_with_visible_from_event_id_and_source(
-        &mut self,
-        primary_client_id: &ClientId,
-        observer_id: &str,
-        visible_from_event_id: u64,
-        view_source_client_id: &ClientId,
-    ) -> Result<()> {
-        self.require_primary(primary_client_id)?;
-        self.require_primary(view_source_client_id)?;
-        let observer_index =
-            self.require_observer_transition(observer_id, ObserverDecisionState::Approved)?;
-        self.record_event();
-        self.approve_observer_target_with_visible_from(
-            primary_client_id,
-            observer_index,
-            visible_from_event_id,
-            view_source_client_id,
-        )
-    }
-
-    /// Runs the approve observer target with visible from operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn approve_observer_target_with_visible_from(
-        &mut self,
-        primary_client_id: &ClientId,
-        observer_index: usize,
-        visible_from_event_id: u64,
-        view_source_client_id: &ClientId,
-    ) -> Result<()> {
-        let observer = self
-            .observers
-            .get_mut(observer_index)
-            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "observer not found"))?;
-
-        let decided_at = current_unix_seconds();
-        observer.state = ObserverDecisionState::Approved;
-        observer.decided_at_unix_seconds = Some(decided_at);
-        observer.decided_by_client_id = Some(primary_client_id.to_string());
-        observer.view_source_client_id = Some(view_source_client_id.clone());
-        observer.visible_from_event_id = Some(visible_from_event_id);
-        observer.visible_from_unix_seconds = Some(decided_at);
-
-        if let Some(client) = self
-            .clients
-            .iter_mut()
-            .find(|client| client.id == observer.client_id)
-        {
-            client.role = ClientRole::Observer;
-            client.state = ClientState::Attached;
-            client.attached_at_unix_seconds = Some(decided_at);
-            client.last_seen_at_unix_seconds = Some(decided_at);
-        }
-
-        Ok(())
-    }
-
-    /// Runs the reject observer target operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn reject_observer_target(
-        &mut self,
-        primary_client_id: &ClientId,
-        observer_id: &str,
-    ) -> Result<()> {
-        self.reject_observer_target_with_reason(primary_client_id, observer_id, None)
-    }
-
-    /// Runs the reject observer target with reason operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn reject_observer_target_with_reason(
-        &mut self,
-        primary_client_id: &ClientId,
-        observer_id: &str,
-        reason: Option<String>,
-    ) -> Result<()> {
-        self.require_primary(primary_client_id)?;
-        let observer_index =
-            self.require_observer_transition(observer_id, ObserverDecisionState::Rejected)?;
-        let observer = self
-            .observers
-            .get_mut(observer_index)
-            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "observer not found"))?;
-        let decided_at = current_unix_seconds();
-        let observer_client_id = observer.client_id.clone();
-        observer.state = ObserverDecisionState::Rejected;
-        observer.decided_at_unix_seconds = Some(decided_at);
-        observer.decided_by_client_id = Some(primary_client_id.to_string());
-        observer.reason = reason;
-        if let Some(client) = self
-            .clients
-            .iter_mut()
-            .find(|client| client.id == observer_client_id)
-        {
-            client.state = ClientState::Revoked;
-            client.last_seen_at_unix_seconds = Some(decided_at);
-        }
-        self.record_event();
-        Ok(())
-    }
-
-    /// Runs the revoke observer client operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn revoke_observer_client(
-        &mut self,
-        primary_client_id: &ClientId,
-        client_id: &str,
-    ) -> Result<()> {
-        self.revoke_observer_client_with_reason(primary_client_id, client_id, None)
-    }
-
-    /// Runs the revoke observer client with reason operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn revoke_observer_client_with_reason(
-        &mut self,
-        primary_client_id: &ClientId,
-        client_id: &str,
-        reason: Option<String>,
-    ) -> Result<()> {
-        self.require_primary(primary_client_id)?;
-        let client_index = self
-            .clients
-            .iter()
-            .position(|client| client.id.as_str() == client_id)
-            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "client not found"))?;
-        let observer_index = self
-            .observers
-            .iter()
-            .position(|observer| observer.client_id.as_str() == client_id)
-            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "observer not found"))?;
-        self.require_observer_transition_at(observer_index, ObserverDecisionState::Revoked)?;
-        let client = &self.clients[client_index];
-        if client.role != ClientRole::Observer {
-            return Err(MezError::invalid_args(
-                "revoke-observer requires an approved observer client",
-            ));
-        }
-        if client.state != ClientState::Attached {
-            return Err(MezError::conflict(
-                "revoke-observer requires an attached observer client",
-            ));
-        }
-        let decided_at = current_unix_seconds();
-        let client = &mut self.clients[client_index];
-        client.state = ClientState::Revoked;
-        client.last_seen_at_unix_seconds = Some(decided_at);
-        let observer = &mut self.observers[observer_index];
-        observer.state = ObserverDecisionState::Revoked;
-        observer.decided_at_unix_seconds = Some(decided_at);
-        observer.decided_by_client_id = Some(primary_client_id.to_string());
-        observer.reason = reason;
-        self.record_event();
-        Ok(())
     }
 
     /// Runs the detach client target operation for this subsystem.
@@ -550,12 +305,8 @@ impl Session {
         let detached_at = current_unix_seconds();
         client.state = ClientState::Detached;
         client.last_seen_at_unix_seconds = Some(detached_at);
-        self.terminalize_observer_for_detach(
-            client_id,
-            detached_at,
-            Some(primary_client_id),
-            "client detached by primary",
-        );
+        self.observer_attachments
+            .retain(|observer| observer.client_id.as_str() != client_id);
         self.record_event();
         Ok(())
     }
@@ -577,12 +328,8 @@ impl Session {
         let detached_at = current_unix_seconds();
         client.state = ClientState::Detached;
         client.last_seen_at_unix_seconds = Some(detached_at);
-        self.terminalize_observer_for_detach(
-            client_id.as_str(),
-            detached_at,
-            None,
-            "client detached itself",
-        );
+        self.observer_attachments
+            .retain(|observer| observer.client_id != *client_id);
         self.record_event();
         Ok(())
     }
@@ -619,20 +366,13 @@ impl Session {
         }
         let revoked_at = current_unix_seconds();
         let revoked_observer_client_ids = self
-            .observers
-            .iter_mut()
-            .filter(|observer| {
-                observer.state == ObserverDecisionState::Approved
-                    && observer.view_source_client_id.as_ref() == Some(primary_client_id)
-            })
-            .map(|observer| {
-                observer.state = ObserverDecisionState::Revoked;
-                observer.decided_at_unix_seconds = Some(revoked_at);
-                observer.decided_by_client_id = None;
-                observer.reason = Some("view source detached".to_string());
-                observer.client_id.clone()
-            })
+            .observer_attachments
+            .iter()
+            .filter(|observer| observer.view_source_client_id == *primary_client_id)
+            .map(|observer| observer.client_id.clone())
             .collect::<Vec<_>>();
+        self.observer_attachments
+            .retain(|observer| observer.view_source_client_id != *primary_client_id);
         for observer_client_id in &revoked_observer_client_ids {
             if let Some(client) = self
                 .clients
@@ -693,84 +433,6 @@ impl Session {
         })
     }
 
-    /// Validates one observer decision by request id before any mutation.
-    ///
-    /// Only pending requests may be approved or rejected, and only approved
-    /// requests may be revoked. Terminal decisions return a conflict without
-    /// advancing the event sequence or changing observer/client state.
-    fn require_observer_transition(
-        &self,
-        observer_id: &str,
-        next_state: ObserverDecisionState,
-    ) -> Result<usize> {
-        let observer_index = self
-            .observers
-            .iter()
-            .position(|observer| observer.id.as_str() == observer_id)
-            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "observer not found"))?;
-        self.require_observer_transition_at(observer_index, next_state)?;
-        Ok(observer_index)
-    }
-
-    /// Validates one observer decision by its already-resolved request index.
-    fn require_observer_transition_at(
-        &self,
-        observer_index: usize,
-        next_state: ObserverDecisionState,
-    ) -> Result<()> {
-        let observer = self
-            .observers
-            .get(observer_index)
-            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "observer not found"))?;
-        let transition_allowed = matches!(
-            (observer.state, next_state),
-            (
-                ObserverDecisionState::Pending,
-                ObserverDecisionState::Approved | ObserverDecisionState::Rejected
-            ) | (
-                ObserverDecisionState::Approved,
-                ObserverDecisionState::Revoked
-            )
-        );
-        if transition_allowed {
-            Ok(())
-        } else {
-            Err(MezError::conflict(format!(
-                "observer request cannot transition from {:?} to {:?}",
-                observer.state, next_state
-            )))
-        }
-    }
-
-    /// Terminalizes a pending or approved observer when its client detaches.
-    ///
-    /// Pending requests become rejected because no live requester remains;
-    /// approved observers become revoked. Existing terminal decisions are
-    /// preserved so detach cannot rewrite their attribution or reason.
-    fn terminalize_observer_for_detach(
-        &mut self,
-        client_id: &str,
-        decided_at: u64,
-        decided_by_client_id: Option<&ClientId>,
-        reason: &str,
-    ) {
-        let Some(observer) = self
-            .observers
-            .iter_mut()
-            .find(|observer| observer.client_id.as_str() == client_id)
-        else {
-            return;
-        };
-        observer.state = match observer.state {
-            ObserverDecisionState::Pending => ObserverDecisionState::Rejected,
-            ObserverDecisionState::Approved => ObserverDecisionState::Revoked,
-            ObserverDecisionState::Rejected | ObserverDecisionState::Revoked => return,
-        };
-        observer.decided_at_unix_seconds = Some(decided_at);
-        observer.decided_by_client_id = decided_by_client_id.map(ToString::to_string);
-        observer.reason = Some(reason.to_string());
-    }
-
     /// Runs the require primary operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -805,24 +467,18 @@ impl Session {
 
     /// Prunes the oldest unreferenced detached client summaries to the retained limit.
     ///
-    /// Observer request identities are always protected. Product adapters may
-    /// additionally protect clients referenced by unsettled external work.
+    /// Product adapters may protect clients referenced by unsettled external
+    /// work through the supplied identity set.
     pub fn prune_detached_client_summaries(
         &mut self,
         additionally_protected: &std::collections::HashSet<ClientId>,
     ) -> usize {
-        let observer_clients = self
-            .observers
-            .iter()
-            .map(|observer| observer.client_id.clone())
-            .collect::<std::collections::HashSet<_>>();
         let mut removable = self
             .clients
             .iter()
             .enumerate()
             .filter(|(_, client)| {
                 client.state == ClientState::Detached
-                    && !observer_clients.contains(&client.id)
                     && !additionally_protected.contains(&client.id)
             })
             .map(|(index, client)| {

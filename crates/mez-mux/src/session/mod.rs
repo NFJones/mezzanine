@@ -19,9 +19,9 @@ pub use reconciliation::TopologyReconciliation;
 pub use types::{
     Client, ClientNavigationState, ClientRole, ClientState, ClientTerminalDescriptor, FocusCursor,
     LandingNavigationState, MAX_ATTACHED_PRIMARY_CLIENTS, MAX_RETAINED_DETACHED_CLIENTS,
-    ObserverDecisionState, ObserverRequest, PrimaryLifecycleEdge, PrimaryMembershipTransition,
-    RestoredPane, RestoredSessionState, RestoredWindow, RestoredWindowGroup, Session,
-    SessionRestoreInput, SessionShell, SessionState, WindowGroup,
+    ObserverAttachment, PrimaryLifecycleEdge, PrimaryMembershipTransition, RestoredPane,
+    RestoredSessionState, RestoredWindow, RestoredWindowGroup, Session, SessionRestoreInput,
+    SessionShell, SessionState, WindowGroup,
 };
 pub use windows::{
     BreakPaneTransition, JoinPaneTransition, KillGroupTransition, KillWindowTransition,

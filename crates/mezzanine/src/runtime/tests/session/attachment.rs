@@ -297,16 +297,11 @@ fn runtime_control_initialize_resizes_started_initial_pane_for_primary_terminal(
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies observer `control/initialize` requests are visible immediately.
-///
-/// The control dispatcher already creates the pending observer record. The
-/// runtime side effect must also log the request, write a visible active-pane
-/// status line with the request id, and make `:list-observers` usable as the
-/// same pager/action surface as `:choose-observer`.
+/// Verifies observer `control/initialize` attaches and publishes immediately.
 #[test]
-fn runtime_control_initialize_observer_logs_and_lists_pending_request() {
+fn runtime_control_initialize_observer_logs_attached_client() {
     let mut service = test_runtime_service();
-    let primary = service
+    let _primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let mut connection = ControlConnectionState::new(true, true);
@@ -318,54 +313,23 @@ fn runtime_control_initialize_observer_logs_and_lists_pending_request() {
         .handle_control_input_for_connection(&initialize, 4096, &mut connection)
         .unwrap();
     let (body, _) = decode_control_frame(&output, 4096).unwrap();
-    let observer = service.session().observers().first().unwrap();
-    let observer_id = observer.id.to_string();
+    let observer_client_id = connection.caller_client_id().unwrap();
 
     assert_eq!(consumed, initialize.len());
-    assert!(
-        body.contains(r#""granted_role":"pending_observer""#),
-        "{body}"
-    );
-    assert!(body.contains(&observer_id), "{body}");
+    assert!(body.contains(r#""granted_role":"observer""#), "{body}");
+    assert!(body.contains(observer_client_id.as_str()), "{body}");
+    assert!(!body.contains("observer_request"), "{body}");
     let events = service
         .event_log()
         .unwrap()
         .replay_for(&EventAudience::AllPrimaries);
     assert!(
         events.iter().any(|event| {
-            event.kind == EventKind::ObserverRequested && event.payload.contains(&observer_id)
+            event.kind == EventKind::ClientAttached
+                && event.payload.contains(observer_client_id.as_str())
+                && event.payload.contains(r#""role":"observer""#)
         }),
         "{events:?}"
-    );
-    let pane_text = service
-        .agent_pane_screen("%1")
-        .unwrap()
-        .visible_lines()
-        .join("\n");
-    assert!(
-        pane_text.contains(&format!("observer request {observer_id}")),
-        "{pane_text}"
-    );
-
-    service
-        .execute_attached_display_command(&primary, "list-observers")
-        .unwrap();
-    let overlay = service
-        .primary_display_overlay()
-        .expect("list-observers should open a command display overlay");
-    assert!(
-        overlay
-            .selections
-            .iter()
-            .any(|selection| selection.command == format!("approve-observer -t {observer_id}")),
-        "{overlay:?}"
-    );
-    assert!(
-        overlay
-            .selections
-            .iter()
-            .any(|selection| selection.command == format!("reject-observer -t {observer_id}")),
-        "{overlay:?}"
     );
 }
 
@@ -523,57 +487,6 @@ fn runtime_applies_attached_terminal_step_actions() {
     assert_eq!(service.session().windows()[0].panes().len(), 2);
     assert_eq!(service.pane_processes().len(), 2);
     service.terminate_all_pane_processes().unwrap();
-}
-
-/// Verifies observer chooser rows expose the concrete available decisions as
-/// compact action chips. The row also contains descriptive `actions=` metadata,
-/// but the executable choices must come from the command list so keyboard and
-/// mouse selection run real terminal commands.
-#[test]
-fn runtime_primary_display_overlay_exposes_observer_action_chips() {
-    let mut service = test_runtime_service();
-    let primary = service
-        .attach_primary("primary", true, Size::new(100, 24).unwrap(), 120)
-        .unwrap();
-    let (_observer_client, observer_request) = service
-        .session
-        .request_observer_with_terminal("observer", None);
-
-    service
-        .execute_attached_display_command(&primary, "choose-observer")
-        .unwrap();
-    let overlay = service
-        .primary_display_overlay()
-        .expect("choose-observer should open a command display overlay");
-    assert!(
-        overlay
-            .selections
-            .iter()
-            .any(|selection| selection.command
-                == format!("approve-observer -t {observer_request}")),
-        "{overlay:?}"
-    );
-    assert!(
-        overlay
-            .selections
-            .iter()
-            .any(|selection| selection.command == format!("reject-observer -t {observer_request}")),
-        "{overlay:?}"
-    );
-    let view = service
-        .render_client_view(
-            ClientViewRole::Primary,
-            Size::new(100, 24).unwrap(),
-            &TerminalClientLoopConfig::default(),
-        )
-        .unwrap()
-        .unwrap();
-    assert!(
-        view.lines
-            .iter()
-            .any(|line| line.contains("[approve]") && line.contains("[reject]")),
-        "{view:?}"
-    );
 }
 
 /// Verifies runtime attached split mux action focuses new pane.

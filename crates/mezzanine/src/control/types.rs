@@ -77,19 +77,10 @@ pub enum GrantedRole {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     Primary,
-    /// Represents the Pending Observer case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    PendingObserver,
     /// Represents the Observer case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
-    #[allow(
-        dead_code,
-        reason = "wire role retained for complete control negotiation"
-    )]
     Observer,
     /// Represents the Agent case for this enumeration.
     ///
@@ -518,18 +509,6 @@ pub struct CapabilityFeatures {
     pub client_bound_events: bool,
 }
 
-/// Defines the PENDING OBSERVER CONTROL METHODS const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-pub(crate) const PENDING_OBSERVER_CONTROL_METHODS: &[&str] = &[
-    "control/initialize",
-    "observer/inspect",
-    "client/detach",
-    "control/cancel",
-    "control/shutdown",
-];
-
 /// Defines the OBSERVER CONTROL METHODS const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -541,7 +520,6 @@ pub(crate) const OBSERVER_CONTROL_METHODS: &[&str] = &[
     "client/detach",
     "terminal/view",
     "event/list",
-    "observer/inspect",
 ];
 
 /// Defines the AGENT CONTROL METHODS const used by this subsystem.
@@ -631,11 +609,6 @@ pub(crate) const PRIMARY_CONTROL_METHODS: &[&str] = &[
     "client/list",
     "client/detach",
     "client/set_layout_owner",
-    "observer/list",
-    "observer/inspect",
-    "observer/approve",
-    "observer/reject",
-    "observer/revoke",
     "event/list",
     "config/validate",
     "config/get",
@@ -828,8 +801,6 @@ impl Capabilities {
             event_types: vec![
                 "client_attached",
                 "client_detached",
-                "observer_requested",
-                "observer_decided",
                 "window_changed",
                 "pane_changed",
                 "agent_status",
@@ -872,21 +843,6 @@ impl Capabilities {
         }
     }
 
-    /// Runs the pending observer operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn pending_observer() -> Self {
-        let mut capabilities = Self::with_methods(PENDING_OBSERVER_CONTROL_METHODS.to_vec());
-        capabilities.features.event_replay = false;
-        capabilities.features.mcp = false;
-        capabilities.features.snapshots = false;
-        capabilities.features.audit = false;
-        capabilities.features.approval_bypass = false;
-        capabilities
-    }
-
     /// Runs the primary operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -917,7 +873,6 @@ impl Capabilities {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    #[cfg(test)]
     pub fn observer() -> Self {
         let mut capabilities = Self::with_methods(OBSERVER_CONTROL_METHODS.to_vec());
         capabilities.features.mcp = false;
@@ -944,29 +899,6 @@ impl Capabilities {
     pub fn automation() -> Self {
         Self::with_methods(AUTOMATION_CONTROL_METHODS.to_vec())
     }
-}
-
-/// Carries Observer Request Summary state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ObserverRequestSummary {
-    /// Stores the request id value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub request_id: String,
-    /// Stores the state value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub state: &'static str,
-    /// Stores the state json value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub state_json: Option<String>,
 }
 
 /// Carries Server Identity state for this subsystem.
@@ -1073,16 +1005,6 @@ pub struct InitializeResult {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub capabilities: Capabilities,
-    /// Stores the approval pending value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub approval_pending: bool,
-    /// Stores the observer request value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub observer_request: Option<ObserverRequestSummary>,
 }
 
 /// Carries Initialize Context state for this subsystem.

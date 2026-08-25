@@ -321,11 +321,10 @@ fn connection_initialize_binds_primary_caller_for_followup_requests() {
 
 /// Verifies pending observer connection gets no session data after initialize.
 ///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
+/// Observer initialization attaches one read-only client immediately while
+/// retaining method-level isolation from primary-only session state.
 #[test]
-fn pending_observer_connection_gets_no_session_data_after_initialize() {
+fn observer_connection_attaches_immediately_after_initialize() {
     let (mut session, _primary) = test_session();
     let mut connection = ControlConnectionState::new(true, true);
     let mut cache = ControlIdempotencyCache::default();
@@ -347,43 +346,23 @@ fn pending_observer_connection_gets_no_session_data_after_initialize() {
     let (init_body, first_len) = decode_control_frame(&output, 4096).unwrap();
     let (session_body, _) = decode_control_frame(&output[first_len..], 4096).unwrap();
 
-    assert!(init_body.contains(r#""granted_role":"pending_observer""#));
-    assert!(init_body.contains(r#""session":null"#));
-    assert!(
-        init_body.contains(r#""observer_request":{"id":"o1""#),
-        "{init_body}"
-    );
-    assert!(
-        init_body.contains(r#""observer_request_id":"o1""#),
-        "{init_body}"
-    );
+    assert!(init_body.contains(r#""granted_role":"observer""#));
+    assert!(init_body.contains(r#""session":{"id":"$1""#));
+    assert!(!init_body.contains("approval_pending"));
+    assert!(!init_body.contains("observer_request"));
     assert!(init_body.contains(r#""client_id":"c2""#), "{init_body}");
-    assert!(
-        init_body.contains(
-            r#""descriptor":{"name":"observer","interactive":false,"terminal":{"columns":100,"rows":40,"term":"xterm-256color"}}"#
-        ),
-        "{init_body}"
-    );
-    assert!(!init_body.contains(r#""request_id":"o1""#), "{init_body}");
+    assert!(init_body.contains(r#""role":"observer""#), "{init_body}");
+    assert!(init_body.contains(r#""state":"attached""#), "{init_body}");
     assert!(session_body.contains(r#""error""#));
     assert!(!session_body.contains(r#""windows""#));
-    assert_eq!(session.observers().len(), 1);
-    assert_eq!(
-        session.observers()[0]
-            .descriptor_terminal
-            .as_ref()
-            .unwrap()
-            .columns,
-        100
-    );
-    assert_eq!(
-        session.observers()[0]
-            .descriptor_terminal
-            .as_ref()
-            .unwrap()
-            .rows,
-        40
-    );
+    assert_eq!(session.observer_attachments().len(), 1);
+    let observer_client = session
+        .clients()
+        .iter()
+        .find(|client| client.id.as_str() == "c2")
+        .unwrap();
+    assert_eq!(observer_client.terminal.as_ref().unwrap().columns, 100);
+    assert_eq!(observer_client.terminal.as_ref().unwrap().rows, 40);
 }
 
 /// Verifies observer initialization owns one disconnect cleanup event.
@@ -403,7 +382,7 @@ fn observer_disconnect_client_is_taken_once() {
     handle_control_frames_for_connection(&input, 4096, &mut session, &mut connection, &mut cache)
         .unwrap();
 
-    let observer_client = session.observers()[0].client_id.clone();
+    let observer_client = connection.caller_client_id().unwrap().clone();
     assert_eq!(
         connection.take_disconnect_client_id(),
         Some(observer_client)

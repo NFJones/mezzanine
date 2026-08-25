@@ -130,28 +130,31 @@ impl RuntimeSessionService {
         for observer_client_id in &transition.revoked_observer_client_ids {
             if let Some(event_log) = staged_event_log.as_mut() {
                 event_log.append(
-                    EventKind::ObserverDecided,
+                    EventKind::ClientDetached,
                     Some(staged_session.id.to_string()),
                     EventVisibility::AllPrimaries,
                     format!(
-                        r#"{{"client_id":"{}","decision":"revoked","reason":"view source detached","view_source_client_id":"{}"}}"#,
+                        r#"{{"client_id":"{}","role":"observer","reason":"view source detached","view_source_client_id":"{}"}}"#,
                         json_escape(observer_client_id.as_str()),
                         json_escape(primary_client_id.as_str())
                     ),
                 )?;
             }
             if let Some(audit_log) = staged_audit_log.as_mut() {
-                let record = AuditRecord::observer_decision(
+                let mut record = AuditRecord::new(
                     staged_session.id.to_string(),
                     AuditActor {
                         kind: "runtime".to_string(),
                         id: "observer-view-source-detach".to_string(),
                     },
                     "client",
-                    observer_client_id.to_string(),
-                    "revoked",
-                    "succeeded",
-                );
+                    "detach",
+                )
+                .with_metadata("client_id", observer_client_id.to_string())
+                .with_metadata("role", "observer")
+                .with_metadata("reason", "view source detached")
+                .with_metadata("view_source_client_id", primary_client_id.to_string());
+                record.outcome = "succeeded".to_string();
                 let _ = audit_log.append(record)?;
             }
         }
@@ -321,14 +324,10 @@ impl RuntimeSessionService {
         else {
             return Ok(false);
         };
-        if !matches!(
-            client.state,
-            mez_mux::session::ClientState::Attached | mez_mux::session::ClientState::Pending
-        ) {
+        if client.state != mez_mux::session::ClientState::Attached {
             return Ok(false);
         }
         let role = match client.role {
-            mez_mux::session::ClientRole::PendingObserver => "pending_observer",
             mez_mux::session::ClientRole::Observer => "observer",
             mez_mux::session::ClientRole::Agent => "agent",
             mez_mux::session::ClientRole::Automation => "automation",

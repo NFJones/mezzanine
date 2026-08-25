@@ -89,10 +89,9 @@ fn runtime_observer_render_follows_exact_source_navigation() {
     landing_screen.feed(b"decider-pane");
     service.set_pane_screen(landing_pane.to_string(), landing_screen);
 
-    let (observer_client, observer_request) = service.session.request_observer("observer");
-    service
+    let observer_client = service
         .session
-        .approve_observer_target_with_source(&decider, observer_request.as_str(), &source)
+        .attach_observer_with_terminal("observer", None, 1)
         .unwrap();
     service
         .prepare_client_render(&observer_client, ClientViewRole::Observer)
@@ -121,8 +120,8 @@ fn runtime_observer_render_follows_exact_source_navigation() {
         decider_window
     );
     assert_eq!(
-        service.session().observers()[0].view_source_client_id,
-        Some(source)
+        service.session().observer_attachments()[0].view_source_client_id,
+        source
     );
 }
 

@@ -2,9 +2,8 @@
 
 use super::SessionShell;
 use super::{
-    Client, ClientRole, ClientState, ClientTerminalDescriptor, ObserverDecisionState, RestoredPane,
-    RestoredSessionState, RestoredWindow, RestoredWindowGroup, Session, SessionRestoreInput,
-    SessionState,
+    Client, ClientRole, ClientState, ClientTerminalDescriptor, RestoredPane, RestoredSessionState,
+    RestoredWindow, RestoredWindowGroup, Session, SessionRestoreInput, SessionState,
 };
 use crate as mez_mux;
 use mez_core::IdFactory;
@@ -325,13 +324,11 @@ fn primary_selection_is_atomic_and_requires_interactive_target() {
     assert_eq!(session.layout_owner_client_id(), Some(&second));
     assert_eq!(session.attached_primaries().count(), 2);
 
-    let (_observer_client, observer_request) = session.request_observer("observer");
-    session
-        .reject_observer_target(&second, observer_request.as_str())
+    let observer_client = session
+        .attach_observer_with_terminal("observer", None, 1)
         .unwrap();
-    let revoked_observer_client = session.clients().last().unwrap().id.to_string();
     let error = session
-        .select_primary_client(Some(&second), &revoked_observer_client)
+        .select_primary_client(Some(&second), observer_client.as_str())
         .unwrap_err();
 
     assert_eq!(error.kind(), mez_mux::MuxErrorKind::Forbidden);
@@ -468,12 +465,17 @@ fn primary_owner_detach_elects_oldest_and_retains_final_size() {
     assert_eq!(session.state, SessionState::Detached);
 }
 
-/// Verifies detached summaries are bounded while observer-referenced and
-/// explicitly protected client identities remain available.
+/// Verifies detached summaries are bounded while explicitly protected client
+/// identities remain available.
 #[test]
 fn detached_client_summary_pruning_preserves_referenced_identities() {
     let mut session = test_session();
-    let (observer_client, _observer_request) = session.request_observer("observer");
+    let observer_client = session.attach_primary("observer-source", true).unwrap();
+    let attached_observer = session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    session.detach_primary(&observer_client).unwrap();
+    let observer_client = attached_observer;
     session.detach_client_self(&observer_client).unwrap();
 
     let mut detached_primaries = Vec::new();
@@ -484,12 +486,14 @@ fn detached_client_summary_pruning_preserves_referenced_identities() {
         session.detach_primary(&primary).unwrap();
         detached_primaries.push(primary);
     }
-    let additionally_protected =
-        std::collections::HashSet::from([detached_primaries.first().unwrap().clone()]);
+    let additionally_protected = std::collections::HashSet::from([
+        observer_client.clone(),
+        detached_primaries.first().unwrap().clone(),
+    ]);
 
     let removed = session.prune_detached_client_summaries(&additionally_protected);
 
-    assert_eq!(removed, 1);
+    assert_eq!(removed, 2);
     assert!(
         session
             .clients()
@@ -514,337 +518,59 @@ fn detached_client_summary_pruning_preserves_referenced_identities() {
     );
 }
 
-/// Verifies observer starts pending and approval sets visibility marker.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
+/// Verifies observer attachment atomically binds the current layout owner and
+/// attach-time visibility cutoff before exposing an attached read-only client.
 #[test]
-fn observer_starts_pending_and_approval_sets_visibility_marker() {
+fn observer_attaches_immediately_to_exact_layout_owner_with_visibility_cutoff() {
     let mut session = test_session();
-    let primary = session.attach_primary("primary", true).unwrap();
-    assert!(session.last_attached_at_unix_seconds.is_some());
-    let (_client, observer) = session.request_observer("observer");
-    assert!(session.clients()[0].attached_at_unix_seconds.is_some());
-    assert!(session.clients()[0].last_seen_at_unix_seconds.is_some());
-    assert_eq!(session.clients()[1].attached_at_unix_seconds, None);
-    assert_eq!(session.clients()[1].last_seen_at_unix_seconds, None);
-    assert_eq!(session.observers()[0].descriptor_name, "observer");
-    assert!(!session.observers()[0].descriptor_interactive);
-    assert_eq!(session.observers()[0].descriptor_terminal, None);
-    assert!(session.observers()[0].requested_at_unix_seconds.is_some());
-    assert_eq!(session.observers()[0].decided_at_unix_seconds, None);
-    assert_eq!(session.observers()[0].decided_by_client_id, None);
-    assert_eq!(session.observers()[0].visible_from_unix_seconds, None);
-    assert_eq!(session.observers()[0].reason, None);
+    let layout_owner = session.attach_primary("owner", true).unwrap();
+    let other_primary = session.attach_primary("other", true).unwrap();
 
-    session.approve_observer(&primary, &observer).unwrap();
-
-    let observer = &session.observers()[0];
-    assert_eq!(observer.state, ObserverDecisionState::Approved);
-    assert!(observer.decided_at_unix_seconds.is_some());
-    assert_eq!(
-        observer.decided_by_client_id.as_deref(),
-        Some(primary.as_str())
-    );
-    assert!(observer.visible_from_event_id.is_some());
-    assert_eq!(
-        observer.visible_from_unix_seconds,
-        observer.decided_at_unix_seconds
-    );
-    assert!(session.clients()[1].attached_at_unix_seconds.is_some());
-    assert!(session.clients()[1].last_seen_at_unix_seconds.is_some());
-}
-
-/// Verifies observer request preserves supplied terminal descriptor.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-#[test]
-fn observer_request_preserves_supplied_terminal_descriptor() {
-    let mut session = test_session();
-
-    let (client, observer) = session.request_observer_with_terminal(
-        "observer",
-        Some(ClientTerminalDescriptor {
-            columns: 132,
-            rows: 43,
-            term: "xterm-256color".to_string(),
-            features: Vec::new(),
-        }),
-    );
-
-    let request = session
-        .observers()
-        .iter()
-        .find(|request| request.id == observer)
-        .unwrap();
-    assert_eq!(request.client_id, client);
-    assert_eq!(
-        request.descriptor_terminal,
-        Some(ClientTerminalDescriptor {
-            columns: 132,
-            rows: 43,
-            term: "xterm-256color".to_string(),
-            features: Vec::new(),
-        })
-    );
-    assert_eq!(
-        session
-            .clients()
-            .iter()
-            .find(|candidate| candidate.id == client)
-            .unwrap()
-            .terminal,
-        None
-    );
-}
-
-/// Verifies primary can reject revoke and detach observers.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-#[test]
-fn primary_can_reject_revoke_and_detach_observers() {
-    let mut session = test_session();
-    let primary = session.attach_primary("primary", true).unwrap();
-    let (_rejected_client, rejected) = session.request_observer("rejected");
-    session
-        .reject_observer_target_with_reason(&primary, rejected.as_str(), Some("not today".into()))
-        .unwrap();
-    assert_eq!(
-        session.observers()[0].state,
-        ObserverDecisionState::Rejected
-    );
-    assert!(session.observers()[0].decided_at_unix_seconds.is_some());
-    assert_eq!(
-        session.observers()[0].decided_by_client_id.as_deref(),
-        Some(primary.as_str())
-    );
-    assert_eq!(session.observers()[0].reason.as_deref(), Some("not today"));
-
-    let (client, approved) = session.request_observer("approved");
-    session
-        .approve_observer_target(&primary, approved.as_str())
-        .unwrap();
-    session
-        .revoke_observer_client(&primary, client.as_str())
-        .unwrap();
-    assert_eq!(session.observers()[1].state, ObserverDecisionState::Revoked);
-    assert!(session.observers()[1].decided_at_unix_seconds.is_some());
-    assert_eq!(
-        session.observers()[1].decided_by_client_id.as_deref(),
-        Some(primary.as_str())
-    );
-
-    let (client, _pending) = session.request_observer("detached");
-    session
-        .detach_client_target(&primary, client.as_str())
-        .unwrap();
-    assert_eq!(
-        session.clients().last().unwrap().state,
-        ClientState::Detached
-    );
-}
-
-/// Verifies rejected and revoked observer decisions are terminal.
-///
-/// A fresh idempotency key at the control layer must not let a later decision
-/// overwrite authority, visibility, attribution, client state, or the event
-/// sequence after an observer request has reached a terminal state.
-#[test]
-fn observer_terminal_decisions_reject_later_transitions_without_mutation() {
-    let mut session = test_session();
-    let primary = session.attach_primary("primary", true).unwrap();
-    let (rejected_client_id, rejected_request_id) = session.request_observer("rejected");
-    session
-        .reject_observer_target_with_reason(
-            &primary,
-            rejected_request_id.as_str(),
-            Some("denied".into()),
-        )
+    let observer_client = session
+        .attach_observer_with_terminal("observer", None, 42)
         .unwrap();
 
-    let rejected_request = session.observers()[0].clone();
-    let rejected_client = session
+    let client = session
         .clients()
         .iter()
-        .find(|client| client.id == rejected_client_id)
-        .unwrap()
-        .clone();
-    let rejected_next_event_id = session.next_event_id;
-    let rejected_updated_at = session.updated_at_unix_seconds;
-
-    let error = session
-        .approve_observer_target(&primary, rejected_request_id.as_str())
-        .unwrap_err();
-    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Conflict);
-    assert_eq!(session.observers()[0], rejected_request);
-    assert_eq!(
-        session
-            .clients()
-            .iter()
-            .find(|client| client.id == rejected_client_id)
-            .unwrap(),
-        &rejected_client
-    );
-    assert_eq!(session.next_event_id, rejected_next_event_id);
-    assert_eq!(session.updated_at_unix_seconds, rejected_updated_at);
-
-    let (approved_client_id, approved_request_id) = session.request_observer("approved");
-    session
-        .approve_observer_target(&primary, approved_request_id.as_str())
+        .find(|client| client.id == observer_client)
         .unwrap();
-    session
-        .revoke_observer_client_with_reason(
-            &primary,
-            approved_client_id.as_str(),
-            Some("revoked".into()),
-        )
-        .unwrap();
-
-    let revoked_request = session.observers()[1].clone();
-    let revoked_client = session
-        .clients()
+    assert_eq!(client.role, ClientRole::Observer);
+    assert_eq!(client.state, ClientState::Attached);
+    let observer = session
+        .observer_attachments()
         .iter()
-        .find(|client| client.id == approved_client_id)
-        .unwrap()
-        .clone();
-    let revoked_next_event_id = session.next_event_id;
-    let revoked_updated_at = session.updated_at_unix_seconds;
-
-    let error = session
-        .approve_observer_target(&primary, approved_request_id.as_str())
-        .unwrap_err();
-    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Conflict);
-    let error = session
-        .revoke_observer_client(&primary, approved_client_id.as_str())
-        .unwrap_err();
-    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Conflict);
-    assert_eq!(session.observers()[1], revoked_request);
-    assert_eq!(
-        session
-            .clients()
-            .iter()
-            .find(|client| client.id == approved_client_id)
-            .unwrap(),
-        &revoked_client
-    );
-    assert_eq!(session.next_event_id, revoked_next_event_id);
-    assert_eq!(session.updated_at_unix_seconds, revoked_updated_at);
-}
-
-/// Verifies detaching a pending observer terminalizes its request.
-///
-/// Primary-targeted detach must not leave a pending request that a later
-/// approval can revive after its requesting client has disconnected.
-#[test]
-fn detached_pending_observer_cannot_be_approved() {
-    let mut session = test_session();
-    let primary = session.attach_primary("primary", true).unwrap();
-    let (observer_client_id, observer_request_id) = session.request_observer("observer");
-
-    session
-        .detach_client_target(&primary, observer_client_id.as_str())
+        .find(|observer| observer.client_id == observer_client)
         .unwrap();
+    assert_eq!(observer.view_source_client_id, layout_owner.clone());
+    assert_eq!(observer.visible_from_event_id, 42);
 
-    let observer_request = session.observers()[0].clone();
-    let observer_client = session.clients()[1].clone();
-    let next_event_id = session.next_event_id;
-    let updated_at = session.updated_at_unix_seconds;
-    assert_eq!(observer_request.state, ObserverDecisionState::Rejected);
-
-    let error = session
-        .approve_observer_target(&primary, observer_request_id.as_str())
-        .unwrap_err();
-
-    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Conflict);
-    assert_eq!(session.observers()[0], observer_request);
-    assert_eq!(session.clients()[1], observer_client);
-    assert_eq!(session.next_event_id, next_event_id);
-    assert_eq!(session.updated_at_unix_seconds, updated_at);
-}
-
-/// Verifies observer approval binds one exact primary view source and source
-/// detach revokes only observers that depend on that primary.
-#[test]
-fn observer_view_source_is_exact_and_revoked_on_source_detach() {
-    let mut session = test_session();
-    let deciding_primary = session.attach_primary("decider", true).unwrap();
-    let source_primary = session.attach_primary("source", true).unwrap();
-    let (observer_client_id, observer_request_id) = session.request_observer("observer");
-
-    session
-        .approve_observer_target_with_source(
-            &deciding_primary,
-            observer_request_id.as_str(),
-            &source_primary,
-        )
-        .unwrap();
-
-    let observer = &session.observers()[0];
-    assert_eq!(observer.state, ObserverDecisionState::Approved);
-    assert_eq!(
-        observer.decided_by_client_id.as_deref(),
-        Some(deciding_primary.as_str())
-    );
-    assert_eq!(observer.view_source_client_id, Some(source_primary.clone()));
-
-    let deciding_detach = session
-        .detach_primary_transition(&deciding_primary)
-        .unwrap();
-    assert!(deciding_detach.revoked_observer_client_ids.is_empty());
-    assert_eq!(
-        session.observers()[0].state,
-        ObserverDecisionState::Approved
-    );
-
-    let source_detach = session.detach_primary_transition(&source_primary).unwrap();
+    let unrelated_detach = session.detach_primary_transition(&other_primary).unwrap();
+    assert!(unrelated_detach.revoked_observer_client_ids.is_empty());
+    let source_detach = session.detach_primary_transition(&layout_owner).unwrap();
     assert_eq!(
         source_detach.revoked_observer_client_ids,
-        vec![observer_client_id.clone()]
-    );
-    assert_eq!(session.observers()[0].state, ObserverDecisionState::Revoked);
-    assert_eq!(
-        session.observers()[0].reason.as_deref(),
-        Some("view source detached")
-    );
-    assert_eq!(
-        session
-            .clients()
-            .iter()
-            .find(|client| client.id == observer_client_id)
-            .unwrap()
-            .state,
-        ClientState::Revoked
+        vec![observer_client]
     );
 }
 
-/// Verifies approval rejects a detached view source without mutating the
-/// pending observer request or its event sequence.
+/// Verifies immediate observer attachment fails without a layout-owner primary
+/// and leaves no client, observer, or mutation-revision residue.
 #[test]
-fn observer_approval_rejects_detached_view_source_without_mutation() {
+fn observer_attach_without_primary_leaves_no_residual_state() {
     let mut session = test_session();
-    let deciding_primary = session.attach_primary("decider", true).unwrap();
-    let detached_source = session.attach_primary("source", true).unwrap();
-    session.detach_primary(&detached_source).unwrap();
-    let (_observer_client_id, observer_request_id) = session.request_observer("observer");
-    let request_before = session.observers()[0].clone();
     let next_event_id = session.next_event_id;
+    let updated_at = session.updated_at_unix_seconds;
 
     let error = session
-        .approve_observer_target_with_source(
-            &deciding_primary,
-            observer_request_id.as_str(),
-            &detached_source,
-        )
+        .attach_observer_with_terminal("observer", None, 42)
         .unwrap_err();
 
-    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Forbidden);
-    assert_eq!(session.observers()[0], request_before);
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Conflict);
+    assert!(session.clients().is_empty());
+    assert!(session.observer_attachments().is_empty());
     assert_eq!(session.next_event_id, next_event_id);
+    assert_eq!(session.updated_at_unix_seconds, updated_at);
 }
 
 /// Verifies primary can create and select windows.
@@ -1919,27 +1645,32 @@ fn killing_final_window_marks_session_empty() {
     assert_eq!(session.state, SessionState::Empty);
 }
 
-/// Verifies self-detach preserves primary lifecycle semantics while allowing
-/// a temporary observer to revoke only its own pending request.
-///
-/// Pairing and profile checks use observer self-detach for cleanup. Extending
-/// that path must not weaken client isolation or leave a primary session in a
-/// running state after its owning client explicitly detaches.
+/// Verifies self-detach preserves primary lifecycle semantics for observers.
 #[test]
 fn client_self_detach_preserves_primary_and_observer_lifecycle() {
     let mut session = test_session();
     let primary = session.attach_primary("primary", true).unwrap();
-    let (observer_client, observer_request) = session.request_observer("pairing-check");
+    let observer_client = session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
 
     session.detach_client_self(&observer_client).unwrap();
 
-    let observer = session
-        .observers()
-        .iter()
-        .find(|observer| observer.id == observer_request)
-        .unwrap();
-    assert_eq!(observer.state, ObserverDecisionState::Rejected);
-    assert_eq!(observer.reason.as_deref(), Some("client detached itself"));
+    assert!(
+        session
+            .observer_attachments()
+            .iter()
+            .all(|observer| observer.client_id != observer_client)
+    );
+    assert_eq!(
+        session
+            .clients()
+            .iter()
+            .find(|client| client.id == observer_client)
+            .unwrap()
+            .state,
+        ClientState::Detached
+    );
     assert_eq!(session.layout_owner_client_id(), Some(&primary));
     assert_eq!(session.state, SessionState::Running);
 

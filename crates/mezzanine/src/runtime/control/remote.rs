@@ -217,9 +217,16 @@ impl RuntimeSessionService {
         prepared: PreparedRemoteInitializeAuthority,
     ) -> String {
         let primary_count_before = self.session.attached_primaries().count();
-        let observer_count_before = self.session.observers().len();
         let mut staged_session = self.session.clone();
         let mut staged_connection = connection.clone();
+        if super::runtime_initialize_requested_observer(request) {
+            staged_connection.set_observer_visible_from_event_id(Some(
+                self.control
+                    .event_log()
+                    .map(|event_log| event_log.latest_event_id().saturating_add(1))
+                    .unwrap_or_else(|| staged_session.mutation_revision().saturating_add(1)),
+            ));
+        }
         if let Err(error) = staged_connection.bind_remote_principal(prepared.principal()) {
             return super::runtime_json_rpc_error(
                 request.id.as_str(),
@@ -296,7 +303,6 @@ impl RuntimeSessionService {
             request,
             primary_count_before,
             connection.caller_client_id(),
-            observer_count_before,
         ) {
             self.session = original_session;
             *connection = original_connection;

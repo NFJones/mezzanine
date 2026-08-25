@@ -1,11 +1,10 @@
 //! Session summaries, target filtering, and state request projection.
 
 use super::approvals::optional_rfc3339_timestamp_json;
-use super::clients::{clients_json, observers_json_for_state};
-use super::snapshots::observer_state_filter_from_params;
+use super::clients::clients_json;
 use super::{
     ClientState, GrantedRole, MezError, Result, Session, builtin_rules, json_escape,
-    json_optional_string, observers_json, pane_state_json, parse_json_object_value,
+    json_optional_string, pane_state_json, parse_json_object_value,
     require_session_target_matches_value, resolve_window_target_value, session_state_name,
     window_by_id, window_state_json,
 };
@@ -17,7 +16,6 @@ use super::{
 pub(in crate::control) fn granted_role_name(role: GrantedRole) -> &'static str {
     match role {
         GrantedRole::Primary => "primary",
-        GrantedRole::PendingObserver => "pending_observer",
         GrantedRole::Observer => "observer",
         GrantedRole::Agent => "agent",
         GrantedRole::Automation => "automation",
@@ -95,7 +93,7 @@ pub(in crate::control) fn session_state_json(
         .and_then(|(_, cursor)| cursor.active.as_ref())
         .map(ToString::to_string);
     Ok(format!(
-        r#"{{"id":"{}","version":2,"session_id":"{}","name":"{}","state":"{}","created_at":{},"updated_at":{},"primary_client_ids":[{}],"attached_primary_count":{},"max_attached_primaries":{},"layout_owner_client_id":{},"authoritative_size":{{"columns":{},"rows":{}}},"navigation":{{"active_group_id":{},"active_window_id":{},"active_pane_id":{},"revision":{}}},"windows":{},"window_count":{},"clients":{},"observers":{},"config_generation":{},"permission_summary":{}}}"#,
+        r#"{{"id":"{}","version":2,"session_id":"{}","name":"{}","state":"{}","created_at":{},"updated_at":{},"primary_client_ids":[{}],"attached_primary_count":{},"max_attached_primaries":{},"layout_owner_client_id":{},"authoritative_size":{{"columns":{},"rows":{}}},"navigation":{{"active_group_id":{},"active_window_id":{},"active_pane_id":{},"revision":{}}},"windows":{},"window_count":{},"clients":{},"config_generation":{},"permission_summary":{}}}"#,
         json_escape(&session.id.to_string()),
         json_escape(&session.id.to_string()),
         json_escape(&session.name),
@@ -115,7 +113,6 @@ pub(in crate::control) fn session_state_json(
         windows_json(session),
         session.windows().len(),
         clients_json(session),
-        observers_json(session),
         session.config_generation,
         permission_summary_json()
     ))
@@ -233,20 +230,6 @@ pub(in crate::control) fn clients_json_for_params(
 ) -> Result<String> {
     state_request_session_target_matches(session, params, "client/list params")?;
     Ok(clients_json(session))
-}
-
-/// Runs the observers json for params operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(in crate::control) fn observers_json_for_params(
-    session: &Session,
-    params: Option<&str>,
-) -> Result<String> {
-    state_request_session_target_matches(session, params, "observer/list params")?;
-    let state = observer_state_filter_from_params(params, "observer/list params")?;
-    Ok(observers_json_for_state(session, state))
 }
 
 /// Validate a read-only state request `target` as a SessionTarget when present.

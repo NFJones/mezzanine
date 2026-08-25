@@ -89,10 +89,10 @@ fn exact_primary_audiences_receive_shared_and_private_events() {
     );
 }
 
-/// Verifies that approved observers only see session-view events at or after
-/// their approval marker.
+/// Verifies that observers only see session-view events at or after their
+/// attachment marker.
 #[test]
-fn approved_observer_replay_starts_at_visibility_marker() {
+fn observer_replay_starts_at_attachment_marker() {
     let mut log = EventLog::new(10, 1024).unwrap();
     log.append(
         EventKind::PaneChanged,
@@ -101,14 +101,7 @@ fn approved_observer_replay_starts_at_visibility_marker() {
         "before",
     )
     .unwrap();
-    let marker = log
-        .append(
-            EventKind::ObserverDecided,
-            Some("$1".to_string()),
-            EventVisibility::AllPrimaries,
-            "approved",
-        )
-        .unwrap();
+    let marker = log.latest_event_id() + 1;
     log.append(
         EventKind::PaneChanged,
         Some("$1".to_string()),
@@ -123,35 +116,6 @@ fn approved_observer_replay_starts_at_visibility_marker() {
 
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].payload, "after");
-}
-
-/// Verifies that pending observers receive only request-local events and do not
-/// receive the session id before approval.
-#[test]
-fn pending_observer_receives_only_request_local_status_without_session() {
-    let mut log = EventLog::new(10, 1024).unwrap();
-    log.append(
-        EventKind::ObserverRequested,
-        Some("$1".to_string()),
-        EventVisibility::AllPrimariesAndPendingObserverRequest("o1".to_string()),
-        "{\"state\":\"pending\"}",
-    )
-    .unwrap();
-    log.append(
-        EventKind::PaneChanged,
-        Some("$1".to_string()),
-        EventVisibility::SessionView,
-        "secret view",
-    )
-    .unwrap();
-
-    let events = log.replay_for(&EventAudience::PendingObserver {
-        observer_request_id: "o1".to_string(),
-    });
-
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].session_id, None);
-    assert_eq!(events[0].payload, "{\"state\":\"pending\"}");
 }
 
 /// Verifies that retention limits discard the oldest events when the log grows
@@ -272,11 +236,11 @@ fn event_notifications_embed_object_payloads() {
     let notification = encode_event_notification(&VisibleEvent {
         id: 8,
         time: "event:8".to_string(),
-        kind: EventKind::ObserverRequested,
-        session_id: None,
-        payload: r#"{"observer_request_id":"obs1","state":"pending"}"#.to_string(),
+        kind: EventKind::ClientAttached,
+        session_id: Some("$1".to_string()),
+        payload: r#"{"client_id":"c2","role":"observer"}"#.to_string(),
     });
 
-    assert!(notification.contains(r#""session_id":null"#));
-    assert!(notification.contains(r#""object":{"observer_request_id":"obs1","state":"pending"}"#));
+    assert!(notification.contains(r#""session_id":"$1""#));
+    assert!(notification.contains(r#""object":{"client_id":"c2","role":"observer"}"#));
 }

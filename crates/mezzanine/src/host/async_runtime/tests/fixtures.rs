@@ -28,9 +28,10 @@ pub(super) fn test_service_with_observer() -> (RuntimeSessionService, ClientId) 
     );
     let size = Size::new(80, 24).unwrap();
     let mut session = Session::new_default(shell, size);
-    let primary = session.attach_primary("primary", true).unwrap();
-    let (observer, request) = session.request_observer("observer");
-    session.approve_observer(&primary, &request).unwrap();
+    session.attach_primary("primary", true).unwrap();
+    let observer = session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
     let service = RuntimeSessionService::new(
         session,
         PathBuf::from("/tmp/mez-async-runtime-test.sock"),

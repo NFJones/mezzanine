@@ -20,13 +20,7 @@ pub(crate) fn control_event_audience(
         .iter()
         .find(|client| client.id == *caller_client_id)
         .ok_or_else(|| MezError::forbidden("unknown control client"))?;
-    if client.role == ClientRole::PendingObserver {
-        if client.state != ClientState::Pending {
-            return Err(MezError::forbidden(
-                "detached or revoked control clients cannot receive events",
-            ));
-        }
-    } else if client.state != ClientState::Attached {
+    if client.state != ClientState::Attached {
         return Err(MezError::forbidden(
             "detached or revoked control clients cannot receive events",
         ));
@@ -35,32 +29,17 @@ pub(crate) fn control_event_audience(
         ClientRole::Primary => Ok(EventAudience::PrimaryClient(caller_client_id.clone())),
         ClientRole::Observer => {
             let observer = session
-                .observers()
+                .observer_attachments()
                 .iter()
                 .find(|observer| observer.client_id == *caller_client_id)
                 .ok_or_else(|| {
                     MezError::new(
                         crate::error::MezErrorKind::NotFound,
-                        "observer request not found",
+                        "observer attachment not found",
                     )
                 })?;
             Ok(EventAudience::ApprovedObserver {
-                visible_from_event_id: observer.visible_from_event_id.unwrap_or(u64::MAX),
-            })
-        }
-        ClientRole::PendingObserver => {
-            let observer = session
-                .observers()
-                .iter()
-                .find(|observer| observer.client_id == *caller_client_id)
-                .ok_or_else(|| {
-                    MezError::new(
-                        crate::error::MezErrorKind::NotFound,
-                        "observer request not found",
-                    )
-                })?;
-            Ok(EventAudience::PendingObserver {
-                observer_request_id: observer.id.to_string(),
+                visible_from_event_id: observer.visible_from_event_id,
             })
         }
         ClientRole::Agent => Ok(EventAudience::Agent {

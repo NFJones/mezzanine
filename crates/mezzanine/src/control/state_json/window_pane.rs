@@ -3,10 +3,10 @@
 use super::approvals::optional_rfc3339_timestamp_json;
 use super::{
     DEFAULT_HISTORY_LIMIT, DEFAULT_PANE_TERM, FrameContext, FrameOverflow, LayoutNode, MezError,
-    ObserverDecisionState, PaneCaptureSource, PaneExitStatus, Result, Session,
-    TerminalFrameContext, Window, json_escape, json_optional_string, pane_by_id,
-    parse_json_object_value, render_frame_template, resolve_pane_target_value,
-    resolve_window_target_value, target_value_has_pane_shape, window_by_id,
+    PaneCaptureSource, PaneExitStatus, Result, Session, TerminalFrameContext, Window, json_escape,
+    json_optional_string, pane_by_id, parse_json_object_value, render_frame_template,
+    resolve_pane_target_value, resolve_window_target_value, target_value_has_pane_shape,
+    window_by_id,
 };
 /// Runs the window state json operation for this subsystem.
 ///
@@ -324,15 +324,7 @@ pub(super) fn frame_read_fields(
     frame_context: &TerminalFrameContext,
 ) -> Vec<(&'static str, String)> {
     let pane_context = frame_context.panes.get(pane.id.as_str());
-    let pending_observer_count = if frame_context.pending_observer_count == 0 {
-        session
-            .observers()
-            .iter()
-            .filter(|observer| observer.state == ObserverDecisionState::Pending)
-            .count()
-    } else {
-        frame_context.pending_observer_count
-    };
+    let pending_observer_count = frame_context.pending_observer_count;
     vec![
         (
             "session.id",

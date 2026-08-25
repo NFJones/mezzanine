@@ -262,7 +262,6 @@ fn classifies_default_prefix_key_bindings() {
         MuxAction::PasteBuffer(PasteBufferTarget::ChooseInteractively),
     );
     assert_prefix(b"\x01-", MuxAction::DeleteMostRecentPasteBuffer);
-    assert_prefix(b"\x01O", MuxAction::ChoosePendingObservers);
     assert_prefix(b"\x01~", MuxAction::ShowMessages);
     assert_eq!(
         classify_terminal_input(b"\x01e", &bindings).unwrap(),

@@ -14,10 +14,6 @@ pub enum EventKind {
     ClientAttached,
     /// A client detached from the session.
     ClientDetached,
-    /// Observer access was requested.
-    ObserverRequested,
-    /// Observer access was approved or denied.
-    ObserverDecided,
     /// Window state changed.
     WindowChanged,
     /// Pane state changed.
@@ -53,8 +49,6 @@ pub enum EventVisibility {
     PrimaryClient(ClientId),
     /// Visible to the session view after observer approval.
     SessionView,
-    /// Visible to all primaries and one matching pending observer request.
-    AllPrimariesAndPendingObserverRequest(String),
     /// Visible only to one agent.
     #[allow(
         dead_code,
@@ -86,11 +80,6 @@ pub enum EventAudience {
     ApprovedObserver {
         /// Earliest event id the observer may see.
         visible_from_event_id: u64,
-    },
-    /// Pending observer, visible only to request-local status.
-    PendingObserver {
-        /// Observer request id.
-        observer_request_id: String,
     },
     /// Agent-local event stream.
     Agent {

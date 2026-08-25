@@ -100,16 +100,6 @@ pub(super) enum ControlDispatchKind {
     ClientDetach,
     /// Transfer canonical layout ownership to an attached primary.
     ClientSetLayoutOwner,
-    /// List observer requests.
-    ObserverList,
-    /// Inspect an observer request.
-    ObserverInspect,
-    /// Approve an observer request.
-    ObserverApprove,
-    /// Reject an observer request.
-    ObserverReject,
-    /// Revoke observer status.
-    ObserverRevoke,
     /// List agents.
     AgentList,
     /// List agent tasks.
@@ -261,39 +251,6 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         method: "client/set_layout_owner",
         dispatch: ControlDispatchKind::ClientSetLayoutOwner,
         params_schema: ControlParamsSchema::Allowed(CLIENT_IDEMPOTENCY_PARAMS),
-    },
-    ControlMethodSpec {
-        method: "observer/list",
-        dispatch: ControlDispatchKind::ObserverList,
-        params_schema: ControlParamsSchema::Allowed(&["target", "state"]),
-    },
-    ControlMethodSpec {
-        method: "observer/inspect",
-        dispatch: ControlDispatchKind::ObserverInspect,
-        params_schema: ControlParamsSchema::Allowed(&["observer_request_id"]),
-    },
-    ControlMethodSpec {
-        method: "observer/approve",
-        dispatch: ControlDispatchKind::ObserverApprove,
-        params_schema: ControlParamsSchema::Allowed(&[
-            "observer_request_id",
-            "view_source_client_id",
-            "idempotency_key",
-        ]),
-    },
-    ControlMethodSpec {
-        method: "observer/reject",
-        dispatch: ControlDispatchKind::ObserverReject,
-        params_schema: ControlParamsSchema::Allowed(&[
-            "observer_request_id",
-            "reason",
-            "idempotency_key",
-        ]),
-    },
-    ControlMethodSpec {
-        method: "observer/revoke",
-        dispatch: ControlDispatchKind::ObserverRevoke,
-        params_schema: ControlParamsSchema::Allowed(&["client_id", "reason", "idempotency_key"]),
     },
     ControlMethodSpec {
         method: "window/list",

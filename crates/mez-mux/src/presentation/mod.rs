@@ -42,8 +42,6 @@ impl TerminalCursorStyle {
 pub enum ClientViewRole {
     /// Primary interactive client.
     Primary,
-    /// Observer awaiting promotion or initial synchronization.
-    PendingObserver,
     /// Read-only observer client.
     Observer,
 }
@@ -68,8 +66,6 @@ pub enum ClientStatusKind {
     Plain,
     /// Copy-mode status.
     CopyMode,
-    /// Observer waiting for promotion or synchronization.
-    PendingObserver,
     /// Diagnostic status emitted by the product adapter.
     Diagnostic,
 }
@@ -171,7 +167,6 @@ pub fn compose_client_presentation_with_styles(
         let prefix = match status.kind {
             ClientStatusKind::Plain => "",
             ClientStatusKind::CopyMode => "copy: ",
-            ClientStatusKind::PendingObserver => "observer: ",
             ClientStatusKind::Diagnostic => "status: ",
         };
         lines[target_rows - 1] =
@@ -192,9 +187,9 @@ pub fn compose_client_presentation_with_styles(
 pub fn status_line_rendition(kind: ClientStatusKind, ui_theme: &UiTheme) -> GraphicRendition {
     match kind {
         ClientStatusKind::Plain => ui_theme.colors.prompt.rendition(),
-        ClientStatusKind::CopyMode
-        | ClientStatusKind::PendingObserver
-        | ClientStatusKind::Diagnostic => ui_theme.colors.display_overlay.rendition(),
+        ClientStatusKind::CopyMode | ClientStatusKind::Diagnostic => {
+            ui_theme.colors.display_overlay.rendition()
+        }
     }
 }
 

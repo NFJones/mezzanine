@@ -1,11 +1,8 @@
-//! Event-kind, observer, and MCP server/tool state serialization.
+//! Event-kind and MCP server/tool state serialization.
 
 use super::approvals::optional_rfc3339_timestamp_json;
-use super::clients::generic_client_terminal_descriptor_json;
-use super::snapshots::observer_state_name;
 use super::{
-    EventKind, McpRegistry, McpServerKind, McpServerStatus, MezError, Result, Session, json_escape,
-    json_optional_string,
+    EventKind, McpRegistry, McpServerKind, McpServerStatus, json_escape, json_optional_string,
 };
 /// Runs the event kind name operation for this subsystem.
 ///
@@ -16,8 +13,6 @@ pub(in crate::control) fn event_kind_name(kind: EventKind) -> &'static str {
     match kind {
         EventKind::ClientAttached => "client_attached",
         EventKind::ClientDetached => "client_detached",
-        EventKind::ObserverRequested => "observer_requested",
-        EventKind::ObserverDecided => "observer_decided",
         EventKind::WindowChanged => "window_changed",
         EventKind::PaneChanged => "pane_changed",
         EventKind::AgentStatus => "agent_status",
@@ -29,57 +24,6 @@ pub(in crate::control) fn event_kind_name(kind: EventKind) -> &'static str {
         EventKind::HookFailed => "hook_failed",
         EventKind::Diagnostic => "diagnostic",
     }
-}
-
-/// Runs the observer json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(crate) fn observer_json(session: &Session, observer_id: &str) -> Result<String> {
-    let observer = session
-        .observers()
-        .iter()
-        .find(|observer| observer.id.as_str() == observer_id)
-        .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "observer not found"))?;
-    Ok(observer_json_by_ref(observer))
-}
-
-/// Runs the observer json by ref operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(in crate::control) fn observer_json_by_ref(
-    observer: &mez_mux::session::ObserverRequest,
-) -> String {
-    let visible_from_event_id = observer
-        .visible_from_event_id
-        .map(|id| id.to_string())
-        .unwrap_or_else(|| "null".to_string());
-    let visible_from_time = optional_rfc3339_timestamp_json(observer.visible_from_unix_seconds);
-    format!(
-        r#"{{"id":"{}","version":2,"observer_request_id":"{}","client_id":"{}","state":"{}","requested_at":{},"decided_at":{},"decided_by_client_id":{},"view_source_client_id":{},"visible_from_event_id":{},"visible_from_time":{},"descriptor":{{"name":"{}","interactive":{},"terminal":{}}},"reason":{}}}"#,
-        json_escape(&observer.id.to_string()),
-        json_escape(&observer.id.to_string()),
-        json_escape(&observer.client_id.to_string()),
-        observer_state_name(observer.state),
-        optional_rfc3339_timestamp_json(observer.requested_at_unix_seconds),
-        optional_rfc3339_timestamp_json(observer.decided_at_unix_seconds),
-        json_optional_string(observer.decided_by_client_id.as_deref()),
-        json_optional_string(
-            observer
-                .view_source_client_id
-                .as_ref()
-                .map(|client_id| client_id.as_str()),
-        ),
-        visible_from_event_id,
-        visible_from_time,
-        json_escape(&observer.descriptor_name),
-        observer.descriptor_interactive,
-        generic_client_terminal_descriptor_json(observer.descriptor_terminal.as_ref()),
-        json_optional_string(observer.reason.as_deref())
-    )
 }
 
 /// Runs the mcp servers json operation for this subsystem.

@@ -7,36 +7,20 @@
 //! control facade.
 
 use super::{
-    AgentId, AttachedTerminalClientStepPlan, AuditActor, AuditRecord, ClientRole, ClientState,
-    ClientViewRole, EventKind, EventVisibility, MezError, PaneCaptureSource, PaneId, Result,
-    RuntimeLifecycleState, RuntimeSessionService, SenderIdentity, SplitDirection,
-    TerminalClientLoopAction, TerminalClientLoopConfig, destination_target_checked_resolved,
-    dispatch_control_request_for_client_with_agent_state, dispatch_control_request_with_captures,
-    json_escape, layout_state_json, observer_json, pane_id_from_runtime_agent_id,
-    pane_target_checked_resolved, rendered_client_view_json, route_client_input_actions,
-    runtime_json_bool_field, runtime_json_creation_command, runtime_json_input_bytes,
-    runtime_json_optional_client_size, runtime_json_optional_size_field,
+    AgentId, AttachedTerminalClientStepPlan, ClientRole, ClientState, ClientViewRole, EventKind,
+    MezError, PaneCaptureSource, PaneId, Result, RuntimeLifecycleState, RuntimeSessionService,
+    SenderIdentity, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig,
+    destination_target_checked_resolved, dispatch_control_request_for_client_with_agent_state,
+    dispatch_control_request_with_captures, json_escape, layout_state_json,
+    pane_id_from_runtime_agent_id, pane_target_checked_resolved, rendered_client_view_json,
+    route_client_input_actions, runtime_json_bool_field, runtime_json_creation_command,
+    runtime_json_input_bytes, runtime_json_optional_client_size, runtime_json_optional_size_field,
     runtime_json_optional_view_offset, runtime_json_rpc_error, runtime_json_size,
     runtime_json_start_directory, runtime_json_string_field, runtime_mcp_retry_event_payload,
     runtime_mcp_retry_result_json, runtime_mutating_response_is_cacheable, runtime_pane_by_id,
     runtime_pane_readiness_state_name, runtime_split_direction, runtime_terminal_step_result_json,
     source_pane_target_checked_resolved, window_target_checked_resolved,
 };
-
-enum ObserverDecisionMutation {
-    Approve {
-        observer_id: String,
-        view_source_client_id: mez_core::ids::ClientId,
-    },
-    Reject {
-        observer_id: String,
-        reason: Option<String>,
-    },
-    Revoke {
-        client_id: String,
-        reason: Option<String>,
-    },
-}
 
 impl RuntimeSessionService {
     /// Runs the dispatch runtime mutating request operation for this subsystem.
@@ -132,9 +116,6 @@ impl RuntimeSessionService {
             }
             "window/close" => self.dispatch_runtime_window_close(primary_client_id, params),
             "session/kill" => self.dispatch_runtime_session_kill(primary_client_id, params),
-            "observer/approve" => self.dispatch_runtime_observer_approve(primary_client_id, params),
-            "observer/reject" => self.dispatch_runtime_observer_reject(primary_client_id, params),
-            "observer/revoke" => self.dispatch_runtime_observer_revoke(primary_client_id, params),
             "terminal/step" => self.dispatch_runtime_terminal_step(primary_client_id, params),
             "terminal/command" => self.dispatch_runtime_terminal_command(primary_client_id, params),
             "agent/shell/command" => {
@@ -626,237 +607,6 @@ impl RuntimeSessionService {
         ))
     }
 
-    /// Runs the dispatch runtime observer approve operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn dispatch_runtime_observer_approve(
-        &mut self,
-        primary_client_id: &mez_core::ids::ClientId,
-        params: &str,
-    ) -> Result<String> {
-        let observer_id =
-            runtime_json_string_field(params, "observer_request_id").ok_or_else(|| {
-                MezError::invalid_args("observer/approve requires observer_request_id")
-            })?;
-        let view_source_client_id = runtime_json_string_field(params, "view_source_client_id")
-            .map(|client_id| {
-                mez_core::ids::ClientId::parse('c', client_id).ok_or_else(|| {
-                    MezError::invalid_args("observer/approve view_source_client_id is invalid")
-                })
-            })
-            .transpose()?
-            .unwrap_or_else(|| primary_client_id.clone());
-        self.apply_observer_approval_transaction(
-            primary_client_id,
-            observer_id,
-            view_source_client_id,
-        )
-    }
-
-    /// Runs the dispatch runtime observer reject operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn dispatch_runtime_observer_reject(
-        &mut self,
-        primary_client_id: &mez_core::ids::ClientId,
-        params: &str,
-    ) -> Result<String> {
-        let observer_id =
-            runtime_json_string_field(params, "observer_request_id").ok_or_else(|| {
-                MezError::invalid_args("observer/reject requires observer_request_id")
-            })?;
-        let reason = runtime_json_string_field(params, "reason");
-        self.apply_observer_rejection_transaction(primary_client_id, observer_id, reason)
-    }
-
-    /// Runs the dispatch runtime observer revoke operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn dispatch_runtime_observer_revoke(
-        &mut self,
-        primary_client_id: &mez_core::ids::ClientId,
-        params: &str,
-    ) -> Result<String> {
-        let client_id = runtime_json_string_field(params, "client_id")
-            .ok_or_else(|| MezError::invalid_args("observer/revoke requires client_id"))?;
-        let reason = runtime_json_string_field(params, "reason");
-        self.apply_observer_revocation_transaction(primary_client_id, client_id, reason)
-    }
-
-    /// Applies observer approval through the staged publication transaction.
-    pub(crate) fn apply_observer_approval_transaction(
-        &mut self,
-        primary_client_id: &mez_core::ids::ClientId,
-        observer_id: String,
-        view_source_client_id: mez_core::ids::ClientId,
-    ) -> Result<String> {
-        self.apply_observer_decision_transaction(
-            primary_client_id,
-            ObserverDecisionMutation::Approve {
-                observer_id,
-                view_source_client_id,
-            },
-        )
-    }
-
-    /// Applies observer rejection through the staged publication transaction.
-    pub(crate) fn apply_observer_rejection_transaction(
-        &mut self,
-        primary_client_id: &mez_core::ids::ClientId,
-        observer_id: String,
-        reason: Option<String>,
-    ) -> Result<String> {
-        self.apply_observer_decision_transaction(
-            primary_client_id,
-            ObserverDecisionMutation::Reject {
-                observer_id,
-                reason,
-            },
-        )
-    }
-
-    /// Applies observer revocation through the staged publication transaction.
-    pub(crate) fn apply_observer_revocation_transaction(
-        &mut self,
-        primary_client_id: &mez_core::ids::ClientId,
-        client_id: String,
-        reason: Option<String>,
-    ) -> Result<String> {
-        self.apply_observer_decision_transaction(
-            primary_client_id,
-            ObserverDecisionMutation::Revoke { client_id, reason },
-        )
-    }
-
-    /// Applies one observer decision to staged authority, event, and audit owners.
-    ///
-    /// Publication failures leave all live owners untouched, so the returned
-    /// error and any cached response cannot contradict committed authority.
-    fn apply_observer_decision_transaction(
-        &mut self,
-        primary_client_id: &mez_core::ids::ClientId,
-        mutation: ObserverDecisionMutation,
-    ) -> Result<String> {
-        let mut staged_session = self.session.clone();
-        let mut staged_event_log = self.control.event_log().cloned();
-        let mut staged_audit_log = self.persistence.audit_log().cloned();
-
-        let (event_payload, target_kind, target_id, decision, result) = match mutation {
-            ObserverDecisionMutation::Approve {
-                observer_id,
-                view_source_client_id,
-            } => {
-                if let Some(visible_from_event_id) = staged_event_log
-                    .as_ref()
-                    .map(|event_log| event_log.latest_event_id().saturating_add(1))
-                {
-                    staged_session.approve_observer_target_with_visible_from_event_id_and_source(
-                        primary_client_id,
-                        &observer_id,
-                        visible_from_event_id,
-                        &view_source_client_id,
-                    )?;
-                } else {
-                    staged_session.approve_observer_target_with_source(
-                        primary_client_id,
-                        &observer_id,
-                        &view_source_client_id,
-                    )?;
-                }
-                let result = format!(
-                    r#"{{"observer":{}}}"#,
-                    observer_json(&staged_session, &observer_id)?
-                );
-                (
-                    format!(
-                        r#"{{"observer_request_id":"{}","decision":"approved","view_source_client_id":"{}"}}"#,
-                        json_escape(&observer_id),
-                        json_escape(view_source_client_id.as_str())
-                    ),
-                    "observer_request",
-                    observer_id,
-                    "approved",
-                    result,
-                )
-            }
-            ObserverDecisionMutation::Reject {
-                observer_id,
-                reason,
-            } => {
-                staged_session.reject_observer_target_with_reason(
-                    primary_client_id,
-                    &observer_id,
-                    reason,
-                )?;
-                let result = format!(
-                    r#"{{"observer":{}}}"#,
-                    observer_json(&staged_session, &observer_id)?
-                );
-                (
-                    format!(
-                        r#"{{"observer_request_id":"{}","decision":"rejected"}}"#,
-                        json_escape(&observer_id)
-                    ),
-                    "observer_request",
-                    observer_id,
-                    "rejected",
-                    result,
-                )
-            }
-            ObserverDecisionMutation::Revoke { client_id, reason } => {
-                staged_session.revoke_observer_client_with_reason(
-                    primary_client_id,
-                    &client_id,
-                    reason,
-                )?;
-                (
-                    format!(
-                        r#"{{"client_id":"{}","decision":"revoked"}}"#,
-                        json_escape(&client_id)
-                    ),
-                    "client",
-                    client_id,
-                    "revoked",
-                    r#"{"revoked":true}"#.to_string(),
-                )
-            }
-        };
-
-        if let Some(event_log) = staged_event_log.as_mut() {
-            event_log.append(
-                EventKind::ObserverDecided,
-                Some(staged_session.id.to_string()),
-                EventVisibility::AllPrimaries,
-                event_payload,
-            )?;
-        }
-        if let Some(audit_log) = staged_audit_log.as_mut() {
-            let record = AuditRecord::observer_decision(
-                staged_session.id.to_string(),
-                AuditActor {
-                    kind: "client".to_string(),
-                    id: primary_client_id.to_string(),
-                },
-                target_kind.to_string(),
-                target_id,
-                decision.to_string(),
-                "succeeded",
-            );
-            let _ = audit_log.append(record)?;
-        }
-
-        self.session = staged_session;
-        self.control.replace_event_log(staged_event_log);
-        self.persistence.replace_audit_log(staged_audit_log);
-        Ok(result)
-    }
-
     /// Runs the dispatch runtime terminal step operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -945,12 +695,11 @@ impl RuntimeSessionService {
             .iter()
             .find(|client| client.id == *caller_client_id)
             .ok_or_else(|| MezError::forbidden("unknown control client"))?;
-        if !matches!(client.state, ClientState::Attached | ClientState::Pending) {
+        if client.state != ClientState::Attached {
             return Err(MezError::forbidden("control client is not attached"));
         }
         let role = match client.role {
             ClientRole::Primary => ClientViewRole::Primary,
-            ClientRole::PendingObserver => ClientViewRole::PendingObserver,
             ClientRole::Observer => ClientViewRole::Observer,
             ClientRole::Agent | ClientRole::Automation => {
                 return Err(MezError::forbidden(

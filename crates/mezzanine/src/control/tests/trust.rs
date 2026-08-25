@@ -147,24 +147,3 @@ fn generic_control_dispatches_empty_project_trust_state() {
     );
     assert!(unknown.contains("project/trust/list params contains unknown field"));
 }
-
-/// Verifies observer cannot inspect other observer request.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-#[test]
-fn observer_cannot_inspect_other_observer_request() {
-    let (mut session, _primary) = test_session();
-    let (first_client, _first_request) = session.request_observer("first");
-    let (_second_client, second_request) = session.request_observer("second");
-    let inspect_request = format!(
-        r#"{{"jsonrpc":"2.0","id":1,"method":"observer/inspect","params":{{"observer_request_id":"{}"}}}}"#,
-        second_request
-    );
-
-    let response =
-        dispatch_control_request_for_client(&inspect_request, &mut session, &first_client, None);
-
-    assert!(response.contains(r#""mezzanine_code":"forbidden""#));
-}

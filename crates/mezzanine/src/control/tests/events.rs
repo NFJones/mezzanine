@@ -10,7 +10,6 @@ use super::*;
 #[test]
 fn event_list_uses_role_visibility_policy() {
     let (mut session, primary) = test_session();
-    let (observer_client, observer_request) = session.request_observer("observer");
     let mut log = EventLog::new(10, 1024).unwrap();
     log.append(
         EventKind::PaneChanged,
@@ -19,28 +18,8 @@ fn event_list_uses_role_visibility_policy() {
         "before",
     )
     .unwrap();
-    log.append(
-        EventKind::ObserverRequested,
-        Some(session.id.to_string()),
-        EventVisibility::AllPrimariesAndPendingObserverRequest(observer_request.to_string()),
-        "{\"state\":\"pending\"}",
-    )
-    .unwrap();
-
-    let pending_response = dispatch_control_request_for_client_with_events(
-        r#"{"jsonrpc":"2.0","id":1,"method":"event/list","params":{}}"#,
-        &mut session,
-        &observer_client,
-        None,
-        &log,
-    );
-    assert!(pending_response.contains(r#""mezzanine_code":"forbidden""#));
-    assert!(pending_response.contains("pending observer clients are not authorized"));
-    assert!(!pending_response.contains("before"));
-    assert!(!pending_response.contains("observer_requested"));
-
-    session
-        .approve_observer_target(&primary, observer_request.as_str())
+    let observer_client = session
+        .attach_observer_with_terminal("observer", None, log.latest_event_id() + 1)
         .unwrap();
     log.append(
         EventKind::PaneChanged,
@@ -49,8 +28,9 @@ fn event_list_uses_role_visibility_policy() {
         "after",
     )
     .unwrap();
+
     let observer_response = dispatch_control_request_for_client_with_events(
-        r#"{"jsonrpc":"2.0","id":2,"method":"event/list","params":{}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"event/list","params":{}}"#,
         &mut session,
         &observer_client,
         None,
@@ -60,7 +40,7 @@ fn event_list_uses_role_visibility_policy() {
     assert!(!observer_response.contains("before"));
 
     let primary_response = dispatch_control_request_for_client_with_events(
-        r#"{"jsonrpc":"2.0","id":3,"method":"event/list","params":{}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"event/list","params":{}}"#,
         &mut session,
         &primary,
         None,

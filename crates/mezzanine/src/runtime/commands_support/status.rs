@@ -1,12 +1,12 @@
 //! Runtime status, message-log, and metrics display helpers.
 //!
 //! This module owns command-support formatting for runtime event messages,
-//! pending observer/approval summaries, hook failures, and runtime/async
+//! pending approval summaries, hook failures, and runtime/async
 //! metrics so the command-support parent can remain focused on dispatch.
 
 use super::{
     BTreeMap, EventAudience, HookExecutionStatus, ModelTokenUsage, ModelTokenUsageKey,
-    ObserverDecisionState, RuntimeSessionService, event_type_name, runtime_hook_event_name,
+    RuntimeSessionService, event_type_name, runtime_hook_event_name,
     runtime_hook_execution_status_name,
 };
 
@@ -16,12 +16,6 @@ use super::{
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(crate) fn runtime_show_messages_display(service: &RuntimeSessionService) -> String {
-    let pending_observers = service
-        .session
-        .observers()
-        .iter()
-        .filter(|observer| observer.state == ObserverDecisionState::Pending)
-        .collect::<Vec<_>>();
     let pending_approvals = service.blocked_approvals().pending();
     let hook_failures = service
         .focused_shell_hook_results()
@@ -34,14 +28,6 @@ pub(crate) fn runtime_show_messages_display(service: &RuntimeSessionService) -> 
         })
         .collect::<Vec<_>>();
     let mut rows = Vec::new();
-    for observer in &pending_observers {
-        rows.push(show_messages_table_row(
-            "pending observer",
-            observer.id.as_str(),
-            "—",
-            &format!("client={}; state=pending", observer.client_id),
-        ));
-    }
     for approval in &pending_approvals {
         rows.push(show_messages_table_row(
             "pending approval",

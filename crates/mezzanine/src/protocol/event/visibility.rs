@@ -21,10 +21,6 @@ pub(super) fn visible_event(
         | (EventVisibility::SessionView, EventAudience::PrimaryClient(_))
         | (EventVisibility::SessionView, EventAudience::SessionView) => true,
         (
-            EventVisibility::AllPrimariesAndPendingObserverRequest(_),
-            EventAudience::AllPrimaries | EventAudience::PrimaryClient(_),
-        ) => true,
-        (
             EventVisibility::PrimaryClient(event_client_id),
             EventAudience::PrimaryClient(audience_client_id),
         ) => event_client_id == audience_client_id,
@@ -34,12 +30,6 @@ pub(super) fn visible_event(
                 visible_from_event_id,
             },
         ) => event.id >= *visible_from_event_id,
-        (
-            EventVisibility::AllPrimariesAndPendingObserverRequest(event_observer),
-            EventAudience::PendingObserver {
-                observer_request_id,
-            },
-        ) => event_observer == observer_request_id,
         (EventVisibility::Agent(event_agent), EventAudience::Agent { agent_id }) => {
             event_agent == agent_id
         }
@@ -51,16 +41,11 @@ pub(super) fn visible_event(
         return None;
     }
 
-    let session_id = match audience {
-        EventAudience::PendingObserver { .. } => None,
-        _ => event.session_id.clone(),
-    };
-
     Some(VisibleEvent {
         id: event.id,
         time: event.time.clone(),
         kind: event.kind,
-        session_id,
+        session_id: event.session_id.clone(),
         payload: event.payload.clone(),
     })
 }

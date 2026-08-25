@@ -6,20 +6,17 @@ use super::event_stream::{
     read_attached_client_input_or_runtime_event,
 };
 use super::requests::{
-    control_socket_cursor_blink_elapsed, observer_inspect_control_request,
-    read_async_control_response_frames_or_disconnected, refresh_attached_client_size_async,
-    terminal_view_control_request, write_async_control_body_or_disconnected,
-    write_styled_output_or_disconnected_async,
+    control_socket_cursor_blink_elapsed, read_async_control_response_frames_or_disconnected,
+    refresh_attached_client_size_async, terminal_view_control_request,
+    write_async_control_body_or_disconnected, write_styled_output_or_disconnected_async,
 };
 use super::responses::{
-    ObserverAttachState, observer_attach_state_from_inspect_response,
     terminal_step_response_line_style_spans, terminal_step_response_lines,
     terminal_step_response_output_modes,
 };
 use super::{
     AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
-    AttachTerminalSizeRefresh, AttachedTerminalOutputModes, MezError, Result, Size, UnixStream,
-    decode_control_frame, io,
+    AttachTerminalSizeRefresh, MezError, Result, Size, UnixStream, decode_control_frame, io,
 };
 
 /// Runs the run control socket attached observer client operation for this subsystem.
@@ -30,7 +27,6 @@ use super::{
 pub(in crate::cli) async fn run_control_socket_attached_observer_client(
     stream: &mut UnixStream,
     control_socket_path: &std::path::Path,
-    observer_request_id: String,
     client_size: Size,
     event_binding_token: String,
 ) -> Result<()> {
@@ -47,7 +43,6 @@ pub(in crate::cli) async fn run_control_socket_attached_observer_client(
     let run_result = run_attached_observer_client_loop_async(
         &mut control_stream,
         terminal_guard.io_mut(),
-        observer_request_id,
         client_size,
         event_stream.as_mut(),
         None,
@@ -66,7 +61,6 @@ pub(in crate::cli) async fn run_control_socket_attached_observer_client(
 /// Runs an observer attach over one persistent Iroh control stream.
 pub(in crate::cli) async fn run_iroh_attached_observer_client<S>(
     stream: &mut S,
-    observer_request_id: String,
     client_size: Size,
     mut event_receiver: tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>,
 ) -> Result<()>
@@ -80,7 +74,6 @@ where
     let run_result = run_attached_observer_client_loop_async(
         stream,
         terminal_guard.io_mut(),
-        observer_request_id,
         client_size,
         None,
         Some(&mut event_receiver),
@@ -106,28 +99,18 @@ where
 pub(in crate::cli) async fn run_control_socket_attached_observer_client_loop_async<I, S>(
     stream: &mut S,
     terminal_io: &mut I,
-    observer_request_id: String,
     client_size: Size,
 ) -> Result<()>
 where
     I: AsyncAttachedTerminalIo,
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    run_attached_observer_client_loop_async(
-        stream,
-        terminal_io,
-        observer_request_id,
-        client_size,
-        None,
-        None,
-    )
-    .await
+    run_attached_observer_client_loop_async(stream, terminal_io, client_size, None, None).await
 }
 
 async fn run_attached_observer_client_loop_async<I, S>(
     stream: &mut S,
     terminal_io: &mut I,
-    observer_request_id: String,
     mut client_size: Size,
     mut event_stream: Option<&mut AttachedRuntimeEventStream>,
     mut event_receiver: Option<&mut tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>>,
@@ -139,7 +122,6 @@ where
     terminal_io.enter_presentation().await?;
     let mut iteration = 0u64;
     let cursor_blink_epoch = std::time::Instant::now();
-    let mut approved = false;
     let mut size_refresh = AttachTerminalSizeRefresh::default();
 
     loop {
@@ -197,11 +179,7 @@ where
             break Ok(());
         }
 
-        let request = if approved {
-            terminal_view_control_request(iteration, client_size)
-        } else {
-            observer_inspect_control_request(iteration, &observer_request_id)
-        };
+        let request = terminal_view_control_request(iteration, client_size);
         if !write_async_control_body_or_disconnected(stream, &request).await? {
             break Ok(());
         }
@@ -211,54 +189,8 @@ where
             break Ok(());
         };
         let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
-        if !approved {
-            match observer_attach_state_from_inspect_response(body.as_str())? {
-                ObserverAttachState::Pending => {
-                    if !write_styled_output_or_disconnected_async(
-                        terminal_io,
-                        &["observer pending approval".to_string()],
-                        &[],
-                        AttachedTerminalOutputModes::default(),
-                    )
-                    .await?
-                    {
-                        break Ok(());
-                    }
-                }
-                ObserverAttachState::Approved => {
-                    approved = true;
-                }
-                ObserverAttachState::Rejected => {
-                    let line = "observer request rejected".to_string();
-                    let _ = write_styled_output_or_disconnected_async(
-                        terminal_io,
-                        &[line],
-                        &[],
-                        AttachedTerminalOutputModes::default(),
-                    )
-                    .await?;
-                    break Ok(());
-                }
-                ObserverAttachState::Revoked => {
-                    let line = "observer access revoked".to_string();
-                    let _ = write_styled_output_or_disconnected_async(
-                        terminal_io,
-                        &[line],
-                        &[],
-                        AttachedTerminalOutputModes::default(),
-                    )
-                    .await?;
-                    break Ok(());
-                }
-            }
-            iteration = iteration.saturating_add(1);
-            continue;
-        }
-        let mut lines = terminal_step_response_lines(body.as_str())?;
+        let lines = terminal_step_response_lines(body.as_str())?;
         let line_style_spans = terminal_step_response_line_style_spans(body.as_str())?;
-        if lines.is_empty() {
-            lines.push("observer pending approval".to_string());
-        }
         let modes = control_socket_cursor_blink_elapsed(
             terminal_step_response_output_modes(body.as_str())?.unwrap_or_default(),
             cursor_blink_epoch,

@@ -42,7 +42,7 @@ use super::{
     dispatch_control_request_for_connection, dispatch_control_request_with_approvals,
     dispatch_control_request_with_approvals_and_audit, dispatch_control_request_with_captures,
     dispatch_control_request_with_mcp, dispatch_snapshot_request_with_context_async, json_escape,
-    layout_state_json, normalize_exact_command_text, observer_json, pane_target_checked_resolved,
+    layout_state_json, normalize_exact_command_text, pane_target_checked_resolved,
     parse_json_rpc_request, plan_config_mutation, project_trust_state_filter_from_params,
     rendered_client_view_json, route_client_input_actions, runtime_agent_turn_state_json,
     runtime_approval_decision_name_to_kind, runtime_approval_policy_name,
@@ -872,7 +872,14 @@ impl RuntimeSessionService {
             }
 
             let primary_count_before = self.session.attached_primaries().count();
-            let observer_count_before = self.session.observers().len();
+            if runtime_initialize_requested_observer(&request) {
+                connection.set_observer_visible_from_event_id(Some(
+                    self.control
+                        .event_log()
+                        .map(|event_log| event_log.latest_event_id().saturating_add(1))
+                        .unwrap_or_else(|| self.session.mutation_revision().saturating_add(1)),
+                ));
+            }
             let mut response = dispatch_control_request_for_connection(
                 body,
                 &mut self.session,
@@ -884,7 +891,6 @@ impl RuntimeSessionService {
                     &request,
                     primary_count_before,
                     connection.caller_client_id(),
-                    observer_count_before,
                 )
             {
                 return runtime_json_rpc_error(&request.id, error.kind(), error.message());

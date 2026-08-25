@@ -8,17 +8,17 @@
 use super::{
     AgentShellVisibility, AgentTurnRecord, AgentTurnState, ClientViewRole, CopyMode, CopyPosition,
     MezError, MouseBorderCell, MousePaneAgentSelectorCell, MousePaneAgentStatusCell,
-    MousePaneRegion, MouseWindowActionFrameCell, MouseWindowFrameCell, ObserverDecisionState,
-    ROOT_AGENT_DISPLAY_NAME, ReadlinePrompt, ReadlinePromptKind, RenderedClientView, Result,
-    RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimePaneAgentStatusSelector,
-    RuntimePrimaryPromptInput, RuntimeSessionService, Size, TerminalClientLoopConfig,
-    TerminalFrameContext, TerminalPaneFrameContext, TerminalScreen, TerminalStyleSpan,
-    TerminalStyledLine, TerminalWindowFrameContext, TerminalWindowGroupFrameContext,
-    TerminalWindowStatusContext, WindowPresentationOptions, WindowPresentationPlan,
-    agent_prompt_reserved_line_count, compose_modal_display_overlay_lines,
-    compose_prompt_overlay_presentation_with_styles, current_unix_millis, current_unix_seconds,
-    modal_overlay_page_rows, mouse_border_cells_for_geometries, overlay_footer,
-    overlay_render_lines, overlay_rendered_line_style_spans, overlay_rendered_selection_start,
+    MousePaneRegion, MouseWindowActionFrameCell, MouseWindowFrameCell, ROOT_AGENT_DISPLAY_NAME,
+    ReadlinePrompt, ReadlinePromptKind, RenderedClientView, Result, RunningShellTransactionKind,
+    RuntimeDisplayOverlay, RuntimePaneAgentStatusSelector, RuntimePrimaryPromptInput,
+    RuntimeSessionService, Size, TerminalClientLoopConfig, TerminalFrameContext,
+    TerminalPaneFrameContext, TerminalScreen, TerminalStyleSpan, TerminalStyledLine,
+    TerminalWindowFrameContext, TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
+    WindowPresentationOptions, WindowPresentationPlan, agent_prompt_reserved_line_count,
+    compose_modal_display_overlay_lines, compose_prompt_overlay_presentation_with_styles,
+    current_unix_millis, current_unix_seconds, modal_overlay_page_rows,
+    mouse_border_cells_for_geometries, overlay_footer, overlay_render_lines,
+    overlay_rendered_line_style_spans, overlay_rendered_selection_start,
     overlay_selection_rendition, overlay_styled_lines, overlay_text_at,
     pane_frame_agent_status_pillbox_cells, plan_window_presentation,
     render_attached_client_view_with_screen_and_row_resolvers, runtime_agent_turn_duration_display,
@@ -138,10 +138,7 @@ impl RuntimeSessionService {
             .iter()
             .find(|client| client.id == *client_id)
             .ok_or_else(|| MezError::forbidden("render requires an attached client"))?;
-        if !matches!(
-            client.state,
-            mez_mux::session::ClientState::Attached | mez_mux::session::ClientState::Pending
-        ) {
+        if client.state != mez_mux::session::ClientState::Attached {
             return Err(MezError::forbidden("render requires an attached client"));
         }
         let role_matches = matches!(
@@ -152,9 +149,6 @@ impl RuntimeSessionService {
             ) | (
                 mez_mux::session::ClientRole::Observer,
                 ClientViewRole::Observer
-            ) | (
-                mez_mux::session::ClientRole::PendingObserver,
-                ClientViewRole::PendingObserver
             )
         );
         if !role_matches {
@@ -168,14 +162,13 @@ impl RuntimeSessionService {
             ClientViewRole::Observer => {
                 let source_client_id = self
                     .session
-                    .observers()
+                    .observer_attachments()
                     .iter()
                     .find(|observer| observer.client_id == *client_id)
-                    .and_then(|observer| observer.view_source_client_id.clone())
+                    .map(|observer| observer.view_source_client_id.clone())
                     .ok_or_else(|| MezError::forbidden("observer has no attached view source"))?;
                 self.session.activate_client_navigation(&source_client_id)?;
             }
-            ClientViewRole::PendingObserver => {}
         }
         Ok(())
     }
@@ -1317,12 +1310,6 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(crate) fn terminal_frame_context(&self) -> TerminalFrameContext {
-        let pending_observer_count = self
-            .session
-            .observers()
-            .iter()
-            .filter(|observer| observer.state == ObserverDecisionState::Pending)
-            .count();
         let shell_process_name = self
             .session
             .shell
@@ -1331,7 +1318,7 @@ impl RuntimeSessionService {
             .map(|name| name.to_string_lossy().to_string());
         let mut context = TerminalFrameContext {
             session_id: Some(self.session.id.to_string()),
-            pending_observer_count,
+            pending_observer_count: 0,
             pressed_window_action: self.presentation.pressed_window_action.clone(),
             animation_tick_ms: self.runtime_frame_animation_tick_ms(),
             reduced_motion: self.presentation.settings.terminal_reduced_motion,
@@ -1844,12 +1831,6 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn pending_observer_status_line(&self) -> Option<String> {
-        let pending = self
-            .session
-            .observers()
-            .iter()
-            .filter(|observer| observer.state == ObserverDecisionState::Pending)
-            .count();
-        (pending > 0).then(|| format!("observer: {pending} pending - Ctrl+A O choose-observer"))
+        None
     }
 }

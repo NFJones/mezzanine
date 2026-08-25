@@ -1,11 +1,10 @@
-//! Client and observer state serialization.
+//! Client state serialization.
 
 use super::approvals::optional_rfc3339_timestamp_json;
-use super::mcp::observer_json_by_ref;
 use super::snapshots::{client_role_name, client_state_name};
 use super::{
-    ClientRole, ClientState, ClientTerminalDescriptor, DEFAULT_PANE_TERM, ObserverDecisionState,
-    Session, json_escape, string_array_json,
+    ClientRole, ClientState, ClientTerminalDescriptor, DEFAULT_PANE_TERM, Session, json_escape,
+    string_array_json,
 };
 /// Runs the clients json operation for this subsystem.
 ///
@@ -67,10 +66,7 @@ pub(in crate::control) fn client_json(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn client_requested_role_name(role: ClientRole) -> &'static str {
-    match role {
-        ClientRole::PendingObserver => "observer",
-        _ => client_role_name(role),
-    }
+    client_role_name(role)
 }
 
 /// Runs the generic client terminal descriptor operation for this subsystem.
@@ -143,31 +139,4 @@ pub(super) fn generic_client_terminal_descriptor_object_json(
             string_array_json(&terminal.features)
         )
     }
-}
-
-/// Runs the observers json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(crate) fn observers_json(session: &Session) -> String {
-    observers_json_for_state(session, None)
-}
-
-/// Runs the observers json for state operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn observers_json_for_state(
-    session: &Session,
-    state: Option<ObserverDecisionState>,
-) -> String {
-    let observers = session
-        .observers()
-        .iter()
-        .filter(|observer| state.is_none_or(|state| observer.state == state))
-        .map(observer_json_by_ref)
-        .collect::<Vec<_>>();
-    format!("[{}]", observers.join(","))
 }

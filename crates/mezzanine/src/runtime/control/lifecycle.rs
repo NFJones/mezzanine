@@ -1,18 +1,18 @@
 //! Runtime control helpers for lifecycle initialization and snapshot resume.
 //!
 //! This module owns runtime-visible side effects for successful control
-//! initialization, observer request publication, snapshot operation auditing,
+//! initialization, client attachment publication, snapshot operation auditing,
 //! and snapshot resume application. The parent control module keeps request
 //! routing while this module keeps lifecycle mutation and rollback details out
 //! of the main control facade.
 
 use super::{
     AgentShellStore, AgentTurnLedger, AuditActor, AuditRecord, ControlConnectionState, EventKind,
-    EventVisibility, MezError, Result, RuntimeLifecycleState, RuntimeSessionService,
-    SnapshotRepository, current_unix_seconds, json_escape, runtime_hook_event_for_lifecycle,
-    runtime_initialize_requested_observer, runtime_initialize_requested_primary,
-    runtime_initialize_terminal_size, runtime_json_string_field, runtime_snapshot_resume_plan_json,
-    runtime_string_array_json, snapshot_id_for_idempotency_key,
+    MezError, Result, RuntimeLifecycleState, RuntimeSessionService, SnapshotRepository,
+    current_unix_seconds, json_escape, runtime_initialize_requested_observer,
+    runtime_initialize_requested_primary, runtime_initialize_terminal_size,
+    runtime_json_string_field, runtime_snapshot_resume_plan_json, runtime_string_array_json,
+    snapshot_id_for_idempotency_key,
 };
 
 impl RuntimeSessionService {
@@ -26,14 +26,31 @@ impl RuntimeSessionService {
         request: &crate::control::JsonRpcRequest,
         primary_count_before: usize,
         initialized_client_id: Option<&mez_core::ids::ClientId>,
-        observer_count_before: usize,
     ) -> Result<()> {
         if runtime_initialize_requested_observer(request) {
             self.session
                 .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
                     self.session.state,
                 ));
-            return self.apply_runtime_observer_initialize_side_effects(observer_count_before);
+            let Some(observer_id) = initialized_client_id
+                .filter(|client_id| {
+                    self.session.clients().iter().any(|client| {
+                        client.id == **client_id
+                            && client.role == mez_mux::session::ClientRole::Observer
+                            && client.state == mez_mux::session::ClientState::Attached
+                    })
+                })
+                .cloned()
+            else {
+                return Ok(());
+            };
+            return self.append_lifecycle_event(
+                EventKind::ClientAttached,
+                format!(
+                    r#"{{"client_id":"{}","role":"observer"}}"#,
+                    json_escape(observer_id.as_str())
+                ),
+            );
         }
         if !runtime_initialize_requested_primary(request) {
             self.session
@@ -78,65 +95,6 @@ impl RuntimeSessionService {
                 self.session.authoritative_size.rows
             ),
         )
-    }
-
-    /// Publishes runtime-visible side effects for a successful observer request.
-    fn apply_runtime_observer_initialize_side_effects(
-        &mut self,
-        observer_count_before: usize,
-    ) -> Result<()> {
-        let Some(observer) = self.session.observers().get(observer_count_before).cloned() else {
-            return Ok(());
-        };
-        let observer_id = observer.id.to_string();
-        let payload = format!(
-            r#"{{"observer_id":"{}","client_id":"{}","state":"pending","descriptor":"{}","interactive":{},"terminal":"{}"}}"#,
-            json_escape(&observer_id),
-            json_escape(observer.client_id.as_str()),
-            json_escape(&observer.descriptor_name),
-            observer.descriptor_interactive,
-            json_escape(
-                &observer
-                    .descriptor_terminal
-                    .as_ref()
-                    .map(|terminal| format!(
-                        "{}x{} {}",
-                        terminal.columns, terminal.rows, terminal.term
-                    ))
-                    .unwrap_or_else(|| "none".to_string())
-            )
-        );
-        self.append_observer_requested_lifecycle_event(observer_id.as_str(), payload)?;
-        let active_pane_id = self.active_pane_id()?;
-        self.append_agent_status_text_to_terminal_buffer(
-            &active_pane_id,
-            &format!(
-                "observer request {} from {} is pending",
-                observer.id, observer.descriptor_name
-            ),
-        )
-    }
-
-    /// Appends an observer-request event with pending-observer visibility.
-    fn append_observer_requested_lifecycle_event(
-        &mut self,
-        observer_id: &str,
-        payload: String,
-    ) -> Result<()> {
-        if let Some(event_log) = self.control.event_log_mut() {
-            event_log.append(
-                EventKind::ObserverRequested,
-                Some(self.session.id.to_string()),
-                EventVisibility::AllPrimariesAndPendingObserverRequest(observer_id.to_string()),
-                payload.clone(),
-            )?;
-        }
-        if let Some(hook_event) =
-            runtime_hook_event_for_lifecycle(EventKind::ObserverRequested, &payload)
-        {
-            self.run_configured_completed_hooks(hook_event, &payload)?;
-        }
-        Ok(())
     }
 
     /// Runs the append runtime snapshot audit operation for this subsystem.
