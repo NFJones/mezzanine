@@ -197,6 +197,10 @@ impl HostServer {
     where
         C: Future<Output = ()>,
     {
+        eprintln!(
+            "mez host: listening for local clients on {}",
+            self.socket_path.display()
+        );
         tokio::pin!(cancellation);
         let mut connections = FuturesUnordered::new();
         let mut checkpoint_timer = tokio::time::interval_at(
@@ -244,15 +248,24 @@ impl HostServer {
                 }
                 accepted = self.listener.accept(), if connections.len() < HOST_CONTROL_CONNECTION_LIMIT => {
                     let (mut stream, _) = accepted?;
-                    let Ok(peer_uid) = crate::runtime::authenticated_unix_peer_uid(
+                    let peer_uid = match crate::runtime::authenticated_unix_peer_uid(
                         stream.as_raw_fd(),
                         self.config.owner_uid,
-                    ) else {
-                        continue;
+                    ) {
+                        Ok(peer_uid) => peer_uid,
+                        Err(error) => {
+                            eprintln!("mez host: rejected local client: peer authentication failed: {error}");
+                            continue;
+                        }
                     };
                     if peer_uid != self.config.owner_uid {
+                        eprintln!(
+                            "mez host: rejected local client with uid {peer_uid}: expected uid {}",
+                            self.config.owner_uid
+                        );
                         continue;
                     }
+                    eprintln!("mez host: accepted local client with uid {peer_uid}");
                     connections.push(async move {
                         match tokio::time::timeout(
                             HOST_CONTROL_CONNECTION_TIMEOUT,
@@ -260,8 +273,18 @@ impl HostServer {
                         )
                         .await
                         {
-                            Ok(Ok(shutdown)) => shutdown,
-                            Ok(Err(_)) | Err(_) => None,
+                            Ok(Ok(shutdown)) => {
+                                eprintln!("mez host: local client request completed");
+                                shutdown
+                            }
+                            Ok(Err(error)) => {
+                                eprintln!("mez host: local client request failed: {error}");
+                                None
+                            }
+                            Err(_) => {
+                                eprintln!("mez host: local client request timed out after {} seconds", HOST_CONTROL_CONNECTION_TIMEOUT.as_secs());
+                                None
+                            }
                         }
                     });
                 }

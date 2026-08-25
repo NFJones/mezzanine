@@ -329,6 +329,7 @@ impl HostIrohRuntime {
         let audit_log = self.audit_log.clone();
         let mut tasks = JoinSet::new();
         let mut accepted = 0u64;
+        eprintln!("mez host: listening for remote clients on Iroh endpoint {server_endpoint_id}");
         tokio::pin!(cancellation);
 
         loop {
@@ -342,14 +343,18 @@ impl HostIrohRuntime {
                     let router = router.clone();
                     let audit_log = audit_log.clone();
                     tasks.spawn(async move {
-                        serve_host_only_connection(
+                        let result = serve_host_only_connection(
                             incoming,
                             policy,
                             trust,
                             server_endpoint_id,
                             router,
                             audit_log,
-                        ).await
+                        ).await;
+                        match result {
+                            Ok(()) => eprintln!("mez host: remote client connection completed"),
+                            Err(error) => eprintln!("mez host: remote client connection failed: {error}"),
+                        }
                     });
                     accepted = accepted.saturating_add(1);
                 }

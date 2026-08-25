@@ -178,6 +178,9 @@ eligible session, or immediately creates and attaches when none is eligible.
 `mez new [--name NAME]` always creates. Local commands do not require Iroh or
 pairing. `mez serve` remains the foreground single-session compatibility path;
 `mez host serve` is the sshd-like foreground service for a service manager.
+It writes its initial machine-readable readiness record to standard output and
+writes local and remote client connection, rejection, timeout, and failure
+diagnostics to standard error.
 
 An Iroh profile in persistent-host mode identifies one stable host rather than
 one session. The remote forms are:
