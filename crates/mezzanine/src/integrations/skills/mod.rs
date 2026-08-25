@@ -919,6 +919,9 @@ mod tests {
                 .contains("Prioritize dependency-free in-progress issues over open issues")
         );
         assert!(fix_issues_document.text.contains(
+            "prioritize open issues related to current uncommitted changes over unrelated open issues"
+        ));
+        assert!(fix_issues_document.text.contains(
             "do not repeat either query merely because another capability, inspection, edit, test, or provider call occurred"
         ));
         assert!(
