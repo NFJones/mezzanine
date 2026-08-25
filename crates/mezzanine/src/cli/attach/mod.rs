@@ -91,11 +91,12 @@ impl AttachClientFrame {
         *row_spans = row_spans
             .iter()
             .flat_map(|span| {
-                mez_mux::render::style_span_segments_outside_range(
-                    *span,
-                    slot.column,
-                    slot.column.saturating_add(slot.width),
-                )
+                let slot_end = slot.column.saturating_add(slot.width);
+                if mez_mux::render::style_span_overlaps_columns(*span, slot.column, slot_end) {
+                    mez_mux::render::style_span_segments_outside_range(*span, slot.column, slot_end)
+                } else {
+                    vec![*span]
+                }
             })
             .collect();
         let rendition = if connected {
