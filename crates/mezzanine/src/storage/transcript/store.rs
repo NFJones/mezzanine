@@ -95,6 +95,13 @@ const SHARED_PROMPT_HISTORY_CONVERSATION_ID: &str = "prompt-history";
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const DEFAULT_AGENT_PROMPT_HISTORY_LIMIT: usize = 1000;
+/// Maximum on-disk bytes allowed before prompt history is compacted.
+pub(super) const PROMPT_HISTORY_COMPACTION_BYTES: u64 =
+    (mez_mux::readline::MAX_READLINE_HISTORY_BYTES * 2 + DEFAULT_AGENT_PROMPT_HISTORY_LIMIT * 64)
+        as u64;
+/// Maximum encoded tail needed to recover one accepted prompt-history row.
+const PROMPT_HISTORY_TAIL_READ_BYTES: u64 =
+    (mez_mux::readline::MAX_READLINE_HISTORY_ENTRY_BYTES * 2 + 128) as u64;
 /// Defines the DEFAULT TRANSCRIPT TAIL READ BYTES const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -954,16 +961,25 @@ impl AgentTranscriptStore {
     /// Appends one submitted agent prompt to the bounded shared history file.
     pub fn append_prompt_history(&self, conversation_id: &str, prompt: &str) -> Result<bool> {
         validate_conversation_id(conversation_id)?;
-        if prompt.trim().is_empty() {
+        if prompt.trim().is_empty()
+            || prompt.len() > mez_mux::readline::MAX_READLINE_HISTORY_ENTRY_BYTES
+        {
             return Ok(false);
         }
         let _lock = self.acquire_prompt_history_lock()?;
         self.migrate_prompt_history_locked()?;
-        let mut prompts = self.read_prompt_history_file()?;
-        if !append_history_entry(&mut prompts, prompt.to_string()) {
+        let path = self.prompt_history_path();
+        if Self::latest_prompt_history_entry(&path)?.as_deref() == Some(prompt) {
+            self.compact_prompt_history_if_needed()?;
             return Ok(false);
         }
-        self.write_prompt_history(prompts)?;
+        let encoded = encode_prompt_history_entry(prompt)?;
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        file.write_all(encoded.as_bytes())?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        set_private_file_permissions(&path)?;
+        self.compact_prompt_history_if_needed()?;
         Ok(true)
     }
 
@@ -1565,6 +1581,43 @@ impl AgentTranscriptStore {
         Self::read_prompt_history_path(&self.prompt_history_path())
     }
 
+    /// Reads only the bounded tail needed for adjacent duplicate suppression.
+    fn latest_prompt_history_entry(path: &std::path::Path) -> Result<Option<String>> {
+        let mut file = match std_fs::File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let len = file.metadata()?.len();
+        let start = len.saturating_sub(PROMPT_HISTORY_TAIL_READ_BYTES);
+        file.seek(SeekFrom::Start(start))?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        let bytes = if start == 0 {
+            bytes.as_slice()
+        } else if let Some(newline) = bytes.iter().position(|byte| *byte == b'\n') {
+            &bytes[newline.saturating_add(1)..]
+        } else {
+            &[]
+        };
+        let text = std::str::from_utf8(bytes)
+            .map_err(|_| MezError::invalid_args("prompt history tail is not valid UTF-8"))?;
+        text.lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .map(decode_prompt_history_entry)
+            .transpose()
+    }
+
+    /// Rewrites prompt history only after its append-only file crosses a bound.
+    fn compact_prompt_history_if_needed(&self) -> Result<()> {
+        let path = self.prompt_history_path();
+        if !path.exists() || path.metadata()?.len() <= PROMPT_HISTORY_COMPACTION_BYTES {
+            return Ok(());
+        }
+        self.write_prompt_history(self.read_prompt_history_file()?)
+    }
+
     /// Reads and decodes one prompt-history path without acquiring a lock.
     fn read_prompt_history_path(path: &std::path::Path) -> Result<Vec<String>> {
         if !path.exists() {
@@ -1711,13 +1764,22 @@ impl AgentTranscriptStore {
 /// Collapses adjacent equal history entries and retains the newest bounded set.
 fn canonicalize_history(history: Vec<String>) -> Vec<String> {
     let mut canonical = Vec::with_capacity(history.len());
+    let mut retained_bytes = 0usize;
     for entry in history {
-        if canonical.last() != Some(&entry) {
-            canonical.push(entry);
+        if entry.is_empty()
+            || entry.len() > mez_mux::readline::MAX_READLINE_HISTORY_ENTRY_BYTES
+            || canonical.last() == Some(&entry)
+        {
+            continue;
         }
-    }
-    if canonical.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT {
-        canonical.drain(..canonical.len() - DEFAULT_AGENT_PROMPT_HISTORY_LIMIT);
+        retained_bytes = retained_bytes.saturating_add(entry.len());
+        canonical.push(entry);
+        while canonical.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT
+            || retained_bytes > mez_mux::readline::MAX_READLINE_HISTORY_BYTES
+        {
+            let removed = canonical.remove(0);
+            retained_bytes = retained_bytes.saturating_sub(removed.len());
+        }
     }
     canonical
 }

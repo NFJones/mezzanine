@@ -14,7 +14,7 @@ use std::{
 use super::encoding::{
     decode_transcript_entry, encode_prompt_history_entry, encode_transcript_entry,
 };
-use super::store::PRESENTATION_CLEAR_TAIL_COMPACT_BYTES;
+use super::store::{PRESENTATION_CLEAR_TAIL_COMPACT_BYTES, PROMPT_HISTORY_COMPACTION_BYTES};
 use super::{AgentPresentationEntry, AgentTranscriptStore};
 use mez_agent::transcript::{AgentSessionMetadata, TranscriptEntry, TranscriptRole};
 
@@ -689,6 +689,41 @@ fn transcript_store_persists_prompt_history_in_shared_file() {
     assert_eq!(fork.conversation_id, "conv3");
     assert_eq!(store.prompt_history("conv3").unwrap(), history);
     assert!(!root.join("conv3").join("prompt-history.tsv").exists());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies pathological prompt history rejects one oversized entry and
+/// compacts append-only rows to the newest aggregate byte-bounded set.
+#[test]
+fn transcript_store_bounds_and_compacts_pathological_prompt_history() {
+    let root = temp_root("prompt-history-bounds");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let oversized = "z".repeat(mez_mux::readline::MAX_READLINE_HISTORY_ENTRY_BYTES + 1);
+
+    assert!(!store.append_prompt_history("conv1", &oversized).unwrap());
+    for index in 0..16 {
+        let prompt = format!("{index:02}-{}", "x".repeat(60 * 1024));
+        assert!(store.append_prompt_history("conv1", &prompt).unwrap());
+    }
+
+    let history = store.prompt_history("reader").unwrap();
+    assert_eq!(history.len(), 4);
+    assert!(
+        history.iter().map(String::len).sum::<usize>()
+            <= mez_mux::readline::MAX_READLINE_HISTORY_BYTES
+    );
+    assert!(
+        history
+            .first()
+            .is_some_and(|entry| entry.starts_with("12-"))
+    );
+    assert!(history.last().is_some_and(|entry| entry.starts_with("15-")));
+    assert!(
+        fs::metadata(root.join("prompt-history.tsv")).unwrap().len()
+            <= PROMPT_HISTORY_COMPACTION_BYTES
+    );
 
     let _ = fs::remove_dir_all(root);
 }

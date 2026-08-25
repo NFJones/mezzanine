@@ -4,11 +4,16 @@
 //! reads terminal bytes directly; decoded edits are applied by callers.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use unicode_width::UnicodeWidthChar;
 
 /// Default number of submitted prompt entries retained by a readline buffer.
 pub const DEFAULT_READLINE_HISTORY_LIMIT: usize = 1000;
+/// Maximum bytes retained for one submitted prompt-history entry.
+pub const MAX_READLINE_HISTORY_ENTRY_BYTES: usize = 64 * 1024;
+/// Maximum aggregate bytes retained by one readline history.
+pub const MAX_READLINE_HISTORY_BYTES: usize = 256 * 1024;
 /// Minimum pasted text byte count rendered as one collapsed prompt block.
 const READLINE_PASTE_BLOCK_THRESHOLD_BYTES: usize = 1024;
 
@@ -98,9 +103,7 @@ impl From<bool> for ReadlineOutcome {
 pub struct ReadlineBuffer {
     line: String,
     cursor: usize,
-    history: Vec<String>,
-    /// Lowercased history entries kept index-aligned for reverse search.
-    normalized_history: Vec<String>,
+    history: SharedReadlineHistory,
     history_limit: usize,
     history_cursor: Option<usize>,
     history_entry_cursor_navigation: bool,
@@ -111,6 +114,35 @@ pub struct ReadlineBuffer {
     draft_before_history_paste_blocks: Vec<ReadlinePasteBlock>,
     draft_before_history_next_paste_block_id: u32,
 }
+
+/// Immutable retained history shared by prompt snapshots until submission.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ReadlineHistory {
+    entries: Vec<String>,
+    /// Lowercased entries kept index-aligned for reverse search.
+    normalized_entries: Vec<String>,
+    bytes: usize,
+}
+
+/// Clone-cheap retained history with pointer-fast equality for snapshots.
+#[derive(Debug, Clone, Default)]
+struct SharedReadlineHistory(Arc<ReadlineHistory>);
+
+impl std::ops::Deref for SharedReadlineHistory {
+    type Target = ReadlineHistory;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl PartialEq for SharedReadlineHistory {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || self.0 == other.0
+    }
+}
+
+impl Eq for SharedReadlineHistory {}
 
 /// One large pasted payload collapsed in prompt rendering.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,8 +211,7 @@ impl ReadlineBuffer {
         Self {
             line: String::new(),
             cursor: 0,
-            history: Vec::new(),
-            normalized_history: Vec::new(),
+            history: SharedReadlineHistory::default(),
             history_limit,
             history_cursor: None,
             history_entry_cursor_navigation: false,
@@ -206,13 +237,33 @@ impl ReadlineBuffer {
     /// Current bounded history, ordered from oldest to newest without
     /// consecutively equal submissions.
     pub fn history(&self) -> &[String] {
-        &self.history
+        &self.history.entries
+    }
+
+    /// Number of retained prompt-history entries.
+    pub fn history_len(&self) -> usize {
+        self.history.entries.len()
+    }
+
+    /// Returns one retained prompt-history entry by index.
+    pub fn history_entry(&self, index: usize) -> Option<&str> {
+        self.history.entries.get(index).map(AsRef::as_ref)
+    }
+
+    /// Aggregate bytes retained by prompt history.
+    pub fn history_bytes(&self) -> usize {
+        self.history.bytes
+    }
+
+    /// Reports whether two snapshots share the same immutable history storage.
+    #[cfg(test)]
+    pub(crate) fn shares_history_storage_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.history.0, &other.history.0)
     }
 
     /// Replace retained submission history while preserving the active edit line.
     pub fn set_history(&mut self, history: impl IntoIterator<Item = String>) {
-        self.history.clear();
-        self.normalized_history.clear();
+        self.history = SharedReadlineHistory::default();
         for entry in history {
             self.remember_submission(entry);
         }
@@ -664,7 +715,7 @@ impl ReadlineBuffer {
 
     /// Move to the previous submitted history entry.
     pub fn history_previous(&mut self) -> bool {
-        if self.history.is_empty() {
+        if self.history.entries.is_empty() {
             return false;
         }
 
@@ -675,7 +726,7 @@ impl ReadlineBuffer {
                 self.draft_before_history = self.line.clone();
                 self.draft_before_history_paste_blocks = self.paste_blocks.clone();
                 self.draft_before_history_next_paste_block_id = self.next_paste_block_id;
-                self.history.len() - 1
+                self.history.entries.len() - 1
             }
         };
         self.load_history_index(next_index);
@@ -688,7 +739,7 @@ impl ReadlineBuffer {
             return false;
         };
 
-        if index + 1 < self.history.len() {
+        if index + 1 < self.history.entries.len() {
             self.load_history_index(index + 1);
             return true;
         }
@@ -708,7 +759,7 @@ impl ReadlineBuffer {
     /// Search backward through submitted history using the current draft as a
     /// case-insensitive substring query.
     pub fn history_search_backward(&mut self) -> bool {
-        if self.history.is_empty() {
+        if self.history.entries.is_empty() {
             return false;
         }
         let query = match self.history_cursor {
@@ -724,11 +775,11 @@ impl ReadlineBuffer {
             return self.history_previous();
         }
         let normalized_query = query.to_lowercase();
-        let mut index = self.history_cursor.unwrap_or(self.history.len());
+        let mut index = self.history_cursor.unwrap_or(self.history.entries.len());
         while index > 0 {
             index -= 1;
             if normalized_history_entry_contains_query_substring(
-                &self.normalized_history[index],
+                &self.history.normalized_entries[index],
                 &normalized_query,
             ) {
                 self.load_history_index(index);
@@ -746,11 +797,11 @@ impl ReadlineBuffer {
     /// - `before`: Exclusive upper-bound index for the search.
     pub fn history_substring_match_before(&self, query: &str, before: usize) -> Option<usize> {
         let normalized_query = query.to_lowercase();
-        let mut index = before.min(self.history.len());
+        let mut index = before.min(self.history.entries.len());
         while index > 0 {
             index -= 1;
             if normalized_history_entry_contains_query_substring(
-                &self.normalized_history[index],
+                &self.history.normalized_entries[index],
                 &normalized_query,
             ) {
                 return Some(index);
@@ -768,9 +819,9 @@ impl ReadlineBuffer {
     pub fn history_substring_match_after(&self, query: &str, after: usize) -> Option<usize> {
         let normalized_query = query.to_lowercase();
         let start = after.saturating_add(1);
-        (start..self.history.len()).find(|index| {
+        (start..self.history.entries.len()).find(|index| {
             normalized_history_entry_contains_query_substring(
-                &self.normalized_history[*index],
+                &self.history.normalized_entries[*index],
                 &normalized_query,
             )
         })
@@ -783,7 +834,7 @@ impl ReadlineBuffer {
     /// - `draft_line`: Prompt text to restore when history navigation returns
     ///   beyond the newest match.
     pub fn load_history_search_match(&mut self, index: usize, draft_line: &str) -> bool {
-        if self.history.get(index).is_none() {
+        if self.history.entries.get(index).is_none() {
             return false;
         }
         self.draft_before_history = draft_line.to_string();
@@ -831,17 +882,25 @@ impl ReadlineBuffer {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn remember_submission(&mut self, submitted: String) {
-        if self.history_limit == 0 || submitted.is_empty() {
+        if self.history_limit == 0
+            || submitted.is_empty()
+            || submitted.len() > MAX_READLINE_HISTORY_ENTRY_BYTES
+        {
             return;
         }
-        if self.history.last() == Some(&submitted) {
+        if self.history.entries.last() == Some(&submitted) {
             return;
         }
-        self.normalized_history.push(submitted.to_lowercase());
-        self.history.push(submitted);
-        while self.history.len() > self.history_limit {
-            self.history.remove(0);
-            self.normalized_history.remove(0);
+        let history = Arc::make_mut(&mut self.history.0);
+        history.bytes = history.bytes.saturating_add(submitted.len());
+        history.normalized_entries.push(submitted.to_lowercase());
+        history.entries.push(submitted);
+        while history.entries.len() > self.history_limit
+            || history.bytes > MAX_READLINE_HISTORY_BYTES
+        {
+            let removed = history.entries.remove(0);
+            history.bytes = history.bytes.saturating_sub(removed.len());
+            history.normalized_entries.remove(0);
         }
     }
 
@@ -851,7 +910,7 @@ impl ReadlineBuffer {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn load_history_index(&mut self, index: usize) {
-        let Some(entry) = self.history.get(index) else {
+        let Some(entry) = self.history.entries.get(index) else {
             return;
         };
         self.replace_current_line_with_text(entry.clone());

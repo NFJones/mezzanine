@@ -1,6 +1,9 @@
 //! Intrinsic regression tests for mux-owned readline buffer behavior.
 
-use crate::readline::{ReadlineBuffer, ReadlineEdit, ReadlineOutcome};
+use crate::readline::{
+    MAX_READLINE_HISTORY_BYTES, MAX_READLINE_HISTORY_ENTRY_BYTES, ReadlineBuffer, ReadlineEdit,
+    ReadlineOutcome,
+};
 
 /// Verifies readline insert and cursor movement edit in place.
 ///
@@ -528,4 +531,36 @@ fn readline_apply_reports_submission_and_noops() {
         ReadlineOutcome::Submitted(String::from("agent"))
     );
     assert_eq!(buffer.line(), "");
+}
+
+/// Verifies prompt snapshots share immutable pathological history and detach
+/// only when one snapshot records a new retained submission.
+#[test]
+fn readline_clones_share_large_history_until_mutation() {
+    let mut buffer = ReadlineBuffer::new();
+    buffer.set_history((0..1000).map(|index| format!("history-{index:04}-{}", "x".repeat(240))));
+    let mut cloned = buffer.clone();
+
+    assert_eq!(buffer.history_len(), 1000);
+    assert!(buffer.history_bytes() <= MAX_READLINE_HISTORY_BYTES);
+    assert!(buffer.shares_history_storage_with(&cloned));
+
+    cloned.insert_text("new retained entry");
+    assert_eq!(cloned.submit(), "new retained entry");
+    assert!(!buffer.shares_history_storage_with(&cloned));
+    assert_ne!(buffer.history(), cloned.history());
+}
+
+/// Verifies an oversized pasted command is dispatched exactly but is not
+/// retained for recall, normalization, or later prompt snapshots.
+#[test]
+fn readline_oversized_submission_is_not_retained() {
+    let mut buffer = ReadlineBuffer::new();
+    buffer.set_history([String::from("retained")]);
+    let oversized = "z".repeat(MAX_READLINE_HISTORY_ENTRY_BYTES + 1);
+    buffer.insert_text(&oversized);
+
+    assert_eq!(buffer.submit(), oversized);
+    assert_eq!(buffer.history(), &[String::from("retained")]);
+    assert_eq!(buffer.history_bytes(), "retained".len());
 }
