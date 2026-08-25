@@ -510,7 +510,7 @@ fn render_wrapped_prompt_layout(
             prompt.buffer.line().chars().count()
         )
     });
-    layout_wrapped_prompt(
+    let mut layout = layout_wrapped_prompt(
         &raw_line,
         raw_cursor_index,
         raw_shadow_range,
@@ -518,7 +518,14 @@ fn render_wrapped_prompt_layout(
         max_rows,
         continuation_indent,
         length_note.as_deref(),
-    )
+    );
+    if length_note.is_some() {
+        layout.cursor_row = 0;
+        layout.cursor_column =
+            terminal_text_width(&format!("{MEZ_UI_PREFIX}mez> ")).min(width.saturating_sub(1));
+        layout.cursor_visible = !layout.lines.is_empty();
+    }
+    layout
 }
 
 /// Runs the should show prompt length note operation for this subsystem.

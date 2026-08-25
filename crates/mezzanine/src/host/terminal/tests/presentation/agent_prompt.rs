@@ -676,7 +676,11 @@ fn render_attached_client_view_styles_agent_prompt_shadow_hint() {
 }
 
 /// Verifies that a long pasted agent prompt expands upward within the pane and
-/// exposes a length note instead of silently hiding that the prompt is large.
+/// anchors its cursor to the visible collapsed-content placeholder.
+///
+/// The hidden wrapped prompt cannot provide meaningful cursor coordinates.
+/// Pointing at the first placeholder cell identifies the editable collapsed
+/// content without pinning the cursor to an unrelated lower-right cell.
 #[test]
 fn prompt_region_presentation_expands_agent_prompt_for_long_input() {
     let mut prompt =
@@ -702,8 +706,8 @@ fn prompt_region_presentation_expands_agent_prompt_for_long_input() {
     );
 
     assert_eq!(presentation.lines[0], "▐ mez> [200 chars pa");
-    assert_eq!(presentation.cursor_row, 3);
-    assert_eq!(presentation.cursor_column, 19);
+    assert_eq!(presentation.cursor_row, 0);
+    assert_eq!(presentation.cursor_column, 7);
     assert!(presentation.cursor_visible);
 }
 
