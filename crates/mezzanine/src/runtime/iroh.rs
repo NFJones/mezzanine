@@ -270,7 +270,7 @@ impl RuntimeIrohDiagnostics {
         self.record_setup_latency(elapsed);
     }
 
-    fn connection_started(
+    pub(crate) fn connection_started(
         &self,
         connection: &iroh::endpoint::Connection,
         setup_elapsed: std::time::Duration,
@@ -371,7 +371,7 @@ impl Drop for RuntimeIrohListenerGuard {
     }
 }
 
-struct RuntimeIrohConnectionGuard {
+pub(crate) struct RuntimeIrohConnectionGuard {
     diagnostics: RuntimeIrohDiagnostics,
     connected_at: Instant,
     client_id: Arc<Mutex<Option<String>>>,
@@ -379,7 +379,10 @@ struct RuntimeIrohConnectionGuard {
 
 impl RuntimeIrohConnectionGuard {
     /// Builds a sampler tied to this guard's connection lifetime and cleanup key.
-    fn sampler(&self, compression_metrics: IrohCompressionMetrics) -> RuntimeIrohPathSampler {
+    pub(crate) fn sampler(
+        &self,
+        compression_metrics: IrohCompressionMetrics,
+    ) -> RuntimeIrohPathSampler {
         RuntimeIrohPathSampler {
             diagnostics: self.diagnostics.clone(),
             connected_at: self.connected_at,
@@ -390,7 +393,7 @@ impl RuntimeIrohConnectionGuard {
     }
 }
 
-struct RuntimeIrohPathSampler {
+pub(crate) struct RuntimeIrohPathSampler {
     diagnostics: RuntimeIrohDiagnostics,
     connected_at: Instant,
     client_id: Arc<Mutex<Option<String>>>,
@@ -400,7 +403,7 @@ struct RuntimeIrohPathSampler {
 
 impl RuntimeIrohPathSampler {
     /// Samples the currently selected path and associates it with the initialized client.
-    fn sample(&mut self, connection: &iroh::endpoint::Connection, client_id: &ClientId) {
+    pub(crate) fn sample(&mut self, connection: &iroh::endpoint::Connection, client_id: &ClientId) {
         self.sample_for_client(connection, client_id.as_str());
     }
 
@@ -420,7 +423,7 @@ impl RuntimeIrohPathSampler {
     }
 
     /// Refreshes the selected path for the client already associated with the connection.
-    fn sample_current(&mut self, connection: &iroh::endpoint::Connection) {
+    pub(crate) fn sample_current(&mut self, connection: &iroh::endpoint::Connection) {
         let client_id = self
             .client_id
             .lock()
@@ -628,6 +631,11 @@ impl RuntimeIrohEndpoint {
         self.endpoint_addr.borrow().clone()
     }
 
+    /// Returns the shared privacy-safe diagnostics registry for accepted connections.
+    pub(crate) fn diagnostics(&self) -> RuntimeIrohDiagnostics {
+        self.diagnostics.clone()
+    }
+
     /// Returns a cloneable handle for intentional endpoint shutdown.
     pub(crate) fn shutdown_handle(&self) -> RuntimeIrohShutdownHandle {
         RuntimeIrohShutdownHandle {
@@ -796,6 +804,12 @@ async fn bind_policy_iroh_endpoint(
 }
 
 impl super::RuntimeSessionService {
+    /// Installs the diagnostics registry owned by a host-routed Iroh transport.
+    pub(crate) fn set_host_routed_iroh_diagnostics(&mut self, diagnostics: RuntimeIrohDiagnostics) {
+        self.integration
+            .set_remote_iroh_diagnostics(Some(diagnostics));
+    }
+
     /// Binds the configured endpoint while retaining the protected identity lock.
     pub(crate) async fn bind_configured_iroh_endpoint(
         &mut self,

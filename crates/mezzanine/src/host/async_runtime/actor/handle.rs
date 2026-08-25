@@ -20,6 +20,18 @@ use crate::host::async_runtime::actor_types::AsyncClientRenderToken;
 use crate::runtime::RuntimeNativeShellDispatch;
 
 impl AsyncRuntimeSessionHandle {
+    /// Installs the privacy-safe diagnostics populated by a host-routed Iroh transport.
+    pub(crate) async fn set_host_routed_iroh_diagnostics(
+        &self,
+        diagnostics: crate::runtime::RuntimeIrohDiagnostics,
+    ) -> Result<()> {
+        self.request(|reply| AsyncRuntimeRequest::SetHostRoutedIrohDiagnostics {
+            diagnostics,
+            reply,
+        })
+        .await
+    }
+
     /// Runs the lifecycle state operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

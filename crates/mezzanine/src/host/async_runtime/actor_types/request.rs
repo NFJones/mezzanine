@@ -51,6 +51,13 @@ impl AsyncRuntimeRequestEnvelope {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
+    /// Installs the shared diagnostics registry for one host-routed Iroh connection.
+    SetHostRoutedIrohDiagnostics {
+        /// Privacy-safe registry populated by the host-owned path sampler.
+        diagnostics: crate::runtime::RuntimeIrohDiagnostics,
+        /// Confirms that the serialized runtime mutation completed.
+        reply: oneshot::Sender<()>,
+    },
     /// Represents the Lifecycle State case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1095,7 +1102,8 @@ impl AsyncRuntimeRequest {
             | Self::RenderClientSideEffect { .. }
             | Self::EnsureClientRenderTimers { .. }
             | Self::TerminalClientLoopConfigSnapshot { .. } => Family::Render,
-            Self::HandleControlInput { .. }
+            Self::SetHostRoutedIrohDiagnostics { .. }
+            | Self::HandleControlInput { .. }
             | Self::HandleControlInputWithSnapshots { .. }
             | Self::CompleteSnapshotControlInput { .. }
             | Self::CreateHostCheckpoint { .. } => Family::Control,

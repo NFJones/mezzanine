@@ -133,6 +133,11 @@ impl AsyncRuntimeSessionActor {
     /// on duplicated control-flow logic.
     pub(super) async fn handle_request(&mut self, request: AsyncRuntimeRequest) -> bool {
         match request {
+            AsyncRuntimeRequest::SetHostRoutedIrohDiagnostics { diagnostics, reply } => {
+                self.service.set_host_routed_iroh_diagnostics(diagnostics);
+                let _ = reply.send(());
+                false
+            }
             AsyncRuntimeRequest::LifecycleState { reply } => {
                 let _ = reply.send(self.service.lifecycle_state());
                 false

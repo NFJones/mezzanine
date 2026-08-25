@@ -9,6 +9,7 @@
 
 use std::future::Future;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
@@ -30,7 +31,8 @@ use crate::host::async_runtime::{
 };
 use crate::host::router::HostSessionRouter;
 use crate::runtime::{
-    IrohCompressionBridge, IrohCompressionPolicy, RuntimeIrohCompressionCodec, RuntimeIrohEndpoint,
+    IrohCompressionBridge, IrohCompressionMetrics, IrohCompressionPolicy,
+    RuntimeIrohCompressionCodec, RuntimeIrohDiagnostics, RuntimeIrohEndpoint,
     RuntimeIrohIdentityPolicy, RuntimeIrohTransportPolicy, RuntimeLifecycleState,
     bind_runtime_iroh_endpoint, serve_host_routed_iroh_event_stream,
 };
@@ -351,6 +353,7 @@ impl HostIrohRuntime {
         let policy = self.endpoint.policy().clone();
         let trust = self.trust.clone();
         let server_endpoint_id = self.endpoint_id().to_string();
+        let diagnostics = self.endpoint.diagnostics();
         let audit_log = self.audit_log.clone();
         let mut tasks = JoinSet::new();
         let mut accepted = 0u64;
@@ -367,6 +370,7 @@ impl HostIrohRuntime {
                     let trust = trust.clone();
                     let server_endpoint_id = server_endpoint_id.clone();
                     let router = router.clone();
+                    let diagnostics = diagnostics.clone();
                     let audit_log = audit_log.clone();
                     tasks.spawn(async move {
                         let result = serve_host_only_connection(
@@ -375,6 +379,7 @@ impl HostIrohRuntime {
                             trust,
                             server_endpoint_id,
                             router,
+                            diagnostics,
                             audit_log,
                             &remote_route,
                         ).await;
@@ -408,15 +413,21 @@ impl HostIrohRuntime {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "transport setup, trust, routing, diagnostics, audit, and peer route are independent connection handoff inputs"
+)]
 async fn serve_host_only_connection(
     incoming: iroh::endpoint::Incoming,
     policy: RuntimeIrohTransportPolicy,
     trust: RemoteTrustStore,
     server_endpoint_id: String,
     router: Option<HostSessionRouter>,
+    diagnostics: RuntimeIrohDiagnostics,
     audit_log: Option<HostAuditLog>,
     remote_route: &str,
 ) -> Result<()> {
+    let setup_started = std::time::Instant::now();
     let mut accepting = incoming
         .accept()
         .map_err(|error| MezError::invalid_state(format!("host Iroh accept failed: {error}")))?;
@@ -454,12 +465,19 @@ async fn serve_host_only_connection(
         .await
         .map_err(|_| MezError::invalid_state("host Iroh control stream setup timed out"))?
         .map_err(|error| MezError::invalid_state(format!("host Iroh stream failed: {error}")))?;
-    let mut bridge =
-        IrohCompressionBridge::spawn(recv, send, compression, HOST_CONTROL_MAX_CONTENT_LENGTH)?;
+    let compression_metrics = IrohCompressionMetrics::new(compression.codec());
+    let mut bridge = IrohCompressionBridge::spawn_with_metrics(
+        recv,
+        send,
+        compression,
+        compression_metrics.clone(),
+        HOST_CONTROL_MAX_CONTENT_LENGTH,
+    )?;
     let request = read_one_control_frame(bridge.stream_mut(), policy.idle_timeout).await?;
     if let Some(router) = router.as_ref()
         && request_session_intent(&request).as_deref() != Some("host_only")
     {
+        let connection_guard = diagnostics.connection_started(&connection, setup_started.elapsed());
         return serve_routed_initialize(
             request,
             &trust,
@@ -469,6 +487,9 @@ async fn serve_host_only_connection(
             connection,
             bridge,
             compression,
+            compression_metrics,
+            diagnostics,
+            connection_guard,
             &policy,
         )
         .await;
@@ -543,6 +564,9 @@ async fn serve_routed_initialize(
     connection: iroh::endpoint::Connection,
     mut bridge: IrohCompressionBridge,
     compression: IrohCompressionPolicy,
+    compression_metrics: IrohCompressionMetrics,
+    diagnostics: RuntimeIrohDiagnostics,
+    connection_guard: crate::runtime::RuntimeIrohConnectionGuard,
     policy: &RuntimeIrohTransportPolicy,
 ) -> Result<()> {
     let response_id = request_id(&request_body);
@@ -556,6 +580,9 @@ async fn serve_routed_initialize(
         &connection,
         &mut bridge,
         compression,
+        compression_metrics,
+        diagnostics,
+        connection_guard,
         policy,
         &mut initialization_sent,
     )
@@ -602,6 +629,9 @@ async fn serve_routed_initialize_inner(
     connection: &iroh::endpoint::Connection,
     bridge: &mut IrohCompressionBridge,
     compression: IrohCompressionPolicy,
+    compression_metrics: IrohCompressionMetrics,
+    diagnostics: RuntimeIrohDiagnostics,
+    connection_guard: crate::runtime::RuntimeIrohConnectionGuard,
     policy: &RuntimeIrohTransportPolicy,
     initialization_sent: &mut bool,
 ) -> Result<()> {
@@ -786,6 +816,33 @@ async fn serve_routed_initialize_inner(
     }
 
     let mut connection_state = initialized.connection;
+    let client_id = connection_state
+        .caller_client_id()
+        .cloned()
+        .ok_or_else(|| {
+            MezError::invalid_state("routed Iroh initialization omitted client identity")
+        })?;
+    binding
+        .runtime
+        .actor()
+        .set_host_routed_iroh_diagnostics(diagnostics)
+        .await?;
+    let sampler = Arc::new(Mutex::new(connection_guard.sampler(compression_metrics)));
+    if let Ok(mut sampler) = sampler.lock() {
+        sampler.sample(connection, &client_id);
+    }
+    let periodic_sampler = sampler.clone();
+    let periodic_connection = connection.clone();
+    let mut sample_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if let Ok(mut sampler) = periodic_sampler.lock() {
+                sampler.sample_current(&periodic_connection);
+            }
+        }
+    });
     let (event_stop_tx, event_stop_rx) = tokio::sync::watch::channel(false);
     let mut event_task = connection_state
         .take_event_stream_start()
@@ -868,6 +925,8 @@ async fn serve_routed_initialize_inner(
             authority_cancelled,
         )
         .await;
+    sample_task.abort();
+    let _ = (&mut sample_task).await;
     let _ = event_stop_tx.send(true);
     if let Some(mut task) = event_task.take()
         && tokio::time::timeout(policy.setup_timeout, &mut task)
@@ -1626,8 +1685,10 @@ mod tests {
 
     /// A capability-bearing host invitation pairs without provisioning, then
     /// routes create replay, conflict, explicit attach, default selection, and
-    /// principal-filtered listing through one persistent front door. A second
-    /// paired device without routing authority receives structured denials.
+    /// principal-filtered listing through one persistent front door. The live
+    /// routed attachment must expose its exact-client Iroh transport statistics
+    /// through `show-iroh-status`. A second paired device without routing
+    /// authority receives structured denials.
     #[tokio::test(flavor = "current_thread")]
     async fn routed_host_end_to_end_enforces_intent_idempotency_and_authority() {
         let root = test_root("routed");
@@ -1861,6 +1922,37 @@ mod tests {
             assert_eq!(
                 persistent_attach["result"]["lease"]["lease_id"], lease_id,
                 "{persistent_attach}"
+            );
+            let status_request = json!({
+                "jsonrpc": "2.0",
+                "id": "test-routed-iroh-status",
+                "method": "terminal/command",
+                "params": {
+                    "idempotency_key": "test-routed-iroh-status",
+                    "input": "show-iroh-status"
+                }
+            })
+            .to_string();
+            persistent_bridge
+                .stream_mut()
+                .write_all(&encode_control_body(&status_request))
+                .await
+                .unwrap();
+            persistent_bridge.stream_mut().flush().await.unwrap();
+            let status_response = read_one_control_frame(
+                persistent_bridge.stream_mut(),
+                std::time::Duration::from_secs(3),
+            )
+            .await
+            .unwrap();
+            assert!(
+                status_response.contains("| State | connected |"),
+                "{status_response}"
+            );
+            assert!(status_response.contains("| RTT |"), "{status_response}");
+            assert!(
+                !status_response.contains("this client has no correlated live Iroh connection"),
+                "{status_response}"
             );
             let record_id = host
                 .trust
