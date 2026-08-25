@@ -19,7 +19,12 @@ fn paste_and_history_commands_report_live_terminal_requirements() {
         )
         .unwrap(),
     );
-    assert_eq!(buffers, "buffers=0 source=not-connected status=empty");
+    assert_eq!(
+        buffers,
+        "| buffer | bytes | created at | origin | preview |\n\
+         | --- | ---: | ---: | --- | --- |\n\
+         | — no buffers — | 0 | — | not connected | — |"
+    );
 
     let paste = display_body(
         execute_command(

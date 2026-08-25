@@ -339,9 +339,9 @@ pub(crate) fn runtime_command_display_overlay_content(
 pub(super) fn terminal_command_display_body_is_markdown(command: Option<&str>, body: &str) -> bool {
     match command {
         Some("help") => body.trim_start().starts_with('#'),
-        Some("list-clients" | "list-key-presets" | "list-sessions" | "list-themes") => {
-            body.trim_start().starts_with('|')
-        }
+        Some(
+            "list-buffers" | "list-clients" | "list-key-presets" | "list-sessions" | "list-themes",
+        ) => body.trim_start().starts_with('|'),
         Some("show-iroh-status") => body.trim_start().starts_with('#'),
         _ => false,
     }
@@ -356,6 +356,7 @@ pub(super) fn terminal_command_display_body_is_markdown(command: Option<&str>, b
 #[test]
 pub(super) fn table_list_command_display_detects_markdown_tables() {
     for command in [
+        "list-buffers",
         "list-clients",
         "list-key-presets",
         "list-sessions",

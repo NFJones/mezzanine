@@ -871,21 +871,13 @@ async fn async_attached_terminal_loop_runs_actor_owned_command_prompt() {
         );
         assert_eq!(io.written_batches.len(), 2);
         assert_eq!(io.written_batches[0][23].trim_end(), "▐ :");
+        let buffer_table = io.written_batches[1].join("\n");
         assert!(
-            io.written_batches[1]
-                .iter()
-                .any(|line| line.contains("buffers: 0"))
+            buffer_table.contains("buffer") && buffer_table.contains("bytes"),
+            "{buffer_table}"
         );
-        assert!(
-            io.written_batches[1]
-                .iter()
-                .any(|line| line.contains("source: runtime"))
-        );
-        assert!(
-            io.written_batches[1]
-                .iter()
-                .any(|line| line.contains("status: empty"))
-        );
+        assert!(buffer_table.contains("no buffers"), "{buffer_table}");
+        assert!(!buffer_table.contains("source: runtime"), "{buffer_table}");
         assert!(!command_history_path.exists());
         let persistence = run_async_persistence_side_effect_service(
             &handle,

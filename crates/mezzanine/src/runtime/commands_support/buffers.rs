@@ -362,26 +362,79 @@ pub(crate) fn runtime_paste_bytes(screen: Option<&TerminalScreen>, content: &str
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn runtime_list_buffers_display(buffers: Vec<PasteBuffer>) -> String {
+    let mut lines = vec![
+        "| buffer | bytes | created at | origin | preview |".to_string(),
+        "| --- | ---: | ---: | --- | --- |".to_string(),
+    ];
     if buffers.is_empty() {
-        return "buffers=0 source=runtime status=empty".to_string();
+        lines.push("| — no buffers — | 0 | — | — | — |".to_string());
+        return lines.join("\n");
     }
-    let lines = buffers
-        .iter()
-        .map(|buffer| {
-            let origin = buffer.origin.as_deref().unwrap_or("unknown");
-            format!(
-                "buffer={}:bytes={}:created_at={}:origin={}:preview={}",
-                buffer.name,
-                buffer.bytes,
-                buffer.created_at_unix_seconds,
-                json_escape(origin),
-                json_escape(&buffer.preview)
-            )
-        })
-        .collect::<Vec<_>>();
-    format!(
-        "buffers={} source=runtime\n{}",
-        buffers.len(),
-        lines.join("\n")
-    )
+    lines.extend(buffers.iter().map(|buffer| {
+        let origin = buffer.origin.as_deref().unwrap_or("unknown");
+        format!(
+            "| {} | {} | {} | {} | {} |",
+            markdown_buffer_table_cell(&buffer.name),
+            buffer.bytes,
+            buffer.created_at_unix_seconds,
+            markdown_buffer_table_cell(origin),
+            markdown_buffer_table_cell(&buffer.preview)
+        )
+    }));
+    lines.join("\n")
+}
+
+/// Escapes one paste-buffer metadata value for a Markdown table cell.
+fn markdown_buffer_table_cell(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace(['\r', '\n'], " ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies live paste buffers render as an ordered Markdown table with
+    /// every available metadata field and escaped table-cell delimiters.
+    #[test]
+    fn runtime_list_buffers_renders_metadata_table_in_store_order() {
+        let body = runtime_list_buffers_display(vec![
+            PasteBuffer {
+                name: "alpha".to_string(),
+                bytes: 5,
+                created_at_unix_seconds: 11,
+                origin: Some("copy|mode".to_string()),
+                preview: "first|line".to_string(),
+            },
+            PasteBuffer {
+                name: "beta".to_string(),
+                bytes: 4,
+                created_at_unix_seconds: 22,
+                origin: None,
+                preview: "second".to_string(),
+            },
+        ]);
+
+        assert_eq!(
+            body,
+            "| buffer | bytes | created at | origin | preview |\n\
+             | --- | ---: | ---: | --- | --- |\n\
+             | alpha | 5 | 11 | copy\\|mode | first\\|line |\n\
+             | beta | 4 | 22 | unknown | second |"
+        );
+    }
+
+    /// Verifies an empty live paste-buffer store retains table structure so
+    /// the pager renders a clear empty row instead of legacy key-value text.
+    #[test]
+    fn runtime_list_buffers_renders_empty_table() {
+        assert_eq!(
+            runtime_list_buffers_display(Vec::new()),
+            "| buffer | bytes | created at | origin | preview |\n\
+             | --- | ---: | ---: | --- | --- |\n\
+             | — no buffers — | 0 | — | — | — |"
+        );
+    }
 }

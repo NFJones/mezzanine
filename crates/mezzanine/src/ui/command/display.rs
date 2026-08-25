@@ -321,11 +321,12 @@ pub(super) fn create_buffer_display(invocation: &CommandInvocation) -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn list_buffers_display() -> String {
-    KeyValueLine::spaced()
-        .push("buffers", 0)
-        .push("source", "not-connected")
-        .push("status", "empty")
-        .finish()
+    [
+        "| buffer | bytes | created at | origin | preview |",
+        "| --- | ---: | ---: | --- | --- |",
+        "| — no buffers — | 0 | — | not connected | — |",
+    ]
+    .join("\n")
 }
 
 /// Runs the choose buffer display operation for this subsystem.
