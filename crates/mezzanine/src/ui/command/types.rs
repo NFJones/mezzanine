@@ -100,7 +100,7 @@ pub enum LayoutLoadSelector {
     Latest,
 }
 
-/// Baseline command support level exposed by `list-commands`.
+/// Baseline command support level used by command discovery and presentation.
 ///
 /// This describes where the command's authoritative behavior is available.
 /// Commands with a fallback still parse and return safe diagnostics from the

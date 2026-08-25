@@ -2,75 +2,34 @@
 
 use super::*;
 
-/// Verifies that `list-commands` reports support status granularly enough to
-/// distinguish generic in-memory command behavior from commands whose complete
-/// behavior requires runtime, persistent store, or control/repository context.
+/// Verifies the obsolete `list-commands` surface is no longer dispatched or
+/// advertised while the supported `help` command remains available.
 #[test]
-fn list_commands_reports_baseline_command_statuses() {
+fn list_commands_is_rejected_and_absent_from_help() {
     let (mut session, primary) = test_session();
 
-    let outcome = execute_command(
+    let error = execute_command(
         &mut session,
         &primary,
         &parse_command_sequence("list-commands").unwrap()[0],
     )
-    .unwrap();
-    let body = display_body(outcome);
+    .unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(error.message().contains("unknown command `list-commands`"));
 
-    assert!(body.contains("help:status=implemented"));
-    assert!(body.contains("new-window:status=implemented"));
-    assert!(body.contains("new-group:status=implemented"));
-    assert!(body.contains("kill-group:status=implemented"));
-    assert!(body.contains("select-group:status=implemented"));
-    assert!(body.contains("swap-pane:status=implemented"));
-    assert!(body.contains("break-pane:status=implemented"));
-    assert!(body.contains("join-pane:status=implemented"));
-    assert!(body.contains("rebalance-window:status=implemented"));
-    assert!(body.contains("synchronize-panes:status=implemented"));
-    assert!(body.contains("attach-session:status=control-required"));
-    assert!(body.contains("list-sessions:status=control-required"));
-    assert!(body.contains("copy-mode:status=runtime-required"));
-    assert!(body.contains("show-messages:status=implemented"));
-    assert!(body.contains("show-metrics:status=runtime-required"));
-    assert!(body.contains("show-iroh-status:status=runtime-required"));
-    assert!(body.contains("list-keys:status=implemented"));
-    assert!(body.contains("list-themes:status=implemented"));
-    assert!(body.contains("set-theme:status=store-required"));
-    assert!(body.contains("show-options:status=implemented"));
-    assert!(body.contains("bind-key:status=store-required"));
-    assert!(body.contains("unbind-key:status=store-required"));
-    assert!(body.contains("set-option:status=store-required"));
-    assert!(body.contains("source-file:status=store-required"));
-    assert!(body.contains("refresh-client:status=runtime-required"));
-    assert!(body.contains("agent-shell:status=runtime-required"));
-    assert!(body.contains("mark-pane-ready:status=store-required"));
-    assert!(body.contains("copy-selection:status=runtime-required"));
-    assert!(body.contains("paste-clipboard:status=runtime-required"));
-    assert!(body.contains("paste-buffer:status=runtime-required"));
-    assert!(body.contains("create-buffer:status=runtime-required"));
-    assert!(body.contains("list-buffers:status=runtime-required"));
-    assert!(body.contains("capture-pane:status=runtime-required"));
-    assert!(body.contains("save-buffer:status=runtime-required"));
-    assert!(body.contains("clear-history:status=runtime-required"));
-    assert!(body.contains("search-history:status=runtime-required"));
-    assert!(body.contains("export-history:status=runtime-required"));
-    assert!(body.contains("pipe-pane:status=runtime-required"));
-    assert!(body.contains("save-layout:status=control-required"));
-    assert!(body.contains("load-layout:status=control-required"));
-    assert!(body.contains("list-observers:status=implemented"));
-    assert!(body.contains("choose-observer:status=implemented"));
-    assert!(body.contains("approve-observer:status=runtime-required"));
-    assert!(body.contains("reject-observer:status=runtime-required"));
-    assert!(body.contains("revoke-observer:status=runtime-required"));
-    assert!(!body.contains("auth-status:"), "{body}");
-    assert!(!body.contains("refresh-provider-info:"), "{body}");
-    assert!(!body.contains("mcp:"), "{body}");
-    assert!(!body.contains("mcp-status:"), "{body}");
+    let help = display_body(
+        execute_command(
+            &mut session,
+            &primary,
+            &parse_command_sequence("help").unwrap()[0],
+        )
+        .unwrap(),
+    );
+    assert!(!help.contains("list-commands"), "{help}");
 }
 
 /// Verifies that the command-language `help` command returns a human-readable
-/// command guide instead of requiring users to infer behavior from the
-/// script-oriented `list-commands` status inventory.
+/// command guide for every supported baseline command.
 #[test]
 fn help_command_describes_mezzanine_command_set() {
     let (mut session, primary) = test_session();
@@ -101,7 +60,7 @@ fn help_command_describes_mezzanine_command_set() {
         help.contains("| Windows, groups, and panes |  |  |"),
         "{help}"
     );
-    assert!(help.contains("| `list-commands` |"), "{help}");
+    assert!(!help.contains("list-commands"), "{help}");
     assert!(help.contains("| `list-keys` |"), "{help}");
     assert!(help.contains("show-metrics"), "{help}");
     assert!(help.contains("show-iroh-status"), "{help}");

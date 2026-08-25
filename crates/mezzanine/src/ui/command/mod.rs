@@ -105,12 +105,11 @@ use display::parse_config_command_value;
 use display::{
     capture_pane_display, choose_buffer_display, clear_history_display, command_help_display,
     copy_mode_display, copy_selection_display, create_buffer_display, export_history_display,
-    list_baseline_commands, list_buffers_display, list_default_key_bindings,
-    list_default_key_presets, list_default_themes, load_layout_selector,
-    mutated_pane_command_outcome, paste_buffer_display, paste_clipboard_display, pipe_pane_display,
-    save_buffer_display, save_layout_name, search_history_display, set_key_preset_arg,
-    set_option_args, set_theme_arg, show_default_options, show_messages_display,
-    show_metrics_display,
+    list_buffers_display, list_default_key_bindings, list_default_key_presets, list_default_themes,
+    load_layout_selector, mutated_pane_command_outcome, paste_buffer_display,
+    paste_clipboard_display, pipe_pane_display, save_buffer_display, save_layout_name,
+    search_history_display, set_key_preset_arg, set_option_args, set_theme_arg,
+    show_default_options, show_messages_display, show_metrics_display,
 };
 use permissions::{
     command_target_pane_id, credential_store_kind_name, mark_pane_ready_audit_record,

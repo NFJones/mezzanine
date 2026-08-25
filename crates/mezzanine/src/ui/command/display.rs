@@ -76,15 +76,10 @@ fn terminal_help_title_case(category: &str) -> String {
 
 /// Returns terminal command help rows before presentation sorting.
 fn terminal_help_command_rows() -> Vec<(&'static str, &'static str)> {
-    let mut rows = baseline_commands()
+    baseline_commands()
         .iter()
         .map(|command| (command.name, terminal_command_description(command.name)))
-        .collect::<Vec<_>>();
-    rows.push((
-        "list-commands",
-        "list every baseline command and support status.",
-    ));
-    rows
+        .collect::<Vec<_>>()
 }
 
 /// Returns the help category for one terminal command.
@@ -100,8 +95,8 @@ fn terminal_command_category(name: &str) -> &'static str {
         | "paste-buffer" | "paste-clipboard" | "pipe-pane" | "save-buffer" | "search-history" => {
             "copy, buffers, and history"
         }
-        "help" | "list-commands" | "mark-pane-ready" | "refresh-client" | "show-messages"
-        | "show-metrics" | "show-iroh-status" => "diagnostics and help",
+        "help" | "mark-pane-ready" | "refresh-client" | "show-messages" | "show-metrics"
+        | "show-iroh-status" => "diagnostics and help",
         "approve-observer" | "attach-session" | "choose-observer" | "detach-client" | "exit"
         | "kill-session" | "list-clients" | "list-observers" | "list-sessions"
         | "reject-observer" | "rename-session" | "load-layout" | "revoke-observer"
@@ -196,19 +191,6 @@ fn terminal_command_description(name: &str) -> &'static str {
         "zoom-pane" => "toggle zoom for the active or target pane.",
         _ => "run the terminal command.",
     }
-}
-
-/// Runs the list baseline commands operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn list_baseline_commands() -> String {
-    baseline_commands()
-        .iter()
-        .map(|command| format!("{}:status={}", command.name, command.status.as_str()))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// Runs the list default themes operation for this subsystem.

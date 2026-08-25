@@ -9,13 +9,13 @@ use super::{
     PaneNavigationDirection, PaneReadinessOverrideStore, PaneReadinessState, Result, Session,
     bind_key_args, capture_pane_display, choose_buffer_display, clear_history_display,
     command_help_display, command_target_pane_id, copy_mode_display, copy_selection_display,
-    create_buffer_display, export_history_display, key_chord_notation, list_baseline_commands,
-    list_buffers_display, list_default_key_bindings, list_default_key_presets, list_default_themes,
-    load_layout_selector, mark_pane_ready_audit_record, mark_pane_ready_warning_display,
-    mutated_pane_command_outcome, pane_readiness_state_name, paste_buffer_display,
-    paste_clipboard_display, pipe_pane_display, save_buffer_display, save_layout_name,
-    search_history_display, set_key_preset_arg, set_option_args, set_theme_arg,
-    show_default_options, show_messages_display, show_metrics_display,
+    create_buffer_display, export_history_display, key_chord_notation, list_buffers_display,
+    list_default_key_bindings, list_default_key_presets, list_default_themes, load_layout_selector,
+    mark_pane_ready_audit_record, mark_pane_ready_warning_display, mutated_pane_command_outcome,
+    pane_readiness_state_name, paste_buffer_display, paste_clipboard_display, pipe_pane_display,
+    save_buffer_display, save_layout_name, search_history_display, set_key_preset_arg,
+    set_option_args, set_theme_arg, show_default_options, show_messages_display,
+    show_metrics_display,
 };
 #[cfg(test)]
 use super::{
@@ -661,10 +661,6 @@ pub fn execute_command(
         "help" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: command_help_display(),
-        }),
-        "list-commands" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: list_baseline_commands(),
         }),
         "list-themes" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),
