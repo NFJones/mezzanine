@@ -74,7 +74,7 @@ impl AttachClientFrame {
         let Some(line) = lines.get_mut(slot.row) else {
             return (lines, spans);
         };
-        let label = if connected { " ok " } else { " no " };
+        let label = if connected { " up " } else { " dn " };
         let prefix = mez_mux::render::line_slice(line, 0, slot.column);
         let suffix =
             mez_mux::render::line_slice(line, slot.column.saturating_add(slot.width), usize::MAX);
@@ -241,7 +241,7 @@ impl PrimaryResizeRequestOutcome {
     }
 }
 
-/// Tracks the local animation refresh deadline for a control-socket attach.
+/// Tracks the local animation refresh deadline for an interactive attach.
 #[derive(Debug, Default)]
 struct AttachAnimationRefresh {
     /// Current refresh interval advertised by the last rendered view.

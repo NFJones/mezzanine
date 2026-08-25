@@ -617,6 +617,7 @@ async fn control_socket_primary_attach_loop_refreshes_active_animation_without_r
     assert_eq!(io.written_frames[0].lines, vec!["thinking phase one"]);
     assert_eq!(io.written_frames[1].lines, vec!["thinking phase two"]);
 }
+
 /// Verifies an idle primary control attach notices local terminal resizes and
 /// requests a fresh view without waiting for user input or daemon events.
 ///

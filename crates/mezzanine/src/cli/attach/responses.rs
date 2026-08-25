@@ -471,7 +471,7 @@ mod tests {
     use crate::host::terminal::TerminalIrohStatusQuality;
 
     /// Verifies semantic slot decoding and local composition use compact
-    /// `ok` and `no` labels while quality changes rendition colors.
+    /// `up` and `dn` labels while quality changes rendition colors.
     #[test]
     fn terminal_view_iroh_slot_decodes_and_composes_local_state() {
         let response = r#"{"result":{"view":{"lines":["base    tail"],"line_style_spans":[[{"start":0,"length":4,"rendition":{"foreground":null,"background":{"kind":"indexed","index":7}}},{"start":9,"length":4,"rendition":{"foreground":null,"background":{"kind":"indexed","index":6}}}]],"cursor":{"row":0,"column":0,"visible":false},"output_modes":{},"iroh_status_slot":{"row":0,"column":4,"width":4,"good":{"foreground":null,"background":{"kind":"indexed","index":2}},"degraded":{"foreground":null,"background":{"kind":"indexed","index":3}},"poor":{"foreground":null,"background":{"kind":"indexed","index":1}},"unknown":{"foreground":null,"background":{"kind":"indexed","index":8}}}}}}"#;
@@ -492,7 +492,7 @@ mod tests {
             ),
         ] {
             let (lines, spans) = frame.with_iroh_status(true, quality);
-            assert_eq!(lines, ["base ok tail"]);
+            assert_eq!(lines, ["base up tail"]);
             assert!(spans[0].iter().any(|span| {
                 span.start == 0
                     && span.length == 4
@@ -515,7 +515,7 @@ mod tests {
         }
 
         let (lines, spans) = frame.with_iroh_status(false, TerminalIrohStatusQuality::Poor);
-        assert_eq!(lines, ["base no tail"]);
+        assert_eq!(lines, ["base dn tail"]);
         assert_eq!(
             spans[0]
                 .iter()

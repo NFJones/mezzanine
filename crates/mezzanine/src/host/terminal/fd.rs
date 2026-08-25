@@ -92,7 +92,7 @@ pub enum TerminalIrohStatusQuality {
 }
 
 /// Fixed width reserved for the client-rendered Iroh state pill.
-pub const TERMINAL_IROH_STATUS_SLOT_WIDTH: usize = " no ".len();
+pub const TERMINAL_IROH_STATUS_SLOT_WIDTH: usize = " dn ".len();
 
 /// Client-space semantic slot for one locally rendered Iroh status pill.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
