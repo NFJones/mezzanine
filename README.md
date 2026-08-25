@@ -119,6 +119,12 @@ configuration.
 After upgrading Mezzanine, open a new pane or restart the session to use
 updated shell integration.
 
+For a service-manager deployment, `mez host serve` runs the persistent
+multi-session host. Optional Iroh access uses explicit device pairing and keeps
+the local Unix socket as the administration and recovery path. See [Remote
+pairing and recovery](docs/safety-and-trust/remote-pairing-and-recovery.md) and
+[Operations and troubleshooting](docs/operations/README.md).
+
 Use `mez --help` and the [CLI reference](docs/reference-manual/cli.md) for the
 current command contract. Use [Sessions and panes](docs/using-mezzanine/sessions-and-panes.md)
 and [Terminal input, copy, and history](docs/using-mezzanine/terminal-input-copy-and-history.md)

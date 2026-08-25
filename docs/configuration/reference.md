@@ -252,16 +252,6 @@ rollout](../operations/iroh-production-operations-and-rollout.md).
 | `terminal.clipboard_paste_command` | string or string array | omitted | Host paste command; writes content to stdout. |
 | `terminal.clipboard_read_timeout_ms` | integer | `250` | Maximum time to wait for a host clipboard helper to return pasted content; must be positive. |
 | `terminal.clipboard_read_max_bytes` | integer | `1048576` | Maximum bytes accepted from a host clipboard read; must be positive. |
-
-An Iroh primary that negotiates event-stream v2 and the explicit
-`client_clipboard_write` capability also writes completed copy-mode selections
-to the attaching machine's clipboard. The server still updates its internal
-paste buffer and attempts its own host clipboard write independently. Client
-writes are best-effort, bounded to 8 MiB, and use only the attaching client's
-local clipboard command configuration. Observers, Unix attachments, legacy v1
-peers, headless clients without a working clipboard provider, and
-capability-disabled sessions retain existing behavior. Clipboard reads and
-remote paste are not part of this feature.
 | `terminal.alternate_screen` | boolean | `true` | Support alternate-screen applications. |
 | `terminal.focus_events` | boolean | `true` | Enable focus event reporting when supported. |
 | `terminal.nested_multiplexer` | string | `"auto"` | Nested multiplexer handling mode. |
@@ -278,6 +268,16 @@ remote paste are not part of this feature.
 | `terminal.cursor_style` | string | `"block"` | Cursor style: `block`, `underline`, or `bar`. |
 | `terminal.cursor_blink` | boolean | `false` | Whether Mezzanine-rendered cursors blink. |
 | `terminal.cursor_blink_interval_ms` | integer | `500` | Full blink cycle length in milliseconds. |
+
+An Iroh primary that negotiates event-stream v2 and the explicit
+`client_clipboard_write` capability also writes completed copy-mode selections
+to the attaching machine's clipboard. The server still updates its internal
+paste buffer and attempts its own host clipboard write independently. Client
+writes are best-effort, bounded to 8 MiB, and use only the attaching client's
+local clipboard command configuration. Observers, Unix attachments, legacy v1
+peers, headless clients without a working clipboard provider, and
+capability-disabled sessions retain existing behavior. Clipboard reads and
+remote paste are not part of this feature.
 
 The historical `terminal.nested_muxxer` spelling is accepted as a version 1
 migration alias and is rewritten to `terminal.nested_multiplexer` before layer

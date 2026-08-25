@@ -103,8 +103,16 @@ processes that existed when the snapshot was taken.
 | `mez sandbox` | Inspect, plan, enable, disable, manage presets, profiles, project trust, and Bubblewrap-home caches. `mez sandbox trust` supports `list`, `inspect PATH`, `add PATH`, `reject PATH`, and `revoke PATH`. |
 | `mez issue` | Add, show, update, query, and delete local project issues. |
 | `mez memory` | List, inspect, add, edit, delete, archive, mark stale, restore, record use or confirmation, supersede, prune, export, and search persistent memory records. |
-| `mez remote` | Use authenticated local Unix control for `status`, `invite --role observer|primary [--expires SECONDS] [--output PATH]`, `clients`, `rename CLIENT_ID LABEL`, and `revoke CLIENT_ID [--reason TEXT]`. Client-local commands are `pair --invite-file PATH [--name NAME]`, `invitation inspect PATH`, and `profile list|show|rename|remove|check`. Paired Iroh clients cannot use server trust-administration methods. |
+| `mez remote` | Use authenticated local Unix control for `status`, `invite`, `clients`, `rename CLIENT_ID LABEL`, and `revoke CLIENT_ID [--reason TEXT]`. Client-local commands are `pair --invite-file PATH [--name NAME]`, `invitation inspect PATH`, and `profile list|show|rename|remove|check`. Paired Iroh clients cannot use server trust-administration methods. |
 | `mez completion <shell>` | Generate a completion definition for `bash`, `elvish`, `fish`, `powershell`, or `zsh`. |
+
+`mez remote invite` accepts `--role observer|primary`, `--expires SECONDS`, and
+`--output PATH`. A role ceiling does not grant session creation. Add
+`--allow-create` when the device may use remote `new` or omitted-target
+`attach`; optional `--max-leases`, `--max-live-sessions`, and
+`--lease-lifetime-ceiling` narrow that authority. `--allow-kill` separately
+permits a primary device with creation authority to force-kill sessions it
+created.
 
 Direct control commands keep Unix as their default target. `--iroh-invite-file
 PATH` explicitly performs first-use pairing from an owner-only, bounded JSON
@@ -141,12 +149,11 @@ no hidden downgrade when `none` is absent, and
 
 ### Persistent-host command contract
 
-Configuration schema 73 defines a persistent-host mode above the existing
-per-session runtime. The host-scoped Iroh identity, trust store, and
-protocol-v3 host-only pairing/profile-check path are implemented. Until the
-local host and session-routing commands below are integrated and enabled, the
-current session-bound commands and `mezctl/2` behavior remain authoritative; a
-direct session endpoint does not interpret an omitted target as creation.
+Configuration schema 73 defines the persistent-host mode above the existing
+per-session runtime. It includes the local host and session-routing commands,
+host-scoped Iroh identity and trust store, and protocol-v3 host-only pairing
+and profile checks. The direct `mez serve` compatibility endpoint remains
+session-bound and does not interpret an omitted target as creation.
 
 The persistent-host command surface is:
 
@@ -245,22 +252,23 @@ before dialing. Omitting `--expires` uses
 through 86,400 seconds. For example:
 
 ```console
-mez remote invite --role primary --output mez-invite.json
+mez remote invite --role primary --allow-create --allow-kill --output mez-invite.json
 mez remote invitation inspect mez-invite.json
 mez remote pair --invite-file mez-invite.json --name home-mez
 mez --iroh-profile home-mez attach
-mez --iroh-profile home-mez kill --force
+mez --iroh-profile home-mez list
+mez --iroh-profile home-mez kill SESSION_TARGET --force
 ```
 
 `remote pair` redeems and saves the profile without entering a terminal session.
-It authenticates temporarily as an observer, detaches its own pending client,
-and prints the exact reconnect command. `remote profile list` and `show` expose
-only aliases, role ceilings, abbreviated server fingerprints, and route counts.
-`rename` changes only the local alias. `remove` deletes only the local reconnect
-profile and explicitly does not revoke server trust. `check` authenticates the
-profile through the same temporary observer/self-detach flow and reports a
-secret-free result. Use local Unix `remote revoke` on the server to revoke a
-device.
+It uses host-only initialization, which cannot create, select, or attach a
+session, and prints the exact reconnect command. Replace `SESSION_TARGET` with
+a lease ID, session ID, or exact name returned by `list`. `remote profile list`
+and `show` expose only aliases, role ceilings, abbreviated server fingerprints,
+and route counts. `rename` changes only the local alias. `remove` deletes only
+the local reconnect profile and explicitly does not revoke server trust.
+`check` uses the same host-only initialization and reports a secret-free result.
+Use local Unix `remote revoke` on the server to revoke a device.
 
 Connection failures identify the setup stage and configured deadline. A setup
 timeout also reports pinned direct and relay route counts and states that

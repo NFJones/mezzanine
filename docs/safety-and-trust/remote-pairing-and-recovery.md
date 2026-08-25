@@ -10,12 +10,12 @@ is lost.
 
 Keep the user-private Unix control socket available. Iroh transport is disabled
 by default. Enable `[transport.iroh]` only in primary-user configuration and
-restart the owning daemon. A per-session identity listener runs alongside Unix
-control; failure to bind an explicitly enabled per-session endpoint fails
-startup rather than silently removing remote service. A host-scoped identity is
-owned only by `mez host serve`: direct `mez` and `mez serve` continue with Unix
-control and do not attempt to bind it. Unix remains the administration and
-recovery path.
+restart the owning daemon. With `identity = "per_session"`, a direct-session
+listener runs alongside Unix control; failure to bind an explicitly enabled
+endpoint fails startup rather than silently removing remote service. The
+default host-scoped identity is owned only by `mez host serve`: direct `mez`
+and `mez serve` continue with Unix control and do not attempt to bind it. Unix
+remains the administration and recovery path.
 
 ## Understand the identities
 
@@ -54,7 +54,7 @@ within the supported 30 through 86,400 second range. Transfer the JSON through
 a confidential channel. Prefer secure no-overwrite output:
 
 ```console
-mez remote invite --role primary --output mez-invite.json
+mez remote invite --role primary --allow-create --output mez-invite.json
 ```
 
 The output file is created mode `0600`, existing files and symlinks are refused,
@@ -62,11 +62,15 @@ and the terminal receives only the created path. `mez remote invitation inspect
 mez-invite.json` reports only expiry, role, an abbreviated server fingerprint,
 and direct/relay route counts; it never prints the token.
 
-The one-shot local administration connection releases a primary that it
-created when the request completes, so the invited remote primary can redeem
-without a manual detach. If an interactive primary already existed, the
-administration request may reuse its authority but does not detach or replace
-that primary when the request closes.
+The role is only an attachment ceiling. `--allow-create` is required for remote
+`new` and omitted-target `attach`. Add `--allow-kill` only when that primary
+device should also be able to force-kill sessions it created; it requires
+`--allow-create`. Use `--max-leases`, `--max-live-sessions`, and
+`--lease-lifetime-ceiling` to narrow creation authority below host limits.
+
+Invitation redemption and profile checks use host-only initialization. They do
+not create, select, attach, detach, or displace a session client, so an existing
+primary is unaffected by pairing.
 
 The invitation is server-bound, role-limited, and claimable by one authenticated
 client endpoint. A remote client selects it explicitly with
@@ -116,14 +120,15 @@ mez remote profile remove workstation
 ```
 
 Rename changes only the alias. Remove deletes only the local profile; it does
-not revoke the server trust record. Check authenticates through a temporary
-observer and self-detaches. Server-side revocation remains the local Unix
-`remote revoke` workflow below. The direct
-Iroh CLI surface supports `attach`, `kill`, and `detach`. For example, use `mez
---iroh-invite-file mez-invite.json attach` for first pairing or `mez
---iroh-profile PROFILE attach` for reconnect; add `--observer` to request
-observer access. An observer-limited invitation or profile cannot attach as
-primary.
+not revoke the server trust record. Check uses host-only initialization and
+cannot create, select, or attach a session. Server-side revocation remains the
+local Unix `remote revoke` workflow below. A host-scoped Iroh profile supports
+`new`, `list`, `attach`, `kill`, and `detach`; legacy direct-session profiles
+retain their narrower compatibility behavior. Bare remote `new` and `attach`
+require creation authority. To attach an existing authorized session without
+creating one, use `mez --iroh-profile PROFILE attach SESSION_TARGET`; add
+`--observer` to request observer access. An observer-limited invitation or
+profile cannot attach as primary.
 
 Configuration schema 73 provides a persistent-host Iroh owner with one stable
 endpoint identity and host trust database. Pairing remains mandatory once per
@@ -184,10 +189,12 @@ available as audit-safe history.
 
 ## Back up or recover identity
 
-Stop the session daemon before copying remote identity state so the endpoint
-and trust database remain a consistent pair. Preserve owner-only permissions
-and protect backups as credentials. Restoring only one side is not sufficient:
-trust records and outstanding invitations are bound to the server endpoint ID.
+Stop the owning daemon before copying remote identity state—`mez host serve`
+for host-scoped identity, or the direct-session daemon for compatibility
+identity—so the endpoint and trust database remain a consistent pair. Preserve
+owner-only permissions and protect backups as credentials. Restoring only one
+side is not sufficient: trust records and outstanding invitations are bound to
+the server endpoint ID.
 
 If the endpoint key is lost, corrupted, or intentionally replaced, prior
 invitations and device credentials no longer authenticate to the new server
@@ -217,3 +224,8 @@ network evidence, staged stop thresholds, and a tested Unix-only rollback. See
 - [Control JSON-RPC](../reference-manual/protocols/control-json-rpc.md)
 - [Audit and diagnostics](audit-and-diagnostics.md)
 - [Lifecycle, detach, and recovery](../operations/lifecycle-detach-and-recovery.md)
+
+## Next step
+
+Use [Iroh production operations and rollout](../operations/iroh-production-operations-and-rollout.md)
+before enabling remote access outside a development environment.

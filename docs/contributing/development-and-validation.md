@@ -35,13 +35,13 @@ before handoff:
 just check
 just fmt
 just clippy
-timeout 60s just test
+timeout 120s just test
 ```
 
 `just check` type-checks all targets and features. `just fmt` applies Rust
 formatting. `just clippy` denies warnings across the workspace. `just test`
 runs all targets and features with Cargo's quiet output; the timeout makes a
-hang visible. Use a timeout of at least 60 seconds for every direct test
+hang visible. Use a timeout of at least 120 seconds for every direct test
 command as well. `just test` already supplies Cargo's `--quiet` option; retain
 that option when running a direct `cargo test` command.
 
