@@ -166,15 +166,6 @@ impl RuntimeSessionService {
     ///
     /// This transition retains the actor's timer key as adapter state while
     /// centralizing the client/configuration policy in the runtime core.
-    pub(crate) fn status_line_refresh_required(&self) -> Result<bool> {
-        let config = self.terminal_client_loop_config(TerminalClientLoopConfig::default())?;
-        Ok(runtime_status_refresh_required_by_config(&config))
-    }
-
-    /// Reconciles the status-refresh timer for one attached terminal client.
-    ///
-    /// This transition retains the actor's timer key as adapter state while
-    /// centralizing the client/configuration policy in the runtime core.
     pub(crate) fn client_status_refresh_timer_transition(
         &mut self,
         client_id: &str,
