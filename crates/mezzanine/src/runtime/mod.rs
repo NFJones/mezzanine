@@ -381,6 +381,7 @@ pub(crate) use commands::{
     RuntimeAgentPromptProviderInfoRefresh, RuntimeProviderInfoRefreshOutcome,
     RuntimeProviderInfoRefreshWork,
 };
+pub(crate) use deferred::AttachedClientClipboardWrite;
 pub use deferred::AttachedClientStepApplication;
 pub use env::{
     AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, RuntimeEnv, SocketDirectory,
@@ -442,13 +443,16 @@ pub use status_pills::{
     RuntimeStatusPillEvent, RuntimeStatusPillRefreshPlan,
     execute_runtime_status_pill_refresh_plan_with_cancellation,
 };
+#[cfg(test)]
+pub(crate) use transitions::MAX_CLIENT_CLIPBOARD_BYTES;
 pub use transitions::{
-    AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AsyncHookEvent, ClientEvent,
-    HostClipboardEvent, HostClipboardPasteTarget, PaneEvent, PaneForegroundProcessObservation,
-    PaneProcessEvent, PaneProcessInstance, PaneProcessIoEffect, PersistenceEvent,
-    PersistenceTarget, PersistenceWriteMode, ProcessEvent, RenderInvalidationReason, RuntimeEvent,
-    RuntimeEventBatch, RuntimeEventIngressReport, RuntimeSideEffect, RuntimeTimerKey,
-    RuntimeTimerKind, RuntimeTransition, ShutdownEvent, TimerEvent,
+    AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AsyncHookEvent,
+    ClientClipboardWrite, ClientEvent, HostClipboardEvent, HostClipboardPasteTarget, PaneEvent,
+    PaneForegroundProcessObservation, PaneProcessEvent, PaneProcessInstance, PaneProcessIoEffect,
+    PersistenceEvent, PersistenceTarget, PersistenceWriteMode, ProcessEvent,
+    RenderInvalidationReason, RuntimeEvent, RuntimeEventBatch, RuntimeEventIngressReport,
+    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, ShutdownEvent,
+    TimerEvent,
 };
 
 pub(crate) use auto_sizing::runtime_execute_auto_sizing_with_async_provider;

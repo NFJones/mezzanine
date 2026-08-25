@@ -17,11 +17,11 @@ impl RuntimeSessionService {
     pub(super) fn apply_attached_copy_mode_action(
         &mut self,
         action: CopyModeKeyAction,
-    ) -> Result<bool> {
+    ) -> Result<(bool, Option<String>)> {
         let pane_id = self.active_pane_id()?;
         if self.remove_presented_surface_scrollback_copy_mode(pane_id.as_str()) {
             self.remove_active_copy_mode_for_presented_surface(pane_id.as_str());
-            return Ok(true);
+            return Ok((true, None));
         }
         let mut should_exit = false;
         let mut copied = None;
@@ -38,6 +38,7 @@ impl RuntimeSessionService {
             }
         }
         if let Some(copied) = copied {
+            let client_clipboard_write = copied.clone();
             let buffer_name = self
                 .presentation
                 .copy
@@ -49,11 +50,15 @@ impl RuntimeSessionService {
                 copied,
                 format!("pane:{pane_id}:copy-mode"),
             )?;
+            if should_exit {
+                self.clear_copy_state_for_presented_surface(pane_id.as_str());
+            }
+            return Ok((true, Some(client_clipboard_write)));
         }
         if should_exit {
             self.clear_copy_state_for_presented_surface(pane_id.as_str());
         }
-        Ok(true)
+        Ok((true, None))
     }
 
     /// Runs the copy text to buffer and host clipboard operation for this subsystem.

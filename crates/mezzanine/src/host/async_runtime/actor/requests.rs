@@ -666,6 +666,56 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
+            AsyncRuntimeRequest::RegisterClientClipboardRoute { client_id, reply } => {
+                self.client_clipboard_routes.insert(client_id.clone(), None);
+                self.client_clipboard_sequences.insert(client_id, 0);
+                let _ = reply.send(());
+                false
+            }
+            AsyncRuntimeRequest::UnregisterClientClipboardRoute { client_id, reply } => {
+                self.client_clipboard_sequences.remove(&client_id);
+                let removed = self.client_clipboard_routes.remove(&client_id).is_some();
+                let _ = reply.send(removed);
+                false
+            }
+            #[cfg(test)]
+            AsyncRuntimeRequest::EnqueueClientClipboardWrite {
+                client_id,
+                content,
+                reply,
+            } => {
+                let accepted =
+                    if let Some(pending) = self.client_clipboard_routes.get_mut(&client_id) {
+                        let sequence = self
+                            .client_clipboard_sequences
+                            .get(&client_id)
+                            .copied()
+                            .unwrap_or(0)
+                            .saturating_add(1);
+                        if let Some(write) =
+                            crate::runtime::ClientClipboardWrite::new(sequence, content)
+                        {
+                            self.client_clipboard_sequences.insert(client_id, sequence);
+                            *pending = Some(write);
+                            self.notify_event_delivery();
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                let _ = reply.send(accepted);
+                false
+            }
+            AsyncRuntimeRequest::TakeClientClipboardWrite { client_id, reply } => {
+                let pending = self
+                    .client_clipboard_routes
+                    .get_mut(&client_id)
+                    .and_then(Option::take);
+                let _ = reply.send(pending);
+                false
+            }
             AsyncRuntimeRequest::ConsumeUnixEventBinding {
                 token,
                 peer_uid,
@@ -715,9 +765,29 @@ impl AsyncRuntimeSessionActor {
                         ])?;
                         return Ok(application);
                     }
-                    let (application, transition) = self
+                    let (mut application, transition) = self
                         .service
                         .apply_attached_terminal_step_transition(&primary_client_id, &step)?;
+                    if let Some(candidate) = application.client_clipboard_write.take()
+                        && let Some(pending) =
+                            self.client_clipboard_routes.get_mut(&primary_client_id)
+                    {
+                        let sequence = self
+                            .client_clipboard_sequences
+                            .get(&primary_client_id)
+                            .copied()
+                            .unwrap_or(0)
+                            .saturating_add(1);
+                        if let Some(write) = crate::runtime::ClientClipboardWrite::new(
+                            sequence,
+                            candidate.into_content(),
+                        ) {
+                            self.client_clipboard_sequences
+                                .insert(primary_client_id.clone(), sequence);
+                            *pending = Some(write);
+                            self.notify_event_delivery();
+                        }
+                    }
                     self.queue_runtime_side_effects(transition.side_effects)?;
                     self.queue_deferred_pane_io_side_effects_from_service()?;
                     self.queue_pending_provider_dispatch_side_effects()?;

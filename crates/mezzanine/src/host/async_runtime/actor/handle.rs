@@ -451,6 +451,47 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Registers one exact authenticated Iroh v2 primary effect route.
+    pub(crate) async fn register_client_clipboard_route(&self, client_id: ClientId) -> Result<()> {
+        self.request(|reply| AsyncRuntimeRequest::RegisterClientClipboardRoute { client_id, reply })
+            .await
+    }
+
+    /// Removes one exact route and clears any unsent clipboard payload.
+    pub(crate) async fn unregister_client_clipboard_route(
+        &self,
+        client_id: ClientId,
+    ) -> Result<bool> {
+        self.request(
+            |reply| AsyncRuntimeRequest::UnregisterClientClipboardRoute { client_id, reply },
+        )
+        .await
+    }
+
+    /// Coalesces one bounded clipboard payload for an exact live route.
+    #[cfg(test)]
+    pub(crate) async fn enqueue_client_clipboard_write(
+        &self,
+        client_id: ClientId,
+        content: String,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::EnqueueClientClipboardWrite {
+            client_id,
+            content,
+            reply,
+        })
+        .await
+    }
+
+    /// Takes one pending write from an exact connection-local route.
+    pub(crate) async fn take_client_clipboard_write(
+        &self,
+        client_id: ClientId,
+    ) -> Result<Option<crate::runtime::ClientClipboardWrite>> {
+        self.request(|reply| AsyncRuntimeRequest::TakeClientClipboardWrite { client_id, reply })
+            .await
+    }
+
     /// Consumes one short-lived Unix event binding for the authenticated peer.
     pub async fn consume_unix_event_binding(
         &self,

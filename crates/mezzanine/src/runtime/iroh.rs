@@ -1,5 +1,6 @@
 //! Iroh endpoint construction and lifecycle for optional remote control.
 
+use base64::Engine as _;
 use iroh::address_lookup::{DnsAddressLookup, PkarrPublisher};
 use iroh::endpoint::{
     BindOpts, IdleTimeout, PortmapperConfig, QuicTransportConfig, VarInt, presets,
@@ -37,7 +38,50 @@ use super::{
 /// ALPN identity for the first Mezzanine Iroh transport contract.
 pub(crate) const MEZZANINE_IROH_ALPN: &[u8] = b"mezzanine/transport/1";
 pub(crate) const MEZZANINE_IROH_EVENT_STREAM_PREFACE: &[u8] = b"mezzanine/events/1\n";
+pub(crate) const MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE: &[u8] = b"mezzanine/events/2\n";
 const IROH_EVENT_BATCH_LIMIT: usize = 64;
+const IROH_CLIPBOARD_CHUNK_BYTES: usize = 256 * 1024;
+
+/// Encodes one bounded clipboard write as transient version-two notifications.
+fn encode_iroh_clipboard_effect_frames(write: &super::ClientClipboardWrite) -> Vec<Vec<u8>> {
+    let content = write.content().as_bytes();
+    let chunk_count = content.len().div_ceil(IROH_CLIPBOARD_CHUNK_BYTES).max(1);
+    let mut frames = Vec::with_capacity(chunk_count.saturating_add(2));
+    let begin = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "client/clipboard.begin",
+        "params": {
+            "sequence": write.sequence(),
+            "total_bytes": write.byte_len(),
+            "chunks": chunk_count,
+        }
+    });
+    frames.push(encode_control_body(&begin.to_string()));
+    let chunks = if content.is_empty() {
+        vec![content]
+    } else {
+        content.chunks(IROH_CLIPBOARD_CHUNK_BYTES).collect()
+    };
+    for (index, chunk) in chunks.into_iter().enumerate() {
+        let chunk = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "client/clipboard.chunk",
+            "params": {
+                "sequence": write.sequence(),
+                "index": index,
+                "data_base64": base64::engine::general_purpose::STANDARD.encode(chunk),
+            }
+        });
+        frames.push(encode_control_body(&chunk.to_string()));
+    }
+    let commit = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "client/clipboard.commit",
+        "params": {"sequence": write.sequence()}
+    });
+    frames.push(encode_control_body(&commit.to_string()));
+    frames
+}
 
 /// Privacy-safe aggregate diagnostics for one supervised Iroh listener.
 #[derive(Debug, Clone, Default)]
@@ -1166,11 +1210,51 @@ async fn serve_runtime_iroh_event_stream(
     idle_timeout: std::time::Duration,
     mut stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<u64> {
-    if version != 1 {
+    if !matches!(version, 1 | 2) {
         return Err(MezError::invalid_args(
             "unsupported Iroh event stream version",
         ));
     }
+    if version == 2 {
+        handle
+            .register_client_clipboard_route(caller_client_id.clone())
+            .await?;
+    }
+    let result = serve_registered_runtime_iroh_event_stream(
+        connection,
+        handle.clone(),
+        caller_client_id.clone(),
+        version,
+        compression,
+        compression_metrics,
+        setup_timeout,
+        idle_timeout,
+        &mut stop,
+    )
+    .await;
+    if version == 2 {
+        let _ = handle
+            .unregister_client_clipboard_route(caller_client_id)
+            .await;
+    }
+    result
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "registered stream ownership, framing, lifecycle, and bounded setup and idle behavior are independent adapter inputs"
+)]
+async fn serve_registered_runtime_iroh_event_stream(
+    connection: iroh::endpoint::Connection,
+    handle: AsyncRuntimeSessionHandle,
+    caller_client_id: ClientId,
+    version: u32,
+    compression: IrohCompressionPolicy,
+    compression_metrics: IrohCompressionMetrics,
+    setup_timeout: std::time::Duration,
+    idle_timeout: std::time::Duration,
+    stop: &mut tokio::sync::watch::Receiver<bool>,
+) -> Result<u64> {
     let connection_id = format!("iroh-events-{caller_client_id}");
     let mut last_delivered_event_id = 0u64;
     if *stop.borrow() {
@@ -1194,7 +1278,11 @@ async fn serve_runtime_iroh_event_stream(
         .map_err(|_| MezError::invalid_state("failed to open Iroh event stream"))?;
     tokio::time::timeout(
         idle_timeout,
-        send.write_all(MEZZANINE_IROH_EVENT_STREAM_PREFACE),
+        send.write_all(if version == 2 {
+            MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE
+        } else {
+            MEZZANINE_IROH_EVENT_STREAM_PREFACE
+        }),
     )
     .await
     .map_err(|_| MezError::invalid_state("Iroh event stream preface timed out"))?
@@ -1207,6 +1295,28 @@ async fn serve_runtime_iroh_event_stream(
     loop {
         if *stop.borrow() {
             break;
+        }
+        if version == 2
+            && let Some(write) = handle
+                .take_client_clipboard_write(caller_client_id.clone())
+                .await?
+        {
+            for frame in encode_iroh_clipboard_effect_frames(&write) {
+                let frame = compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?;
+                compression_metrics.record_frame(
+                    frame.as_bytes().len(),
+                    frame.decoded_bytes(),
+                    frame.compressed(),
+                );
+                tokio::time::timeout(idle_timeout, send.write_all(frame.as_bytes()))
+                    .await
+                    .map_err(|_| MezError::invalid_state("Iroh clipboard effect write timed out"))?
+                    .map_err(|_| MezError::invalid_state("Iroh clipboard effect write failed"))?;
+            }
+            tokio::time::timeout(idle_timeout, send.flush())
+                .await
+                .map_err(|_| MezError::invalid_state("Iroh clipboard effect flush timed out"))?
+                .map_err(|_| MezError::invalid_state("Iroh clipboard effect flush failed"))?;
         }
         if pending.is_empty() {
             pending = match handle
@@ -1328,6 +1438,48 @@ fn relay_mode(policy: &RuntimeIrohRelayPolicy) -> Result<RelayMode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies clipboard effects use bounded contiguous chunks and keep raw
+    /// payload bytes out of frame metadata and debug output.
+    #[test]
+    fn iroh_clipboard_effect_frames_are_bounded_ordered_and_private() {
+        let payload = format!("private-prefix-{}", "x".repeat(IROH_CLIPBOARD_CHUNK_BYTES));
+        let write = super::super::ClientClipboardWrite::new(7, payload.clone()).unwrap();
+        let frames = encode_iroh_clipboard_effect_frames(&write);
+
+        assert_eq!(frames.len(), 4);
+        let bodies = frames
+            .iter()
+            .map(|frame| {
+                crate::control::decode_control_frame(frame, 1_048_576)
+                    .unwrap()
+                    .0
+            })
+            .collect::<Vec<_>>();
+        assert!(bodies[0].contains(r#""method":"client/clipboard.begin""#));
+        assert!(bodies[0].contains(r#""sequence":7"#));
+        assert!(bodies[0].contains(r#""chunks":2"#));
+        assert!(bodies[1].contains(r#""index":0"#));
+        assert!(bodies[2].contains(r#""index":1"#));
+        assert!(bodies[3].contains(r#""method":"client/clipboard.commit""#));
+        assert!(bodies.iter().all(|body| !body.contains("private-prefix")));
+        assert!(!format!("{write:?}").contains("private-prefix"));
+    }
+
+    /// Verifies an empty clipboard write still emits the declared single
+    /// contiguous chunk so a receiver can validate and commit it exactly.
+    #[test]
+    fn iroh_empty_clipboard_effect_emits_one_empty_chunk() {
+        let write = super::super::ClientClipboardWrite::new(3, String::new()).unwrap();
+        let frames = encode_iroh_clipboard_effect_frames(&write);
+
+        assert_eq!(frames.len(), 3);
+        let chunk = crate::control::decode_control_frame(&frames[1], 1_048_576)
+            .unwrap()
+            .0;
+        assert!(chunk.contains(r#""index":0"#), "{chunk}");
+        assert!(chunk.contains(r#""data_base64":"""#), "{chunk}");
+    }
 
     /// Verifies the shared Iroh quality classifier preserves every threshold
     /// and treats stale samples as unknown before considering measurements.

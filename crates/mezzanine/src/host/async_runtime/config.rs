@@ -5,7 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AgentId, Arc, AsyncRuntimeRequestEnvelope, ControlConnectionState,
+    AgentId, Arc, AsyncRuntimeRequestEnvelope, ClientId, ControlConnectionState,
     DEFAULT_ASYNC_CONTROL_MAX_CONTENT_LENGTH, DEFAULT_ASYNC_EVENT_LIMIT_PER_CONNECTION,
     DEFAULT_ASYNC_RUNTIME_COMMAND_BUFFER, Duration, FanoutBatch, HashMap, HashSet,
     MessageConnection, MezError, Notify, PaneProcessInstance, Result, RuntimeLifecycleState,
@@ -407,6 +407,11 @@ pub struct AsyncRuntimeSessionActor {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) receiver: mpsc::Receiver<AsyncRuntimeRequestEnvelope>,
+    /// Pending transient clipboard write keyed by the exact live Iroh primary.
+    pub(super) client_clipboard_routes:
+        HashMap<ClientId, Option<crate::runtime::ClientClipboardWrite>>,
+    /// Last route-local clipboard sequence assigned to each live Iroh primary.
+    pub(super) client_clipboard_sequences: HashMap<ClientId, u64>,
     /// Stores the message delivery notify value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

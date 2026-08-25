@@ -483,6 +483,37 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Authorized visible events or a current-role authorization failure.
         reply: oneshot::Sender<Result<Vec<RuntimeEventWakeup>>>,
     },
+    /// Registers one authenticated Iroh v2 primary as an exact effect route.
+    RegisterClientClipboardRoute {
+        /// Exact interactive primary owning the live event stream.
+        client_id: ClientId,
+        /// Confirms that the route was installed or reset.
+        reply: oneshot::Sender<()>,
+    },
+    /// Removes one exact route and discards any unsent sensitive payload.
+    UnregisterClientClipboardRoute {
+        /// Exact interactive primary whose event route ended.
+        client_id: ClientId,
+        /// Confirms whether a live route was removed.
+        reply: oneshot::Sender<bool>,
+    },
+    /// Coalesces one bounded clipboard payload into an exact live route.
+    #[cfg(test)]
+    EnqueueClientClipboardWrite {
+        /// Exact initiating client selected by copy dispatch.
+        client_id: ClientId,
+        /// Sensitive clipboard contents retained only in transient actor state.
+        content: String,
+        /// Reports whether an eligible route accepted the bounded payload.
+        reply: oneshot::Sender<bool>,
+    },
+    /// Takes the next unsent clipboard write for one exact route.
+    TakeClientClipboardWrite {
+        /// Exact event writer draining its connection-local route.
+        client_id: ClientId,
+        /// Pending write, if the route is live and currently has one.
+        reply: oneshot::Sender<Option<crate::runtime::ClientClipboardWrite>>,
+    },
     /// Consumes one short-lived Unix event binding credential.
     ConsumeUnixEventBinding {
         /// Raw bearer credential received only from the event initialization frame.
@@ -1113,7 +1144,12 @@ impl AsyncRuntimeRequest {
             | Self::MessageFanoutReadyFor { .. }
             | Self::AcknowledgeMessageFanout { .. }
             | Self::EventWakeupsForClient { .. }
+            | Self::RegisterClientClipboardRoute { .. }
+            | Self::UnregisterClientClipboardRoute { .. }
+            | Self::TakeClientClipboardWrite { .. }
             | Self::ConsumeUnixEventBinding { .. } => Family::Message,
+            #[cfg(test)]
+            Self::EnqueueClientClipboardWrite { .. } => Family::Message,
             #[cfg(test)]
             Self::WriteInputToPane { .. }
             | Self::ManagedShellLifecycleState { .. }

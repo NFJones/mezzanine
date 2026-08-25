@@ -529,6 +529,92 @@ fn iroh_primary_with_same_display_name_gets_independent_client() {
     assert_eq!(session.attached_primaries().count(), 2);
 }
 
+/// Verifies event-stream version two is available only through an authenticated
+/// Iroh primary initialization and is retained as the exact connection start.
+///
+/// Clipboard effects rely on transport-established Iroh identity rather than
+/// client metadata, so successful negotiation must preserve both the exact
+/// attached client and requested stream version for the host handoff.
+#[test]
+fn authenticated_iroh_primary_negotiates_event_stream_version_two() {
+    use crate::security::remote::{RemoteHostRoutingAuthority, RemotePrincipal, RemoteRoleCeiling};
+
+    let mut session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let mut connection = ControlConnectionState::new(false, false);
+    connection
+        .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint("endpoint-v2"))
+        .unwrap();
+    connection
+        .bind_remote_principal(RemotePrincipal {
+            trust_record_id: "trust-v2".to_string(),
+            endpoint_id: "endpoint-v2".to_string(),
+            role_ceiling: RemoteRoleCeiling::Primary,
+            host_routing: RemoteHostRoutingAuthority::default(),
+            requested_role: RequestedRole::Primary,
+        })
+        .unwrap();
+    let mut cache = ControlIdempotencyCache::default();
+    let input = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"remote-v2","requested_version":2,"requested_role":"primary","detach_primary_on_disconnect":true,"event_stream_version":2,"client":{"name":"remote-v2","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+    );
+
+    let (output, _) = handle_control_frames_for_connection(
+        &input,
+        4096,
+        &mut session,
+        &mut connection,
+        &mut cache,
+    )
+    .unwrap();
+    let (body, _) = decode_control_frame(&output, 4096).unwrap();
+
+    let expected_client = connection.caller_client_id().unwrap().clone();
+    assert!(body.contains(r#""client_clipboard_write":true"#), "{body}");
+    assert_eq!(
+        connection.take_event_stream_start(),
+        Some((expected_client, 2))
+    );
+    assert!(connection.take_event_stream_start().is_none());
+}
+
+/// Verifies a local Unix primary cannot opt into Iroh-only event-stream v2.
+///
+/// Unix attachments retain the version-one event contract even when their
+/// initialize JSON claims support for the effect-capable stream.
+#[test]
+fn unix_primary_cannot_negotiate_event_stream_version_two() {
+    let mut session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let mut connection = ControlConnectionState::new(true, true);
+    connection
+        .bind_authenticated_peer(AuthenticatedPeer::unix_user(1000))
+        .unwrap();
+    let mut cache = ControlIdempotencyCache::default();
+    let input = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"local-primary","requested_version":2,"requested_role":"primary","event_stream_version":2,"client":{"name":"local-primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+    );
+
+    let (output, consumed) = handle_control_frames_for_connection(
+        &input,
+        4096,
+        &mut session,
+        &mut connection,
+        &mut cache,
+    )
+    .unwrap();
+    let (body, _) = decode_control_frame(&output, 4096).unwrap();
+
+    assert_eq!(consumed, input.len());
+    assert!(body.contains(r#""error""#), "{body}");
+    assert!(body.contains("authenticated Iroh primary"), "{body}");
+    assert!(!connection.initialized());
+}
+
 /// Verifies a forged primary request cannot turn an observer-only durable
 /// trust ceiling into primary-terminal authority.
 #[test]

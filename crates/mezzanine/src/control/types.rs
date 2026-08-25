@@ -507,6 +507,8 @@ pub struct CapabilityFeatures {
     pub layout_owner: bool,
     /// Whether event delivery is bound to one exact initialized client.
     pub client_bound_events: bool,
+    /// Whether this initialized connection may receive client-local clipboard writes.
+    pub client_clipboard_write: bool,
 }
 
 /// Defines the OBSERVER CONTROL METHODS const used by this subsystem.
@@ -833,6 +835,7 @@ impl Capabilities {
                 client_local_focus: true,
                 layout_owner: true,
                 client_bound_events: true,
+                client_clipboard_write: false,
             },
         }
     }

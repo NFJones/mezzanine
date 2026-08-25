@@ -2,6 +2,91 @@
 
 use super::super::*;
 
+/// Verifies exact-client clipboard routes coalesce unsent writes, preserve a
+/// monotonic sequence, reject unrelated clients and oversize payloads, and
+/// never expose clipboard contents through `Debug` formatting.
+#[tokio::test(flavor = "current_thread")]
+async fn iroh_client_clipboard_routes_are_bounded_private_and_exact() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let other = service
+        .attach_primary("other", true, Size::new(80, 24).unwrap(), 2)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .register_client_clipboard_route(primary.clone())
+            .await
+            .unwrap();
+        assert!(
+            handle
+                .enqueue_client_clipboard_write(primary.clone(), "superseded secret".to_string())
+                .await
+                .unwrap()
+        );
+        assert!(
+            handle
+                .enqueue_client_clipboard_write(primary.clone(), "newest secret".to_string())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !handle
+                .enqueue_client_clipboard_write(other, "wrong client".to_string())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !handle
+                .enqueue_client_clipboard_write(
+                    primary.clone(),
+                    "x".repeat(crate::runtime::MAX_CLIENT_CLIPBOARD_BYTES + 1),
+                )
+                .await
+                .unwrap()
+        );
+
+        let write = handle
+            .take_client_clipboard_write(primary.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(write.sequence(), 2);
+        assert_eq!(write.content(), "newest secret");
+        assert_eq!(write.byte_len(), "newest secret".len());
+        let debug = format!("{write:?}");
+        assert!(debug.contains("byte_len"));
+        assert!(!debug.contains("secret"));
+        assert!(
+            handle
+                .take_client_clipboard_write(primary.clone())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            handle
+                .unregister_client_clipboard_route(primary.clone())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !handle
+                .enqueue_client_clipboard_write(primary, "after close".to_string())
+                .await
+                .unwrap()
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
 /// Verifies a slow host clipboard helper runs outside serialized actor
 /// ownership and reports one typed completion after its bounded worker exits.
 ///

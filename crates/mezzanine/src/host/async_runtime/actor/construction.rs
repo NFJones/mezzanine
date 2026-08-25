@@ -152,6 +152,8 @@ impl AsyncRuntimeSessionActor {
                 receiver,
                 message_delivery_notify,
                 event_delivery_notify,
+                client_clipboard_routes: Default::default(),
+                client_clipboard_sequences: Default::default(),
                 side_effect_delivery_notify,
                 side_effect_delivery_tx,
                 lifecycle_state_tx,

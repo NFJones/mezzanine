@@ -422,7 +422,7 @@ pub(super) fn initialize_control_connection(
         require_session_target_matches_value(session, &session_target)?;
     }
     if let Some(version) = init.event_stream_version {
-        if version != 1 {
+        if !matches!(version, 1 | 2) {
             return Err(MezError::invalid_args("unsupported event stream version"));
         }
         if !matches!(
@@ -431,6 +431,16 @@ pub(super) fn initialize_control_connection(
         ) {
             return Err(MezError::forbidden(
                 "event streams require an authenticated transport connection",
+            ));
+        }
+        if version == 2
+            && (!matches!(
+                connection.authenticated_peer(),
+                Some(AuthenticatedPeer::IrohEndpoint { .. })
+            ) || init.requested_role != RequestedRole::Primary)
+        {
+            return Err(MezError::forbidden(
+                "event stream version 2 requires an authenticated Iroh primary",
             ));
         }
     }
@@ -459,13 +469,15 @@ pub(super) fn initialize_control_connection(
             connection.caller_client_id = Some(client_id);
             connection.detach_client_on_disconnect = init.detach_primary_on_disconnect;
             connection.event_stream_version = init.event_stream_version;
+            let mut capabilities = Capabilities::primary();
+            capabilities.features.client_clipboard_write = init.event_stream_version == Some(2);
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),
                 session: Some(session_summary_json(session)),
                 client: Some(client_json),
                 granted_role: GrantedRole::Primary,
-                capabilities: Capabilities::primary(),
+                capabilities,
             })
         }
         RequestedRole::Observer => {

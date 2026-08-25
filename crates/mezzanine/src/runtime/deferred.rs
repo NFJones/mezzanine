@@ -6,6 +6,38 @@
 //! side-effect boundaries explicit without changing when the effects are
 //! scheduled or drained.
 
+use std::fmt;
+
+/// Sensitive clipboard payload produced by one interactive attached-client step.
+///
+/// The actor consumes this value before returning the application report. Its
+/// debug representation deliberately exposes only byte length.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AttachedClientClipboardWrite {
+    content: String,
+}
+
+impl AttachedClientClipboardWrite {
+    /// Creates one transient clipboard candidate from the selected text.
+    pub(crate) fn new(content: String) -> Self {
+        Self { content }
+    }
+
+    /// Consumes the wrapper and returns the payload for exact-route enqueue.
+    pub(crate) fn into_content(self) -> String {
+        self.content
+    }
+}
+
+impl fmt::Debug for AttachedClientClipboardWrite {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AttachedClientClipboardWrite")
+            .field("byte_len", &self.content.len())
+            .finish()
+    }
+}
+
 /// Effects applied while processing one attached terminal client step.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AttachedClientStepApplication {
@@ -25,4 +57,6 @@ pub struct AttachedClientStepApplication {
     pub full_redraw_required: bool,
     /// Whether this step changed session metadata persisted by the registry.
     pub registry_persistence_required: bool,
+    /// Transient client-local clipboard candidate produced by this step.
+    pub(crate) client_clipboard_write: Option<AttachedClientClipboardWrite>,
 }

@@ -18,8 +18,8 @@ use crate::host::terminal::{
     plan_attached_terminal_client_step,
 };
 use crate::runtime::{
-    PaneProcessIoEffect, RenderInvalidationReason, RuntimeAgentPromptProviderInfoRefresh,
-    RuntimeSideEffect, RuntimeTransition,
+    AttachedClientClipboardWrite, PaneProcessIoEffect, RenderInvalidationReason,
+    RuntimeAgentPromptProviderInfoRefresh, RuntimeSideEffect, RuntimeTransition,
 };
 
 impl RuntimeSessionService {
@@ -381,6 +381,7 @@ impl RuntimeSessionService {
             view_refresh_required: false,
             full_redraw_required: false,
             registry_persistence_required: false,
+            client_clipboard_write: None,
         };
 
         if !step.actions.is_empty()
@@ -688,10 +689,12 @@ impl RuntimeSessionService {
                 }
                 TerminalClientLoopAction::HandleCopyMode(action) => {
                     match self.apply_attached_copy_mode_action(*action) {
-                        Ok(true) => {
+                        Ok((true, client_clipboard_write)) => {
                             report.view_refresh_required = true;
+                            report.client_clipboard_write =
+                                client_clipboard_write.map(AttachedClientClipboardWrite::new);
                         }
-                        Ok(false) => {
+                        Ok((false, _)) => {
                             report
                                 .unsupported_actions
                                 .push(format!("copy-mode:{action:?}"));

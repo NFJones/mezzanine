@@ -3040,8 +3040,9 @@ replayed after an ambiguous failure. Servers MUST advertise the configured
 codec ALPNs in deterministic order. Clients MUST attempt that order before
 opening an application stream, MUST retain the selected codec for the complete
 connection lifetime, and MUST fail closed when no configured codec is mutual.
-Control requests and responses in both directions and event frames after the
-unchanged event-stream preface MUST use the selected connection-local framing.
+Control requests and responses in both directions and event or client-effect
+frames after the negotiated event-stream preface MUST use the selected
+connection-local framing.
 Connection-local observability MUST count only wire bytes, decoded frame bytes,
 compressed-frame count, and identity-frame count. Sampling MUST compare counters
 only within the same connection and negotiated codec, MUST label a zero-frame
@@ -3161,15 +3162,33 @@ traffic or publishes invitation-issued profile authority.
 
 Interactive Iroh attach MUST retain one initialized bidirectional control
 stream for its lifetime and MUST preserve request/response ordering across
-terminal resize, input, and view operations. The client MUST negotiate event
-stream version 1 during `control/initialize`. The server MUST NOT open an event
-stream before the successful initialize response is flushed, and then MUST open
-at most one unidirectional stream on that same QUIC connection with the exact
-preface `mezzanine/events/1\n`. Client-opened unidirectional streams remain
-forbidden. The client MUST apply one configured Iroh setup deadline to both
-accepting the negotiated event stream and receiving its complete preface. If
-that deadline expires, the client MUST close the QUIC connection and fail the
-attach visibly rather than wait indefinitely.
+terminal resize, input, and view operations. Observers, Unix clients, and
+legacy or non-negotiating Iroh clients MUST use event-stream version 1. An
+authenticated interactive Iroh primary MAY request event-stream version 2 and
+MUST receive explicit `client_clipboard_write` capability confirmation before
+treating client-local clipboard effects as negotiated. Version 1 uses the exact
+preface `mezzanine/events/1\n`; version 2 uses the exact preface
+`mezzanine/events/2\n`. The server MUST NOT open an event stream before the
+successful initialize response is flushed, and then MUST open at most one
+unidirectional stream on that same QUIC connection. Client-opened
+unidirectional streams remain forbidden. The client MUST apply one configured
+Iroh setup deadline to both accepting the negotiated event stream and receiving
+its complete preface. If that deadline expires, the client MUST close the QUIC
+connection and fail the attach visibly rather than wait indefinitely.
+
+Event-stream version 2 MAY carry transient `client/clipboard.begin`,
+`client/clipboard.chunk`, and `client/clipboard.commit` notifications in
+addition to retained `event/*` notifications. A clipboard transfer MUST be
+addressed only to the exact authenticated primary that initiated the copy,
+MUST have a route-local monotonically increasing sequence, MUST cap total UTF-8
+payload size at 8 MiB, and MUST use contiguous zero-based chunks no larger than
+256 KiB before base64 encoding. Clipboard effects MUST NOT enter event replay,
+snapshots, persistence, audit output, diagnostics, metrics labels, or other
+durable channels. Observers, other primaries, other paired devices, Unix
+clients, and version-1 streams MUST receive no client-local clipboard effect.
+Route loss, oversize content, backpressure, timeout, or write failure MUST drop
+only the client-local effect and MUST NOT undo the internal paste-buffer update
+or best-effort server-host clipboard write.
 
 Every remote event batch MUST re-resolve the current initialized session client
 and project retained events through the existing audience policy. Attached

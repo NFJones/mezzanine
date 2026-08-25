@@ -19,7 +19,53 @@ use mez_mux::layout::Size;
 use mez_mux::presentation::AttachedTerminalOutputModes;
 use mez_mux::process::ShellInputDelivery;
 use mez_terminal::TerminalStyleSpan;
+use std::fmt;
 use std::path::PathBuf;
+
+/// Maximum UTF-8 payload accepted for one transient client clipboard write.
+pub const MAX_CLIENT_CLIPBOARD_BYTES: usize = 8 * 1024 * 1024;
+
+/// One connection-local clipboard write addressed to an exact Iroh client.
+///
+/// The payload deliberately has no derived `Debug` representation so terminal
+/// selections cannot leak through actor diagnostics or assertion failures.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ClientClipboardWrite {
+    sequence: u64,
+    content: String,
+}
+
+impl ClientClipboardWrite {
+    /// Creates a bounded clipboard write, rejecting payloads above the protocol cap.
+    pub(crate) fn new(sequence: u64, content: String) -> Option<Self> {
+        (content.len() <= MAX_CLIENT_CLIPBOARD_BYTES).then_some(Self { sequence, content })
+    }
+
+    /// Returns the route-local monotonic transfer sequence.
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    /// Returns the clipboard payload for transient wire encoding.
+    pub fn content(&self) -> &str {
+        self.content.as_str()
+    }
+
+    /// Returns the UTF-8 payload length without exposing its contents.
+    pub fn byte_len(&self) -> usize {
+        self.content.len()
+    }
+}
+
+impl fmt::Debug for ClientClipboardWrite {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClientClipboardWrite")
+            .field("sequence", &self.sequence)
+            .field("byte_len", &self.content.len())
+            .finish()
+    }
+}
 
 /// Stable identity for one adapter-owned pane process instance.
 ///

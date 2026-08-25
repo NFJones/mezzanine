@@ -544,7 +544,7 @@ fn render_window_status_iroh_segment_is_themed_optional_and_non_clickable() {
         slot.1,
         crate::host::terminal::TERMINAL_IROH_STATUS_SLOT_WIDTH
     );
-    assert_eq!(base.lines[2], " 0 work              now                ");
+    assert_eq!(base.lines[2], " 0 work                        now      ");
     assert!(window_frame_action_pillbox_cells(&config.frame_context, 2, 40).is_empty());
     let (without_slot_config, without_slot) = render("#{datetime.local}");
     assert!(
