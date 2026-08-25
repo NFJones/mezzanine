@@ -221,6 +221,33 @@ fn dry_run_new_builds_default_session_model() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Verifies direct Unix daemons suppress a host-scoped Iroh listener instead
+/// of failing startup while attempting to create a per-session endpoint.
+///
+/// The persistent host owns host identity. Bare `mez` and `mez serve` must
+/// remain usable local Unix-session commands even if that host transport is
+/// enabled in primary configuration.
+#[test]
+fn direct_unix_daemon_disables_host_scoped_iroh_listener() {
+    let layers =
+        super::super::serve::direct_unix_session_config_layers(vec![crate::config::ConfigLayer {
+            name: "host-iroh".to_string(),
+            path: None,
+            format: crate::config::ConfigFormat::Toml,
+            scope: crate::config::ConfigScope::Primary,
+            trusted: true,
+            text: "[transport.iroh]\nenabled = true\nidentity = \"host\"\n".to_string(),
+        }]);
+    let configured = crate::runtime::runtime_effective_config_value(&layers).unwrap();
+    let policy = crate::runtime::runtime_iroh_transport_policy_from_config(&configured).unwrap();
+
+    assert!(!policy.enabled);
+    assert_eq!(
+        policy.identity,
+        crate::runtime::RuntimeIrohIdentityPolicy::Host
+    );
+}
+
 /// Verifies that live daemon sessions do not reuse the deterministic `$1`
 /// in-memory construction id. The durable registry keys records by session id;
 /// if two independently launched daemons both publish `$1`, the later upsert

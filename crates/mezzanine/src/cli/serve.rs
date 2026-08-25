@@ -8,10 +8,10 @@ use super::{
     Args, AsRawFd, AsyncAttachedTerminalClientServiceConfig, AsyncAttachedTerminalLoopRequest,
     AsyncAttachedTerminalPresentationGuard, AsyncRuntimeService, AsyncRuntimeServiceExit,
     AttachedTerminalClientLoopConfig, AuxiliarySocketKind, CliEnv, CliOutputFormat, ClientEvent,
-    ClientId, ClientViewRole, ConfigLayer, ConfigPaths, IsTerminal, MezError, PathBuf, Result,
-    RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState, Session, SessionSnapshotPayload, Size,
-    SnapshotRestoreResult, SocketSelection, TerminalClientLoopConfig, Write,
-    auxiliary_socket_path_for_control_socket, current_unix_seconds, io, json_escape,
+    ClientId, ClientViewRole, ConfigFormat, ConfigLayer, ConfigPaths, ConfigScope, IsTerminal,
+    MezError, PathBuf, Result, RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState, Session,
+    SessionSnapshotPayload, Size, SnapshotRestoreResult, SocketSelection, TerminalClientLoopConfig,
+    Write, auxiliary_socket_path_for_control_socket, current_unix_seconds, io, json_escape,
     load_runtime_config_layers, resolve_shell, run_async_attached_terminal_client_service,
     selected_socket_path, terminal_size_from_fd_or_environment, write_json_or_plain,
 };
@@ -938,12 +938,13 @@ pub(super) async fn run_foreground_control_daemon(
     startup: RuntimeDaemonStartup,
 ) -> Result<()> {
     let attached_primary_client_id = options.attached_primary_client_id.clone();
+    let config_layers = direct_unix_session_config_layers(config.layers);
     let runtime = SessionFactory::create(SessionFactoryRequest {
         session,
         owner_uid,
         created_at_unix_seconds,
         config: SessionRuntimeConfig {
-            layers: config.layers,
+            layers: config_layers,
             root: config.root,
         },
         sockets: SessionSocketPublication {
@@ -993,6 +994,26 @@ pub(super) async fn run_foreground_control_daemon(
     let completion = runtime.run(services, foreground_shutdown_signal()).await?;
     let _ = (completion.service, completion.supervision);
     Ok(())
+}
+
+/// Disables session-scoped Iroh listeners for a daemon reached through Unix
+/// sockets.
+///
+/// Host-scoped Iroh identity belongs exclusively to `mez host serve`; direct
+/// `mez` and `mez serve` sessions retain Unix control even when the primary
+/// configuration enables the persistent host endpoint.
+pub(super) fn direct_unix_session_config_layers(
+    mut config_layers: Vec<ConfigLayer>,
+) -> Vec<ConfigLayer> {
+    config_layers.push(ConfigLayer {
+        name: "direct-unix-session-transport".to_string(),
+        path: None,
+        format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary,
+        trusted: true,
+        text: "[transport.iroh]\nenabled = false\n".to_string(),
+    });
+    config_layers
 }
 
 /// Runs the build foreground attached primary client service operation for this subsystem.

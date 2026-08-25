@@ -118,6 +118,12 @@ detach`. Host-profile attach and kill targets accept a lease ID, stable session
 ID, or exact name. Remote kill requires an explicit target, `--force`, a primary
 role ceiling, and separately granted force-kill authority.
 
+An enabled host-scoped Iroh configuration does not change bare `mez` or `mez
+serve` into remote-listener commands. Those direct session commands use Unix
+control; only `mez host serve` binds the host Iroh endpoint. Use an explicit
+`--iroh-profile` or `--iroh-invite-file` selector with a supported remote
+command to initiate Iroh client transport.
+
 Explicit Iroh targets work when listener-oriented `transport.iroh.enabled` is
 false. They require `transport.iroh.outbound_enabled = true` (the default) and
 derive a client-only direct or relay policy from the target's pinned address;

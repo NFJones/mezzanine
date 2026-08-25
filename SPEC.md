@@ -3104,10 +3104,13 @@ an explicit override rather than supplying a client-side default, and both the
 configured lifetime and explicit override MUST be constrained to 30 through
 86,400 seconds.
 
-When `transport.iroh.enabled` is true, daemon startup MUST bind the protected
-per-session endpoint and supervise it alongside the unchanged Unix control
-listener. Explicit enablement is startup-critical: endpoint construction failure
-MUST fail startup rather than silently continue as Unix-only. The Iroh adapter
+When `transport.iroh.enabled` is true with `identity = "per_session"`, daemon
+startup MUST bind the protected per-session endpoint and supervise it alongside
+the unchanged Unix control listener. Explicit per-session enablement is
+startup-critical: endpoint construction failure MUST fail startup rather than
+silently continue as Unix-only. A direct `mez` or `mez serve` Unix-session
+daemon MUST suppress an enabled `identity = "host"` listener and retain Unix
+control; only `mez host serve` may bind the host-scoped endpoint. The Iroh adapter
 MUST negotiate ALPN `mezzanine/transport/1`, accept exactly one client-opened
 bidirectional control stream per connection, accept no unidirectional streams,
 and carry unchanged bounded `mezctl/1` frames. Connection setup, stream setup,

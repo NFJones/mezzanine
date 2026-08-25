@@ -10,9 +10,12 @@ is lost.
 
 Keep the user-private Unix control socket available. Iroh transport is disabled
 by default. Enable `[transport.iroh]` only in primary-user configuration and
-restart the daemon. The enabled listener runs alongside Unix control; failure
-to bind an explicitly enabled endpoint fails startup rather than silently
-removing remote service. Unix remains the administration and recovery path.
+restart the owning daemon. A per-session identity listener runs alongside Unix
+control; failure to bind an explicitly enabled per-session endpoint fails
+startup rather than silently removing remote service. A host-scoped identity is
+owned only by `mez host serve`: direct `mez` and `mez serve` continue with Unix
+control and do not attempt to bind it. Unix remains the administration and
+recovery path.
 
 ## Understand the identities
 
