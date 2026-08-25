@@ -2,34 +2,35 @@
 
 use super::*;
 
-/// Verifies recent message-log detail rows wrap to the pane width with an
-/// indented continuation row.
+/// Verifies recent message-log entries render as escaped Markdown table rows in
+/// newest-first order.
 ///
-/// The `show-messages` command renders diagnostics and lifecycle events in a
-/// modal display. Long payloads should stay readable in narrow panes instead
-/// of depending on host-terminal soft wrapping, and continuation rows should be
-/// visually tied to the original log line.
+/// The pager owns table layout and width adaptation. The command formatter must
+/// preserve event ordering and prevent payload delimiters from creating extra
+/// cells before the Markdown body reaches that renderer.
 #[test]
-fn runtime_show_messages_wraps_logged_rows_with_indented_continuations() {
+fn runtime_show_messages_renders_ordered_escaped_table_rows() {
     let mut service = test_runtime_service_with_size(Size::new(48, 24).unwrap());
     service
-        .append_runtime_diagnostic_event(
-            "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu".to_string(),
-        )
+        .append_runtime_diagnostic_event("older | diagnostic".to_string())
+        .unwrap();
+    service
+        .append_runtime_diagnostic_event("newer diagnostic".to_string())
         .unwrap();
 
     let body = super::commands_support::runtime_show_messages_display(&service);
-    let detail_lines = body.lines().skip(1).collect::<Vec<_>>();
 
     assert!(
-        detail_lines.iter().any(|line| line.starts_with("    ")),
-        "expected an indented continuation row in {body:?}"
+        body.starts_with("| kind | id | time | details |\n| --- | --- | --- | --- |"),
+        "{body}"
     );
     assert!(
-        detail_lines
-            .iter()
-            .all(|line| UnicodeWidthStr::width(*line) <= 48),
-        "message rows should fit the pane width: {body:?}"
+        body.contains("older \\| diagnostic"),
+        "message table cells must escape delimiters: {body}"
+    );
+    assert!(
+        body.find("newer diagnostic").unwrap() < body.find("older \\| diagnostic").unwrap(),
+        "events must remain newest-first: {body}"
     );
 }
 

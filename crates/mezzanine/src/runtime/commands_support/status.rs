@@ -6,8 +6,8 @@
 
 use super::{
     BTreeMap, EventAudience, HookExecutionStatus, ModelTokenUsage, ModelTokenUsageKey,
-    ObserverDecisionState, RuntimeSessionService, event_type_name, json_escape,
-    runtime_hook_event_name, runtime_hook_execution_status_name, wrap_agent_log_lines,
+    ObserverDecisionState, RuntimeSessionService, event_type_name, runtime_hook_event_name,
+    runtime_hook_execution_status_name,
 };
 
 /// Runs the runtime show messages display operation for this subsystem.
@@ -16,7 +16,6 @@ use super::{
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(crate) fn runtime_show_messages_display(service: &RuntimeSessionService) -> String {
-    let terminal_width = service.session.authoritative_size.columns;
     let pending_observers = service
         .session
         .observers()
@@ -34,87 +33,79 @@ pub(crate) fn runtime_show_messages_display(service: &RuntimeSessionService) -> 
             ) || result.failure.is_some()
         })
         .collect::<Vec<_>>();
-    let mut status_lines = Vec::new();
+    let mut rows = Vec::new();
     for observer in &pending_observers {
-        status_lines.push(format!(
-            "pending_observer={}:client={}:state=pending",
-            observer.id, observer.client_id
+        rows.push(show_messages_table_row(
+            "pending observer",
+            observer.id.as_str(),
+            "—",
+            &format!("client={}; state=pending", observer.client_id),
         ));
     }
     for approval in &pending_approvals {
-        status_lines.push(format!(
-            "pending_approval={}:agent={}:pane={}:action={}",
-            json_escape(&approval.id),
-            json_escape(&approval.requesting_agent_id),
-            json_escape(&approval.pane_id),
-            json_escape(&approval.action_summary)
+        rows.push(show_messages_table_row(
+            "pending approval",
+            &approval.id,
+            "—",
+            &format!(
+                "agent={}; pane={}; action={}",
+                approval.requesting_agent_id, approval.pane_id, approval.action_summary
+            ),
         ));
     }
     for result in &hook_failures {
-        status_lines.push(format!(
-            "hook_failure={}:event={}:status={}:exit_code={}",
-            json_escape(&result.hook_id),
-            runtime_hook_event_name(result.event),
-            runtime_hook_execution_status_name(result.status),
-            result
-                .exit_code
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "none".to_string())
+        rows.push(show_messages_table_row(
+            "hook failure",
+            &result.hook_id,
+            "—",
+            &format!(
+                "event={}; status={}; exit_code={}",
+                runtime_hook_event_name(result.event),
+                runtime_hook_execution_status_name(result.status),
+                result
+                    .exit_code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "none".to_string())
+            ),
         ));
     }
-    let summary = format!(
-        "pending_observers={} pending_approvals={} hook_failures={}",
-        pending_observers.len(),
-        pending_approvals.len(),
-        hook_failures.len()
-    );
     let Some(event_log) = service.event_log() else {
-        return runtime_show_messages_body(
-            0,
-            "source=runtime-event-log status=unavailable",
-            &summary,
-            terminal_width,
-            status_lines,
-        );
+        rows.push(show_messages_table_row(
+            "unavailable",
+            "—",
+            "—",
+            "runtime event log unavailable",
+        ));
+        return runtime_show_messages_table(rows);
     };
     let events = event_log.replay_for(&EventAudience::AllPrimaries);
-    if events.is_empty() {
-        return runtime_show_messages_body(
-            0,
-            "source=runtime-event-log status=empty",
-            &summary,
-            terminal_width,
-            status_lines,
-        );
+    if events.is_empty() && rows.is_empty() {
+        rows.push(show_messages_table_row(
+            "empty",
+            "—",
+            "—",
+            "no visible runtime messages",
+        ));
     }
-    let mut lines = status_lines;
-    lines.extend(
+    rows.extend(
         events
             .iter()
             .rev()
             .map(|event| {
-                format!(
-                    "event_id={}:time={}:type={}:session={}:payload={}",
-                    event.id,
-                    json_escape(&event.time),
+                show_messages_table_row(
                     event_type_name(event.kind),
-                    event
-                        .session_id
-                        .as_deref()
-                        .map(json_escape)
-                        .unwrap_or_else(|| "none".to_string()),
-                    json_escape(&event.payload)
+                    &event.id.to_string(),
+                    &event.time,
+                    &format!(
+                        "session={}; payload={}",
+                        event.session_id.as_deref().unwrap_or("none"),
+                        event.payload
+                    ),
                 )
             })
             .collect::<Vec<_>>(),
     );
-    runtime_show_messages_body(
-        events.len(),
-        "source=runtime-event-log",
-        &summary,
-        terminal_width,
-        lines,
-    )
+    runtime_show_messages_table(rows)
 }
 
 /// Formats one runtime histogram summary and bucket listing for pager output.
@@ -854,50 +845,31 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-/// Runs the runtime show messages body operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_show_messages_body(
-    messages: usize,
-    status: &str,
-    summary: &str,
-    terminal_width: u16,
-    lines: Vec<String>,
-) -> String {
-    let header = format!("messages={messages} {status} {summary}");
-    if lines.is_empty() {
-        header
-    } else {
-        let wrapped = wrap_show_messages_lines(&lines, terminal_width);
-        format!("{header}\n{}", wrapped.join("\n"))
-    }
+/// Renders message rows through the shared Markdown table pager path.
+fn runtime_show_messages_table(rows: Vec<String>) -> String {
+    let mut lines = vec![
+        "| kind | id | time | details |".to_string(),
+        "| --- | --- | --- | --- |".to_string(),
+    ];
+    lines.extend(rows);
+    lines.join("\n")
 }
 
-/// Wraps message-log detail rows to the configured terminal width.
-///
-/// The first physical row keeps the normal message text. Continuation rows are
-/// indented by four spaces so long log entries remain readable without losing
-/// their association with the preceding row.
-fn wrap_show_messages_lines(lines: &[String], terminal_width: u16) -> Vec<String> {
-    lines
-        .iter()
-        .flat_map(|line| {
-            let continuation_width = terminal_width.saturating_sub(4).max(1);
-            wrap_agent_log_lines(std::slice::from_ref(line), terminal_width)
-                .into_iter()
-                .enumerate()
-                .flat_map(move |(index, wrapped)| {
-                    if index == 0 {
-                        vec![wrapped]
-                    } else {
-                        wrap_agent_log_lines(std::slice::from_ref(&wrapped), continuation_width)
-                            .into_iter()
-                            .map(|continued| format!("    {continued}"))
-                            .collect::<Vec<_>>()
-                    }
-                })
-        })
-        .collect()
+/// Renders one escaped message row.
+fn show_messages_table_row(kind: &str, id: &str, time: &str, details: &str) -> String {
+    format!(
+        "| {} | {} | {} | {} |",
+        show_messages_table_cell(kind),
+        show_messages_table_cell(id),
+        show_messages_table_cell(time),
+        show_messages_table_cell(details)
+    )
+}
+
+/// Escapes one message field for a Markdown table cell.
+fn show_messages_table_cell(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace(['\r', '\n'], " ")
 }

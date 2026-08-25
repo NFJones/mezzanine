@@ -467,11 +467,12 @@ pub(super) fn load_layout_selector(invocation: &CommandInvocation) -> LayoutLoad
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn show_messages_display() -> String {
-    KeyValueLine::spaced()
-        .push("messages", 0)
-        .push("source", "in-memory-log")
-        .push("status", "empty")
-        .finish()
+    [
+        "| kind | id | time | details |",
+        "| --- | --- | --- | --- |",
+        "| empty | — | — | no messages (in-memory log) |",
+    ]
+    .join("\n")
 }
 /// Runs the show metrics display operation for this subsystem.
 ///

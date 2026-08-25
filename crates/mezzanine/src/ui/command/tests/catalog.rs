@@ -328,7 +328,12 @@ fn display_safe_pending_command_defaults() {
         )
         .unwrap(),
     );
-    assert_eq!(messages, "messages=0 source=in-memory-log status=empty");
+    assert_eq!(
+        messages,
+        "| kind | id | time | details |\n\
+         | --- | --- | --- | --- |\n\
+         | empty | — | — | no messages (in-memory log) |"
+    );
     let metrics = display_body(
         execute_command(
             &mut session,

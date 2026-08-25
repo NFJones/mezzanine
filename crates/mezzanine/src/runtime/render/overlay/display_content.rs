@@ -339,6 +339,7 @@ pub(crate) fn runtime_command_display_overlay_content(
 pub(super) fn terminal_command_display_body_is_markdown(command: Option<&str>, body: &str) -> bool {
     match command {
         Some("help") => body.trim_start().starts_with('#'),
+        Some("show-messages") => body.trim_start().starts_with('|'),
         Some(
             "list-buffers" | "list-clients" | "list-key-presets" | "list-sessions" | "list-themes",
         ) => body.trim_start().starts_with('|'),
@@ -347,9 +348,9 @@ pub(super) fn terminal_command_display_body_is_markdown(command: Option<&str>, b
     }
 }
 
-/// Verifies table-producing list commands take the Markdown overlay path.
+/// Verifies table-producing commands take the Markdown overlay path.
 ///
-/// Session and client list bodies use the same Markdown table contract as
+/// Message, session, and client bodies use the same Markdown table contract as
 /// theme and key-preset lists. Treating them as legacy plain text exposes the
 /// pipe and delimiter syntax in the pager instead of rendering a table.
 #[cfg(test)]
@@ -361,6 +362,7 @@ pub(super) fn table_list_command_display_detects_markdown_tables() {
         "list-key-presets",
         "list-sessions",
         "list-themes",
+        "show-messages",
     ] {
         assert!(terminal_command_display_body_is_markdown(
             Some(command),
