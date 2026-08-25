@@ -4,7 +4,9 @@ use super::display_content::*;
 use super::product_content::*;
 use super::selection_adapter::*;
 use crate::runtime::render::*;
+use crate::runtime::service_state::{RuntimeLiveOverlaySource, RuntimeLiveOverlaySourceKind};
 use crate::ui::selector::record_browser_save_path_candidates;
+use mez_mux::overlay::overlay_next_search_match;
 
 /// Returns the byte length of one logical key in an overlay input buffer.
 ///
@@ -1100,6 +1102,7 @@ impl RuntimeSessionService {
                 selections,
                 active_selection_index,
                 dismiss_on_any_input,
+                live_source: None,
                 record_browser: None,
             })
         };
@@ -1121,6 +1124,7 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         let should_open_overlay = runtime_command_display_should_open_overlay(&content);
         if should_open_overlay {
+            let live_source = content.live_source.clone();
             let available_width = runtime_command_overlay_available_width(
                 usize::from(self.session.authoritative_size.columns),
                 !content.selections.is_empty(),
@@ -1130,18 +1134,182 @@ impl RuntimeSessionService {
                 available_width,
                 available_width,
             );
-            return self.show_primary_display_overlay_inner(
+            self.show_primary_display_overlay_inner(
                 content.lines,
                 content.line_style_spans,
                 content.line_copy_texts,
                 content.selections,
                 false,
-            );
+            )?;
+            if let (Some(overlay), Some(source)) = (
+                self.presentation.primary_display_overlay.as_mut(),
+                live_source,
+            ) {
+                const LIVE_STATUS_REFRESH_INTERVAL_MS: u64 = 1_000;
+                overlay.live_source = Some(RuntimeLiveOverlaySource {
+                    source,
+                    refresh_interval_ms: LIVE_STATUS_REFRESH_INTERVAL_MS,
+                    next_due_ms: current_unix_millis()
+                        .saturating_add(LIVE_STATUS_REFRESH_INTERVAL_MS),
+                });
+            }
+            return Ok(());
         }
         if let Some(line) = runtime_command_display_transient_status_line(&content) {
             return self.show_primary_notice_overlay(vec![line]);
         }
         self.show_primary_notice_overlay(content.lines)
+    }
+
+    /// Replaces live overlay rows without resetting retained interaction state.
+    pub(crate) fn replace_primary_display_overlay_content(
+        &mut self,
+        mut content: RuntimeCommandDisplayOverlayContent,
+    ) -> bool {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+            return false;
+        };
+        let active_command = overlay
+            .active_selection_index
+            .and_then(|index| overlay.selections.get(index))
+            .map(|selection| selection.command.clone());
+        content.line_style_spans.truncate(content.lines.len());
+        content
+            .line_style_spans
+            .resize(content.lines.len(), Vec::new());
+        content.line_copy_texts.truncate(content.lines.len());
+        content.line_copy_texts.resize(content.lines.len(), None);
+        if overlay.lines == content.lines
+            && overlay.line_style_spans == content.line_style_spans
+            && overlay.line_copy_texts == content.line_copy_texts
+            && overlay.selections == content.selections
+        {
+            return false;
+        }
+        overlay.lines = content.lines;
+        overlay.line_style_spans = content.line_style_spans;
+        overlay.line_copy_texts = content.line_copy_texts;
+        overlay.selections = content.selections;
+        overlay.active_selection_index = active_command
+            .as_deref()
+            .and_then(|command| {
+                overlay
+                    .selections
+                    .iter()
+                    .position(|selection| selection.command == command)
+            })
+            .or_else(|| (!overlay.selections.is_empty()).then_some(0));
+        overlay.mouse_selection = None;
+        let client_size = self.session.authoritative_size;
+        clamp_overlay_scroll(overlay, client_size);
+        if let Some(query) = overlay.search_query.clone() {
+            let start_line = overlay
+                .search_match
+                .map(|search_match| search_match.line_index.saturating_sub(1))
+                .unwrap_or(0);
+            overlay.search_match = overlay_next_search_match(overlay, &query, start_line);
+            overlay.search_status = overlay
+                .search_match
+                .is_none()
+                .then(|| format!("pattern not found: {query}"));
+        }
+        true
+    }
+
+    /// Rebuilds one due live overlay for its exact owning client.
+    pub(crate) fn refresh_live_overlay_for_client(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+        now_ms: u64,
+    ) -> Result<bool> {
+        self.presentation.activate_client_state(client_id);
+        let Some(live_source) = self
+            .presentation
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.live_source.clone())
+        else {
+            return Ok(false);
+        };
+        if now_ms < live_source.next_due_ms {
+            return Ok(false);
+        }
+        let terminal_width = usize::from(self.session.authoritative_size.columns).max(1);
+        let prose_width = terminal_width
+            .min(self.presentation.settings.terminal_agent_wrap_column_cap)
+            .max(1);
+        let rebuilt = match &live_source.source {
+            RuntimeLiveOverlaySourceKind::IrohStatus {
+                client_id: source_client_id,
+            } => mez_core::ids::ClientId::opaque(source_client_id.clone())
+                .filter(|source_client_id| source_client_id == client_id)
+                .map(|source_client_id| {
+                    let body = crate::runtime::commands_support::runtime_show_iroh_status_display(
+                        self,
+                        &source_client_id,
+                    );
+                    runtime_agent_shell_markdown_overlay_content_for_layout(
+                        Some("show-iroh-status".to_string()),
+                        &body,
+                        &self.presentation.settings.ui_theme,
+                        terminal_width,
+                        prose_width,
+                    )
+                }),
+            RuntimeLiveOverlaySourceKind::AgentStatus { pane_id, extended } => self
+                .runtime_agent_status_display_with_options(pane_id, *extended)
+                .ok()
+                .map(|body| {
+                    runtime_agent_shell_markdown_overlay_content_for_layout(
+                        Some("status".to_string()),
+                        &body,
+                        &self.presentation.settings.ui_theme,
+                        terminal_width,
+                        prose_width,
+                    )
+                }),
+        };
+        let changed = rebuilt
+            .map(|content| self.replace_primary_display_overlay_content(content))
+            .unwrap_or(false);
+        if let Some(source) = self
+            .presentation
+            .primary_display_overlay
+            .as_mut()
+            .and_then(|overlay| overlay.live_source.as_mut())
+        {
+            source.next_due_ms = now_ms.saturating_add(source.refresh_interval_ms);
+        }
+        self.presentation.capture_projected_client_state();
+        Ok(changed)
+    }
+
+    /// Rebuilds a live overlay after geometry changes without moving its deadline.
+    pub(crate) fn reflow_live_overlay_for_client(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+    ) -> Result<bool> {
+        self.presentation.activate_client_state(client_id);
+        let Some(next_due_ms) = self
+            .presentation
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.live_source.as_ref())
+            .map(|source| source.next_due_ms)
+        else {
+            return Ok(false);
+        };
+        let changed = self.refresh_live_overlay_for_client(client_id, next_due_ms)?;
+        if let Some(source) = self
+            .presentation
+            .primary_display_overlay
+            .as_mut()
+            .and_then(|overlay| overlay.live_source.as_mut())
+        {
+            source.next_due_ms = next_due_ms;
+        }
+        self.presentation.capture_projected_client_state();
+        Ok(changed)
     }
 
     /// Runs the apply primary display overlay terminal action operation for this subsystem.

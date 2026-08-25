@@ -48,9 +48,37 @@ pub(crate) struct RuntimeSubagentLineage {
     pub display_name: String,
 }
 
-/// Product-specialized mux overlay carrying issue or memory refresh sources.
+/// Product-specialized mux overlay carrying record-browser and live sources.
 pub(crate) type RuntimeDisplayOverlay =
-    mez_mux::overlay::DisplayOverlay<RuntimeRecordBrowserOverlaySource>;
+    mez_mux::overlay::DisplayOverlay<RuntimeRecordBrowserOverlaySource, RuntimeLiveOverlaySource>;
+
+/// Product-owned source and schedule retained for one live pager overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeLiveOverlaySource {
+    /// Typed status builder used to refresh the overlay without command replay.
+    pub source: RuntimeLiveOverlaySourceKind,
+    /// Refresh cadence for this source.
+    pub refresh_interval_ms: u64,
+    /// Earliest actor clock time when this source should next be rebuilt.
+    pub next_due_ms: u64,
+}
+
+/// Typed product status builders supported by live pager overlays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RuntimeLiveOverlaySourceKind {
+    /// Exact-client Iroh connection status.
+    IrohStatus {
+        /// Client whose authenticated connection details may be displayed.
+        client_id: String,
+    },
+    /// Pane-bound agent status.
+    AgentStatus {
+        /// Pane that opened the status pager.
+        pane_id: String,
+        /// Whether durable extended status was requested.
+        extended: bool,
+    },
+}
 
 /// Product-specialized record-browser overlay state.
 pub(crate) type RuntimeRecordBrowserOverlayState =

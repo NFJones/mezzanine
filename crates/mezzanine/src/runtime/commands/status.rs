@@ -91,10 +91,21 @@ impl RuntimeSessionService {
                 ));
             }
         };
-        Ok(AgentShellCommandOutcome::Display {
-            command: "status".to_string(),
-            body: self.runtime_agent_status_display_with_options(pane_id, extended)?,
-        })
+        let body = self.runtime_agent_status_display_with_options(pane_id, extended)?;
+        if extended {
+            Ok(AgentShellCommandOutcome::Display {
+                command: "status".to_string(),
+                body,
+            })
+        } else {
+            Ok(AgentShellCommandOutcome::LiveDisplay {
+                command: "status".to_string(),
+                body,
+                source: crate::integrations::agent::slash::AgentShellDisplaySource::AgentStatus {
+                    pane_id: pane_id.to_string(),
+                },
+            })
+        }
     }
 
     /// Executes `/reset-status` against pane-lifetime token accounting only.
@@ -128,7 +139,7 @@ impl RuntimeSessionService {
 
     /// Builds the live status display, optionally including durable rolling
     /// token-accounting windows.
-    fn runtime_agent_status_display_with_options(
+    pub(crate) fn runtime_agent_status_display_with_options(
         &self,
         pane_id: &str,
         extended: bool,

@@ -98,7 +98,7 @@ pub(crate) use display::{
 use mez_mux::command::CommandInvocation;
 #[cfg(test)]
 use mez_mux::command::parse_command_sequence;
-pub use types::{CommandOutcome, LayoutLoadSelector, baseline_commands};
+pub use types::{CommandDisplaySource, CommandOutcome, LayoutLoadSelector, baseline_commands};
 
 #[cfg(test)]
 use display::parse_config_command_value;

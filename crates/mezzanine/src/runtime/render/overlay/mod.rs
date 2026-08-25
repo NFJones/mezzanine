@@ -13,7 +13,9 @@ mod selection_adapter;
 mod service;
 
 #[cfg(test)]
-pub(crate) use display_content::runtime_human_readable_display_lines;
+pub(crate) use display_content::{
+    RuntimeCommandDisplayOverlayContent, runtime_human_readable_display_lines,
+};
 pub(crate) use display_content::{
     runtime_command_display_overlay_content, runtime_command_display_should_open_overlay,
 };

@@ -254,8 +254,8 @@ pub fn keep_selector_active_visible<Field>(
 }
 
 /// Applies one generic overlay action and returns caller-owned command intent.
-pub fn apply_overlay_input<Source>(
-    overlay: &mut DisplayOverlay<Source>,
+pub fn apply_overlay_input<Source, LiveSource>(
+    overlay: &mut DisplayOverlay<Source, LiveSource>,
     action: OverlayInputAction,
     input_text: Option<&str>,
     input_present: bool,
@@ -300,8 +300,8 @@ pub fn apply_overlay_input<Source>(
 }
 
 /// Applies input while the overlay search editor is active.
-fn apply_overlay_search_input<Source>(
-    overlay: &mut DisplayOverlay<Source>,
+fn apply_overlay_search_input<Source, LiveSource>(
+    overlay: &mut DisplayOverlay<Source, LiveSource>,
     action: OverlayInputAction,
     input_text: Option<&str>,
     size: Size,
@@ -354,7 +354,10 @@ fn apply_overlay_search_input<Source>(
 }
 
 /// Submits or repeats the active overlay search query.
-fn submit_overlay_search<Source>(overlay: &mut DisplayOverlay<Source>, size: Size) {
+fn submit_overlay_search<Source, LiveSource>(
+    overlay: &mut DisplayOverlay<Source, LiveSource>,
+    size: Size,
+) {
     let submitted = overlay.search_input.take().unwrap_or_default();
     let query = if submitted.is_empty() {
         let Some(query) = overlay.search_query.clone() else {
@@ -382,8 +385,8 @@ fn submit_overlay_search<Source>(overlay: &mut DisplayOverlay<Source>, size: Siz
 }
 
 /// Moves overlay selection or plain pager scrolling by one signed delta.
-fn move_overlay_selection<Source>(
-    overlay: &mut DisplayOverlay<Source>,
+fn move_overlay_selection<Source, LiveSource>(
+    overlay: &mut DisplayOverlay<Source, LiveSource>,
     delta: isize,
     size: Size,
 ) -> bool {
@@ -425,8 +428,8 @@ fn move_overlay_selection<Source>(
 }
 
 /// Sets overlay selection or jumps a plain pager to one boundary.
-fn set_overlay_selection_index<Source>(
-    overlay: &mut DisplayOverlay<Source>,
+fn set_overlay_selection_index<Source, LiveSource>(
+    overlay: &mut DisplayOverlay<Source, LiveSource>,
     index: usize,
     size: Size,
 ) -> bool {
@@ -460,7 +463,10 @@ fn set_overlay_selection_index<Source>(
 }
 
 /// Returns a visible active command without executing it.
-fn active_overlay_command<Source>(overlay: &DisplayOverlay<Source>, size: Size) -> Option<String> {
+fn active_overlay_command<Source, LiveSource>(
+    overlay: &DisplayOverlay<Source, LiveSource>,
+    size: Size,
+) -> Option<String> {
     let index = overlay.active_selection_index?;
     if !overlay_selection_index_is_visible(overlay, index, size) {
         return None;
@@ -509,6 +515,7 @@ mod tests {
             selections: Vec::new(),
             active_selection_index: None,
             dismiss_on_any_input: false,
+            live_source: None,
             record_browser: None,
         }
     }

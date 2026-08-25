@@ -5,6 +5,7 @@ use super::record_adapter::{
     RuntimeDisplayRecord, runtime_display_field_label, runtime_display_field_value,
 };
 use crate::runtime::render::*;
+use crate::runtime::service_state::RuntimeLiveOverlaySourceKind;
 #[cfg(test)]
 use unicode_width::UnicodeWidthStr;
 
@@ -13,6 +14,8 @@ use unicode_width::UnicodeWidthStr;
 pub(crate) struct RuntimeCommandDisplayOverlayContent {
     /// Terminal command that produced these display lines, when present.
     pub(crate) command: Option<String>,
+    /// Typed product source used to refresh this content in place.
+    pub(crate) live_source: Option<RuntimeLiveOverlaySourceKind>,
     /// Human-readable lines rendered in the command display overlay.
     pub(crate) lines: Vec<String>,
     /// Visible terminal styles for each rendered display line.
@@ -35,6 +38,7 @@ pub(crate) fn wrap_runtime_command_display_overlay_content(
     let table_display_width = table_display_width.max(display_width);
     let RuntimeCommandDisplayOverlayContent {
         command,
+        live_source,
         lines,
         line_style_spans,
         line_kinds,
@@ -43,6 +47,7 @@ pub(crate) fn wrap_runtime_command_display_overlay_content(
     } = content;
     let mut wrapped_content = RuntimeCommandDisplayOverlayContent {
         command,
+        live_source,
         lines: Vec::new(),
         line_style_spans: Vec::new(),
         line_kinds: Vec::new(),
@@ -131,6 +136,7 @@ fn command_overlay_wrapping_preserves_split_selection_and_style_ranges() {
     };
     let content = RuntimeCommandDisplayOverlayContent {
         command: Some("show-issues".to_string()),
+        live_source: None,
         lines: vec!["prefix alpha beta gamma suffix".to_string()],
         line_style_spans: vec![vec![TerminalStyleSpan {
             start: 7,
@@ -202,6 +208,7 @@ fn command_overlay_wrapping_accounts_for_consumed_spaces_in_ranges() {
     };
     let content = RuntimeCommandDisplayOverlayContent {
         command: Some("open-link".to_string()),
+        live_source: None,
         lines: vec!["alpha beta gamma".to_string()],
         line_style_spans: vec![vec![TerminalStyleSpan {
             start: 11,
@@ -289,6 +296,7 @@ pub(crate) fn runtime_command_display_overlay_content(
         .ok_or_else(|| MezError::invalid_state("runtime command response has no outcomes"))?;
     let mut content = RuntimeCommandDisplayOverlayContent {
         command: None,
+        live_source: None,
         lines: Vec::new(),
         line_style_spans: Vec::new(),
         line_kinds: Vec::new(),
@@ -298,6 +306,9 @@ pub(crate) fn runtime_command_display_overlay_content(
     for outcome in outcomes {
         if outcome.get("kind").and_then(serde_json::Value::as_str) != Some("display") {
             continue;
+        }
+        if content.live_source.is_none() {
+            content.live_source = runtime_live_overlay_source_from_json(outcome.get("live_source"));
         }
         if content.command.is_none() {
             content.command = outcome
@@ -333,6 +344,23 @@ pub(crate) fn runtime_command_display_overlay_content(
         }
     }
     Ok(content)
+}
+
+/// Decodes product-owned live source metadata without inspecting rendered text.
+pub(super) fn runtime_live_overlay_source_from_json(
+    value: Option<&serde_json::Value>,
+) -> Option<RuntimeLiveOverlaySourceKind> {
+    let value = value?;
+    match value.get("kind").and_then(serde_json::Value::as_str)? {
+        "iroh_status" => Some(RuntimeLiveOverlaySourceKind::IrohStatus {
+            client_id: value.get("client_id")?.as_str()?.to_string(),
+        }),
+        "agent_status" => Some(RuntimeLiveOverlaySourceKind::AgentStatus {
+            pane_id: value.get("pane_id")?.as_str()?.to_string(),
+            extended: false,
+        }),
+        _ => None,
+    }
 }
 
 /// Returns true when a terminal command display body is authored as Markdown.
@@ -530,6 +558,7 @@ pub(super) fn list_themes_rendered_overlay_lines_align_headers_with_selectable_r
         search_match: None,
         search_status: None,
         mouse_selection: None,
+        live_source: None,
         record_browser: None,
     };
 

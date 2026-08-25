@@ -2,7 +2,8 @@
 
 use super::display_content::{
     RuntimeCommandDisplayOverlayContent, runtime_command_overlay_available_width,
-    runtime_human_readable_display_lines, wrap_runtime_command_display_overlay_content,
+    runtime_human_readable_display_lines, runtime_live_overlay_source_from_json,
+    wrap_runtime_command_display_overlay_content,
 };
 use super::record_adapter::runtime_theme_preview_style_spans;
 use crate::runtime::render::*;
@@ -124,6 +125,7 @@ pub(crate) fn runtime_agent_shell_display_output(
         .get("command")
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned);
+    let live_source = runtime_live_overlay_source_from_json(parsed.get("live_source"));
     if let Some(presentation) = parsed
         .get("presentation")
         .and_then(serde_json::Value::as_str)
@@ -133,15 +135,17 @@ pub(crate) fn runtime_agent_shell_display_output(
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
         return match presentation {
-            "pager" => Ok(RuntimeAgentShellDisplayOutput::Overlay(
-                runtime_agent_shell_markdown_overlay_content_for_layout(
+            "pager" => {
+                let mut content = runtime_agent_shell_markdown_overlay_content_for_layout(
                     command,
                     body,
                     ui_theme,
                     terminal_width,
                     terminal_width.max(1),
-                ),
-            )),
+                );
+                content.live_source = live_source;
+                Ok(RuntimeAgentShellDisplayOutput::Overlay(content))
+            }
             "notice" => {
                 let mut lines = runtime_human_readable_display_lines(body);
                 lines.truncate(200);
@@ -184,13 +188,14 @@ pub(crate) fn runtime_agent_shell_display_output(
                 return Ok(RuntimeAgentShellDisplayOutput::Lines(lines));
             }
             let display_width = terminal_width.max(1);
-            let content = runtime_agent_shell_markdown_overlay_content_for_layout(
+            let mut content = runtime_agent_shell_markdown_overlay_content_for_layout(
                 command.clone(),
                 body,
                 ui_theme,
                 terminal_width,
                 display_width,
             );
+            content.live_source = live_source;
             if runtime_command_display_should_open_overlay(&content) {
                 return Ok(RuntimeAgentShellDisplayOutput::Overlay(content));
             }
@@ -458,6 +463,7 @@ pub(crate) fn runtime_agent_shell_markdown_overlay_content_for_width(
 ) -> RuntimeCommandDisplayOverlayContent {
     let mut content = RuntimeCommandDisplayOverlayContent {
         command,
+        live_source: None,
         lines: Vec::new(),
         line_style_spans: Vec::new(),
         line_kinds: Vec::new(),

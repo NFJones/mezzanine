@@ -855,6 +855,7 @@ impl RuntimeSessionService {
             .resize_authoritative_terminal_transition(primary_client_id, size)?;
         self.presentation.clear_mouse_resize_drag_state();
         self.reflow_primary_record_browser_overlay();
+        self.reflow_live_overlay_for_client(primary_client_id)?;
         let updates = self.sync_pane_resize_effects(&effects)?;
         self.append_lifecycle_event(
             EventKind::PaneChanged,

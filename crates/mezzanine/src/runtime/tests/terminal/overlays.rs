@@ -154,6 +154,45 @@ fn runtime_primary_display_overlay_preserves_unwrapped_plain_content() {
     assert_eq!(overlay.lines, vec!["alpha beta gamma"]);
 }
 
+/// Verifies the Iroh status pager retains exact-client source identity rather
+/// than inferring refresh behavior from its rendered command or rows.
+#[test]
+fn runtime_iroh_status_overlay_retains_exact_client_live_source() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    service
+        .execute_attached_display_command(&primary, "show-iroh-status")
+        .unwrap();
+
+    let source = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.live_source.as_ref())
+        .expect("show-iroh-status should install a live source");
+    let wide_lines = service.primary_display_overlay().unwrap().lines.clone();
+    let next_due_ms = source.next_due_ms;
+    assert!(matches!(
+        &source.source,
+        crate::runtime::service_state::RuntimeLiveOverlaySourceKind::IrohStatus {
+            client_id,
+        } if client_id == primary.as_str()
+    ));
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(30, 12).unwrap())
+        .unwrap();
+    let resized = service.primary_display_overlay().unwrap();
+    assert_ne!(resized.lines, wide_lines);
+    assert_eq!(
+        resized
+            .live_source
+            .as_ref()
+            .map(|source| source.next_due_ms),
+        Some(next_due_ms)
+    );
+}
+
 /// Verifies terminal command feedback that does not need the pager uses the
 /// window status line and never mutates the active pane's retained log.
 #[test]
@@ -470,6 +509,56 @@ fn runtime_primary_display_overlay_search_repeats_and_wraps() {
         overlay.search_status.as_deref(),
         Some("pattern not found: absent")
     );
+}
+
+/// Verifies live overlay replacement preserves durable interaction state and
+/// does not report a change when rebuilt content is identical.
+#[test]
+fn runtime_live_display_overlay_replacement_reconciles_interaction_state() {
+    let mut service = test_runtime_service_with_size(Size::new(40, 6).unwrap());
+    service
+        .show_primary_display_overlay(vec![
+            "header".to_string(),
+            "needle old".to_string(),
+            "tail".to_string(),
+        ])
+        .unwrap();
+    {
+        let overlay = service.primary_display_overlay_mut().unwrap();
+        overlay.scroll_offset = 2;
+        overlay.search_query = Some("needle".to_string());
+        overlay.search_match = Some(mez_mux::overlay::OverlaySearchMatch {
+            line_index: 1,
+            start_column: 0,
+            width: 6,
+        });
+        overlay.mouse_selection = Some((
+            mez_mux::copy::CopyPosition { line: 1, column: 0 },
+            mez_mux::copy::CopyPosition { line: 1, column: 6 },
+        ));
+    }
+    let content = crate::runtime::render::RuntimeCommandDisplayOverlayContent {
+        command: Some("status".to_string()),
+        live_source: None,
+        lines: vec!["needle new".to_string()],
+        line_style_spans: vec![Vec::new()],
+        line_kinds: vec![mez_mux::render::RichTextLineKind::Normal],
+        line_copy_texts: vec![None],
+        selections: Vec::new(),
+    };
+
+    assert!(service.replace_primary_display_overlay_content(content.clone()));
+    let overlay = service.primary_display_overlay().unwrap();
+    assert_eq!(overlay.scroll_offset, 0);
+    assert_eq!(overlay.search_query.as_deref(), Some("needle"));
+    assert_eq!(
+        overlay
+            .search_match
+            .map(|search_match| search_match.line_index),
+        Some(0)
+    );
+    assert!(overlay.mouse_selection.is_none());
+    assert!(!service.replace_primary_display_overlay_content(content));
 }
 
 /// Verifies that command chooser output rendered in the primary overlay is not

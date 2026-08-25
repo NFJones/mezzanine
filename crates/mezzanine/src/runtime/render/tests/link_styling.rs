@@ -72,6 +72,7 @@ fn agent_shell_markdown_overlay_preserves_selectable_link_style_spans() {
             search_match: None,
             search_status: None,
             mouse_selection: None,
+            live_source: None,
             record_browser: None,
         },
         selection,
@@ -120,6 +121,7 @@ fn active_markdown_overlay_link_keeps_tail_cell_link_styling() {
         search_match: None,
         search_status: None,
         mouse_selection: None,
+        live_source: None,
         record_browser: None,
     };
     let selection = &overlay.selections[0];
@@ -180,6 +182,7 @@ fn active_saved_session_overlay_uuid_keeps_tail_cell_link_styling() {
         search_match: None,
         search_status: None,
         mouse_selection: None,
+        live_source: None,
         record_browser: None,
     };
     let selection = &overlay.selections[0];
@@ -241,6 +244,7 @@ fn active_saved_session_overlay_uuid_does_not_style_previous_cell() {
         search_match: None,
         search_status: None,
         mouse_selection: None,
+        live_source: None,
         record_browser: None,
     };
     let selection = &overlay.selections[0];
@@ -292,6 +296,7 @@ fn active_markdown_overlay_front_of_line_link_keeps_gutter_separate() {
         search_match: None,
         search_status: None,
         mouse_selection: None,
+        live_source: None,
         record_browser: None,
     };
     let selection = &overlay.selections[0];
@@ -382,6 +387,7 @@ fn active_markdown_overlay_link_style_stops_before_following_cell() {
         search_match: None,
         search_status: None,
         mouse_selection: None,
+        live_source: None,
         record_browser: None,
     };
     let selection = &overlay.selections[0];

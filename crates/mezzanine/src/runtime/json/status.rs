@@ -68,6 +68,21 @@ pub(crate) fn runtime_agent_shell_command_response_json(
             json_escape(command),
             json_escape(body)
         ),
+        Some(AgentShellCommandOutcome::LiveDisplay {
+            command,
+            body,
+            source:
+                crate::integrations::agent::slash::AgentShellDisplaySource::AgentStatus {
+                    pane_id: source_pane_id,
+                },
+        }) => format!(
+            r#"{{"pane_id":"{}","input":"{}","kind":"display","command":"{}","content_type":"text/markdown; charset=utf-8","body":"{}","live_source":{{"kind":"agent_status","pane_id":"{}"}},"turn":null}}"#,
+            json_escape(pane_id),
+            json_escape(input),
+            json_escape(command),
+            json_escape(body),
+            json_escape(source_pane_id)
+        ),
         Some(AgentShellCommandOutcome::Presented {
             command,
             body,

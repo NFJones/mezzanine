@@ -400,6 +400,10 @@ fn runtime_agent_shell_extended_status_persists_rolling_token_usage() {
         r#"{"jsonrpc":"2.0","id":"plain-status","method":"agent/shell/command","params":{"idempotency_key":"plain-status","input":"/status"}}"#,
         &primary,
     );
+    assert!(
+        plain.contains(r#""live_source":{"kind":"agent_status","pane_id":"%1"}"#),
+        "{plain}"
+    );
     assert!(!plain.contains("### 7-Day Token Usage"), "{plain}");
     assert!(
         !plain.contains("Rolling Token Usage Unavailable"),
@@ -410,6 +414,7 @@ fn runtime_agent_shell_extended_status_persists_rolling_token_usage() {
         r#"{"jsonrpc":"2.0","id":"extended-status","method":"agent/shell/command","params":{"idempotency_key":"extended-status","input":"/status --extended"}}"#,
         &primary,
     );
+    assert!(!extended.contains("live_source"), "{extended}");
     assert!(extended.contains("### 1-Day Token Usage"), "{extended}");
     for days in [7, 30, 60, 90] {
         assert!(

@@ -1046,6 +1046,26 @@ fn runtime_agent_slash_markdown_display_opens_command_overlay() {
     let overlay = service
         .primary_display_overlay()
         .expect("/status should open the command display overlay");
+    let live_source = overlay
+        .live_source
+        .as_ref()
+        .expect("ordinary /status should retain a live source");
+    let next_due_ms = live_source.next_due_ms;
+    assert!(matches!(
+        &live_source.source,
+        crate::runtime::service_state::RuntimeLiveOverlaySourceKind::AgentStatus {
+            pane_id,
+            extended: false,
+        } if pane_id == "%1"
+    ));
+    assert!(
+        !service
+            .refresh_live_overlay_for_client(&primary, next_due_ms)
+            .unwrap()
+    );
+    let overlay = service
+        .primary_display_overlay()
+        .expect("/status should remain open after an unchanged refresh");
     let heading_index = overlay
         .lines
         .iter()

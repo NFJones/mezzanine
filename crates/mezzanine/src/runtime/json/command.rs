@@ -48,6 +48,16 @@ pub(crate) fn runtime_command_outcome_json(outcome: &CommandOutcome) -> String {
             json_escape(command),
             json_escape(body)
         ),
+        CommandOutcome::LiveDisplay {
+            command,
+            body,
+            source: crate::ui::command::CommandDisplaySource::IrohStatus { client_id },
+        } => format!(
+            r#"{{"command":"{}","kind":"display","body":"{}","live_source":{{"kind":"iroh_status","client_id":"{}"}}}}"#,
+            json_escape(command),
+            json_escape(body),
+            json_escape(client_id)
+        ),
         CommandOutcome::LayoutSave { command, name } => format!(
             r#"{{"command":"{}","kind":"layout_save","name":{},"body":"runtime layout repository required"}}"#,
             json_escape(command),

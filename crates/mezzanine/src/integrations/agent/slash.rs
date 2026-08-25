@@ -59,6 +59,15 @@ pub enum AgentShellCommandOutcome {
         /// boundary and should remain aligned with the owning type invariant.
         body: String,
     },
+    /// Displays content backed by one typed product-owned live source.
+    LiveDisplay {
+        /// Stable slash-command identity.
+        command: String,
+        /// Initial rendered display body.
+        body: String,
+        /// Typed source used for subsequent refreshes.
+        source: AgentShellDisplaySource,
+    },
     /// Displays content through an explicit presentation destination.
     Presented {
         /// Stable command identity used by pager and compatibility adapters.
@@ -104,6 +113,16 @@ pub enum AgentShellCommandOutcome {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         reason: String,
+    },
+}
+
+/// Product-owned sources supported by live agent-shell displays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentShellDisplaySource {
+    /// Status bound to the pane that opened the pager.
+    AgentStatus {
+        /// Stable pane identity used for all refreshes.
+        pane_id: String,
     },
 }
 

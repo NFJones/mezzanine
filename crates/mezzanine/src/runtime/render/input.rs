@@ -15,7 +15,7 @@ use super::{
     default_runtime_agent_prompt_input, runtime_agent_shell_display_output,
     runtime_agent_shell_visibility, runtime_command_display_overlay_content,
 };
-use crate::runtime::service_state::RuntimeRecordBrowserOverlayState;
+use crate::runtime::service_state::{RuntimeLiveOverlaySource, RuntimeRecordBrowserOverlayState};
 use mez_mux::readline::{ReadlineDecodedInput, readline_input_is_ctrl_v};
 use std::sync::mpsc::TryRecvError;
 
@@ -1068,6 +1068,7 @@ impl RuntimeSessionService {
                 state.display_lines.clear();
             }
             RuntimeAgentShellDisplayOutput::Overlay(content) => {
+                let live_source = content.live_source.clone();
                 let record_browser = content.command.as_ref().and_then(|command| {
                     let key = (pane_id.to_string(), command.clone());
                     let source = self
@@ -1102,6 +1103,18 @@ impl RuntimeSessionService {
                     record_browser,
                 ) {
                     overlay.record_browser = Some(record_browser);
+                }
+                if let (Some(overlay), Some(source)) = (
+                    self.presentation.primary_display_overlay.as_mut(),
+                    live_source,
+                ) {
+                    const LIVE_STATUS_REFRESH_INTERVAL_MS: u64 = 1_000;
+                    overlay.live_source = Some(RuntimeLiveOverlaySource {
+                        source,
+                        refresh_interval_ms: LIVE_STATUS_REFRESH_INTERVAL_MS,
+                        next_due_ms: current_unix_millis()
+                            .saturating_add(LIVE_STATUS_REFRESH_INTERVAL_MS),
+                    });
                 }
                 self.reflow_primary_record_browser_overlay();
                 let state = self

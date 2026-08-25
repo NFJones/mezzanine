@@ -34,7 +34,7 @@ pub struct AnchoredSelector<Field> {
 
 /// Actor-owned full-window display overlay state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DisplayOverlay<Source> {
+pub struct DisplayOverlay<Source, LiveSource = ()> {
     /// Unprefixed overlay content rows.
     pub lines: Vec<String>,
     /// Visible styles for each content row.
@@ -59,6 +59,8 @@ pub struct DisplayOverlay<Source> {
     pub active_selection_index: Option<usize>,
     /// Whether any input dismisses this overlay.
     pub dismiss_on_any_input: bool,
+    /// Optional product-owned source used to refresh this overlay in place.
+    pub live_source: Option<LiveSource>,
     /// Optional interactive record-browser state.
     pub record_browser: Option<RecordBrowserOverlayState<Source>>,
 }

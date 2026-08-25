@@ -71,6 +71,15 @@ pub enum CommandOutcome {
         /// boundary and should remain aligned with the owning type invariant.
         body: String,
     },
+    /// Displays content backed by one typed product-owned live source.
+    LiveDisplay {
+        /// Stable terminal command identity.
+        command: String,
+        /// Initial rendered display body.
+        body: String,
+        /// Typed source used for subsequent refreshes.
+        source: CommandDisplaySource,
+    },
     /// Represents a snapshot creation request that must be satisfied by a
     /// runtime/control snapshot repository rather than by the generic session
     /// fallback.
@@ -88,6 +97,16 @@ pub enum CommandOutcome {
         command: String,
         /// Stores the requested snapshot selector.
         selector: LayoutLoadSelector,
+    },
+}
+
+/// Product-owned sources supported by live terminal-command displays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandDisplaySource {
+    /// Exact-client Iroh connection status.
+    IrohStatus {
+        /// Client whose authenticated connection details are displayed.
+        client_id: String,
     },
 }
 

@@ -411,8 +411,26 @@ impl AsyncRuntimeSessionActor {
                 self.timers
                     .status_refresh
                     .remove(timer.key.owner_id.as_str());
-                let mut application =
-                    self.apply_render_timer_event(RenderInvalidationReason::StatusLine);
+                let client_id = ClientId::opaque(timer.key.owner_id.clone());
+                let overlay_changed = if let Some(client_id) = client_id.as_ref() {
+                    self.service
+                        .refresh_live_overlay_for_client(client_id, timer.now_ms)?
+                } else {
+                    false
+                };
+                let status_line_refresh = self.service.status_line_refresh_required()?;
+                let mut application = RuntimeTransition::default();
+                if (overlay_changed || status_line_refresh)
+                    && let Some(client_id) = client_id
+                {
+                    application.applied = true;
+                    application
+                        .side_effects
+                        .push(RuntimeSideEffect::RenderClient {
+                            client_id,
+                            reason: RenderInvalidationReason::StatusLine,
+                        });
+                }
                 application.side_effects.extend(
                     self.status_refresh_timer_side_effects_for_client(
                         &timer.key.owner_id,

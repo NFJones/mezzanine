@@ -126,6 +126,7 @@ fn display_overlay_search_highlights_only_matching_columns() {
         }),
         search_status: None,
         mouse_selection: None,
+        live_source: None,
         record_browser: None,
     };
 
@@ -190,6 +191,7 @@ fn display_overlay_search_skips_offscreen_match_ranges() {
         }),
         search_status: None,
         mouse_selection: None,
+        live_source: None,
         record_browser: None,
     };
 
@@ -291,6 +293,7 @@ fn display_overlay_single_selection_hit_testing_requires_link_bounds() {
         search_match: None,
         search_status: None,
         mouse_selection: None,
+        live_source: None,
         record_browser: None,
     };
     let rendered_start = overlay_rendered_selection_start(&overlay, &overlay.selections[0]);
@@ -352,6 +355,7 @@ fn display_overlay_scroll_keeps_active_selection_visible() {
         search_match: None,
         search_status: None,
         mouse_selection: None,
+        live_source: None,
         record_browser: None,
     };
 

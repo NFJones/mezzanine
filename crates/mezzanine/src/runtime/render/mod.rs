@@ -733,6 +733,19 @@ fn presentation_render_invalidation_priority(reason: RenderInvalidationReason) -
 }
 
 impl RuntimePresentationComponent {
+    /// Returns the next live-overlay refresh deadline for one exact client.
+    pub(crate) fn client_live_overlay_next_due_ms(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+    ) -> Option<u64> {
+        self.capture_projected_client_state();
+        self.client_states
+            .get(client_id)
+            .and_then(|state| state.primary_display_overlay.as_ref())
+            .and_then(|overlay| overlay.live_source.as_ref())
+            .map(|source| source.next_due_ms)
+    }
+
     /// Returns the newest captured transient presentation revision for one client.
     pub(crate) fn client_presentation_revision(
         &mut self,
@@ -799,7 +812,22 @@ impl RuntimePresentationComponent {
             pane_agent_status_selector: self.pane_agent_status_selector.clone(),
             presentation_revision: previous.presentation_revision,
         };
-        if next != previous {
+        let mut comparable_next = next.clone();
+        if let (Some(next_source), Some(previous_source)) = (
+            comparable_next
+                .primary_display_overlay
+                .as_mut()
+                .and_then(|overlay| overlay.live_source.as_mut()),
+            previous
+                .primary_display_overlay
+                .as_ref()
+                .and_then(|overlay| overlay.live_source.as_ref()),
+        ) && next_source.source == previous_source.source
+            && next_source.refresh_interval_ms == previous_source.refresh_interval_ms
+        {
+            next_source.next_due_ms = previous_source.next_due_ms;
+        }
+        if comparable_next != previous {
             next.presentation_revision = previous.presentation_revision.saturating_add(1);
         }
         self.client_states.insert(client_id, next);
@@ -1817,6 +1845,12 @@ impl RuntimeSessionService {
         self.presentation.primary_display_overlay.as_ref()
     }
 
+    /// Returns mutable overlay state for focused product integration tests.
+    #[cfg(test)]
+    pub(crate) fn primary_display_overlay_mut(&mut self) -> Option<&mut RuntimeDisplayOverlay> {
+        self.presentation.primary_display_overlay.as_mut()
+    }
+
     /// Returns the right-side frame status template for integration tests.
     pub(crate) fn window_frame_right_status_template(&self) -> &str {
         &self
@@ -1935,6 +1969,8 @@ use mez_mux::render::{
     RichTextLineKind, markdown_rendered_line_is_table_row,
     wrap_rich_text_line_to_width_with_source_ranges_hard,
 };
+#[cfg(test)]
+pub(crate) use overlay::RuntimeCommandDisplayOverlayContent;
 use overlay::{
     RuntimeAgentShellDisplayOutput, agent_command_link_at_line_column,
     agent_shell_mcp_display_state_name, default_runtime_agent_prompt_input,

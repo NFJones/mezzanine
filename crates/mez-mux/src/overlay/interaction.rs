@@ -28,7 +28,9 @@ fn terminal_grapheme_width(grapheme: &str) -> usize {
 }
 
 /// Returns the rendered line index for the active overlay selection.
-pub fn overlay_active_line_index(overlay: &DisplayOverlay<impl Sized>) -> Option<usize> {
+pub fn overlay_active_line_index(
+    overlay: &DisplayOverlay<impl Sized, impl Sized>,
+) -> Option<usize> {
     overlay
         .active_selection_index
         .and_then(|index| overlay.selections.get(index))
@@ -37,7 +39,7 @@ pub fn overlay_active_line_index(overlay: &DisplayOverlay<impl Sized>) -> Option
 
 /// Keeps a target overlay line within the modal page.
 pub fn scroll_overlay_to_line(
-    overlay: &mut DisplayOverlay<impl Sized>,
+    overlay: &mut DisplayOverlay<impl Sized, impl Sized>,
     line_index: usize,
     client_size: Size,
 ) {
@@ -53,14 +55,17 @@ pub fn scroll_overlay_to_line(
 }
 
 /// Clamps overlay scrolling to the visible content range for the client size.
-pub fn clamp_overlay_scroll(overlay: &mut DisplayOverlay<impl Sized>, client_size: Size) {
+pub fn clamp_overlay_scroll(
+    overlay: &mut DisplayOverlay<impl Sized, impl Sized>,
+    client_size: Size,
+) {
     overlay.scroll_offset = overlay
         .scroll_offset
         .min(modal_overlay_max_scroll(overlay.lines.len(), client_size));
 }
 
 /// Returns display overlay lines with selector markers on actionable rows.
-pub fn overlay_render_lines(overlay: &DisplayOverlay<impl Sized>) -> Vec<String> {
+pub fn overlay_render_lines(overlay: &DisplayOverlay<impl Sized, impl Sized>) -> Vec<String> {
     let active_line = overlay_active_line_index(overlay);
     let inactive_prefix = (!overlay.selections.is_empty()).then_some(OVERLAY_INACTIVE_SELECTOR);
     overlay
@@ -81,7 +86,7 @@ pub fn overlay_render_lines(overlay: &DisplayOverlay<impl Sized>) -> Vec<String>
 
 /// Returns the rendered start column after selector gutters are added.
 pub fn overlay_rendered_selection_start(
-    overlay: &DisplayOverlay<impl Sized>,
+    overlay: &DisplayOverlay<impl Sized, impl Sized>,
     selection: &OverlaySelection,
 ) -> usize {
     selection.start_column + overlay_line_prefix_columns(overlay, selection.line_index)
@@ -89,7 +94,7 @@ pub fn overlay_rendered_selection_start(
 
 /// Returns the terminal-cell width occupied by one rendered overlay row gutter.
 pub fn overlay_line_prefix_columns(
-    overlay: &DisplayOverlay<impl Sized>,
+    overlay: &DisplayOverlay<impl Sized, impl Sized>,
     _line_index: usize,
 ) -> usize {
     usize::from(!overlay.selections.is_empty()) * overlay_selection_prefix_columns()
@@ -101,7 +106,7 @@ pub fn overlay_selection_prefix_columns() -> usize {
 }
 
 /// Returns the modal overlay footer with physical-row progress and key hints.
-pub fn overlay_footer(overlay: &DisplayOverlay<impl Sized>, size: Size) -> String {
+pub fn overlay_footer(overlay: &DisplayOverlay<impl Sized, impl Sized>, size: Size) -> String {
     let page_rows = modal_overlay_page_rows(size);
     let max_scroll = modal_overlay_max_scroll(overlay.lines.len(), size);
     let offset = overlay.scroll_offset.min(max_scroll);
@@ -217,7 +222,7 @@ pub fn overlay_link_rendition(ui_theme: &UiTheme) -> GraphicRendition {
 }
 /// Returns the shifted, clipped markdown/body spans for one overlay line.
 pub fn overlay_body_style_spans(
-    overlay: &DisplayOverlay<impl Sized>,
+    overlay: &DisplayOverlay<impl Sized, impl Sized>,
     line_index: usize,
     max_columns: usize,
 ) -> Vec<TerminalStyleSpan> {
@@ -329,7 +334,7 @@ fn append_active_overlay_body_selection_spans(
 }
 /// Returns the fully composed style spans for one rendered overlay line.
 pub fn overlay_rendered_line_style_spans(
-    overlay: &DisplayOverlay<impl Sized>,
+    overlay: &DisplayOverlay<impl Sized, impl Sized>,
     line_index: usize,
     max_columns: usize,
     ui_theme: &UiTheme,
@@ -462,7 +467,7 @@ fn append_display_overlay_mouse_selection_spans(
 
 /// Computes terminal placement for a pane agent model/reasoning selector.
 /// Copies the currently selected primary display-overlay text.
-pub fn overlay_copy_selection(overlay: &DisplayOverlay<impl Sized>) -> Option<String> {
+pub fn overlay_copy_selection(overlay: &DisplayOverlay<impl Sized, impl Sized>) -> Option<String> {
     let (start, end) = overlay.mouse_selection?;
     let (start, end) = if start <= end {
         (start, end)
@@ -504,7 +509,7 @@ pub fn overlay_copy_selection(overlay: &DisplayOverlay<impl Sized>) -> Option<St
 
 /// Returns source copy text for one fully selected overlay row.
 fn overlay_source_copy_line(
-    overlay: &DisplayOverlay<impl Sized>,
+    overlay: &DisplayOverlay<impl Sized, impl Sized>,
     line_index: usize,
 ) -> Option<String> {
     match overlay
@@ -520,7 +525,7 @@ fn overlay_source_copy_line(
 
 /// Applies a signed scroll delta to a display overlay and clamps the viewport.
 pub fn apply_overlay_scroll_delta(
-    overlay: &mut DisplayOverlay<impl Sized>,
+    overlay: &mut DisplayOverlay<impl Sized, impl Sized>,
     delta: isize,
     size: Size,
 ) -> bool {
@@ -539,7 +544,7 @@ pub fn apply_overlay_scroll_delta(
 
 /// Returns whether one overlay selection is currently visible in the viewport.
 pub fn overlay_selection_index_is_visible(
-    overlay: &DisplayOverlay<impl Sized>,
+    overlay: &DisplayOverlay<impl Sized, impl Sized>,
     selection_index: usize,
     size: Size,
 ) -> bool {
@@ -554,7 +559,7 @@ pub fn overlay_selection_index_is_visible(
 
 /// Keeps the active overlay selection executable only when it is visible.
 pub fn update_overlay_active_selection_for_viewport(
-    overlay: &mut DisplayOverlay<impl Sized>,
+    overlay: &mut DisplayOverlay<impl Sized, impl Sized>,
     size: Size,
 ) {
     if overlay.selections.is_empty() {
@@ -599,7 +604,7 @@ pub fn overlay_line_slice(line: &str, start: usize, end: usize) -> String {
 
 /// Returns the overlay selection index under a mouse position.
 pub fn overlay_selection_index_at_position(
-    overlay: &DisplayOverlay<impl Sized>,
+    overlay: &DisplayOverlay<impl Sized, impl Sized>,
     line_index: usize,
     column: usize,
 ) -> Option<usize> {
@@ -618,7 +623,7 @@ pub fn overlay_selection_index_at_position(
 
 /// Returns the next forward pager-search match, wrapping once to the start.
 pub fn overlay_next_search_match(
-    overlay: &DisplayOverlay<impl Sized>,
+    overlay: &DisplayOverlay<impl Sized, impl Sized>,
     query: &str,
     current_line: usize,
 ) -> Option<OverlaySearchMatch> {
@@ -690,6 +695,7 @@ mod tests {
             selections: Vec::new(),
             active_selection_index: None,
             dismiss_on_any_input: false,
+            live_source: None,
             record_browser: None,
         }
     }

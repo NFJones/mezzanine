@@ -166,8 +166,17 @@ impl RuntimeSessionService {
     ///
     /// This transition retains the actor's timer key as adapter state while
     /// centralizing the client/configuration policy in the runtime core.
+    pub(crate) fn status_line_refresh_required(&self) -> Result<bool> {
+        let config = self.terminal_client_loop_config(TerminalClientLoopConfig::default())?;
+        Ok(runtime_status_refresh_required_by_config(&config))
+    }
+
+    /// Reconciles the status-refresh timer for one attached terminal client.
+    ///
+    /// This transition retains the actor's timer key as adapter state while
+    /// centralizing the client/configuration policy in the runtime core.
     pub(crate) fn client_status_refresh_timer_transition(
-        &self,
+        &mut self,
         client_id: &str,
         active_key: Option<RuntimeTimerKey>,
         generation_base_ms: u64,
@@ -176,7 +185,21 @@ impl RuntimeSessionService {
         let client_attached = self.session.clients().iter().any(|client| {
             client.id.as_str() == client_id && client.state == crate::runtime::ClientState::Attached
         });
-        if !client_attached || !runtime_status_refresh_required_by_config(&config) {
+        let client_id_value = self
+            .session
+            .clients()
+            .iter()
+            .find(|client| client.id.as_str() == client_id)
+            .map(|client| client.id.clone());
+        let live_due_ms = client_id_value
+            .as_ref()
+            .and_then(|client_id| self.presentation.client_live_overlay_next_due_ms(client_id));
+        let config_due_ms = runtime_status_refresh_required_by_config(&config).then(|| {
+            generation_base_ms
+                .saturating_add(runtime_status_refresh_interval_ms_for_config(&config))
+        });
+        let next_due_ms = [config_due_ms, live_due_ms].into_iter().flatten().min();
+        if !client_attached || next_due_ms.is_none() {
             return Ok(RuntimeTransition {
                 applied: false,
                 side_effects: active_key
@@ -185,12 +208,10 @@ impl RuntimeSessionService {
                     .collect(),
             });
         }
-        let delay_ms = runtime_status_refresh_interval_ms_for_config(&config);
-        let next_key = RuntimeTimerKey::new(
-            RuntimeTimerKind::StatusRefresh,
-            client_id,
-            generation_base_ms.saturating_add(delay_ms),
-        );
+        let next_due_ms = next_due_ms.unwrap_or(generation_base_ms);
+        let delay_ms = next_due_ms.saturating_sub(generation_base_ms);
+        let next_key =
+            RuntimeTimerKey::new(RuntimeTimerKind::StatusRefresh, client_id, next_due_ms);
         let side_effects = match active_key {
             Some(existing_key) if existing_key.generation <= next_key.generation => Vec::new(),
             Some(existing_key) => vec![
