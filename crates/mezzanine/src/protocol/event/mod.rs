@@ -1,7 +1,7 @@
 //! Session event log and observer-safe replay policy.
 //!
 //! Runtime clients and agents need a retained stream for state changes without
-//! leaking data across observer approval boundaries. This module models event
+//! leaking data across observer attachment boundaries. This module models event
 //! visibility independently from the socket transport so the eventual control
 //! endpoint can deliver the same events over Unix or TCP sockets. Events use a
 //! deterministic monotonic `event:<id>` timestamp until a runtime clock is

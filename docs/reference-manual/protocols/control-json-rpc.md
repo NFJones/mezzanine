@@ -25,8 +25,8 @@ with `unsupported_version`.
 
 V2 event delivery binds every stream to an exact initialized client. Shared
 events target all primaries, private presentation events target one client,
-and observers receive only their source primary's live session view after the
-approval marker. Snapshot payload v5 persists shared topology, canonical size,
+and observers receive only their source primary's live session view at or after
+the attachment cutoff. Snapshot payload v5 persists shared topology, canonical size,
 and landing navigation, but never live clients, owner, event credentials, or
 transient presentation.
 
@@ -207,11 +207,12 @@ the layout owner's resize changes canonical geometry. A primary request always
 requires a verifiable interactive terminal; a client descriptor alone is not
 sufficient when the transport does not trust that assertion.
 
-Observer attachment begins as `pending_observer`. Before approval it may only
-initialize, attach or inspect its own observer request, cancel its own request,
-or shut down; it receives no session view. Approved observers receive only
-post-approval rendered views and permitted events, and cannot mutate the
-session. Primary-only operations fail with `not_primary` for other callers.
+Observer initialization immediately creates an attached read-only `observer`
+bound to the current layout-owner primary. It fails with `conflict` and leaves
+no client residue when no layout owner is attached. Observers receive only
+rendered views and permitted events at or after their attachment cutoff, may
+detach themselves through `client/detach`, and cannot mutate the session.
+Primary-only operations fail with `not_primary` or `forbidden` for other callers.
 Agent calls remain subject to the active permission policy.
 
 Every non-idempotent mutation requires an `idempotency_key` in its params.
@@ -374,10 +375,10 @@ has elapsed, so attach clients refetch the current rendered view after any gap.
 The capabilities limits expose retention.
 
 Every Iroh event batch re-resolves the live session client before projection.
-Pending observers receive no event stream until approval. Approved observers
-see only `SessionView` events at or after their approval marker; primary-only,
-other-observer, agent, automation, and pre-approval payloads are omitted.
-Revocation, detach, control completion, reset, or connection shutdown closes the
+Attached observers see only `SessionView` events at or after their atomic
+attachment cutoff; primary-only, agent, automation, pre-attachment, and
+cross-session payloads are omitted. Source detach, self-detach, control
+completion, reset, or connection shutdown closes the
 event stream. Transport endpoint authentication alone never authorizes events.
 
 ## Related pages

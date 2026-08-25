@@ -292,8 +292,8 @@ impl RuntimeSessionService {
     /// Applies an exact-client disconnect delivered through runtime ingress.
     ///
     /// Primary disconnects retain the established session-detach lifecycle.
-    /// Pending and approved observers, agents, and automation clients detach
-    /// only themselves. Already detached or revoked clients are stale no-ops,
+    /// Observers, agents, and automation clients detach only themselves.
+    /// Already detached or revoked clients are stale no-ops,
     /// making duplicate EOF, reset, and shutdown cleanup harmless.
     pub fn apply_client_disconnect_event(
         &mut self,

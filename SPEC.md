@@ -170,11 +170,6 @@ Read-only Observer:
   send pane input, approve agent actions, mutate configuration, or control the
   session.
 
-Pending Observer:
-: A client that has requested read-only observer access but has not yet been
-  approved by the primary client. A pending observer MUST NOT receive session
-  view data.
-
 Control Endpoint:
 : A structured local endpoint used by Mezzanine clients and agent harnesses to
   inspect and mutate Mezzanine state.
@@ -384,8 +379,8 @@ and agent drafts. One primary's navigation or transient presentation MUST NOT
 move, reveal, complete, or overwrite another primary's view.
 
 Mezzanine MUST retain no more than 64 unreferenced detached client summaries.
-It MUST NOT prune a client record while an observer request, unsettled approval,
-event binding, audit relation, or other live work refers to that client.
+It MUST NOT prune a client record while an unsettled approval, event binding,
+audit relation, or other live work refers to that client.
 
 One attached primary MUST be the layout owner whenever any primary is attached.
 The first attached primary becomes owner. Only owner resize changes canonical
@@ -405,41 +400,36 @@ clear the owner, update client-independent landing navigation from the final
 primary, and run final-detach effects once. Duplicate EOF, reset, cancellation,
 shutdown, and explicit-detach cleanup for the same connection MUST be inert
 after the first exact-client transition. Pane processes, agents, providers,
-retries, pending observer requests, and pending approvals MUST continue while
-zero primaries are attached.
+retries, and pending approvals MUST continue while zero primaries are attached.
 
-A client requesting read-only access MUST enter the pending observer role
-first. A pending observer MUST NOT receive terminal, frame, window, pane, agent
-status, message-log, or notification payloads other than request-local status
-for its own observer request.
+An authenticated client requesting read-only access MUST attach immediately as
+an `observer`. Attachment MUST require an attached layout-owner primary and
+MUST atomically bind the observer to that exact primary together with the first
+event id visible to the observer. If no layout-owner primary is attached,
+initialization MUST fail with a conflict before allocating a client or changing
+session state.
 
-A pending observer MUST graduate to read-only observer only after one attached
-primary explicitly approves that observer. Approval MUST atomically bind the
-observer to an exact attached source primary; the deciding primary is the
-default source, and an explicitly requested source MUST already be attached in
-the same session. A rejected pending observer MUST be disconnected or left
-connected only to a request-local status surface that exposes no session state.
-An approved observer MUST follow only its source primary's navigation and live
+An observer MUST follow only its exact source primary's navigation and live
 pane content. It MUST NOT receive the source primary's prompts, overlays, copy
-mode, mouse state, drafts, private errors, or pre-approval history. Source
-detach MUST revoke the observer and close its stream; Mezzanine MUST NOT
+mode, mouse state, drafts, private errors, or pre-attachment history. Source
+detach MUST detach the observer and close its stream; Mezzanine MUST NOT
 silently transfer an observer to another primary.
 
-After approval, a read-only observer MAY receive the raw rendered live view
-of its source primary from the approval moment forward. The observer
-stream MUST start at the live viewport and live scroll position at the approval
-moment, not at a historical copy-mode or scrollback position. Mezzanine MUST
-NOT apply observer-specific redaction to the approved live rendered view.
+A read-only observer MAY receive the raw rendered live view of its source
+primary from the attachment cutoff forward. The observer stream MUST start at
+the live viewport and live scroll position at attachment, not at a historical
+copy-mode or scrollback position. Mezzanine MUST NOT apply observer-specific
+redaction to the attached live rendered view.
 
 Read-only observers MUST NOT receive pane history, paste buffers, transcripts,
-or terminal output from before the approval moment.
+or terminal output from before the attachment cutoff.
 
 If the source primary is in copy mode, viewing scrollback, viewing a paste
-buffer, or otherwise displaying pre-approval history when an observer is
-approved, Mezzanine MUST show the observer the live viewport instead or a
-status placeholder until the source returns to live content. After approval,
-commands or UI states that would expose pre-approval history to that observer
-MUST either omit older content or display a placeholder for it.
+buffer, or otherwise displaying pre-attachment history when an observer
+attaches, Mezzanine MUST show the observer the live viewport instead or a
+status placeholder until the source returns to live content. Commands or UI
+states that would expose pre-attachment history to that observer MUST either
+omit older content or display a placeholder for it.
 
 The layout owner MUST define the authoritative terminal dimensions for the
 session while attached. Read-only observers MUST render their source primary's
@@ -452,10 +442,6 @@ view, unused space MUST NOT change the controlled pane layout.
 If the final primary detaches, the most recent canonical dimensions MUST remain
 authoritative until a new primary attaches. Read-only observers MUST NOT change
 pane pseudoterminal dimensions while no primary is attached.
-
-Approved read-only observers MAY continue receiving rendered updates while no
-primary client is attached, but those updates MUST use the last authoritative
-primary-client dimensions and MUST NOT expose pre-approval history.
 
 If the final primary detaches and pane primary processes remain active,
 Mezzanine MUST keep the session running.
@@ -499,7 +485,7 @@ for:
   registry rather than assuming the default control socket is active. It MUST
   accept an explicit session identifier and attach to that session's registered
   control socket. It MUST accept `--observer` and `--observe` as equivalent
-  flags for requesting pending observer access.
+  flags for immediate read-only observer attachment.
 - `mez list`: List resumable sessions.
 - `mez detach`: Detach the current client when invoked from inside a session.
 - `mez kill [target]`: Terminate a session explicitly. The optional target
@@ -1023,8 +1009,6 @@ Pane frames MUST support the following fields:
   becomes unavailable.
 - `policy.mode`: Active approval policy as `ask`, `auto-allow`, `full-access`,
   or `host-access`. `host-access` MUST use conspicuous warning styling.
-- `observer.pending_count`: Number of read-only observer attach requests
-  waiting for primary-client approval.
 - `history.position`: Scrollback position when the pane is not at the live
   bottom.
 
@@ -1072,12 +1056,6 @@ The generated default configuration MUST display padded window command buttons
 for `split-window -h`, `split-window`, `new-window`, `new-group`, and
 `agent-shell`, followed by `system.uptime` and `datetime.local`, in that status
 line with distinguishable themed color spans.
-
-When one or more observer attach requests are pending, Mezzanine MUST surface
-that state to the primary client through the pane frame, window frame, message
-log, command prompt, or an equivalent pane status message. The displayed status
-MUST include enough information for the primary client to identify the pending
-observer and the command used to approve, reject, or inspect it.
 
 Frames MUST NOT corrupt the byte stream delivered to pane primary processes.
 
@@ -1671,8 +1649,6 @@ default prefix bindings MUST include:
 - `Ctrl+A #`: List paste buffers.
 - `Ctrl+A =`: Choose the active copy/paste buffer interactively.
 - `Ctrl+A -`: Delete the most recent paste buffer when in buffer context.
-- `Ctrl+A O`: Choose pending read-only observers to approve, reject, inspect,
-  or revoke.
 - `Ctrl+A ~`: Show Mezzanine messages.
 
 Bindings MAY be changed by configuration or command.
@@ -1798,11 +1774,6 @@ The command language MUST include commands equivalent to:
 - `export-history`
 - `pipe-pane`
 - `mark-pane-ready`
-- `list-observers`
-- `choose-observer`
-- `approve-observer`
-- `reject-observer`
-- `revoke-observer`
 
 The terminal command language MUST remain focused on multiplexer control,
 terminal display, configuration, and primary-client operations. Agent-scoped
@@ -1844,9 +1815,9 @@ The baseline commands MUST have the following semantics:
 | `list-groups` | Return the window groups in the target session, including stable identity, index, name, active state, and owned window count. |
 | `choose-group` | Present an interactive group picker with concrete `select-group` actions. |
 | `list-panes` | Return panes for the target window or session, including stable identity, index, active state, title, primary PID when available, current size, and agent identity when present. |
-| `list-clients` | Return attached clients and pending observers, including role, attach time, terminal size, and approval state. Pending observer details MUST be visible only to the primary client unless the primary explicitly grants broader visibility. |
+| `list-clients` | Return attached clients, including read-only observers, with role, state, attach time, and terminal size. |
 | `detach-client` | Detach the target client. Detaching the primary client MUST NOT terminate the session unless exit-on-detach behavior is explicitly configured. |
-| `attach-session` | Attach the invoking client to a resumable session as primary or pending observer according to the requested role and session authority rules. |
+| `attach-session` | Attach the invoking client to a resumable session as primary or as an immediate read-only observer according to the requested role and session authority rules. |
 | `list-sessions` | Return resumable sessions, including identity, name, creation time, last attach time, window count, attached client count, and primary availability. |
 | `rename-session` | Rename the target session. Repeating the command with the same target and name MUST be idempotent. |
 | `kill-session` | Terminate the target session and all panes after confirmation or an explicit force flag unless policy permits destructive session termination without prompting. |
@@ -1860,7 +1831,7 @@ The baseline commands MUST have the following semantics:
 | `list-buffers` | Return paste buffers with identity, creation time, size, preview text, and origin when known. |
 | `choose-buffer` | Present an interactive buffer picker and set the chosen buffer as the active copy/paste buffer or paste it when requested. |
 | `delete-buffer` | Delete the selected or named paste buffer. The command MUST fail with `not_found` for an unknown buffer. |
-| `show-messages` | Display Mezzanine message log entries as a rendered table, including diagnostics, pending observer requests, pending approvals, and hook failures visible to the primary client. |
+| `show-messages` | Display Mezzanine message log entries as a rendered table, including diagnostics, pending approvals, and hook failures visible to the primary client. |
 | `show-metrics` | Display runtime-service and async-runtime counters and bounded histogram summaries for important measurements, including agent turn lifecycle, provider prompt/cache shape, token usage, shell transaction behavior, actor queue wait and handler duration by fixed request family, event application and reconciliation, render composition and encoding, provider progress and total duration, persistence operations and batches, output flushes, side-effect queue age and activity, pane output sizes, and current queue depth snapshots, in the primary command-output pager. |
 | `show-iroh-status` | Display a privacy-safe table of the invoking Iroh client's selected path, connection duration, current and rolling RTT, jitter, recent traffic rate, byte totals, negotiated application-frame codec, interval compression ratio and bytes saved or expanded, recent packet loss and congestion deltas, congestion window, MTU, sample freshness, and a reasoned quality rating. It MUST label unavailable and insufficient compression samples, reset interval comparisons for each connection-local codec context, show an unavailable/unknown state for clients without a correlated live Iroh sample, keep quality classification independent from compression effectiveness, and MUST NOT expose endpoint identities, addresses, relay URLs, credentials, payloads, payload-derived samples, or another client's sample. |
 | `list-keys` | Return effective key bindings in column-aligned form, including source configuration layer and command expansion. |
@@ -1885,12 +1856,6 @@ The baseline commands MUST have the following semantics:
 | `export-history` | Export bounded history for the target pane subject to permission policy and configured redaction behavior. |
 | `pipe-pane` | Stream pane output to a configured command or file subject to permission policy. The command MUST make active pipes visible in diagnostics and provide a way to stop them. |
 | `mark-pane-ready` | Primary-only command that marks an uncertain target pane as ready for one shell interaction epoch after displaying a warning that Mezzanine could not verify a safe shell boundary. A command invocation that would apply this override MUST require an explicit risk acknowledgement; without that acknowledgement, it MUST display the current readiness state, reason, and risk without mutating pane readiness. It MUST record an audit entry when audit logging is enabled, MUST clear any pending readiness probe for that pane, and MUST be revoked automatically when Mezzanine observes command-start metadata, sends a harness-owned command, sees alternate-screen entry, observes foreground-interactive prompts, observes the pane primary PID changing, observes the pane's environment signature changing, or observes a later readiness probe failure. Observers, agents, and automation clients MUST NOT invoke this command. |
-| `list-observers` | List pending, approved, rejected, and revoked observers visible to the primary client. |
-| `choose-observer` | Present an interactive selector for observer requests and approved observers, allowing inspect, approve, reject, revoke, or detach actions according to observer state. |
-| `approve-observer` | Primary-only command that graduates a pending observer to read-only observer. The observer's visible stream MUST begin no earlier than the approval decision. |
-| `reject-observer` | Primary-only command that rejects a pending observer without exposing session state. |
-| `revoke-observer` | Primary-only command that removes an approved observer's session view and prevents further session data from being sent to that client. |
-
 Commands that perform the same logical operation as a control endpoint method
 MUST enforce the same role, permission, idempotency, target resolution, and
 audit requirements as that method. Interactive commands MAY omit explicit
@@ -2787,11 +2752,6 @@ event. A completion in the focused pane MUST NOT start a flash. If no eligible
 title pill is visible, the completion marker MUST remain pending without
 creating a substitute presentation surface.
 
-When a read-only observer attach request is pending, Mezzanine MUST make that
-state visible to the primary client through the same notification surfaces.
-Read-only observers MUST NOT receive pending observer request details unless
-the primary client approves them.
-
 ## 8. Configuration
 
 Mezzanine MUST load user configuration from `~/.config/mezzanine`.
@@ -3182,9 +3142,9 @@ credential only when the existing and incoming profiles are pinned to the same
 server endpoint identity. A different-server name collision MUST fail before
 credential publication and MUST preserve the existing profile and credential.
 `remote pair` and `remote profile check` MUST authenticate through a temporary
-observer connection, request no event stream, detach only their own temporary
-session client, and MUST NOT displace an attached primary or leave a pending
-observer request. Their output MAY include the local alias, role ceiling,
+host-only connection, request no session or event stream, and MUST NOT allocate
+a session client or displace an attached primary. Their output MAY include the
+local alias, role ceiling,
 abbreviated server fingerprint, route counts, and reconnect command, but MUST
 NOT include invitation tokens, device credentials, or private endpoint keys.
 Connection timeout diagnostics MUST identify the failed setup stage, configured
@@ -3212,12 +3172,12 @@ that deadline expires, the client MUST close the QUIC connection and fail the
 attach visibly rather than wait indefinitely.
 
 Every remote event batch MUST re-resolve the current initialized session client
-and project retained events through the existing audience policy. Pending
-observers MUST receive no event stream before approval. Approved observers MUST
-receive only session-view events at or after their approval marker; primary-only,
-other-observer, agent, automation, pre-approval, and cross-session data MUST NOT
-be disclosed. Revoked, detached, unknown, or failed clients MUST terminate event
-delivery. Transport authentication MUST NOT imply event authority.
+and project retained events through the existing audience policy. Attached
+observers MUST receive only session-view events at or after their atomic
+attachment cutoff; primary-only, agent, automation, pre-attachment, and
+cross-session data MUST NOT be disclosed. Detached, unknown, or failed clients
+MUST terminate event delivery. Transport authentication MUST NOT imply event
+authority.
 
 Event framing, parsing, batches, queues, writes, waits, and teardown MUST be
 bounded. A slow receiver MUST backpressure or terminate only its own stream and
@@ -4409,7 +4369,7 @@ to:
 - Select provider and model profiles.
 - Inspect local message protocol status.
 - Inspect and change control endpoint status.
-- List, approve, reject, inspect, and revoke read-only observers.
+- List and detach attached clients, including read-only observers.
 - Add, list, remove, enable, disable, and authenticate MCP servers.
 - Create, list, inspect, resume, and delete session snapshots.
 - List, add, remove, enable, disable, and persist command prefix rules.
@@ -7917,36 +7877,31 @@ descriptor and caller-readable navigation revision. Client IDs are
 non-resumable and MUST NOT be persisted.
 
 V2 event visibility MUST distinguish `AllPrimaries`,
-`PrimaryClient(ClientId)`, `SessionView`,
-`PendingObserverRequest(ObserverRequestId)`, `Agent(AgentId)`, and
-`Automation`. Shared lifecycle, security, approval, and observer-decision
-notifications MUST use `AllPrimaries`; focus, local errors, prompts, overlays,
-and other private presentation notices MUST use `PrimaryClient`. Observer
-management decisions MUST NOT use `SessionView`. Every Unix and Iroh event
-stream MUST bind to one exact initialized client and revalidate that client's
-live role and attachment before every batch. Canonical shared transitions MUST
-be retained and hooked once, then projected independently for each audience;
-one slow or closed stream MUST NOT block or close another.
+`PrimaryClient(ClientId)`, `SessionView`, `Agent(AgentId)`, and `Automation`.
+Shared lifecycle, security, and approval notifications MUST use
+`AllPrimaries`; focus, local errors, prompts, overlays, and other private
+presentation notices MUST use `PrimaryClient`. Every Unix and Iroh event stream
+MUST bind to one exact initialized client and revalidate that client's live
+role and attachment before every batch. An observer projection of
+`SessionView` MUST additionally enforce that attachment's first visible event
+id. Canonical shared transitions MUST be retained and hooked once, then
+projected independently for each audience; one slow or closed stream MUST NOT
+block or close another.
 
-Observer approval in v2 MUST record `view_source_client_id` and the exact
-deciding client ID in state and audit. Decision transitions are strictly
-`pending -> approved|rejected` and `approved -> revoked`; the first valid
-actor-ordered transition wins, and losing or duplicate decisions MUST have no
-marker, timestamp, event, hook, audit, focus, publication, or resume side
-effect. Request-connection loss and source-primary detach MUST settle before a
-later queued decision when they reach the actor first. Required publication
-failure MUST either roll back the entire authority transition or commit a
-successful response with durable publication retry; a cached error MUST never
-contradict committed authority.
+Observer initialization in v2 MUST atomically validate the current layout
+owner, allocate an attached read-only client, bind it to that exact primary,
+and record the first visible event id. Validation or publication failure MUST
+leave no client, attachment metadata, event marker, focus change, or audit
+residue. Source-primary detach MUST remove the observer attachment in the same
+actor-ordered transition and MUST NOT transfer it to another primary.
 
 V2 topology and presentation races MUST be actor ordered. Reconciliation after
 a shared topology mutation MUST complete before the next queued caller input
 resolves. Owner resize versus owner detach MUST apply exactly one canonical
 geometry transition according to actor order. Concurrent attach, duplicate
-disconnect, close versus observer decision, and approval versus source detach
-MUST be deterministic and duplicate-safe. Input events from different clients
-MAY interleave only at whole-event boundaries, never within one event's byte
-sequence.
+disconnect, and observer attachment versus source detach MUST be deterministic
+and duplicate-safe. Input events from different clients MAY interleave only at
+whole-event boundaries, never within one event's byte sequence.
 
 The following v2 scenarios are normative examples:
 
@@ -7956,9 +7911,9 @@ The following v2 scenarios are normative examples:
 - If client `c1` owns layout at `120x40` and client `c2` reports `80x24`, only
   `c2`'s local viewport changes. If `c1` then detaches, `c2` becomes owner and
   its latest `80x24` size is applied once.
-- An observer approved by `c2` records `view_source_client_id = "c2"`, follows
-  only `c2`'s live navigation, and is revoked when `c2` detaches even when
-  `c1` remains attached.
+- If `c2` is the layout owner, an observer attachment records
+  `view_source_client_id = "c2"`, follows only `c2`'s live navigation, and is
+  detached when `c2` detaches even when `c1` remains attached.
 - Snapshot restore starts with no clients and no owner. The first new primary
   receives fresh identity and navigation seeded from version-5 landing state;
   no prior client, event credential, approval authority, or transient view is
@@ -8018,12 +7973,11 @@ documented outer mechanism. `control/initialize` params MUST include client
 name, client version when known, requested protocol version, requested role
 (`primary`, `observer`, `agent`, or `automation`), and authentication material
 when required by the selected transport. The result MUST include selected
-protocol version, server identity, granted role, capabilities, and whether
-additional approval is pending. The result MUST include session identity when
-the caller is bound to a session and the granted role is not
-`pending_observer`. When an observer request has not been approved, the granted
-role MUST be `pending_observer`, the result MUST omit session identity, and the
-result MUST expose only request-local observer status.
+protocol version, server identity, granted role, capabilities, attached client,
+and session identity when the caller is bound to a session. A successful
+observer initialization MUST grant `observer` immediately. If no layout-owner
+primary is attached, it MUST fail with `conflict` and MUST NOT allocate a
+client.
 
 For Unix-domain local transports, Mezzanine SHOULD authenticate using peer
 credentials and the user-private socket path. For TCP transports, Mezzanine
@@ -8033,36 +7987,17 @@ in an `Authorization: Bearer <token>` header when the framing layer supports
 headers; otherwise they MUST be sent only in `control/initialize` params.
 
 Mutating methods MUST require an authenticated caller and MUST enforce role
-authorization. Observer-role and pending-observer-role callers MUST NOT invoke
-mutating methods except for operations that create, refresh, detach, or shut down
-their own observer connection. An authenticated caller requesting observer
-access MAY create or refresh its own pending observer request through
-`session/attach`; that operation MUST expose no session view and MUST mutate
-only observer-request metadata. Agent callers MAY invoke only the control
-methods allowed by active permission policy. Primary-only methods MUST fail
-with `not_primary` for every non-primary caller.
-
-Pending-observer callers MUST NOT receive session data through read-only
-methods. Before approval, a pending observer connection MAY invoke only
-`control/initialize`, `session/attach` for its own observer request,
-`observer/inspect` for its own observer request, `control/cancel` for its own
-in-flight requests, and `control/shutdown`. Any other method from a
-pending-observer caller MUST fail with `forbidden` or `approval_required` and
-MUST NOT include session, window, pane, frame, history, agent, message-log, or
-configuration data in the error payload.
-
-Approved observer callers MAY receive the rendered terminal stream and
-post-approval view events for their approved observer attachment. Approved
-observer callers MUST NOT receive control-method responses or event replay that
-include terminal output, frame content, history, paste buffers, transcripts,
-agent state, configuration, MCP state, approval state, client lists, or session
-metadata from before `ObserverState.visible_from_event_id` and
-`ObserverState.visible_from_time`. Unless a baseline method explicitly permits
-approved-observer use, approved observers MAY invoke only `control/shutdown`,
-`control/cancel` for their own requests, `observer/inspect` for their own
-observer state, and methods that refresh or detach their own observer
-attachment. A method being read-only or naturally idempotent MUST NOT by itself
-grant observer authorization.
+authorization. Observer callers MUST NOT invoke pane input, geometry, session,
+configuration, approval, agent, MCP, or other primary-only mutations. They MAY
+invoke `terminal/view`, `event/list`, `client/detach` for their exact caller,
+`control/cancel` for their own requests, and `control/shutdown`. Observer
+responses and event replay MUST NOT expose pre-attachment terminal output,
+history, paste buffers, transcripts, private primary presentation, agent state,
+configuration, MCP state, approval state, or cross-session data. A method being
+read-only or naturally idempotent MUST NOT by itself grant observer
+authorization. Agent callers MAY invoke only methods allowed by active
+permission policy. Primary-only methods MUST fail with `not_primary` or
+`forbidden` for every non-primary caller.
 
 Every non-idempotent mutating request params object MUST include
 `idempotency_key`. Methods that are naturally idempotent MAY omit
@@ -8075,8 +8010,7 @@ is reused with different method or parameters, Mezzanine MUST return
 
 Method names MUST use slash-separated namespaces. Baseline namespaces are
 `control/*`, `session/*`, `client/*`, `window/*`, `pane/*`, `agent/*`,
-`observer/*`, `approval/*`, `config/*`, `project/*`, `snapshot/*`, and
-`mcp/*`.
+`approval/*`, `config/*`, `project/*`, `snapshot/*`, and `mcp/*`.
 Notifications sent by the server SHOULD use the `event/*` namespace and MUST
 NOT require a response.
 
@@ -8125,8 +8059,8 @@ or audit logs.
 When `mechanism` is `none`, Mezzanine MUST treat the caller as unauthenticated
 unless the transport has already established an authenticated identity through a
 documented outer mechanism. An unauthenticated caller MUST NOT receive session
-data, observer data for any existing request, mutating capabilities, agent
-capabilities, or primary authority. `none` MAY be used only for version
+data, mutating capabilities, agent capabilities, or primary authority. `none`
+MAY be used only for version
 negotiation, no-session capability discovery, or an outer-authenticated
 connection whose authentication is represented outside the JSON payload.
 
@@ -8136,15 +8070,9 @@ connection whose authentication is represented outside the JSON payload.
 of `primary`, `observer`, `agent`, or `automation`. `client`, when present,
 MUST be a `ClientDescriptor`. `authentication`, when present, MUST be
 `AuthenticationMaterial`. The result MUST include `selected_version`, `server`,
-`session`, `granted_role`, `capabilities`, `approval_pending`, and
-`observer_request`.
-`granted_role` MUST be one of `primary`, `pending_observer`, `observer`,
-`agent`, or `automation`. `observer_request` MUST be `null` unless the result
-concerns an observer attachment or pending observer request. When `granted_role`
-is `pending_observer`, `session` MUST be `null`, `observer_request` MUST contain
-request-local observer status, `capabilities.methods` MUST be limited to the
-pending-observer allowlist, and the result MUST NOT include session, window,
-pane, frame, history, agent, message-log, or configuration data. A request for
+`session`, `client`, `granted_role`, and `capabilities`. `granted_role` MUST be
+one of `primary`, `observer`, `agent`, or `automation`. A successful observer
+result MUST include an attached observer client and its session. A request for
 `requested_role = "primary"` MUST fail with `invalid_state` or `forbidden`
 when the client descriptor does not identify an interactive terminal.
 
@@ -8182,22 +8110,16 @@ The baseline control methods are:
 
 | Method | Params | Result | Notes |
 | --- | --- | --- | --- |
-| `control/initialize` | `{ "client_name": string, "requested_version": integer, "requested_role": string, "client_version": string \| null, "session_target": SessionTarget \| null, "detach_primary_on_disconnect": boolean \| null, "client": ClientDescriptor \| null, "authentication": AuthenticationMaterial \| null }` | `{ "selected_version": integer, "server": ServerIdentity, "session": SessionSummary \| null, "granted_role": string, "capabilities": Capabilities, "approval_pending": boolean, "observer_request": ObserverState \| null }` | V1 first request on a connection unless negotiated externally. Pending observers receive no session data beyond request-local status. Foreground primary attach clients and one-shot administrative clients set `detach_primary_on_disconnect` when they may create the v1 primary. Cleanup is armed only when that connection actually creates the v1 primary; local same-name reuse preserves the existing owner. |
+| `control/initialize` | `{ "client_name": string, "requested_version": integer, "requested_role": string, "client_version": string \| null, "session_target": SessionTarget \| null, "detach_primary_on_disconnect": boolean \| null, "client": ClientDescriptor \| null, "authentication": AuthenticationMaterial \| null }` | `{ "selected_version": integer, "server": ServerIdentity, "session": SessionSummary \| null, "client": ClientState \| null, "granted_role": string, "capabilities": Capabilities }` | First request on a connection unless negotiated externally. Observer initialization returns an attached read-only client immediately. Foreground primary attach clients and one-shot administrative clients set `detach_primary_on_disconnect` when they may create a primary. Cleanup is armed only when that connection actually creates the primary; local same-name reuse preserves the existing owner. |
 | `control/shutdown` | `{}` | `{ "closed": boolean }` | Orderly client disconnect. Naturally idempotent. |
 | `control/cancel` | `{ "request_id": string }` | `{ "cancel_requested": boolean }` | May cancel only requests owned by the caller unless primary policy permits broader cancellation. |
 | `session/list` | `{}` | `{ "sessions": [SessionSummary] }` | Read-only and naturally idempotent. |
 | `session/get` | `{ "target": SessionTarget }` | `{ "session": SessionState }` | Read-only and naturally idempotent. |
-| `session/attach` | `{ "target": SessionTarget, "role": "primary" \| "observer", "client": ClientDescriptor, "idempotency_key": string }` | `{ "client": ClientState, "approval_pending": boolean }` | V1 primary attachment MUST enforce its single-primary invariant. Observer attachment MUST create a pending observer and expose no view until approved. This method is absent from v2. |
 | `session/rename` | `{ "name": string, "idempotency_key": string }` | `{ "renamed": boolean }` | Primary-only mutating method. `name` MUST be non-empty. |
 | `session/kill` | `{ "force": boolean, "idempotency_key": string }` | `{ "killed": boolean, "session_id": string }` | Primary-only destructive method. `force` MAY be omitted or false only when no pane process remains live. |
-| `client/list` | `{ "target": SessionTarget }` | `{ "clients": [ClientState] }` | Primary-readable and naturally idempotent. Observers MAY receive only their own `ClientState` unless the primary explicitly grants broader visibility. Pending observers MUST NOT use this method. |
+| `client/list` | `{ "target": SessionTarget }` | `{ "clients": [ClientState] }` | Primary-readable and naturally idempotent. Attached observers are represented as ordinary clients. |
 | `client/detach` | `{ "client_id": string, "idempotency_key": string }` | `{ "detached": boolean }` | Mutating. |
 | `client/select_primary` | `{ "client_id": string, "idempotency_key": string }` | `{ "primary_client_id": string }` | Primary-only mutating method when a primary is attached; authenticated session-owner operation when no primary is attached. The target client MUST have an interactive terminal. The transfer MUST be atomic and MUST never create two primaries. |
-| `observer/list` | `{ "target": SessionTarget, "state": string \| null }` | `{ "observers": [ObserverState] }` | Primary-readable and naturally idempotent. Pending observers MUST NOT use this method. |
-| `observer/inspect` | `{ "observer_request_id": string }` | `{ "observer": ObserverState }` | Primary-readable and naturally idempotent. Pending and approved observers MAY inspect only their own request-local `ObserverState`, with no session data beyond their observer status. |
-| `observer/approve` | `{ "observer_request_id": string, "idempotency_key": string }` | `{ "observer": ObserverState }` | Primary-only mutating method. The observer view begins at the live viewport and live scroll position at approval time. |
-| `observer/reject` | `{ "observer_request_id": string, "reason": string \| null, "idempotency_key": string }` | `{ "observer": ObserverState }` | Primary-only mutating method. |
-| `observer/revoke` | `{ "client_id": string, "reason": string \| null, "idempotency_key": string }` | `{ "revoked": boolean }` | Primary-only mutating method. |
 | `window/list` | `{ "target": SessionTarget }` | `{ "windows": [WindowState] }` | Read-only and naturally idempotent. |
 | `window/create` | `{ "target": SessionTarget, "name": string \| null, "start_directory": string \| null, "shell_command": string \| [string] \| null, "select": boolean, "idempotency_key": string }` | `{ "window": WindowState, "pane": PaneState }` | Mutating. `shell_command`, when present, MUST follow pane creation command semantics. An omitted `start_directory` MUST use `terminal.pane_spawn_directory`; an explicit value MUST take precedence. |
 | `window/rename` | `{ "target": WindowTarget, "name": string, "idempotency_key": string }` | `{ "window": WindowState }` | Naturally idempotent when the target and name are unchanged. |
@@ -8226,7 +8148,7 @@ The baseline control methods are:
 | `buffer/read` | `{ "name": string }` | `{ "name": string, "content": string, "bytes": integer }` | Primary-only read of one internal paste buffer. |
 | `buffer/delete` | `{ "name": string, "idempotency_key": string }` | `{ "name": string, "deleted": true }` | Primary-only mutation; unknown names return `not_found`. |
 | `frame/read` | `{ "target": WindowTarget \| PaneTarget }` | `{ "fields": object, "rendered": string }` | Read-only and naturally idempotent. |
-| `terminal/view` | `{ "client_size": { "columns": integer, "rows": integer } \| null, "view_offset": { "row": integer, "column": integer } \| null }` | `{ "view": RenderedClientView \| null }` | Read-only for an attached primary or approved observer. Pending observers MUST receive no session view. `viewport` MAY be accepted as a compatibility alias for `view_offset`. |
+| `terminal/view` | `{ "client_size": { "columns": integer, "rows": integer } \| null, "view_offset": { "row": integer, "column": integer } \| null }` | `{ "view": RenderedClientView \| null }` | Read-only for an attached primary or observer. Observer output begins at its atomic attachment cutoff. `viewport` MAY be accepted as a compatibility alias for `view_offset`. |
 | `terminal/step` | `{ "idempotency_key": string, "client_size": { "columns": integer, "rows": integer } \| null, "render": boolean \| null, "input_bytes": [integer] }` | `{ "input_bytes": integer, "application": object, "view": RenderedClientView \| null, "ui_theme": object \| null, "client_detached": boolean, "session_terminated": boolean }` | Primary-only mutating input and resize step. Every input byte MUST be in `0..255`; `render` defaults to true. `client_detached` reports that this acknowledged step detached the invoking client while leaving the session available for reattachment. |
 | `terminal/command` | `{ "idempotency_key": string, "input": string }` | `{ "executed": integer, "outcomes": [CommandOutcome] }` | Primary-only mutating command-prompt execution. `input` MUST use the terminal command language rather than a JSON-RPC method alias. |
 | `agent/shell/show` | `{ "target": PaneTarget, "idempotency_key": string }` | `{ "agent": AgentState, "visible": true }` | Mutating UI state. |
@@ -8301,17 +8223,9 @@ as global focus authority.
 
 `ClientState` MUST include `id`, `version`, `role`, `requested_role`, `state`,
 `attached_at`, `last_seen_at`, `descriptor`, and `terminal_size`. `role` MUST
-be one of `primary`, `pending_observer`, `observer`, `agent`, or `automation`.
+be one of `primary`, `observer`, `agent`, or `automation`.
 `state` MUST be one of `attached`, `pending`, `detached`, `revoked`, or
 `failed`. `terminal_size` MUST include `columns` and `rows` when known.
-
-`ObserverState` MUST include `id`, `version`, `client_id`, `state`,
-`requested_at`, `decided_at`, `decided_by_client_id`, `visible_from_event_id`,
-`visible_from_time`, `descriptor`, and `reason`. `state` MUST be one of
-`pending`, `approved`, `rejected`, or `revoked`. `decided_at`,
-`decided_by_client_id`, `visible_from_event_id`, `visible_from_time`, and
-`reason` MAY be null when not applicable. Approved observers MUST receive no
-session data earlier than `visible_from_time` and `visible_from_event_id`.
 
 `WindowState` MUST include `id`, `version`, `session_id`, `index`, `name`,
 `active`, `created_at`, `size`, `active_pane_id`, `panes`, and `layout`.
@@ -8428,40 +8342,28 @@ file.
 Server notifications MUST use `event/*` methods. Event params MUST include
 `event_id`, `time`, `event_type`, and an `object` payload. Event params MUST
 include `session_id` when the recipient is authorized to know the session
-identity for that event. Events sent to pending observers MUST omit `session_id`
-or set it to `null`. Events that change entity state SHOULD include `previous`
-when reasonably available.
+identity for that event. Events that change entity state SHOULD include
+`previous` when reasonably available.
 When a wall-clock event timestamp is unavailable, `time` MAY use the monotonic
 form `event:<event_id>`, where `<event_id>` is the same per-connection ordered
 event identifier carried by `event_id`.
-Baseline event types MUST cover client attach/detach, observer request and
-decision, window changes, pane changes, agent task state changes, approval
+Baseline event types MUST cover client attach/detach, window changes, pane
+changes, agent task state changes, approval
 creation and decision, configuration reload or mutation, snapshot changes, and
 MCP server availability changes.
 
 The `object` payload of an event MUST be one of the state objects defined in
-this section or a method-specific object documented by the event type. Observer
-request events visible to the primary client MUST include `ObserverState`.
-Events sent to pending observers MUST be limited to the pending observer's own
-request-local status and MUST NOT include `SessionState`, `WindowState`,
-`PaneState`, `AgentState`, history, frame content, or message-log content.
+this section or a method-specific object documented by the event type.
 Event delivery MUST preserve order per connection. A client that reconnects MAY
 request events after a known `event_id`; Mezzanine MAY refuse replay for events
 that are no longer retained, but it MUST make the retention policy visible in
 capabilities.
 
-The control endpoint MUST distinguish read-only observer requests from primary
-client requests.
-
-A read-only observer request MUST NOT mutate windows, panes, terminal buffers,
-configuration, agents, approvals unrelated to the observer request, or other
-runtime state. It MAY create or update observer-request metadata needed for
-primary-client approval and audit.
-
-Only an attached primary MAY approve, reject, or revoke observer access through
-the control endpoint. If no primary is attached, observer requests MUST remain
-pending and MUST receive no session view until an attached primary decides
-them.
+The control endpoint MUST distinguish attached read-only observers from primary
+clients. Observer attachment MUST occur only through `control/initialize`, and
+observer management MUST use generic client listing and detachment. If no
+layout-owner primary is attached, observer initialization MUST fail without
+residual client or attachment state.
 
 Agent harness requests that mutate multiplexer state MUST be subject to the active
 permission policy.
@@ -9820,7 +9722,7 @@ Entering approval bypass mode MUST require primary-client authority. A
 command-line flag MAY request bypass during interactive primary session creation
 or through an authenticated control operation initiated by the current primary
 client. A command-line flag MUST NOT grant bypass authority to an observer,
-pending observer, agent, automation client, or unauthenticated caller.
+agent, automation client, or unauthenticated caller.
 
 Entering approval bypass mode MUST require confirmation unless the user passed
 an explicit confirmation-skipping bypass flag whose name makes that behavior

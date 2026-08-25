@@ -812,13 +812,7 @@ impl Capabilities {
                 "hook_failed",
                 "diagnostic",
             ],
-            roles: vec![
-                "primary",
-                "pending_observer",
-                "observer",
-                "agent",
-                "automation",
-            ],
+            roles: vec!["primary", "observer", "agent", "automation"],
             transports: vec!["unix"],
             limits: CapabilityLimits {
                 max_frame_size: 1_048_576,

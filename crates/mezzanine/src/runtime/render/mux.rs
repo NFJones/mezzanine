@@ -1,7 +1,7 @@
 //! Runtime render multiplexer action methods.
 //!
 //! This module owns attached multiplexer action dispatch, command-display
-//! overlay execution, pane swapping, observer approval cutoffs, and active pane
+//! overlay execution, pane swapping, observer attachment cutoffs, and active pane
 //! lookup. Keeping these methods outside the render facade separates mux-level
 //! terminal actions from frame rendering and prompt/input handling.
 

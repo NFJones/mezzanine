@@ -1,6 +1,6 @@
-//! Client attachment, primary ownership, and observer-request operations.
+//! Client attachment, primary ownership, and observer attachment operations.
 //!
-//! Client methods enforce primary exclusivity, observer approval visibility,
+//! Client methods enforce primary exclusivity, observer visibility cutoffs,
 //! control-client role restrictions, and detach semantics.
 
 use crate::{MuxError as MezError, MuxErrorKind, Result};
@@ -313,9 +313,9 @@ impl Session {
 
     /// Detaches one session client acting on its own authenticated identity.
     ///
-    /// This does not grant authority over any other client. Observer records
-    /// are revoked so a short-lived pairing or connectivity-check connection
-    /// cannot leave a pending or approved observer request behind.
+    /// This does not grant authority over any other client. Observer attachment
+    /// metadata is removed so a disconnected read-only client cannot retain
+    /// event or rendering authority.
     pub fn detach_client_self(&mut self, client_id: &ClientId) -> Result<()> {
         if self.is_attached_primary(client_id) {
             return self.detach_primary(client_id);

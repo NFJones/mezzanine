@@ -95,8 +95,8 @@ replace endpoint identity, role, or credential checks. If an alias already
 belongs to a different server endpoint, the client fails before dialing or
 redeeming the invitation and preserves the existing profile. Reusing an alias
 for the same endpoint may refresh authenticated routes and credentials.
-`remote pair` authenticates temporarily as an observer and self-detaches, so it
-does not displace a primary or leave a pending observer request.
+`remote pair` uses host-only authentication without allocating a session
+client, so it does not displace a primary or leave session attachment residue.
 Foreign-machine invitations include only a relay route or a non-loopback direct
 route on a configured non-zero `transport.iroh.bind_port`. Direct-only
 deployments must configure that stable port and the network must make it
@@ -152,9 +152,9 @@ Interactive attach retains one initialized control stream and orders each
 resize, terminal-input, and view request behind its response. It explicitly
 negotiates one server-opened event stream only after authenticated
 initialization. Event authorization is rechecked for every bounded batch:
-pending observers receive no stream before approval, approved observers receive
-only post-approval session-view events, and revocation or detach closes the
-stream. Endpoint identity alone cannot reveal events. If terminal input may have
+attached observers receive only session-view events at or after their atomic
+attachment cutoff, and source detach or self-detach closes the stream. Endpoint
+identity alone cannot reveal events. If terminal input may have
 been written when the connection fails, the client reports an unknown outcome,
 does not replay the input or reconnect automatically, and requires a new
 explicit attach. Unix control remains available concurrently for recovery.

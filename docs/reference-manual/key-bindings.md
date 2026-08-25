@@ -33,7 +33,7 @@ configuration can replace bindings.
 | `Ctrl+A !`, `Ctrl+A {`, `Ctrl+A }` | Break the active pane into a window / swap it with the previous or next pane. |
 | `Ctrl+A [` / `Ctrl+A PageUp` | Enter copy mode / enter copy mode and scroll up. |
 | `Ctrl+A ]`, `Ctrl+A #`, `Ctrl+A =`, `Ctrl+A -` | Paste, list, choose, or delete paste buffers. |
-| `Ctrl+A O` / `Ctrl+A ~` | Manage observers / show Mez messages. |
+| `Ctrl+A ~` | Show Mez messages. |
 | `Ctrl+A a` | Toggle the focused pane's agent shell. |
 
 ## Prompt and browser controls

@@ -35,25 +35,6 @@ pub fn render_frame_template(
     apply_overflow(rendered, width, overflow)
 }
 
-/// Renders a compact status line for observers waiting on task completion.
-#[cfg(test)]
-pub fn render_pending_observer_status(observers: &[(String, String)], width: usize) -> String {
-    if observers.is_empty() {
-        return String::new();
-    }
-    let mut status = String::from("pending observers: ");
-    for (index, (id, name)) in observers.iter().enumerate() {
-        if index > 0 {
-            status.push_str(", ");
-        }
-        status.push_str(&sanitize_frame_text(id));
-        status.push('(');
-        status.push_str(&sanitize_frame_text(name));
-        status.push(')');
-    }
-    apply_overflow(status, width, FrameOverflow::Elide)
-}
-
 /// Replaces control characters with spaces for visible frame text.
 pub fn sanitize_frame_text(value: &str) -> String {
     value

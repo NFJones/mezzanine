@@ -262,17 +262,6 @@ impl RuntimeSessionService {
         }
         if role == ClientViewRole::Primary
             && let Some(view) = view.as_mut()
-            && let Some(status) = self.pending_observer_status_line()
-            && let Some(last_line) = view.lines.last_mut()
-        {
-            *last_line =
-                runtime_fit_status_line(&status, usize::from(view.authoritative_size.columns));
-            if let Some(last_spans) = view.line_style_spans.last_mut() {
-                last_spans.clear();
-            }
-        }
-        if role == ClientViewRole::Primary
-            && let Some(view) = view.as_mut()
             && let Some(selector) = self.presentation.pane_agent_status_selector.as_ref()
         {
             self.overlay_pane_agent_status_selector(view, selector);
@@ -1318,7 +1307,6 @@ impl RuntimeSessionService {
             .map(|name| name.to_string_lossy().to_string());
         let mut context = TerminalFrameContext {
             session_id: Some(self.session.id.to_string()),
-            pending_observer_count: 0,
             pressed_window_action: self.presentation.pressed_window_action.clone(),
             animation_tick_ms: self.runtime_frame_animation_tick_ms(),
             reduced_motion: self.presentation.settings.terminal_reduced_motion,
@@ -1823,14 +1811,5 @@ impl RuntimeSessionService {
             "…/{}",
             segments[segments.len().saturating_sub(3)..].join("/")
         )
-    }
-
-    /// Runs the pending observer status line operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn pending_observer_status_line(&self) -> Option<String> {
-        None
     }
 }

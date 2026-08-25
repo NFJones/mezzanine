@@ -41,9 +41,9 @@ or `mez attach` to select an existing one.
 | `mez snapshot` | Manage persisted snapshots. With no subcommand it lists snapshots; see the snapshot forms below. |
 
 Creating or attaching a primary client needs an interactive terminal. `mez
-serve` can run without one. An observer request also requires an interactive
-terminal and remains pending until an attached primary approves it. The runtime
-implements `mezctl/2` and accepts up to 16 independent attached primaries. Each
+serve` can run without one. Observer attachment also requires an interactive
+terminal and immediately creates a read-only client bound to the current layout
+owner. The runtime implements `mezctl/2` and accepts up to 16 independent attached primaries. Each
 has caller-local navigation and presentation; one elected layout owner controls
 canonical PTY geometry. `mez snapshot resume <snapshot-id> --serve`
 restores a snapshot as a foreground daemon; add `--attach-primary` only when
@@ -209,10 +209,11 @@ distinct.
 
 Interactive remote attach requires a terminal and keeps one initialized Iroh
 control stream open for its lifetime. A `primary` profile may attach as primary
-or request observer access; an `observer` profile cannot attach as primary.
-The client also negotiates one server-opened version 1 event stream. Authorized
-events wake a fresh `terminal/view`; a pending observer receives no event stream
-until approval, and revocation or event-stream failure ends the attach visibly.
+or observer; an `observer` profile cannot attach as primary. The client also
+negotiates one server-opened version 1 event stream. Authorized events wake a
+fresh `terminal/view`; observers receive only session-view events at or after
+their atomic attachment cutoff, and detach or event-stream failure ends the
+attach visibly.
 Acceptance and preface receipt share the configured Iroh setup timeout; expiry
 closes the connection and requires an explicit reattach.
 Terminal resize, input, and view requests remain ordered one at a time behind

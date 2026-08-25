@@ -74,7 +74,7 @@ fn dispatches_cancel_and_frame_read_methods() {
     assert!(frame.contains(r#""pane.size":"80x24""#));
     assert!(frame.contains(r#""pane.mode":"normal""#));
     assert!(frame.contains(r#""agent.status":"idle""#));
-    assert!(frame.contains(r#""observer.pending_count":"0""#));
+    assert!(!frame.contains("observer.pending_count"));
     assert!(frame.contains(r#""result":{"fields":"#));
     assert!(!frame.contains(r#""frame""#));
 
@@ -319,7 +319,7 @@ fn connection_initialize_binds_primary_caller_for_followup_requests() {
     );
 }
 
-/// Verifies pending observer connection gets no session data after initialize.
+/// Verifies an observer connection attaches immediately after initialize.
 ///
 /// Observer initialization attaches one read-only client immediately while
 /// retaining method-level isolation from primary-only session state.

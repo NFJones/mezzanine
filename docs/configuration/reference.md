@@ -387,8 +387,7 @@ Pane templates support `session.id`, `window.id`, `window.index`, `pane.id`,
 `pane.process_name`, `pane.exit_status`, `pane.pwd`, `pane.mode`, `pane.status`, `agent.id`,
 `agent.name`, `agent.status`, `agent.model`, `agent.reasoning`,
 `agent.thinking`, `agent.planning`, `agent.routing`, `agent.latency`, `agent.preset`,
-`agent.context_usage`, `policy.mode`, `observer.pending_count`, and
-`history.position`.
+`agent.context_usage`, `policy.mode`, and `history.position`.
 
 ### `theme`
 

@@ -92,7 +92,6 @@ fn render_frame_templates_use_runtime_context_fields() {
     }];
     let mut frame_context = TerminalFrameContext {
         session_id: Some("$1".to_string()),
-        pending_observer_count: 1,
         ..TerminalFrameContext::default()
     };
     frame_context
@@ -129,7 +128,7 @@ fn render_frame_templates_use_runtime_context_fields() {
         ),
         TerminalFrameRenderOptions::plain(
             true,
-            "#{session.id}|#{pane.primary_pid}|#{pane.process_name}|#{pane.pwd}|#{pane.mode}|#{agent.id}|#{agent.name}|#{agent.status}|#{agent.model}|#{policy.mode}|#{observer.pending_count}|#{history.position}",
+            "#{session.id}|#{pane.primary_pid}|#{pane.process_name}|#{pane.pwd}|#{pane.mode}|#{agent.id}|#{agent.name}|#{agent.status}|#{agent.model}|#{policy.mode}|#{history.position}",
             TerminalFramePosition::Top,
         ),
     )
@@ -139,7 +138,7 @@ fn render_frame_templates_use_runtime_context_fields() {
     assert_eq!(
         rendered[1].trim_end(),
         format!(
-            "$1|4242|bash[31m|~/repo[31m|copy|agent-{pane_id}|manager|running|default|full-access|1|scroll:4"
+            "$1|4242|bash[31m|~/repo[31m|copy|agent-{pane_id}|manager|running|default|full-access|scroll:4"
         )
     );
 }

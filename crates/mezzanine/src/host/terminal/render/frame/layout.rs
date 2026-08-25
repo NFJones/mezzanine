@@ -107,7 +107,6 @@ pub(in crate::host::terminal::render) fn pane_frame_field_value(
             }
             "policy.mode" => optional_pane_context_value(pane_context, |ctx| &ctx.policy_mode)
                 .unwrap_or_default(),
-            "observer.pending_count" => frame_context.pending_observer_count.to_string(),
             "history.position" => {
                 optional_pane_context_value(pane_context, |ctx| &ctx.history_position)
                     .unwrap_or_default()

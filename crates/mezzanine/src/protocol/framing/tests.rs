@@ -5,7 +5,7 @@ use tokio_util::codec::{Decoder, Encoder};
 
 use super::{
     FrameContext, FrameOverflow, ProtocolFrame, ProtocolFrameCodec, decode_frame, encode_frame,
-    render_frame_template, render_pending_observer_status,
+    render_frame_template,
 };
 
 /// Verifies that a content-length frame round-trips through direct wire helpers.
@@ -152,15 +152,4 @@ fn frame_template_elides_to_width() {
     let rendered = render_frame_template("#{window.name}", &context, 6, FrameOverflow::Elide);
 
     assert_eq!(rendered, "01234\u{2026}");
-}
-
-/// Verifies that pending observer labels are rendered in a compact frame-safe
-/// status string.
-#[test]
-fn pending_observer_status_names_requests() {
-    let observers = vec![("o1".to_string(), "reader".to_string())];
-
-    let rendered = render_pending_observer_status(&observers, 80);
-
-    assert_eq!(rendered, "pending observers: o1(reader)");
 }

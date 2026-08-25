@@ -176,7 +176,7 @@ fn event_stream_disconnect(kind: ErrorKind) -> bool {
 ///
 /// The binding token is consumed exactly once through the actor. Every event
 /// batch is then reauthorized against the exact live client, so observer
-/// approval markers, detach, rejection, and revocation take effect immediately.
+/// attachment cutoffs and detach transitions take effect immediately.
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) async fn serve_bound_async_runtime_event_connection<F>(
     stream: &mut UnixStream,
@@ -246,17 +246,6 @@ where
             .await
         {
             Ok(wakeups) => wakeups,
-            Err(error) if error.message().contains("pending observer event streams") => {
-                tokio::select! {
-                    _ = handle.wait_for_event_delivery() => {}
-                    changed = lifecycle.changed() => {
-                        if changed.is_err() {
-                            return Ok(delivered);
-                        }
-                    }
-                }
-                continue;
-            }
             Err(_) => return Ok(delivered),
         };
         let mut batch_last = None;

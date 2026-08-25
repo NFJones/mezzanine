@@ -1,6 +1,6 @@
 //! Session data types and in-memory state containers.
 //!
-//! These types describe clients, observer requests, session state, and the core
+//! These types describe clients, observer attachments, session state, and the core
 //! session container. Behavior is implemented in focused sibling modules.
 
 use crate::layout::{LayoutNode, LayoutPolicy, PaneGeometry, Size, Window};

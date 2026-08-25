@@ -20,7 +20,7 @@ pub(super) fn test_service() -> RuntimeSessionService {
     )
 }
 
-/// Builds the shared async runtime fixture with one live approved observer.
+/// Builds the shared async runtime fixture with one live attached observer.
 pub(super) fn test_service_with_observer() -> (RuntimeSessionService, ClientId) {
     let shell = crate::host::shell::ResolvedShell::new(
         PathBuf::from("/bin/sh"),

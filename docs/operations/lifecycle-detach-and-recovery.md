@@ -33,7 +33,7 @@ to its invoking terminal.
 For an explicitly paired remote session, use `mez --iroh-profile PROFILE
 attach`, pair without attaching with `mez remote pair --invite-file PATH --name
 NAME`, or first pair and attach with `mez --iroh-invite-file PATH --save-as NAME
-attach`. Add `--observer` to request pending observer access. These selectors do
+attach`. Add `--observer` to attach immediately with read-only access. These selectors do
 not inspect the local session registry and never fall back to a Unix socket. A
 role ceiling of `observer` cannot be elevated to primary attachment. Remote
 attach also

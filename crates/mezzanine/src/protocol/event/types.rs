@@ -47,7 +47,7 @@ pub enum EventVisibility {
     AllPrimaries,
     /// Visible only to one exact attached primary client.
     PrimaryClient(ClientId),
-    /// Visible to the session view after observer approval.
+    /// Visible to the session view, subject to an observer attachment cutoff.
     SessionView,
     /// Visible only to one agent.
     #[allow(
@@ -76,7 +76,7 @@ pub enum EventAudience {
         reason = "aggregate session-view projection is retained for protocol adapters"
     )]
     SessionView,
-    /// Approved observer, visible only from its approval marker onward.
+    /// Attached observer, visible only from its attachment marker onward.
     ApprovedObserver {
         /// Earliest event id the observer may see.
         visible_from_event_id: u64,

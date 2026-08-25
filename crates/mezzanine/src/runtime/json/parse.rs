@@ -207,7 +207,7 @@ pub(crate) fn runtime_initialize_requested_primary(
         == Some("primary")
 }
 
-/// Returns whether one initialize request is asking for a pending observer role.
+/// Returns whether one initialize request is asking for the observer role.
 pub(crate) fn runtime_initialize_requested_observer(
     request: &crate::control::JsonRpcRequest,
 ) -> bool {

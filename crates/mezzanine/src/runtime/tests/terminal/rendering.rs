@@ -23,7 +23,7 @@ fn runtime_exact_client_render_rejects_stale_identity() {
     assert!(error.to_string().contains("attached client"), "{error}");
 }
 
-/// Verifies an approved observer follows its exact source primary's
+/// Verifies an attached observer follows its exact source primary's
 /// caller-local navigation rather than the deciding primary or landing view.
 #[test]
 fn runtime_observer_render_follows_exact_source_navigation() {

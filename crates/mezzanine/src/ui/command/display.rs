@@ -173,7 +173,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "set-key-preset" => "switch active key-assignment preset by name.",
         "set-option" => "set a live-mutable option.",
         "set-theme" => "switch active UI theme by name.",
-        "show-messages" => "show diagnostics, pending approvals, and observer requests.",
+        "show-messages" => "show diagnostics, pending approvals, and hook failures.",
         "show-metrics" => "show async runtime counters and histograms.",
         "show-iroh-status" => "show the invoking client's live Iroh path quality.",
         "show-options" => "show effective options.",

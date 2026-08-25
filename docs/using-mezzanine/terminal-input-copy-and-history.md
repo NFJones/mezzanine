@@ -40,7 +40,7 @@ copying such a pane copies its currently visible text rather than hidden history
 Use `search-history` and `export-history` for normal pane history.
 `clear-history` clears bounded history after the applicable confirmation policy
 without changing the current screen unless requested. Use `show-messages` for
-diagnostics, pending approvals, observer requests, and visible hook failures.
+diagnostics, pending approvals, and visible hook failures.
 
 Command-output views support `/` text search. An empty `/` repeats the previous
 search. Exact behavior and all default bindings belong to the manual reference.

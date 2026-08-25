@@ -324,7 +324,6 @@ pub(super) fn frame_read_fields(
     frame_context: &TerminalFrameContext,
 ) -> Vec<(&'static str, String)> {
     let pane_context = frame_context.panes.get(pane.id.as_str());
-    let pending_observer_count = frame_context.pending_observer_count;
     vec![
         (
             "session.id",
@@ -447,7 +446,6 @@ pub(super) fn frame_read_fields(
                 .and_then(|context| context.policy_mode.clone())
                 .unwrap_or_default(),
         ),
-        ("observer.pending_count", pending_observer_count.to_string()),
         (
             "history.position",
             pane_context

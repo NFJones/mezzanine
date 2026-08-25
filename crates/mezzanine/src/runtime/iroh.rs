@@ -1129,33 +1129,20 @@ async fn serve_runtime_iroh_event_stream(
     }
     let connection_id = format!("iroh-events-{caller_client_id}");
     let mut last_delivered_event_id = 0u64;
-    let mut pending = loop {
-        if *stop.borrow() {
-            return Ok(0);
-        }
-        match handle
-            .event_wakeups_for_client(
-                caller_client_id.clone(),
-                connection_id.clone(),
-                last_delivered_event_id,
-                IROH_EVENT_BATCH_LIMIT,
-            )
-            .await
-        {
-            Ok(wakeups) => break wakeups,
-            Err(error) if error.message().contains("pending observer event streams") => {
-                tokio::select! {
-                    _ = handle.wait_for_event_delivery() => {}
-                    changed = stop.changed() => {
-                        if changed.is_err() || *stop.borrow() {
-                            return Ok(0);
-                        }
-                    }
-                    _ = connection.closed() => return Ok(0),
-                }
-            }
-            Err(_) => return Ok(0),
-        }
+    if *stop.borrow() {
+        return Ok(0);
+    }
+    let mut pending = match handle
+        .event_wakeups_for_client(
+            caller_client_id.clone(),
+            connection_id.clone(),
+            last_delivered_event_id,
+            IROH_EVENT_BATCH_LIMIT,
+        )
+        .await
+    {
+        Ok(wakeups) => wakeups,
+        Err(_) => return Ok(0),
     };
     let mut send = tokio::time::timeout(setup_timeout, connection.open_uni())
         .await

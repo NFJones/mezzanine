@@ -295,7 +295,8 @@ fn initialize_json_includes_required_server_and_capability_schema() {
     assert!(json.contains(r#""protocol_version":2"#));
     assert!(json.contains(r#""event_types":["client_attached""#));
     assert!(json.contains(r#""mcp_server_changed""#));
-    assert!(json.contains(r#""roles":["primary","pending_observer""#));
+    assert!(json.contains(r#""roles":["primary","observer""#));
+    assert!(!json.contains("pending_observer"));
     assert!(json.contains(r#""transports":["unix"]"#));
     assert!(json.contains(r#""max_frame_size":"#) || json.contains(r#""max_frame_size":1048576"#));
     assert!(json.contains(r#""approval_bypass":true"#));
