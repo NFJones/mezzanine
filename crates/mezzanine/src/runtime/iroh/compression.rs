@@ -520,7 +520,15 @@ where
     }
     send.finish()
         .map_err(|_| MezError::invalid_state("failed to finish negotiated Iroh control stream"))?;
-    Ok(())
+    match send.stopped().await {
+        Ok(None) => Ok(()),
+        Ok(Some(_)) => Err(MezError::invalid_state(
+            "peer reset negotiated Iroh control stream before acknowledgement",
+        )),
+        Err(_) => Err(MezError::invalid_state(
+            "negotiated Iroh control stream acknowledgement failed",
+        )),
+    }
 }
 
 async fn pump_iroh_frames_to_raw<W>(
@@ -613,6 +621,9 @@ mod tests {
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::sync::atomic::{AtomicBool, AtomicU64};
 
+    use iroh::endpoint::{PortmapperConfig, presets};
+    use iroh::{Endpoint, RelayMode};
+
     struct CountingAllocator;
 
     static COUNT_ALLOCATIONS: AtomicBool = AtomicBool::new(false);
@@ -677,6 +688,150 @@ mod tests {
 
     fn policy(codec: RuntimeIrohCompressionCodec, min_bytes: usize) -> IrohCompressionPolicy {
         IrohCompressionPolicy::new(codec, min_bytes, 3, 4096).unwrap()
+    }
+
+    async fn test_iroh_stream_pair() -> (
+        Endpoint,
+        Endpoint,
+        iroh::endpoint::Connection,
+        iroh::endpoint::Connection,
+        iroh::endpoint::SendStream,
+        iroh::endpoint::RecvStream,
+        iroh::endpoint::SendStream,
+        iroh::endpoint::RecvStream,
+    ) {
+        const TEST_ALPN: &[u8] = b"mezzanine/compression-test/1";
+        let server = Endpoint::builder(presets::Minimal)
+            .alpns(vec![TEST_ALPN.to_vec()])
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let client = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let server_addr = server.addr();
+        let client_side = async {
+            let connection = client.connect(server_addr, TEST_ALPN).await.unwrap();
+            let (mut send, recv) = connection.open_bi().await.unwrap();
+            send.write_all(&[0]).await.unwrap();
+            send.flush().await.unwrap();
+            (connection, send, recv)
+        };
+        let server_side = async {
+            let incoming = server.accept().await.unwrap();
+            let connection = incoming.accept().unwrap().await.unwrap();
+            let (send, mut recv) = connection.accept_bi().await.unwrap();
+            let mut marker = [0u8; 1];
+            recv.read_exact(&mut marker).await.unwrap();
+            (connection, send, recv)
+        };
+        let (
+            (client_connection, client_send, client_recv),
+            (server_connection, server_send, server_recv),
+        ) = tokio::join!(client_side, server_side);
+        (
+            server,
+            client,
+            server_connection,
+            client_connection,
+            server_send,
+            server_recv,
+            client_send,
+            client_recv,
+        )
+    }
+
+    /// Finishing the outbound pump succeeds only after the peer has received
+    /// the complete final frame and acknowledged the finished QUIC stream.
+    #[tokio::test(flavor = "current_thread")]
+    async fn outbound_pump_waits_for_clean_final_frame_acknowledgement() {
+        let (
+            server,
+            client,
+            server_connection,
+            client_connection,
+            server_send,
+            _server_recv,
+            mut client_send,
+            mut client_recv,
+        ) = test_iroh_stream_pair().await;
+        client_send.finish().unwrap();
+        let (mut raw_writer, raw_reader) = tokio::io::duplex(4096);
+        let frame = crate::control::encode_control_body(r#"{"final":true}"#);
+        let outbound = tokio::spawn(pump_raw_frames_to_iroh(
+            raw_reader,
+            server_send,
+            policy(RuntimeIrohCompressionCodec::None, 1),
+            IrohCompressionMetrics::new(RuntimeIrohCompressionCodec::None),
+            ProtocolFrameCodec::new(4096).unwrap(),
+        ));
+
+        raw_writer.write_all(&frame).await.unwrap();
+        raw_writer.shutdown().await.unwrap();
+        let received = client_recv.read_to_end(4096).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), outbound)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(received, frame);
+        server_connection.close(0u32.into(), b"test complete");
+        client_connection.close(0u32.into(), b"test complete");
+        server.close().await;
+        client.close().await;
+    }
+
+    /// A peer STOP received after the final frame bytes but before local FIN
+    /// must be reported instead of being mistaken for clean acknowledgement.
+    #[tokio::test(flavor = "current_thread")]
+    async fn outbound_pump_reports_peer_reset_before_acknowledgement() {
+        let (
+            server,
+            client,
+            server_connection,
+            client_connection,
+            server_send,
+            _server_recv,
+            mut client_send,
+            mut client_recv,
+        ) = test_iroh_stream_pair().await;
+        client_send.finish().unwrap();
+        let (mut raw_writer, raw_reader) = tokio::io::duplex(4096);
+        let frame = crate::control::encode_control_body(r#"{"final":true}"#);
+        let outbound = tokio::spawn(pump_raw_frames_to_iroh(
+            raw_reader,
+            server_send,
+            policy(RuntimeIrohCompressionCodec::None, 1),
+            IrohCompressionMetrics::new(RuntimeIrohCompressionCodec::None),
+            ProtocolFrameCodec::new(4096).unwrap(),
+        ));
+
+        raw_writer.write_all(&frame).await.unwrap();
+        let mut received = vec![0u8; frame.len()];
+        client_recv.read_exact(&mut received).await.unwrap();
+        client_recv.stop(42u32.into()).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        raw_writer.shutdown().await.unwrap();
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), outbound)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+
+        assert_eq!(received, frame);
+        assert!(error.message().contains("peer reset"), "{error:?}");
+        server_connection.close(0u32.into(), b"test complete");
+        client_connection.close(0u32.into(), b"test complete");
+        server.close().await;
+        client.close().await;
     }
 
     /// Verifies connection-local counters distinguish compressed and identity
