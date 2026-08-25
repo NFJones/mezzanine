@@ -339,25 +339,74 @@ pub(crate) fn runtime_command_display_overlay_content(
 pub(super) fn terminal_command_display_body_is_markdown(command: Option<&str>, body: &str) -> bool {
     match command {
         Some("help") => body.trim_start().starts_with('#'),
-        Some("list-key-presets" | "list-themes") => body.trim_start().starts_with('|'),
+        Some("list-clients" | "list-key-presets" | "list-sessions" | "list-themes") => {
+            body.trim_start().starts_with('|')
+        }
         Some("show-iroh-status") => body.trim_start().starts_with('#'),
         _ => false,
     }
 }
 
-/// Verifies `list-themes` bodies authored as Markdown tables take the command
-/// overlay Markdown path rather than the legacy plain-text display path.
+/// Verifies table-producing list commands take the Markdown overlay path.
+///
+/// Session and client list bodies use the same Markdown table contract as
+/// theme and key-preset lists. Treating them as legacy plain text exposes the
+/// pipe and delimiter syntax in the pager instead of rendering a table.
 #[cfg(test)]
 #[test]
-pub(super) fn list_themes_command_display_detects_markdown_tables() {
-    assert!(terminal_command_display_body_is_markdown(
-        Some("list-themes"),
-        "| active | theme | preview | source | preview colors | action |"
-    ));
-    assert!(!terminal_command_display_body_is_markdown(
-        Some("list-themes"),
-        "active     theme                   preview"
-    ));
+pub(super) fn table_list_command_display_detects_markdown_tables() {
+    for command in [
+        "list-clients",
+        "list-key-presets",
+        "list-sessions",
+        "list-themes",
+    ] {
+        assert!(terminal_command_display_body_is_markdown(
+            Some(command),
+            "| active | name | state |"
+        ));
+        assert!(!terminal_command_display_body_is_markdown(
+            Some(command),
+            "active     name                   state"
+        ));
+    }
+}
+
+/// Verifies session and client list payloads become rendered table rows.
+///
+/// These commands return Markdown tables without a content-type field at this
+/// terminal-command boundary. The pager must therefore recognize their command
+/// identities before choosing the legacy plain-text renderer.
+#[cfg(test)]
+#[test]
+pub(super) fn session_and_client_list_payloads_render_as_markdown_tables() {
+    for command in ["list-clients", "list-sessions"] {
+        let body = serde_json::json!({
+            "outcomes": [{
+                "kind": "display",
+                "command": command,
+                "body": "| name | state |\n| --- | --- |\n| main | running |"
+            }]
+        })
+        .to_string();
+
+        let content = runtime_command_display_overlay_content(
+            &body,
+            &mez_mux::theme::deepforest_ui_theme(),
+            80,
+            80,
+        )
+        .unwrap();
+
+        assert!(
+            content.lines.iter().any(|line| line.contains('│')),
+            "{command}: {content:?}"
+        );
+        assert!(
+            content.lines.iter().any(|line| line.contains("main")),
+            "{command}: {content:?}"
+        );
+    }
 }
 
 /// Verifies non-`show` Markdown command pagers use terminal width during
