@@ -3185,7 +3185,10 @@ MUST NOT block the runtime actor or another connection. Control completion,
 revocation, detach, reset, endpoint shutdown, and connection loss MUST close the
 event task idempotently. The client MUST reject missing, malformed, oversized,
 duplicate, unknown-version, or non-event server streams and MUST refetch the
-current rendered view after any event gap. Terminal input MUST NOT be replayed
+current rendered view after any event gap. Iroh attach clients MUST coalesce
+already-ready redraw wakeups before fetching a view and MUST honor the rendered
+view's animation refresh interval without waiting for another runtime event.
+Terminal input MUST NOT be replayed
 after an ambiguous write, response, timeout, reset, or connection failure. The
 client MUST report that the input outcome is unknown, close boundedly, and
 require an explicit reattach without reconnecting or retrying buffered input.

@@ -11,7 +11,7 @@ use super::requests::{
 };
 use super::{
     AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
-    AttachTerminalSizeRefresh, MezError, Result, Size, UnixStream, io,
+    AttachAnimationRefresh, AttachTerminalSizeRefresh, MezError, Result, Size, UnixStream, io,
 };
 
 /// Runs the run control socket attached observer client operation for this subsystem.
@@ -123,6 +123,7 @@ where
     let mut iteration = 0u64;
     let cursor_blink_epoch = std::time::Instant::now();
     let mut size_refresh = AttachTerminalSizeRefresh::default();
+    let mut animation_refresh = AttachAnimationRefresh::default();
     let mut health = super::AttachIrohHealthTracker::default();
     let mut cached_frame = None;
     let mut render_requested = true;
@@ -141,7 +142,7 @@ where
                     terminal_io,
                     Some(event_stream),
                     4096,
-                    None,
+                    animation_refresh.deadline(),
                     wake_deadline,
                 )
                 .await?
@@ -151,13 +152,22 @@ where
                     terminal_io,
                     event_receiver,
                     4096,
+                    animation_refresh.deadline(),
                     wake_deadline,
                 )
                 .await?
             }
             (None, None) => {
-                read_attached_client_input_or_deadline(terminal_io, 4096, None, wake_deadline)
-                    .await?
+                read_attached_client_input_or_deadline(
+                    terminal_io,
+                    4096,
+                    animation_refresh.deadline(),
+                    animation_refresh
+                        .deadline()
+                        .filter(|deadline| *deadline <= wake_deadline)
+                        .unwrap_or(wake_deadline),
+                )
+                .await?
             }
             (Some(_), Some(_)) => {
                 return Err(MezError::invalid_state(
@@ -240,6 +250,7 @@ where
             break Ok(());
         }
         cached_frame = Some(frame);
+        animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
         render_requested = false;
         iteration = iteration.saturating_add(1);
     }

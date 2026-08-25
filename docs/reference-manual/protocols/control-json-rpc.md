@@ -372,7 +372,11 @@ receiver therefore backpressures or times out its own event task without
 blocking the serialized runtime actor or another connection. Reconnect with
 `event/list` and a known `after_event_id`; replay can be refused once retention
 has elapsed, so attach clients refetch the current rendered view after any gap.
-The capabilities limits expose retention.
+The capabilities limits expose retention. Interactive Iroh clients collapse
+already-ready redraw wakeups into one authoritative view fetch and schedule
+animation-only view refreshes from the interval advertised by the last rendered
+view. Compression therefore does not turn a burst into a queue of stale renders
+or suppress local animation cadence.
 
 Every Iroh event batch re-resolves the live session client before projection.
 Attached observers see only `SessionView` events at or after their atomic

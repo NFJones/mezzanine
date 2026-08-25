@@ -161,9 +161,18 @@ pub(super) async fn read_attached_client_input_or_iroh_event<I: AsyncAttachedTer
     terminal_io: &mut I,
     event_receiver: &mut tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>,
     max_bytes: usize,
+    animation_deadline: Option<tokio::time::Instant>,
     wake_deadline: tokio::time::Instant,
 ) -> Result<AttachedClientInputPoll> {
-    let input = read_attached_client_input_or_deadline(terminal_io, max_bytes, None, wake_deadline);
+    let wake_deadline = animation_deadline
+        .filter(|deadline| *deadline <= wake_deadline)
+        .unwrap_or(wake_deadline);
+    let input = read_attached_client_input_or_deadline(
+        terminal_io,
+        max_bytes,
+        animation_deadline,
+        wake_deadline,
+    );
     tokio::pin!(input);
     tokio::select! {
         biased;
@@ -172,7 +181,10 @@ pub(super) async fn read_attached_client_input_or_iroh_event<I: AsyncAttachedTer
             Some(Ok(render_action)) => Ok(AttachedClientInputPoll {
                 bytes: Vec::new(),
                 eof: false,
-                render_action,
+                render_action: coalesce_ready_iroh_render_actions(
+                    event_receiver,
+                    render_action,
+                )?,
             }),
             Some(Err(error)) => Err(error),
             None => Ok(AttachedClientInputPoll {
@@ -181,6 +193,23 @@ pub(super) async fn read_attached_client_input_or_iroh_event<I: AsyncAttachedTer
                 render_action: AttachRenderAction::Disconnect,
             }),
         },
+    }
+}
+
+/// Collapses already-ready Iroh redraw wakeups before the next view fetch.
+fn coalesce_ready_iroh_render_actions(
+    event_receiver: &mut tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>,
+    mut render_action: AttachRenderAction,
+) -> Result<AttachRenderAction> {
+    loop {
+        match event_receiver.try_recv() {
+            Ok(Ok(next_action)) => render_action = render_action.combine(next_action),
+            Ok(Err(error)) => return Err(error),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return Ok(render_action),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                return Ok(render_action.combine(AttachRenderAction::Disconnect));
+            }
+        }
     }
 }
 
@@ -767,6 +796,65 @@ pub(super) fn control_socket_disconnected_without_pending_response(
 #[cfg(test)]
 mod iroh_tests {
     use super::*;
+
+    /// Verifies an Iroh input poll wakes at the rendered animation deadline
+    /// even when neither terminal input nor a runtime event is available.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn iroh_input_poll_honors_animation_deadline_without_event() {
+        let mut terminal_io = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+        terminal_io.push_pending_input_read();
+        let (_sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let animation_deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(25);
+        let wake_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+
+        let input = read_attached_client_input_or_iroh_event(
+            &mut terminal_io,
+            &mut receiver,
+            4096,
+            Some(animation_deadline),
+            wake_deadline,
+        )
+        .await
+        .unwrap();
+
+        assert!(input.bytes.is_empty());
+        assert!(!input.eof);
+        assert_eq!(input.render_action, AttachRenderAction::View);
+    }
+
+    /// Verifies a ready Iroh redraw burst becomes one strongest action instead
+    /// of leaving stale redraw work queued behind the next authoritative view.
+    #[test]
+    fn ready_iroh_render_actions_are_coalesced_before_view_fetch() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
+        sender.try_send(Ok(AttachRenderAction::View)).unwrap();
+        sender
+            .try_send(Ok(AttachRenderAction::InvalidateAndView))
+            .unwrap();
+
+        assert_eq!(
+            coalesce_ready_iroh_render_actions(&mut receiver, AttachRenderAction::View).unwrap(),
+            AttachRenderAction::InvalidateAndView
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    /// Verifies coalescing does not hide a queued decode or transport failure,
+    /// because malformed compressed events must still fail the attach visibly.
+    #[test]
+    fn ready_iroh_render_action_coalescing_preserves_errors() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+        sender
+            .try_send(Err(MezError::invalid_state("queued Iroh event failure")))
+            .unwrap();
+
+        let error = coalesce_ready_iroh_render_actions(&mut receiver, AttachRenderAction::View)
+            .expect_err("queued Iroh event failures must not be discarded");
+        assert!(error.message().contains("queued Iroh event failure"));
+    }
 
     /// Verifies negotiated Zstandard and LZ4 event envelopes decode to the
     /// same strict render action while incomplete envelopes remain buffered.

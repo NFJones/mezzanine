@@ -138,6 +138,7 @@ where
     let cursor_blink_epoch = std::time::Instant::now();
     let mut render_requested = true;
     let mut size_refresh = AttachTerminalSizeRefresh::default();
+    let mut animation_refresh = AttachAnimationRefresh::default();
     let mut health = super::AttachIrohHealthTracker::default();
     let mut cached_frame = None;
     loop {
@@ -169,13 +170,22 @@ where
                     terminal_io,
                     event_receiver,
                     4096,
+                    animation_refresh.deadline(),
                     wake_deadline,
                 )
                 .await?
             }
             None => {
-                read_attached_client_input_or_deadline(terminal_io, 4096, None, wake_deadline)
-                    .await?
+                read_attached_client_input_or_deadline(
+                    terminal_io,
+                    4096,
+                    animation_refresh.deadline(),
+                    animation_refresh
+                        .deadline()
+                        .filter(|deadline| *deadline <= wake_deadline)
+                        .unwrap_or(wake_deadline),
+                )
+                .await?
             }
         };
         size_refresh.reschedule();
@@ -262,6 +272,7 @@ where
                 ));
             }
             cached_frame = Some(frame);
+            animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
             render_requested = false;
             iteration = iteration.saturating_add(1);
             continue;
@@ -345,6 +356,7 @@ where
                 ));
             }
             cached_frame = Some(frame);
+            animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
         }
         render_requested = false;
         iteration = iteration.saturating_add(1);
