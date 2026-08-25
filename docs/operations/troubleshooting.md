@@ -67,6 +67,23 @@ and actually compressible before lowering `compression_min_bytes`. Immediate
 rollback is `compression_codecs = ["none"]` followed by daemon restart. Codec
 choice and compression ratio do not change direct/relay path quality.
 
+## An Iroh copy does not reach the attaching machine clipboard
+
+Confirm the attachment is a primary and negotiated event-stream version 2 with
+the explicit `client_clipboard_write` capability. Observers, version-1 peers,
+and legacy fallback sessions intentionally retain server-only copy behavior.
+The attaching client, not the server, selects `terminal.clipboard_copy_command`;
+verify that the local command exists and can access the client desktop session.
+Linux clients try `wl-copy`, `xclip`, and `xsel` by default, while macOS clients
+try `pbcopy`. Headless sessions may have no usable provider.
+
+Clipboard writes are best-effort and bounded to 8 MiB. A local provider failure
+does not undo the server internal paste buffer or server-host clipboard attempt,
+and it does not interrupt rendering or input. Troubleshoot with payload-free
+version, capability, provider availability, and failure-class information;
+never copy clipboard contents into logs or diagnostics. Clipboard reads and
+remote paste are not part of the Iroh client clipboard feature.
+
 ## Related pages
 
 - [Lifecycle, detach, and recovery](lifecycle-detach-and-recovery.md)

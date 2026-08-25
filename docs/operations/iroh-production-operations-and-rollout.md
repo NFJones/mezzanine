@@ -170,6 +170,10 @@ must never exceed its input; compressible fixtures should remain at or below
    verify future initialization fails.
 9. Confirm a local Unix client can still inspect, revoke, detach, and stop the
    session during and after remote failures.
+10. From a negotiated remote primary, copy a non-sensitive test value and verify
+    the server internal buffer, server-host clipboard attempt, and attaching
+    client clipboard independently. Confirm observers, other devices, and v1
+    clients receive no client-local effect.
 
 `remote/status` includes endpoint identity and dialable endpoint address because
 local administration needs them. Aggregate `show-metrics` output intentionally
@@ -333,6 +337,7 @@ production network, relay, lookup, or upgrade/rollback gates.
 | Privacy | Aggregate status and metrics have redaction regressions; documentation states direct and relay metadata exposure. | Production telemetry schema and retention review. | Local redaction verified; production review pending. |
 | Performance and package impact | Local report-only release workload records throughput, RSS, and PTY/input/render latency; isolated direct create, detach, reconnect, and revocation paths pass. | Cold startup, memory, CPU, release binary and package size, direct and relay latency and throughput, reconnect, observer fan-out, and concurrent-session baseline. | Local sample recorded; packaged and network baselines pending. |
 | Compatibility | ALPN and protocol version are fixed and explicit targets never fall back. | Supported client/server upgrade and rollback matrix. | Protocol behavior verified; packaged upgrade matrix pending. |
+| Client clipboard | Negotiated v2 routing, exact-client isolation, bounded assembly, malformed/timeout handling, local command ownership, and v1 fallback have focused integration regressions. | Native Linux and macOS desktop/headless runs plus packaged old/new client-server matrix. | Repository behavior verified; native/platform matrix pending. |
 
 Do not label the Iroh transport supported for production while any pending gate
 lacks an approved exception and a tracker record with an owner and due date.

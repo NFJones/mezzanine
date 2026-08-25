@@ -212,16 +212,29 @@ distinct.
 Interactive remote attach requires a terminal and keeps one initialized Iroh
 control stream open for its lifetime. A `primary` profile may attach as primary
 or observer; an `observer` profile cannot attach as primary. The client also
-negotiates one server-opened version 1 event stream. Authorized events wake a
-fresh `terminal/view`; observers receive only session-view events at or after
-their atomic attachment cutoff, and detach or event-stream failure ends the
-attach visibly.
+negotiates one server-opened event stream. Observers use version 1. Primaries
+request version 2 and retry version 1 only when a legacy server explicitly
+rejects the newer event-stream version. Client-local clipboard writes are
+enabled only when a primary receives explicit `client_clipboard_write`
+capability confirmation; otherwise copy behavior remains the version-1 behavior.
+Authorized events wake a fresh `terminal/view`; observers receive only
+session-view events at or after their atomic attachment cutoff, and detach or
+event-stream failure ends the attach visibly.
 Acceptance and preface receipt share the configured Iroh setup timeout; expiry
 closes the connection and requires an explicit reattach.
 Terminal resize, input, and view requests remain ordered one at a time behind
 their responses. If the connection fails after terminal input may have been
 sent, Mez reports that the outcome is unknown, does not reconnect or replay the
 input, and requires an explicit reattach.
+
+For a negotiated primary, copy-mode selections continue to update the server
+session's internal paste buffer and best-effort server-host clipboard, and also
+attempt one write on the attaching machine. The client selects its own
+`terminal.clipboard_copy_command`; the server cannot provide or override that
+command. Writes are best-effort, limited to 8 MiB, and supported through the
+same Linux (`wl-copy`, `xclip`, or `xsel`) and macOS (`pbcopy`) adapters used by
+local Mez. Headless or unsupported clients continue normally when no clipboard
+provider succeeds. Clipboard reads and remote paste are not included.
 
 Create invitation files without exposing the token through shell arguments or
 world-readable output. `--output PATH` securely creates a new mode-`0600` file,

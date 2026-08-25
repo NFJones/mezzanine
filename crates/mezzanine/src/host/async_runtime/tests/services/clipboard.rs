@@ -2,6 +2,123 @@
 
 use super::super::*;
 
+static IROH_COPY_INTEGRATION_WRITES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn record_iroh_copy_integration_write(content: &str) -> bool {
+    IROH_COPY_INTEGRATION_WRITES
+        .lock()
+        .unwrap()
+        .push(content.to_string());
+    true
+}
+
+fn empty_iroh_copy_integration_read() -> Option<String> {
+    None
+}
+
+/// Verifies one real attached copy-mode selection preserves the internal and
+/// server-host effects while adding exactly one initiator-scoped Iroh effect.
+///
+/// The second primary has no registered v2 route, so the selected bytes must
+/// remain isolated to the initiating primary even though both clients are live.
+#[tokio::test(flavor = "current_thread")]
+async fn iroh_copy_mode_selection_preserves_host_and_buffer_and_routes_exactly() {
+    IROH_COPY_INTEGRATION_WRITES.lock().unwrap().clear();
+    let mut service = test_service();
+    service.set_host_clipboard_for_tests(HostClipboard::new(
+        record_iroh_copy_integration_write,
+        empty_iroh_copy_integration_read,
+    ));
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let other = service
+        .attach_primary("other", true, Size::new(80, 24).unwrap(), 2)
+        .unwrap();
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: Vec::new(),
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    let mut screen = mez_terminal::TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap();
+    screen.feed(b"client clipboard integration");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .ensure_active_copy_mode("%1")
+        .unwrap()
+        .select_range(
+            mez_mux::copy::CopyPosition { line: 0, column: 0 },
+            mez_mux::copy::CopyPosition {
+                line: 0,
+                column: 28,
+            },
+        )
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .register_client_clipboard_route(primary.clone())
+            .await
+            .unwrap();
+        handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::HandleCopyMode(
+                        mez_mux::copy::CopyModeKeyAction::BeginSelection,
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let write = handle
+            .take_client_clipboard_write(primary.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(write.content(), "client clipboard integration");
+        assert!(
+            handle
+                .take_client_clipboard_write(other)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let buffers = handle
+            .execute_terminal_command(primary.clone(), "list-buffers".to_string())
+            .await
+            .unwrap();
+        assert!(
+            buffers.contains("client clipboard integration"),
+            "{buffers}"
+        );
+        assert_eq!(
+            IROH_COPY_INTEGRATION_WRITES.lock().unwrap().as_slice(),
+            ["client clipboard integration"]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
 /// Verifies exact-client clipboard routes coalesce unsent writes, preserve a
 /// monotonic sequence, reject unrelated clients and oversize payloads, and
 /// never expose clipboard contents through `Debug` formatting.
