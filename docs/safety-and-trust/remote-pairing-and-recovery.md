@@ -52,6 +52,11 @@ The versioned invitation envelope currently uses format version 1. On the
 persistent-host path, omitting `--expires` currently uses 600 seconds even when
 `transport.iroh.invitation_ttl_seconds` differs. Supply `--expires SECONDS` to
 select an explicit lifetime in the supported 30 through 86,400 second range.
+
+The direct-session compatibility path uses the configured invitation lifetime;
+the persistent-host behavior is a known implementation difference from that
+configuration contract.
+
 Transfer the JSON through a confidential channel. Prefer secure no-overwrite
 output:
 

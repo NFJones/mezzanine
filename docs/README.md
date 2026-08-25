@@ -38,6 +38,8 @@ normative behavior and compatibility contract.
   and protocol-reference material, with links to normative contracts.
 - [Contributing](contributing/README.md): workspace architecture and local
   development validation, including cross-platform release-load checks.
+- [Testing and performance guides](testing/README.md): specialized benchmark
+  and release-evidence procedures for contributors and operators.
 
 ## Documentation boundaries
 

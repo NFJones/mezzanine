@@ -251,9 +251,11 @@ Create invitation files without exposing the token through shell arguments or
 world-readable output. `--output PATH` securely creates a new mode-`0600` file,
 refuses to replace an existing path or symlink, and prints only the created
 path. Invitations carry format version 1, and incompatible clients reject them
-before dialing. Omitting `--expires` uses
-`transport.iroh.invitation_ttl_seconds`; an explicit override must be from 30
-through 86,400 seconds. For example:
+before dialing. On the direct-session compatibility path, omitting `--expires`
+uses `transport.iroh.invitation_ttl_seconds`. The persistent host currently
+uses 600 seconds when the option is omitted, even when that configuration value
+differs. An explicit override must be from 30 through 86,400 seconds. For
+example:
 
 ```console
 mez remote invite --role primary --allow-create --allow-kill --output mez-invite.json

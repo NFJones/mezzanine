@@ -4,8 +4,9 @@
 
 Specify Mezzanine Message Protocol version 1 (`mmp/1`), the local service for
 agent discovery, direct/group messaging, presence, correlation, and task
-status. It is separate from `mezctl/1`: MMP never creates panes, changes
-layout, or performs multiplexer control. The [MMP section of `SPEC.md`](../../../SPEC.md#12-local-message-passing-protocol)
+status. It is separate from the `mezctl/2` direct-session and `mezctl/3`
+persistent-host control endpoints: MMP never creates panes, changes layout, or
+performs multiplexer control. The [MMP section of `SPEC.md`](../../../SPEC.md#12-local-message-passing-protocol)
 is normative.
 
 ## Transport and framing

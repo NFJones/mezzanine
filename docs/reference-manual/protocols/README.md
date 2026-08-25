@@ -47,5 +47,7 @@ role, transport, configuration, or policy state.
 
 ## Next step
 
-Choose [`mezctl/2`](control-json-rpc.md) to build a client, [`maap/1`](maap.md)
-to integrate an agent provider, or [`mmp/1`](mmp.md) to coordinate local agents.
+Choose the [control JSON-RPC reference](control-json-rpc.md) to build a
+`mezctl/2` direct-session or `mezctl/3` persistent-host client,
+[`maap/1`](maap.md) to integrate an agent provider, or [`mmp/1`](mmp.md) to
+coordinate local agents.

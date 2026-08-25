@@ -139,8 +139,11 @@ session, run:
 source <(mez completion zsh)
 ```
 
-Replace `zsh` with `bash`, `fish`, `elvish`, or `powershell` as needed. Install
-the generated output according to your shell's conventions for future sessions.
+The same process-substitution form works for Bash with `bash` in place of
+`zsh`. Fish, Elvish, and PowerShell use different loading conventions; generate
+their definitions with `mez completion <shell>` and install the output according
+to that shell's completion documentation. Supported shell names are `bash`,
+`elvish`, `fish`, `powershell`, and `zsh`.
 
 ## Safety at a glance
 
