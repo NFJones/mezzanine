@@ -357,6 +357,7 @@ impl HostIrohRuntime {
         let audit_log = self.audit_log.clone();
         let mut tasks = JoinSet::new();
         let mut accepted = 0u64;
+        let mut endpoint_closed_unexpectedly = false;
         eprintln!("mez host: listening for remote clients on Iroh endpoint {server_endpoint_id}");
         tokio::pin!(cancellation);
 
@@ -364,7 +365,10 @@ impl HostIrohRuntime {
             tokio::select! {
                 () = &mut cancellation => break,
                 incoming = endpoint.accept(), if tasks.len() < policy.max_connections => {
-                    let Some(incoming) = incoming else { break; };
+                    let Some(incoming) = incoming else {
+                        endpoint_closed_unexpectedly = !self.endpoint.is_intentionally_closed();
+                        break;
+                    };
                     let remote_route = remote_client_route(incoming.remote_addr());
                     let policy = policy.clone();
                     let trust = trust.clone();
@@ -408,6 +412,11 @@ impl HostIrohRuntime {
             .is_err()
         {
             tasks.abort_all();
+        }
+        if endpoint_closed_unexpectedly {
+            return Err(MezError::invalid_state(format!(
+                "persistent host Iroh listener closed unexpectedly after accepting {accepted} connections",
+            )));
         }
         Ok(accepted)
     }
@@ -1687,6 +1696,65 @@ mod tests {
         let restarted = RemoteEndpointIdentity::load_or_create_host(&root).unwrap();
         assert_eq!(restarted.endpoint_id(), server_addr.id.to_string());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Endpoint loss outside the host shutdown handle must fail the persistent
+    /// listener instead of looking like a clean zero-connection completion.
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_listener_reports_unexpected_endpoint_closure() {
+        let root = test_root("unexpected-endpoint-closure");
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            identity: RuntimeIrohIdentityPolicy::Host,
+            setup_timeout: std::time::Duration::from_secs(10),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let host = HostIrohRuntime::bind(&root, policy).await.unwrap().unwrap();
+        let endpoint = host.endpoint.endpoint().clone();
+        endpoint.close().await;
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            host.serve(std::future::pending()),
+        )
+        .await
+        .expect("closed host endpoint should terminate its listener")
+        .unwrap_err();
+        assert_eq!(error.kind(), MezErrorKind::InvalidState);
+        assert!(
+            error
+                .message()
+                .contains("persistent host Iroh listener closed unexpectedly"),
+            "{error:?}"
+        );
+
+        drop(host);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Closing through the runtime shutdown handle marks endpoint exhaustion
+    /// intentional and therefore retains clean host-listener completion.
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_listener_accepts_intentional_endpoint_shutdown() {
+        let root = test_root("intentional-endpoint-closure");
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            identity: RuntimeIrohIdentityPolicy::Host,
+            setup_timeout: std::time::Duration::from_secs(10),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let host = HostIrohRuntime::bind(&root, policy).await.unwrap().unwrap();
+        let shutdown = host.endpoint.shutdown_handle();
+        let (served, closed) = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            tokio::join!(host.serve(std::future::pending()), shutdown.close())
+        })
+        .await
+        .expect("intentional host endpoint shutdown should remain bounded");
+        assert!(closed);
+        assert_eq!(served.unwrap(), 0);
+
+        drop(host);
+        let _ = fs::remove_dir_all(root);
     }
 
     /// A peer that opens its control stream but withholds the mandatory first

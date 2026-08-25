@@ -236,8 +236,7 @@ async fn run_host_serve<W: Write>(
         }
         result = &mut remote => {
             let _ = shutdown.send(true);
-            result?;
-            local.await
+            finish_remote_host_listener(result, local.as_mut()).await
         }
         () = host_shutdown_signal() => {
             let _ = shutdown.send(true);
@@ -246,6 +245,17 @@ async fn run_host_serve<W: Write>(
             remote_result.map(|_| ())
         }
     }
+}
+
+/// Drains the local host listener after remote completion while retaining the
+/// remote listener result as the primary service outcome.
+async fn finish_remote_host_listener<L>(remote_result: Result<u64>, local: L) -> Result<()>
+where
+    L: std::future::Future<Output = Result<()>>,
+{
+    let local_result = local.await;
+    remote_result?;
+    local_result
 }
 
 fn host_usize(
@@ -622,12 +632,41 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use crate::config::{ConfigFormat, ConfigLayer, ConfigScope, DEFAULT_CONFIG_TOML};
     use crate::host::shell::{ResolvedShell, ShellSource};
     use crate::runtime::RuntimeEnv;
 
     use super::*;
+
+    /// Remote listener failure remains the reported service error only after
+    /// the local Unix listener has completed its shutdown path.
+    #[tokio::test(flavor = "current_thread")]
+    async fn remote_host_failure_drains_local_listener_before_returning() {
+        let drained = Arc::new(AtomicBool::new(false));
+        let local_drained = drained.clone();
+        let local = async move {
+            local_drained.store(true, Ordering::Release);
+            Ok(())
+        };
+        let remote = Err(MezError::invalid_state(
+            "persistent host Iroh listener closed unexpectedly",
+        ));
+
+        let error = finish_remote_host_listener(remote, local)
+            .await
+            .unwrap_err();
+
+        assert!(drained.load(Ordering::Acquire));
+        assert!(
+            error
+                .message()
+                .contains("persistent host Iroh listener closed unexpectedly"),
+            "{error:?}"
+        );
+    }
 
     /// Only one concurrent cold-start caller owns the launcher election, and
     /// releasing that owner permits a waiter to recover a failed startup.

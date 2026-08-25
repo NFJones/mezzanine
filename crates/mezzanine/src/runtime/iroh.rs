@@ -690,6 +690,12 @@ impl RuntimeIrohEndpoint {
         }
     }
 
+    /// Returns whether endpoint shutdown was initiated through the bounded
+    /// runtime shutdown handle.
+    pub(crate) fn is_intentionally_closed(&self) -> bool {
+        self.intentional_close.load(Ordering::Acquire)
+    }
+
     /// Closes the endpoint and bounds the wait for its I/O tasks to finish.
     pub(crate) async fn close(&self) -> bool {
         self.shutdown_handle().close().await
