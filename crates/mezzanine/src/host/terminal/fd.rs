@@ -91,8 +91,8 @@ pub enum TerminalIrohStatusQuality {
     Unknown,
 }
 
-/// Maximum fixed width reserved for the client-rendered Iroh state pill.
-pub const TERMINAL_IROH_STATUS_SLOT_WIDTH: usize = " disconnected ".len();
+/// Fixed width reserved for the client-rendered Iroh state pill.
+pub const TERMINAL_IROH_STATUS_SLOT_WIDTH: usize = " no ".len();
 
 /// Client-space semantic slot for one locally rendered Iroh status pill.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

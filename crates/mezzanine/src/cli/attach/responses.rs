@@ -470,11 +470,11 @@ mod tests {
     use super::*;
     use crate::host::terminal::TerminalIrohStatusQuality;
 
-    /// Verifies semantic slot decoding and local composition use only the
-    /// connected/disconnected labels while quality changes rendition colors.
+    /// Verifies semantic slot decoding and local composition use compact
+    /// `ok` and `no` labels while quality changes rendition colors.
     #[test]
     fn terminal_view_iroh_slot_decodes_and_composes_local_state() {
-        let response = r#"{"result":{"view":{"lines":["base              tail"],"line_style_spans":[[{"start":0,"length":4,"rendition":{"foreground":null,"background":{"kind":"indexed","index":7}}},{"start":19,"length":4,"rendition":{"foreground":null,"background":{"kind":"indexed","index":6}}}]],"cursor":{"row":0,"column":0,"visible":false},"output_modes":{},"iroh_status_slot":{"row":0,"column":4,"width":14,"good":{"foreground":null,"background":{"kind":"indexed","index":2}},"degraded":{"foreground":null,"background":{"kind":"indexed","index":3}},"poor":{"foreground":null,"background":{"kind":"indexed","index":1}},"unknown":{"foreground":null,"background":{"kind":"indexed","index":8}}}}}}"#;
+        let response = r#"{"result":{"view":{"lines":["base    tail"],"line_style_spans":[[{"start":0,"length":4,"rendition":{"foreground":null,"background":{"kind":"indexed","index":7}}},{"start":9,"length":4,"rendition":{"foreground":null,"background":{"kind":"indexed","index":6}}}]],"cursor":{"row":0,"column":0,"visible":false},"output_modes":{},"iroh_status_slot":{"row":0,"column":4,"width":4,"good":{"foreground":null,"background":{"kind":"indexed","index":2}},"degraded":{"foreground":null,"background":{"kind":"indexed","index":3}},"poor":{"foreground":null,"background":{"kind":"indexed","index":1}},"unknown":{"foreground":null,"background":{"kind":"indexed","index":8}}}}}}"#;
         let frame = terminal_step_response_client_frame(response)
             .unwrap()
             .expect("view should decode");
@@ -492,21 +492,21 @@ mod tests {
             ),
         ] {
             let (lines, spans) = frame.with_iroh_status(true, quality);
-            assert_eq!(lines, ["base connected    tail"]);
+            assert_eq!(lines, ["base ok tail"]);
             assert!(spans[0].iter().any(|span| {
                 span.start == 0
                     && span.length == 4
                     && span.rendition.background == Some(TerminalColor::Indexed(7))
             }));
             assert!(spans[0].iter().any(|span| {
-                span.start == 19
+                span.start == 9
                     && span.length == 4
                     && span.rendition.background == Some(TerminalColor::Indexed(6))
             }));
             assert_eq!(
                 spans[0]
                     .iter()
-                    .find(|span| span.start == 4 && span.length == 14)
+                    .find(|span| span.start == 4 && span.length == 4)
                     .unwrap()
                     .rendition
                     .background,
@@ -515,11 +515,11 @@ mod tests {
         }
 
         let (lines, spans) = frame.with_iroh_status(false, TerminalIrohStatusQuality::Poor);
-        assert_eq!(lines, ["base disconnected tail"]);
+        assert_eq!(lines, ["base no tail"]);
         assert_eq!(
             spans[0]
                 .iter()
-                .find(|span| span.start == 4 && span.length == 14)
+                .find(|span| span.start == 4 && span.length == 4)
                 .unwrap()
                 .rendition
                 .background,

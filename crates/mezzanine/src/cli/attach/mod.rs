@@ -74,11 +74,7 @@ impl AttachClientFrame {
         let Some(line) = lines.get_mut(slot.row) else {
             return (lines, spans);
         };
-        let label = if connected {
-            " connected "
-        } else {
-            " disconnected "
-        };
+        let label = if connected { " ok " } else { " no " };
         let prefix = mez_mux::render::line_slice(line, 0, slot.column);
         let suffix =
             mez_mux::render::line_slice(line, slot.column.saturating_add(slot.width), usize::MAX);
