@@ -265,7 +265,7 @@ impl HostServer {
                         );
                         continue;
                     }
-                    eprintln!("mez host: accepted local client with uid {peer_uid}");
+                    eprintln!("mez host: local client connected with uid {peer_uid}");
                     connections.push(async move {
                         match tokio::time::timeout(
                             HOST_CONTROL_CONNECTION_TIMEOUT,
@@ -274,15 +274,15 @@ impl HostServer {
                         .await
                         {
                             Ok(Ok(shutdown)) => {
-                                eprintln!("mez host: local client request completed");
+                                eprintln!("mez host: local client disconnected after request completion");
                                 shutdown
                             }
                             Ok(Err(error)) => {
-                                eprintln!("mez host: local client request failed: {error}");
+                                eprintln!("mez host: local client disconnected after request failure: {error}");
                                 None
                             }
                             Err(_) => {
-                                eprintln!("mez host: local client request timed out after {} seconds", HOST_CONTROL_CONNECTION_TIMEOUT.as_secs());
+                                eprintln!("mez host: local client disconnected after timeout of {} seconds", HOST_CONTROL_CONNECTION_TIMEOUT.as_secs());
                                 None
                             }
                         }

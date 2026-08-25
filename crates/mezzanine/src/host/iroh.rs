@@ -43,6 +43,31 @@ use crate::storage::lease::{RemoteSessionLease, RemoteSessionLeaseState};
 
 const HOST_CONTROL_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
 
+/// Emits the final lifecycle record for one established remote client connection.
+struct RemoteClientConnectionLog {
+    endpoint_id: String,
+    route: String,
+}
+
+impl Drop for RemoteClientConnectionLog {
+    fn drop(&mut self) {
+        eprintln!(
+            "mez host: remote client disconnected: endpoint {}, route {}",
+            self.endpoint_id, self.route
+        );
+    }
+}
+
+/// Renders the network route observed when a remote client initiates a connection.
+fn remote_client_route(remote_addr: iroh::endpoint::IncomingAddr) -> String {
+    match remote_addr {
+        iroh::endpoint::IncomingAddr::Ip(address) => format!("direct {address}"),
+        iroh::endpoint::IncomingAddr::Relay { url, .. } => format!("relay {url}"),
+        iroh::endpoint::IncomingAddr::Custom(address) => format!("custom {address:?}"),
+        _ => "unknown".to_string(),
+    }
+}
+
 /// Stable host endpoint, trust store, and bounded pre-session listener.
 #[derive(Debug)]
 pub(crate) struct HostIrohRuntime {
@@ -337,6 +362,7 @@ impl HostIrohRuntime {
                 () = &mut cancellation => break,
                 incoming = endpoint.accept(), if tasks.len() < policy.max_connections => {
                     let Some(incoming) = incoming else { break; };
+                    let remote_route = remote_client_route(incoming.remote_addr());
                     let policy = policy.clone();
                     let trust = trust.clone();
                     let server_endpoint_id = server_endpoint_id.clone();
@@ -350,10 +376,11 @@ impl HostIrohRuntime {
                             server_endpoint_id,
                             router,
                             audit_log,
+                            &remote_route,
                         ).await;
                         match result {
-                            Ok(()) => eprintln!("mez host: remote client connection completed"),
-                            Err(error) => eprintln!("mez host: remote client connection failed: {error}"),
+                            Ok(()) => {}
+                            Err(error) => eprintln!("mez host: remote client connection from {remote_route} failed: {error}"),
                         }
                     });
                     accepted = accepted.saturating_add(1);
@@ -388,6 +415,7 @@ async fn serve_host_only_connection(
     server_endpoint_id: String,
     router: Option<HostSessionRouter>,
     audit_log: Option<HostAuditLog>,
+    remote_route: &str,
 ) -> Result<()> {
     let mut accepting = incoming
         .accept()
@@ -415,6 +443,13 @@ async fn serve_host_only_connection(
     connection.set_max_concurrent_bi_streams(iroh::endpoint::VarInt::from_u32(1));
     connection.set_max_concurrent_uni_streams(iroh::endpoint::VarInt::from_u32(0));
     let client_endpoint_id = connection.remote_id().to_string();
+    eprintln!(
+        "mez host: remote client connected: endpoint {client_endpoint_id}, route {remote_route}"
+    );
+    let _connection_log = RemoteClientConnectionLog {
+        endpoint_id: client_endpoint_id.clone(),
+        route: remote_route.to_owned(),
+    };
     let (send, recv) = tokio::time::timeout(policy.setup_timeout, connection.accept_bi())
         .await
         .map_err(|_| MezError::invalid_state("host Iroh control stream setup timed out"))?
@@ -1340,6 +1375,18 @@ mod tests {
             std::process::id(),
             rand::random::<u64>()
         ))
+    }
+
+    /// Connection lifecycle logs retain the direct client socket address so an
+    /// operator can correlate a remote client with its transport connection.
+    #[test]
+    fn remote_client_route_identifies_direct_client_address() {
+        let address = "192.0.2.42:443".parse().unwrap();
+
+        assert_eq!(
+            remote_client_route(iroh::endpoint::IncomingAddr::Ip(address)),
+            "direct 192.0.2.42:443"
+        );
     }
 
     /// Host identity and trust are stable across restart and isolated from
