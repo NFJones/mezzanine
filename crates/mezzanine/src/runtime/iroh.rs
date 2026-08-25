@@ -404,6 +404,21 @@ impl RuntimeIrohPathSampler {
         self.sample_for_client(connection, client_id.as_str());
     }
 
+    /// Associates this connection with its initialized client before path sampling.
+    fn associate_client(&mut self, client_id: &str) {
+        let client_id = client_id.to_string();
+        if let Ok(mut current_client_id) = self.client_id.lock()
+            && current_client_id.as_deref() != Some(client_id.as_str())
+        {
+            if let Some(previous_client_id) = current_client_id.replace(client_id.clone())
+                && let Ok(mut quality) = self.diagnostics.inner.connection_quality.lock()
+            {
+                quality.remove(&previous_client_id);
+            }
+            self.previous_sample = None;
+        }
+    }
+
     /// Refreshes the selected path for the client already associated with the connection.
     fn sample_current(&mut self, connection: &iroh::endpoint::Connection) {
         let client_id = self
@@ -417,6 +432,7 @@ impl RuntimeIrohPathSampler {
     }
 
     fn sample_for_client(&mut self, connection: &iroh::endpoint::Connection, client_id: &str) {
+        self.associate_client(client_id);
         let now = Instant::now();
         let paths = connection.paths();
         let Some(path) = paths.iter().find(|path| path.is_selected()) else {
@@ -508,19 +524,8 @@ impl RuntimeIrohPathSampler {
                 3
             },
         };
-        let client_id = client_id.to_string();
-        if let Ok(mut current_client_id) = self.client_id.lock()
-            && current_client_id.as_deref() != Some(client_id.as_str())
-        {
-            if let Some(previous_client_id) = current_client_id.replace(client_id.clone())
-                && let Ok(mut quality) = self.diagnostics.inner.connection_quality.lock()
-            {
-                quality.remove(&previous_client_id);
-            }
-            self.previous_sample = None;
-        }
         if let Ok(mut quality) = self.diagnostics.inner.connection_quality.lock() {
-            quality.insert(client_id, snapshot);
+            quality.insert(client_id.to_string(), snapshot);
         }
         self.previous_sample = Some(RuntimeIrohPathSample {
             sampled_at: now,
@@ -1346,6 +1351,30 @@ mod tests {
         assert_eq!(
             classify(900_000, 0, 9, 9, 6),
             TerminalIrohStatusQuality::Unknown
+        );
+    }
+
+    /// Verifies a client remains associated with its Iroh connection while
+    /// path discovery is incomplete, allowing the periodic sampler to publish
+    /// the first selected-path sample later.
+    #[test]
+    fn iroh_path_sampler_associates_client_before_path_selection() {
+        let diagnostics = RuntimeIrohDiagnostics::default();
+        let client_id = ClientId::opaque("remote-primary").unwrap();
+        let guard = RuntimeIrohConnectionGuard {
+            diagnostics,
+            connected_at: Instant::now(),
+            client_id: Arc::new(Mutex::new(None)),
+        };
+        let mut sampler = guard.sampler(IrohCompressionMetrics::new(
+            RuntimeIrohCompressionCodec::Zstd,
+        ));
+
+        sampler.associate_client(client_id.as_str());
+
+        assert_eq!(
+            sampler.client_id.lock().unwrap().as_deref(),
+            Some(client_id.as_str())
         );
     }
 
