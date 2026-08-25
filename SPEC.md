@@ -1811,10 +1811,10 @@ The baseline commands MUST have the following semantics:
 | `break-pane` | Move the target pane into a new window while preserving its process, buffer, agent harness, and pane identity unless a new identity is required by the implementation's identity model. |
 | `join-pane` | Move a source pane into a destination window or split destination pane while preserving its process, buffer, and agent harness. |
 | `display-panes` | Display temporary pane identifiers suitable for interactive pane selection. It MUST NOT alter layout. |
-| `list-windows` | Return the windows in the active or target group, including stable identity, group-local index, name, active state, pane count, and size. |
-| `list-groups` | Return the window groups in the target session, including stable identity, index, name, active state, and owned window count. |
+| `list-windows` | Display the windows in the active or target group as a rendered pager table, including stable identity, group-local index, name, active state, pane count, and size. |
+| `list-groups` | Display the window groups in the target session as a rendered pager table, including stable identity, index, name, active state, and owned window count. |
 | `choose-group` | Present an interactive group picker with concrete `select-group` actions. |
-| `list-panes` | Return panes for the target window or session, including stable identity, index, active state, title, primary PID when available, current size, and agent identity when present. |
+| `list-panes` | Display panes for the target window or session as a rendered pager table, including stable identity, index, active state, title, primary PID when available, current size, and agent identity when present. |
 | `list-clients` | Return attached clients, including read-only observers, with role, state, attach time, and terminal size. |
 | `detach-client` | Detach the target client. Detaching the primary client MUST NOT terminate the session unless exit-on-detach behavior is explicitly configured. |
 | `attach-session` | Attach the invoking client to a resumable session as primary or as an immediate read-only observer according to the requested role and session authority rules. |

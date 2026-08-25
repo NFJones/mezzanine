@@ -9,28 +9,32 @@ use crate::session::{
 };
 use crate::{MuxError, Result};
 
-/// Renders windows in the active group as compact state rows.
+/// Renders windows in the active group as a pager-friendly Markdown table.
 pub fn list_windows(session: &Session) -> String {
-    session
-        .active_group_windows()
-        .iter()
-        .enumerate()
-        .map(|(index, window)| {
-            format!(
-                "{}:{}:{}:active={}:panes={}:size={}x{}",
-                index,
-                window.id,
-                window.name,
-                session
-                    .active_window()
-                    .is_some_and(|active| active.id == window.id),
-                window.panes().len(),
-                window.size.columns,
-                window.size.rows
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut lines = vec![
+        "| index | window | name | active | panes | size |".to_string(),
+        "| --- | --- | --- | --- | --- | --- |".to_string(),
+    ];
+    lines.extend(
+        session
+            .active_group_windows()
+            .iter()
+            .enumerate()
+            .map(|(index, window)| {
+                format!(
+                    "| {index} | {} | {} | {} | {} | {}x{} |",
+                    markdown_table_cell(&window.id.to_string()),
+                    markdown_table_cell(&window.name),
+                    session
+                        .active_window()
+                        .is_some_and(|active| active.id == window.id),
+                    window.panes().len(),
+                    window.size.columns,
+                    window.size.rows
+                )
+            }),
+    );
+    lines.join("\n")
 }
 
 /// Renders windows with concrete select-window actions.
@@ -65,25 +69,25 @@ pub fn choose_window_display(session: &Session) -> String {
     )
 }
 
-/// Renders ordered window groups as compact state rows.
+/// Renders ordered window groups as a pager-friendly Markdown table.
 pub fn list_groups(session: &Session) -> String {
-    session
-        .window_groups()
-        .iter()
-        .map(|group| {
-            format!(
-                "{}:{}:{}:active={}:windows={}",
-                group.index,
-                group.id,
-                escaped(&group.name),
-                session
-                    .active_group()
-                    .is_some_and(|active| active.id == group.id),
-                group.window_ids.len()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut lines = vec![
+        "| index | group | name | active | windows |".to_string(),
+        "| --- | --- | --- | --- | --- |".to_string(),
+    ];
+    lines.extend(session.window_groups().iter().map(|group| {
+        format!(
+            "| {} | {} | {} | {} | {} |",
+            group.index,
+            markdown_table_cell(&group.id.to_string()),
+            markdown_table_cell(&group.name),
+            session
+                .active_group()
+                .is_some_and(|active| active.id == group.id),
+            group.window_ids.len()
+        )
+    }));
+    lines.join("\n")
 }
 
 /// Renders groups with concrete select-group actions.
@@ -115,28 +119,28 @@ pub fn choose_group_display(session: &Session) -> String {
     )
 }
 
-/// Renders panes in the active window as compact state rows.
+/// Renders panes in the active window as a pager-friendly Markdown table.
 pub fn list_panes(session: &Session) -> Result<String> {
     let window = session
         .active_window()
         .ok_or_else(|| MuxError::invalid_state("session has no active window"))?;
-    Ok(window
-        .panes()
-        .iter()
-        .map(|pane| {
-            format!(
-                "{}:{}:{}:active={}:primary_pid=none:size={}x{}:agent_id=none:live={}",
-                pane.index,
-                pane.id,
-                pane.title,
-                pane.active,
-                pane.size.columns,
-                pane.size.rows,
-                pane.live
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n"))
+    let mut lines = vec![
+        "| index | pane | title | active | primary pid | size | agent id | live |".to_string(),
+        "| --- | --- | --- | --- | --- | --- | --- | --- |".to_string(),
+    ];
+    lines.extend(window.panes().iter().map(|pane| {
+        format!(
+            "| {} | {} | {} | {} | none | {}x{} | none | {} |",
+            pane.index,
+            markdown_table_cell(&pane.id.to_string()),
+            markdown_table_cell(&pane.title),
+            pane.active,
+            pane.size.columns,
+            pane.size.rows,
+            pane.live
+        )
+    }));
+    Ok(lines.join("\n"))
 }
 
 /// Renders panes in the active window with concrete select-pane actions.
@@ -351,7 +355,22 @@ mod tests {
             .attach_observer_with_terminal("observer", None, 1)
             .unwrap();
 
-        assert!(list_windows(&session).contains("active=true:panes=1:size=80x24"));
+        let windows = list_windows(&session);
+        assert!(
+            windows.starts_with("| index | window | name | active | panes | size |"),
+            "{windows}"
+        );
+        assert!(windows.contains("| true | 1 | 80x24 |"), "{windows}");
+        let groups = list_groups(&session);
+        assert!(
+            groups.starts_with("| index | group | name | active | windows |"),
+            "{groups}"
+        );
+        let panes = list_panes(&session).unwrap();
+        assert!(
+            panes.starts_with("| index | pane | title | active | primary pid |"),
+            "{panes}"
+        );
         assert!(choose_group_display(&session).contains("action=select-group -t"));
         assert!(
             display_panes(&session)

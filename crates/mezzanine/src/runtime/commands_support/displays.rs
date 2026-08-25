@@ -16,39 +16,34 @@ pub(super) fn runtime_list_panes_display(service: &RuntimeSessionService) -> Res
         .session
         .active_window()
         .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
-    let lines = window
-        .panes()
-        .iter()
-        .map(|pane| {
-            let primary_pid = service
-                .primary_pid_for_live_pane_process(pane.id.as_str())
-                .map(|pid| pid.to_string())
-                .unwrap_or_else(|| "none".to_string());
-            let agent_id = service
-                .agent_shell_store()
-                .get(pane.id.as_str())
-                .map(|_| format!("agent-{}", pane.id))
-                .unwrap_or_else(|| "none".to_string());
-            format!(
-                "pane={}:index={}:title={}:active={}:primary_pid={}:size={}x{}:agent_id={}:live={}:source=runtime",
-                pane.id,
-                pane.index,
-                json_escape(&pane.title),
-                pane.active,
-                primary_pid,
-                pane.size.columns,
-                pane.size.rows,
-                agent_id,
-                pane.live
-            )
-        })
-        .collect::<Vec<_>>();
-    Ok(format!(
-        "panes={} window={} source=runtime\n{}",
-        lines.len(),
-        window.id,
-        lines.join("\n")
-    ))
+    let mut lines = vec![
+        "| index | pane | title | active | primary pid | size | agent id | live |".to_string(),
+        "| --- | --- | --- | --- | --- | --- | --- | --- |".to_string(),
+    ];
+    lines.extend(window.panes().iter().map(|pane| {
+        let primary_pid = service
+            .primary_pid_for_live_pane_process(pane.id.as_str())
+            .map(|pid| pid.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        let agent_id = service
+            .agent_shell_store()
+            .get(pane.id.as_str())
+            .map(|_| format!("agent-{}", pane.id))
+            .unwrap_or_else(|| "none".to_string());
+        format!(
+            "| {} | {} | {} | {} | {} | {}x{} | {} | {} |",
+            pane.index,
+            runtime_markdown_table_cell(pane.id.as_str()),
+            runtime_markdown_table_cell(&pane.title),
+            pane.active,
+            primary_pid,
+            pane.size.columns,
+            pane.size.rows,
+            agent_id,
+            pane.live
+        )
+    }));
+    Ok(lines.join("\n"))
 }
 
 /// Runs the runtime display panes display operation for this subsystem.
@@ -201,25 +196,29 @@ pub(super) fn runtime_choose_window_display(service: &RuntimeSessionService) -> 
 
 /// Returns runtime window group rows for `list-groups`.
 pub(super) fn runtime_list_groups_display(service: &RuntimeSessionService) -> String {
-    service
-        .session
-        .window_groups()
-        .iter()
-        .map(|group| {
-            format!(
-                "{}:{}:{}:active={}:windows={}",
-                group.index,
-                group.id,
-                json_escape(&group.name),
-                service
-                    .session
-                    .active_group()
-                    .is_some_and(|active| active.id == group.id),
-                group.window_ids.len()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut lines = vec![
+        "| index | group | name | active | windows |".to_string(),
+        "| --- | --- | --- | --- | --- |".to_string(),
+    ];
+    lines.extend(service.session.window_groups().iter().map(|group| {
+        format!(
+            "| {} | {} | {} | {} | {} |",
+            group.index,
+            runtime_markdown_table_cell(group.id.as_str()),
+            runtime_markdown_table_cell(&group.name),
+            service
+                .session
+                .active_group()
+                .is_some_and(|active| active.id == group.id),
+            group.window_ids.len()
+        )
+    }));
+    lines.join("\n")
+}
+
+/// Escapes one runtime topology field for a Markdown table cell.
+fn runtime_markdown_table_cell(value: &str) -> String {
+    value.replace('|', r"\|").replace('\n', "<br>")
 }
 
 /// Returns runtime group chooser rows with concrete selection actions.

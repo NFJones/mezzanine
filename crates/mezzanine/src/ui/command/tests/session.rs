@@ -263,12 +263,30 @@ fn list_commands_return_session_state() {
     )
     .unwrap();
 
-    assert!(display_body(windows).contains("panes=2"));
+    let windows = display_body(windows);
+    assert!(
+        windows.starts_with("| index | window | name | active | panes | size |"),
+        "{windows}"
+    );
+    assert!(windows.contains("| 2 |"), "{windows}");
+    let groups = display_body(
+        execute_command(
+            &mut session,
+            &primary,
+            &parse_command_sequence("list-groups").unwrap()[0],
+        )
+        .unwrap(),
+    );
+    assert!(
+        groups.starts_with("| index | group | name | active | windows |"),
+        "{groups}"
+    );
     let panes = display_body(panes);
-    assert!(panes.contains("active=true"), "{panes}");
-    assert!(panes.contains("primary_pid=none"), "{panes}");
-    assert!(panes.contains("agent_id=none"), "{panes}");
-    assert!(panes.contains("size="), "{panes}");
+    assert!(
+        panes.starts_with("| index | pane | title | active | primary pid |"),
+        "{panes}"
+    );
+    assert!(panes.contains("| none |"), "{panes}");
     let clients = display_body(clients);
     assert!(
         clients.starts_with("| client | name | role | state |"),

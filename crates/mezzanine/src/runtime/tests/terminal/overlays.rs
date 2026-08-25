@@ -225,6 +225,43 @@ fn runtime_non_pager_command_feedback_stays_out_of_pane_log() {
     );
 }
 
+/// Verifies topology list commands open the command pager with rendered table
+/// rows instead of exposing their compact machine-oriented state strings.
+///
+/// Windows use the shared session formatter while groups and panes use
+/// runtime-aware formatters, so this covers every command path that must emit
+/// pager-friendly Markdown tables.
+#[test]
+fn runtime_topology_lists_render_tables_in_command_pager() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    for (command, heading) in [
+        ("list-windows", "window"),
+        ("list-groups", "group"),
+        ("list-panes", "pane"),
+    ] {
+        service
+            .execute_attached_display_command(&primary, command)
+            .unwrap();
+        let overlay = service
+            .primary_display_overlay()
+            .expect("topology list command should open the command pager");
+        assert!(
+            overlay.lines.iter().any(|line| line.contains(heading)),
+            "{command} should retain its table heading: {:?}",
+            overlay.lines
+        );
+        assert!(
+            overlay.lines.iter().any(|line| line.contains('│')),
+            "{command} should render Markdown as table rows: {:?}",
+            overlay.lines
+        );
+    }
+}
+
 /// Verifies keyboard movement inside a primary command-output pager refreshes
 /// through the retained-frame diff path.
 ///
