@@ -14,7 +14,9 @@ Know the basic session commands in [Sessions and panes](../using-mezzanine/sessi
 Use `mez new` to create a session. Bare `mez` attaches to the first session
 that accepts a primary client and creates a session only when none is
 available. Use `mez list` to discover resumable sessions and `mez attach` to
-select one. Press `Ctrl+A d` or use `mez detach` to leave the invoking client.
+select one. Press `Ctrl+A d` inside an interactive attachment to leave that
+client. For administration from another process, use `mez detach --client-id
+ID`; a bare one-shot `mez detach` cannot identify a separate attached client.
 Detaching normally leaves pane processes and agent tasks running.
 
 The runtime exposes `mezctl/2` and allows up to 16 equal-authority attached
@@ -33,13 +35,13 @@ to its invoking terminal.
 For an explicitly paired remote session, use `mez --iroh-profile PROFILE
 attach`, pair without attaching with `mez remote pair --invite-file PATH --name
 NAME`, or first pair and attach with `mez --iroh-invite-file PATH --save-as NAME
-attach`. Add `--observer` to attach immediately with read-only access. These selectors do
-not inspect the local session registry and never fall back to a Unix socket. A
-role ceiling of `observer` cannot be elevated to primary attachment. Remote
-attach also
-negotiates an authorized event stream for redraw wakeups. Pending observers do
-not receive it until approval; revocation, detach, or stream failure terminates
-the remote attach and requires an explicit reconnect. The configured Iroh setup
+attach`. Add `--observer` to attach immediately with read-only access. These
+selectors do not inspect the local session registry and never fall back to a
+Unix socket. A role ceiling of `observer` cannot be elevated to primary
+attachment. Remote attach also negotiates an authorized event stream for
+redraw wakeups. An observer receives session-view events only from its atomic
+attachment cutoff onward. Revocation, detach, or stream failure terminates the
+remote attach and requires an explicit reconnect. The configured Iroh setup
 timeout bounds both waiting for that stream and receiving its preface; timeout
 closes the connection instead of leaving attach waiting indefinitely.
 
@@ -60,7 +62,9 @@ and a client-independent landing view. It never restores attached client IDs,
 layout ownership, client-local focus/history/zoom, transient presentation,
 observer authority, event credentials, credentials, terminal history, agent
 conversations, local message state, live MCP state, pending approvals, approval
-grants, or pane processes. Restored sessions begin with zero attached primaries.
+grants, or pane processes. Restored sessions begin with zero attached primaries
+by default; `--serve --attach-primary` creates the documented interactive
+primary during live restore.
 
 Snapshots are stored under Mezzanine's user-private configuration area. The
 snapshot CLI uses its `snapshots` directory, while live session layout commands
@@ -73,8 +77,10 @@ Use `mez snapshot inspect <snapshot-id>` to inspect saved snapshot metadata.
 `mez snapshot resume <snapshot-id>` reconstructs a saved session model without
 starting a daemon; add `--serve` to start it as a live foreground daemon.
 `resume-latest` offers the same behavior for the newest matching snapshot.
-Both restore commands accept `--restart-command` for restorable pane processes.
-A live restore creates fresh panes and shell
+Both restore commands accept `--restart-command`, but use it with `--serve`
+when restarted pane processes must remain alive. Without `--serve`, restore is
+transient: any restarted process is terminated when the reconstructed model is
+serialized and the command exits. A live restore creates fresh panes and shell
 processes. It cannot reconnect to processes that exited, and it resets previous
 live approvals. If a saved directory cannot be used, Mez falls back to the
 user's home directory and reports the recovery state. Review interrupted agent

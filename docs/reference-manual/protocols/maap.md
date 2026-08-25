@@ -11,8 +11,9 @@ is normative.
 ## Batch envelope and ownership
 
 The internal and audit batch is a JSON object with `protocol: "maap/1"`, a
-non-empty `rationale`, optional durable `thought`, `turn_id`, `agent_id`, one
-or more `actions`, and `final`. Provider-native compact schemas require only
+non-empty `rationale`, optional durable `thought`, `turn_id`, `agent_id`,
+`actions`, and `final`. A canonical explicitly final internal batch may contain
+zero actions; other internal batches contain one or more. Provider-native compact schemas require only
 the model-authored `rationale` and `actions`; Mezzanine stamps protocol,
 turn/agent identities, final-state bookkeeping, and stable action identities.
 
@@ -38,7 +39,7 @@ surface; an absent action family must be requested, not emulated.
 | --- | --- | --- |
 | `say` | `status`, `content_type`, `text` | Display-only `progress`, `final`, or `blocked` text. Supported plain-text, Markdown, and diff source is rendered while streaming, then validated and promoted in place without truncation or final replay. Commands and patches in text do not execute. |
 | `request_capability` | `capability`, `reason` | Requests a coarse runtime action family; it is not a user permission request. |
-| `shell_command` | `summary`, `command` | Sends exact local shell input through the pane shell. Optional `interactive`, `stateful`, and `timeout_ms` refine execution. |
+| `shell_command` | `summary`, `command` | Sends exact local shell input through the effective native or pane shell transport. Optional `interactive`, `stateful`, and `timeout_ms` refine execution. |
 | `apply_patch` | `patch` | The only semantic file-content mutation action; payload uses Mezzanine `*** Begin Patch` format. |
 | `web_search` | `query` | Runtime-owned web search, only for user-requested current web information. |
 | `fetch_url` | `url` | Runtime-owned HTTP(S) retrieval, never a local-path reader. |
@@ -59,6 +60,27 @@ while model-selected skills are disabled. `abort` is controller-owned and must
 not appear in provider action schemas. Availability of memory, issue, MCP,
 network, and other action types depends on the live turn capability surface.
 
+### Canonical optional fields
+
+The canonical internal contract accepts optional fields that a compact
+provider schema may omit from a particular turn:
+
+- `shell_command`: `interactive` and `stateful` default to `false`;
+  `timeout_ms` is optional.
+- `apply_patch`: `strip` is accepted for compatibility but is unsupported by
+  Mezzanine patch payloads and should be omitted.
+- `web_search`: optional `domains`, `recency_days`, and `max_results` filters.
+- `fetch_url`: optional `format` and `max_bytes` response bounds.
+- `memory_search`: optional `limit`; `memory_store`: optional `priority`,
+  `scope`, and `expires_in_days`.
+- `spawn_agent`: optional `placement`, `cooperation_mode`, `read_scopes`, and
+  `write_scopes`. Omitted scopes inherit the parent; explicit empty arrays deny
+  that authority.
+
+Treat the live schema as authoritative for what the current turn may submit.
+Provider compatibility carriers can be stricter than the canonical internal
+contract and do not make hidden fields available.
+
 ## Execution and approval
 
 Mezzanine validates the complete batch and active capabilities before evaluating
@@ -67,11 +89,13 @@ grant authority. Actions requiring approval become `blocked` and are presented
 to the primary client. Denial, cancellation, timeout, policy prohibition, and
 pre-execution failure remain durable results rather than being silently retried.
 
-`shell_command` is pane-shell-backed. Its `summary` is visible progress text;
-the raw command is not part of the summary. Model-authored commands cannot use
-heredoc/here-string redirection or invoke MAAP semantic action names as shell
-programs. Use `apply_patch` for ordinary file-content edits and shell commands
-for inspection, validation, and non-content filesystem operations.
+`shell_command` is shell-backed. Native mode starts a fresh compatible shell
+inferred from the validated pane root process; pane mode uses the interactive
+pane shell. Its `summary` is visible progress text; the raw command is not part
+of the summary. Model-authored commands cannot use heredoc/here-string
+redirection or invoke MAAP semantic action names as shell programs. Use
+`apply_patch` for ordinary file-content edits and shell commands for inspection,
+validation, and non-content filesystem operations.
 
 An `apply_patch` payload begins with `*** Begin Patch` and ends with
 `*** End Patch`. It contains add, update (with anchored hunks), delete, or
@@ -89,7 +113,7 @@ rules.
 ## Results, continuation, and retries
 
 Mezzanine emits one result for every identifiable accepted, rejected, blocked,
-denied, running, succeeded, failed, cancelled, timed-out, or interrupted
+denied, running, succeeded, failed, cancelled, `timed_out`, or interrupted
 action. A result includes:
 
 | Field | Meaning |

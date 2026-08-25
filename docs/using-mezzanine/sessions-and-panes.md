@@ -35,11 +35,11 @@ state, and viewport. One elected layout owner controls canonical pane geometry.
 Every attach receives a fresh non-resumable client ID, even when display names
 match.
 
-`mez attach --observer` requests observer access. An attached primary must
-approve the request and becomes its exact view source unless another attached
-source is selected atomically. Observers are read-only, receive no history from
-before approval, and are revoked rather than silently transferred when their
-source primary detaches.
+`mez attach --observer` immediately attaches a read-only observer to the
+current layout-owner primary. Attachment fails when no layout owner is present.
+The observer follows that exact source from the attachment cutoff onward,
+receives no earlier history, and detaches rather than silently transferring
+when its source detaches.
 
 ## Work with windows and panes
 
@@ -62,16 +62,33 @@ Open the Mezzanine command prompt with `Ctrl+A :` for commands such as
 Use `Ctrl+A ?` or `list-keys` for the effective bindings; configuration can
 change them.
 
-## Persistence and shutdown
+## Detach and reattach
 
-Detaching normally keeps pane processes running. Layout, history, and agent
-state persist according to their settings, but persistence never bypasses trust
-or approval checks. Use `mez snapshot create` to save a layout and
-`mez snapshot` to list saved snapshots. Use `mez snapshot inspect
-<snapshot-id>` to inspect its metadata. `mez snapshot resume <snapshot-id>`
-reconstructs the saved layout model without starting a daemon; add `--serve`
-to start it as a live foreground daemon. Use `mez kill --force` or the
-command-prompt `exit` to end a session and its panes.
+Detaching normally leaves the live session, pane processes, retained terminal
+history, and agent tasks running. Reattaching reconnects to that same runtime;
+it is different from reconstructing a new session from a snapshot. Persistence
+never bypasses trust or approval checks.
+
+Use `mez list` to select a target, then use `mez kill <session-id> --force` or
+the command-prompt `exit` to end that session and its panes.
+
+## Snapshots
+
+Use `mez snapshot create` to save a layout, `mez snapshot` to list snapshots,
+and `mez snapshot inspect <snapshot-id>` to inspect one. `mez snapshot resume
+<snapshot-id>` reconstructs the saved topology, names, geometry, and known pane
+working directories without starting a daemon; `resume-latest` selects the
+newest matching snapshot. Add `--serve` to either resume command to run the
+restored model as a live foreground daemon.
+
+A snapshot is not a frozen live session. Resume creates fresh pane shell
+processes with fresh process IDs; it does not restore process state, terminal
+history, attached clients, client-local presentation, approvals, agent
+conversations, or live integration state. Snapshot files contain metadata such
+as pane titles and working-directory paths, so treat them as sensitive when
+sharing or backing them up. See [Lifecycle, detach, and
+recovery](../operations/lifecycle-detach-and-recovery.md) for the full restore
+contract.
 
 ## Related pages
 

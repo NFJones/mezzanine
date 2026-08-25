@@ -18,6 +18,11 @@ when none exists, it is the pane working directory. For a path-scoped task,
 applicable instruction files are collected from the project root down to the
 target directory.
 
+`instructions.project_filenames` can add ordered alternatives to the default
+`AGENTS.md` name. In each directory, Mezzanine selects at most one instruction
+file: the first configured filename that exists. Directory depth then controls
+scope and descendant precedence as described below.
+
 Ancestor guidance applies before descendant guidance, and a descendant file
 takes precedence when instructions conflict. Its scope is the directory tree
 containing it. Mezzanine applies every applicable instruction to a modified
@@ -52,12 +57,19 @@ pane. Trust decisions persist in the user-private trust store. Trusting an
 overlay does not itself grant host access, disable approval, or override a
 Bubblewrap boundary.
 
-While a relevant overlay is pending and no primary client can decide it, Mez
-does not silently substitute lower-precedence behavior for work that depends on
-that overlay. Agent prompts and turns, hooks, MCP configuration, command rules,
-and provider settings scoped to that project wait for the trust decision. Use
-`mez config layers` to distinguish an applied overlay from one that is pending
-or ignored.
+Even after trust, project overlays cannot change primary-user-only execution
+authority: approval policy or bypass, sandbox backend, read/write scopes,
+network and destructive-action policy, Bubblewrap authority, host/transport
+settings, or model-profile approval policy. Trust activates only otherwise
+eligible project settings, such as hooks, MCP/provider configuration, and
+project command rules. Separately, a trusted project root can provide the
+default Bubblewrap project scope when no user scopes are configured.
+
+While an applicable overlay is pending, new agent turns wait for the primary
+user to trust or reject it rather than silently substituting lower-precedence
+project behavior. If no primary client is attached, the request remains
+pending until one can decide it. Use `mez config layers` to distinguish an
+applied overlay from one that is pending or ignored.
 
 ## Related pages
 

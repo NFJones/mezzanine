@@ -39,13 +39,20 @@ it applies to subsequent turns until `/plan off` (or `/plan toggle`) disables
 it. While enabled, the pane has no write sandbox scopes. Use `/plan status` to
 inspect the current mode.
 
-Runtime-created subagent and restored-agent panes select their effective shell
-mode before launching. Native mode validates the pane root process and starts
-agent work without writing bootstrap input to the pane. Pane mode launches an
-agent-owned Bash, Fish, Zsh, or POSIX `sh` startup adapter, then keeps the child
-task queued until authenticated admission and environment bootstrap complete.
-If that bounded startup fails, the child and its joined or routed parent are
-settled with a copyable diagnostic instead of remaining in `bootstrapping`.
+## Choose a shell mode
+
+The default `native` mode validates the pane root process and runs each local
+agent action in a fresh compatible shell without writing bootstrap input into
+the pane. `pane` mode instead sends shell-backed work through the interactive
+pane shell. Use `/shell-mode status` to inspect the effective mode,
+`/shell-mode native` or `/shell-mode pane` for a pane override, and append
+`--global` to persist the default for panes without an override.
+
+Pane mode requires a supported Bash, Fish, Zsh, or POSIX `sh` prompt to be
+ready for input. A full-screen program, password prompt, or uncertain shell
+boundary makes injection unsafe; return it to an empty prompt. Runtime-created
+agent panes use bounded startup and fail with a copyable diagnostic instead of
+remaining indefinitely in bootstrap.
 
 ## Work inside SSH and container shells
 
@@ -63,11 +70,9 @@ This explicit empty-prompt assertion applies only to an existing user-owned
 foreign environment. Runtime-created agent panes use their mode-specific
 startup contract and never enter this foreign-shell discovery path.
 
-Agent work waits for that dependency-free bootstrap to certify the foreign
+Agent work waits for that dependency-free bootstrap to validate the foreign
 shell before generated input is released. Mezzanine never silently edits remote
-startup files and never installs software in the foreign environment. Loader
-and child-startup records stay owner-only, remain within portable PTY
-canonical-line limits, and are removed when the synchronous child returns.
+startup files and never installs software in the foreign environment.
 
 An unmanaged nested shell that is not at an empty, interactive prompt cannot be
 probed safely from the local `ssh` or container-client process alone; Mezzanine
@@ -75,12 +80,9 @@ will not inject input into a password prompt, full-screen program, or unknown
 command line. Exit the nested environment to restore normal discovery of the
 local pane shell.
 
-For all three shells, bootstrap remains bounded and fail-closed. Mezzanine
-releases the environment bootstrap only after the fresh child publishes an
-authenticated installation event, then certifies the child process group with
-fresh foreground observations. Exiting the nested environment clears that
-authority and re-arms discovery for the original pane shell when agent mode is
-visible.
+For all supported shells, bootstrap remains bounded and fail-closed. Exiting a
+nested environment clears its shell authority and re-arms discovery for the
+original pane shell when agent mode is visible.
 
 ## Review actions and context
 

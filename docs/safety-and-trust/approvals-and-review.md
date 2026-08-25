@@ -19,7 +19,8 @@ state, declared scopes, and whether shell syntax can be safely classified. If
 it cannot establish that a command fits the active rules, it asks rather than
 assuming it is safe.
 
-Blocked actions remain pending until the primary client decides. Read-only
+Blocked actions remain pending until the primary client decides or a scoped
+policy change makes them allowable when pending work is re-evaluated. Read-only
 observers cannot approve, deny, or redirect them. Use the pane-local approval
 controls or the session approval view to inspect the exact requested action,
 then choose an appropriately narrow decision. A denial returns to the agent so
@@ -29,7 +30,8 @@ continues.
 ## Choose a policy deliberately
 
 `ask` prompts for actions that are not already allowed by applicable rules.
-`auto-allow` still requires model justification and honors deny rules.
+For a non-whitelisted action, `auto-allow` requires a non-empty model rationale
+and still honors deny rules.
 `full-access` suppresses fresh whitelist approval prompts but preserves explicit
 denies and any configured sandbox. `host-access` runs local shell actions on
 the host outside the sandbox; only the primary user can select it.

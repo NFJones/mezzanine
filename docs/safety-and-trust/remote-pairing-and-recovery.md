@@ -44,14 +44,16 @@ mez remote status
 mez remote invite --role observer
 ```
 
-`status` reports the public persistent-host endpoint identity and, while the listener
-is bound, its current dialable endpoint address. `invite` returns a short-lived
-bearer token once together with that pinned address, role, expiry, and profile
-name. The versioned invitation envelope currently uses format version 1. Its
-lifetime defaults to `transport.iroh.invitation_ttl_seconds` (600
-seconds by default); `--expires SECONDS` explicitly overrides that lifetime
-within the supported 30 through 86,400 second range. Transfer the JSON through
-a confidential channel. Prefer secure no-overwrite output:
+For the persistent host, `status` reports whether the host Iroh issuer is
+enabled and its public endpoint ID; it does not report listener health, route
+policy, counters, or a dialable address. `invite` returns a short-lived bearer
+token once together with the pinned address, role, expiry, and profile name.
+The versioned invitation envelope currently uses format version 1. On the
+persistent-host path, omitting `--expires` currently uses 600 seconds even when
+`transport.iroh.invitation_ttl_seconds` differs. Supply `--expires SECONDS` to
+select an explicit lifetime in the supported 30 through 86,400 second range.
+Transfer the JSON through a confidential channel. Prefer secure no-overwrite
+output:
 
 ```console
 mez remote invite --role primary --allow-create --output mez-invite.json
@@ -59,8 +61,9 @@ mez remote invite --role primary --allow-create --output mez-invite.json
 
 The output file is created mode `0600`, existing files and symlinks are refused,
 and the terminal receives only the created path. `mez remote invitation inspect
-mez-invite.json` reports only expiry, role, an abbreviated server fingerprint,
-and direct/relay route counts; it never prints the token.
+mez-invite.json` reports secret-free metadata including format version, profile
+name, scope, expiry and expired state, role, an abbreviated server fingerprint,
+and direct/relay route counts. It never prints the token.
 
 The role is only an attachment ceiling. `--allow-create` is required for remote
 `new` and omitted-target `attach`. Add `--allow-kill` only when that primary
@@ -177,11 +180,14 @@ mez remote rename remote-RECORD-ID "work laptop"
 mez remote revoke remote-RECORD-ID --reason "device retired"
 ```
 
-These commands are primary-only and local-Unix-only. A paired Iroh primary
-cannot create invitations or inspect, rename, or revoke trust. Revocation makes
-future device-proof initialization fail closed. Existing Unix control remains
-available concurrently and is the recovery path after revocation, malformed
-remote traffic, setup timeout, ALPN failure, abrupt loss, or listener failure.
+These commands are local-Unix-only. On the persistent-host path their authority
+comes from owner access to the protected host socket; no attached session
+primary is required. A paired Iroh primary cannot create invitations or
+inspect, rename, or revoke trust. Revocation makes future device-proof
+initialization fail closed. Ordinary remote connection failures leave Unix
+control available concurrently. A supervised Iroh listener failure currently
+terminates `mez host serve` and its Unix listener as one service, so restart the
+host before using Unix administration for recovery.
 To pair the same persistent client endpoint again after revocation, create and
 transfer a new invitation. The new credential resolves against the new active
 trust record; the old credential remains rejected and the revoked record stays

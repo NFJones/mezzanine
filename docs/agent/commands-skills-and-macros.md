@@ -30,7 +30,7 @@ turning the command into an ordinary model request:
 
 | Goal | Commands |
 | --- | --- |
-| Inspect or change authority | `/status`, `/permissions`, `/approval`, `/approve`, `/show-approvals`, and `/sandbox` |
+| Inspect or change authority and execution mode | `/status`, `/permissions`, `/approval`, `/approve`, `/show-approvals`, `/sandbox`, and `/shell-mode` |
 | Control the current task | `/plan`, `/directive`, `/loop`, `/stop`, `/new`, `/fork`, `/resume`, and `/name-session` |
 | Inspect or preserve context | `/compact`, `/show-context`, `/copy`, `/copy-context`, `/copy-patches`, `/copy-trace-log`, and `/list-modified-files` |
 | Select model behavior | `/model`, `/routing`, `/latency`, `/thinking`, `/personality`, and `/list-personalities` |
@@ -42,6 +42,12 @@ reports or changes pane-local sandbox state, while advanced setup, profiles,
 and managed-home cache operations remain under `mez sandbox`. `/plan on`
 keeps the conversation in plan-only mode and removes write scopes for later
 turns; use `/plan off` before asking the agent to edit files.
+
+`/shell-mode status` reports whether local shell work uses fresh native shells
+or the interactive pane shell. `/shell-mode native|pane` changes the current
+pane; add `--global` to persist the fallback for panes without an override.
+Shell mode selects the transport, not its authority—approval and the configured
+[sandbox](../safety-and-trust/sandboxing.md) still apply.
 
 `/new` starts a conversation without prior context, `/fork` opens a new pane
 with a branch copied from the current or selected conversation, and `/resume`

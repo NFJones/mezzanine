@@ -30,7 +30,7 @@ terminal state remain outside ordinary model context.
 | --- | --- | --- |
 | `say` | Present progress, completion, or a blocker to the user. | It is display-only and cannot execute text that resembles a command or patch. |
 | `request_capability` | Ask the controller to expose a coarse action family for this turn. | It is not a user permission prompt. |
-| `shell_command` | Pane-shell inspection, commands, validation, and filesystem operations. | Runs through the pane shell and can require approval. |
+| `shell_command` | Local shell inspection, commands, validation, and filesystem operations. | Uses the effective native or pane shell mode and can require approval. |
 | `apply_patch` | Semantic file-content add, update, move, or delete using `*** Begin Patch` format. | It is a MAAP action, never a shell executable. |
 | `web_search`, `fetch_url` | User-requested current web search or HTTP(S) retrieval. | They are runtime network actions, not local-path readers. |
 | `send_message`, `spawn_agent` | Local coordination and pane-backed delegation. | Scope and policy inherit from the parent. |

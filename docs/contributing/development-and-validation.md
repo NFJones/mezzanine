@@ -7,7 +7,7 @@ before handing off a change.
 
 ## Prerequisites
 
-- A Rust toolchain that supports edition 2024.
+- Rust 1.91 or newer, including `rustfmt` and `clippy`.
 - `just` for the repository recipes.
 - The repository [AGENTS.md](../../AGENTS.md), which is the authoritative
   workflow and handoff guidance.
@@ -48,6 +48,19 @@ that option when running a direct `cargo test` command.
 The optional `just test-real-bubblewrap` acceptance test requires Linux and a
 working Bubblewrap environment. Run it when a change affects the real
 confinement path.
+
+Use the repository's focused recipes for affected subsystems before the full
+suite:
+
+| Area | Focused recipe |
+| --- | --- |
+| Managed Bash, Fish, Zsh, or POSIX-shell startup | `just test-managed-shells` |
+| Slow-test ownership or async responsiveness | `just profile-slow-tests` |
+| Release-mode load and latency | `just release-load-check` or `just release-load-sweep` |
+| Iroh compression behavior or performance | `just iroh-compression-bench` |
+
+Run platform-specific shell and PTY changes on both Linux and macOS when
+available. To reproduce the macOS CI shape, run the full test suite serially.
 
 ## Change discipline
 

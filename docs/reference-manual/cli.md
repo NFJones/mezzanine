@@ -32,13 +32,15 @@ or `mez attach` to select an existing one.
 
 | Command | Behavior |
 | --- | --- |
-| `mez new [--dry-run]` | Start a new background session and attach when interactive. With `--dry-run`, validate session construction instead of starting a daemon. Alias: `new-session`. |
+| `mez new [--dry-run] [--name NAME]` | Start a new background session and attach when interactive. `--name` assigns a session name. With `--dry-run`, validate session construction instead of starting a daemon. Alias: `new-session`. |
 | `mez serve` | Start a foreground session service; it does not attach a primary client unless `--attach-primary` is supplied from an interactive terminal. Alias: `daemon`. |
 | `mez list [--all]` | List hosted local sessions. With the persistent local host, `--all` adds non-terminal remote durable leases to the same scope-tagged aggregate. Alias: `list-sessions`. |
-| `mez attach [session-id] [--observer]` | Attach a primary client, or request read-only observer access. Alias: `attach-session`. |
-| `mez detach [--client-id ID]` | Detach the current client, or the selected client when `--client-id` is supplied. Alias: `detach-client`. |
+| `mez attach [SESSION_ID] [--observer\|--default]` | Attach a primary client, request read-only observer access, or select an existing host default without creating when `--default` is used. `--default` conflicts with an explicit target. Alias: `attach-session`. |
+| `mez detach [--client-id ID]` | Detach the selected client. From an interactive attachment, use `Ctrl+A d` to detach that invoking client; a separate administrative invocation needs the target client ID. Alias: `detach-client`. |
 | `mez kill [session-id] --force` | Terminate the selected live session through its control socket; the optional target accepts a registered session id or creation-order index. `--force` confirms the destructive operation. Alias: `kill-session`. |
 | `mez snapshot` | Manage persisted snapshots. With no subcommand it lists snapshots; see the snapshot forms below. |
+| `mez host` | Serve, inspect, stop, or reconcile the persistent multi-session host. |
+| `mez lease` | Inspect, checkpoint, recover, release, revoke, or garbage-collect persistent-host leases through local administration. |
 
 Creating or attaching a primary client needs an interactive terminal. `mez
 serve` can run without one. Observer attachment also requires an interactive
@@ -89,9 +91,11 @@ authority in a restored session:
 | `mez snapshot resume <snapshot-id>` | Reconstruct the saved layout model without starting a daemon; add `--serve` to launch fresh panes in a foreground daemon. |
 | `mez snapshot resume-latest [--session-id ID]` | Reconstruct the newest matching layout model without starting a daemon; it also accepts `--serve`. |
 
-Both restore commands accept `--restart-command <command>` for restorable pane
-processes. A live restore starts fresh processes and cannot reconnect to the
-processes that existed when the snapshot was taken.
+Both restore commands accept `--restart-command <command>`. Use it with
+`--serve` when restarted pane processes must remain alive; without `--serve`,
+the reconstructed runtime is transient and terminates those processes before
+the command exits. A live restore starts fresh processes and cannot reconnect
+to the processes that existed when the snapshot was taken.
 
 ## Configuration, identity, and integrations
 

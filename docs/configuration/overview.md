@@ -38,6 +38,9 @@ already-running session; their JSON result reports `reload_required` when the
 runtime must reload configuration to observe the change. Validate after an
 edit; invalid configuration is rejected rather than partially applied.
 
+See the [CLI reference](../reference-manual/cli.md#configuration-identity-and-integrations)
+for complete `mez config` command forms, options, and output behavior.
+
 Run `mez config path` before a mutation when several supported formats might
 exist or when you need to confirm the target. A default mutation updates the
 selected primary file; if none exists, it creates the default `config.toml`.

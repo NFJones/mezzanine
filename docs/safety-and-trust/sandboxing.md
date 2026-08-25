@@ -21,8 +21,11 @@ Mez does not install a privileged helper. Pane shell mode probes and launches
 through the pane shell. Native shell mode instead derives identity,
 environment, working directory, and filesystem authority from the pane root
 process and host metadata, then probes and launches directly without pane
-input. Environments without Bubblewrap support use `policy-only`, which remains
-an approval and coordination boundary rather than process isolation.
+input. On unsupported platforms, generated configuration selects
+`policy-only`, which remains an approval and coordination boundary rather than
+process isolation. If `bubblewrap` is explicitly configured, an unavailable
+backend or failed probe fails closed; it never silently changes the action to
+`policy-only` or host execution.
 
 Use `mez sandbox status --verbose` to inspect configured and effective state,
 and `mez sandbox plan` to preview guided setup. The agent-shell `/sandbox`
@@ -31,21 +34,32 @@ advanced setup and managed-home workflows remain CLI operations.
 
 ## Understand effective authority
 
-With Bubblewrap, read scopes are mounted read-only and write scopes are mounted
-read-write (and also imply read access). Explicit scopes are the maximum
-authority. When no scope is configured, a pane in a trusted project can receive
-that project's canonical root as read-write authority; a pane with neither
-source has no filesystem authority.
+With Bubblewrap, user-configured read scopes are mounted read-only and write
+scopes are mounted read-write and also imply read access. Effective authority
+can additionally include code-owned user `skills` and `macros` roots. When no
+user read or write scope is configured, a pane in a trusted project is intended
+to receive that project's canonical root as read-write authority; a pane with
+neither source has no project filesystem authority.
+
+The current runtime folds the code-owned skills and macros paths into the same
+resource lists used to detect explicit scopes. Consequently, when those paths
+are present, the trusted-project fallback can be suppressed even though no user
+scope was configured. Treat `mez sandbox status --verbose` as the source of
+truth for effective authority until the runtime is aligned with the normative
+contract.
 
 Unavailable configured paths are excluded with a warning rather than silently
 broadening authority. The multi-user `/home` root is never usable as an
-authority scope. Scope configuration is the sole determinant of filesystem
-exposure, including credential-bearing paths, so authorize such paths only
-when their exposure is intentional. A permitted home scope is projected through
-a private managed home; Mezzanine does not copy or mount the host home,
-credentials, or user configuration into it. Configured environment forwarding
-names and Git identity can be selectively projected, but they do not grant
-filesystem authority and host global Git configuration is not inherited.
+authority scope. Effective scopes—not approval or project instructions—define
+filesystem exposure, including credential-bearing paths, so authorize such
+paths only when intentional. Trusted-project Bubblewrap runs use a private
+project/profile-keyed managed home when a private configuration root is
+available. Authorized host paths beneath the pane home are projected there at
+corresponding paths; Mezzanine does not otherwise copy or mount the host home,
+credentials, or user configuration. Cleanup and quota for managed homes remain
+user or deployment policy. Configured environment forwarding names and Git
+identity can be selectively projected, but they do not grant filesystem
+authority and host global Git configuration is not inherited.
 
 ## Control network access
 
@@ -76,4 +90,4 @@ boundary is explicitly required and understood.
 ## Next step
 
 Review [Project trust and instructions](project-trust-and-instructions.md)
-before allowing a project overlay to affect authority.
+before activating a project overlay or using a trusted-project default scope.

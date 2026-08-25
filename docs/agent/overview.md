@@ -19,10 +19,12 @@ alternate-screen content, or other panes. Ask it to inspect a file, run a
 bounded command, or capture relevant output when that evidence is needed.
 
 Before a turn, Mez bootstraps the pane environment and discovers applicable
-tools through the pane shell. A remote shell, container, full-screen program,
-password prompt, or uncertain shell boundary can make non-interactive commands
-unavailable. Return the pane to a usable prompt or follow the reported
-readiness guidance rather than assuming a command was sent safely.
+tools. The default native mode starts fresh shell actions from the validated
+pane root process without injecting pane input. Pane mode uses the interactive
+pane shell; in that mode, a remote shell, container, full-screen program,
+password prompt, or uncertain shell boundary can make commands unavailable.
+Return a pane-mode shell to a usable prompt or follow the reported readiness
+guidance rather than assuming a command was sent safely.
 
 ## Review visible actions
 

@@ -45,8 +45,8 @@ policy and sandbox.
 
 Press `Ctrl+A d` to detach the primary client while leaving the session running
 under the usual configuration. Use `mez list` to discover resumable sessions,
-`mez attach` to return, and `mez kill --force` to terminate one
-explicitly.
+`mez attach <session-id>` to return, and `mez kill <session-id> --force` to
+terminate one explicitly.
 
 ## Related pages
 

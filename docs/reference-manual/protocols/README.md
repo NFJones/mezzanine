@@ -17,13 +17,15 @@ advertised by that live service as authoritative over this summary.
 
 | Protocol | Audience | Responsibility |
 | --- | --- | --- |
-| [`mezctl/2`](control-json-rpc.md) | Attach clients, automation, and alternative frontends | JSON-RPC control, terminal rendering and input, session state, and events. |
+| [`mezctl/2`](control-json-rpc.md) | Direct-session attach clients, automation, and alternative frontends | JSON-RPC control, terminal rendering and input, session state, and events. |
+| [`mezctl/3`](control-json-rpc.md) | Persistent-host clients | Authenticated host-front-door routing, host-only operations, and session-bound control after routing. |
 | [`maap/1`](maap.md) | Agent providers and harness integrations | Agent action proposals, approval, execution, and results. |
 | [`mmp/1`](mmp.md) | Local agents and coordination services | Agent discovery, local messaging, presence, and task status. |
 
 [Common conventions](common-conventions.md) defines terminology shared by these
-pages. The protocols are separate services: use `mezctl/2` for multiplexer
-control, `maap/1` for model-to-runtime actions, and `mmp/1` for agent messages.
+pages. The protocols are separate services: use `mezctl/2` for direct-session
+multiplexer control, `mezctl/3` for the persistent-host front door, `maap/1`
+for model-to-runtime actions, and `mmp/1` for agent messages.
 
 ## Compatibility
 

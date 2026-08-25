@@ -35,6 +35,12 @@ bounded profile and authority counts plus a launch-plan digest, not mount paths,
 environment values, or raw command evidence. Configure the audit path and
 retention in the canonical configuration documentation.
 
+Set `audit.hash_chain = true` to cryptographically link consecutive records;
+this provides tamper evidence but is not proof against deletion or rollback.
+`audit.retention_days` controls age-based pruning. With `audit.required = true`,
+a failure to persist a required record denies the auditable work instead of
+continuing without its record.
+
 If audit logging is required and unavailable, auditable actions are denied.
 Treat a logging failure as an operational problem to repair, not a reason to
 disable review controls without a deliberate risk decision.

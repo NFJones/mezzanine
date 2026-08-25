@@ -27,6 +27,20 @@ Press `Ctrl+A [` to enter pane-local copy mode. You can scroll normal terminal
 content, move a selection cursor, and copy without sending keys to the pane
 program. `Ctrl+A ]` pastes the most recent buffer into the active pane.
 
+Default copy-mode controls are:
+
+| Key | Result |
+| --- | --- |
+| Arrow keys, `Home`, and `End` | Move the copy cursor. |
+| `Ctrl+Up` / `Ctrl+Down` | Move by larger vertical steps. |
+| `PageUp` / `PageDown` | Move by one viewport page. |
+| `Space` | Start a selection; press again to copy it. |
+| `Escape` | Leave copy mode. |
+
+`Ctrl+A PageUp` enters copy mode and immediately moves one page upward. Use
+`Ctrl+A ?` to inspect effective bindings when configuration changes the
+defaults.
+
 The command prompt also provides `copy-selection`, `paste-clipboard`,
 `paste-buffer`, `create-buffer`, `list-buffers`, `choose-buffer`, and
 `delete-buffer`. Bracketed paste is used when the pane application supports it.

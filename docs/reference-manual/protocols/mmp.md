@@ -35,7 +35,7 @@ Every envelope is an object with these fields:
 | --- | --- |
 | `protocol` | Exactly `mmp/1`. |
 | `id` | Globally unique message ID in the session. Recipients treat it as an idempotency key. |
-| `type` | One of the message types below, or a namespaced extension. |
+| `type` | One of the message types accepted by the endpoint below. |
 | `time` | RFC 3339 or documented monotonic time. |
 | `sender` | Authenticated sender identity. Registered agents include `agent_id`; pane, window, role, and capabilities may be present. |
 | `recipient` | Agent, pane, window, session, role, capability query, or group target. |
@@ -45,13 +45,15 @@ Every envelope is an object with these fields:
 | `payload` | The application payload. |
 
 The registration `hello` is the bootstrap exception to this full envelope: it
-contains `protocol`, `type`, a non-empty `role`, and optional `capabilities`.
-It does not carry a registered sender identity, recipient, delivery metadata,
-or application payload. The service assigns the effective identity in
-`welcome`. After registration, the service—not the sender—validates identity
-against the authenticated connection. Mismatched sender claims are rejected
-unless a documented trusted bridge rewrites them. Forwarders preserve the
-effective identity and unknown envelope fields unless policy removes them.
+contains `protocol`, `type`, an optional non-empty `role`, and optional
+`capabilities`. An omitted role defaults to `default`. It does not carry a
+registered sender identity, recipient, delivery metadata, or application
+payload. The service assigns the effective identity in `welcome`. After
+registration, the service—not the sender—validates identity against the
+authenticated connection. Mismatched sender claims are rejected unless a
+documented trusted bridge rewrites them. MMP currently preserves accepted
+non-reserved extension fields at the top level; this is an explicit exception
+to the shared `extensions`-object convention.
 
 ## Message types
 
@@ -62,30 +64,39 @@ effective identity and unknown envelope fields unless policy removes them.
 | `discover` | Query agents by identity, pane, window, role, status, or capabilities. |
 | `discover_result` | Discovery response. |
 | `send` | Submit application payload for a recipient or scope. |
-| `deliver` | Service delivers application payload. |
-| `ack` | Acknowledge accepted handling or delivery. |
+| `mmp.receive` | Poll a subscribed recipient for a delivery batch; optional `limit` defaults to 100. |
+| `transport/receive` | Compatibility alias for `mmp.receive`. |
+| `deliver` | Service delivers a batch containing `cursor` and sequenced `messages`. |
+| `ack` | Advance the recipient subscription through `sequence` (or compatibility field `last_sequence`). |
 | `error` | Structured protocol or delivery failure. |
 | `presence` | Announce status or capability changes. |
 | `heartbeat` | Prove connection liveness. |
 | `task_status` | Report task state. |
 | `task_result` | Report task completion. |
 
-Extension message types must use a reverse-DNS or URI-like namespace.
+Unknown message types, including otherwise well-formed namespaced types, are
+rejected by the current endpoint.
 
 ## Delivery, expiry, and errors
 
-MMP provides at-least-once delivery to registered local recipients while they
-remain available and the message has not expired. The service continues trying
-an open writable recipient connection without requiring another request frame.
-For one sender, one recipient, and one logical channel, delivery order matches
-acceptance order.
+MMP preserves acceptance order for one sender, one recipient, and one logical
+channel. Explicit receive returns a `deliver` object shaped as
+`{"protocol":"mmp/1","type":"deliver","cursor":{"recipient":"...","last_sequence":N},"messages":[{"sequence":N,"envelope":{...}}]}`.
+An `ack` advances the durable subscription cursor through the supplied
+sequence. The current automatic fanout path, however, advances its server-side
+cursor after writing a delivery frame rather than after a recipient `ack`.
+Therefore it is connection-oriented best effort, not an end-to-end
+at-least-once guarantee: a disconnect after the server write but before
+application consumption can lose that unconsumed delivery.
 
-The sender receives `ack` when a message is accepted for delivery. It receives
-`error` when the message is rejected, undeliverable, or expires first. An error
-payload contains `code`, `message`, and `retryable`, with non-secret `details`
-when useful. Baseline codes are `unsupported_protocol`, `malformed_frame`,
-`invalid_envelope`, `unauthorized`, `not_found`, `expired`,
-`payload_too_large`, `rate_limited`, `policy_denied`, and `internal_error`.
+The sender receives `ack` when a message is accepted for delivery. Body-level
+failures use
+`{"protocol":"mmp/1","type":"error","error":{"code":"...","message":"...","retryable":false,"delivery_status":"..."}}`.
+Current dispatch can emit `unsupported_protocol`, `payload_too_large`,
+`expired`, `invalid_envelope`, `not_found`, `unauthorized`, `undeliverable`, and
+`internal_error`, depending on the underlying failure. Framing failures such as
+malformed or oversized frames can terminate the framed request before an MMP
+error body exists.
 
 ## Payloads and MAAP bridge
 

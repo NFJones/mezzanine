@@ -33,6 +33,36 @@ state can affect what is available.
 | Inspect and adjust the interface | `show-messages`, `show-iroh-status`, `list-keys`, `list-key-presets`, `set-key-preset`, `list-themes`, `set-theme`, `add-options`, `show-options`, `set-option`, `bind-key`, and `unbind-key` |
 | Save or load layout state | `save-layout` and `load-layout` |
 
+## Baseline command inventory
+
+The baseline registry contains the following canonical commands. Live `help`
+remains authoritative for arguments, aliases, configured availability, and
+runtime requirements.
+
+- **Help and configuration:** `help`, `add-options`, `show-options`,
+  `set-option`, `source-file`, `refresh-client`, `bind-key`, `unbind-key`,
+  `list-keys`, `list-key-presets`, `set-key-preset`, `list-themes`, and
+  `set-theme`.
+- **Groups and windows:** `new-group`, `rename-group`, `kill-group`,
+  `select-group`, `next-group`, `previous-group`, `last-group`, `list-groups`,
+  `choose-group`, `new-window`, `rename-window`, `kill-window`,
+  `select-window`, `next-window`, `previous-window`, `last-window`,
+  `list-windows`, `next-layout`, `select-layout`, and `rebalance-window`.
+- **Panes and presentation:** `split-window`, `kill-pane`, `select-pane`,
+  `resize-pane`, `next-pane`, `previous-pane`, `last-pane`, `rotate-pane`,
+  `synchronize-panes`, `zoom-pane`, `swap-pane`, `break-pane`, `join-pane`,
+  `display-panes`, `list-panes`, `rename-pane`, `capture-pane`, `pipe-pane`,
+  and `mark-pane-ready`.
+- **Sessions and clients:** `list-clients`, `detach-client`, `attach-session`,
+  `list-sessions`, `rename-session`, `kill-session`, `save-layout`,
+  `load-layout`, and `exit`.
+- **Copy, buffers, and history:** `copy-mode`, `copy-selection`,
+  `paste-clipboard`, `paste-buffer`, `create-buffer`, `list-buffers`,
+  `choose-buffer`, `delete-buffer`, `save-buffer`, `clear-history`,
+  `search-history`, and `export-history`.
+- **Agent and diagnostics:** `agent-shell`, `show-messages`, `show-metrics`,
+  and `show-iroh-status`.
+
 Some commands require an active runtime, control endpoint, or primary-client
 authority. Use `help <command>` when available and review the resulting prompt
 or approval rather than assuming a command affects a detached or observer

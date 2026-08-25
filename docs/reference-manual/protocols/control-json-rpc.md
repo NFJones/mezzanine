@@ -2,10 +2,10 @@
 
 ## Purpose
 
-Describe the implemented `mezctl/2` independent-primary endpoint and its
-unsupported `mezctl/1` predecessor. This page summarizes the implementer contract;
-the [control endpoint in `SPEC.md`](../../../SPEC.md#13-control-endpoint) is
-normative.
+Describe the implemented `mezctl/2` independent-primary endpoint, the
+`mezctl/3` persistent-host front door, and the unsupported `mezctl/1`
+predecessor. This page summarizes the implementer contract; the [control
+endpoint in `SPEC.md`](../../../SPEC.md#13-control-endpoint) is normative.
 
 ## Version 2 cutover contract
 
@@ -38,16 +38,19 @@ configured. Unix clients should use peer credentials and the private socket
 path. TCP clients must authenticate with an unguessable bearer token or a
 stronger configured mechanism before receiving session data or mutating state.
 
-The opt-in Iroh adapter uses ALPN `mezzanine/transport/1` and carries the same
-bounded `mezctl/2` frames on exactly one long-lived, client-opened bidirectional
-control stream. The server accepts no client-opened unidirectional streams and
-lowers each connection to one concurrent bidirectional control stream. An
-interactive client may request `event_stream_version: 1` during
-`control/initialize`; only after that initialize response is flushed may the
-server open one unidirectional stream beginning with the exact preface
-`mezzanine/events/1\n`. Setup, idle operation, writes, and teardown are bounded;
-wrong ALPNs, excess streams, malformed frames, stalled setup, and one failed
-connection are isolated from later clients and from the Unix listener.
+The opt-in Iroh adapter uses ALPN `mezzanine/transport/1` and carries bounded
+control frames on exactly one long-lived, client-opened bidirectional control
+stream. The server accepts no client-opened unidirectional streams and lowers
+each connection to one concurrent bidirectional control stream. Observers
+request `event_stream_version: 1`; primaries request version 2 and may retry
+version 1 only after a legacy server explicitly rejects version 2. After the
+initialize response is flushed, the server may open one unidirectional stream
+with preface `mezzanine/events/1\n` or `mezzanine/events/2\n`, matching the
+negotiated version. Version 2 is limited to authenticated Iroh primaries and
+supports negotiated client-local clipboard writes. Setup, idle operation,
+writes, and teardown are bounded; wrong ALPNs, excess streams, malformed
+frames, stalled setup, and one failed connection are isolated from later
+clients and from the Unix listener.
 
 Schema v71 defines two compressed application-framing ALPNs:
 `mezzanine/transport/2/zstd` and
@@ -134,7 +137,7 @@ Unless an outer transport has already authenticated and negotiated a version,
 the first request is `control/initialize`.
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"example-ui","client_version":"1.0.0","requested_version":1,"requested_role":"primary","client":{"name":"example-ui","terminal":{"columns":120,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}
+{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"example-ui","client_version":"1.0.0","requested_version":2,"requested_role":"primary","client":{"name":"example-ui","terminal":{"columns":120,"rows":40,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}
 ```
 
 The implemented direct-session endpoint accepts `mezctl/2`. The persistent
@@ -255,21 +258,21 @@ State results use versioned objects such as `SessionState`, `WindowState`,
 MCP server/tool state. State records include opaque `id` and `version`; clients
 must preserve unknown extensions and refetch rather than reconstructing state.
 
-## Version 1 compatibility catalog
+## Current version 2 method catalog
 
-The table records the unsupported predecessor catalog for migration reference. V2 removes
-`session/attach` and `client/select_primary` and adds
-`client/set_layout_owner`; the table below does not define the v2 surface.
-“RO” means read-only and
-naturally idempotent. Every other entry requires `idempotency_key` unless its
-note says otherwise. The parameter and result object schemas are specified in
-the [baseline method table in `SPEC.md`](../../../SPEC.md#13-control-endpoint).
+This table summarizes the direct-session `mezctl/2` surface. “RO” means
+read-only and naturally idempotent. Every other entry requires
+`idempotency_key` unless its note says otherwise. The parameter and result
+object schemas are specified in the [baseline method table in
+`SPEC.md`](../../../SPEC.md#13-control-endpoint). The unsupported v1
+predecessor additionally exposed `session/attach` and `client/select_primary`;
+v2 removes those methods and adds `client/set_layout_owner`.
 
 | Namespace | Methods | Access and purpose |
 | --- | --- | --- |
 | Control | `control/initialize`, `control/shutdown`, `control/cancel` | Negotiate a connection, close it, or cancel an owned request. Shutdown is naturally idempotent. |
-| Session | `session/list`, `session/get`, `session/attach`, `session/rename`, `session/kill` | Historical v1 session operations retained only for migration reference. |
-| Client | `client/list`, `client/detach`, `client/select_primary` | Inspect clients, detach a client, or atomically transfer primary ownership. |
+| Session | `session/list`, `session/get`, `session/rename`, `session/kill` | Inspect, rename, or terminate sessions. List/get are RO. |
+| Client | `client/list`, `client/detach`, `client/set_layout_owner` | Inspect clients, detach a client, or atomically select an attached interactive primary as layout owner. |
 | Window | `window/list`, `window/create`, `window/rename`, `window/select`, `window/close`, `window/layout`, `window/rebalance` | Inspect, create, name, select, close, or arrange windows. List is RO; rename is naturally idempotent when unchanged. Layout and rebalance are primary-only presentation mutations. |
 | Pane | `pane/list`, `pane/create`, `pane/select`, `pane/resize`, `pane/move`, `pane/swap`, `pane/break`, `pane/join`, `pane/close`, `pane/rename`, `pane/zoom`, `pane/input-sync`, `pane/attention`, `pane/status`, `pane/notice`, `pane/capture` | Inspect panes, mutate layout and presentation, control synchronized input, completion attention, source-owned status, or bounded notices, or capture pane content. List is RO; capture is RO when policy permits. Status and notices are available to primary and automation clients; rename, zoom, and input synchronization are primary-only. |
 | Buffer | `buffer/list`, `buffer/create`, `buffer/read`, `buffer/delete` | Primary-only bounded internal paste-buffer inspection and mutation. List/read are RO; create requires explicit replacement for existing names. |
@@ -351,11 +354,12 @@ host clipboard.
 
 The recommended loop is initialize, fetch a view, render it, pass physical
 input and size updates via `terminal/step`, then apply the returned view or
-request a fresh `terminal/view`. Local clients use the Unix event socket; an
-Iroh attach negotiates the version 1 server-opened event stream. Both transports
-use events only as redraw wakeups and refetch authoritative rendered state over
-control. This is rendered-view/input-step control, not raw PTY export;
-specialized frontends should design around the supplied view model.
+request a fresh `terminal/view`. Local clients use the Unix event socket. Iroh
+observers negotiate event-stream version 1; Iroh primaries request version 2
+and use version 1 only as the explicit legacy fallback described above. Both
+transports use events as redraw wakeups and refetch authoritative rendered
+state over control. This is rendered-view/input-step control, not raw PTY
+export; specialized frontends should design around the supplied view model.
 
 ## Events and replay
 

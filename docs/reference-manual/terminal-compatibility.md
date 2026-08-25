@@ -19,6 +19,15 @@ focus, mouse, title, clipboard, and save/restore behaviors. Unimplemented
 capabilities, including DCS controls unless documented otherwise, are marked
 unsupported rather than assumed to work.
 
+### Synchronized output
+
+Mezzanine implements DEC synchronized-output mode 2026 and the bounded legacy
+DCS markers `=1s` and `=2s`. While synchronization is active, terminal state
+continues to update but presentation is frozen until the matching end marker,
+a lifecycle boundary, or the safety timeout releases it. Synchronization does
+not nest; a new begin marker rearms the bounded interval. Alternate-screen and
+terminal-lifecycle transitions cannot leave presentation frozen indefinitely.
+
 Mezzanine also supports pane-local OSC 9;4 progress reports. Determinate
 normal progress appears as a percentage pill immediately to the right of the
 pane title and disappears on clear; warning, error, and indeterminate records

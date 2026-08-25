@@ -441,6 +441,8 @@ Default color slots:
 | `frame_fill_bg` | `"surface"` | Frame fill background. |
 | `scroll_indicator_fg` | `"tertiary_text"` | Scroll indicator foreground. |
 | `scroll_indicator_bg` | `"tertiary"` | Scroll indicator background. |
+| `pane_progress_fg` | `"tertiary_text"` | Pane progress foreground. |
+| `pane_progress_bg` | `"tertiary"` | Pane progress background. |
 | `pane_pwd_fg` | `"muted_text"` | Pane working-directory pill foreground. |
 | `pane_pwd_bg` | `"muted"` | Pane working-directory pill background. |
 | `window_status_uptime_fg` | `"secondary_text"` | Uptime status foreground. |
@@ -580,11 +582,12 @@ description.
 | `agents.default_provider` | string | `"openai"` | Provider profile used by default. |
 | `agents.default_model_profile` | string | `"default"` | Model profile used by default. |
 | `agents.active_turn_sleep_inhibition` | string | `"disabled"` | Primary-user-only host power policy: `disabled`, `system` (best-effort prevention of automatic idle system sleep), or `system-and-display` (also request display wakefulness where supported; higher battery use). It is held only while at least one canonical agent turn is `Running`, including a detached session, and releases when the final turn settles or the runtime stops or fails. Unsupported platforms and failed requests are nonfatal; current support is macOS system/display assertions, while other platforms report unavailable until a native backend is added. Neither mode overrides explicit sleep, lid-close, thermal, or critical-battery safeguards, and model-authored config changes cannot alter it. |
-| `agents.shell_only` | boolean | `true` | Require local system actions to go through the pane shell. |
+| `agents.shell_only` | boolean | `true` | Require local system actions to use shell-backed execution rather than an unmediated local executor; `agents.shell_mode` selects native or pane transport. |
 | `agents.shell_mode` | string | `"native"` | Default agent shell execution transport: `native` runs each action in a freshly spawned shell inferred from the pane root process without sending pane input; `pane` sends shell-backed actions through the pane shell. Use `/shell-mode status` to view the effective pane mode, configured global mode, and override provenance in the pager. Use `/shell-mode pane` or `/shell-mode native` for an active-pane override, or append `--global` to persist the default for panes without an override. |
 | `agents.compaction_raw_retention_percent` | integer | `10` | Initial percent of complete raw groups retained outside model-authored summary input; provider context-limit backoff may grow the exact tail one complete group at a time; 1 to 100. |
 | `agents.routing` | boolean | `false` | Enable pane-local routing selection by default. |
 | `agents.action_failure_retry_limit` | integer | `5` | Self-correction attempts per repeated correctable action failure signature other than `apply_patch`. |
+| `agents.turn_timeout_ms` | integer | `1800000` | Total wall-clock deadline, in milliseconds, snapshotted for each new agent turn; must be positive. |
 | `agents.loop_limit` | integer | `8` | Maximum iterations for a `/loop`; must be positive. |
 | `agents.custom_system_prompt` | string | `""` | User-owned system prompt appended after built-in prompt content. |
 | `agents.default_personality` | string | `""` | Default personality profile id; empty means none. |
@@ -1223,7 +1226,7 @@ credentials.
 | `hooks.<name>.env` | map | omitted | Extra hook environment. |
 | `hooks.<name>.working_directory` | string | omitted | Hook working directory. |
 | `hooks.<name>.cwd` | string | omitted | Compatibility working-directory field. |
-| `hooks.<name>.inject_instructions` | boolean | omitted | Inject hook output into agent instructions. |
+| `hooks.<name>.inject_instructions` | string | omitted | Reserved compatibility field; accepted by the schema but not consumed by the current hook runtime. |
 | `hooks.<name>.mutates_policy` | boolean | omitted | Declares that the hook can mutate policy. |
 | `hooks.<name>.alters_action` | boolean | omitted | Declares that the hook can alter an action. |
 

@@ -128,40 +128,25 @@ just iroh-compression-bench
 ```
 
 It writes `target/iroh-compression-bench.json` by default; override the path
-with `MEZ_IROH_COMPRESSION_BENCH_REPORT`. The fixtures cover small control,
-repetitive terminal, JSON/configuration, deterministic incompressible, and
-bidirectional attach/event frames. Results include elapsed nanoseconds,
-throughput, allocation count and bytes, decoded bytes, wire bytes, and ratio for
-`none`, zstd level 3, and LZ4.
-
-The reference release run used 2,000 iterations per fixture. Small 146-byte
-control frames bypassed both codecs and completed below 57 ns per encode/decode
-operation; their v2 wire size was 1.11× because of the fixed 16-byte envelope.
-For repetitive terminal, JSON/configuration, and bidirectional fixtures, zstd
-used 1.9–6.7% of decoded bytes at 338–682 MiB/s, while LZ4 used 2.9–11.1% at
-4.3–5.1 GiB/s. The deterministic incompressible fixture selected fallback:
-LZ4 emitted only the 16-byte identity-envelope overhead, while zstd found a
-smaller representation for this ASCII fixture. Zstd used four allocations per
-large operation; LZ4 used five to six; `none` used two.
-
-Use these host-independent rollout budgets even though absolute timings remain
-report-only: below-threshold frames must bypass codec work; compressed output
-must never exceed its input; compressible fixtures should remain at or below
-15% wire/decoded size; zstd should sustain at least 250 MiB/s and LZ4 at least
-4 GiB/s on a comparable release run. The measurements support retaining
-`compression_min_bytes = 512` and `compression_zstd_level = 3`.
+with `MEZ_IROH_COMPRESSION_BENCH_REPORT`. See [Iroh compression
+benchmarks](../testing/iroh-compression-benchmarks.md) for fixtures, budgets,
+and interpretation. Keep point-in-time measurements in generated reports
+rather than this operational runbook.
 
 ## Enable and verify
 
 1. Confirm the private Unix control socket works and retain a local primary
    administration path.
-2. Validate configuration before restart.
-3. Start one canary persistent host with Iroh enabled.
+2. Run `mez config validate` before restart.
+3. Start one canary persistent host with Iroh enabled by running `mez host
+   serve` under the deployment's service manager.
 4. Run `mez --json remote status` through local Unix control.
-5. Confirm `enabled`, `listener_active`, configured route flags, and the bound
-   endpoint address match the intended policy.
-6. Inspect `show-metrics` locally. The `[iroh transport]` section reports only
-   aggregate listener, setup, connection, shutdown, and path counters.
+5. Confirm `enabled` and `endpoint_id`. This response does not prove listener
+   health or expose route policy, counters, or a dialable address; verify the
+   configured route policy separately and treat the running host plus a
+   successful paired connection as the listener-health check.
+6. Inspect `show-metrics` in the routed canary session when session-local Iroh
+   diagnostics are needed. It is not a host-wide preflight surface.
 7. From the paired remote client, run `show-iroh-status` in the command prompt
    to inspect its selected path, RTT, traffic, negotiated codec, interval wire
    savings, recent loss/congestion, and quality rating without exposing endpoint,
@@ -169,18 +154,22 @@ must never exceed its input; compressible fixtures should remain at or below
 8. Pair one role-limited test device, exercise attach and detach, revoke it, and
    verify future initialization fails.
 9. Confirm a local Unix client can still inspect, revoke, detach, and stop the
-   session during and after remote failures.
+   session after ordinary remote connection failures. Also verify that the
+   service manager restarts the host after a listener-task failure, because
+   the current listener supervisor stops the paired Unix listener too.
 10. From a negotiated remote primary, copy a non-sensitive test value and verify
     the server internal buffer, server-host clipboard attempt, and attaching
     client clipboard independently. Confirm observers, other devices, and v1
     clients receive no client-local effect.
 
-`remote/status` includes endpoint identity and dialable endpoint address because
-local administration needs them. Aggregate `show-metrics` output intentionally
-omits endpoint IDs, peer addresses, invitations, credentials, private keys,
-payloads, and trust records.
+Persistent-host `remote/status` includes only `enabled` and `endpoint_id`.
+Session-local `show-metrics` output intentionally omits endpoint IDs, peer
+addresses, invitations, credentials, private keys, payloads, and trust records.
 
 ## Interpret diagnostics
+
+The fields below belong to routed session-local diagnostics such as
+`show-metrics`; they are not fields in persistent-host `remote/status`.
 
 | Field | Meaning and response |
 | --- | --- |
@@ -250,10 +239,11 @@ Use local Unix control for all trust administration.
 
 1. Establish and test a local Unix primary connection.
 2. Set `transport.iroh.enabled = false` in primary-user configuration.
-3. Restart the daemon so the supervised listener and network activity stop.
-4. Confirm Unix attach and `mez remote status` still work, `enabled` and
-   `listener_active` are false, active remote connections are zero, and no bound
-   Iroh endpoint address is published.
+3. Restart the host through the deployment's service manager so the supervised
+   listener and network activity stop.
+4. Confirm Unix attach and `mez remote status` still work and that `enabled` is
+   false with no endpoint ID. The current host status response does not expose
+   listener or active-connection counters.
 5. Confirm explicit remote targets fail visibly and do not fall back to Unix.
 6. Preserve remote identity and trust state for later re-enable, or remove it
    only during a deliberate offline credential-retirement procedure.
@@ -283,47 +273,10 @@ requires a recorded release exception.
 Repository tests are not substitutes for native platform, production service,
 or representative network evidence.
 
-### Local integrated build sample (not a release gate)
-
-One bounded WSL2 x86_64 release build on Linux 6.18 with Rust/Cargo 1.97.1
-completed in 90.53 seconds with 3,901,536 KiB peak build RSS. The resulting
-`mez` binary was 75,896,528 bytes. The existing shared `target/release`
-directory occupied 15,246,428,797 bytes, and `cargo tree -p mezzanine --locked`
-contained 1,014 unique rendered lines.
-
-These values are a local integrated sample only. The target directory included
-unrelated existing workspace artifacts, the build was not paired with a
-same-commit non-Iroh binary, and WSL2 is not a supported-platform packaging
-result. Do not use these numbers as package impact, acceptance thresholds, or
-native Linux/macOS evidence.
-
-### Persistent-host local acceptance sample (not a release gate)
-
-One isolated Linux/WSL2 acceptance run used owner-only temporary configuration
-and runtime roots, direct-only Iroh with a stable bind port, and the repository
-debug binary. It verified host start, status, reconcile, and graceful stop;
-host-only invitation pairing; remote create and detach through a real pseudo-
-terminal; remote and local session listing; lease show, checkpoint, release,
-revoke, garbage-collection preview, restart reconciliation, and explicit
-recovery; client trust revocation; and denial of reconnect after revocation.
-The host endpoint identity remained stable while the boot generation advanced
-from 1 to 2. A rejected noninteractive primary create left no durable lease.
-
-That run exposed and fixed a remote detach result bug: an acknowledged
-`Ctrl+A d` detached the client and preserved its active lease, but the client
-then treated the expected control-stream closure as a failed terminal-view
-read. `terminal/step` now reports `client_detached`, allowing an acknowledged
-detach to exit cleanly without weakening the existing fail-visible behavior
-for ambiguous unacknowledged input.
-
-The same worktree passed the schema 72-to-73 migration regression and a serial
-all-target, all-feature workspace test run. A report-only release workload with
-two runtime workers processed 1,083,050 output bytes in 97,951 microseconds
-(11,057,059 bytes/second), used 126,038,016 bytes maximum RSS, and measured PTY
-output-apply p95 at 1,615 microseconds, pane-input p95 at 402 microseconds, and
-render-frame p95 at 543 microseconds. These are local functional and
-responsiveness samples only; they do not satisfy packaged native-platform,
-production network, relay, lookup, or upgrade/rollback gates.
+Point-in-time build, benchmark, and acceptance samples belong in generated or
+versioned release evidence, not in this runbook. The matrix below states what
+the repository currently demonstrates and what each release must still collect
+on supported platforms and approved infrastructure.
 
 | Gate | Current repository evidence | Required release evidence | Status |
 | --- | --- | --- | --- |

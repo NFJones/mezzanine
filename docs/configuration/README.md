@@ -20,6 +20,7 @@ This section owns the following configuration guidance:
 - [Extensions, hooks, and control](extensions-hooks-and-control.md)
 - [Configuration reference](reference.md)
 - [Example configuration](../examples/config.toml)
+- [Configuration CLI](../reference-manual/cli.md#configuration-identity-and-integrations)
 
 ## Related pages
 

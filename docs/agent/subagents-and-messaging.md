@@ -28,6 +28,21 @@ The default join behavior waits for a child result before the parent continues;
 detached work can report later through local messaging. Approval requests from
 children are surfaced to the primary client and cannot be decided by observers.
 
+## Understand limits, profiles, and cleanup
+
+Delegation is bounded by `agents.max_subagent_panes_per_window`,
+`agents.max_root_subagents`, `agents.max_subagents_per_subagent`, and
+`agents.max_depth`. Their defaults are four panes per subagent window, four
+direct children for a root agent, two children for a subagent, and depth two.
+When a limit rejects a spawn, narrow or sequence the work instead of assuming
+the child was created.
+
+Custom subagent profiles can narrow model, permission, MCP, environment,
+cooperation-mode, and filesystem-scope settings; see the
+[configuration reference](../configuration/reference.md). A successful child
+delivers its result before its pane closes. A failed or interrupted child pane
+remains available for diagnosis rather than disappearing automatically.
+
 ## Use routed loops sparingly
 
 `/loop [--fork|--new] [--limit <count>] [--goal <string>] <prompt>` repeats a

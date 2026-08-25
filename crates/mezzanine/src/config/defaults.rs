@@ -928,8 +928,9 @@ sandbox = "bubblewrap"
 # an empty list strips all ambient supplementary groups.
 # group_whitelist = []
 # Optional variable names are read from the active pane and always redacted.
-# They cannot override the fixed /usr/bin:/bin command-search path or grant
-# filesystem authority. External tools run by absolute path or command-local PATH.
+# When this field is omitted, PATH is forwarded by default. An explicit list
+# replaces that default, so include PATH when sandboxed command lookup should
+# use the pane's safely resolved path. Forwarding never grants filesystem authority.
 # env_whitelist = ["ACME_HOME"]
 # git_user_name = "Your Name"
 # git_user_email = "you@example.invalid"

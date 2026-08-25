@@ -31,7 +31,8 @@ ambiguous, or unavailable identifiers expose no substitute tools. Configured
 always-exposed servers use the same validation rules.
 
 MCP calls are external actions. A tool that reaches the network, accesses
-credentials, executes processes, or changes files can require approval and is
+credentials, executes processes, or changes files requires approval unless the
+active policy explicitly permits that external capability, and the call is
 audited. An MCP server can operate outside the pane shell, so treat its declared
 capabilities as a distinct boundary rather than assuming Bubblewrap contains it.
 
