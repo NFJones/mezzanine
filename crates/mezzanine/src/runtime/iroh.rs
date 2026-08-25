@@ -924,7 +924,7 @@ async fn serve_runtime_iroh_control_listener(
         diagnostics: endpoint.diagnostics.clone(),
         endpoint_addr: endpoint.endpoint_addr.clone(),
     };
-    let mut accepted = 0u64;
+    let accepted = Arc::new(AtomicU64::new(0));
     let mut tasks = JoinSet::new();
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut endpoint_addr = endpoint.endpoint.watch_addr();
@@ -955,73 +955,78 @@ async fn serve_runtime_iroh_control_listener(
                             && !terminal_daemon_state(*lifecycle.borrow());
                     break;
                 };
-                let setup_started = Instant::now();
-                let Ok(mut accepting) = incoming.accept() else {
-                    endpoint
-                        .diagnostics
-                        .record_rejected(setup_started.elapsed());
-                    continue;
-                };
-                let alpn = match tokio::time::timeout(endpoint.policy.setup_timeout, accepting.alpn()).await {
-                    Ok(Ok(alpn)) => alpn,
-                    _ => {
-                        endpoint
-                            .diagnostics
-                            .record_rejected(setup_started.elapsed());
-                        continue;
-                    }
-                };
-                let codec = match RuntimeIrohCompressionCodec::from_alpn(&alpn) {
-                    Ok(codec) if endpoint.policy.compression_codecs.contains(&codec) => codec,
-                    _ => {
-                        endpoint
-                            .diagnostics
-                            .record_rejected(setup_started.elapsed());
-                        continue;
-                    }
-                };
-                let max_decoded_bytes = match control_config.max_content_length.checked_add(1024) {
-                    Some(limit) => limit,
-                    None => {
-                        endpoint
-                            .diagnostics
-                            .record_rejected(setup_started.elapsed());
-                        continue;
-                    }
-                };
-                let compression = match IrohCompressionPolicy::new(
-                    codec,
-                    endpoint.policy.compression_min_bytes,
-                    endpoint.policy.compression_zstd_level,
-                    max_decoded_bytes,
-                ) {
-                    Ok(compression) => compression,
-                    Err(_) => {
-                        endpoint
-                            .diagnostics
-                            .record_rejected(setup_started.elapsed());
-                        continue;
-                    }
-                };
-                let connection = match tokio::time::timeout(endpoint.policy.setup_timeout, accepting).await {
-                    Ok(Ok(connection)) => connection,
-                    _ => {
-                        endpoint
-                            .diagnostics
-                            .record_rejected(setup_started.elapsed());
-                        continue;
-                    }
-                };
-                connection.set_max_concurrent_bi_streams(VarInt::from_u32(1));
-                connection.set_max_concurrent_uni_streams(VarInt::from_u32(0));
                 let connection_handle = handle.clone();
                 let connection_snapshots = snapshots.clone();
                 let diagnostics = endpoint.diagnostics.clone();
-                let connection_guard =
-                    diagnostics.connection_started(&connection, setup_started.elapsed());
-                let setup_timeout = endpoint.policy.setup_timeout;
-                let idle_timeout = endpoint.policy.idle_timeout;
+                let policy = endpoint.policy.clone();
+                let accepted = accepted.clone();
+                let mut setup_lifecycle = handle.lifecycle_state_watcher();
                 tasks.spawn(async move {
+                    let setup_started = Instant::now();
+                    let setup_deadline = tokio::time::Instant::now() + policy.setup_timeout;
+                    let Ok(mut accepting) = incoming.accept() else {
+                        diagnostics.record_rejected(setup_started.elapsed());
+                        return Ok(0);
+                    };
+                    let alpn = tokio::select! {
+                        result = tokio::time::timeout_at(setup_deadline, accepting.alpn()) => {
+                            match result {
+                                Ok(Ok(alpn)) => alpn,
+                                _ => {
+                                    diagnostics.record_rejected(setup_started.elapsed());
+                                    return Ok(0);
+                                }
+                            }
+                        }
+                        () = wait_for_terminal_iroh_lifecycle(&mut setup_lifecycle) => {
+                            return Ok(0);
+                        }
+                    };
+                    let codec = match RuntimeIrohCompressionCodec::from_alpn(&alpn) {
+                        Ok(codec) if policy.compression_codecs.contains(&codec) => codec,
+                        _ => {
+                            diagnostics.record_rejected(setup_started.elapsed());
+                            return Ok(0);
+                        }
+                    };
+                    let max_decoded_bytes = match control_config.max_content_length.checked_add(1024) {
+                        Some(limit) => limit,
+                        None => {
+                            diagnostics.record_rejected(setup_started.elapsed());
+                            return Ok(0);
+                        }
+                    };
+                    let compression = match IrohCompressionPolicy::new(
+                        codec,
+                        policy.compression_min_bytes,
+                        policy.compression_zstd_level,
+                        max_decoded_bytes,
+                    ) {
+                        Ok(compression) => compression,
+                        Err(_) => {
+                            diagnostics.record_rejected(setup_started.elapsed());
+                            return Ok(0);
+                        }
+                    };
+                    let connection = tokio::select! {
+                        result = tokio::time::timeout_at(setup_deadline, accepting) => {
+                            match result {
+                                Ok(Ok(connection)) => connection,
+                                _ => {
+                                    diagnostics.record_rejected(setup_started.elapsed());
+                                    return Ok(0);
+                                }
+                            }
+                        }
+                        () = wait_for_terminal_iroh_lifecycle(&mut setup_lifecycle) => {
+                            return Ok(0);
+                        }
+                    };
+                    connection.set_max_concurrent_bi_streams(VarInt::from_u32(1));
+                    connection.set_max_concurrent_uni_streams(VarInt::from_u32(0));
+                    let connection_guard =
+                        diagnostics.connection_started(&connection, setup_started.elapsed());
+                    accepted.fetch_add(1, Ordering::Relaxed);
                     let result = serve_runtime_iroh_control_connection(
                         connection,
                         connection_guard,
@@ -1029,14 +1034,13 @@ async fn serve_runtime_iroh_control_listener(
                         control_config,
                         connection_snapshots.as_ref(),
                         compression,
-                        setup_timeout,
-                        idle_timeout,
+                        policy.setup_timeout,
+                        policy.idle_timeout,
                     )
                     .await;
                     diagnostics.record_result(&result);
                     result
                 });
-                accepted = accepted.saturating_add(1);
             }
             changed = lifecycle.changed() => {
                 if changed.is_err() {
@@ -1082,7 +1086,7 @@ async fn serve_runtime_iroh_control_listener(
             "Iroh control listener closed unexpectedly while runtime remained active",
         ));
     }
-    Ok(accepted)
+    Ok(accepted.load(Ordering::Relaxed))
 }
 
 #[allow(
@@ -1418,6 +1422,18 @@ async fn drain_iroh_control_tasks(tasks: &mut JoinSet<Result<u64>>) -> Result<()
     Ok(())
 }
 
+/// Waits until the runtime enters a terminal lifecycle state or its state
+/// publisher disappears, allowing peer-controlled setup to cancel promptly.
+async fn wait_for_terminal_iroh_lifecycle(
+    lifecycle: &mut tokio::sync::watch::Receiver<super::RuntimeLifecycleState>,
+) {
+    loop {
+        if terminal_daemon_state(*lifecycle.borrow()) || lifecycle.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
 fn terminal_daemon_state(state: super::RuntimeLifecycleState) -> bool {
     matches!(
         state,
@@ -1444,6 +1460,26 @@ fn relay_mode(policy: &RuntimeIrohRelayPolicy) -> Result<RelayMode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, Clone)]
+    struct StallFirstHandshake {
+        attempts: Arc<AtomicUsize>,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    impl iroh::endpoint::EndpointHooks for StallFirstHandshake {
+        async fn after_handshake(
+            &self,
+            _connection: &iroh::endpoint::Connection,
+        ) -> iroh::endpoint::AfterHandshakeOutcome {
+            if self.attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+            iroh::endpoint::AfterHandshakeOutcome::Accept
+        }
+    }
 
     /// Verifies clipboard effects use bounded contiguous chunks and keep raw
     /// payload bytes out of frame metadata and debug output.
@@ -1818,6 +1854,126 @@ mod tests {
         client.close().await;
         let _ = handle.shutdown().await.unwrap();
         drop(handle);
+        actor_task.abort();
+        let _ = actor_task.await;
+    }
+
+    /// One peer stalled after ALPN negotiation must not block a second valid
+    /// handshake while listener admission capacity remains available, and
+    /// runtime cancellation must not wait for that stalled setup deadline.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_listener_parallelizes_pre_session_handshakes() {
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::test_support::runtime::RuntimeServiceFixture;
+
+        let service = RuntimeServiceFixture::new().build();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            max_connections: 2,
+            setup_timeout: std::time::Duration::from_secs(5),
+            idle_timeout: std::time::Duration::from_secs(5),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let endpoint = Endpoint::builder(presets::Minimal)
+            .secret_key(SecretKey::generate())
+            .alpns(IrohCompressionPolicy::ordered_alpns(
+                &policy.compression_codecs,
+            ))
+            .hooks(StallFirstHandshake {
+                attempts: Arc::new(AtomicUsize::new(0)),
+                entered: entered.clone(),
+                release: release.clone(),
+            })
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let initial_addr = wait_for_dialable_iroh_addr(&endpoint, &policy)
+            .await
+            .unwrap();
+        let (endpoint_addr, _) = tokio::sync::watch::channel(Some(initial_addr));
+        let server_addr = endpoint.addr();
+        let diagnostics = RuntimeIrohDiagnostics::default();
+        let server = RuntimeIrohEndpoint {
+            endpoint,
+            policy,
+            diagnostics: diagnostics.clone(),
+            intentional_close: Arc::new(AtomicBool::new(false)),
+            endpoint_addr,
+        };
+        let listener_handle = handle.clone();
+        let listener = tokio::spawn(async move {
+            let result = serve_runtime_iroh_control_listener(
+                &server,
+                &listener_handle,
+                AsyncRuntimeControlConnectionConfig::new(4096, 0).unwrap(),
+                None,
+            )
+            .await;
+            server.close().await;
+            result
+        });
+        let actor_task = tokio::spawn(actor.run());
+        let first_client = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let first_endpoint = first_client.clone();
+        let first_addr = server_addr.clone();
+        let first_connect = tokio::spawn(async move {
+            first_endpoint
+                .connect(first_addr, MEZZANINE_IROH_ALPN)
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified())
+            .await
+            .expect("first server handshake should reach the stall hook");
+
+        let second_client = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let second_connection = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            second_client.connect(server_addr, MEZZANINE_IROH_ALPN),
+        )
+        .await
+        .expect("valid peer should not wait for the stalled handshake")
+        .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while diagnostics.snapshot().setup_successes != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        second_connection.close(VarInt::from_u32(0), b"test complete");
+        second_client.close().await;
+        let _ = handle.shutdown().await.unwrap();
+        drop(handle);
+        let served = tokio::time::timeout(std::time::Duration::from_secs(1), listener)
+            .await
+            .expect("listener cancellation should not wait for stalled setup")
+            .unwrap()
+            .unwrap();
+        assert_eq!(served, 1);
+        first_connect.abort();
+        let _ = first_connect.await;
+        first_client.close().await;
+        release.notify_one();
         actor_task.abort();
         let _ = actor_task.await;
     }
