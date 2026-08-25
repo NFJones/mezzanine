@@ -1783,6 +1783,7 @@ The command language MUST include commands equivalent to:
 - `set-theme`
 - `bind-key`
 - `unbind-key`
+- `add-options`
 - `show-options`
 - `set-option`
 - `source-file`
@@ -1869,6 +1870,7 @@ The baseline commands MUST have the following semantics:
 | `set-theme` | Set the active UI theme to a built-in or configured theme name, validate the name against the effective theme registry, materialize the selected aliases and color slots, apply the change to the running client immediately, and persist the selected theme into the primary config. |
 | `bind-key` | Add or replace a key binding in the live configuration or requested persistence target. It MUST validate that the binding is syntactically representable. |
 | `unbind-key` | Remove a key binding from the live configuration or requested persistence target. |
+| `add-options` | Display the supported live configuration option reference as a rendered table with option path pattern, purpose, value type, and available values or format requirements. |
 | `show-options` | Return effective options for the requested scope, including source layer and whether each option is live-mutable. |
 | `set-option` | Set a live-mutable option. Persisted changes MUST identify the target configuration layer. |
 | `source-file` | Parse and apply a configuration file according to configuration trust and precedence rules. Untrusted project files MUST block until trust is decided. |

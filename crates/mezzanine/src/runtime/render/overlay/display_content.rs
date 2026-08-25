@@ -339,6 +339,7 @@ pub(crate) fn runtime_command_display_overlay_content(
 pub(super) fn terminal_command_display_body_is_markdown(command: Option<&str>, body: &str) -> bool {
     match command {
         Some("help") => body.trim_start().starts_with('#'),
+        Some("add-options") => body.trim_start().starts_with('|'),
         Some("show-messages") => body.trim_start().starts_with('|'),
         Some(
             "list-buffers" | "list-clients" | "list-key-presets" | "list-sessions" | "list-themes",
@@ -357,6 +358,7 @@ pub(super) fn terminal_command_display_body_is_markdown(command: Option<&str>, b
 #[test]
 pub(super) fn table_list_command_display_detects_markdown_tables() {
     for command in [
+        "add-options",
         "list-buffers",
         "list-clients",
         "list-key-presets",

@@ -70,7 +70,7 @@ pub use migration::migrate_config_text;
 pub use migration::{CURRENT_CONFIG_SCHEMA_VERSION, migrate_config_file};
 pub use paths::ConfigPaths;
 pub use schema::{
-    BASELINE_TOP_LEVEL_KEYS, PRIMARY_CONFIG_FILENAMES,
+    BASELINE_TOP_LEVEL_KEYS, PRIMARY_CONFIG_FILENAMES, config_change_option_reference_markdown,
     config_change_setting_path_annotations_markdown, config_change_setting_path_description,
 };
 pub(crate) use schema::{

@@ -307,6 +307,28 @@ fn display_safe_pending_command_defaults() {
     assert!(options.contains("[history]"));
     assert!(options.contains("lines = 10000"));
 
+    let option_reference = display_body(
+        execute_command(
+            &mut session,
+            &primary,
+            &parse_command_sequence("add-options").unwrap()[0],
+        )
+        .unwrap(),
+    );
+    assert!(
+        option_reference.starts_with(
+            "| option | purpose | type | available values/settings |\n| --- | --- | --- | --- |"
+        ),
+        "{option_reference}"
+    );
+    assert!(option_reference.contains(
+        "| `theme.active` | Switch the active built-in or configured UI theme. | string |"
+    ));
+    assert!(option_reference.contains(
+        "| `mcp_servers.<name>.external_capability.<safety_flag>` | Classify MCP servers"
+    ));
+    assert!(option_reference.contains("mutates_filesystem_outside_shell"));
+
     let copy_mode = display_body(
         execute_command(
             &mut session,

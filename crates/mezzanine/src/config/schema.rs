@@ -234,6 +234,28 @@ pub fn config_change_setting_path_annotations_markdown() -> String {
     rows.join("\n")
 }
 
+/// Formats live configuration options as a concise user-facing reference table.
+pub fn config_change_option_reference_markdown() -> String {
+    let mut rows = vec![
+        "| option | purpose | type | available values/settings |".to_string(),
+        "| --- | --- | --- | --- |".to_string(),
+    ];
+    rows.extend(
+        config_change_setting_path_annotations()
+            .into_iter()
+            .map(|annotation| {
+                format!(
+                    "| `{}` | {} | {} | {} |",
+                    annotation.pattern,
+                    annotation.purpose,
+                    annotation.value_type,
+                    annotation.format
+                )
+            }),
+    );
+    rows.join("\n")
+}
+
 /// Builds provider-facing path guidance for model-authored live config changes.
 ///
 /// The returned text intentionally mirrors the conservative live mutation

@@ -210,6 +210,7 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "set-theme",
     "bind-key",
     "unbind-key",
+    "add-options",
     "show-options",
     "set-option",
     "source-file",

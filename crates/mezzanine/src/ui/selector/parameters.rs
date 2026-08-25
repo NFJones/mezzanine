@@ -26,6 +26,7 @@ pub(super) fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {
         "create-buffer" => Some(" [-b buffer] [--content text] [--select] [--replace]"),
         "bind-key" => Some(" [-T table] <key> <command>"),
         "unbind-key" => Some(" [-T table] <key>"),
+        "add-options" => Some(""),
         "show-options" => Some(" [-g|-w|-p] [option]"),
         "set-option" => Some(" [-g|-w|-p] <option> <value>"),
         "set-key-preset" => Some(" <preset>"),

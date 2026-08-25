@@ -86,10 +86,9 @@ fn terminal_help_command_rows() -> Vec<(&'static str, &'static str)> {
 fn terminal_command_category(name: &str) -> &'static str {
     match name {
         "agent-shell" => "agent and integrations",
-        "bind-key" | "list-key-presets" | "list-keys" | "set-key-preset" | "set-option"
-        | "set-theme" | "show-options" | "source-file" | "unbind-key" | "list-themes" => {
-            "configuration"
-        }
+        "add-options" | "bind-key" | "list-key-presets" | "list-keys" | "set-key-preset"
+        | "set-option" | "set-theme" | "show-options" | "source-file" | "unbind-key"
+        | "list-themes" => "configuration",
         "capture-pane" | "choose-buffer" | "clear-history" | "copy-mode" | "copy-selection"
         | "create-buffer" | "delete-buffer" | "export-history" | "list-buffers"
         | "paste-buffer" | "paste-clipboard" | "pipe-pane" | "save-buffer" | "search-history" => {
@@ -108,6 +107,7 @@ fn terminal_command_category(name: &str) -> &'static str {
 /// Returns the human-readable description for one terminal command.
 fn terminal_command_description(name: &str) -> &'static str {
     match name {
+        "add-options" => "show the live configuration option reference.",
         "agent-shell" => "toggle the pane-local agent shell.",
         "approve-observer" => "approve a pending observer.",
         "attach-session" => "attach to an existing session.",
@@ -724,6 +724,11 @@ pub(super) fn show_default_options() -> String {
         "source=default live_mutation=not-connected\n{}",
         crate::config::DEFAULT_CONFIG_TOML.trim()
     )
+}
+
+/// Returns the schema-owned reference for supported live configuration options.
+pub(super) fn add_options_display() -> String {
+    crate::config::config_change_option_reference_markdown()
 }
 
 /// Runs the set option args operation for this subsystem.
