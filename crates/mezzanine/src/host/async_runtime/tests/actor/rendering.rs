@@ -51,6 +51,115 @@ async fn async_actor_applies_client_resize_signal_as_render_invalidation() {
     assert_eq!(exit.commands_processed, 3);
 }
 
+/// Verifies that opening the client-local Iroh status display through the
+/// actor immediately schedules its refresh timer. The overlay must not depend
+/// on a later successful terminal flush before its live source starts polling.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_schedules_live_iroh_status_overlay_refresh() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .enter_primary_command_prompt("show-iroh-status")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                None,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(b"\r".to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        assert!(
+            timers.iter().any(|effect| matches!(
+                effect,
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh
+                        && key.owner_id == primary.as_str()
+            )),
+            "{timers:?}"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.commands_processed, 3);
+}
+
+/// Verifies that opening `/status` through attached agent-shell input
+/// immediately schedules its refresh timer. Live token and turn accounting
+/// must continue updating even when no subsequent terminal flush occurs.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_schedules_live_agent_status_overlay_refresh() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                None,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(
+                        b"/status\r".to_vec(),
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        assert!(
+            timers.iter().any(|effect| matches!(
+                effect,
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh
+                        && key.owner_id == primary.as_str()
+            )),
+            "{timers:?}"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.commands_processed, 3);
+}
+
 /// Verifies that client output-readiness events are applied only for attached
 /// clients and enqueue a render side effect without composing or writing the
 /// frame inside the actor. This keeps slow or backpressured frame delivery on
