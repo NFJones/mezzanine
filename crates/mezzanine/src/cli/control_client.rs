@@ -2079,10 +2079,14 @@ fn iroh_client_clipboard_negotiated(
 fn validate_iroh_host_only_initialize_response(body: &str) -> Result<Option<SecretString>> {
     let value: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_state("invalid host-only Iroh initialize response"))?;
-    if value.get("error").is_some() {
-        return Err(MezError::forbidden(
-            "Iroh transport connected, but host trust initialization was rejected",
-        ));
+    if let Some(error) = value.get("error") {
+        let message = error
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("host trust initialization was rejected");
+        return Err(MezError::forbidden(format!(
+            "Iroh transport connected, but {message}",
+        )));
     }
     let result = value
         .get("result")
@@ -2217,7 +2221,8 @@ pub(super) fn incomplete_control_response_error(
 mod tests {
     use super::{
         RemoteRoleCeiling, ensure_iroh_attach_role_allowed, iroh_client_clipboard_negotiated,
-        iroh_initialize_rejected_event_stream_v2, validate_iroh_initialize_response,
+        iroh_initialize_rejected_event_stream_v2, validate_iroh_host_only_initialize_response,
+        validate_iroh_initialize_response,
     };
 
     #[test]
@@ -2251,6 +2256,21 @@ mod tests {
         .expect_err("primary attach must reject a downgraded grant");
         assert!(
             error.message().contains("unexpected remote role"),
+            "{error:?}"
+        );
+    }
+
+    /// Verifies host-scoped pairing retains the server's trust diagnostic so a
+    /// rejected fresh invitation can be distinguished from a transport failure.
+    #[test]
+    fn iroh_host_only_initialize_reports_the_server_trust_rejection() {
+        let error = validate_iroh_host_only_initialize_response(
+            r#"{"jsonrpc":"2.0","id":"cli-init","error":{"code":-32002,"message":"Iroh invitation token is invalid"}}"#,
+        )
+        .expect_err("a rejected host invitation must fail initialization");
+
+        assert!(
+            error.message().contains("Iroh invitation token is invalid"),
             "{error:?}"
         );
     }
