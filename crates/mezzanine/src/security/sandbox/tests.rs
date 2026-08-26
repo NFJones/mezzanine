@@ -9,7 +9,8 @@ use std::path::Path;
 
 use mez_agent::permissions::{
     CandidateEvaluation, EffectCompleteness, EffectiveCommandEffects, PathScopes,
-    PermissionEvaluation, ResolvedPathEvidence, ResolvedPathKind, RuleDecision,
+    PermissionEvaluation, ResolvedPathEvidence, ResolvedPathKind, ResolvedPathObjectKind,
+    RuleDecision,
 };
 
 use crate::runtime::{ConfiguredSandboxEnvironment, ConfiguredSandboxGroups};
@@ -20,7 +21,7 @@ fn config() -> BubblewrapConfig {
     BubblewrapConfig {
         executable: "/usr/bin/bwrap".to_string(),
         unavailable: SandboxUnavailablePolicy::Fail,
-        network: BubblewrapNetworkMode::Isolated,
+        network: SandboxNetworkMode::Isolated,
         environment: SandboxEnvironmentPolicy::Minimal,
         group_whitelist: ConfiguredSandboxGroups::default(),
         env_whitelist: ConfiguredSandboxEnvironment::default(),
@@ -83,6 +84,7 @@ fn authority() -> PathScopes {
                 canonical_path: canonical.to_string(),
                 kind: ResolvedPathKind::Existing,
                 nearest_existing_parent: canonical.to_string(),
+                object_kind: ResolvedPathObjectKind::Directory,
             },
         );
     }
@@ -114,6 +116,7 @@ fn home_authority(home: &str) -> PathScopes {
                 canonical_path: canonical.clone(),
                 kind: ResolvedPathKind::Existing,
                 nearest_existing_parent: canonical,
+                object_kind: ResolvedPathObjectKind::Directory,
             },
         );
     }
@@ -289,6 +292,30 @@ fn bubblewrap_failure_remediation_points_to_verbose_status() {
     assert_eq!(bubblewrap_failure_remediation(&remediated), remediated);
 }
 
+/// Builds resolver-backed authority for one protected IPC path so tests prove
+/// that the shared compiler consumes trusted object-kind evidence rather than
+/// rediscovering filesystem metadata.
+fn protected_ipc_authority(
+    path: &Path,
+    object_kind: ResolvedPathObjectKind,
+    write: bool,
+) -> PathScopes {
+    let canonical_path = path.to_string_lossy().into_owned();
+    let evidence = BTreeMap::from([(
+        canonical_path.clone(),
+        ResolvedPathEvidence {
+            canonical_path: canonical_path.clone(),
+            kind: ResolvedPathKind::Existing,
+            nearest_existing_parent: canonical_path.clone(),
+            object_kind,
+        },
+    )]);
+    let read_scopes = vec!["/workspace".to_string(), canonical_path.clone()];
+    let write_scopes = write.then_some(canonical_path).into_iter().collect();
+    PathScopes::try_shell_resolved_with_evidence("/workspace", read_scopes, write_scopes, evidence)
+        .unwrap()
+}
+
 /// Unix sockets are the sole IPC endpoint type that may receive the narrow
 /// read-only exception; regular files and directories must remain forbidden.
 #[test]
@@ -305,15 +332,20 @@ fn ipc_read_scope_requires_an_existing_unix_socket() {
     let file = root.join("regular");
     std::fs::write(&file, "not a socket").unwrap();
 
-    assert!(validate_ipc_read_scope(socket.to_str().unwrap()).is_ok());
+    let socket_authority =
+        protected_ipc_authority(&socket, ResolvedPathObjectKind::UnixSocket, false);
+    assert!(validate_ipc_read_scope(&socket_authority, socket.to_str().unwrap()).is_ok());
+    let file_authority = protected_ipc_authority(&file, ResolvedPathObjectKind::File, false);
     assert_eq!(
-        validate_ipc_read_scope(file.to_str().unwrap())
+        validate_ipc_read_scope(&file_authority, file.to_str().unwrap())
             .unwrap_err()
             .kind(),
         SandboxCompileErrorKind::ForbiddenHostPath
     );
+    let directory_authority =
+        protected_ipc_authority(&root, ResolvedPathObjectKind::Directory, false);
     assert_eq!(
-        validate_ipc_read_scope(Path::new(&root).to_str().unwrap())
+        validate_ipc_read_scope(&directory_authority, Path::new(&root).to_str().unwrap())
             .unwrap_err()
             .kind(),
         SandboxCompileErrorKind::ForbiddenHostPath
@@ -355,13 +387,8 @@ fn protected_ipc_socket_read_scope_is_compiled_read_only() {
     let evaluation = evaluation(EffectCompleteness::Unknown, effects());
     let socket_scope = socket.to_string_lossy().into_owned();
 
-    let socket_authority = PathScopes::try_shell_resolved(
-        "/workspace",
-        vec!["/workspace".to_string(), socket_scope.clone()],
-        Vec::new(),
-        BTreeMap::new(),
-    )
-    .unwrap();
+    let socket_authority =
+        protected_ipc_authority(&socket, ResolvedPathObjectKind::UnixSocket, false);
     let plan =
         compile_bubblewrap_launch_plan(request(&config, &socket_authority, &evaluation)).unwrap();
     assert!(
@@ -375,17 +402,11 @@ fn protected_ipc_socket_read_scope_is_compiled_read_only() {
             .any(|args| args == ["--symlink", "/run", "/var/run"])
     );
 
-    for read_scope in [
-        root.to_string_lossy().into_owned(),
-        file.to_string_lossy().into_owned(),
+    for (read_scope, object_kind) in [
+        (root.as_path(), ResolvedPathObjectKind::Directory),
+        (file.as_path(), ResolvedPathObjectKind::File),
     ] {
-        let authority = PathScopes::try_shell_resolved(
-            "/workspace",
-            vec!["/workspace".to_string(), read_scope],
-            Vec::new(),
-            BTreeMap::new(),
-        )
-        .unwrap();
+        let authority = protected_ipc_authority(read_scope, object_kind, false);
         assert_eq!(
             compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation))
                 .unwrap_err()
@@ -394,13 +415,8 @@ fn protected_ipc_socket_read_scope_is_compiled_read_only() {
         );
     }
 
-    let write_authority = PathScopes::try_shell_resolved(
-        "/workspace",
-        vec!["/workspace".to_string()],
-        vec![socket_scope],
-        BTreeMap::new(),
-    )
-    .unwrap();
+    let write_authority =
+        protected_ipc_authority(&socket, ResolvedPathObjectKind::UnixSocket, true);
     assert_eq!(
         compile_bubblewrap_launch_plan(request(&config, &write_authority, &evaluation))
             .unwrap_err()
@@ -428,8 +444,8 @@ fn unknown_effects_compile_to_bounded_maximum_authority() {
         plan.audit_summary.authority_source,
         SandboxAuthoritySource::Maximum
     );
-    assert_eq!(plan.audit_summary.read_only_mount_count, 1);
-    assert_eq!(plan.audit_summary.read_write_mount_count, 1);
+    assert_eq!(plan.audit_summary.read_only_grant_count, 1);
+    assert_eq!(plan.audit_summary.read_write_grant_count, 1);
     assert!(
         plan.arguments
             .windows(3)
@@ -872,6 +888,7 @@ fn complete_effects_outside_authority_fail_closed() {
             canonical_path: "/sibling".to_string(),
             kind: ResolvedPathKind::Existing,
             nearest_existing_parent: "/sibling".to_string(),
+            object_kind: ResolvedPathObjectKind::File,
         },
     );
     let mut complete = effects();
@@ -899,11 +916,47 @@ fn create_targets_mount_nearest_existing_parent() {
             canonical_path: "/workspace/target/new/output.txt".to_string(),
             kind: ResolvedPathKind::CreateTarget,
             nearest_existing_parent: "/workspace/target".to_string(),
+            object_kind: ResolvedPathObjectKind::Directory,
         },
     );
     let mut complete = effects();
     complete.creates.push("target/new/output.txt".to_string());
     let evaluation = evaluation(EffectCompleteness::Complete, complete);
+
+    let plan = compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap();
+
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--bind", "/workspace/target", "/workspace/target"])
+    );
+    assert!(
+        !plan
+            .arguments
+            .iter()
+            .any(|argument| argument == "/workspace/target/new/output.txt")
+    );
+}
+
+/// Unknown effects retain maximum write authority while enforcing a
+/// configured create target through its trusted nearest existing parent.
+#[test]
+fn maximum_authority_create_target_uses_nearest_existing_parent() {
+    let config = config();
+    let mut authority = authority();
+    authority.write_scopes = vec!["/workspace/target/new/output.txt".to_string()];
+    authority.path_evidence.insert(
+        "target/new/output.txt".to_string(),
+        ResolvedPathEvidence {
+            canonical_path: "/workspace/target/new/output.txt".to_string(),
+            kind: ResolvedPathKind::CreateTarget,
+            nearest_existing_parent: "/workspace/target".to_string(),
+            object_kind: ResolvedPathObjectKind::Directory,
+        },
+    );
+    let mut unknown = effects();
+    unknown.unknown = true;
+    let evaluation = evaluation(EffectCompleteness::Unknown, unknown);
 
     let plan = compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap();
 
@@ -931,20 +984,20 @@ fn unsupported_requirements_fail_before_launch() {
     let mut allowed_no_network = request(&config, &authority, &no_network);
     allowed_no_network.network_policy = NetworkPolicy::Allow;
     let plan = compile_bubblewrap_launch_plan(allowed_no_network).unwrap();
-    assert_eq!(plan.audit_summary.network, BubblewrapNetworkMode::Connected);
+    assert_eq!(plan.audit_summary.network, SandboxNetworkMode::Connected);
     assert!(!plan.arguments.contains(&"--unshare-net".to_string()));
 
     let mut network = effects();
     network.network = true;
     let network = evaluation(EffectCompleteness::Complete, network);
     let plan = compile_bubblewrap_launch_plan(request(&config, &authority, &network)).unwrap();
-    assert_eq!(plan.audit_summary.network, BubblewrapNetworkMode::Connected);
+    assert_eq!(plan.audit_summary.network, SandboxNetworkMode::Connected);
     assert!(!plan.arguments.contains(&"--unshare-net".to_string()));
 
     let mut denied_network = request(&config, &authority, &network);
     denied_network.network_policy = NetworkPolicy::Deny;
     let plan = compile_bubblewrap_launch_plan(denied_network).unwrap();
-    assert_eq!(plan.audit_summary.network, BubblewrapNetworkMode::Isolated);
+    assert_eq!(plan.audit_summary.network, SandboxNetworkMode::Isolated);
     assert!(plan.arguments.contains(&"--unshare-net".to_string()));
 
     let mut credentials = effects();

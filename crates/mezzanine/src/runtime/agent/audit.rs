@@ -47,6 +47,8 @@ impl RuntimeSessionService {
             "host".to_string()
         } else if fallback_bypass {
             "policy-only".to_string()
+        } else if let Some(summary) = sandbox_summary {
+            summary.backend.as_str().to_string()
         } else {
             configured_sandbox.clone()
         };
@@ -81,12 +83,12 @@ impl RuntimeSessionService {
                     summary.authority_source.as_str(),
                 )
                 .with_metadata(
-                    "sandbox_read_only_mount_count",
-                    summary.read_only_mount_count.to_string(),
+                    "sandbox_read_only_grant_count",
+                    summary.read_only_grant_count.to_string(),
                 )
                 .with_metadata(
-                    "sandbox_read_write_mount_count",
-                    summary.read_write_mount_count.to_string(),
+                    "sandbox_read_write_grant_count",
+                    summary.read_write_grant_count.to_string(),
                 )
                 .with_metadata("sandbox_network", summary.network.as_str())
                 .with_metadata("sandbox_plan_sha256", summary.plan_sha256.clone());

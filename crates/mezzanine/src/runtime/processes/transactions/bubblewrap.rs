@@ -121,10 +121,7 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         let permission_policy = self.permission_policy_for_turn(turn);
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
-        if !crate::runtime::config::bubblewrap_applies_to_policy(
-            &sandbox_config,
-            &permission_policy,
-        ) {
+        if !crate::runtime::config::sandbox_applies_to_policy(&sandbox_config, &permission_policy) {
             return Ok(true);
         }
         let SandboxConfig::Bubblewrap(config) = sandbox_config else {

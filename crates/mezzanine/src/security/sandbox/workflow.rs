@@ -442,7 +442,7 @@ fn trust_state_name(state: TrustDecision) -> &'static str {
 mod tests {
     use super::*;
     use crate::runtime::{
-        BubblewrapConfig, BubblewrapNetworkMode, NetworkPolicy, SandboxEnvironmentPolicy,
+        BubblewrapConfig, NetworkPolicy, SandboxEnvironmentPolicy, SandboxNetworkMode,
         SandboxUnavailablePolicy,
     };
     use crate::security::project::{ProjectRootInputSource, ProjectRootMarkerKind};
@@ -466,7 +466,7 @@ mod tests {
         permissions.sandbox = SandboxConfig::Bubblewrap(BubblewrapConfig {
             executable: "/bin/sh".to_string(),
             unavailable: SandboxUnavailablePolicy::Fail,
-            network: BubblewrapNetworkMode::Isolated,
+            network: SandboxNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
             group_whitelist: crate::runtime::ConfiguredSandboxGroups::default(),
             env_whitelist: crate::runtime::ConfiguredSandboxEnvironment::default(),
@@ -521,7 +521,7 @@ mod tests {
             sandbox: SandboxConfig::Bubblewrap(BubblewrapConfig {
                 executable: "/bin/sh".to_string(),
                 unavailable: SandboxUnavailablePolicy::Fail,
-                network: BubblewrapNetworkMode::Isolated,
+                network: SandboxNetworkMode::Isolated,
                 environment: SandboxEnvironmentPolicy::Minimal,
                 group_whitelist: crate::runtime::ConfiguredSandboxGroups::default(),
                 env_whitelist: crate::runtime::ConfiguredSandboxEnvironment::default(),
@@ -568,7 +568,7 @@ mod tests {
         permissions.sandbox = SandboxConfig::Bubblewrap(BubblewrapConfig {
             executable: "/bin/sh".to_string(),
             unavailable: SandboxUnavailablePolicy::Fail,
-            network: BubblewrapNetworkMode::Isolated,
+            network: SandboxNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
             group_whitelist: crate::runtime::ConfiguredSandboxGroups::default(),
             env_whitelist: crate::runtime::ConfiguredSandboxEnvironment::default(),

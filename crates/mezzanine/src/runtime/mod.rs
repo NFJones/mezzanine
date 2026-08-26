@@ -248,9 +248,9 @@ mod config;
 #[cfg(test)]
 pub(crate) use config::ConfiguredSandboxEnvironment;
 pub(crate) use config::{
-    BubblewrapConfig, BubblewrapNetworkMode, ConfiguredPermissions, ConfiguredSandboxGroups,
-    NetworkPolicy, SandboxConfig, SandboxEnvironmentPolicy, SandboxUnavailablePolicy,
-    runtime_configured_permissions_from_config,
+    BubblewrapConfig, ConfiguredPermissions, ConfiguredSandboxGroups, NetworkPolicy,
+    SandboxBackend, SandboxConfig, SandboxEnvironmentPolicy, SandboxNetworkMode,
+    SandboxUnavailablePolicy, runtime_configured_permissions_from_config,
 };
 /// Exposes the control module boundary.
 ///

@@ -80,11 +80,12 @@ pub(super) use model::{
 #[cfg(test)]
 pub(crate) use permissions::ConfiguredSandboxEnvironment;
 pub(crate) use permissions::{
-    BubblewrapConfig, BubblewrapNetworkMode, ConfiguredPermissions, ConfiguredSandboxGroups,
-    NetworkPolicy, SandboxConfig, SandboxEnvironmentPolicy, SandboxUnavailablePolicy,
-    bubblewrap_applies_to_policy, runtime_approval_decision_name_to_kind,
+    BubblewrapConfig, ConfiguredPermissions, ConfiguredSandboxGroups, NetworkPolicy,
+    SandboxBackend, SandboxConfig, SandboxEnvironmentPolicy, SandboxNetworkMode,
+    SandboxUnavailablePolicy, runtime_approval_decision_name_to_kind,
     runtime_blocked_approval_request, runtime_config_permission_preset,
     runtime_configured_permissions_from_config, runtime_message_recipient,
+    sandbox_applies_to_policy,
 };
 pub(crate) use providers::runtime_default_models_for_provider;
 pub(super) use providers::{

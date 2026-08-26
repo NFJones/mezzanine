@@ -870,6 +870,21 @@ pub enum ResolvedPathKind {
     CreateTarget,
 }
 
+/// Trusted filesystem object kind observed while resolving one path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedPathObjectKind {
+    /// The legacy caller supplied canonical text without object metadata.
+    Unknown,
+    /// The enforcement object is a regular file.
+    File,
+    /// The enforcement object is a directory.
+    Directory,
+    /// The enforcement object is a Unix-domain socket.
+    UnixSocket,
+    /// The enforcement object exists but is another filesystem object kind.
+    Other,
+}
+
 /// Trusted canonical evidence for one path requested from a resolver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedPathEvidence {
@@ -879,6 +894,9 @@ pub struct ResolvedPathEvidence {
     pub kind: ResolvedPathKind,
     /// Canonical nearest existing parent observed during resolution.
     pub nearest_existing_parent: String,
+    /// Kind of the canonical target, or of the nearest existing parent for a
+    /// create target.
+    pub object_kind: ResolvedPathObjectKind,
 }
 
 /// Carries Path Scopes state for this subsystem.
@@ -918,6 +936,7 @@ impl PathScopes {
                     nearest_existing_parent: canonical_path.clone(),
                     canonical_path,
                     kind: ResolvedPathKind::Existing,
+                    object_kind: ResolvedPathObjectKind::Unknown,
                 };
                 (requested, evidence)
             })

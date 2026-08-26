@@ -89,7 +89,7 @@ impl RuntimeSessionService {
         else {
             return Ok(true);
         };
-        if !crate::runtime::config::bubblewrap_applies_to_policy(
+        if !crate::runtime::config::sandbox_applies_to_policy(
             &crate::runtime::SandboxConfig::Bubblewrap(config.clone()),
             &policy,
         ) || config.env_whitelist.requested_names.is_empty()

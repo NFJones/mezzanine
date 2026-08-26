@@ -2,32 +2,31 @@
 //!
 //! This module converts trusted pane-shell path authority and the structured
 //! permission evaluation computed for the original policy command into a
-//! deterministic Bubblewrap launch plan. Authorization remains owned by the
-//! permission subsystem. This compiler only narrows already-authorized
-//! resource authority and never interprets command prefixes as mount grants.
+//! backend-neutral effective policy and deterministic launch plan. Authorization
+//! remains owned by the permission subsystem. Backend compilers only narrow
+//! already-authorized resource authority and never infer grants from command
+//! prefixes or rediscover filesystem facts.
 //!
 //! The boundary is deliberately fail-closed: unresolved paths, host-root
-//! mounts, credential or process-control requirements, network requirements
+//! grants, credential or process-control requirements, network requirements
 //! without mediated egress, and unsupported stateful or interactive execution
 //! all fail before a workload can start. Generated plans contain typed argv,
-//! never user-provided Bubblewrap arguments or wrapper shell fragments.
+//! never user-provided backend arguments or wrapper shell fragments.
 
 use std::collections::BTreeMap;
 use std::fmt;
-#[cfg(unix)]
-use std::os::unix::fs::FileTypeExt;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 
 use mez_agent::permissions::{
     EffectiveCommandEffects, PathResolutionStatus, PathScopes, PermissionEvaluation,
-    ResolvedPathEvidence, ResolvedPathKind, RuleDecision,
+    ResolvedPathEvidence, ResolvedPathKind, ResolvedPathObjectKind, RuleDecision,
 };
 use sha2::{Digest, Sha256};
 
 use crate::runtime::{
-    BubblewrapConfig, BubblewrapNetworkMode, NetworkPolicy, SandboxEnvironmentPolicy,
+    BubblewrapConfig, NetworkPolicy, SandboxBackend, SandboxEnvironmentPolicy, SandboxNetworkMode,
     SandboxUnavailablePolicy,
 };
 
@@ -137,6 +136,13 @@ pub(crate) struct BubblewrapCompileRequest<'a> {
     pub(crate) interactive: bool,
 }
 
+/// Backend-discriminated request for compiling one sandboxed workload.
+#[derive(Debug, Clone)]
+pub(crate) enum SandboxCompileRequest<'a> {
+    /// Compile the request with the Linux Bubblewrap backend.
+    Bubblewrap(BubblewrapCompileRequest<'a>),
+}
+
 /// Identifies whether command effects narrowed maximum filesystem authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SandboxAuthoritySource {
@@ -156,24 +162,41 @@ impl SandboxAuthoritySource {
     }
 }
 
-/// Access granted by one compiled bind mount.
+/// Access granted to one normalized host path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum SandboxMountAccess {
-    /// The workload can read but cannot modify the mounted path.
+pub(crate) enum SandboxPathAccess {
+    /// The workload can read but cannot modify the path.
     ReadOnly,
-    /// The workload can read and modify the mounted path.
+    /// The workload can read and modify the path.
     ReadWrite,
 }
 
-/// One deterministic host-to-sandbox path projection.
+/// Trusted kind of the existing object on which confinement is enforced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SandboxPathKind {
+    /// A regular file.
+    File,
+    /// A directory and, where the backend supports it, its descendants.
+    Directory,
+    /// A Unix-domain socket node.
+    UnixSocket,
+    /// Another existing filesystem object kind.
+    Other,
+    /// Legacy canonical evidence that did not include object metadata.
+    Unknown,
+}
+
+/// One deterministic host-path authority grant shared by sandbox backends.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SandboxMount {
-    /// Canonical source path in the pane environment.
-    pub(crate) source: String,
-    /// Destination path inside the sandbox.
-    pub(crate) destination: String,
+pub(crate) struct SandboxPathGrant {
+    /// Canonical target requested by the authorized effect or maximum scope.
+    pub(crate) canonical_path: String,
+    /// Canonical existing object on which the backend enforces authority.
+    pub(crate) enforcement_path: String,
+    /// Trusted kind of the enforcement object.
+    pub(crate) kind: SandboxPathKind,
     /// Access granted to the workload.
-    pub(crate) access: SandboxMountAccess,
+    pub(crate) access: SandboxPathAccess,
 }
 
 /// Effective confinement policy after maximum-authority normalization and
@@ -182,12 +205,12 @@ pub(crate) struct SandboxMount {
 pub(crate) struct EffectiveSandboxPolicy {
     /// Canonical working directory used inside the sandbox.
     pub(crate) working_directory: String,
-    /// Deterministically ordered filesystem mounts.
-    pub(crate) mounts: Vec<SandboxMount>,
-    /// Whether mounts use maximum or narrowed authority.
+    /// Deterministically ordered host-path grants.
+    pub(crate) grants: Vec<SandboxPathGrant>,
+    /// Whether grants use maximum or narrowed authority.
     pub(crate) authority_source: SandboxAuthoritySource,
-    /// Effective network namespace mode.
-    pub(crate) network: BubblewrapNetworkMode,
+    /// Effective backend-neutral network mode.
+    pub(crate) network: SandboxNetworkMode,
     /// Effective minimal environment policy.
     pub(crate) environment: SandboxEnvironmentPolicy,
 }
@@ -195,26 +218,30 @@ pub(crate) struct EffectiveSandboxPolicy {
 /// Redacted facts suitable for status and audit records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SandboxAuditSummary {
+    /// Backend that compiled the redacted plan summary.
+    pub(crate) backend: SandboxBackend,
     /// Fixed runtime-profile version.
     pub(crate) runtime_profile_version: &'static str,
     /// Whether complete effects narrowed maximum authority.
     pub(crate) authority_source: SandboxAuthoritySource,
-    /// Number of read-only command-authority mounts.
-    pub(crate) read_only_mount_count: usize,
-    /// Number of writable command-authority mounts.
-    pub(crate) read_write_mount_count: usize,
-    /// Effective network namespace mode.
-    pub(crate) network: BubblewrapNetworkMode,
+    /// Number of read-only command-authority grants.
+    pub(crate) read_only_grant_count: usize,
+    /// Number of writable command-authority grants.
+    pub(crate) read_write_grant_count: usize,
+    /// Effective backend-neutral network mode.
+    pub(crate) network: SandboxNetworkMode,
     /// Stable normalized launch-plan digest.
     pub(crate) plan_sha256: String,
 }
 
-/// Fully typed Bubblewrap process plan consumed by pane transaction rendering.
+/// Fully typed sandbox process plan consumed by pane and native transports.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BubblewrapLaunchPlan {
-    /// Absolute Bubblewrap executable path in the pane environment.
+pub(crate) struct SandboxLaunchPlan {
+    /// Backend that compiled the launch plan.
+    pub(crate) backend: SandboxBackend,
+    /// Absolute backend executable path in the pane environment.
     pub(crate) executable: String,
-    /// Deterministic Bubblewrap argv excluding argv[0].
+    /// Deterministic backend argv excluding argv[0].
     pub(crate) arguments: Vec<String>,
     /// Fixed command-file path visible to the child shell.
     pub(crate) sandbox_command_path: String,
@@ -223,6 +250,10 @@ pub(crate) struct BubblewrapLaunchPlan {
     /// Redacted plan facts for audit and diagnostics.
     pub(crate) audit_summary: SandboxAuditSummary,
 }
+
+/// Compatibility name for Bubblewrap-specific owners during backend
+/// generalization.
+pub(crate) type BubblewrapLaunchPlan = SandboxLaunchPlan;
 
 /// Deterministic pane-shell probe for the fixed Bubblewrap runtime profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -413,6 +444,15 @@ impl fmt::Display for SandboxCompileError {
 
 impl std::error::Error for SandboxCompileError {}
 
+/// Dispatches one backend-tagged request to its deterministic compiler.
+pub(crate) fn compile_sandbox_launch_plan(
+    request: SandboxCompileRequest<'_>,
+) -> Result<SandboxLaunchPlan, SandboxCompileError> {
+    match request {
+        SandboxCompileRequest::Bubblewrap(request) => compile_bubblewrap_launch_plan(request),
+    }
+}
+
 /// Compiles one authorized command into a deterministic Bubblewrap launch
 /// plan without performing filesystem or process I/O.
 pub(crate) fn compile_bubblewrap_launch_plan(
@@ -427,26 +467,28 @@ pub(crate) fn compile_bubblewrap_launch_plan(
     );
     let arguments = bubblewrap_arguments(&request, &policy);
     let plan_sha256 = launch_plan_sha256(&request.config.executable, &arguments);
-    let read_only_mount_count = policy
-        .mounts
+    let read_only_grant_count = policy
+        .grants
         .iter()
-        .filter(|mount| mount.access == SandboxMountAccess::ReadOnly)
+        .filter(|grant| grant.access == SandboxPathAccess::ReadOnly)
         .count();
-    let read_write_mount_count = policy
-        .mounts
+    let read_write_grant_count = policy
+        .grants
         .iter()
-        .filter(|mount| mount.access == SandboxMountAccess::ReadWrite)
+        .filter(|grant| grant.access == SandboxPathAccess::ReadWrite)
         .count();
     Ok(BubblewrapLaunchPlan {
+        backend: SandboxBackend::Bubblewrap,
         executable: request.config.executable.clone(),
         arguments,
         sandbox_command_path: SANDBOX_COMMAND_PATH.to_string(),
         sandbox_working_directory: policy.working_directory.clone(),
         audit_summary: SandboxAuditSummary {
+            backend: SandboxBackend::Bubblewrap,
             runtime_profile_version: BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
             authority_source: policy.authority_source,
-            read_only_mount_count,
-            read_write_mount_count,
+            read_only_grant_count,
+            read_write_grant_count,
             network: policy.network,
             plan_sha256,
         },
@@ -740,7 +782,7 @@ fn validate_request(request: &BubblewrapCompileRequest<'_>) -> Result<(), Sandbo
         SandboxUnavailablePolicy::Fail => {}
     }
     match request.config.network {
-        BubblewrapNetworkMode::Isolated | BubblewrapNetworkMode::Connected => {}
+        SandboxNetworkMode::Isolated | SandboxNetworkMode::Connected => {}
     }
     match request.config.environment {
         SandboxEnvironmentPolicy::Minimal => {}
@@ -753,31 +795,31 @@ fn effective_sandbox_policy(
 ) -> Result<EffectiveSandboxPolicy, SandboxCompileError> {
     validate_maximum_authority(request.maximum_authority)?;
     let evaluation = request.permission_evaluation;
-    let (mounts, authority_source) = if request.preserve_maximum_authority {
+    let (grants, authority_source) = if request.preserve_maximum_authority {
         (
-            maximum_mounts(request.maximum_authority),
+            maximum_grants(request.maximum_authority),
             SandboxAuthoritySource::Maximum,
         )
     } else if let Some(effects) = evaluation.confinement_effects.as_ref() {
         (
-            narrowed_mounts(request.maximum_authority, effects)?,
+            narrowed_grants(request.maximum_authority, effects)?,
             SandboxAuthoritySource::Narrowed,
         )
     } else {
         (
-            maximum_mounts(request.maximum_authority),
+            maximum_grants(request.maximum_authority),
             SandboxAuthoritySource::Maximum,
         )
     };
     Ok(EffectiveSandboxPolicy {
         working_directory: request.maximum_authority.current_directory.clone(),
-        mounts,
+        grants,
         authority_source,
         network: if matches!(request.network_policy, NetworkPolicy::Allow)
             || (evaluation.effects.network
                 && matches!(request.network_policy, NetworkPolicy::Prompt))
         {
-            BubblewrapNetworkMode::Connected
+            SandboxNetworkMode::Connected
         } else {
             request.config.network
         },
@@ -803,7 +845,7 @@ fn validate_maximum_authority(authority: &PathScopes) -> Result<(), SandboxCompi
     }
     for path in &authority.read_scopes {
         if path_overlaps(path, "/run/user") || path_overlaps(path, "/var/run") {
-            validate_ipc_read_scope(path)?;
+            validate_ipc_read_scope(authority, path)?;
         }
     }
     for path in &authority.write_scopes {
@@ -828,58 +870,68 @@ fn validate_maximum_authority(authority: &PathScopes) -> Result<(), SandboxCompi
     Ok(())
 }
 
-/// Allows a protected IPC read scope only when it identifies one existing Unix
-/// socket node. Directories, regular files, missing paths, and symlinks could
-/// expose broader IPC authority and therefore remain forbidden.
-fn validate_ipc_read_scope(path: &str) -> Result<(), SandboxCompileError> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-        SandboxCompileError::new(
-            SandboxCompileErrorKind::ForbiddenHostPath,
-            format!("Bubblewrap IPC read authority must name an existing Unix socket: {error}"),
-        )
-    })?;
-    #[cfg(unix)]
-    let is_socket = !metadata.file_type().is_symlink() && metadata.file_type().is_socket();
-    #[cfg(not(unix))]
-    let is_socket = false;
-    if !is_socket {
+/// Allows a protected IPC read scope only when trusted resolver evidence
+/// identifies its exact canonical object as a Unix-domain socket.
+fn validate_ipc_read_scope(authority: &PathScopes, path: &str) -> Result<(), SandboxCompileError> {
+    if authority_path_kind(authority, path) != SandboxPathKind::UnixSocket {
         return Err(SandboxCompileError::new(
             SandboxCompileErrorKind::ForbiddenHostPath,
-            "Bubblewrap IPC read authority must name an existing Unix socket",
+            "sandbox IPC read authority requires trusted Unix-socket evidence",
         ));
     }
     Ok(())
 }
 
-fn maximum_mounts(authority: &PathScopes) -> Vec<SandboxMount> {
-    let mut mounts = authority
+fn maximum_grants(authority: &PathScopes) -> Vec<SandboxPathGrant> {
+    let mut grants = authority
         .read_scopes
         .iter()
-        .map(|path| SandboxMount {
-            source: path.clone(),
-            destination: path.clone(),
-            access: SandboxMountAccess::ReadOnly,
-        })
+        .map(|path| authority_path_grant(authority, path, SandboxPathAccess::ReadOnly))
         .collect::<Vec<_>>();
-    mounts.extend(authority.write_scopes.iter().map(|path| SandboxMount {
-        source: path.clone(),
-        destination: path.clone(),
-        access: SandboxMountAccess::ReadWrite,
-    }));
-    normalize_mounts(mounts)
+    grants.extend(
+        authority
+            .write_scopes
+            .iter()
+            .map(|path| authority_path_grant(authority, path, SandboxPathAccess::ReadWrite)),
+    );
+    normalize_grants(grants)
 }
 
-fn narrowed_mounts(
+fn authority_path_grant(
+    authority: &PathScopes,
+    path: &str,
+    access: SandboxPathAccess,
+) -> SandboxPathGrant {
+    let evidence = authority
+        .path_evidence
+        .values()
+        .find(|evidence| evidence.canonical_path == path);
+    let enforcement_path = evidence
+        .filter(|evidence| evidence.kind == ResolvedPathKind::CreateTarget)
+        .map(|evidence| evidence.nearest_existing_parent.clone())
+        .unwrap_or_else(|| path.to_string());
+    SandboxPathGrant {
+        canonical_path: path.to_string(),
+        enforcement_path,
+        kind: evidence
+            .map(|evidence| sandbox_path_kind(evidence.object_kind))
+            .unwrap_or(SandboxPathKind::Unknown),
+        access,
+    }
+}
+
+fn narrowed_grants(
     authority: &PathScopes,
     effects: &EffectiveCommandEffects,
-) -> Result<Vec<SandboxMount>, SandboxCompileError> {
-    let mut mounts = Vec::new();
+) -> Result<Vec<SandboxPathGrant>, SandboxCompileError> {
+    let mut grants = Vec::new();
     for path in &effects.reads {
         let resolved = resolve_effect_path(path, authority, false)?;
-        mounts.push(SandboxMount {
-            source: resolved.mount_source,
-            destination: resolved.mount_destination,
-            access: SandboxMountAccess::ReadOnly,
+        grants.push(SandboxPathGrant {
+            canonical_path: resolved.canonical_path,
+            enforcement_path: resolved.enforcement_path,
+            kind: resolved.kind,
+            access: SandboxPathAccess::ReadOnly,
         });
     }
     for path in effects
@@ -890,18 +942,20 @@ fn narrowed_mounts(
         .chain(&effects.touches)
     {
         let resolved = resolve_effect_path(path, authority, true)?;
-        mounts.push(SandboxMount {
-            source: resolved.mount_source,
-            destination: resolved.mount_destination,
-            access: SandboxMountAccess::ReadWrite,
+        grants.push(SandboxPathGrant {
+            canonical_path: resolved.canonical_path,
+            enforcement_path: resolved.enforcement_path,
+            kind: resolved.kind,
+            access: SandboxPathAccess::ReadWrite,
         });
     }
-    Ok(normalize_mounts(mounts))
+    Ok(normalize_grants(grants))
 }
 
 struct ResolvedEffectPath {
-    mount_source: String,
-    mount_destination: String,
+    canonical_path: String,
+    enforcement_path: String,
+    kind: SandboxPathKind,
 }
 
 fn resolve_effect_path(
@@ -932,9 +986,9 @@ fn resolve_effect_path(
         .chain(&authority.write_scopes)
         .any(|scope| scope == &normalized)
         || normalized == authority.current_directory;
-    let (canonical_target, mount_source) = match evidence {
+    let (canonical_target, enforcement_path, kind) = match evidence {
         Some(evidence) => resolved_effect_mount(evidence, write)?,
-        None if exact_authority_path => (normalized.clone(), normalized),
+        None if exact_authority_path => (normalized.clone(), normalized, SandboxPathKind::Unknown),
         None => {
             return Err(SandboxCompileError::new(
                 SandboxCompileErrorKind::UnresolvedEffectPath,
@@ -952,7 +1006,7 @@ fn resolve_effect_path(
         .any(|scope| Path::new(&canonical_target).starts_with(scope))
         || !allowed_scopes
             .iter()
-            .any(|scope| Path::new(&mount_source).starts_with(scope))
+            .any(|scope| Path::new(&enforcement_path).starts_with(scope))
     {
         return Err(SandboxCompileError::new(
             SandboxCompileErrorKind::EffectOutsideAuthority,
@@ -960,15 +1014,16 @@ fn resolve_effect_path(
         ));
     }
     Ok(ResolvedEffectPath {
-        mount_source: mount_source.clone(),
-        mount_destination: mount_source,
+        canonical_path: canonical_target,
+        enforcement_path,
+        kind,
     })
 }
 
 fn resolved_effect_mount(
     evidence: &ResolvedPathEvidence,
     write: bool,
-) -> Result<(String, String), SandboxCompileError> {
+) -> Result<(String, String, SandboxPathKind), SandboxCompileError> {
     validate_canonical_path(&evidence.canonical_path, "resolved effect target")?;
     validate_canonical_path(
         &evidence.nearest_existing_parent,
@@ -980,41 +1035,64 @@ fn resolved_effect_mount(
             "read effects cannot target a path that did not exist during resolution",
         ));
     }
-    let mount_source = if write && evidence.kind == ResolvedPathKind::CreateTarget {
+    let enforcement_path = if write && evidence.kind == ResolvedPathKind::CreateTarget {
         evidence.nearest_existing_parent.clone()
     } else {
         evidence.canonical_path.clone()
     };
-    Ok((evidence.canonical_path.clone(), mount_source))
+    Ok((
+        evidence.canonical_path.clone(),
+        enforcement_path,
+        sandbox_path_kind(evidence.object_kind),
+    ))
 }
 
-fn normalize_mounts(mounts: Vec<SandboxMount>) -> Vec<SandboxMount> {
-    let mut by_destination = BTreeMap::<String, SandboxMount>::new();
-    for mount in mounts {
-        by_destination
-            .entry(mount.destination.clone())
+fn authority_path_kind(authority: &PathScopes, path: &str) -> SandboxPathKind {
+    authority
+        .path_evidence
+        .values()
+        .find(|evidence| evidence.canonical_path == path)
+        .map(|evidence| sandbox_path_kind(evidence.object_kind))
+        .unwrap_or(SandboxPathKind::Unknown)
+}
+
+const fn sandbox_path_kind(kind: ResolvedPathObjectKind) -> SandboxPathKind {
+    match kind {
+        ResolvedPathObjectKind::Unknown => SandboxPathKind::Unknown,
+        ResolvedPathObjectKind::File => SandboxPathKind::File,
+        ResolvedPathObjectKind::Directory => SandboxPathKind::Directory,
+        ResolvedPathObjectKind::UnixSocket => SandboxPathKind::UnixSocket,
+        ResolvedPathObjectKind::Other => SandboxPathKind::Other,
+    }
+}
+
+fn normalize_grants(grants: Vec<SandboxPathGrant>) -> Vec<SandboxPathGrant> {
+    let mut by_enforcement_path = BTreeMap::<String, SandboxPathGrant>::new();
+    for grant in grants {
+        by_enforcement_path
+            .entry(grant.enforcement_path.clone())
             .and_modify(|existing| {
-                if mount.access > existing.access {
-                    *existing = mount.clone();
+                if grant.access > existing.access {
+                    *existing = grant.clone();
                 }
             })
-            .or_insert(mount);
+            .or_insert(grant);
     }
-    let mut ordered = by_destination.into_values().collect::<Vec<_>>();
+    let mut ordered = by_enforcement_path.into_values().collect::<Vec<_>>();
     ordered.sort_by(|left, right| {
-        path_depth(&left.destination)
-            .cmp(&path_depth(&right.destination))
-            .then_with(|| left.destination.cmp(&right.destination))
+        path_depth(&left.enforcement_path)
+            .cmp(&path_depth(&right.enforcement_path))
+            .then_with(|| left.enforcement_path.cmp(&right.enforcement_path))
             .then_with(|| left.access.cmp(&right.access))
     });
-    let mut normalized: Vec<SandboxMount> = Vec::new();
-    for mount in ordered {
+    let mut normalized: Vec<SandboxPathGrant> = Vec::new();
+    for grant in ordered {
         let covered = normalized.iter().any(|parent| {
-            Path::new(&mount.destination).starts_with(&parent.destination)
-                && parent.access == mount.access
+            Path::new(&grant.enforcement_path).starts_with(&parent.enforcement_path)
+                && parent.access == grant.access
         });
         if !covered {
-            normalized.push(mount);
+            normalized.push(grant);
         }
     }
     normalized
@@ -1032,17 +1110,6 @@ fn project_policy_into_synthetic_home(
     };
     policy.working_directory =
         synthetic_home_path(&policy.working_directory, pane_home_directory, sandbox_home);
-    policy.mounts = normalize_mounts(
-        policy
-            .mounts
-            .into_iter()
-            .map(|mut mount| {
-                mount.destination =
-                    synthetic_home_path(&mount.destination, pane_home_directory, sandbox_home);
-                mount
-            })
-            .collect(),
-    );
     policy
 }
 
@@ -1176,7 +1243,7 @@ fn bubblewrap_arguments(
     .into_iter()
     .map(str::to_string)
     .collect::<Vec<_>>();
-    if policy.network == BubblewrapNetworkMode::Isolated {
+    if policy.network == SandboxNetworkMode::Isolated {
         arguments.insert(7, "--unshare-net".to_string());
     }
     if let Some(managed_home) = request.managed_home {
@@ -1193,16 +1260,23 @@ fn bubblewrap_arguments(
         arguments.push("--tmpfs".to_string());
         arguments.push(sandbox_home.clone());
     }
-    for mount in &policy.mounts {
+    for grant in &policy.grants {
         arguments.push(
-            match mount.access {
-                SandboxMountAccess::ReadOnly => "--ro-bind",
-                SandboxMountAccess::ReadWrite => "--bind",
+            match grant.access {
+                SandboxPathAccess::ReadOnly => "--ro-bind",
+                SandboxPathAccess::ReadWrite => "--bind",
             }
             .to_string(),
         );
-        arguments.push(mount.source.clone());
-        arguments.push(mount.destination.clone());
+        arguments.push(grant.enforcement_path.clone());
+        arguments.push(
+            request
+                .pane_home_directory
+                .map(|pane_home| {
+                    synthetic_home_path(&grant.enforcement_path, pane_home, &sandbox_home)
+                })
+                .unwrap_or_else(|| grant.enforcement_path.clone()),
+        );
     }
     arguments.extend(
         [

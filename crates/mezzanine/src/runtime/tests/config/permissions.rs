@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::runtime::config::{
-    NetworkPolicy, SandboxConfig, bubblewrap_applies_to_policy,
-    runtime_configured_permissions_from_config,
+    NetworkPolicy, SandboxConfig, runtime_configured_permissions_from_config,
+    sandbox_applies_to_policy,
 };
 use mez_agent::permissions::EffectCompleteness;
 
@@ -98,10 +98,10 @@ fn runtime_effective_bubblewrap_tracks_approval_policy_without_mutating_config()
     let mut policy = configured.authorization.clone();
 
     policy.approval_policy = ApprovalPolicy::FullAccess;
-    assert!(bubblewrap_applies_to_policy(&configured.sandbox, &policy));
+    assert!(sandbox_applies_to_policy(&configured.sandbox, &policy));
 
     policy.approval_policy = ApprovalPolicy::HostAccess;
-    assert!(!bubblewrap_applies_to_policy(&configured.sandbox, &policy));
+    assert!(!sandbox_applies_to_policy(&configured.sandbox, &policy));
     assert!(matches!(configured.sandbox, SandboxConfig::Bubblewrap(_)));
 }
 

@@ -51,7 +51,8 @@ pub use types::{
     CommandRuleScope, CommandRuleStore, CommandShellDialect, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
     DeclaredCommandEffects, EffectCompleteness, EffectiveCommandEffects, PathResolutionStatus,
     PathScopes, PermissionAuthorityChange, PermissionEvaluation, PermissionPolicy,
-    ResolvedPathEvidence, ResolvedPathKind, RuleMatch, SessionApprovalStore,
+    ResolvedPathEvidence, ResolvedPathKind, ResolvedPathObjectKind, RuleMatch,
+    SessionApprovalStore,
 };
 
 use classification::{

@@ -1161,7 +1161,7 @@ impl RuntimeSessionService {
                 .clone();
             let permission_policy = self.permission_policy_for_turn(turn);
             let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
-            let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
+            let bubblewrap_applies = crate::runtime::config::sandbox_applies_to_policy(
                 &sandbox_config,
                 &permission_policy,
             );

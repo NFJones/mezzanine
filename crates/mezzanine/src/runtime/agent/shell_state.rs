@@ -188,7 +188,7 @@ impl RuntimeSessionService {
             None
         } else if let Some(context) = native_context.as_ref() {
             let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
-            let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
+            let bubblewrap_applies = crate::runtime::config::sandbox_applies_to_policy(
                 &sandbox_config,
                 &permission_policy,
             ) && !self
@@ -291,10 +291,8 @@ impl RuntimeSessionService {
         let mut sandbox_audit_summary = None;
         let mut managed_home_activity_lock = None;
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
-        let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
-            &sandbox_config,
-            &permission_policy,
-        );
+        let bubblewrap_applies =
+            crate::runtime::config::sandbox_applies_to_policy(&sandbox_config, &permission_policy);
         let sandbox_bypassed = bubblewrap_applies
             && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
         if let SandboxConfig::Bubblewrap(config) = sandbox_config
@@ -395,30 +393,32 @@ impl RuntimeSessionService {
                 }
                 _ => None,
             };
-            let launch_plan = match crate::security::sandbox::compile_bubblewrap_launch_plan(
-                crate::security::sandbox::BubblewrapCompileRequest {
-                    config: &config,
-                    identity,
-                    capability,
-                    pane_environment_signature: &cache_key.pane_environment_signature,
-                    environment_evidence: &environment_evidence,
-                    network_policy: self.configured_permissions().resources.network_policy,
-                    maximum_authority: &maximum_authority,
-                    permission_evaluation: evaluation,
-                    preserve_maximum_authority: matches!(
-                        action.payload,
-                        AgentActionPayload::ApplyPatch { .. }
-                    ),
-                    child_shell_path: program_dialect
-                        .interpreter_path()
-                        .unwrap_or(&signature.shell_path),
-                    command_file_host_path:
-                        crate::security::sandbox::BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
-                    managed_home: managed_home.as_ref(),
-                    pane_home_directory: signature.home_directory.as_deref().map(Path::new),
-                    stateful,
-                    interactive,
-                },
+            let launch_plan = match crate::security::sandbox::compile_sandbox_launch_plan(
+                crate::security::sandbox::SandboxCompileRequest::Bubblewrap(
+                    crate::security::sandbox::BubblewrapCompileRequest {
+                        config: &config,
+                        identity,
+                        capability,
+                        pane_environment_signature: &cache_key.pane_environment_signature,
+                        environment_evidence: &environment_evidence,
+                        network_policy: self.configured_permissions().resources.network_policy,
+                        maximum_authority: &maximum_authority,
+                        permission_evaluation: evaluation,
+                        preserve_maximum_authority: matches!(
+                            action.payload,
+                            AgentActionPayload::ApplyPatch { .. }
+                        ),
+                        child_shell_path: program_dialect
+                            .interpreter_path()
+                            .unwrap_or(&signature.shell_path),
+                        command_file_host_path:
+                            crate::security::sandbox::BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
+                        managed_home: managed_home.as_ref(),
+                        pane_home_directory: signature.home_directory.as_deref().map(Path::new),
+                        stateful,
+                        interactive,
+                    },
+                ),
             ) {
                 Ok(launch_plan) => launch_plan,
                 Err(error)
@@ -671,10 +671,8 @@ impl RuntimeSessionService {
         };
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
         let permission_policy = self.permission_policy_for_turn(turn);
-        let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
-            &sandbox_config,
-            &permission_policy,
-        );
+        let bubblewrap_applies =
+            crate::runtime::config::sandbox_applies_to_policy(&sandbox_config, &permission_policy);
         let sandbox_bypassed = bubblewrap_applies
             && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
         let native_bubblewrap = if bubblewrap_applies && !sandbox_bypassed {
@@ -855,10 +853,7 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         let permission_policy = self.permission_policy_for_turn(turn);
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
-        if !crate::runtime::config::bubblewrap_applies_to_policy(
-            &sandbox_config,
-            &permission_policy,
-        ) {
+        if !crate::runtime::config::sandbox_applies_to_policy(&sandbox_config, &permission_policy) {
             return Ok(true);
         }
         self.refresh_project_trust_store_from_disk_if_changed()?;
@@ -1007,10 +1002,8 @@ impl RuntimeSessionService {
     ) -> Result<super::ApplyPatchPathBoundary> {
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
         let permission_policy = self.permission_policy_for_turn(turn);
-        let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
-            &sandbox_config,
-            &permission_policy,
-        );
+        let bubblewrap_applies =
+            crate::runtime::config::sandbox_applies_to_policy(&sandbox_config, &permission_policy);
         if !bubblewrap_applies || self.sandbox_bypass_active_for_action(&turn.turn_id, action_id) {
             return Ok(super::ApplyPatchPathBoundary::CurrentDirectoryOnly);
         }

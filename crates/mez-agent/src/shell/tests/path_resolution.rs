@@ -1,7 +1,7 @@
 //! Regression coverage for pane-shell canonical path resolution.
 
 use super::*;
-use crate::permissions::ResolvedPathKind;
+use crate::permissions::{ResolvedPathKind, ResolvedPathObjectKind};
 use base64::Engine;
 use std::os::unix::fs::symlink;
 use std::process::Command;
@@ -55,8 +55,10 @@ fn pane_path_resolution_observes_symlinks_and_create_targets() {
     let create = scopes.path_evidence.get("link/new/nested.txt").unwrap();
     assert_eq!(create.kind, ResolvedPathKind::CreateTarget);
     assert_eq!(create.nearest_existing_parent, outside.to_string_lossy());
+    assert_eq!(create.object_kind, ResolvedPathObjectKind::Directory);
     let existing = scopes.path_evidence.get("link/secret.txt").unwrap();
     assert_eq!(existing.kind, ResolvedPathKind::Existing);
+    assert_eq!(existing.object_kind, ResolvedPathObjectKind::File);
     assert_eq!(
         existing.canonical_path,
         outside.join("secret.txt").to_string_lossy()

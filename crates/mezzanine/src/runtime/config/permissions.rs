@@ -116,6 +116,14 @@ pub(crate) enum SandboxConfig {
 }
 
 impl SandboxConfig {
+    /// Returns the selected OS confinement backend, if one is configured.
+    pub(crate) const fn backend(&self) -> Option<SandboxBackend> {
+        match self {
+            Self::PolicyOnly => None,
+            Self::Bubblewrap(_) => Some(SandboxBackend::Bubblewrap),
+        }
+    }
+
     /// Returns the stable backend name without exposing backend arguments.
     pub(crate) const fn as_str(&self) -> &'static str {
         match self {
@@ -130,7 +138,7 @@ impl SandboxConfig {
         Self::Bubblewrap(BubblewrapConfig {
             executable: "/usr/bin/bwrap".to_string(),
             unavailable: SandboxUnavailablePolicy::Fail,
-            network: BubblewrapNetworkMode::Isolated,
+            network: SandboxNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
             group_whitelist: ConfiguredSandboxGroups::default(),
             env_whitelist: ConfiguredSandboxEnvironment::default(),
@@ -140,14 +148,30 @@ impl SandboxConfig {
     }
 }
 
-/// Reports whether configured Bubblewrap confinement applies to one effective
+/// Identifies one OS-level confinement implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SandboxBackend {
+    /// Linux Bubblewrap namespace confinement.
+    Bubblewrap,
+}
+
+impl SandboxBackend {
+    /// Returns the stable configuration, status, and audit spelling.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bubblewrap => "bubblewrap",
+        }
+    }
+}
+
+/// Reports whether configured OS confinement applies to one effective
 /// permission policy. Host access leaves the configured backend unchanged but
 /// deliberately executes local shell actions outside it.
-pub(crate) fn bubblewrap_applies_to_policy(
+pub(crate) fn sandbox_applies_to_policy(
     sandbox: &SandboxConfig,
     policy: &PermissionPolicy,
 ) -> bool {
-    matches!(sandbox, SandboxConfig::Bubblewrap(_)) && !policy.approval_policy.bypasses_sandbox()
+    sandbox.backend().is_some() && !policy.approval_policy.bypasses_sandbox()
 }
 
 /// Typed fail-closed Bubblewrap configuration.
@@ -158,7 +182,7 @@ pub(crate) struct BubblewrapConfig {
     /// Missing or nonfunctional Bubblewrap behavior.
     pub(crate) unavailable: SandboxUnavailablePolicy,
     /// Network namespace policy.
-    pub(crate) network: BubblewrapNetworkMode,
+    pub(crate) network: SandboxNetworkMode,
     /// Environment reconstruction policy.
     pub(crate) environment: SandboxEnvironmentPolicy,
     /// Exact host supplementary groups selected by the primary user.
@@ -290,16 +314,16 @@ pub(crate) enum SandboxUnavailablePolicy {
     Fail,
 }
 
-/// Bubblewrap network namespace mode.
+/// Effective network boundary requested from a sandbox backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BubblewrapNetworkMode {
-    /// Use an isolated private network namespace.
+pub(crate) enum SandboxNetworkMode {
+    /// Deny host network access using the selected backend's mechanism.
     Isolated,
-    /// Share the pane host's network namespace for an authorized workload.
+    /// Permit host network access for an authorized workload.
     Connected,
 }
 
-impl BubblewrapNetworkMode {
+impl SandboxNetworkMode {
     /// Returns the stable audit spelling for this network mode.
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
@@ -566,7 +590,7 @@ pub(crate) fn runtime_configured_permissions_from_config(
                 .and_then(|config| runtime_json_string(config.get("network")))
                 .unwrap_or("isolated")
             {
-                "isolated" => BubblewrapNetworkMode::Isolated,
+                "isolated" => SandboxNetworkMode::Isolated,
                 _ => {
                     return Err(MezError::config(
                         "permissions.bubblewrap.network must be isolated",

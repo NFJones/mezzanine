@@ -111,6 +111,7 @@ impl RealBubblewrapFixture {
                     canonical_path: canonical.to_string_lossy().into_owned(),
                     kind: ResolvedPathKind::Existing,
                     nearest_existing_parent: canonical.to_string_lossy().into_owned(),
+                    object_kind: ResolvedPathObjectKind::Directory,
                 },
             );
         }
@@ -130,6 +131,7 @@ impl RealBubblewrapFixture {
                     canonical_path: canonical.to_string_lossy().into_owned(),
                     kind: ResolvedPathKind::Existing,
                     nearest_existing_parent: canonical.to_string_lossy().into_owned(),
+                    object_kind: ResolvedPathObjectKind::Directory,
                 },
             );
         }
@@ -531,7 +533,7 @@ fn real_bubblewrap_authorized_network_uses_connected_profile() {
     network.network = true;
     let evaluation = evaluation(EffectCompleteness::Complete, network);
     let plan = real_plan(&config, capability, &fixture.authority(), &evaluation);
-    assert_eq!(plan.audit_summary.network, BubblewrapNetworkMode::Connected);
+    assert_eq!(plan.audit_summary.network, SandboxNetworkMode::Connected);
     assert!(!plan.arguments.contains(&"--unshare-net".to_string()));
 
     let command = format!(

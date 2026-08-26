@@ -848,7 +848,7 @@ impl RuntimeSessionService {
         }
         let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
         let sandbox_config = self.sandbox_config_for_pane(parent_pane_id.as_str());
-        if !crate::runtime::config::bubblewrap_applies_to_policy(
+        if !crate::runtime::config::sandbox_applies_to_policy(
             &sandbox_config,
             &self.permission_policy_for_agent(parent_agent_id),
         ) {

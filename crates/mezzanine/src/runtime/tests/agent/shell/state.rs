@@ -287,11 +287,12 @@ fn runtime_bubblewrap_shell_audit_records_redacted_plan_metadata() {
     let action = sandbox_audit_action();
     let plan_sha256 = "a".repeat(64);
     let summary = crate::security::sandbox::SandboxAuditSummary {
+        backend: crate::runtime::SandboxBackend::Bubblewrap,
         runtime_profile_version: crate::security::sandbox::BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
         authority_source: crate::security::sandbox::SandboxAuthoritySource::Narrowed,
-        read_only_mount_count: 2,
-        read_write_mount_count: 1,
-        network: crate::runtime::BubblewrapNetworkMode::Isolated,
+        read_only_grant_count: 2,
+        read_write_grant_count: 1,
+        network: crate::runtime::SandboxNetworkMode::Isolated,
         plan_sha256: plan_sha256.clone(),
     };
 
@@ -315,8 +316,8 @@ fn runtime_bubblewrap_shell_audit_records_redacted_plan_metadata() {
         crate::security::sandbox::BUBBLEWRAP_RUNTIME_PROFILE_VERSION
     );
     assert_eq!(metadata["sandbox_authority_source"], "narrowed");
-    assert_eq!(metadata["sandbox_read_only_mount_count"], "2");
-    assert_eq!(metadata["sandbox_read_write_mount_count"], "1");
+    assert_eq!(metadata["sandbox_read_only_grant_count"], "2");
+    assert_eq!(metadata["sandbox_read_write_grant_count"], "1");
     assert_eq!(metadata["sandbox_network"], "isolated");
     assert_eq!(metadata["sandbox_plan_sha256"], plan_sha256);
     assert!(!serialized.contains("/private/workspace/secret.txt"));

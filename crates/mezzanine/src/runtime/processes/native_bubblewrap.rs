@@ -228,28 +228,30 @@ impl crate::runtime::RuntimeSessionService {
             }
             _ => (None, None),
         };
-        let launch_plan = crate::security::sandbox::compile_bubblewrap_launch_plan(
-            crate::security::sandbox::BubblewrapCompileRequest {
-                config,
-                identity,
-                capability,
-                pane_environment_signature: &signature_hash,
-                environment_evidence: &evidence,
-                network_policy: self.configured_permissions().resources.network_policy,
-                maximum_authority: &maximum_authority,
-                permission_evaluation,
-                preserve_maximum_authority: matches!(
-                    action.payload,
-                    AgentActionPayload::ApplyPatch { .. }
-                ),
-                child_shell_path,
-                command_file_host_path:
-                    crate::security::sandbox::BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
-                managed_home: managed_home.as_ref(),
-                pane_home_directory: signature.home_directory.as_deref().map(Path::new),
-                stateful: false,
-                interactive: false,
-            },
+        let launch_plan = crate::security::sandbox::compile_sandbox_launch_plan(
+            crate::security::sandbox::SandboxCompileRequest::Bubblewrap(
+                crate::security::sandbox::BubblewrapCompileRequest {
+                    config,
+                    identity,
+                    capability,
+                    pane_environment_signature: &signature_hash,
+                    environment_evidence: &evidence,
+                    network_policy: self.configured_permissions().resources.network_policy,
+                    maximum_authority: &maximum_authority,
+                    permission_evaluation,
+                    preserve_maximum_authority: matches!(
+                        action.payload,
+                        AgentActionPayload::ApplyPatch { .. }
+                    ),
+                    child_shell_path,
+                    command_file_host_path:
+                        crate::security::sandbox::BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
+                    managed_home: managed_home.as_ref(),
+                    pane_home_directory: signature.home_directory.as_deref().map(Path::new),
+                    stateful: false,
+                    interactive: false,
+                },
+            ),
         )
         .map_err(|error| {
             MezError::invalid_state(format!(
@@ -462,11 +464,13 @@ fn resolve_host_path(current_directory: &Path, requested: &str) -> Result<Resolv
                 "native path resolution could not canonicalize {requested}: {error}"
             ))
         })?;
+        let object_kind = resolved_path_object_kind(&canonical)?;
         let canonical = canonical.to_string_lossy().into_owned();
         return Ok(ResolvedPathEvidence {
             canonical_path: canonical.clone(),
             kind: ResolvedPathKind::Existing,
             nearest_existing_parent: canonical,
+            object_kind,
         });
     }
     let mut probe = target.as_path();
@@ -497,6 +501,31 @@ fn resolve_host_path(current_directory: &Path, requested: &str) -> Result<Resolv
         canonical_path: canonical.to_string_lossy().into_owned(),
         kind: ResolvedPathKind::CreateTarget,
         nearest_existing_parent: nearest.to_string_lossy().into_owned(),
+        object_kind: resolved_path_object_kind(&nearest)?,
+    })
+}
+
+/// Classifies one canonical existing enforcement object without following a
+/// second path supplied by the caller.
+fn resolved_path_object_kind(
+    path: &Path,
+) -> Result<mez_agent::permissions::ResolvedPathObjectKind> {
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        MezError::invalid_state(format!(
+            "native path resolution could not classify a canonical path: {error}"
+        ))
+    })?;
+    let file_type = metadata.file_type();
+    #[cfg(unix)]
+    use std::os::unix::fs::FileTypeExt;
+    Ok(if file_type.is_dir() {
+        mez_agent::permissions::ResolvedPathObjectKind::Directory
+    } else if file_type.is_file() {
+        mez_agent::permissions::ResolvedPathObjectKind::File
+    } else if file_type.is_socket() {
+        mez_agent::permissions::ResolvedPathObjectKind::UnixSocket
+    } else {
+        mez_agent::permissions::ResolvedPathObjectKind::Other
     })
 }
 

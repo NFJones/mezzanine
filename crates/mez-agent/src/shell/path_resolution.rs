@@ -11,7 +11,9 @@ use super::{
     AgentShellValidationError, AgentShellValidationResult, ShellClassification, fish_quote,
     shell_quote,
 };
-use crate::permissions::{PathScopes, ResolvedPathEvidence, ResolvedPathKind};
+use crate::permissions::{
+    PathScopes, ResolvedPathEvidence, ResolvedPathKind, ResolvedPathObjectKind,
+};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,7 +22,7 @@ const PATH_RESOLUTION_PROTOCOL_MARKER: &str = "MEZ_PATH_RESOLUTION_V2\t";
 const MAX_PATH_RESOLUTION_REQUESTS: usize = 4096;
 const MAX_PATH_RESOLUTION_REQUEST_BYTES: usize = 1024 * 1024;
 
-const PATH_RESOLUTION_PYTHON: &str = r#"import base64,json,os,sys
+const PATH_RESOLUTION_PYTHON: &str = r#"import base64,json,os,stat,sys
 payload=json.loads(base64.b64decode(sys.argv[1],validate=True))
 cwd=os.path.realpath(os.getcwd())
 entries=[]
@@ -41,6 +43,7 @@ for requested in payload["paths"]:
             canonical=os.path.realpath(target)
             kind="existing"
             nearest=canonical
+            mode=os.stat(canonical).st_mode
         else:
             relative=os.path.relpath(target,probe)
             suffix=relative.split(os.sep)
@@ -48,7 +51,9 @@ for requested in payload["paths"]:
                 raise ValueError("ambiguous create target")
             canonical=os.path.normpath(os.path.join(nearest,*suffix))
             kind="create-target"
-        entries.append({"requested":requested,"status":"resolved","canonical_path":canonical,"kind":kind,"nearest_existing_parent":nearest})
+            mode=os.stat(nearest).st_mode
+        object_kind="directory" if stat.S_ISDIR(mode) else "file" if stat.S_ISREG(mode) else "unix-socket" if stat.S_ISSOCK(mode) else "other"
+        entries.append({"requested":requested,"status":"resolved","canonical_path":canonical,"kind":kind,"nearest_existing_parent":nearest,"object_kind":object_kind})
     except (OSError,ValueError) as error:
         entries.append({"requested":requested,"status":"unavailable","reason":type(error).__name__})
 result={"version":2,"current_directory":cwd,"entries":entries}
@@ -289,12 +294,24 @@ pub fn parse_pane_path_resolution_output(
                 ));
             }
         };
+        let object_kind = match entry.object_kind.as_deref() {
+            Some("file") => ResolvedPathObjectKind::File,
+            Some("directory") => ResolvedPathObjectKind::Directory,
+            Some("unix-socket") => ResolvedPathObjectKind::UnixSocket,
+            Some("other") => ResolvedPathObjectKind::Other,
+            _ => {
+                return Err(AgentShellValidationError::invalid_args(
+                    "path-resolution output contained an unknown object kind",
+                ));
+            }
+        };
         path_evidence.insert(
             entry.requested,
             ResolvedPathEvidence {
                 canonical_path,
                 kind,
                 nearest_existing_parent,
+                object_kind,
             },
         );
     }
@@ -364,5 +381,6 @@ struct PathResolutionEntryWire {
     canonical_path: Option<String>,
     kind: Option<String>,
     nearest_existing_parent: Option<String>,
+    object_kind: Option<String>,
     reason: Option<String>,
 }
