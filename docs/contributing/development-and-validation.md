@@ -32,14 +32,14 @@ Use the narrowest check while developing, then run the complete required set
 before handoff:
 
 ```sh
-just check
 just fmt
+just check
 just clippy
 timeout 120s just test
 ```
 
-`just check` type-checks all targets and features. `just fmt` applies Rust
-formatting. `just clippy` denies warnings across the workspace. `just test`
+`just fmt` applies Rust formatting. `just check` type-checks all targets and
+features. `just clippy` denies warnings across the workspace. `just test`
 runs all targets and features with Cargo's quiet output; the timeout makes a
 hang visible. Use a timeout of at least 120 seconds for every direct test
 command as well. `just test` already supplies Cargo's `--quiet` option; retain

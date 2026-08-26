@@ -58,7 +58,8 @@ while you inspect, edit, and validate work.
 - Linux or macOS, with pseudoterminals and a POSIX-style shell.
 - Rust 1.91 or newer when building from this repository.
 - A usable `$SHELL`; Mez falls back to `/bin/sh` when it is executable.
-- A provider account and supported sign-in method for model-backed agent work.
+- A provider account and supported sign-in method, or a configured compatible
+  local backend, for model-backed agent work.
 
 ## Quick start
 
@@ -84,7 +85,8 @@ cd /path/to/repository
 mez new
 ```
 
-The default login flow opens OpenAI's browser sign-in. See
+With an interactive terminal, the default OpenAI login flow prefers browser
+sign-in. See
 [Getting started](docs/getting-started/README.md) for other providers, API keys,
 and noninteractive authentication, or the
 [configuration reference](docs/configuration/reference.md) for backend options.
@@ -118,10 +120,11 @@ and pane execution, while [Terminal
 compatibility](docs/reference-manual/terminal-compatibility.md) defines the
 implemented terminal surface.
 
-Agent work inside nested SSH or container environments is discovered and
-bootstrapped automatically without installing anything inside that environment.
-Mezzanine does not reuse local startup files or silently modify remote shell
-configuration.
+After you explicitly open the agent shell at an empty interactive prompt,
+Mezzanine discovers and bootstraps nested SSH or container environments without
+installing anything inside them. It does not inject into password prompts,
+full-screen programs, or uncertain command lines, reuse local startup files, or
+silently modify remote shell configuration.
 
 After upgrading Mezzanine, open a new pane or restart the session to use
 updated shell integration.

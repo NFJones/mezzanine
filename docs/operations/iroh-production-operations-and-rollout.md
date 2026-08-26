@@ -301,3 +301,11 @@ lacks an approved exception and a tracker record with an owner and due date.
 - [Configuration reference](../configuration/reference.md)
 - [Control JSON-RPC](../reference-manual/protocols/control-json-rpc.md)
 - [Lifecycle, detach, and recovery](lifecycle-detach-and-recovery.md)
+
+## Next step
+
+For a development or controlled-evaluation deployment, return to [Remote
+pairing and recovery](../safety-and-trust/remote-pairing-and-recovery.md) and
+create the narrowest invitation that fits the test. For production, stop until
+every infrastructure decision and release-readiness gate above has an approved
+owner and evidence.

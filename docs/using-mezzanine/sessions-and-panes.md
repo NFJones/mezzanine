@@ -16,7 +16,7 @@ interactive primary client.
 mez             # attach to an available session, or create one
 mez new         # always create a new session
 mez serve       # run a foreground service without a primary client
-mez list         # list resumable sessions
+mez list        # list resumable sessions
 mez attach [session-id] # attach to a resumable session
 mez attach [session-id] --observer  # request read-only observer access
 ```

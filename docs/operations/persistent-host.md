@@ -10,6 +10,9 @@ creation, routing, durable leases, and optional host-scoped Iroh access.
 - Complete [Getting started](../getting-started/README.md).
 - Keep the user-private Unix control path available for administration and
   recovery.
+- Run the host as the same unprivileged account that owns the Mezzanine
+  configuration and will administer its sessions; do not run it as root to
+  bypass path or permission failures.
 - Use a service manager that preserves standard output and standard error when
   deploying the host as a background service.
 
@@ -41,8 +44,11 @@ prevent an operator or service manager from starting the host explicitly.
 
 The host writes an initial machine-readable readiness record to standard
 output and operational diagnostics to standard error. A service manager should
-capture both streams, restart the process according to local policy, and stop
-it gracefully rather than treating it as an interactive attachment.
+run exactly one foreground instance for the account, provide a stable `HOME`
+and runtime-directory environment, capture both streams, restart the process
+according to local policy, and stop it gracefully rather than treating it as an
+interactive attachment. Do not infer readiness merely from process creation;
+retain and inspect the initial readiness record or use `mez host status`.
 
 From another local process, inspect or stop the service:
 

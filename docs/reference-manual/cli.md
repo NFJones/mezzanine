@@ -120,6 +120,25 @@ to the processes that existed when the snapshot was taken.
 
 ### Iroh targeting and pairing
 
+Pairing starts on a configured, running host and finishes on the client after
+the invitation file is transferred through a confidential channel:
+
+```console
+# Host, through local Unix control
+mez remote invite --role primary --allow-create --output mez-invite.json
+
+# Client, after confidential transfer
+mez remote invitation inspect mez-invite.json
+mez remote pair --invite-file mez-invite.json --name home-mez
+mez --iroh-profile home-mez attach
+```
+
+Use an `observer` invitation when the device needs read-only attachment, and
+omit `--allow-create` when it must attach only to an explicitly named existing
+session. See [Remote pairing and
+recovery](../safety-and-trust/remote-pairing-and-recovery.md) for listener
+prerequisites, route policy, role ceilings, revocation, and identity recovery.
+
 `mez remote invite` accepts `--role observer|primary`, `--expires SECONDS`, and
 `--output PATH`. A role ceiling does not grant session creation. Add
 `--allow-create` when the device may use remote `new` or omitted-target

@@ -12,13 +12,6 @@ Read [Configuration overview](overview.md) to understand file discovery,
 precedence, trust, and validation. Compare settings against the checked-in
 [example configuration](../examples/config.toml) for the current release.
 
-## Related pages
-
-- [Configuration overview](overview.md)
-- [Permissions, sandbox, and trust](permissions-sandbox-and-trust.md)
-- [Example configuration](../examples/config.toml)
-- [SPEC.md Section 8](../../SPEC.md#8-configuration) for normative behavior
-
 ## Schema index
 
 - [Files, layers, versions, and migration](#configuration-files-and-layers)
@@ -1279,3 +1272,16 @@ omit plan-specific fields.
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
 | `extensions.<name>.*` | implementation-defined | omitted | Extension-specific config. Unknown non-extension top-level keys are rejected. |
+
+## Related pages
+
+- [Configuration overview](overview.md)
+- [Permissions, sandbox, and trust](permissions-sandbox-and-trust.md)
+- [Example configuration](../examples/config.toml)
+- [SPEC.md Section 8](../../SPEC.md#8-configuration) for normative behavior
+
+## Next step
+
+Run `mez config path` before editing, make the smallest required change, and
+then run `mez config validate` and `mez config layers` to confirm both syntax
+and effective precedence.
