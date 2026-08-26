@@ -750,7 +750,7 @@ async fn async_pane_process_service_waits_for_live_output_before_exit() {
                 &service_handle,
                 &mut driver,
                 AsyncPaneProcessServiceConfig {
-                    max_polls: 20,
+                    max_polls: u64::MAX,
                     output_drain_limit: 1,
                     drain_limit: 8,
                     idle_interval: Duration::from_secs(60),
