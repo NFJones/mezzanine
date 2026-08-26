@@ -824,7 +824,9 @@ impl AsyncRuntimeSessionActor {
                     self.queue_deferred_pane_io_side_effects_from_service()?;
                     self.queue_pending_provider_dispatch_side_effects()?;
                     self.queue_shell_lifecycle_timer_side_effects()?;
-                    self.ensure_client_render_timers(&primary_client_id)?;
+                    self.ensure_client_render_timers_or_defer_to_pending_render(
+                        &primary_client_id,
+                    )?;
                     for mut refresh in self
                         .service
                         .take_pending_agent_prompt_provider_info_refreshes()

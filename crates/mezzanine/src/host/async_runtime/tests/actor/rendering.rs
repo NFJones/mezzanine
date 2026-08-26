@@ -160,6 +160,126 @@ async fn async_actor_schedules_live_agent_status_overlay_refresh() {
     assert_eq!(exit.commands_processed, 3);
 }
 
+/// Verifies bounded timer backpressure cannot turn an already-applied live
+/// overlay step into a failed acknowledgement. With a one-entry side-effect
+/// queue, the owner render occupies capacity first; composing that render must
+/// recover both deferred timer creation and deferred cancellation.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_defers_live_overlay_timers_to_pending_render_under_backpressure() {
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "static-status-under-backpressure".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"ready\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: 1,
+            ..AsyncRuntimeActorConfig::default()
+        })
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                None,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(
+                        b"/status\r".to_vec(),
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .expect("opening the applied overlay must remain acknowledged");
+        let open_render = run_async_render_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 1,
+                drain_limit: 1,
+                idle_interval: Duration::from_millis(1),
+            },
+            TerminalClientLoopConfig::default(),
+            |_, _| Ok(None),
+            |_| Ok(()),
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(open_render.applied, 1);
+        let scheduled = handle.drain_timer_side_effects(8).await.unwrap();
+        let status_key = scheduled
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .expect("owner rendering should recover deferred timer creation");
+
+        handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                None,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(b"q".to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .expect("closing the applied overlay must remain acknowledged");
+        let close_render = run_async_render_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 1,
+                drain_limit: 1,
+                idle_interval: Duration::from_millis(1),
+            },
+            TerminalClientLoopConfig::default(),
+            |_, _| Ok(None),
+            |_| Ok(()),
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(close_render.applied, 1);
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().iter().any(
+            |effect| matches!(effect, RuntimeSideEffect::CancelTimer { key } if key == &status_key)
+        ));
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
 /// Verifies that dismissing a live agent-status overlay cancels its accepted
 /// refresh timer. A late delivery of the canceled generation must be ignored
 /// instead of causing an unnecessary status-line redraw after the overlay has
