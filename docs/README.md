@@ -16,7 +16,8 @@ normative behavior and compatibility contract.
   [Safety, trust, and security](safety-and-trust/README.md), then review
   [Configuration](configuration/README.md).
 - **Operators:** use [Operations and troubleshooting](operations/README.md)
-  for lifecycle, diagnostics, recovery, and known symptoms.
+  for persistent-host deployment, lifecycle, diagnostics, recovery, and known
+  symptoms.
 - **Contributors:** use [Contributing](contributing/README.md), then consult
   [AGENTS.md](../AGENTS.md) for repository workflow requirements.
 
@@ -32,8 +33,9 @@ normative behavior and compatibility contract.
   sandboxing, project trust, instructions, and audit information.
 - [Configuration](configuration/README.md): configuration concepts, focused
   topics, the schema reference, and examples.
-- [Operations and troubleshooting](operations/README.md): lifecycle, cache
-  diagnostics, recovery, and symptom-based guidance.
+- [Operations and troubleshooting](operations/README.md): persistent-host
+  operation, lifecycle, cache diagnostics, recovery, and symptom-based
+  guidance.
 - [Manual reference](reference-manual/README.md): CLI, key, action, terminal,
   and protocol-reference material, with links to normative contracts.
 - [Contributing](contributing/README.md): workspace architecture and local

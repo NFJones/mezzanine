@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Guide lifecycle management, recovery, diagnostics, cache inspection, and
-symptom-based troubleshooting.
+Guide persistent-host operation, lifecycle management, recovery, diagnostics,
+cache inspection, and symptom-based troubleshooting.
 
 ## Prerequisites
 
@@ -13,6 +13,7 @@ Know the basic session workflow in [Using Mezzanine](../using-mezzanine/README.m
 
 This section owns the following operational guidance:
 
+- [Persistent multi-session host](persistent-host.md)
 - [Lifecycle, detach, and recovery](lifecycle-detach-and-recovery.md)
 - [Cache status and diagnostics](cache-status-and-diagnostics.md)
 - [Troubleshooting](troubleshooting.md)
@@ -27,5 +28,6 @@ This section owns the following operational guidance:
 
 ## Next step
 
-Start with [Lifecycle, detach, and recovery](lifecycle-detach-and-recovery.md)
-when operating or recovering a session.
+Start with [Persistent multi-session host](persistent-host.md) for a
+service-manager deployment, or [Lifecycle, detach, and
+recovery](lifecycle-detach-and-recovery.md) when operating one session.

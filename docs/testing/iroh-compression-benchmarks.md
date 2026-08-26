@@ -7,6 +7,13 @@ decisions. This benchmark does not measure QUIC or relay network latency; codec
 framing is path-independent, while direct and relayed transport checks remain in
 the Iroh operations matrix.
 
+## Prerequisites
+
+Run from the repository root with the Rust toolchain and `just` described in
+[Development and validation](../contributing/development-and-validation.md).
+Use a release build on an otherwise reasonably idle machine when comparing
+throughput across changes.
+
 ## Run
 
 ```text
@@ -38,3 +45,15 @@ The reference run met these budgets and supports retaining
 `compression_min_bytes = 512` and `compression_zstd_level = 3`. Re-run before
 changing defaults, enabling compression broadly, or after codec dependency or
 compiler upgrades.
+
+## Related pages
+
+- [Iroh production operations and rollout](../operations/iroh-production-operations-and-rollout.md)
+- [Cross-platform release load checks](release-load-checks.md)
+- [Development and validation](../contributing/development-and-validation.md)
+
+## Next step
+
+Retain the generated report under `target/`, record the environment used for
+the run, and compare like-for-like release measurements before changing codec
+defaults.

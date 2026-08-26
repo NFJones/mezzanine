@@ -30,13 +30,20 @@ mez config get
 mez config layers
 ```
 
-Use `mez config default` to print the built-in baseline. `mez config set` and
-`mez config unset` persist supported scalar changes to the user configuration
-by default; use their `--scope project` option only for a trusted, eligible
-project overlay. These offline commands change the selected file, not an
-already-running session; their JSON result reports `reload_required` when the
-runtime must reload configuration to observe the change. Validate after an
-edit; invalid configuration is rejected rather than partially applied.
+Use `mez config default` to print the complete code-owned baseline, including
+provider catalogs and model presets that Mezzanine can materialize after
+authentication. It is not the exact first-launch file. `mez config init` and
+automatic first launch create a provider-free configuration, and `mez auth
+login` adds only the successfully authenticated provider's connection,
+profiles, and preset defaults.
+
+`mez config set` and `mez config unset` persist supported scalar changes to the
+user configuration by default; use their `--scope project` option only for a
+trusted, eligible project overlay. These offline commands change the selected
+file, not an already-running session; their JSON result reports
+`reload_required` when the runtime must reload configuration to observe the
+change. Validate after an edit; invalid configuration is rejected rather than
+partially applied.
 
 See the [CLI reference](../reference-manual/cli.md#configuration-identity-and-integrations)
 for complete `mez config` command forms, options, and output behavior.
@@ -95,9 +102,14 @@ The current schema is version `73`. Older primary user configurations migrate
 on launch; a configuration declaring a newer schema is rejected. Existing
 project overlays must declare the current schema version and are not migrated
 automatically. When `mez config set --scope project` creates or updates an
-eligible overlay, it writes the current version for that managed file. The
-checked-in [example configuration](../examples/config.toml) is generated for
-version 73 and is the baseline for valid default settings.
+eligible overlay, it writes the current version for that managed file.
+
+The checked-in [example configuration](../examples/config.toml) is the
+provider-free first-launch template for version 73. Actual generation adjusts
+`permissions.approval_policy` and `permissions.sandbox` for the current
+platform and Bubblewrap availability, so those values can differ from the
+portable checked-in template. Use `mez config default` when the complete
+code-owned provider and model catalog is needed for reference.
 
 ## Related pages
 

@@ -37,6 +37,8 @@ lock. Do not edit these files directly.
 
 ## Pair a device
 
+### Create a role-limited invitation
+
 Use only the local Unix control path:
 
 ```console
@@ -56,6 +58,8 @@ select an explicit lifetime in the supported 30 through 86,400 second range.
 The direct-session compatibility path uses the configured invitation lifetime;
 the persistent-host behavior is a known implementation difference from that
 configuration contract.
+
+### Transfer and inspect the invitation
 
 Transfer the JSON through a confidential channel. Prefer secure no-overwrite
 output:
@@ -79,6 +83,8 @@ device should also be able to force-kill sessions it created; it requires
 Invitation redemption and profile checks use host-only initialization. They do
 not create, select, attach, detach, or displace a session client, so an existing
 primary is unaffected by pairing.
+
+### Redeem the invitation on the client
 
 The invitation is server-bound, role-limited, and claimable by one authenticated
 client endpoint. A remote client selects it explicitly with
@@ -116,6 +122,9 @@ reachable. Relay-backed routes survive direct-port changes. If address lookup
 is explicitly configured, a paired profile may resolve and persist refreshed
 route hints only after the connection authenticates the same pinned server ID
 and device credential.
+
+### Reconnect with a saved profile
+
 Later control and interactive attach use `--iroh-profile PROFILE`. Inspect and
 manage local reconnect profiles without exposing credentials:
 
@@ -138,6 +147,8 @@ creating one, use `mez --iroh-profile PROFILE attach SESSION_TARGET`; add
 `--observer` to request observer access. An observer-limited invitation or
 profile cannot attach as primary.
 
+### Understand host-scoped profiles and leases
+
 Configuration schema 73 provides a persistent-host Iroh owner with one stable
 endpoint identity and host trust database. Pairing remains mandatory once per
 client device, but invitation redemption and profile checks use protocol-v3
@@ -155,6 +166,8 @@ persistent host. Lease administration remains local-only: active release or
 revocation requires explicit runtime termination, while device trust revocation
 continues to affect that device across leases. Runtime kill, lease release,
 lease revocation, and device trust revocation remain separate operations.
+
+### Handle attach failures safely
 
 Setup timeout errors name the failed stage and deadline, summarize pinned
 direct/relay route counts, and state when no Mezzanine authentication occurred.
@@ -231,6 +244,7 @@ network evidence, staged stop thresholds, and a tested Unix-only rollback. See
 
 ## Related pages
 
+- [Persistent multi-session host](../operations/persistent-host.md)
 - [Configuration reference](../configuration/reference.md)
 - [Control JSON-RPC](../reference-manual/protocols/control-json-rpc.md)
 - [Audit and diagnostics](audit-and-diagnostics.md)
