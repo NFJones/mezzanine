@@ -8,11 +8,13 @@
 //! bounded budget, and kills the whole child process group on timeout or
 //! interruption. Nothing is written to or read from the pane PTY.
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
-use std::fs;
-use std::io::Read;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -153,6 +155,47 @@ struct SpawnedChild {
     status_reader: Option<OwnedFd>,
 }
 
+/// Owner-only command and artifact files prepared for one native launch.
+struct MaterializedShellLaunch {
+    /// Canonical private directory removed after every completion path.
+    directory: PathBuf,
+    /// Canonical command-file path substituted into typed argv.
+    command_file: PathBuf,
+    /// Canonical artifact paths keyed by validated launch ids.
+    artifacts: BTreeMap<mez_agent::ShellLaunchArtifactId, PathBuf>,
+}
+
+impl MaterializedShellLaunch {
+    /// Removes every launch file through its private owner directory.
+    fn cleanup(&self) {
+        let _ = fs::remove_dir_all(&self.directory);
+    }
+}
+
+/// Creates one new owner-only launch file and writes its inert bytes.
+fn write_owner_only_file(path: &Path, content: &[u8], mode: u32) -> std::io::Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .open(path)?;
+    file.write_all(content)?;
+    file.sync_all()?;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+}
+
+/// Returns one validated materialized artifact path from the native launch set.
+fn materialized_artifact_path<'a>(
+    materialized: &'a MaterializedShellLaunch,
+    artifact: &mez_agent::ShellLaunchArtifactId,
+) -> Result<&'a Path> {
+    materialized
+        .artifacts
+        .get(artifact)
+        .map(PathBuf::as_path)
+        .ok_or_else(|| MezError::invalid_state("typed child launch artifact was not materialized"))
+}
+
 /// Executes one shell transaction in a freshly spawned shell process.
 pub(crate) struct SpawnedShellExecutor {
     /// Inferred shell path, environment, and working directory.
@@ -186,15 +229,48 @@ impl SpawnedShellExecutor {
     /// pane transport's sidecar-frame appender.
     const INPUT_SIDECAR_LINE_PREFIX: &str = "# __MEZ_INPUT_SIDECAR_V1__ ";
 
-    /// Materializes the transaction command, plus any input sidecar records,
-    /// to one temporary file.
-    fn materialize_command_file(&self, transaction: &ShellTransaction) -> Result<PathBuf> {
+    /// Materializes one owner-only command file and bounded artifact set.
+    fn materialize_launch(
+        &self,
+        transaction: &ShellTransaction,
+    ) -> Result<MaterializedShellLaunch> {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let path =
+        let directory =
             std::env::temp_dir().join(format!("mez-spawned-{}-{unique}", std::process::id()));
+        let mut directory_builder = fs::DirBuilder::new();
+        directory_builder.mode(0o700);
+        directory_builder.create(&directory).map_err(|error| {
+            MezError::invalid_state(format!(
+                "spawned shell execution could not create its private launch directory: {error}"
+            ))
+        })?;
+        let result = self.materialize_launch_in_directory(transaction, &directory);
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&directory);
+        }
+        result
+    }
+
+    /// Writes launch files below one newly created private directory.
+    fn materialize_launch_in_directory(
+        &self,
+        transaction: &ShellTransaction,
+        directory: &Path,
+    ) -> Result<MaterializedShellLaunch> {
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).map_err(|error| {
+            MezError::invalid_state(format!(
+                "spawned shell execution could not protect its launch directory: {error}"
+            ))
+        })?;
+        let directory = fs::canonicalize(directory).map_err(|error| {
+            MezError::invalid_state(format!(
+                "spawned shell execution could not canonicalize its launch directory: {error}"
+            ))
+        })?;
+        let command_file = directory.join("command");
         let mut content = transaction.command.clone();
         if !content.ends_with('\n') {
             content.push('\n');
@@ -206,19 +282,45 @@ impl SpawnedShellExecutor {
                 content.push('\n');
             }
         }
-        fs::write(&path, content.as_bytes()).map_err(|error| {
+        write_owner_only_file(&command_file, content.as_bytes(), 0o600).map_err(|error| {
             MezError::invalid_state(format!(
                 "spawned shell execution could not materialize its command file: {error}"
             ))
         })?;
-        Ok(path)
+        let command_file = fs::canonicalize(&command_file).map_err(|error| {
+            MezError::invalid_state(format!(
+                "spawned shell execution could not canonicalize its command file: {error}"
+            ))
+        })?;
+        let mut artifacts = BTreeMap::new();
+        if let Some(launch) = &transaction.child_launch {
+            for (index, artifact) in launch.artifacts.iter().enumerate() {
+                let path = directory.join(index.to_string());
+                write_owner_only_file(&path, &artifact.content, artifact.mode).map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "spawned shell execution could not materialize a launch artifact: {error}"
+                    ))
+                })?;
+                let path = fs::canonicalize(&path).map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "spawned shell execution could not canonicalize a launch artifact: {error}"
+                    ))
+                })?;
+                artifacts.insert(artifact.id.clone(), path);
+            }
+        }
+        Ok(MaterializedShellLaunch {
+            directory,
+            command_file,
+            artifacts,
+        })
     }
 
     /// Spawns the shell (or typed child launch) with the inferred context.
     fn spawn_child(
         &self,
         transaction: &ShellTransaction,
-        command_file: &Path,
+        materialized: &MaterializedShellLaunch,
     ) -> Result<SpawnedChild> {
         let mut command = if let Some(launch) = &transaction.child_launch {
             let mut command = Command::new(&launch.executable);
@@ -228,14 +330,21 @@ impl SpawnedShellExecutor {
                         command.arg(value);
                     }
                     ShellChildArgument::MaterializedCommandFile => {
-                        command.arg(command_file);
+                        command.arg(&materialized.command_file);
+                    }
+                    ShellChildArgument::MaterializedArtifact(artifact) => {
+                        command.arg(materialized_artifact_path(materialized, artifact)?);
+                    }
+                    ShellChildArgument::MaterializedPathBinding { name, artifact } => {
+                        let path = materialized_artifact_path(materialized, artifact)?;
+                        command.arg(format!("{name}={}", path.to_string_lossy()));
                     }
                 }
             }
             command
         } else {
             let mut command = Command::new(self.context.shell_path());
-            command.arg(command_file);
+            command.arg(&materialized.command_file);
             command
         };
         command
@@ -439,15 +548,18 @@ impl SpawnedShellExecutorPort for SpawnedShellExecutor {
             ));
         }
         self.interrupted.store(false, Ordering::SeqCst);
-        let command_file = self.materialize_command_file(&request.transaction)?;
-        let child = self.spawn_child(&request.transaction, &command_file)?;
-        let output = self.collect(
-            child,
-            request.timeout_ms,
-            request.transaction.output_max_raw_bytes,
-            None,
-        );
-        let _ = fs::remove_file(&command_file);
+        let materialized = self.materialize_launch(&request.transaction)?;
+        let output = self
+            .spawn_child(&request.transaction, &materialized)
+            .and_then(|child| {
+                self.collect(
+                    child,
+                    request.timeout_ms,
+                    request.transaction.output_max_raw_bytes,
+                    None,
+                )
+            });
+        materialized.cleanup();
         output
     }
 }
@@ -508,10 +620,10 @@ fn execute_native_shell_dispatch_inner(
                 bubblewrap_capability = capability;
                 executor.interrupted.store(false, Ordering::SeqCst);
                 executor
-                    .materialize_command_file(&request.transaction)
-                    .and_then(|command_file| {
+                    .materialize_launch(&request.transaction)
+                    .and_then(|materialized| {
                         let result = executor
-                            .spawn_child(&request.transaction, &command_file)
+                            .spawn_child(&request.transaction, &materialized)
                             .and_then(|child| {
                                 executor.collect(
                                     child,
@@ -520,7 +632,7 @@ fn execute_native_shell_dispatch_inner(
                                     progress,
                                 )
                             });
-                        let _ = fs::remove_file(&command_file);
+                        materialized.cleanup();
                         result
                     })
             })
@@ -725,8 +837,8 @@ fn join_output_reader(reader: SpawnedChildPipeReader) -> Result<CapturedPipeOutp
     })?
 }
 
-/// Validates trusted Bubblewrap lifecycle evidence captured outside stdout
-/// and stderr for one completed typed child launch.
+/// Validates trusted sandbox lifecycle evidence captured outside stdout and
+/// stderr for one completed typed child launch.
 fn validate_spawned_child_status(
     status_bytes: &[u8],
     status_dropped: usize,
@@ -743,9 +855,12 @@ fn validate_spawned_child_status(
     let status_text = std::str::from_utf8(status_bytes).map_err(|_| {
         MezError::invalid_state("spawned shell lifecycle status was not valid UTF-8")
     })?;
-    let status = crate::security::sandbox::parse_bubblewrap_status(status_text)
-        .map_err(|error| MezError::invalid_state(error.message()))?;
-    let reported_exit_code = status.exit_code.ok_or_else(|| {
+    let status = crate::security::sandbox::parse_sandbox_lifecycle_status(
+        crate::runtime::SandboxBackend::Bubblewrap,
+        status_text,
+    )
+    .map_err(|error| MezError::invalid_state(error.message()))?;
+    let reported_exit_code = status.exit_code().ok_or_else(|| {
         MezError::invalid_state(crate::security::sandbox::bubblewrap_failure_remediation(
             "Bubblewrap failed before payload execution",
         ))
@@ -775,7 +890,7 @@ fn kill_process_group(pid: i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mez_agent::{MarkerToken, ShellChildLaunch};
+    use mez_agent::{MarkerToken, ShellChildLaunch, ShellLaunchArtifact, ShellLaunchArtifactId};
     use mez_mux::process::RawEnvironmentEntry;
 
     /// Builds one test context around the host `/bin/sh`.
@@ -1108,6 +1223,48 @@ mod tests {
 
         assert_eq!(output.exit_code, Some(0));
         assert_eq!(output.stdout, "child-launch-ok");
+    }
+
+    /// Verifies native typed launches receive canonical owner-only artifact
+    /// paths and validated path bindings, then remove the private launch tree.
+    #[test]
+    fn spawned_executor_materializes_and_cleans_typed_artifacts() {
+        let mut executor = SpawnedShellExecutor::new(test_context());
+        let mut transaction_request = request("true", Some(5_000));
+        let artifact_id = ShellLaunchArtifactId::new("profile").unwrap();
+        transaction_request.transaction = transaction_request.transaction.with_child_launch(
+            ShellChildLaunch::new_with_artifacts(
+                "/bin/sh",
+                vec![
+                    ShellChildArgument::Literal("-c".to_string()),
+                    ShellChildArgument::Literal(
+                        "test -f \"$1\" && test \"$(cat \"$1\")\" = profile && test \"$2\" = \"PROFILE=$1\" && printf '%s' \"$1\""
+                            .to_string(),
+                    ),
+                    ShellChildArgument::Literal("sh".to_string()),
+                    ShellChildArgument::MaterializedArtifact(artifact_id.clone()),
+                    ShellChildArgument::MaterializedPathBinding {
+                        name: "PROFILE".to_string(),
+                        artifact: artifact_id.clone(),
+                    },
+                ],
+                vec![
+                    ShellLaunchArtifact::new(artifact_id, b"profile".to_vec(), 0o400).unwrap(),
+                ],
+            )
+            .unwrap(),
+        );
+
+        let output = executor.execute_shell(&transaction_request).unwrap();
+        let artifact_path = PathBuf::from(&output.stdout);
+
+        assert_eq!(output.exit_code, Some(0), "stderr={}", output.stderr);
+        assert!(artifact_path.is_absolute(), "stdout={}", output.stdout);
+        assert!(!artifact_path.exists(), "artifact was not cleaned up");
+        assert!(
+            !artifact_path.parent().unwrap().exists(),
+            "launch directory was not cleaned up"
+        );
     }
 
     /// Verifies direct typed-child execution supplies the selected status

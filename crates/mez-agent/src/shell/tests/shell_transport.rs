@@ -1662,6 +1662,100 @@ fn typed_child_launch_quotes_arguments_without_shell_fragments() {
 }
 
 #[test]
+/// Verifies typed artifacts remain inert files with stable argv boundaries in
+/// every supported pane-shell renderer, including validated path bindings.
+fn typed_child_launch_materializes_artifacts_without_shell_evaluation() {
+    let artifact_id = ShellLaunchArtifactId::new("profile").unwrap();
+    let launch = ShellChildLaunch::new_with_artifacts(
+        "/bin/sh",
+        vec![
+            ShellChildArgument::Literal("-c".to_string()),
+            ShellChildArgument::Literal(
+                "test -f \"$1\" && test \"$(cat \"$1\")\" = 'profile $(false)' && test \"$2\" = \"PROFILE=$1\""
+                    .to_string(),
+            ),
+            ShellChildArgument::Literal("sh".to_string()),
+            ShellChildArgument::MaterializedArtifact(artifact_id.clone()),
+            ShellChildArgument::MaterializedPathBinding {
+                name: "PROFILE".to_string(),
+                artifact: artifact_id.clone(),
+            },
+        ],
+        vec![
+            ShellLaunchArtifact::new(
+                artifact_id,
+                b"profile $(false)".to_vec(),
+                0o400,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let transaction =
+        ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/sh"), "true")
+            .unwrap()
+            .with_child_launch(launch);
+
+    for classification in [
+        ShellClassification::PosixSh,
+        ShellClassification::Bash,
+        ShellClassification::Zsh,
+    ] {
+        let transaction = if classification == ShellClassification::Bash {
+            transaction.clone().with_bash_receiver_token(
+                MarkerToken::new("abcdef0123456789abcdef0123456789").unwrap(),
+            )
+        } else {
+            transaction.clone()
+        };
+        let input = transaction.render_for_classification_input(classification);
+        let source = if classification == ShellClassification::Bash {
+            let encoded = input
+                .receiver_payload
+                .lines()
+                .filter(|line| line.starts_with("MEZ_BASH_RX1_DATA "))
+                .map(|line| {
+                    line.split_whitespace()
+                        .nth(4)
+                        .expect("private Bash artifact frame should contain encoded source")
+                })
+                .collect::<String>();
+            String::from_utf8(
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .unwrap(),
+            )
+            .unwrap()
+        } else {
+            decoded_posix_wrapper_source(&input.wrapper)
+        };
+        assert!(source.contains("\"$MEZ_ARTIFACT_DIR/0\""), "{source}");
+        assert!(
+            source.contains("\"PROFILE=$MEZ_ARTIFACT_DIR/0\""),
+            "{source}"
+        );
+        assert!(input.payload.contains("A0 cHJvZmlsZSAkKGZhbHNlKQ==\n"));
+        assert!(!source.contains("cHJvZmlsZSAkKGZhbHNlKQ=="), "{source}");
+    }
+
+    let posix = transaction.render_for_classification_input(ShellClassification::PosixSh);
+    let output = run_sh_transaction(&posix, "");
+    assert!(
+        output.status.success(),
+        "status={:?} stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let fish_input = transaction.render_for_classification_input(ShellClassification::Fish);
+    let fish = decoded_fish_wrapper_source(&fish_input.wrapper);
+    assert!(fish.contains("\"$MEZ_ARTIFACT_DIR/0\""), "{fish}");
+    assert!(fish.contains("\"PROFILE=$MEZ_ARTIFACT_DIR/0\""), "{fish}");
+    assert!(fish_input.payload.contains("A0 cHJvZmlsZSAkKGZhbHNlKQ==\n"));
+    assert!(!fish.contains("cHJvZmlsZSAkKGZhbHNlKQ=="), "{fish}");
+}
+
+#[test]
 /// Verifies a literal-only typed Fish child launch starts directly without an
 /// unused command-file receiver or synthetic empty-command payload.
 fn typed_fish_child_launch_without_command_file_skips_payload_receiver() {
@@ -1831,6 +1925,48 @@ fn typed_child_launch_rejects_invalid_argv_contracts() {
         ShellChildLaunch::new(
             "relative-bwrap",
             vec![ShellChildArgument::MaterializedCommandFile]
+        )
+        .is_err()
+    );
+
+    let artifact_id = ShellLaunchArtifactId::new("profile").unwrap();
+    let artifact =
+        ShellLaunchArtifact::new(artifact_id.clone(), b"profile".to_vec(), 0o400).unwrap();
+    assert!(
+        ShellChildLaunch::new_with_artifacts(
+            "/usr/bin/bwrap",
+            vec![ShellChildArgument::MaterializedArtifact(
+                ShellLaunchArtifactId::new("missing").unwrap(),
+            )],
+            vec![artifact.clone()],
+        )
+        .is_err()
+    );
+    assert!(
+        ShellChildLaunch::new_with_artifacts(
+            "/usr/bin/bwrap",
+            Vec::new(),
+            vec![artifact.clone(), artifact],
+        )
+        .is_err()
+    );
+    assert!(
+        ShellLaunchArtifact::new(
+            artifact_id.clone(),
+            vec![0; SHELL_LAUNCH_MAX_ARTIFACT_BYTES + 1],
+            0o400,
+        )
+        .is_err()
+    );
+    assert!(ShellLaunchArtifact::new(artifact_id.clone(), b"profile".to_vec(), 0o644).is_err());
+    assert!(
+        ShellChildLaunch::new_with_artifacts(
+            "/usr/bin/bwrap",
+            vec![ShellChildArgument::MaterializedPathBinding {
+                name: "invalid-name".to_string(),
+                artifact: artifact_id.clone(),
+            }],
+            vec![ShellLaunchArtifact::new(artifact_id, b"profile".to_vec(), 0o400).unwrap()],
         )
         .is_err()
     );

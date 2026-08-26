@@ -11,6 +11,7 @@ use crate::{
 };
 use base64::Engine;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::{validate_resolved_shell_path, validate_shell_marker_token};
@@ -353,6 +354,72 @@ pub struct ShellTransaction {
     payload_receiver_acknowledgements: bool,
 }
 
+/// Maximum number of bounded artifacts accepted by one typed child launch.
+pub const SHELL_LAUNCH_MAX_ARTIFACTS: usize = 16;
+/// Maximum bytes accepted in one typed child-launch artifact.
+pub const SHELL_LAUNCH_MAX_ARTIFACT_BYTES: usize = 256 * 1024;
+/// Maximum aggregate artifact bytes accepted by one typed child launch.
+pub const SHELL_LAUNCH_MAX_TOTAL_ARTIFACT_BYTES: usize = 1024 * 1024;
+
+/// Stable identifier for one materialized typed child-launch artifact.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ShellLaunchArtifactId(String);
+
+impl ShellLaunchArtifactId {
+    /// Validates one bounded identifier used only for typed artifact lookup.
+    pub fn new(value: impl Into<String>) -> AgentShellValidationResult<Self> {
+        let value = value.into();
+        let valid = !value.is_empty()
+            && value.len() <= 32
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-');
+        if !valid {
+            return Err(AgentShellValidationError::invalid_args(
+                "typed child artifact ids must be 1-32 ASCII alphanumeric, underscore, or hyphen bytes",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the validated identifier without exposing a shell variable.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One bounded owner-only file materialized for a typed child launch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellLaunchArtifact {
+    /// Stable identifier referenced by typed child arguments.
+    pub id: ShellLaunchArtifactId,
+    /// Inert file bytes written without shell evaluation.
+    pub content: Vec<u8>,
+    /// Owner-only file mode, restricted to read-only or read-write data.
+    pub mode: u32,
+}
+
+impl ShellLaunchArtifact {
+    /// Builds one bounded owner-only launch artifact.
+    pub fn new(
+        id: ShellLaunchArtifactId,
+        content: Vec<u8>,
+        mode: u32,
+    ) -> AgentShellValidationResult<Self> {
+        if content.len() > SHELL_LAUNCH_MAX_ARTIFACT_BYTES {
+            return Err(AgentShellValidationError::invalid_args(
+                "typed child artifact exceeds the per-artifact byte limit",
+            ));
+        }
+        if !matches!(mode, 0o400 | 0o600) {
+            return Err(AgentShellValidationError::invalid_args(
+                "typed child artifact mode must be owner-only 0400 or 0600",
+            ));
+        }
+        Ok(Self { id, content, mode })
+    }
+}
+
 /// One argument in a typed isolated-child process launch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShellChildArgument {
@@ -360,6 +427,15 @@ pub enum ShellChildArgument {
     Literal(String),
     /// The temporary command file materialized by the transaction wrapper.
     MaterializedCommandFile,
+    /// Exact path of one launch artifact materialized by the transport.
+    MaterializedArtifact(ShellLaunchArtifactId),
+    /// One validated `NAME=<materialized path>` argv element.
+    MaterializedPathBinding {
+        /// Validated non-secret binding name.
+        name: String,
+        /// Artifact whose canonical materialized path supplies the value.
+        artifact: ShellLaunchArtifactId,
+    },
 }
 
 /// Typed executable and argv for an isolated child process.
@@ -373,6 +449,8 @@ pub struct ShellChildLaunch {
     pub executable: String,
     /// Ordered argv elements excluding argv[0].
     pub arguments: Vec<ShellChildArgument>,
+    /// Bounded inert files materialized before this child starts.
+    pub artifacts: Vec<ShellLaunchArtifact>,
     /// Optional runtime-owned descriptor used to capture trusted child status.
     ///
     /// The transaction wrapper redirects this descriptor to a private temporary
@@ -386,6 +464,15 @@ impl ShellChildLaunch {
     pub fn new(
         executable: impl Into<String>,
         arguments: Vec<ShellChildArgument>,
+    ) -> AgentShellValidationResult<Self> {
+        Self::new_with_artifacts(executable, arguments, Vec::new())
+    }
+
+    /// Validates one typed child launch and its bounded artifact set.
+    pub fn new_with_artifacts(
+        executable: impl Into<String>,
+        arguments: Vec<ShellChildArgument>,
+        artifacts: Vec<ShellLaunchArtifact>,
     ) -> AgentShellValidationResult<Self> {
         let executable = executable.into();
         if !Path::new(&executable).is_absolute()
@@ -412,9 +499,66 @@ impl ShellChildLaunch {
                 "typed child launch accepts at most one materialized command-file argument",
             ));
         }
+        if artifacts.len() > SHELL_LAUNCH_MAX_ARTIFACTS {
+            return Err(AgentShellValidationError::invalid_args(
+                "typed child launch exceeds the artifact count limit",
+            ));
+        }
+        let mut artifact_ids = BTreeSet::new();
+        let mut total_artifact_bytes = 0usize;
+        for artifact in &artifacts {
+            ShellLaunchArtifactId::new(artifact.id.as_str())?;
+            if artifact.content.len() > SHELL_LAUNCH_MAX_ARTIFACT_BYTES
+                || !matches!(artifact.mode, 0o400 | 0o600)
+            {
+                return Err(AgentShellValidationError::invalid_args(
+                    "typed child launch contains an invalid artifact",
+                ));
+            }
+            total_artifact_bytes = total_artifact_bytes.saturating_add(artifact.content.len());
+            if !artifact_ids.insert(artifact.id.clone()) {
+                return Err(AgentShellValidationError::invalid_args(
+                    "typed child launch artifact ids must be unique",
+                ));
+            }
+        }
+        if total_artifact_bytes > SHELL_LAUNCH_MAX_TOTAL_ARTIFACT_BYTES {
+            return Err(AgentShellValidationError::invalid_args(
+                "typed child launch exceeds the aggregate artifact byte limit",
+            ));
+        }
+        for argument in &arguments {
+            let artifact = match argument {
+                ShellChildArgument::MaterializedArtifact(artifact) => Some(artifact),
+                ShellChildArgument::MaterializedPathBinding { name, artifact } => {
+                    let valid_name = !name.is_empty()
+                        && name.len() <= 32
+                        && name.bytes().enumerate().all(|(index, byte)| {
+                            byte == b'_'
+                                || byte.is_ascii_uppercase()
+                                || (index > 0 && byte.is_ascii_digit())
+                        });
+                    if !valid_name {
+                        return Err(AgentShellValidationError::invalid_args(
+                            "typed child artifact binding names must match [A-Z_][A-Z0-9_]{0,31}",
+                        ));
+                    }
+                    Some(artifact)
+                }
+                ShellChildArgument::Literal(_) | ShellChildArgument::MaterializedCommandFile => {
+                    None
+                }
+            };
+            if artifact.is_some_and(|artifact| !artifact_ids.contains(artifact)) {
+                return Err(AgentShellValidationError::invalid_args(
+                    "typed child argument references an unknown artifact id",
+                ));
+            }
+        }
         Ok(Self {
             executable,
             arguments,
+            artifacts,
             status_fd: None,
         })
     }
@@ -897,9 +1041,28 @@ fn posix_typed_child_launch_words(launch: &ShellChildLaunch) -> String {
         .chain(launch.arguments.iter().map(|argument| match argument {
             ShellChildArgument::Literal(value) => posix_shell_quoted_argument(value),
             ShellChildArgument::MaterializedCommandFile => "\"$MEZ_COMMAND_FILE\"".to_string(),
+            ShellChildArgument::MaterializedArtifact(artifact) => {
+                format!(
+                    "\"$MEZ_ARTIFACT_DIR/{}\"",
+                    launch_artifact_index(launch, artifact)
+                )
+            }
+            ShellChildArgument::MaterializedPathBinding { name, artifact } => format!(
+                "\"{name}=$MEZ_ARTIFACT_DIR/{}\"",
+                launch_artifact_index(launch, artifact)
+            ),
         }))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Returns the validated positional index for one referenced launch artifact.
+fn launch_artifact_index(launch: &ShellChildLaunch, artifact: &ShellLaunchArtifactId) -> usize {
+    launch
+        .artifacts
+        .iter()
+        .position(|candidate| &candidate.id == artifact)
+        .expect("typed launch validation guarantees every artifact reference exists")
 }
 
 /// Renders one POSIX argument without creating an oversized physical source line.
@@ -965,6 +1128,16 @@ pub(super) fn fish_typed_child_launch_words(launch: &ShellChildLaunch) -> String
         .chain(launch.arguments.iter().map(|argument| match argument {
             ShellChildArgument::Literal(value) => fish_shell_quoted_argument(value),
             ShellChildArgument::MaterializedCommandFile => "\"$MEZ_COMMAND_FILE\"".to_string(),
+            ShellChildArgument::MaterializedArtifact(artifact) => {
+                format!(
+                    "\"$MEZ_ARTIFACT_DIR/{}\"",
+                    launch_artifact_index(launch, artifact)
+                )
+            }
+            ShellChildArgument::MaterializedPathBinding { name, artifact } => format!(
+                "\"{name}=$MEZ_ARTIFACT_DIR/{}\"",
+                launch_artifact_index(launch, artifact)
+            ),
         }))
         .collect::<Vec<_>>()
         .join(" \\\n")
@@ -1099,6 +1272,10 @@ impl ShellTransaction {
         let command_materialization = posix_command_file_materialization(
             &self.command,
             self.input_sidecar.as_deref(),
+            self.child_launch
+                .as_ref()
+                .map(|launch| launch.artifacts.as_slice())
+                .unwrap_or_default(),
             self.marker.as_str(),
             "command printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \"$MEZ_MARKER_TOKEN\" \"$MEZ_TURN\" \"$MEZ_AGENT\" \"$MEZ_PANE\"",
             self.payload_receiver_acknowledgements,
@@ -1165,9 +1342,10 @@ MEZ_PANE={pane}\n\
 {child_invocation}\
 command rm -f -- \"$MEZ_COMMAND_FILE\" \"$MEZ_COMMAND_B64\" \"$MEZ_SIDECAR_DATA\" >/dev/null 2>&1 || :\n\
 {sidecar_frame_cleanup}\
+if [ -n \"$MEZ_ARTIFACT_DIR\" ]; then command rm -rf -- \"$MEZ_ARTIFACT_DIR\" >/dev/null 2>&1 || :; fi\n\
 if [ -n \"$MEZ_OUTPUT_FILE\" ]; then command rm -f -- \"$MEZ_OUTPUT_FILE\" >/dev/null 2>&1 || :; fi\n\
 if [ -n \"$MEZ_STATUS_FILE\" ]; then command rm -f -- \"$MEZ_STATUS_FILE\" >/dev/null 2>&1 || :; fi\n\
-unset MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_SIDECAR_DATA MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STATUS_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
+unset MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_SIDECAR_DATA MEZ_ARTIFACT_DIR MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STATUS_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
 unset -f {function_name} 2>/dev/null || :\n\
 {history_restore}\
 {history_marker_finish}command printf '\\033]133;D;%s;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \
@@ -1383,6 +1561,10 @@ unset -f {function_name} 2>/dev/null || :\n\
         let command_materialization = if self.child_launch.is_some()
             && !typed_child_uses_command_file
             && self.input_sidecar.is_none()
+            && self
+                .child_launch
+                .as_ref()
+                .is_none_or(|launch| launch.artifacts.is_empty())
         {
             CommandMaterialization {
                 setup: format!(
@@ -1399,6 +1581,10 @@ set -l MEZ_WRITE_STATUS 0\n\
             fish_command_file_materialization(
                 &self.command,
                 self.input_sidecar.as_deref(),
+                self.child_launch
+                    .as_ref()
+                    .map(|launch| launch.artifacts.as_slice())
+                    .unwrap_or_default(),
                 self.marker.as_str(),
                 start_marker_line,
                 "printf '\\033]133;R;mez_payload_receiver=ready;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE",
@@ -1455,9 +1641,10 @@ if test -n \"$MEZ_COMMAND_FILE\"; command rm -f -- \"$MEZ_COMMAND_FILE\" >/dev/n
 if test -n \"$MEZ_COMMAND_B64\"; command rm -f -- \"$MEZ_COMMAND_B64\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_SIDECAR_DATA\"; command rm -f -- \"$MEZ_SIDECAR_DATA\" >/dev/null 2>&1; or true; end\n\
 {sidecar_frame_cleanup}\
+if test -n \"$MEZ_ARTIFACT_DIR\"; command rm -rf -- \"$MEZ_ARTIFACT_DIR\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_OUTPUT_FILE\"; command rm -f -- \"$MEZ_OUTPUT_FILE\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_STATUS_FILE\"; command rm -f -- \"$MEZ_STATUS_FILE\" >/dev/null 2>&1; or true; end\n\
-set -e MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_SIDECAR_DATA MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STATUS_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
+set -e MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_SIDECAR_DATA MEZ_ARTIFACT_DIR MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STATUS_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
 {history_restore}\
 printf '\\033]133;D;%s;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \
 $MEZ_STATUS $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE\n\
@@ -1550,6 +1737,7 @@ struct CommandMaterialization {
 fn posix_command_file_materialization(
     command: &str,
     input_sidecar: Option<&str>,
+    artifacts: &[ShellLaunchArtifact],
     marker: &str,
     start_marker_line: &str,
     acknowledge_payload_records: bool,
@@ -1566,9 +1754,33 @@ fn posix_command_file_materialization(
             frame_bytes = SHELL_TRANSACTION_SIDECAR_FRAME_BYTES,
         )
     } else {
+        let artifact_cases = artifacts
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                format!(
+                    "A{index}\\ *) if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then printf '%s\\n' \"${{MEZ_COMMAND_LINE#A{index} }}\" >> \"$MEZ_ARTIFACT_DIR/{index}.b64\" || MEZ_WRITE_STATUS=$?; fi ;; "
+                )
+            })
+            .collect::<String>();
         format!(
-            "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then case \"$MEZ_COMMAND_LINE\" in C\\ *) printf '%s\\n' \"${{MEZ_COMMAND_LINE#C }}\" >> \"$MEZ_COMMAND_B64\" || MEZ_WRITE_STATUS=$? ;; *) MEZ_WRITE_STATUS=1 ;; esac; fi; {acknowledge}"
+            "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then case \"$MEZ_COMMAND_LINE\" in C\\ *) printf '%s\\n' \"${{MEZ_COMMAND_LINE#C }}\" >> \"$MEZ_COMMAND_B64\" || MEZ_WRITE_STATUS=$? ;; {artifact_cases}*) MEZ_WRITE_STATUS=1 ;; esac; fi; {acknowledge}"
         )
+    };
+    let artifact_cases = artifacts
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            format!(
+                "A{index}\\ *) if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then printf '%s\\n' \"${{MEZ_COMMAND_LINE#A{index} }}\" >> \"$MEZ_ARTIFACT_DIR/{index}.b64\" || MEZ_WRITE_STATUS=$?; fi; {acknowledge} ;; "
+            )
+        })
+        .collect::<String>();
+    let catch_all = format!("*) MEZ_WRITE_STATUS=1; {acknowledge} ;;");
+    let receive_record = if artifacts.is_empty() {
+        receive_record
+    } else {
+        receive_record.replacen(&catch_all, &format!("{artifact_cases}{catch_all}"), 1)
     };
     let terminal_mode = if input_sidecar.is_some() {
         "stty -icanon min 1 time 0 -echo 2>/dev/null || :"
@@ -1582,6 +1794,7 @@ fn posix_command_file_materialization(
         "MEZ_SIDECAR_FRAME=".to_string(),
         "MEZ_SIDECAR_FRAME_SEQUENCE=0".to_string(),
         "MEZ_SIDECAR_FRAME_OPEN=0".to_string(),
+        "MEZ_ARTIFACT_DIR=".to_string(),
         format!("MEZ_COMMAND_END={}", shell_quote(&end_marker)),
         "MEZ_COMMAND_SEEN_END=0".to_string(),
         "MEZ_STTY_STATE=".to_string(),
@@ -1591,6 +1804,18 @@ fn posix_command_file_materialization(
         "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then MEZ_COMMAND_B64=$(mktemp) || MEZ_WRITE_STATUS=1; fi".to_string(),
         "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then : > \"$MEZ_COMMAND_B64\" || MEZ_WRITE_STATUS=$?; fi".to_string(),
     ];
+    if !artifacts.is_empty() {
+        lines.extend([
+            "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then MEZ_ARTIFACT_DIR=$(mktemp -d) || MEZ_WRITE_STATUS=1; fi".to_string(),
+            "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then chmod 700 \"$MEZ_ARTIFACT_DIR\" || MEZ_WRITE_STATUS=$?; fi".to_string(),
+            "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then MEZ_ARTIFACT_DIR=$(CDPATH= cd -P -- \"$MEZ_ARTIFACT_DIR\" 2>/dev/null && pwd -P) || MEZ_WRITE_STATUS=$?; fi".to_string(),
+        ]);
+        for (index, _) in artifacts.iter().enumerate() {
+            lines.push(format!(
+                "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then : > \"$MEZ_ARTIFACT_DIR/{index}.b64\" || MEZ_WRITE_STATUS=$?; fi"
+            ));
+        }
+    }
     if input_sidecar.is_some() {
         lines.push(
             "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then MEZ_SIDECAR_DATA=$(mktemp) || MEZ_WRITE_STATUS=1; fi"
@@ -1616,6 +1841,20 @@ fn posix_command_file_materialization(
         "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ] && [ \"$MEZ_COMMAND_SEEN_END\" != 1 ]; then printf '%s\\n' 'Mezzanine shell transaction command payload ended before sentinel' >&2; MEZ_WRITE_STATUS=1; fi".to_string(),
         "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then if base64 -d < \"$MEZ_COMMAND_B64\" > \"$MEZ_COMMAND_FILE\" 2>/dev/null; then MEZ_WRITE_STATUS=0; else base64 -D < \"$MEZ_COMMAND_B64\" > \"$MEZ_COMMAND_FILE\"; MEZ_WRITE_STATUS=$?; fi; fi".to_string(),
         "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ] && [ -n \"$MEZ_SIDECAR_DATA\" ]; then cat \"$MEZ_SIDECAR_DATA\" >> \"$MEZ_COMMAND_FILE\" || MEZ_WRITE_STATUS=$?; fi".to_string(),
+    ]);
+    for (index, artifact) in artifacts.iter().enumerate() {
+        lines.push(format!(
+            "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then if base64 -d < \"$MEZ_ARTIFACT_DIR/{index}.b64\" > \"$MEZ_ARTIFACT_DIR/{index}\" 2>/dev/null; then MEZ_WRITE_STATUS=0; else base64 -D < \"$MEZ_ARTIFACT_DIR/{index}.b64\" > \"$MEZ_ARTIFACT_DIR/{index}\"; MEZ_WRITE_STATUS=$?; fi; fi"
+        ));
+        lines.push(format!(
+            "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then chmod {:o} \"$MEZ_ARTIFACT_DIR/{index}\" || MEZ_WRITE_STATUS=$?; fi",
+            artifact.mode
+        ));
+        lines.push(format!(
+            "command rm -f -- \"$MEZ_ARTIFACT_DIR/{index}.b64\" >/dev/null 2>&1 || :"
+        ));
+    }
+    lines.extend([
         "else".to_string(),
         "MEZ_WRITE_STATUS=1".to_string(),
         "fi".to_string(),
@@ -1626,7 +1865,7 @@ fn posix_command_file_materialization(
     );
     CommandMaterialization {
         setup: lines.join("\n") + "\n",
-        payload: command_payload_lines(command, &end_marker, input_sidecar),
+        payload: command_payload_lines(command, &end_marker, input_sidecar, artifacts),
     }
 }
 
@@ -1854,6 +2093,7 @@ fn fish_shell_interactive_invocation_words(
 fn fish_command_file_materialization(
     command: &str,
     input_sidecar: Option<&str>,
+    artifacts: &[ShellLaunchArtifact],
     marker: &str,
     start_marker_line: &str,
     receiver_ready_marker_line: &str,
@@ -1865,7 +2105,10 @@ fn fish_command_file_materialization(
     } else {
         "true"
     };
-    let posix_payload_reader = (acknowledge_payload_records && input_sidecar.is_none()).then(|| {
+    let posix_payload_reader = (acknowledge_payload_records
+        && input_sidecar.is_none()
+        && artifacts.is_empty())
+    .then(|| {
         let source = "end=$1; output=$2; receive_status=$3; seen_end=0; while IFS= read -r record; do if [ \"$record\" = \"$end\" ]; then seen_end=1; printf '\\036'; break; fi; case \"$record\" in 'C '*) if [ \"$receive_status\" -eq 0 ]; then printf '%s\\n' \"${record#C }\" >>\"$output\" || receive_status=$?; fi ;; *) receive_status=1 ;; esac; printf '\\036'; done; [ \"$seen_end\" -eq 1 ] || receive_status=1; exit \"$receive_status\"";
         format!(
             "command /bin/sh -c {} sh \"$MEZ_COMMAND_END\" \"$MEZ_COMMAND_B64\" \"$MEZ_WRITE_STATUS\"",
@@ -1879,6 +2122,7 @@ fn fish_command_file_materialization(
         "set -l MEZ_COMMAND_FILE (mktemp); or set -l MEZ_COMMAND_FILE ''".to_string(),
         "set -l MEZ_COMMAND_B64 ''".to_string(),
         "set -l MEZ_SIDECAR_DATA ''".to_string(),
+        "set -l MEZ_ARTIFACT_DIR ''".to_string(),
         format!("set -l MEZ_COMMAND_END {}", fish_quote(&end_marker)),
         "set -l MEZ_COMMAND_SEEN_END 0".to_string(),
         "set -l MEZ_STTY_STATE ''".to_string(),
@@ -1888,6 +2132,18 @@ fn fish_command_file_materialization(
         "if test \"$MEZ_WRITE_STATUS\" -eq 0; set MEZ_COMMAND_B64 (mktemp); or set MEZ_WRITE_STATUS 1; end".to_string(),
         "if test \"$MEZ_WRITE_STATUS\" -eq 0; : > \"$MEZ_COMMAND_B64\"; or set MEZ_WRITE_STATUS $status; end".to_string(),
     ];
+    if !artifacts.is_empty() {
+        lines.extend([
+            "if test \"$MEZ_WRITE_STATUS\" -eq 0; set MEZ_ARTIFACT_DIR (mktemp -d); or set MEZ_WRITE_STATUS 1; end".to_string(),
+            "if test \"$MEZ_WRITE_STATUS\" -eq 0; chmod 700 \"$MEZ_ARTIFACT_DIR\"; or set MEZ_WRITE_STATUS $status; end".to_string(),
+            "if test \"$MEZ_WRITE_STATUS\" -eq 0; set MEZ_ARTIFACT_DIR (cd \"$MEZ_ARTIFACT_DIR\" 2>/dev/null; and pwd -P); or set MEZ_WRITE_STATUS $status; end".to_string(),
+        ]);
+        for (index, _) in artifacts.iter().enumerate() {
+            lines.push(format!(
+                "if test \"$MEZ_WRITE_STATUS\" -eq 0; : > \"$MEZ_ARTIFACT_DIR/{index}.b64\"; or set MEZ_WRITE_STATUS $status; end"
+            ));
+        }
+    }
     if input_sidecar.is_some() {
         lines.push("set -l MEZ_SIDECAR_FRAME ''".to_string());
         lines.push("set -l MEZ_SIDECAR_FRAME_SEQUENCE 0".to_string());
@@ -1955,6 +2211,15 @@ fn fish_command_file_materialization(
                 "case 'S1E *'".to_string(),
                 "if test \"$MEZ_WRITE_STATUS\" -eq 0; set MEZ_SIDECAR_FRAME_FIELDS (string split ' ' -- \"$MEZ_COMMAND_LINE\"); set MEZ_SIDECAR_FRAME_COUNT (wc -c < \"$MEZ_SIDECAR_FRAME\" | string trim); if test \"$MEZ_SIDECAR_SHA256\" = sha256sum; set MEZ_SIDECAR_FRAME_ACTUAL (sha256sum -- \"$MEZ_SIDECAR_FRAME\" | string split -f 1 ' '); else; set MEZ_SIDECAR_FRAME_ACTUAL (shasum -a 256 -- \"$MEZ_SIDECAR_FRAME\" | string split -f 1 ' '); end; if test (count $MEZ_SIDECAR_FRAME_FIELDS) -ne 2; or test \"$MEZ_SIDECAR_FRAME_OPEN\" -ne 1; or test \"$MEZ_SIDECAR_FRAME_FIELDS[2]\" != \"$MEZ_SIDECAR_FRAME_SEQUENCE\"; or test \"$MEZ_SIDECAR_FRAME_COUNT\" != \"$MEZ_SIDECAR_FRAME_LENGTH\"; or test \"$MEZ_SIDECAR_FRAME_ACTUAL\" != \"$MEZ_SIDECAR_FRAME_DIGEST\"; set MEZ_WRITE_STATUS 1; else; sed 's/^/# __MEZ_INPUT_SIDECAR_V1__ /' \"$MEZ_SIDECAR_FRAME\" >> \"$MEZ_SIDECAR_DATA\"; or set MEZ_WRITE_STATUS $status; set MEZ_SIDECAR_FRAME_SEQUENCE (math $MEZ_SIDECAR_FRAME_SEQUENCE + 1); set MEZ_SIDECAR_FRAME_OPEN 0; end; end".to_string(),
                 acknowledge.to_string(),
+            ]);
+            for (index, _) in artifacts.iter().enumerate() {
+                lines.extend([
+                    format!("case 'A{index} *'"),
+                    format!("if test \"$MEZ_WRITE_STATUS\" -eq 0; string replace -r '^A{index} ' '' -- \"$MEZ_COMMAND_LINE\" >> \"$MEZ_ARTIFACT_DIR/{index}.b64\"; or set MEZ_WRITE_STATUS $status; end"),
+                    acknowledge.to_string(),
+                ]);
+            }
+            lines.extend([
                 "case '*'".to_string(),
                 "set MEZ_WRITE_STATUS 1".to_string(),
                 acknowledge.to_string(),
@@ -1966,6 +2231,14 @@ fn fish_command_file_materialization(
                 "switch \"$MEZ_COMMAND_LINE\"".to_string(),
                 "case 'C *'".to_string(),
                 "string replace -r '^C ' '' -- \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\"; or set MEZ_WRITE_STATUS $status".to_string(),
+            ]);
+            for (index, _) in artifacts.iter().enumerate() {
+                lines.extend([
+                    format!("case 'A{index} *'"),
+                    format!("string replace -r '^A{index} ' '' -- \"$MEZ_COMMAND_LINE\" >> \"$MEZ_ARTIFACT_DIR/{index}.b64\"; or set MEZ_WRITE_STATUS $status"),
+                ]);
+            }
+            lines.extend([
                 "case '*'".to_string(),
                 "set MEZ_WRITE_STATUS 1".to_string(),
                 "end".to_string(),
@@ -1988,6 +2261,15 @@ fn fish_command_file_materialization(
         "set MEZ_WRITE_STATUS $status".to_string(),
         "end".to_string(),
         "if test \"$MEZ_WRITE_STATUS\" -eq 0; and test -n \"$MEZ_SIDECAR_DATA\"; cat \"$MEZ_SIDECAR_DATA\" >> \"$MEZ_COMMAND_FILE\"; or set MEZ_WRITE_STATUS $status; end".to_string(),
+    ]);
+    for (index, artifact) in artifacts.iter().enumerate() {
+        lines.extend([
+            format!("if test \"$MEZ_WRITE_STATUS\" -eq 0; if base64 -d < \"$MEZ_ARTIFACT_DIR/{index}.b64\" > \"$MEZ_ARTIFACT_DIR/{index}\" 2>/dev/null; set MEZ_WRITE_STATUS 0; else; base64 -D < \"$MEZ_ARTIFACT_DIR/{index}.b64\" > \"$MEZ_ARTIFACT_DIR/{index}\"; set MEZ_WRITE_STATUS $status; end; end"),
+            format!("if test \"$MEZ_WRITE_STATUS\" -eq 0; chmod {:o} \"$MEZ_ARTIFACT_DIR/{index}\"; or set MEZ_WRITE_STATUS $status; end", artifact.mode),
+            format!("command rm -f -- \"$MEZ_ARTIFACT_DIR/{index}.b64\" >/dev/null 2>&1; or true"),
+        ]);
+    }
+    lines.extend([
         "else".to_string(),
         "set MEZ_WRITE_STATUS 1".to_string(),
         "end".to_string(),
@@ -2001,7 +2283,7 @@ fn fish_command_file_materialization(
     ]);
     CommandMaterialization {
         setup: lines.join("\n") + "\n",
-        payload: command_payload_lines(command, &end_marker, input_sidecar),
+        payload: command_payload_lines(command, &end_marker, input_sidecar, artifacts),
     }
 }
 
@@ -2045,7 +2327,12 @@ fn append_sidecar_frame(payload: &mut String, sequence: usize, frame: &str) {
 }
 
 /// Renders the base64 command payload consumed by the transaction receiver.
-fn command_payload_lines(command: &str, end_marker: &str, input_sidecar: Option<&str>) -> String {
+fn command_payload_lines(
+    command: &str,
+    end_marker: &str,
+    input_sidecar: Option<&str>,
+    artifacts: &[ShellLaunchArtifact],
+) -> String {
     let mut command_source = command.to_string();
     if !command_source.ends_with('\n') {
         command_source.push('\n');
@@ -2064,6 +2351,17 @@ fn command_payload_lines(command: &str, end_marker: &str, input_sidecar: Option<
     }
     if let Some(input_sidecar) = input_sidecar {
         append_framed_sidecar_payload(&mut payload, input_sidecar);
+    }
+    for (index, artifact) in artifacts.iter().enumerate() {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&artifact.content);
+        for chunk in encoded
+            .as_bytes()
+            .chunks(SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES)
+        {
+            let chunk = std::str::from_utf8(chunk)
+                .expect("standard base64 output should always be valid UTF-8");
+            payload.push_str(&format!("A{index} {chunk}\n"));
+        }
     }
     payload.push_str(end_marker);
     payload.push('\n');

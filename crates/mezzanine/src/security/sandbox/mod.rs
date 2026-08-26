@@ -311,6 +311,41 @@ pub(crate) struct BubblewrapStatus {
     pub(crate) exit_code: Option<i32>,
 }
 
+/// Backend-tagged trusted lifecycle evidence captured outside workload output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SandboxLifecycleStatus {
+    /// Ordered status documents emitted by Bubblewrap.
+    Bubblewrap(BubblewrapStatus),
+}
+
+impl SandboxLifecycleStatus {
+    /// Returns the trusted child process identity when the backend reported it.
+    pub(crate) const fn child_pid(self) -> Option<u32> {
+        match self {
+            Self::Bubblewrap(status) => status.child_pid,
+        }
+    }
+
+    /// Returns the trusted payload exit status when execution was established.
+    pub(crate) const fn exit_code(self) -> Option<i32> {
+        match self {
+            Self::Bubblewrap(status) => status.exit_code,
+        }
+    }
+}
+
+/// Parses lifecycle evidence through the selected backend contract.
+pub(crate) fn parse_sandbox_lifecycle_status(
+    backend: SandboxBackend,
+    status: &str,
+) -> Result<SandboxLifecycleStatus, SandboxCompileError> {
+    match backend {
+        SandboxBackend::Bubblewrap => {
+            parse_bubblewrap_status(status).map(SandboxLifecycleStatus::Bubblewrap)
+        }
+    }
+}
+
 /// Parses ordered JSON status documents emitted by Bubblewrap.
 pub(crate) fn parse_bubblewrap_status(
     status: &str,

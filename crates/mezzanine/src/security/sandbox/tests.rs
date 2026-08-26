@@ -280,6 +280,27 @@ fn bubblewrap_status_parser_validates_payload_execution_evidence() {
     assert!(parse_bubblewrap_status("not-json\n").is_err());
 }
 
+/// The backend-tagged lifecycle parser preserves Bubblewrap ordering and
+/// exposes only typed child and payload-establishment evidence.
+#[test]
+fn sandbox_lifecycle_parser_dispatches_to_bubblewrap_contract() {
+    let status = parse_sandbox_lifecycle_status(
+        SandboxBackend::Bubblewrap,
+        "{\"child-pid\":42}\n{\"exit-code\":0}\n",
+    )
+    .unwrap();
+
+    assert_eq!(status.child_pid(), Some(42));
+    assert_eq!(status.exit_code(), Some(0));
+    assert!(
+        parse_sandbox_lifecycle_status(
+            SandboxBackend::Bubblewrap,
+            "{\"exit-code\":0}\n{\"child-pid\":42}\n",
+        )
+        .is_err()
+    );
+}
+
 /// Live Bubblewrap failures provide one concise, authority-preserving command
 /// that expands into the existing structured sandbox diagnostics and remedies.
 #[test]

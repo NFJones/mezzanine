@@ -1869,12 +1869,15 @@ impl RuntimeSessionService {
                 mez_agent::decode_shell_status_transport(&transaction_ref.observed_output_preview)
                     .map_err(|error| error.message().to_string())
                     .and_then(|status| {
-                        crate::security::sandbox::parse_bubblewrap_status(&status)
-                            .map_err(|error| error.message().to_string())
+                        crate::security::sandbox::parse_sandbox_lifecycle_status(
+                            crate::runtime::SandboxBackend::Bubblewrap,
+                            &status,
+                        )
+                        .map_err(|error| error.message().to_string())
                     })
             };
             match status {
-                Ok(status) if status.exit_code.is_none() => {
+                Ok(status) if status.exit_code().is_none() => {
                     self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
                     if self.offer_sandbox_pre_payload_fallback_approval(
                         marker,
@@ -1907,7 +1910,7 @@ impl RuntimeSessionService {
                         },
                     );
                 }
-                Ok(status) if status.exit_code != Some(exit_code) => {
+                Ok(status) if status.exit_code() != Some(exit_code) => {
                     let message = crate::security::sandbox::bubblewrap_failure_remediation(
                         "Bubblewrap status exit code contradicts the shell transaction",
                     );
@@ -1924,7 +1927,7 @@ impl RuntimeSessionService {
                                 "source": "bubblewrap_status",
                                 "marker": marker,
                                 "exit_code": exit_code,
-                                "reported_exit_code": status.exit_code,
+                                "reported_exit_code": status.exit_code(),
                                 "boundary_state": "bubblewrap-status-mismatch"
                             }),
                             trace_reason: "bubblewrap_status_mismatch".to_string(),
