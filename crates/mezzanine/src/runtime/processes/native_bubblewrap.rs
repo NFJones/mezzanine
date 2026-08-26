@@ -17,6 +17,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use mez_agent::permissions::{
@@ -36,6 +38,75 @@ use super::native_shell_inference::NativeShellContext;
 const NATIVE_BUBBLEWRAP_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 /// Poll interval while waiting for the capability probe.
 const NATIVE_BUBBLEWRAP_PROBE_POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// Maximum retained output from either native capability-probe pipe.
+const NATIVE_BUBBLEWRAP_PROBE_OUTPUT_LIMIT_BYTES: usize = 8 * 1024;
+
+/// Uncached native capability probe transferred to the external worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativeBubblewrapCapabilityProbe {
+    pane_id: String,
+    pane_environment_signature: String,
+    config_generation: u64,
+    plan: crate::security::sandbox::BubblewrapCapabilityProbePlan,
+}
+
+impl NativeBubblewrapCapabilityProbe {
+    /// Runs the exact native probe outside the serialized runtime actor.
+    pub(crate) fn run(self) -> Result<crate::security::sandbox::BubblewrapCapability> {
+        run_native_bubblewrap_capability_probe(
+            &self.pane_id,
+            &self.pane_environment_signature,
+            self.config_generation,
+            &self.plan,
+        )
+    }
+
+    /// Builds one deterministic worker-owned probe fixture.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        executable: &str,
+        arguments: Vec<String>,
+        expected_stdout: &'static str,
+    ) -> Self {
+        Self {
+            pane_id: "%native-test".to_string(),
+            pane_environment_signature: "native-test-signature".to_string(),
+            config_generation: 1,
+            plan: crate::security::sandbox::BubblewrapCapabilityProbePlan {
+                executable: executable.to_string(),
+                arguments,
+                expected_stdout,
+                identity_sha256: "native-test-identity".to_string(),
+                environment_sha256: "native-test-environment".to_string(),
+                probe_sha256: "native-test-probe".to_string(),
+            },
+        }
+    }
+}
+
+/// Cloneable managed-home lease retained by both actor state and the external
+/// native worker. Turn cleanup may drop the actor's clone, but the worker's
+/// clone keeps maintenance excluded until probe and workload execution end.
+#[derive(Debug, Clone)]
+pub(crate) struct NativeBubblewrapActivityLease {
+    activity_lock: Arc<crate::security::sandbox::BubblewrapManagedHomeActivityLock>,
+}
+
+impl NativeBubblewrapActivityLease {
+    fn new(activity_lock: crate::security::sandbox::BubblewrapManagedHomeActivityLock) -> Self {
+        Self {
+            activity_lock: Arc::new(activity_lock),
+        }
+    }
+}
+
+impl PartialEq for NativeBubblewrapActivityLease {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.activity_lock, &other.activity_lock)
+    }
+}
+
+impl Eq for NativeBubblewrapActivityLease {}
 
 /// Everything native dispatch needs to run one sandboxed action.
 pub(crate) struct NativeBubblewrapDispatch {
@@ -43,8 +114,10 @@ pub(crate) struct NativeBubblewrapDispatch {
     pub(crate) child_launch: ShellChildLaunch,
     /// Redacted plan facts for diagnostics.
     pub(crate) audit_summary: crate::security::sandbox::SandboxAuditSummary,
+    /// Uncached capability proof that must complete before workload launch.
+    pub(crate) capability_probe: Option<NativeBubblewrapCapabilityProbe>,
     /// Shared workload lock retained until the spawned action settles.
-    pub(crate) _activity_lock: Option<crate::security::sandbox::BubblewrapManagedHomeActivityLock>,
+    pub(crate) activity_lease: Option<NativeBubblewrapActivityLease>,
 }
 
 impl crate::runtime::RuntimeSessionService {
@@ -120,18 +193,19 @@ impl crate::runtime::RuntimeSessionService {
             &probe_plan,
         )
         .map_err(|error| MezError::invalid_state(error.message()))?;
-        let capability = match self.bubblewrap_capability(&cache_key) {
-            Some(capability) => capability,
-            None => {
-                let capability = run_native_bubblewrap_capability_probe(
-                    &turn.pane_id,
-                    &signature_hash,
-                    self.session.config_generation,
-                    &probe_plan,
-                )?;
-                self.record_bubblewrap_capability(cache_key.clone(), capability.clone());
-                capability
-            }
+        let (capability, capability_probe) = match self.bubblewrap_capability(&cache_key) {
+            Some(capability) => (capability, None),
+            None => (
+                crate::security::sandbox::BubblewrapCapability {
+                    cache_key: cache_key.clone(),
+                },
+                Some(NativeBubblewrapCapabilityProbe {
+                    pane_id: turn.pane_id.clone(),
+                    pane_environment_signature: signature_hash.clone(),
+                    config_generation: self.session.config_generation,
+                    plan: probe_plan,
+                }),
+            ),
         };
         let maximum_authority =
             self.native_bubblewrap_path_scopes_for_turn(turn, context, permission_evaluation)?;
@@ -198,7 +272,8 @@ impl crate::runtime::RuntimeSessionService {
         Ok(NativeBubblewrapDispatch {
             child_launch,
             audit_summary,
-            _activity_lock: activity_lock,
+            capability_probe,
+            activity_lease: activity_lock.map(NativeBubblewrapActivityLease::new),
         })
     }
 
@@ -562,10 +637,12 @@ fn run_native_bubblewrap_capability_probe(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| {
-            MezError::invalid_state(format!(
-                "native Bubblewrap capability probe could not start: {error}"
+            MezError::invalid_state(crate::security::sandbox::bubblewrap_failure_remediation(
+                &format!("native Bubblewrap capability probe could not start: {error}"),
             ))
         })?;
+    let stdout_reader = child.stdout.take().map(spawn_bounded_probe_reader);
+    let stderr_reader = child.stderr.take().map(spawn_bounded_probe_reader);
     let deadline = Instant::now() + NATIVE_BUBBLEWRAP_PROBE_TIMEOUT;
     let status = loop {
         match child.try_wait() {
@@ -574,25 +651,24 @@ fn run_native_bubblewrap_capability_probe(
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(MezError::invalid_state(
-                    "native Bubblewrap capability probe exceeded its time budget",
+                    crate::security::sandbox::bubblewrap_failure_remediation(
+                        "native Bubblewrap capability probe exceeded its time budget",
+                    ),
                 ));
             }
             Ok(None) => std::thread::sleep(NATIVE_BUBBLEWRAP_PROBE_POLL_INTERVAL),
             Err(error) => {
-                return Err(MezError::invalid_state(format!(
-                    "native Bubblewrap capability probe wait failed: {error}"
-                )));
+                return Err(MezError::invalid_state(
+                    crate::security::sandbox::bubblewrap_failure_remediation(&format!(
+                        "native Bubblewrap capability probe wait failed: {error}"
+                    )),
+                ));
             }
         }
     };
-    let mut stdout = String::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        let _ = pipe.read_to_string(&mut stdout);
-    }
-    let mut stderr = String::new();
-    if let Some(mut pipe) = child.stderr.take() {
-        let _ = pipe.read_to_string(&mut stderr);
-    }
+    let stdout = join_bounded_probe_reader(stdout_reader);
+    let stderr_present = !join_bounded_probe_reader(stderr_reader).is_empty();
+    let stdout = String::from_utf8_lossy(&stdout).into_owned();
     let exit_code = status.code().unwrap_or(-1);
     crate::security::sandbox::parse_bubblewrap_capability_probe(
         pane_id,
@@ -603,12 +679,48 @@ fn run_native_bubblewrap_capability_probe(
         &stdout,
     )
     .map_err(|error| {
-        MezError::invalid_state(format!(
-            "native Bubblewrap capability probe failed: {} (stderr: {})",
-            error.message(),
-            stderr.trim()
+        MezError::invalid_state(crate::security::sandbox::bubblewrap_failure_remediation(
+            &format!(
+                "native Bubblewrap capability probe failed: {} (stderr output present: {})",
+                error.message(),
+                stderr_present
+            ),
         ))
     })
+}
+
+/// Drains one probe pipe concurrently so a noisy child cannot fill its pipe
+/// and stall until the timeout, while retaining only a bounded diagnostic
+/// prefix. The reader continues draining after the bound so it never causes a
+/// valid child to receive `SIGPIPE` merely for producing extra diagnostics.
+fn spawn_bounded_probe_reader<R>(pipe: R) -> JoinHandle<Vec<u8>>
+where
+    R: Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut pipe = pipe;
+        let mut buffer = [0_u8; 4096];
+        loop {
+            match pipe.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => {
+                    let remaining =
+                        NATIVE_BUBBLEWRAP_PROBE_OUTPUT_LIMIT_BYTES.saturating_sub(output.len());
+                    output.extend_from_slice(&buffer[..count.min(remaining)]);
+                }
+            }
+        }
+        output
+    })
+}
+
+/// Joins one bounded probe reader without letting reader failure obscure the
+/// primary capability-probe result.
+fn join_bounded_probe_reader(reader: Option<JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    reader
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default()
 }
 
 /// Returns the host name reported by the kernel, or `unknown` on failure.

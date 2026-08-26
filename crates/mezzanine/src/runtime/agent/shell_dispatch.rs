@@ -238,6 +238,9 @@ impl RuntimeSessionService {
         if !current {
             return Ok(false);
         }
+        if let Some(capability) = outcome.bubblewrap_capability.as_deref().cloned() {
+            self.record_bubblewrap_capability(capability.cache_key.clone(), capability);
+        }
         let Some(turn) = self
             .agent_turn_ledger()
             .turns()

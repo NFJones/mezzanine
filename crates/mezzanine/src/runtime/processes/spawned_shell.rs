@@ -487,32 +487,40 @@ fn execute_native_shell_dispatch_inner(
         action_id,
         marker,
         context,
+        capability_probe,
+        bubblewrap_activity_lease: _bubblewrap_activity_lease,
         request,
         started_at_unix_ms,
     } = dispatch;
     let command = request.transaction.command.clone();
     let executor = SpawnedShellExecutor::new(context);
+    let mut bubblewrap_capability = None;
     let result = if request.interactive || request.stateful {
         Err(MezError::invalid_args(
             "native transport does not serve stateful or interactive execution",
         ))
     } else {
-        executor.interrupted.store(false, Ordering::SeqCst);
-        executor
-            .materialize_command_file(&request.transaction)
-            .and_then(|command_file| {
-                let result = executor
-                    .spawn_child(&request.transaction, &command_file)
-                    .and_then(|child| {
-                        executor.collect(
-                            child,
-                            request.timeout_ms,
-                            request.transaction.output_max_raw_bytes,
-                            progress,
-                        )
-                    });
-                let _ = fs::remove_file(&command_file);
-                result
+        capability_probe
+            .map_or(Ok(None), |probe| probe.run().map(Some))
+            .and_then(|capability| {
+                bubblewrap_capability = capability;
+                executor.interrupted.store(false, Ordering::SeqCst);
+                executor
+                    .materialize_command_file(&request.transaction)
+                    .and_then(|command_file| {
+                        let result = executor
+                            .spawn_child(&request.transaction, &command_file)
+                            .and_then(|child| {
+                                executor.collect(
+                                    child,
+                                    request.timeout_ms,
+                                    request.transaction.output_max_raw_bytes,
+                                    progress,
+                                )
+                            });
+                        let _ = fs::remove_file(&command_file);
+                        result
+                    })
             })
     }
     .map_err(|error| crate::runtime::RuntimeNativeShellFailure {
@@ -525,6 +533,7 @@ fn execute_native_shell_dispatch_inner(
         marker,
         command,
         started_at_unix_ms,
+        bubblewrap_capability: bubblewrap_capability.map(Box::new),
         result,
     }
 }
@@ -798,6 +807,24 @@ mod tests {
         }
     }
 
+    /// Builds one external-worker dispatch with an optional deferred
+    /// Bubblewrap capability probe.
+    fn dispatch_with_probe(
+        command: &str,
+        probe: Option<crate::runtime::processes::NativeBubblewrapCapabilityProbe>,
+    ) -> crate::runtime::RuntimeNativeShellDispatch {
+        crate::runtime::RuntimeNativeShellDispatch {
+            turn_id: "turn-1".to_string(),
+            action_id: "native-1".to_string(),
+            marker: "0123456789abcdef0123456789abcdef".to_string(),
+            context: test_context(),
+            capability_probe: probe,
+            bubblewrap_activity_lease: None,
+            request: request(command, Some(5_000)),
+            started_at_unix_ms: 1,
+        }
+    }
+
     /// Verifies native progress publications carry strictly increasing revisions.
     ///
     /// Stdout and stderr readers share one reporter. Each accepted chunk must
@@ -837,6 +864,83 @@ mod tests {
         assert_eq!(output.stderr, "err");
         assert!(!output.timed_out);
         assert!(!output.interrupted);
+    }
+
+    /// Verifies an uncached native Bubblewrap probe executes in the external
+    /// worker before the authorized workload and returns capability evidence
+    /// for actor-owned caching.
+    #[test]
+    fn native_worker_runs_deferred_probe_before_workload() {
+        let marker =
+            std::env::temp_dir().join(format!("mez-native-probe-order-{}", std::process::id()));
+        let _ = fs::remove_file(&marker);
+        let probe_script = format!(
+            "printf ready > '{}'; printf mez-native-probe-ok",
+            marker.display()
+        );
+        let probe = crate::runtime::processes::NativeBubblewrapCapabilityProbe::for_test(
+            "/bin/sh",
+            vec!["-c".to_string(), probe_script],
+            "mez-native-probe-ok",
+        );
+        let command = format!(
+            "test -f '{}' && printf workload-after-probe",
+            marker.display()
+        );
+
+        let outcome = execute_native_shell_dispatch(dispatch_with_probe(&command, Some(probe)));
+        let output = outcome.result.expect("probe and workload succeed");
+        let _ = fs::remove_file(&marker);
+
+        assert_eq!(output.exit_code, Some(0));
+        assert_eq!(output.stdout, "workload-after-probe");
+        assert!(outcome.bubblewrap_capability.is_some());
+    }
+
+    /// Verifies a failed deferred capability probe prevents the workload from
+    /// starting and returns no cacheable capability evidence.
+    #[test]
+    fn native_worker_probe_failure_prevents_workload_launch() {
+        let marker =
+            std::env::temp_dir().join(format!("mez-native-probe-failure-{}", std::process::id()));
+        let _ = fs::remove_file(&marker);
+        let probe = crate::runtime::processes::NativeBubblewrapCapabilityProbe::for_test(
+            "/bin/sh",
+            vec!["-c".to_string(), "printf wrong; exit 7".to_string()],
+            "mez-native-probe-ok",
+        );
+        let command = format!("printf ran > '{}'", marker.display());
+
+        let outcome = execute_native_shell_dispatch(dispatch_with_probe(&command, Some(probe)));
+
+        assert!(outcome.result.is_err());
+        assert!(outcome.bubblewrap_capability.is_none());
+        assert!(!marker.exists(), "workload ran despite failed probe");
+    }
+
+    /// Verifies probe pipes are drained concurrently beyond the retained
+    /// diagnostic bound so a noisy valid probe cannot deadlock or receive
+    /// `SIGPIPE` before publishing its sentinel.
+    #[test]
+    fn native_worker_drains_noisy_probe_output_without_deadlock() {
+        let probe = crate::runtime::processes::NativeBubblewrapCapabilityProbe::for_test(
+            "/bin/sh",
+            vec![
+                "-c".to_string(),
+                "i=0; while [ \"$i\" -lt 20000 ]; do printf x >&2; i=$((i + 1)); done; printf mez-native-probe-ok"
+                    .to_string(),
+            ],
+            "mez-native-probe-ok",
+        );
+        let started = Instant::now();
+
+        let outcome =
+            execute_native_shell_dispatch(dispatch_with_probe("printf workload", Some(probe)));
+        let output = outcome.result.expect("noisy probe and workload succeed");
+
+        assert_eq!(output.stdout, "workload");
+        assert!(outcome.bubblewrap_capability.is_some());
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     /// Verifies the inferred environment and working directory reach the

@@ -17,6 +17,9 @@ mod startup;
 mod transactions;
 mod zsh_compat;
 
+pub(crate) use native_bubblewrap::{
+    NativeBubblewrapActivityLease, NativeBubblewrapCapabilityProbe,
+};
 pub(crate) use native_shell_inference::{NativeShellContext, infer_native_shell_context};
 #[cfg(test)]
 pub(crate) use spawned_shell::execute_native_shell_dispatch;
