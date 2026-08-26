@@ -2197,7 +2197,7 @@ fn migrates_schema_66_with_disabled_iroh_transport() {
 /// single bidirectional control stream enforced by the v1 Iroh protocol.
 #[test]
 fn migrates_schema_67_to_fixed_iroh_stream_limit() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 73);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 74);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2216,7 +2216,7 @@ fn migrates_schema_67_to_fixed_iroh_stream_limit() {
         let values = extract_config_values(format, &plan.text);
 
         assert_eq!(plan.from_version, 67);
-        assert_eq!(plan.to_version, 73);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
         assert_eq!(
             values.get("transport.iroh.max_streams_per_connection"),
             Some(&"1".to_string())
@@ -2246,7 +2246,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
         let values = extract_config_values(format, &plan.text);
 
         assert_eq!(plan.from_version, 68);
-        assert_eq!(plan.to_version, 73);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
         assert_eq!(
             values.get("transport.iroh.enabled"),
             Some(&"false".to_string())
@@ -2262,7 +2262,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
 /// changing the existing ephemeral behavior unless the owner configures it.
 #[test]
 fn migrates_schema_69_with_iroh_bind_port() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 73);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 74);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2281,7 +2281,7 @@ fn migrates_schema_69_with_iroh_bind_port() {
         let values = extract_config_values(format, &plan.text);
 
         assert_eq!(plan.from_version, 69);
-        assert_eq!(plan.to_version, 73);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
         assert_eq!(
             values.get("transport.iroh.bind_port"),
             Some(&"0".to_string())
@@ -2293,7 +2293,7 @@ fn migrates_schema_69_with_iroh_bind_port() {
 /// supported primary configuration format without enabling the Iroh listener.
 #[test]
 fn migrates_schema_70_with_iroh_compression_defaults() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 73);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 74);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2313,7 +2313,7 @@ fn migrates_schema_70_with_iroh_compression_defaults() {
         let root = parse_config_json_value(format, &plan.text).unwrap();
 
         assert_eq!(plan.from_version, 70);
-        assert_eq!(plan.to_version, 73);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
         assert_eq!(
             root.pointer("/transport/iroh/compression_codecs"),
             Some(&serde_json::json!(["zstd", "lz4", "none"]))
@@ -2355,7 +2355,7 @@ fn migrates_schema_71_with_iroh_status_theme_defaults() {
         let root = parse_config_json_value(format, &plan.text).unwrap();
 
         assert_eq!(plan.from_version, 71);
-        assert_eq!(plan.to_version, 73);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
         assert_eq!(
             root.pointer("/transport/iroh/enabled"),
             Some(&serde_json::json!(false))
@@ -2401,7 +2401,7 @@ fn migrates_schema_72_with_disabled_persistent_host_defaults() {
         let root = parse_config_json_value(format, &plan.text).unwrap();
 
         assert_eq!(plan.from_version, 72);
-        assert_eq!(plan.to_version, 73);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
         assert_eq!(
             root.pointer("/host/enabled"),
             Some(&serde_json::json!(false))
@@ -2425,6 +2425,54 @@ fn migrates_schema_72_with_disabled_persistent_host_defaults() {
         assert_eq!(
             root.pointer("/transport/iroh/identity"),
             Some(&serde_json::json!("host"))
+        );
+    }
+}
+
+/// Schema v74 changes only the declared version and preserves every existing
+/// sandbox and approval decision or omission in all supported formats.
+#[test]
+fn migrates_schema_73_without_enabling_seatbelt_or_changing_policy() {
+    for (format, text, expected_sandbox, expected_approval) in [
+        (
+            ConfigFormat::Toml,
+            "version = 73\n[permissions]\nsandbox = \"policy-only\"\napproval_policy = \"auto-allow\"\n",
+            Some("policy-only"),
+            Some("auto-allow"),
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":73,"permissions":{"sandbox":"bubblewrap","approval_policy":"full-access"}}"#,
+            Some("bubblewrap"),
+            Some("full-access"),
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 73\npermissions: {}\n",
+            None,
+            None,
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let values = extract_config_values(format, &plan.text);
+
+        assert_eq!(plan.from_version, 73);
+        assert_eq!(plan.to_version, 74);
+        assert_eq!(values.get("version"), Some(&"74".to_string()));
+        assert_eq!(
+            values.get("permissions.sandbox").map(String::as_str),
+            expected_sandbox
+        );
+        assert_eq!(
+            values
+                .get("permissions.approval_policy")
+                .map(String::as_str),
+            expected_approval
+        );
+        assert!(
+            !values
+                .keys()
+                .any(|path| path.starts_with("permissions.seatbelt"))
         );
     }
 }

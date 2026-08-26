@@ -343,6 +343,10 @@ pub(crate) fn parse_sandbox_lifecycle_status(
         SandboxBackend::Bubblewrap => {
             parse_bubblewrap_status(status).map(SandboxLifecycleStatus::Bubblewrap)
         }
+        SandboxBackend::Seatbelt => Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            "Seatbelt lifecycle evidence is unavailable before runtime integration",
+        )),
     }
 }
 

@@ -2963,10 +2963,20 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 73 is the current implemented configuration schema version for this
+schema version 74 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
+
+The `73 -> 74` migration MUST advance only the schema version while preserving
+every configured or omitted `permissions.sandbox` and
+`permissions.approval_policy` value. It MUST NOT inspect host executables, add a
+`permissions.seatbelt` table, or enable Seatbelt for an existing configuration.
+Schema v74 adds `sandbox = "seatbelt"` and a primary-user-only
+`permissions.seatbelt` table containing only `executable`, `unavailable`,
+`network`, `environment`, `env_whitelist`, `git_user_name`, and
+`git_user_email`. Raw Seatbelt profiles, rules, and launcher arguments MUST NOT
+be configurable. Explicit Seatbelt configuration MUST be fail-closed.
 
 The `72 -> 73` migration
 MUST add disabled-by-default host policy and lease-retention defaults, MUST

@@ -1025,6 +1025,59 @@ fn validates_paired_sanitized_bubblewrap_git_identity() {
     }));
 }
 
+/// Verifies schema v74 accepts only Seatbelt's fixed fail-closed fields and
+/// applies the shared Git and environment validation contracts.
+#[test]
+fn validates_explicit_seatbelt_configuration() {
+    let valid = format!(
+        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"seatbelt\"\n[permissions.seatbelt]\nexecutable = \"/usr/bin/sandbox-exec\"\nunavailable = \"fail\"\nnetwork = \"isolated\"\nenvironment = \"minimal\"\nenv_whitelist = [\"PATH\", \"CI\"]\ngit_user_name = \"Sandbox Author\"\ngit_user_email = \"sandbox@example.invalid\"\n"
+    );
+    let primary = validate_config_text(ConfigFormat::Toml, &valid, ConfigScope::Primary);
+    assert!(primary.valid, "{:?}", primary.diagnostics);
+
+    let overlay = validate_config_text(ConfigFormat::Toml, &valid, ConfigScope::ProjectOverlay);
+    assert!(overlay.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "permissions.seatbelt.executable"
+            && diagnostic
+                .message
+                .starts_with("primary_user_only_execution_authority:")
+    }));
+
+    for (field, value) in [
+        ("executable", "\"relative\""),
+        ("unavailable", "\"policy-only\""),
+        ("network", "\"connected\""),
+        ("environment", "\"inherit\""),
+        ("unknown", "\"value\""),
+    ] {
+        let text = format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"seatbelt\"\n[permissions.seatbelt]\n{field} = {value}\n"
+        );
+        let validation = validate_config_text(ConfigFormat::Toml, &text, ConfigScope::Primary);
+        assert!(!validation.valid, "accepted permissions.seatbelt.{field}");
+    }
+
+    let incomplete = format!(
+        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"seatbelt\"\n[permissions.seatbelt]\ngit_user_name = \"Sandbox Author\"\n"
+    );
+    let validation = validate_config_text(ConfigFormat::Toml, &incomplete, ConfigScope::Primary);
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "permissions.seatbelt"
+            && diagnostic.message.contains("must be configured together")
+    }));
+
+    let bad_env = format!(
+        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"seatbelt\"\n[permissions.seatbelt]\nenv_whitelist = [\"BAD-NAME\"]\n"
+    );
+    let validation = validate_config_text(ConfigFormat::Toml, &bad_env, ConfigScope::Primary);
+    assert!(
+        validation
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.path == "permissions.seatbelt.env_whitelist" })
+    );
+}
+
 /// Verifies the current schema rejects removed built-in and custom toolchain
 /// keys in both primary configuration and project overlays.
 #[test]

@@ -74,7 +74,8 @@ pub use schema::{
     config_change_setting_path_annotations_markdown, config_change_setting_path_description,
 };
 pub(crate) use schema::{
-    config_change_path_is_user_only_host_policy, config_change_path_is_user_only_host_power_policy,
+    SEATBELT_PERMISSION_KEYS, config_change_path_is_user_only_host_policy,
+    config_change_path_is_user_only_host_power_policy,
     config_change_path_is_user_only_sandbox_policy,
     config_change_path_is_user_only_transport_policy,
 };

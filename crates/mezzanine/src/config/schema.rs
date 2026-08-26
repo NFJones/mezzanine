@@ -285,6 +285,7 @@ pub fn config_change_setting_path_description() -> String {
                 "read_scopes",
                 "write_scopes",
                 "bubblewrap",
+                "seatbelt",
                 "command_rules",
                 "session_command_rules",
                 "global_command_rules",
@@ -353,6 +354,7 @@ pub(super) const PERMISSION_KEYS: &[&str] = &[
     "read_scopes",
     "write_scopes",
     "bubblewrap",
+    "seatbelt",
     "command_rules",
     "session_command_rules",
     "global_command_rules",
@@ -394,6 +396,17 @@ pub(super) const BUBBLEWRAP_PERMISSION_KEYS: &[&str] = &[
     "git_user_email",
 ];
 
+/// Defines the typed Seatbelt configuration keys accepted by schema v74.
+pub(crate) const SEATBELT_PERMISSION_KEYS: &[&str] = &[
+    "executable",
+    "unavailable",
+    "network",
+    "environment",
+    "env_whitelist",
+    "git_user_name",
+    "git_user_email",
+];
+
 /// Reports whether a permission path controls sandbox confinement or authority.
 ///
 /// These settings remain available to direct user configuration commands, but
@@ -406,7 +419,9 @@ pub(crate) fn config_change_path_is_user_only_sandbox_policy(path: &str) -> bool
             | "permissions.read_scopes"
             | "permissions.write_scopes"
             | "permissions.bubblewrap"
+            | "permissions.seatbelt"
     ) || path.starts_with("permissions.bubblewrap.")
+        || path.starts_with("permissions.seatbelt.")
 }
 
 /// Reports whether a configuration path controls host power policy.

@@ -113,6 +113,8 @@ pub(crate) enum SandboxConfig {
     PolicyOnly,
     /// Compile authorized commands into Bubblewrap launch plans.
     Bubblewrap(BubblewrapConfig),
+    /// Compile authorized commands into macOS Seatbelt launch plans.
+    Seatbelt(SeatbeltConfig),
 }
 
 impl SandboxConfig {
@@ -121,6 +123,7 @@ impl SandboxConfig {
         match self {
             Self::PolicyOnly => None,
             Self::Bubblewrap(_) => Some(SandboxBackend::Bubblewrap),
+            Self::Seatbelt(_) => Some(SandboxBackend::Seatbelt),
         }
     }
 
@@ -129,6 +132,7 @@ impl SandboxConfig {
         match self {
             Self::PolicyOnly => "policy-only",
             Self::Bubblewrap(_) => "bubblewrap",
+            Self::Seatbelt(_) => "seatbelt",
         }
     }
 
@@ -153,6 +157,8 @@ impl SandboxConfig {
 pub(crate) enum SandboxBackend {
     /// Linux Bubblewrap namespace confinement.
     Bubblewrap,
+    /// macOS Seatbelt operation-level confinement.
+    Seatbelt,
 }
 
 impl SandboxBackend {
@@ -160,6 +166,7 @@ impl SandboxBackend {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Bubblewrap => "bubblewrap",
+            Self::Seatbelt => "seatbelt",
         }
     }
 }
@@ -187,6 +194,25 @@ pub(crate) struct BubblewrapConfig {
     pub(crate) environment: SandboxEnvironmentPolicy,
     /// Exact host supplementary groups selected by the primary user.
     pub(crate) group_whitelist: ConfiguredSandboxGroups,
+    /// Pane environment variable names selected for best-effort forwarding.
+    pub(crate) env_whitelist: ConfiguredSandboxEnvironment,
+    /// Optional non-secret Git author name projected without host Git config.
+    pub(crate) git_user_name: Option<String>,
+    /// Optional non-secret Git author email projected without host Git config.
+    pub(crate) git_user_email: Option<String>,
+}
+
+/// Typed fail-closed macOS Seatbelt configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SeatbeltConfig {
+    /// Absolute `/usr/bin/sandbox-exec` path selected by direct user config.
+    pub(crate) executable: String,
+    /// Missing or nonfunctional Seatbelt behavior.
+    pub(crate) unavailable: SandboxUnavailablePolicy,
+    /// Effective socket-access policy compiled by the Seatbelt backend.
+    pub(crate) network: SandboxNetworkMode,
+    /// Environment reconstruction policy.
+    pub(crate) environment: SandboxEnvironmentPolicy,
     /// Pane environment variable names selected for best-effort forwarding.
     pub(crate) env_whitelist: ConfiguredSandboxEnvironment,
     /// Optional non-secret Git author name projected without host Git config.
@@ -649,6 +675,89 @@ pub(crate) fn runtime_configured_permissions_from_config(
                 network,
                 environment,
                 group_whitelist,
+                env_whitelist,
+                git_user_name,
+                git_user_email,
+            })
+        }
+        Some("seatbelt") => {
+            let seatbelt = permissions.get("seatbelt").and_then(Value::as_object);
+            let executable = seatbelt
+                .and_then(|config| runtime_json_string(config.get("executable")))
+                .unwrap_or("/usr/bin/sandbox-exec")
+                .to_string();
+            if !executable.starts_with('/')
+                || executable.bytes().any(|byte| byte.is_ascii_control())
+            {
+                return Err(MezError::config(
+                    "permissions.seatbelt.executable must be an absolute printable path",
+                ));
+            }
+            let unavailable = match seatbelt
+                .and_then(|config| runtime_json_string(config.get("unavailable")))
+                .unwrap_or("fail")
+            {
+                "fail" => SandboxUnavailablePolicy::Fail,
+                _ => {
+                    return Err(MezError::config(
+                        "permissions.seatbelt.unavailable must be fail",
+                    ));
+                }
+            };
+            let network = match seatbelt
+                .and_then(|config| runtime_json_string(config.get("network")))
+                .unwrap_or("isolated")
+            {
+                "isolated" => SandboxNetworkMode::Isolated,
+                _ => {
+                    return Err(MezError::config(
+                        "permissions.seatbelt.network must be isolated",
+                    ));
+                }
+            };
+            let environment = match seatbelt
+                .and_then(|config| runtime_json_string(config.get("environment")))
+                .unwrap_or("minimal")
+            {
+                "minimal" => SandboxEnvironmentPolicy::Minimal,
+                _ => {
+                    return Err(MezError::config(
+                        "permissions.seatbelt.environment must be minimal",
+                    ));
+                }
+            };
+            let env_whitelist = ConfiguredSandboxEnvironment::parse(
+                runtime_json_string_array(seatbelt.and_then(|config| config.get("env_whitelist")))?
+                    .unwrap_or_else(|| ConfiguredSandboxEnvironment::default().requested_names),
+            )?;
+            let git_user_name = seatbelt
+                .and_then(|config| runtime_json_string(config.get("git_user_name")))
+                .map(str::to_string);
+            let git_user_email = seatbelt
+                .and_then(|config| runtime_json_string(config.get("git_user_email")))
+                .map(str::to_string);
+            if git_user_name.is_some() != git_user_email.is_some() {
+                return Err(MezError::config(
+                    "permissions.seatbelt.git_user_name and git_user_email must be configured together",
+                ));
+            }
+            for (field, value) in [
+                ("git_user_name", git_user_name.as_deref()),
+                ("git_user_email", git_user_email.as_deref()),
+            ] {
+                if value.is_some_and(|value| {
+                    value.trim().is_empty() || value.chars().any(char::is_control)
+                }) {
+                    return Err(MezError::config(format!(
+                        "permissions.seatbelt.{field} must be non-empty printable text"
+                    )));
+                }
+            }
+            SandboxConfig::Seatbelt(SeatbeltConfig {
+                executable,
+                unavailable,
+                network,
+                environment,
                 env_whitelist,
                 git_user_name,
                 git_user_email,

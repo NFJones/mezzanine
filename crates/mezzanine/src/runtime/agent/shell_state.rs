@@ -295,6 +295,14 @@ impl RuntimeSessionService {
             crate::runtime::config::sandbox_applies_to_policy(&sandbox_config, &permission_policy);
         let sandbox_bypassed = bubblewrap_applies
             && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
+        if matches!(&sandbox_config, SandboxConfig::Seatbelt(_))
+            && bubblewrap_applies
+            && !sandbox_bypassed
+        {
+            return Err(MezError::invalid_state(
+                "Seatbelt runtime integration is unavailable; the configured backend fails closed",
+            ));
+        }
         if let SandboxConfig::Bubblewrap(config) = sandbox_config
             && bubblewrap_applies
             && !sandbox_bypassed

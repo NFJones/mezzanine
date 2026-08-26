@@ -225,6 +225,7 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
                 let count = configured.len();
                 (configured, "pane-bootstrap-required".to_string(), count)
             }
+            SandboxConfig::Seatbelt(_) => (Vec::new(), "not-applicable".to_string(), 0),
         };
 
     let (
@@ -254,6 +255,22 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
                 managed_home_state,
                 managed_home_bytes,
                 managed_home_active,
+                true,
+            )
+        }
+        SandboxConfig::Seatbelt(config) => {
+            let executable = PathBuf::from(&config.executable);
+            let executable_state = if bubblewrap_executable_available(&executable) {
+                "available"
+            } else {
+                "unavailable"
+            };
+            (
+                Some(executable),
+                executable_state,
+                "not-applicable",
+                0,
+                false,
                 true,
             )
         }
@@ -372,6 +389,7 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             env_whitelist: match &request.permissions.sandbox {
                 SandboxConfig::PolicyOnly => Vec::new(),
                 SandboxConfig::Bubblewrap(config) => config.env_whitelist.requested_names.clone(),
+                SandboxConfig::Seatbelt(config) => config.env_whitelist.requested_names.clone(),
             },
         },
         effective: SandboxEffectiveState {

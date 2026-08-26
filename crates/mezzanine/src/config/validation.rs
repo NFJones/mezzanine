@@ -314,14 +314,17 @@ pub fn validate_config_text(
     diagnostics.extend(validate_group_whitelist_config(format, text));
     diagnostics.extend(validate_env_whitelist_config(format, text));
 
-    let git_user_name = values.get("permissions.bubblewrap.git_user_name");
-    let git_user_email = values.get("permissions.bubblewrap.git_user_email");
-    if git_user_name.is_some() != git_user_email.is_some() {
-        diagnostics.push(ConfigDiagnostic {
-            path: "permissions.bubblewrap".to_string(),
-            message: "Bubblewrap git_user_name and git_user_email must be configured together"
-                .to_string(),
-        });
+    for (backend, display_name) in [("bubblewrap", "Bubblewrap"), ("seatbelt", "Seatbelt")] {
+        let git_user_name = values.get(&format!("permissions.{backend}.git_user_name"));
+        let git_user_email = values.get(&format!("permissions.{backend}.git_user_email"));
+        if git_user_name.is_some() != git_user_email.is_some() {
+            diagnostics.push(ConfigDiagnostic {
+                path: format!("permissions.{backend}"),
+                message: format!(
+                    "{display_name} git_user_name and git_user_email must be configured together"
+                ),
+            });
+        }
     }
 
     let raw_schema_version = values.get("version").map(String::as_str);
@@ -948,25 +951,38 @@ fn validate_env_whitelist_config(format: ConfigFormat, text: &str) -> Vec<Config
     let Ok(root) = parse_config_json_value(format, text) else {
         return Vec::new();
     };
-    let Some(value) = root
+    let Some(permissions) = root
         .get("permissions")
         .and_then(serde_json::Value::as_object)
-        .and_then(|permissions| permissions.get("bubblewrap"))
-        .and_then(serde_json::Value::as_object)
-        .and_then(|bubblewrap| bubblewrap.get("env_whitelist"))
     else {
         return Vec::new();
     };
-    let path = "permissions.bubblewrap.env_whitelist";
+    let mut diagnostics = Vec::new();
+    for backend in ["bubblewrap", "seatbelt"] {
+        let Some(value) = permissions
+            .get(backend)
+            .and_then(serde_json::Value::as_object)
+            .and_then(|config| config.get("env_whitelist"))
+        else {
+            continue;
+        };
+        diagnostics.extend(validate_env_whitelist_value(backend, value));
+    }
+    diagnostics
+}
+
+/// Validates one backend's bounded portable environment-name list.
+fn validate_env_whitelist_value(backend: &str, value: &serde_json::Value) -> Vec<ConfigDiagnostic> {
+    let path = format!("permissions.{backend}.env_whitelist");
     let Some(names) = value.as_array() else {
         return vec![ConfigDiagnostic {
-            path: path.to_string(),
+            path,
             message: "env_whitelist must be a string array".to_string(),
         }];
     };
     if names.len() > 128 {
         return vec![ConfigDiagnostic {
-            path: path.to_string(),
+            path,
             message: "env_whitelist must contain at most 128 names".to_string(),
         }];
     }
@@ -976,7 +992,7 @@ fn validate_env_whitelist_config(format: ConfigFormat, text: &str) -> Vec<Config
     for value in names {
         let Some(name) = value.as_str() else {
             diagnostics.push(ConfigDiagnostic {
-                path: path.to_string(),
+                path: path.clone(),
                 message: "env_whitelist must contain only strings".to_string(),
             });
             continue;
@@ -989,19 +1005,19 @@ fn validate_env_whitelist_config(format: ConfigFormat, text: &str) -> Vec<Config
             && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric());
         if !valid {
             diagnostics.push(ConfigDiagnostic {
-                path: path.to_string(),
+                path: path.clone(),
                 message: "environment names must match [A-Za-z_][A-Za-z0-9_]*".to_string(),
             });
         } else if !seen.insert(name) {
             diagnostics.push(ConfigDiagnostic {
-                path: path.to_string(),
+                path: path.clone(),
                 message: "environment names must not contain duplicates".to_string(),
             });
         }
     }
     if encoded_bytes > 16 * 1024 {
         diagnostics.push(ConfigDiagnostic {
-            path: path.to_string(),
+            path,
             message: "env_whitelist exceeds the 16 KiB name limit".to_string(),
         });
     }
@@ -1035,7 +1051,9 @@ fn project_overlay_path_changes_execution_authority(path: &str) -> bool {
             | "permissions.destructive_action_policy"
             | "permissions.bypass_mode"
             | "permissions.bubblewrap"
+            | "permissions.seatbelt"
     ) || path.starts_with("permissions.bubblewrap.")
+        || path.starts_with("permissions.seatbelt.")
         || path == "host"
         || path.starts_with("host.")
         || path == "transport"

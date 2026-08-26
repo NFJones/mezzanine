@@ -11,9 +11,9 @@ use super::{
     HOST_LEASE_KEYS, INSTRUCTION_KEYS, IROH_TRANSPORT_KEYS, ISSUE_KEYS, JsonPathParser,
     JsonValueParser, KEY_BINDING_KEYS, KEY_PRESET_KEYS, LAYOUT_KEYS, MCP_SERVER_KEYS, MEMORY_KEYS,
     MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS, PANE_FRAME_KEYS, PERMISSION_KEYS,
-    PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, RUNTIME_KEYS, SESSION_KEYS, SHELL_KEYS, SNAPSHOT_KEYS,
-    SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS, exact_command_sha256,
-    normalize_exact_command_text, parse_config_json_value_best_effort,
+    PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, RUNTIME_KEYS, SEATBELT_PERMISSION_KEYS, SESSION_KEYS,
+    SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
+    exact_command_sha256, normalize_exact_command_text, parse_config_json_value_best_effort,
 };
 use mez_mux::theme::{UI_COLOR_SLOT_NAMES, valid_color_alias_name};
 
@@ -868,6 +868,16 @@ pub(super) fn validate_permissions_path(path: &str) -> Option<String> {
         if segments.len() > 3 {
             return Some("Bubblewrap setting must not contain nested keys".to_string());
         }
+    } else if key == "seatbelt" {
+        if segments.len() <= 2 {
+            return None;
+        }
+        if !SEATBELT_PERMISSION_KEYS.contains(&segments[2]) {
+            return Some("unknown Seatbelt configuration key".to_string());
+        }
+        if segments.len() > 3 {
+            return Some("Seatbelt setting must not contain nested keys".to_string());
+        }
     } else if segments.len() > 2 {
         return Some("scalar permissions setting must not contain nested keys".to_string());
     }
@@ -880,8 +890,11 @@ pub(super) fn validate_permissions_path(path: &str) -> Option<String> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn validate_permission_value(path: &str, value: &str) -> Option<String> {
-    if path == "permissions.sandbox" && !matches!(value, "policy-only" | "bubblewrap") {
-        return Some("unsupported sandbox backend; use policy-only or bubblewrap".to_string());
+    if path == "permissions.sandbox" && !matches!(value, "policy-only" | "bubblewrap" | "seatbelt")
+    {
+        return Some(
+            "unsupported sandbox backend; use policy-only, bubblewrap, or seatbelt".to_string(),
+        );
     }
     if path == "permissions.network_policy" && !matches!(value, "deny" | "prompt" | "allow") {
         return Some("unsupported network policy; use deny, prompt, or allow".to_string());
@@ -906,6 +919,27 @@ pub(super) fn validate_permission_value(path: &str, value: &str) -> Option<Strin
     ) && (value.trim().is_empty() || value.chars().any(char::is_control))
     {
         return Some("Bubblewrap Git identity must be non-empty printable text".to_string());
+    }
+    if path == "permissions.seatbelt.executable"
+        && (!value.starts_with('/') || value.bytes().any(|byte| byte.is_ascii_control()))
+    {
+        return Some("Seatbelt executable must be an absolute printable path".to_string());
+    }
+    if path == "permissions.seatbelt.unavailable" && value != "fail" {
+        return Some("Seatbelt unavailable policy must be fail".to_string());
+    }
+    if path == "permissions.seatbelt.network" && value != "isolated" {
+        return Some("Seatbelt network mode must be isolated".to_string());
+    }
+    if path == "permissions.seatbelt.environment" && value != "minimal" {
+        return Some("Seatbelt environment policy must be minimal".to_string());
+    }
+    if matches!(
+        path,
+        "permissions.seatbelt.git_user_name" | "permissions.seatbelt.git_user_email"
+    ) && (value.trim().is_empty() || value.chars().any(char::is_control))
+    {
+        return Some("Seatbelt Git identity must be non-empty printable text".to_string());
     }
     if command_rule_field(path, "effects.completeness") && !matches!(value, "unknown" | "complete")
     {

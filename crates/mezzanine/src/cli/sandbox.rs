@@ -566,7 +566,8 @@ fn run_sandbox_profile<W: Write>(
             let permissions = runtime_configured_permissions_from_config(&structured)?;
             let (preset, authority) = match permissions.sandbox {
                 crate::runtime::SandboxConfig::PolicyOnly => ("off", "explicit-scope"),
-                crate::runtime::SandboxConfig::Bubblewrap(_) => {
+                crate::runtime::SandboxConfig::Bubblewrap(_)
+                | crate::runtime::SandboxConfig::Seatbelt(_) => {
                     let preset = if permissions.resources.write_scopes.is_empty()
                         && !permissions.resources.read_scopes.is_empty()
                     {

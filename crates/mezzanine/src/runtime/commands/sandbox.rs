@@ -134,6 +134,7 @@ impl RuntimeSessionService {
                         SandboxConfig::Bubblewrap(config) => {
                             SandboxConfig::Bubblewrap(config.clone())
                         }
+                        SandboxConfig::Seatbelt(config) => SandboxConfig::Seatbelt(config.clone()),
                         SandboxConfig::PolicyOnly => SandboxConfig::default_bubblewrap(),
                     }
                 } else {

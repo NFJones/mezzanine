@@ -290,6 +290,8 @@ fn runtime_config_change_rejects_user_only_sandbox_policy() {
         ("permissions.sandbox", "bubblewrap"),
         ("permissions.bubblewrap", r#"{\"toolchains\":[\"rust\"]}"#),
         ("permissions.bubblewrap.executable", "/tmp/bwrap"),
+        ("permissions.seatbelt", r#"{\"network\":\"isolated\"}"#),
+        ("permissions.seatbelt.executable", "/usr/bin/sandbox-exec"),
         (
             "permissions.bubblewrap.custom_toolchains.private.roots",
             r#"[\"/private/toolchain\"]"#,

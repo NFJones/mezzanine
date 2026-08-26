@@ -87,6 +87,38 @@ fn runtime_materializes_only_paired_sanitized_git_identity() {
     assert!(error.message().contains("must be configured together"));
 }
 
+/// Verifies explicit Seatbelt configuration materializes only the fixed
+/// fail-closed surface and does not require generated-default enablement.
+#[test]
+fn runtime_materializes_explicit_seatbelt_configuration() {
+    let configured = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {
+            "sandbox": "seatbelt",
+            "seatbelt": {
+                "executable": "/usr/bin/sandbox-exec",
+                "unavailable": "fail",
+                "network": "isolated",
+                "environment": "minimal",
+                "env_whitelist": ["PATH", "CI"],
+                "git_user_name": "Sandbox Author",
+                "git_user_email": "sandbox@example.invalid"
+            }
+        }
+    }))
+    .unwrap();
+    let SandboxConfig::Seatbelt(seatbelt) = configured.sandbox else {
+        panic!("expected Seatbelt configuration");
+    };
+
+    assert_eq!(seatbelt.executable, "/usr/bin/sandbox-exec");
+    assert_eq!(seatbelt.env_whitelist.requested_names, ["PATH", "CI"]);
+    assert_eq!(seatbelt.git_user_name.as_deref(), Some("Sandbox Author"));
+    assert_eq!(
+        seatbelt.git_user_email.as_deref(),
+        Some("sandbox@example.invalid")
+    );
+}
+
 /// Verifies configured Bubblewrap remains active for full access but becomes
 /// ineffective only while the primary-user host-access policy is selected.
 #[test]
