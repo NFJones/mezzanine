@@ -2510,6 +2510,105 @@ mod tests {
                 !status_response.contains("this client has no correlated live Iroh connection"),
                 "{status_response}"
             );
+            let detach_request = json!({
+                "jsonrpc": "2.0",
+                "id": "test-routed-detach",
+                "method": "terminal/step",
+                "params": {
+                    "idempotency_key": "test-routed-detach",
+                    "render": false,
+                    "input_bytes": [1, 100]
+                }
+            })
+            .to_string();
+            persistent_bridge
+                .stream_mut()
+                .write_all(&encode_control_body(&detach_request))
+                .await
+                .unwrap();
+            persistent_bridge.stream_mut().flush().await.unwrap();
+            let detach_response = read_one_control_frame(
+                persistent_bridge.stream_mut(),
+                std::time::Duration::from_secs(3),
+            )
+            .await
+            .unwrap();
+            let detach_response: Value = serde_json::from_str(&detach_response).unwrap();
+            assert_eq!(
+                detach_response["result"]["client_detached"], true,
+                "{detach_response}"
+            );
+            assert_eq!(
+                detach_response["result"]["session_terminated"], false,
+                "{detach_response}"
+            );
+            let _ = persistent_bridge
+                .shutdown(std::time::Duration::from_secs(2))
+                .await;
+            persistent_connection.close(
+                iroh::endpoint::VarInt::from_u32(0),
+                b"detached test client complete",
+            );
+
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    let snapshots = router.snapshots().await.unwrap();
+                    if snapshots.len() == 1
+                        && snapshots[0].state
+                            == crate::host::session::SessionSupervisorState::Running
+                        && snapshots[0].runtime_state
+                            == Some(crate::runtime::RuntimeLifecycleState::Detached)
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("detached routed session should remain supervised and reattachable");
+            assert_eq!(
+                router.get_lease(&lease_id).unwrap().state,
+                RemoteSessionLeaseState::Active
+            );
+
+            let (persistent_connection, persistent_bridge, persistent_attach) =
+                open_test_routed_attach(&client, &server_addr, &credential, &session_id).await;
+            assert_eq!(
+                persistent_attach["result"]["lease"]["lease_id"], lease_id,
+                "{persistent_attach}"
+            );
+            drop(persistent_bridge);
+            persistent_connection.close(
+                iroh::endpoint::VarInt::from_u32(1),
+                b"abrupt routed client loss",
+            );
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    let snapshots = router.snapshots().await.unwrap();
+                    if snapshots.len() == 1
+                        && snapshots[0].state
+                            == crate::host::session::SessionSupervisorState::Running
+                        && snapshots[0].runtime_state
+                            == Some(crate::runtime::RuntimeLifecycleState::Detached)
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("abrupt routed client loss should leave the session reattachable");
+            assert_eq!(
+                router.get_lease(&lease_id).unwrap().state,
+                RemoteSessionLeaseState::Active
+            );
+
+            let (persistent_connection, mut persistent_bridge, persistent_attach) =
+                open_test_routed_attach(&client, &server_addr, &credential, &session_id).await;
+            assert_eq!(
+                persistent_attach["result"]["lease"]["lease_id"], lease_id,
+                "{persistent_attach}"
+            );
             let record_id = host
                 .trust
                 .list_records()
@@ -2562,18 +2661,18 @@ mod tests {
         };
 
         let (served, ()) = tokio::join!(server, client_work);
-        assert_eq!(served.unwrap(), 12);
+        assert_eq!(served.unwrap(), 14);
         let snapshot = diagnostics.snapshot();
         assert!(!snapshot.listener_active);
         assert_eq!(snapshot.active_connections, 0);
-        assert_eq!(snapshot.connections_accepted, 12);
-        assert_eq!(snapshot.setup_successes, 12);
+        assert_eq!(snapshot.connections_accepted, 14);
+        assert_eq!(snapshot.setup_successes, 14);
         assert_eq!(snapshot.connections_rejected, snapshot.setup_failures);
         assert_eq!(
             snapshot
                 .connections_completed
                 .saturating_add(snapshot.connections_failed),
-            12
+            14
         );
         router
             .shutdown_all(true, std::time::Duration::from_secs(2))
@@ -2656,6 +2755,7 @@ mod tests {
             "client_name": "test-client",
             "requested_version": 3,
             "requested_role": "primary",
+            "detach_primary_on_disconnect": true,
             "session_intent": intent,
             "client": client_metadata,
             "authentication": {
@@ -2701,6 +2801,7 @@ mod tests {
                 "client_name": "test-client",
                 "requested_version": 3,
                 "requested_role": "primary",
+                "detach_primary_on_disconnect": true,
                 "session_intent": "attach",
                 "session_target": {"session_id": session_id},
                 "client": {
