@@ -296,16 +296,45 @@ impl RuntimeSessionService {
                 (key, deadline_ms.saturating_sub(now_ms))
             })
             .collect::<BTreeMap<_, _>>();
+        // Bootstrap progress can move an inactivity deadline later many times
+        // while generated source is being delivered. Retain one earlier wakeup
+        // for the same owner instead of churning timer generations: expiry
+        // rechecks the refreshed timestamp and rearms the remaining deadline.
+        let retained_bootstrap_timers = desired
+            .keys()
+            .filter_map(|desired_key| {
+                (desired_key.kind == RuntimeTimerKind::Bootstrap)
+                    .then(|| {
+                        active_keys
+                            .iter()
+                            .filter(|active_key| {
+                                active_key.kind == desired_key.kind
+                                    && active_key.owner_id == desired_key.owner_id
+                                    && active_key.generation <= desired_key.generation
+                            })
+                            .max_by_key(|active_key| active_key.generation)
+                            .cloned()
+                    })
+                    .flatten()
+                    .map(|active_key| (desired_key.clone(), active_key))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let retained_active_keys = retained_bootstrap_timers
+            .values()
+            .cloned()
+            .collect::<HashSet<_>>();
         let mut side_effects = active_keys
             .iter()
-            .filter(|key| !desired.contains_key(*key))
+            .filter(|key| !desired.contains_key(*key) && !retained_active_keys.contains(*key))
             .cloned()
             .map(|key| RuntimeSideEffect::CancelTimer { key })
             .collect::<Vec<_>>();
         side_effects.extend(
             desired
                 .into_iter()
-                .filter(|(key, _)| !active_keys.contains(key))
+                .filter(|(key, _)| {
+                    !active_keys.contains(key) && !retained_bootstrap_timers.contains_key(key)
+                })
                 .map(|(key, delay_ms)| RuntimeSideEffect::ScheduleTimer { key, delay_ms }),
         );
         RuntimeTransition {

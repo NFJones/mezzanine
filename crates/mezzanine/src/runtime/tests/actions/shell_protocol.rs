@@ -692,6 +692,114 @@ fn runtime_pane_input_written_traces_active_shell_transaction() {
     assert!(trace.contains("action: create-1"), "{trace}");
 }
 
+/// Verifies positive pane-write progress refreshes a primary bootstrap's idle
+/// deadline even when no foreign-shell boundary exists.
+///
+/// Darwin delivers generated shell source in paced records, so a primary
+/// bootstrap must not expire against its registration time while its wrapper
+/// is still being accepted by the pane worker.
+#[test]
+fn runtime_primary_bootstrap_input_progress_refreshes_timeout() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.running_shell_transactions_mut_for_tests().insert(
+        "bootstrap-marker".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "bootstrap-turn".to_string(),
+            kind: RunningShellTransactionKind::Bootstrap,
+            pane_id: "%1".to_string(),
+            command: "bootstrap".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: Some(10),
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+
+    assert!(service.apply_pane_input_written_event("%1", 4096).unwrap());
+
+    let refreshed_at_unix_ms = service
+        .running_shell_transactions_for_tests()
+        .get("bootstrap-marker")
+        .unwrap()
+        .started_at_unix_ms;
+    assert!(refreshed_at_unix_ms > 0);
+    let original_timer_key = crate::runtime::RuntimeTimerKey::new(
+        crate::runtime::RuntimeTimerKind::Bootstrap,
+        "bootstrap-marker",
+        0,
+    );
+    assert!(
+        service
+            .shell_transaction_timer_transition(
+                &std::collections::HashSet::from([original_timer_key]),
+                10,
+            )
+            .side_effects
+            .is_empty(),
+        "an earlier bootstrap wakeup remains safe after progress moves the deadline"
+    );
+    assert_eq!(service.expire_timed_out_shell_transactions(10).unwrap(), 0);
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .contains_key("bootstrap-marker")
+    );
+    let rearmed = service.shell_transaction_timer_transition(&std::collections::HashSet::new(), 10);
+    assert!(rearmed.side_effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::ScheduleTimer { key, .. }
+            if key.owner_id == "bootstrap-marker"
+                && key.generation == refreshed_at_unix_ms
+    )));
+    assert_eq!(
+        service
+            .expire_timed_out_shell_transactions(refreshed_at_unix_ms.saturating_add(10))
+            .unwrap(),
+        1
+    );
+}
+
+/// Verifies empty pane-write notifications cannot indefinitely extend a
+/// primary bootstrap transaction that made no delivery progress.
+#[test]
+fn runtime_primary_bootstrap_empty_input_does_not_refresh_timeout() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.running_shell_transactions_mut_for_tests().insert(
+        "bootstrap-marker".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "bootstrap-turn".to_string(),
+            kind: RunningShellTransactionKind::Bootstrap,
+            pane_id: "%1".to_string(),
+            command: "bootstrap".to_string(),
+            started_at_unix_ms: 7,
+            timeout_ms: Some(10),
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+
+    assert!(service.apply_pane_input_written_event("%1", 0).unwrap());
+
+    assert_eq!(
+        service
+            .running_shell_transactions_for_tests()
+            .get("bootstrap-marker")
+            .unwrap()
+            .started_at_unix_ms,
+        7
+    );
+}
+
 /// Verifies transaction retention removes a fragmented, marker-correlated Fish
 /// payload receiver record without hiding child-owned OSC output.
 ///

@@ -2,6 +2,77 @@
 
 use super::*;
 
+/// Verifies pane-write progress for a correlated foreign identity probe still
+/// refreshes both its transaction timeout and foreign phase idle deadline.
+///
+/// Primary bootstrap progress no longer depends on foreign boundary state, but
+/// the existing foreign lifecycle must retain its separate phase-level clock.
+#[test]
+fn runtime_foreign_identity_input_progress_refreshes_both_timeout_clocks() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    service
+        .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+
+    let identity_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )
+            .then(|| marker.clone())
+        })
+        .expect("dependency-free identity probe should be registered");
+    service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&identity_marker)
+        .unwrap()
+        .started_at_unix_ms = 1;
+
+    assert!(
+        service
+            .apply_pane_input_written_event(&pane_id, 4096)
+            .unwrap()
+    );
+
+    let transaction_started_at_unix_ms = service
+        .running_shell_transactions_for_tests()
+        .get(&identity_marker)
+        .unwrap()
+        .started_at_unix_ms;
+    assert!(transaction_started_at_unix_ms > 1);
+    assert_eq!(
+        service
+            .foreign_shell_bootstrap_phase_started_at_for_tests(&pane_id)
+            .unwrap(),
+        transaction_started_at_unix_ms
+    );
+    process.terminate(Duration::from_millis(100)).unwrap();
+}
+
 /// Verifies explicit agent entry at an ordinary foreign prompt immediately
 /// probes shell identity and launches one ephemeral loader without a retained
 /// adapter. Generated child source must remain withheld until the loader emits

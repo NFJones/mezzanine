@@ -2431,6 +2431,17 @@ impl RuntimeSessionService {
             .map(|boundary| boundary.phase.as_str())
     }
 
+    /// Returns the foreign bootstrap phase's idle-deadline origin for tests.
+    pub(crate) fn foreign_shell_bootstrap_phase_started_at_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> Option<u64> {
+        self.process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .map(|boundary| boundary.phase_started_at_unix_ms)
+    }
+
     /// Returns the bounded dependency-free loader nonce for correlation tests.
     pub(crate) fn foreign_shell_loader_marker_for_tests(&self, pane_id: &str) -> Option<&str> {
         self.process
@@ -3623,41 +3634,44 @@ impl RuntimeSessionService {
         if self.find_pane_descriptor(&pane_id).is_none() {
             return Ok(false);
         }
-        let progress_marker = self
-            .process
-            .pane_foreign_shell_boundaries
-            .get(&pane_id)
-            .and_then(|boundary| match boundary.phase {
-                RuntimeForeignShellBootstrapPhase::IdentityProbing => {
-                    boundary.identity_marker.clone()
-                }
-                RuntimeForeignShellBootstrapPhase::BootstrappingChild => self
-                    .process
-                    .pane_managed_shell_handoffs
-                    .get(&pane_id)
-                    .map(|handoff| handoff.identity().marker.clone()),
-                RuntimeForeignShellBootstrapPhase::AwaitingPrompt
-                | RuntimeForeignShellBootstrapPhase::Certified
-                | RuntimeForeignShellBootstrapPhase::Failed => None,
-            })
-            .filter(|marker| {
-                bytes > 0
-                    && self
-                        .process
-                        .running_shell_transactions
-                        .get(marker)
-                        .is_some_and(|transaction| {
-                            transaction.pane_id == pane_id
-                                && matches!(
-                                    transaction.kind,
-                                    RunningShellTransactionKind::Bootstrap
-                                        | RunningShellTransactionKind::ShellIdentityProbe { .. }
-                                )
-                        })
-            });
+        // Registration's shell-input lease permits at most one live shell
+        // transaction to own delivery progress for this pane.
+        let progress_marker = (bytes > 0).then_some(()).and_then(|()| {
+            self.process
+                .running_shell_transactions
+                .iter()
+                .find_map(|(marker, transaction)| {
+                    (transaction.pane_id == pane_id
+                        && matches!(
+                            transaction.kind,
+                            RunningShellTransactionKind::Bootstrap
+                                | RunningShellTransactionKind::ShellIdentityProbe { .. }
+                        ))
+                    .then(|| marker.clone())
+                })
+        });
         if let Some(marker) = progress_marker {
             let now_unix_ms = current_unix_millis();
-            if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(&pane_id) {
+            let foreign_progress_marker = self
+                .process
+                .pane_foreign_shell_boundaries
+                .get(&pane_id)
+                .and_then(|boundary| match boundary.phase {
+                    RuntimeForeignShellBootstrapPhase::IdentityProbing => {
+                        boundary.identity_marker.as_deref()
+                    }
+                    RuntimeForeignShellBootstrapPhase::BootstrappingChild => self
+                        .process
+                        .pane_managed_shell_handoffs
+                        .get(&pane_id)
+                        .map(|handoff| handoff.identity().marker.as_str()),
+                    RuntimeForeignShellBootstrapPhase::AwaitingPrompt
+                    | RuntimeForeignShellBootstrapPhase::Certified
+                    | RuntimeForeignShellBootstrapPhase::Failed => None,
+                });
+            if foreign_progress_marker == Some(marker.as_str())
+                && let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(&pane_id)
+            {
                 boundary.phase_started_at_unix_ms = now_unix_ms;
             }
             if let Some(transaction) = self.process.running_shell_transactions.get_mut(&marker) {
