@@ -160,6 +160,213 @@ async fn async_actor_schedules_live_agent_status_overlay_refresh() {
     assert_eq!(exit.commands_processed, 3);
 }
 
+/// Verifies that dismissing a live agent-status overlay cancels its accepted
+/// refresh timer. A late delivery of the canceled generation must be ignored
+/// instead of causing an unnecessary status-line redraw after the overlay has
+/// already closed.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_cancels_live_status_refresh_when_overlay_closes() {
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"ready\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                None,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(
+                        b"/status\r".to_vec(),
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let scheduled = handle.drain_timer_side_effects(8).await.unwrap();
+        let status_key = scheduled
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .expect("missing live-overlay status refresh timer");
+        let _ = handle.drain_render_side_effects(8).await.unwrap();
+
+        handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                None,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(b"q".to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().iter().any(
+            |effect| matches!(effect, RuntimeSideEffect::CancelTimer { key } if key == &status_key)
+        ));
+        let _ = handle.drain_render_side_effects(8).await.unwrap();
+
+        let mut late = RuntimeEventBatch::new();
+        late.push(RuntimeEvent::Timer(TimerEvent {
+            key: status_key,
+            now_ms: u64::MAX,
+        }));
+        let report = handle.submit_runtime_events(late).await.unwrap();
+        assert_eq!(report.applied, 0);
+        assert_eq!(report.side_effects, 0);
+        assert!(
+            handle
+                .drain_render_side_effects(8)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.metrics.runtime_timer_events_ignored > 0);
+}
+
+/// Verifies that disconnecting a client cancels the client's accepted live
+/// status refresh timer. If the timer worker races with disconnect cleanup,
+/// the late generation must be ignored without repainting any remaining
+/// clients.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_cancels_live_status_refresh_when_client_disconnects() {
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"ready\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                None,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(
+                        b"/status\r".to_vec(),
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let scheduled = handle.drain_timer_side_effects(8).await.unwrap();
+        let status_key = scheduled
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .expect("missing live-overlay status refresh timer");
+        let _ = handle.drain_render_side_effects(8).await.unwrap();
+
+        let mut disconnect = RuntimeEventBatch::new();
+        disconnect.push(RuntimeEvent::Client(ClientEvent::Disconnected {
+            client_id: primary,
+            reason: "test disconnect".to_string(),
+        }));
+        assert_eq!(
+            handle
+                .submit_runtime_events(disconnect)
+                .await
+                .unwrap()
+                .applied,
+            1
+        );
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().iter().any(
+            |effect| matches!(effect, RuntimeSideEffect::CancelTimer { key } if key == &status_key)
+        ));
+
+        let mut late = RuntimeEventBatch::new();
+        late.push(RuntimeEvent::Timer(TimerEvent {
+            key: status_key,
+            now_ms: u64::MAX,
+        }));
+        let report = handle.submit_runtime_events(late).await.unwrap();
+        assert_eq!(report.applied, 0);
+        assert_eq!(report.side_effects, 0);
+        assert!(
+            handle
+                .drain_render_side_effects(8)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Detached
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.metrics.runtime_timer_events_ignored > 0);
+}
+
 /// Verifies that client output-readiness events are applied only for attached
 /// clients and enqueue a render side effect without composing or writing the
 /// frame inside the actor. This keeps slow or backpressured frame delivery on

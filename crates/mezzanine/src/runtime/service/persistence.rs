@@ -18,13 +18,6 @@ impl RuntimeSessionService {
         &self.session
     }
 
-    /// Returns whether one exact client currently owns a live display overlay.
-    pub(crate) fn client_has_live_overlay(&mut self, client_id: &mez_core::ids::ClientId) -> bool {
-        self.presentation
-            .client_live_overlay_next_due_ms(client_id)
-            .is_some()
-    }
-
     /// Attaches the session registry used to publish live session metadata.
     ///
     /// Foreground daemons call this after constructing the service so attach,

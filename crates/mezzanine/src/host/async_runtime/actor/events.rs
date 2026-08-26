@@ -412,12 +412,16 @@ impl AsyncRuntimeSessionActor {
                     .status_refresh
                     .remove(timer.key.owner_id.as_str());
                 let client_id = ClientId::opaque(timer.key.owner_id.clone());
-                if let Some(client_id) = client_id.as_ref() {
+                let mut application = if let Some(client_id) = client_id {
                     self.service
-                        .refresh_live_overlay_for_client(client_id, timer.now_ms)?;
-                }
-                let mut application =
-                    self.apply_render_timer_event(RenderInvalidationReason::StatusLine);
+                        .refresh_live_overlay_for_client(&client_id, timer.now_ms)?;
+                    self.apply_runtime_client_render_signal_event(
+                        client_id,
+                        RenderInvalidationReason::StatusLine,
+                    )
+                } else {
+                    RuntimeTransition::default()
+                };
                 application.side_effects.extend(
                     self.status_refresh_timer_side_effects_for_client(
                         &timer.key.owner_id,
@@ -835,11 +839,30 @@ impl AsyncRuntimeSessionActor {
         client_event: ClientEvent,
     ) -> Result<RuntimeTransition> {
         match client_event {
-            event @ (ClientEvent::Resize { .. } | ClientEvent::Disconnected { .. }) => {
+            event @ ClientEvent::Resize { .. } => {
                 let mut transition = self.service.apply_client_lifecycle_transition(event)?;
                 transition
                     .side_effects
                     .extend(self.synchronized_output_timer_reconciliation_side_effects());
+                Ok(transition)
+            }
+            ClientEvent::Disconnected { client_id, reason } => {
+                let disconnected_client_id = client_id.clone();
+                let mut transition =
+                    self.service
+                        .apply_client_lifecycle_transition(ClientEvent::Disconnected {
+                            client_id,
+                            reason,
+                        })?;
+                transition
+                    .side_effects
+                    .extend(self.synchronized_output_timer_reconciliation_side_effects());
+                transition
+                    .side_effects
+                    .extend(self.status_refresh_timer_side_effects_for_client(
+                        disconnected_client_id.as_str(),
+                        0,
+                    )?);
                 Ok(transition)
             }
             ClientEvent::ResizeSignal { client_id } => Ok(self
