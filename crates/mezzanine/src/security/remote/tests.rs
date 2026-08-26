@@ -301,6 +301,97 @@ fn revoked_endpoint_can_repair_with_new_credential() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies a valid invitation supersedes an active trust record for the same endpoint.
+///
+/// Re-pairing is authenticated by the fresh invitation, so stale local credential
+/// state must not require an administrator to revoke the previous record manually.
+#[test]
+fn active_endpoint_can_repair_and_supersede_previous_trust() {
+    let root = test_root("active-repaired-endpoint");
+    let store = RemoteTrustStore::under_config_root(&root, "session-a").unwrap();
+    let server_endpoint_id = SecretKey::generate().public().to_string();
+    let client_endpoint_id = SecretKey::generate().public().to_string();
+    let first_invitation = store
+        .create_invitation(&server_endpoint_id, RemoteRoleCeiling::Observer, 600, 1_000)
+        .unwrap();
+    let first = store
+        .redeem_invitation(
+            &first_invitation.token,
+            &server_endpoint_id,
+            &client_endpoint_id,
+            "laptop",
+            RequestedRole::Observer,
+            1_001,
+        )
+        .unwrap();
+
+    let second_invitation = store
+        .create_invitation(&server_endpoint_id, RemoteRoleCeiling::Observer, 600, 1_002)
+        .unwrap();
+    let preparation = store
+        .prepare_invitation(
+            &second_invitation.token,
+            &server_endpoint_id,
+            &client_endpoint_id,
+            "replacement laptop",
+            RequestedRole::Observer,
+            1_003,
+        )
+        .unwrap();
+    let second = store.commit_invitation(preparation.clone(), 1_003).unwrap();
+
+    let records = store.list_records().unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(
+        records
+            .iter()
+            .any(|record| record.id == first.record.id && record.revoked())
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| record.id == second.record.id && !record.revoked())
+    );
+    store.rollback_invitation_redemption(&second).unwrap();
+    let records = store.list_records().unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0], first.record);
+    let restored = store
+        .resolve_principal(
+            &server_endpoint_id,
+            &client_endpoint_id,
+            &first.device_credential,
+            RequestedRole::Observer,
+            1_006,
+        )
+        .unwrap();
+    assert_eq!(restored.trust_record_id, first.record.id);
+    let recommitted = store.commit_invitation(preparation, 1_007).unwrap();
+    assert_ne!(recommitted.record.id, first.record.id);
+    let old = store
+        .resolve_principal(
+            &server_endpoint_id,
+            &client_endpoint_id,
+            &first.device_credential,
+            RequestedRole::Observer,
+            1_008,
+        )
+        .unwrap_err();
+    assert_eq!(old.kind(), crate::error::MezErrorKind::Forbidden);
+    let replacement = store
+        .resolve_principal(
+            &server_endpoint_id,
+            &client_endpoint_id,
+            &recommitted.device_credential,
+            RequestedRole::Observer,
+            1_009,
+        )
+        .unwrap();
+    assert_eq!(replacement.trust_record_id, recommitted.record.id);
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies expired and server-mismatched invitations fail without trust creation.
 #[test]
 fn invitation_rejects_expiry_and_server_mismatch() {

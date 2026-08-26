@@ -3107,8 +3107,12 @@ Durable trust MUST bind the server endpoint identity, authenticated client
 endpoint identity, stable trust record ID, role ceiling, revocation state, and
 a verifier for the device credential. Reconnects MUST resolve the presented
 credential against its exact trust record and fail closed for an unknown,
-revoked, mismatched, or role-exceeding record. Revoked history MUST NOT shadow a
-later active re-pair record, and the old revoked credential MUST remain denied.
+revoked, mismatched, or role-exceeding record. A valid fresh invitation presented
+by an endpoint with an active trust record MUST atomically supersede that record,
+retaining it as revoked history, rather than fail pairing; failed transactional
+initialization MUST restore the previous active record. Revoked history MUST NOT
+shadow a later active re-pair record, and the old credential MUST remain denied
+after successful replacement.
 The client MUST persist its endpoint key, server profile, and device credential
 under owner-only protected paths. A live client endpoint
 identity MUST retain an exclusive lock, and profile database reads and writes

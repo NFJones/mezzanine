@@ -161,13 +161,15 @@ impl std::fmt::Debug for RemotePairingInvitation {
     }
 }
 
-/// Successful first-use pairing result returned only to the redeeming client.
+/// Successful pairing result returned only to the redeeming client.
 #[derive(Clone)]
 pub(crate) struct RemotePairingRedemption {
     /// Durable non-secret trust record created for the endpoint.
     pub record: RemoteTrustRecord,
     /// Endpoint-bound credential required on every later connection.
     pub device_credential: SecretString,
+    /// Active trust record superseded by this redemption, retained for exact rollback.
+    pub(super) superseded_record: Option<RemoteTrustRecord>,
     /// Invitation consumed by this redemption, retained for exact rollback.
     pub(super) invitation_id: String,
     /// Commit timestamp retained for exact rollback.

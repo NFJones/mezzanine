@@ -197,9 +197,12 @@ subsequent application requests. Reconnect with the returned credential and
 the same authenticated endpoint ID. Credentials are matched to their exact
 trust record and bound to the current server endpoint identity and role ceiling;
 wrong endpoints, bad proofs, revoked historical credentials, server identity
-replacement, and role escalation fail closed. Re-pairing a revoked endpoint
-creates a new active record without allowing the old record to shadow it. Never
-log or copy invitation or device credentials into diagnostics.
+replacement, and role escalation fail closed. Redeeming a valid new invitation
+for an endpoint with active trust atomically revokes the previous record as
+superseded and activates the replacement; initialization rollback restores the
+previous record. Re-pairing a revoked endpoint likewise creates a new active
+record without allowing old history to shadow it. Never log or copy invitation
+or device credentials into diagnostics.
 
 ## Roles, authorization, and idempotency
 

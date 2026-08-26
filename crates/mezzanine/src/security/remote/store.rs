@@ -455,7 +455,6 @@ impl RemoteTrustStore {
                 }
                 Some((record.clone(), redeemed_at))
             } else {
-                validate_endpoint_available_for_pairing(&database, client_endpoint_id)?;
                 None
             };
             Ok((
@@ -513,6 +512,9 @@ impl RemoteTrustStore {
     }
 
     /// Atomically commits a fresh invitation or resumes its same-endpoint redemption.
+    ///
+    /// A fresh authenticated redemption supersedes any active trust record for the
+    /// client endpoint while retaining that record as revoked history.
     pub(crate) fn commit_invitation(
         &self,
         preparation: RemotePairingPreparation,
@@ -571,17 +573,30 @@ impl RemoteTrustStore {
                 return Ok(RemotePairingRedemption {
                     record: record.clone(),
                     device_credential: preparation.device_credential,
+                    superseded_record: None,
                     invitation_id: preparation.invitation_id,
                     redeemed_at_unix_seconds: redeemed_at,
                     newly_committed: false,
                 });
             }
-            validate_endpoint_available_for_pairing(database, &preparation.record.endpoint_id)?;
             if database.records.len() >= MAX_TRUST_RECORDS {
                 return Err(MezError::conflict(
                     "remote trust record limit has been reached",
                 ));
             }
+            let superseded_record = database
+                .records
+                .iter_mut()
+                .find(|record| {
+                    record.endpoint_id == preparation.record.endpoint_id && !record.revoked()
+                })
+                .map(|record| {
+                    let previous = record.clone();
+                    record.revoked_at_unix_seconds = Some(now_unix_seconds);
+                    record.revocation_reason =
+                        Some("superseded by authenticated re-pairing".into());
+                    previous
+                });
             let invitation = &mut database.invitations[invitation_index];
             invitation.redeemed_at_unix_seconds = Some(now_unix_seconds);
             invitation.redeemed_endpoint_id = Some(preparation.record.endpoint_id.clone());
@@ -590,6 +605,7 @@ impl RemoteTrustStore {
             Ok(RemotePairingRedemption {
                 record: preparation.record,
                 device_credential: preparation.device_credential,
+                superseded_record,
                 invitation_id: preparation.invitation_id,
                 redeemed_at_unix_seconds: now_unix_seconds,
                 newly_committed: true,
@@ -597,7 +613,7 @@ impl RemoteTrustStore {
         })
     }
 
-    /// Atomically redeems an invitation and creates an endpoint trust record.
+    /// Atomically redeems an invitation and creates or supersedes endpoint trust.
     #[cfg(test)]
     pub(crate) fn redeem_invitation(
         &self,
@@ -619,7 +635,7 @@ impl RemoteTrustStore {
         self.commit_invitation(preparation, now_unix_seconds)
     }
 
-    /// Restores a newly committed invitation when later initialization side effects fail.
+    /// Restores a newly committed invitation and any superseded active trust record.
     pub(crate) fn rollback_invitation_redemption(
         &self,
         redemption: &RemotePairingRedemption,
@@ -650,6 +666,24 @@ impl RemoteTrustStore {
                     MezError::invalid_state("redeemed trust record changed before rollback")
                 })?;
             database.records.remove(record_index);
+            if let Some(superseded_record) = redemption.superseded_record.as_ref() {
+                let record = database
+                    .records
+                    .iter_mut()
+                    .find(|record| record.id == superseded_record.id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("superseded remote trust record is missing")
+                    })?;
+                let mut expected = superseded_record.clone();
+                expected.revoked_at_unix_seconds = Some(redemption.redeemed_at_unix_seconds);
+                expected.revocation_reason = Some("superseded by authenticated re-pairing".into());
+                if record != &expected {
+                    return Err(MezError::invalid_state(
+                        "superseded remote trust record changed before rollback",
+                    ));
+                }
+                *record = superseded_record.clone();
+            }
             invitation.redeemed_at_unix_seconds = None;
             invitation.redeemed_endpoint_id = None;
             invitation.redeemed_record_id = None;
@@ -891,22 +925,6 @@ fn validate_invitation_request(
     }
     if now_unix_seconds > invitation.expires_at_unix_seconds {
         return Err(MezError::forbidden("remote pairing invitation has expired"));
-    }
-    Ok(())
-}
-
-fn validate_endpoint_available_for_pairing(
-    database: &RemoteTrustDatabase,
-    client_endpoint_id: &str,
-) -> Result<()> {
-    if database
-        .records
-        .iter()
-        .any(|record| record.endpoint_id == client_endpoint_id && !record.revoked())
-    {
-        return Err(MezError::conflict(
-            "remote endpoint already has an active trust record",
-        ));
     }
     Ok(())
 }

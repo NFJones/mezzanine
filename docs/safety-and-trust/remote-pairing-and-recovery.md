@@ -251,6 +251,13 @@ transfer a new invitation. The new credential resolves against the new active
 trust record; the old credential remains rejected and the revoked record stays
 available as audit-safe history.
 
+A valid new invitation may also re-pair an endpoint whose previous trust record
+is still active, such as after the client loses its saved credential. Successful
+initialization atomically revokes the previous record as superseded and activates
+the replacement; failed initialization restores the previous record. The old
+credential is rejected after the replacement succeeds, so manual revocation is
+not required before authenticated re-pairing.
+
 ## Back up or recover identity
 
 Stop the owning daemon before copying remote identity state—`mez host serve`
