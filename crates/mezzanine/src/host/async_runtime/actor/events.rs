@@ -36,6 +36,9 @@ impl AsyncRuntimeSessionActor {
     pub(super) fn notify_event_delivery(&mut self) {
         self.metrics.event_delivery_notifications =
             self.metrics.event_delivery_notifications.saturating_add(1);
+        let _ = self
+            .event_delivery_revision_tx
+            .send(self.metrics.event_delivery_notifications);
         self.event_delivery_notify.notify_waiters();
         self.event_delivery_notify.notify_one();
     }

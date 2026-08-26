@@ -126,12 +126,14 @@ where
     authorize_unix_peer_raw_fd(stream.as_raw_fd(), config.owner_uid)?;
     let mut delivered = 0u64;
     let mut lifecycle = handle.lifecycle_state_watcher();
+    let mut event_delivery = handle.event_delivery_watcher();
     loop {
         let state = *lifecycle.borrow();
         if should_stop(delivered, state) {
             return Ok(delivered);
         }
 
+        let _ = event_delivery.borrow_and_update();
         let outcome = flush_async_runtime_event_wakeups_to_stream_outcome(
             stream,
             handle,
@@ -147,7 +149,11 @@ where
         };
         if count == 0 {
             tokio::select! {
-                _ = handle.wait_for_event_delivery() => {}
+                changed = event_delivery.changed() => {
+                    if changed.is_err() {
+                        return Ok(delivered);
+                    }
+                }
                 changed = lifecycle.changed() => {
                     if changed.is_err() {
                         return Ok(delivered);
@@ -231,11 +237,13 @@ where
     let mut delivered = 0u64;
     let mut last_delivered_event_id = after_event_id;
     let mut lifecycle = handle.lifecycle_state_watcher();
+    let mut event_delivery = handle.event_delivery_watcher();
     loop {
         let state = *lifecycle.borrow();
         if should_stop(delivered, state) {
             return Ok(delivered);
         }
+        let _ = event_delivery.borrow_and_update();
         let wakeups = match handle
             .event_wakeups_for_client(
                 caller_client_id.clone(),
@@ -273,7 +281,11 @@ where
             continue;
         }
         tokio::select! {
-            _ = handle.wait_for_event_delivery() => {}
+            changed = event_delivery.changed() => {
+                if changed.is_err() {
+                    return Ok(delivered);
+                }
+            }
             changed = lifecycle.changed() => {
                 if changed.is_err() {
                     return Ok(delivered);

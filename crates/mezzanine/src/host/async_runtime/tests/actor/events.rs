@@ -168,3 +168,49 @@ async fn async_actor_reconciles_global_state_once_per_applied_event_batch() {
     let ((), exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.metrics.runtime_event_reconciliation_passes, 1);
 }
+
+/// Verifies event delivery revisions remain pending independently for every
+/// subscriber when an event arrives between an empty query and the next wait.
+///
+/// Remote event streams query retained events before sleeping. A shared
+/// edge-triggered notification can be consumed by an unrelated waiter during
+/// that gap, leaving an Iroh attachment stale until a later event. Each watch
+/// receiver must instead observe the revision even when it was not awaiting at
+/// publication time and another subscriber observes the same publication.
+#[tokio::test(flavor = "current_thread")]
+async fn event_delivery_revision_survives_query_to_wait_gap_per_subscriber() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let mut first = handle.event_delivery_watcher();
+    let mut second = handle.event_delivery_watcher();
+    let _ = first.borrow_and_update();
+    let _ = second.borrow_and_update();
+
+    let client = async {
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Client(ClientEvent::OutputReady {
+            client_id: primary,
+        }));
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.applied, 1);
+
+        tokio::time::timeout(Duration::from_millis(100), first.changed())
+            .await
+            .expect("first subscriber must retain the event revision")
+            .expect("event revision sender must remain open");
+        tokio::time::timeout(Duration::from_millis(100), second.changed())
+            .await
+            .expect("second subscriber must retain the same event revision")
+            .expect("event revision sender must remain open");
+        assert_eq!(*first.borrow(), *second.borrow());
+        assert_ne!(*first.borrow(), 0);
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}

@@ -1275,9 +1275,11 @@ async fn serve_registered_runtime_iroh_event_stream(
 ) -> Result<u64> {
     let connection_id = format!("iroh-events-{caller_client_id}");
     let mut last_delivered_event_id = 0u64;
+    let mut event_delivery = handle.event_delivery_watcher();
     if *stop.borrow() {
         return Ok(0);
     }
+    let _ = event_delivery.borrow_and_update();
     let mut pending = match handle
         .event_wakeups_for_client(
             caller_client_id.clone(),
@@ -1342,6 +1344,7 @@ async fn serve_registered_runtime_iroh_event_stream(
                 .map_err(|_| MezError::invalid_state("Iroh clipboard effect flush failed"))?;
         }
         if pending.is_empty() {
+            let _ = event_delivery.borrow_and_update();
             pending = match handle
                 .event_wakeups_for_client(
                     caller_client_id.clone(),
@@ -1382,7 +1385,11 @@ async fn serve_registered_runtime_iroh_event_stream(
             continue;
         }
         tokio::select! {
-            _ = handle.wait_for_event_delivery() => {}
+            changed = event_delivery.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+            }
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
                     break;

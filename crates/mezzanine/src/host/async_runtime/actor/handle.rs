@@ -421,6 +421,16 @@ impl AsyncRuntimeSessionHandle {
         self.event_delivery_notify.notified().await;
     }
 
+    /// Returns an independent durable event-delivery revision watcher.
+    ///
+    /// Long-lived consumers should create this watcher before querying event
+    /// state, mark the current revision before each query, and await `changed`
+    /// only after an empty result. Unlike the compatibility notification port,
+    /// one consumer cannot take another consumer's pending wakeup.
+    pub fn event_delivery_watcher(&self) -> watch::Receiver<u64> {
+        self.event_delivery_revision_rx.clone()
+    }
+
     /// Waits until the actor queues at least one runtime side effect.
     #[cfg(test)]
     pub async fn wait_for_runtime_side_effects(&self) {

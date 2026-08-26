@@ -446,6 +446,8 @@ pub struct AsyncRuntimeSessionActor {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) event_delivery_notify: Arc<Notify>,
+    /// Publishes a durable revision for every event-delivery notification.
+    pub(super) event_delivery_revision_tx: watch::Sender<u64>,
     /// Stores the side effect delivery notify value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -517,6 +519,8 @@ pub struct AsyncRuntimeSessionHandle {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) event_delivery_notify: Arc<Notify>,
+    /// Receives durable event-delivery revisions independently per handle.
+    pub(super) event_delivery_revision_rx: watch::Receiver<u64>,
     /// Stores the side effect delivery notify value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
