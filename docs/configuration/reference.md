@@ -289,7 +289,9 @@ writes are best-effort, bounded to 8 MiB, and use only the attaching client's
 local clipboard command configuration. Observers, Unix attachments, legacy v1
 peers, headless clients without a working clipboard provider, and
 capability-disabled sessions retain existing behavior. Clipboard reads and
-remote paste are not part of this feature.
+remote paste are not part of this feature. When no copy command is configured,
+WSL clients first use Windows PowerShell with explicit UTF-8 stdin decoding to
+write the Windows host clipboard before trying Linux display-server helpers.
 
 The historical `terminal.nested_muxxer` spelling is accepted as a version 1
 migration alias and is rewritten to `terminal.nested_multiplexer` before layer

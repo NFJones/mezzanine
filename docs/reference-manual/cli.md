@@ -283,8 +283,10 @@ attempt one write on the attaching machine. The client selects its own
 `terminal.clipboard_copy_command`; the server cannot provide or override that
 command. Writes are best-effort, limited to 8 MiB, and supported through the
 same Linux (`wl-copy`, `xclip`, or `xsel`) and macOS (`pbcopy`) adapters used by
-local Mez. Headless or unsupported clients continue normally when no clipboard
-provider succeeds. Clipboard reads and remote paste are not included.
+local Mez. WSL clients first bridge UTF-8 text to the Windows host clipboard
+with Windows PowerShell `Set-Clipboard`, then retain the Linux helper fallbacks.
+Headless or unsupported clients continue normally when no clipboard provider
+succeeds. Clipboard reads and remote paste are not included.
 
 Create invitation files without exposing the token through shell arguments or
 world-readable output. `--output PATH` securely creates a new mode-`0600` file,
