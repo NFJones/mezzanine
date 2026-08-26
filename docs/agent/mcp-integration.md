@@ -45,5 +45,6 @@ capabilities as a distinct boundary rather than assuming Bubblewrap contains it.
 
 ## Next step
 
-Return to [the agent section](README.md) or use [Operations and troubleshooting](../operations/README.md)
-when a provider or integration is unavailable.
+Return to [the agent section](README.md) or use [Operations and
+troubleshooting](../operations/README.md) when a provider or integration is
+unavailable.

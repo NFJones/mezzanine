@@ -9,13 +9,20 @@ is lost.
 ## Prerequisites
 
 Keep the user-private Unix control socket available. Iroh transport is disabled
-by default. Enable `[transport.iroh]` only in primary-user configuration and
-restart the owning daemon. With `identity = "per_session"`, a direct-session
-listener runs alongside Unix control; failure to bind an explicitly enabled
-endpoint fails startup rather than silently removing remote service. The
-default host-scoped identity is owned only by `mez host serve`: direct `mez`
-and `mez serve` continue with Unix control and do not attempt to bind it. Unix
-remains the administration and recovery path.
+by default. Before pairing, choose one explicit network policy in [Iroh
+production operations and
+rollout](../operations/iroh-production-operations-and-rollout.md#choose-one-explicit-network-policy),
+enable `[transport.iroh]` only in primary-user configuration, validate the
+configuration, and restart the owning daemon. A direct-only foreign-machine
+deployment needs a stable non-zero UDP `bind_port` that the network permits;
+relay and lookup deployments need explicitly selected infrastructure.
+
+With `identity = "per_session"`, a direct-session listener runs alongside Unix
+control; failure to bind an explicitly enabled endpoint fails startup rather
+than silently removing remote service. The default host-scoped identity is
+owned only by a running `mez host serve`: direct `mez` and `mez serve` continue
+with Unix control and do not attempt to bind it. Unix remains the administration
+and recovery path.
 
 ## Understand the identities
 
@@ -37,8 +44,19 @@ lock. Do not edit these files directly.
 
 ## Pair a device
 
-For the common persistent-host workflow, run the invitation command on the
-host through its local Unix control path, transfer the resulting file through a
+For a direct-only evaluation starting from the baseline configuration, choose
+and permit a stable UDP port on the host, then enable Iroh and start the host.
+Replace `4242` with the port approved for the deployment:
+
+```console
+mez config set transport.iroh.enabled true
+mez config set transport.iroh.bind_port 4242
+mez config validate
+mez host serve
+```
+
+Keep that host process running. In another local shell, create the invitation
+through the host's Unix control path, transfer the resulting file through a
 confidential channel, and run the remaining commands on the client device:
 
 ```console
@@ -274,5 +292,6 @@ network evidence, staged stop thresholds, and a tested Unix-only rollback. See
 
 ## Next step
 
-Use [Iroh production operations and rollout](../operations/iroh-production-operations-and-rollout.md)
-before enabling remote access outside a development environment.
+Use [Iroh production operations and
+rollout](../operations/iroh-production-operations-and-rollout.md) before
+enabling remote access outside a development environment.

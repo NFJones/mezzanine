@@ -9,7 +9,7 @@ an exact setting, type, default, or constraint.
 ## Prerequisites
 
 Read [Configuration overview](overview.md) to understand file discovery,
-precedence, trust, and validation. Compare settings against the generated
+precedence, trust, and validation. Compare settings against the checked-in
 [example configuration](../examples/config.toml) for the current release.
 
 ## Related pages
@@ -38,7 +38,7 @@ precedence, trust, and validation. Compare settings against the generated
   [instructions](#instructions), [hooks](#hooksname), [audit](#audit), and
   [extensions](#extensionsname)
 
-## Configuration Files and Layers
+## Configuration files and layers
 
 Primary config discovery resolves `$HOME/.config/mezzanine/` directly; it does
 not consult `XDG_CONFIG_HOME`. It accepts exactly one of these files there:
@@ -106,7 +106,7 @@ run. Start with `mez config init`, `mez config get`, and `mez config validate`,
 then return to the schema reference when customizing behavior in detail.
 
 
-## Full Config Schema
+## Full configuration schema
 
 The tables below list the supported fields, first-launch defaults where
 applicable, built-in provider catalog values, and concise descriptions.

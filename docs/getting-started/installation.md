@@ -13,9 +13,12 @@ Mezzanine sessions.
 
 ## Install from this repository
 
-From the repository root, install the product package with Cargo:
+Clone the repository, then install the product package from its root with
+Cargo. If you already have a checkout, start in that checkout instead:
 
 ```sh
+git clone https://github.com/NFJones/mezzanine.git
+cd mezzanine
 cargo install --path crates/mezzanine --locked
 ```
 
@@ -30,6 +33,23 @@ inspect and select existing sessions. Use the [CLI
 reference](../reference-manual/cli.md) or `mez --help` for the complete command
 tree, including configuration, authentication, persistent-host, remote-pairing,
 integration, and diagnostic commands.
+
+## Update or remove the installation
+
+To update a source installation, update the checkout and reinstall it. Use
+`--force` when the package version has not changed but the source has:
+
+```sh
+git pull --ff-only
+cargo install --path crates/mezzanine --locked --force
+```
+
+Review local changes before pulling in a development checkout. To remove the
+Cargo-installed executable, run:
+
+```sh
+cargo uninstall mezzanine
+```
 
 ## Before enabling confinement
 

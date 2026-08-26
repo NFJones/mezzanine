@@ -62,9 +62,11 @@ while you inspect, edit, and validate work.
 
 ## Quick start
 
-Install the product package:
+Clone the repository, then install the product package from its root:
 
 ```sh
+git clone https://github.com/NFJones/mezzanine.git
+cd mezzanine
 cargo install --path crates/mezzanine --locked
 ```
 
@@ -93,8 +95,9 @@ without normally stopping the session.
 
 Agent entry can also work with an interactive shell reached through SSH or a
 container, without requiring Mezzanine to be installed in that environment.
-See the [configuration reference](docs/configuration/reference.md) for
-platform-specific options.
+See [Agent shell: Work inside SSH and container
+shells](docs/using-mezzanine/agent-shell.md#work-inside-ssh-and-container-shells)
+for the required prompt boundary and bootstrap behavior.
 
 ## Everyday use
 
@@ -182,3 +185,7 @@ The [Mezzanine manual](docs/README.md) is organized by task and audience:
 
 [SPEC.md](SPEC.md) remains the normative behavior and compatibility contract.
 [AGENTS.md](AGENTS.md) contains repository workflow requirements for contributors.
+
+## License
+
+Mezzanine is licensed under the [Apache License 2.0](COPYING).

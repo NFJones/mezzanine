@@ -76,11 +76,11 @@ enabled. Use `--no-aux-sockets` for an intentional control-only service.
 
 The built-in Unix attach client discovers the event service at the standard
 path derived from the control socket; it has no separate event-socket selector.
-An explicit `--event-socket` path is therefore suitable only when the attaching
-client already knows that path or when it is the standard derived path. Without
-a reachable event socket, control requests still work, but an idle attachment
-does not receive redraw wakeups and may not fetch a fresh view until input,
-focus, mouse, or resize activity occurs.
+A nonstandard explicit `--event-socket` path is therefore useful only to a
+custom client configured for that path; the built-in `mez attach` client will
+not discover it. Without a reachable event socket, control requests still work,
+but an idle attachment does not receive redraw wakeups and may not fetch a
+fresh view until input, focus, mouse, or resize activity occurs.
 
 ## Snapshot forms
 
