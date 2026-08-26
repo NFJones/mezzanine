@@ -689,6 +689,12 @@ impl RuntimeSessionService {
         } else {
             None
         };
+        let capability_probe = native_bubblewrap
+            .as_ref()
+            .and_then(|dispatch| dispatch.capability_probe.clone());
+        let bubblewrap_activity_lease = native_bubblewrap
+            .as_ref()
+            .and_then(|dispatch| dispatch.activity_lease.clone());
         let sandbox_audit_summary = native_bubblewrap
             .as_ref()
             .map(|dispatch| dispatch.audit_summary.clone());
@@ -783,6 +789,8 @@ impl RuntimeSessionService {
                 action_id: action.id.clone(),
                 marker: marker.as_str().to_string(),
                 context,
+                capability_probe,
+                bubblewrap_activity_lease,
                 request,
                 started_at_unix_ms,
             },

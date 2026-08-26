@@ -883,6 +883,67 @@ impl HostSessionRouter {
         principal: &RemotePrincipal,
         request: RemoteSessionCreateRequest,
     ) -> Result<RemoteSessionProvisioning> {
+        let _creation = self.creation_lock.lock().await;
+        self.require_serving()?;
+        let now = current_unix_seconds()?;
+        let _ = self.expire_due_leases_locked(now).await?;
+        self.prepare_remote_locked(principal, request, now).await
+    }
+
+    /// Resolves the principal's deterministic default or transactionally
+    /// prepares one new remote session when no attachable lease exists.
+    pub(crate) async fn prepare_resolve_or_create_remote(
+        &self,
+        principal: &RemotePrincipal,
+        request: RemoteSessionCreateRequest,
+    ) -> Result<RemoteSessionProvisioning> {
+        let _creation = self.creation_lock.lock().await;
+        self.require_serving()?;
+        let now = current_unix_seconds()?;
+        let _ = self.expire_due_leases_locked(now).await?;
+        if self.config.default_session_policy != HostDefaultSessionPolicy::None {
+            let mut visible = self.visible_leases(principal)?;
+            visible.sort_by(|left, right| {
+                right
+                    .default_for_owner
+                    .cmp(&left.default_for_owner)
+                    .then_with(|| {
+                        right
+                            .updated_at_unix_seconds
+                            .cmp(&left.updated_at_unix_seconds)
+                    })
+                    .then_with(|| left.lease_id.cmp(&right.lease_id))
+            });
+            if let Some(lease) = visible.iter().find(|lease| {
+                matches!(
+                    lease.state,
+                    RemoteSessionLeaseState::Active | RemoteSessionLeaseState::Recoverable
+                )
+            }) {
+                return self
+                    .resolve_remote_lease_locked(principal, lease.clone())
+                    .await
+                    .map(RemoteSessionProvisioning::active);
+            }
+            if let Some(lease) = visible
+                .into_iter()
+                .find(|lease| lease.state == RemoteSessionLeaseState::Pending)
+            {
+                return self
+                    .resolve_replayed_create(lease)
+                    .await
+                    .map(RemoteSessionProvisioning::active);
+            }
+        }
+        self.prepare_remote_locked(principal, request, now).await
+    }
+
+    async fn prepare_remote_locked(
+        &self,
+        principal: &RemotePrincipal,
+        request: RemoteSessionCreateRequest,
+        now: u64,
+    ) -> Result<RemoteSessionProvisioning> {
         let authority = principal.host_routing;
         if !authority.session_create {
             return Err(MezError::forbidden(
@@ -895,10 +956,6 @@ impl HostSessionRouter {
             ));
         }
         validate_session_name(request.name.as_deref())?;
-        let _creation = self.creation_lock.lock().await;
-        self.require_serving()?;
-        let now = current_unix_seconds()?;
-        let _ = self.expire_due_leases_locked(now).await?;
         let prior_key = self.leases.list()?.iter().any(|lease| {
             lease.owner_principal_id == principal.trust_record_id
                 && lease.idempotency_key == request.idempotency_key
@@ -1021,6 +1078,14 @@ impl HostSessionRouter {
         }
         .cloned()
         .ok_or_else(|| MezError::new(MezErrorKind::NotFound, "remote session was not found"))?;
+        self.resolve_remote_lease_locked(principal, lease).await
+    }
+
+    async fn resolve_remote_lease_locked(
+        &self,
+        principal: &RemotePrincipal,
+        lease: RemoteSessionLease,
+    ) -> Result<RemoteSessionBinding> {
         match lease.state {
             RemoteSessionLeaseState::Active => {
                 let runtime = self.supervisor.lookup(&lease.session_id)?;
@@ -2371,6 +2436,52 @@ mod tests {
                 .lease_id,
             committed.lease.lease_id
         );
+        router
+            .shutdown_all(true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Bare remote attach must provision the first authorized session, then
+    /// resolve that retained lease on a later client process even when the
+    /// fallback idempotency key changes. This prevents reconnect from silently
+    /// substituting a new blank session.
+    #[tokio::test(flavor = "current_thread")]
+    async fn remote_resolve_or_create_reuses_retained_session_across_client_keys() {
+        let root = test_root("remote-resolve-or-create");
+        let router = HostSessionRouter::new(test_config(&root));
+        let principal = test_principal("resolve-or-create-owner", 2);
+        let first = router
+            .prepare_resolve_or_create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: None,
+                    idempotency_key: "first-client-process".to_string(),
+                    size: Size::new(80, 24).unwrap(),
+                },
+            )
+            .await
+            .unwrap()
+            .commit()
+            .unwrap();
+        let selected = router
+            .prepare_resolve_or_create_remote(
+                &principal,
+                RemoteSessionCreateRequest {
+                    name: None,
+                    idempotency_key: "later-client-process".to_string(),
+                    size: Size::new(120, 40).unwrap(),
+                },
+            )
+            .await
+            .unwrap()
+            .commit()
+            .unwrap();
+
+        assert_eq!(selected.lease.lease_id, first.lease.lease_id);
+        assert_eq!(selected.lease.session_id, first.lease.session_id);
+        assert_eq!(router.leases.list().unwrap().len(), 1);
         router
             .shutdown_all(true, Duration::from_secs(2))
             .await

@@ -17,6 +17,9 @@ mod startup;
 mod transactions;
 mod zsh_compat;
 
+pub(crate) use native_bubblewrap::{
+    NativeBubblewrapActivityLease, NativeBubblewrapCapabilityProbe,
+};
 pub(crate) use native_shell_inference::{NativeShellContext, infer_native_shell_context};
 #[cfg(test)]
 pub(crate) use spawned_shell::execute_native_shell_dispatch;
@@ -3808,6 +3811,7 @@ impl RuntimeSessionService {
             .session
             .close_exited_pane_with_effects(descriptor.pane_id.as_str())?;
         self.sync_pane_resize_effects(&transition.effects)?;
+        self.cleanup_removed_pane_runtime_state(descriptor.pane_id.as_str())?;
         if remove_recorded_process {
             self.process
                 .pane_processes

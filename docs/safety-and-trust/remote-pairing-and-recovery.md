@@ -181,11 +181,13 @@ not revoke the server trust record. Check uses host-only initialization and
 cannot create, select, or attach a session. Server-side revocation remains the
 local Unix `remote revoke` workflow below. A host-scoped Iroh profile supports
 `new`, `list`, `attach`, `kill`, and `detach`; legacy direct-session profiles
-retain their narrower compatibility behavior. Bare remote `new` and `attach`
-require creation authority. To attach an existing authorized session without
-creating one, use `mez --iroh-profile PROFILE attach SESSION_TARGET`; add
-`--observer` to request observer access. An observer-limited invitation or
-profile cannot attach as primary.
+retain their narrower compatibility behavior. Bare remote `attach` resumes the
+existing host default and requires creation authority only when no attachable
+session exists; bare remote `new` always requires creation authority. To attach
+an existing authorized session without fallback creation, use `mez
+--iroh-profile PROFILE attach SESSION_TARGET`; add `--observer` to request
+observer access. An observer-limited invitation or profile cannot attach as
+primary.
 
 ### Understand host-scoped profiles and leases
 
@@ -201,11 +203,12 @@ Protected client profiles now carry an explicit scope: `host` or
 `legacy_session`. Profiles written before scope metadata existed are loaded as
 `legacy_session`; they are never silently broadened to host authority. A host
 profile uses `host_only` for pairing and health checks. Omitted-target `attach`
-and `new`, explicit lease attachment, and `attach --default` route through the
-persistent host. Lease administration remains local-only: active release or
-revocation requires explicit runtime termination, while device trust revocation
-continues to affect that device across leases. Runtime kill, lease release,
-lease revocation, and device trust revocation remain separate operations.
+uses atomic default resolution with fallback creation; `new`, explicit lease
+attachment, and `attach --default` use their distinct host routes. Lease
+administration remains local-only: active release or revocation requires
+explicit runtime termination, while device trust revocation continues to
+affect that device across leases. Runtime kill, lease release, lease revocation,
+and device trust revocation remain separate operations.
 
 ### Handle attach failures safely
 

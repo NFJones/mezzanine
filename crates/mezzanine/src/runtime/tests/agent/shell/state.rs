@@ -2372,6 +2372,11 @@ fn runtime_bubblewrap_probe_nonzero_exit_retains_typed_evidence() {
     assert!(trace.contains("bwrap: namespace denied"), "{trace}");
     assert!(trace.contains("\\\\u{1b}"), "{trace}");
     assert!(trace.contains("mez sandbox status --verbose"), "{trace}");
+    assert!(
+        trace.contains("\"execution_transport\": \"pane_shell\""),
+        "{trace}"
+    );
+    assert!(trace.contains("\"sent_to_pane\": true"), "{trace}");
     assert!(service.bubblewrap_capability(&cache_key).is_none());
     fs::remove_dir_all(root).unwrap();
 }

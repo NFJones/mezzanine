@@ -794,10 +794,12 @@ async fn bind_policy_iroh_endpoint(
 ) -> Result<Endpoint> {
     let idle_timeout = IdleTimeout::try_from(policy.idle_timeout)
         .map_err(|_| MezError::config("transport.iroh.idle_timeout_ms is too large"))?;
+    let keep_alive_interval = policy.idle_timeout / 3;
     let transport = QuicTransportConfig::builder()
         .max_concurrent_bidi_streams(VarInt::from_u32(incoming_bidi_streams))
         .max_concurrent_uni_streams(VarInt::from_u32(incoming_uni_streams))
         .max_idle_timeout(Some(idle_timeout))
+        .keep_alive_interval(keep_alive_interval)
         .build();
 
     let mut builder = Endpoint::builder(presets::Minimal)
@@ -1157,7 +1159,6 @@ async fn serve_runtime_iroh_control_connection(
     });
     let sample_connection = connection.clone();
     let response_sampler = sampler.clone();
-    let control_config = control_config.with_application_idle_timeout(idle_timeout);
     let result =
         serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush(
             bridge.stream_mut(),
@@ -1275,9 +1276,11 @@ async fn serve_registered_runtime_iroh_event_stream(
 ) -> Result<u64> {
     let connection_id = format!("iroh-events-{caller_client_id}");
     let mut last_delivered_event_id = 0u64;
+    let mut event_delivery = handle.event_delivery_watcher();
     if *stop.borrow() {
         return Ok(0);
     }
+    let _ = event_delivery.borrow_and_update();
     let mut pending = match handle
         .event_wakeups_for_client(
             caller_client_id.clone(),
@@ -1342,6 +1345,7 @@ async fn serve_registered_runtime_iroh_event_stream(
                 .map_err(|_| MezError::invalid_state("Iroh clipboard effect flush failed"))?;
         }
         if pending.is_empty() {
+            let _ = event_delivery.borrow_and_update();
             pending = match handle
                 .event_wakeups_for_client(
                     caller_client_id.clone(),
@@ -1382,7 +1386,11 @@ async fn serve_registered_runtime_iroh_event_stream(
             continue;
         }
         tokio::select! {
-            _ = handle.wait_for_event_delivery() => {}
+            changed = event_delivery.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+            }
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
                     break;
@@ -2012,8 +2020,12 @@ mod tests {
         }
     }
 
+    /// Verifies a paired control and event connection remains usable after an
+    /// application-silent period longer than its deliberately short QUIC idle
+    /// timeout. This protects persistent attaches from idle disconnection while
+    /// still exercising a request after the keepalive-only interval.
     #[tokio::test(flavor = "current_thread")]
-    async fn paired_iroh_control_and_events_round_trip_over_direct_listener() {
+    async fn paired_iroh_control_and_events_survive_idle_period_over_direct_listener() {
         use secrecy::ExposeSecret;
 
         use crate::control::encode_control_body;
@@ -2057,7 +2069,7 @@ mod tests {
             max_connections: 1,
             max_streams_per_connection: 1,
             setup_timeout: std::time::Duration::from_secs(10),
-            idle_timeout: std::time::Duration::from_secs(30),
+            idle_timeout: std::time::Duration::from_millis(300),
             ..RuntimeIrohTransportPolicy::default()
         };
         let server_endpoint = bind_runtime_iroh_endpoint(policy, server_secret)
@@ -2160,6 +2172,8 @@ mod tests {
                 !event_body.contains(invitation.token.expose_secret()),
                 "{event_body}"
             );
+
+            tokio::time::sleep(std::time::Duration::from_millis(900)).await;
 
             send.write_all(&encode_control_body(kill)).await.unwrap();
             send.finish().unwrap();

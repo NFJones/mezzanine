@@ -1058,6 +1058,18 @@ fn runtime_agent_slash_markdown_display_opens_command_overlay() {
             extended: false,
         } if pane_id == "%1"
     ));
+    let view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(80, 24).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        view.animation_refresh_interval_ms,
+        live_source.refresh_interval_ms
+    );
     assert!(
         !service
             .refresh_live_overlay_for_client(&primary, next_due_ms)

@@ -281,10 +281,12 @@ fn bubblewrap_status_parser_validates_payload_execution_evidence() {
 /// that expands into the existing structured sandbox diagnostics and remedies.
 #[test]
 fn bubblewrap_failure_remediation_points_to_verbose_status() {
+    let remediated = bubblewrap_failure_remediation("Bubblewrap probe failed.");
     assert_eq!(
-        bubblewrap_failure_remediation("Bubblewrap probe failed."),
+        remediated,
         "Bubblewrap probe failed. Run `mez sandbox status --verbose` to inspect the executable, authority, and configuration remedies."
     );
+    assert_eq!(bubblewrap_failure_remediation(&remediated), remediated);
 }
 
 /// Unix sockets are the sole IPC endpoint type that may receive the narrow
@@ -751,6 +753,16 @@ fn capability_probe_is_deterministic_and_environment_bound() {
         plan.arguments
             .last()
             .is_some_and(|script| script.contains("/proc/self/status"))
+    );
+    assert!(
+        plan.arguments
+            .last()
+            .is_some_and(|script| script.contains("while read -r key"))
+    );
+    assert!(
+        plan.arguments
+            .last()
+            .is_some_and(|script| !script.contains("id -u") && !script.contains("id -g"))
     );
     assert!(
         plan.arguments

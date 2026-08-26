@@ -126,6 +126,7 @@ impl AsyncRuntimeSessionActor {
             mpsc::unbounded_channel();
         let message_delivery_notify = Arc::new(Notify::new());
         let event_delivery_notify = Arc::new(Notify::new());
+        let (event_delivery_revision_tx, event_delivery_revision_rx) = watch::channel(0u64);
         let side_effect_delivery_notify = Arc::new(Notify::new());
         let (side_effect_delivery_tx, side_effect_delivery_rx) = watch::channel(0u64);
         let (lifecycle_state_tx, lifecycle_state_rx) = watch::channel(service.lifecycle_state());
@@ -144,6 +145,7 @@ impl AsyncRuntimeSessionActor {
                 client_clipboard_route_cleanup_tx,
                 message_delivery_notify: message_delivery_notify.clone(),
                 event_delivery_notify: event_delivery_notify.clone(),
+                event_delivery_revision_rx,
                 side_effect_delivery_notify: side_effect_delivery_notify.clone(),
                 side_effect_delivery_rx,
                 lifecycle_state_rx,
@@ -155,6 +157,7 @@ impl AsyncRuntimeSessionActor {
                 receiver,
                 message_delivery_notify,
                 event_delivery_notify,
+                event_delivery_revision_tx,
                 client_clipboard_routes: Default::default(),
                 client_clipboard_route_generations: Default::default(),
                 next_client_clipboard_route_generation: 0,

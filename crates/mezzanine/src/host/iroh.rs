@@ -907,6 +907,28 @@ async fn serve_routed_initialize_inner(
             provisioning = Some(prepared);
             binding
         }
+        SessionIntent::ResolveOrCreate => {
+            let prepared = router
+                .prepare_resolve_or_create_remote(
+                    &principal,
+                    crate::host::router::RemoteSessionCreateRequest {
+                        name: session_name,
+                        idempotency_key: init.idempotency_key.clone().ok_or_else(|| {
+                            MezError::invalid_args(
+                                "resolve_or_create intent requires idempotency_key",
+                            )
+                        })?,
+                        size,
+                    },
+                )
+                .await?;
+            let binding = crate::host::router::RemoteSessionBinding {
+                lease: prepared.lease().clone(),
+                runtime: prepared.runtime()?.clone(),
+            };
+            provisioning = Some(prepared);
+            binding
+        }
         SessionIntent::Attach => {
             router
                 .resolve_remote(&principal, init.session_target_json.as_deref())
@@ -1044,8 +1066,7 @@ async fn serve_routed_initialize_inner(
             ))
         });
     let control_config =
-        AsyncRuntimeControlConnectionConfig::new(HOST_CONTROL_MAX_CONTENT_LENGTH, 0)?
-            .with_application_idle_timeout(policy.idle_timeout);
+        AsyncRuntimeControlConnectionConfig::new(HOST_CONTROL_MAX_CONTENT_LENGTH, 0)?;
     let authority_principal = principal.clone();
     let authority_lease = binding.lease.clone();
     let request_trust = trust.clone();
@@ -2474,7 +2495,8 @@ mod tests {
             assert_eq!(router.snapshots().await.unwrap().len(), 1);
 
             let (persistent_connection, mut persistent_bridge, persistent_attach) =
-                open_test_routed_attach(&client, &server_addr, &credential, &session_id).await;
+                open_test_routed_attach(&client, &server_addr, &credential, Some(&session_id))
+                    .await;
             assert_eq!(
                 persistent_attach["result"]["lease"]["lease_id"], lease_id,
                 "{persistent_attach}"
@@ -2509,6 +2531,156 @@ mod tests {
             assert!(
                 !status_response.contains("this client has no correlated live Iroh connection"),
                 "{status_response}"
+            );
+            for request_id in ["test-routed-pane-two", "test-routed-pane-three"] {
+                let pane_create_request = json!({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "pane/create",
+                    "params": {
+                        "split": "vertical",
+                        "select": true,
+                        "idempotency_key": request_id
+                    }
+                })
+                .to_string();
+                persistent_bridge
+                    .stream_mut()
+                    .write_all(&encode_control_body(&pane_create_request))
+                    .await
+                    .unwrap();
+                persistent_bridge.stream_mut().flush().await.unwrap();
+                let pane_create_response = read_one_control_frame(
+                    persistent_bridge.stream_mut(),
+                    std::time::Duration::from_secs(3),
+                )
+                .await
+                .unwrap();
+                let pane_create_response: Value =
+                    serde_json::from_str(&pane_create_response).unwrap();
+                assert!(
+                    pane_create_response.get("error").is_none(),
+                    "{pane_create_response}"
+                );
+            }
+            let panes_before_detach = exchange_test_pane_list(&mut persistent_bridge).await;
+            assert_eq!(
+                panes_before_detach["result"]["panes"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                3,
+                "{panes_before_detach}"
+            );
+            let detach_request = json!({
+                "jsonrpc": "2.0",
+                "id": "test-routed-detach",
+                "method": "terminal/step",
+                "params": {
+                    "idempotency_key": "test-routed-detach",
+                    "render": false,
+                    "input_bytes": [1, 100]
+                }
+            })
+            .to_string();
+            persistent_bridge
+                .stream_mut()
+                .write_all(&encode_control_body(&detach_request))
+                .await
+                .unwrap();
+            persistent_bridge.stream_mut().flush().await.unwrap();
+            let detach_response = read_one_control_frame(
+                persistent_bridge.stream_mut(),
+                std::time::Duration::from_secs(3),
+            )
+            .await
+            .unwrap();
+            let detach_response: Value = serde_json::from_str(&detach_response).unwrap();
+            assert_eq!(
+                detach_response["result"]["client_detached"], true,
+                "{detach_response}"
+            );
+            assert_eq!(
+                detach_response["result"]["session_terminated"], false,
+                "{detach_response}"
+            );
+            let _ = persistent_bridge
+                .shutdown(std::time::Duration::from_secs(2))
+                .await;
+            persistent_connection.close(
+                iroh::endpoint::VarInt::from_u32(0),
+                b"detached test client complete",
+            );
+
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    let snapshots = router.snapshots().await.unwrap();
+                    if snapshots.len() == 1
+                        && snapshots[0].state
+                            == crate::host::session::SessionSupervisorState::Running
+                        && snapshots[0].runtime_state
+                            == Some(crate::runtime::RuntimeLifecycleState::Detached)
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("detached routed session should remain supervised and reattachable");
+            assert_eq!(
+                router.get_lease(&lease_id).unwrap().state,
+                RemoteSessionLeaseState::Active
+            );
+
+            let (persistent_connection, mut persistent_bridge, persistent_attach) =
+                open_test_routed_attach(&client, &server_addr, &credential, None).await;
+            assert_eq!(
+                persistent_attach["result"]["lease"]["lease_id"], lease_id,
+                "{persistent_attach}"
+            );
+            let panes_after_reconnect = exchange_test_pane_list(&mut persistent_bridge).await;
+            assert_eq!(
+                panes_after_reconnect["result"]["panes"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                3,
+                "{panes_after_reconnect}"
+            );
+            assert_eq!(router.snapshots().await.unwrap().len(), 1);
+            drop(persistent_bridge);
+            persistent_connection.close(
+                iroh::endpoint::VarInt::from_u32(1),
+                b"abrupt routed client loss",
+            );
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    let snapshots = router.snapshots().await.unwrap();
+                    if snapshots.len() == 1
+                        && snapshots[0].state
+                            == crate::host::session::SessionSupervisorState::Running
+                        && snapshots[0].runtime_state
+                            == Some(crate::runtime::RuntimeLifecycleState::Detached)
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("abrupt routed client loss should leave the session reattachable");
+            assert_eq!(
+                router.get_lease(&lease_id).unwrap().state,
+                RemoteSessionLeaseState::Active
+            );
+
+            let (persistent_connection, mut persistent_bridge, persistent_attach) =
+                open_test_routed_attach(&client, &server_addr, &credential, Some(&session_id))
+                    .await;
+            assert_eq!(
+                persistent_attach["result"]["lease"]["lease_id"], lease_id,
+                "{persistent_attach}"
             );
             let record_id = host
                 .trust
@@ -2562,18 +2734,18 @@ mod tests {
         };
 
         let (served, ()) = tokio::join!(server, client_work);
-        assert_eq!(served.unwrap(), 12);
+        assert_eq!(served.unwrap(), 14);
         let snapshot = diagnostics.snapshot();
         assert!(!snapshot.listener_active);
         assert_eq!(snapshot.active_connections, 0);
-        assert_eq!(snapshot.connections_accepted, 12);
-        assert_eq!(snapshot.setup_successes, 12);
+        assert_eq!(snapshot.connections_accepted, 14);
+        assert_eq!(snapshot.setup_successes, 14);
         assert_eq!(snapshot.connections_rejected, snapshot.setup_failures);
         assert_eq!(
             snapshot
                 .connections_completed
                 .saturating_add(snapshot.connections_failed),
-            12
+            14
         );
         router
             .shutdown_all(true, std::time::Duration::from_secs(2))
@@ -2656,6 +2828,7 @@ mod tests {
             "client_name": "test-client",
             "requested_version": 3,
             "requested_role": "primary",
+            "detach_primary_on_disconnect": true,
             "session_intent": intent,
             "client": client_metadata,
             "authentication": {
@@ -2676,7 +2849,7 @@ mod tests {
         client: &iroh::Endpoint,
         server_addr: &iroh::EndpointAddr,
         credential: &str,
-        session_id: &str,
+        session_id: Option<&str>,
     ) -> (iroh::endpoint::Connection, IrohCompressionBridge, Value) {
         let connection = client
             .connect(server_addr.clone(), crate::runtime::MEZZANINE_IROH_ALPN)
@@ -2693,26 +2866,37 @@ mod tests {
         let mut bridge =
             IrohCompressionBridge::spawn(recv, send, compression, HOST_CONTROL_MAX_CONTENT_LENGTH)
                 .unwrap();
+        let mut params = json!({
+            "client_name": "test-client",
+            "requested_version": 3,
+            "requested_role": "primary",
+            "detach_primary_on_disconnect": true,
+            "session_intent": if session_id.is_some() {
+                "attach"
+            } else {
+                "resolve_or_create"
+            },
+            "client": {
+                "name": "test-client",
+                "interactive": true,
+                "terminal": {"columns": 80, "rows": 24, "term": "xterm-256color"}
+            },
+            "authentication": {
+                "mechanism": "extension:iroh_device",
+                "token": credential
+            }
+        });
+        if let Some(session_id) = session_id {
+            params["session_target"] = json!({"session_id": session_id});
+        } else {
+            params["idempotency_key"] =
+                Value::String("test-persistent-resolve-or-create".to_string());
+        }
         let request = json!({
             "jsonrpc": "2.0",
             "id": "test-persistent-attach",
             "method": "control/initialize",
-            "params": {
-                "client_name": "test-client",
-                "requested_version": 3,
-                "requested_role": "primary",
-                "session_intent": "attach",
-                "session_target": {"session_id": session_id},
-                "client": {
-                    "name": "test-client",
-                    "interactive": true,
-                    "terminal": {"columns": 80, "rows": 24, "term": "xterm-256color"}
-                },
-                "authentication": {
-                    "mechanism": "extension:iroh_device",
-                    "token": credential
-                }
-            }
+            "params": params
         })
         .to_string();
         bridge
@@ -2726,6 +2910,27 @@ mod tests {
                 .await
                 .unwrap();
         (connection, bridge, serde_json::from_str(&response).unwrap())
+    }
+
+    async fn exchange_test_pane_list(bridge: &mut IrohCompressionBridge) -> Value {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": "test-persistent-pane-list",
+            "method": "pane/list",
+            "params": {}
+        })
+        .to_string();
+        bridge
+            .stream_mut()
+            .write_all(&encode_control_body(&request))
+            .await
+            .unwrap();
+        bridge.stream_mut().flush().await.unwrap();
+        let response =
+            read_one_control_frame(bridge.stream_mut(), std::time::Duration::from_secs(3))
+                .await
+                .unwrap();
+        serde_json::from_str(&response).unwrap()
     }
 
     async fn exchange_test_initialize_params(

@@ -746,9 +746,11 @@ mod tests {
                 .windows(identity_end.len())
                 .any(|window| window == identity_end.as_bytes())
         });
-        output.extend(process.write_shell_delivery(&ShellInputDelivery::generated_source(
-            loader.command.into_bytes(),
-        )));
+        output.extend(
+            process.write_shell_delivery(&ShellInputDelivery::generated_source(
+                loader.command.into_bytes(),
+            )),
+        );
         extend_fish_output_until(&mut process, &mut output, |output| {
             output
                 .windows(b"mez_foreign_loader=ready".len())

@@ -237,6 +237,23 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Completes one prepared interactive provider refresh and fences actor ordering.
+    #[cfg(test)]
+    pub async fn complete_agent_prompt_provider_info_refresh_for_tests(
+        &self,
+        refresh: crate::runtime::RuntimeAgentPromptProviderInfoRefresh,
+        outcome: crate::runtime::RuntimeProviderInfoRefreshOutcome,
+    ) -> Result<()> {
+        self.sender
+            .send(AsyncRuntimeRequestEnvelope::new(
+                AsyncRuntimeRequest::CompleteAgentPromptProviderInfoRefresh { refresh, outcome },
+            ))
+            .await
+            .map_err(|_| MezError::invalid_state("async runtime session actor is closed"))?;
+        let _ = self.lifecycle_state().await?;
+        Ok(())
+    }
+
     /// Runs the terminal client loop config operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -402,6 +419,16 @@ impl AsyncRuntimeSessionHandle {
     /// on duplicated control-flow logic.
     pub async fn wait_for_event_delivery(&self) {
         self.event_delivery_notify.notified().await;
+    }
+
+    /// Returns an independent durable event-delivery revision watcher.
+    ///
+    /// Long-lived consumers should create this watcher before querying event
+    /// state, mark the current revision before each query, and await `changed`
+    /// only after an empty result. Unlike the compatibility notification port,
+    /// one consumer cannot take another consumer's pending wakeup.
+    pub fn event_delivery_watcher(&self) -> watch::Receiver<u64> {
+        self.event_delivery_revision_rx.clone()
     }
 
     /// Waits until the actor queues at least one runtime side effect.

@@ -614,7 +614,7 @@ impl RuntimeSessionService {
                     },
                     code: evidence.code.to_string(),
                     message: message.clone(),
-                    sent_to_pane: false,
+                    sent_to_pane: true,
                     terminal_observation: terminal_observation.clone(),
                     trace_reason: evidence.code.to_string(),
                 })

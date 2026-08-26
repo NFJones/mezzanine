@@ -1269,9 +1269,12 @@ impl RuntimeSessionService {
                     )
                 }),
         };
-        let changed = rebuilt
-            .map(|content| self.replace_primary_display_overlay_content(content))
-            .unwrap_or(false);
+        let Some(content) = rebuilt else {
+            self.presentation.primary_display_overlay = None;
+            self.presentation.capture_projected_client_state();
+            return Ok(true);
+        };
+        let changed = self.replace_primary_display_overlay_content(content);
         if let Some(source) = self
             .presentation
             .primary_display_overlay

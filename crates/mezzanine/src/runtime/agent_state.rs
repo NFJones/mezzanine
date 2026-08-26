@@ -100,6 +100,11 @@ pub(crate) struct RuntimeNativeShellDispatch {
     pub(crate) marker: String,
     /// Inferred shell, environment, and working-directory context.
     pub(crate) context: NativeShellContext,
+    /// Uncached Bubblewrap capability proof run by the external worker.
+    pub(crate) capability_probe: Option<crate::runtime::processes::NativeBubblewrapCapabilityProbe>,
+    /// Managed-home lease retained through worker probe and workload execution.
+    pub(crate) bubblewrap_activity_lease:
+        Option<crate::runtime::processes::NativeBubblewrapActivityLease>,
     /// Fully materialized spawned-shell request.
     pub(crate) request: ShellExecutionRequest,
     /// Runtime wall-clock timestamp used by shell completion metrics.
@@ -143,6 +148,8 @@ pub(crate) struct RuntimeNativeShellOutcome {
     pub(crate) command: String,
     /// Runtime wall-clock timestamp captured before worker dispatch.
     pub(crate) started_at_unix_ms: u64,
+    /// Successful native capability proof returned for actor-owned caching.
+    pub(crate) bubblewrap_capability: Option<Box<crate::security::sandbox::BubblewrapCapability>>,
     /// Normalized shell output or a typed worker failure.
     pub(crate) result: std::result::Result<ShellExecutionOutput, RuntimeNativeShellFailure>,
 }

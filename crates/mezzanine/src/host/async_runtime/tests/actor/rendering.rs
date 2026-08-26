@@ -51,6 +51,569 @@ async fn async_actor_applies_client_resize_signal_as_render_invalidation() {
     assert_eq!(exit.commands_processed, 3);
 }
 
+/// Verifies that opening the client-local Iroh status display through the
+/// actor immediately schedules its refresh timer. The overlay must not depend
+/// on a later successful terminal flush before its live source starts polling.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_schedules_live_iroh_status_overlay_refresh() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .enter_primary_command_prompt("show-iroh-status")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                None,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(b"\r".to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        assert!(
+            timers.iter().any(|effect| matches!(
+                effect,
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh
+                        && key.owner_id == primary.as_str()
+            )),
+            "{timers:?}"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.commands_processed, 3);
+}
+
+/// Verifies that opening `/status` through attached agent-shell input
+/// immediately schedules its refresh timer. Live token and turn accounting
+/// must continue updating even when no subsequent terminal flush occurs.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_schedules_live_agent_status_overlay_refresh() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                None,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(
+                        b"/status\r".to_vec(),
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        assert!(
+            timers.iter().any(|effect| matches!(
+                effect,
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh
+                        && key.owner_id == primary.as_str()
+            )),
+            "{timers:?}"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.commands_processed, 3);
+}
+
+/// Verifies bounded timer backpressure cannot turn an already-applied live
+/// overlay step into a failed acknowledgement. With a one-entry side-effect
+/// queue, the owner render occupies capacity first; composing that render must
+/// recover both deferred timer creation and deferred cancellation.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_defers_live_overlay_timers_to_pending_render_under_backpressure() {
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "static-status-under-backpressure".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"ready\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
+            side_effect_buffer: 1,
+            ..AsyncRuntimeActorConfig::default()
+        })
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                None,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(
+                        b"/status\r".to_vec(),
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .expect("opening the applied overlay must remain acknowledged");
+        let open_render = run_async_render_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 1,
+                drain_limit: 1,
+                idle_interval: Duration::from_millis(1),
+            },
+            TerminalClientLoopConfig::default(),
+            |_, _| Ok(None),
+            |_| Ok(()),
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(open_render.applied, 1);
+        let scheduled = handle.drain_timer_side_effects(8).await.unwrap();
+        let status_key = scheduled
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .expect("owner rendering should recover deferred timer creation");
+
+        handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                None,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(b"q".to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .expect("closing the applied overlay must remain acknowledged");
+        let close_render = run_async_render_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 1,
+                drain_limit: 1,
+                idle_interval: Duration::from_millis(1),
+            },
+            TerminalClientLoopConfig::default(),
+            |_, _| Ok(None),
+            |_| Ok(()),
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(close_render.applied, 1);
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().iter().any(
+            |effect| matches!(effect, RuntimeSideEffect::CancelTimer { key } if key == &status_key)
+        ));
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
+/// Verifies that dismissing a live agent-status overlay cancels its accepted
+/// refresh timer. A late delivery of the canceled generation must be ignored
+/// instead of causing an unnecessary status-line redraw after the overlay has
+/// already closed.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_cancels_live_status_refresh_when_overlay_closes() {
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"ready\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                None,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(
+                        b"/status\r".to_vec(),
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let scheduled = handle.drain_timer_side_effects(8).await.unwrap();
+        let status_key = scheduled
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .expect("missing live-overlay status refresh timer");
+        let _ = handle.drain_render_side_effects(8).await.unwrap();
+
+        handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                None,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(b"q".to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().iter().any(
+            |effect| matches!(effect, RuntimeSideEffect::CancelTimer { key } if key == &status_key)
+        ));
+        let _ = handle.drain_render_side_effects(8).await.unwrap();
+
+        let mut late = RuntimeEventBatch::new();
+        late.push(RuntimeEvent::Timer(TimerEvent {
+            key: status_key,
+            now_ms: u64::MAX,
+        }));
+        let report = handle.submit_runtime_events(late).await.unwrap();
+        assert_eq!(report.applied, 0);
+        assert_eq!(report.side_effects, 0);
+        assert!(
+            handle
+                .drain_render_side_effects(8)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.metrics.runtime_timer_events_ignored > 0);
+}
+
+/// Verifies that disconnecting a client cancels the client's accepted live
+/// status refresh timer. If the timer worker races with disconnect cleanup,
+/// the late generation must be ignored without repainting any remaining
+/// clients.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_cancels_live_status_refresh_when_client_disconnects() {
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"ready\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .apply_attached_terminal_step_plan_for_frame(
+                primary.clone(),
+                None,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(
+                        b"/status\r".to_vec(),
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        let scheduled = handle.drain_timer_side_effects(8).await.unwrap();
+        let status_key = scheduled
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .expect("missing live-overlay status refresh timer");
+        let _ = handle.drain_render_side_effects(8).await.unwrap();
+
+        let mut disconnect = RuntimeEventBatch::new();
+        disconnect.push(RuntimeEvent::Client(ClientEvent::Disconnected {
+            client_id: primary,
+            reason: "test disconnect".to_string(),
+        }));
+        assert_eq!(
+            handle
+                .submit_runtime_events(disconnect)
+                .await
+                .unwrap()
+                .applied,
+            1
+        );
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().iter().any(
+            |effect| matches!(effect, RuntimeSideEffect::CancelTimer { key } if key == &status_key)
+        ));
+
+        let mut late = RuntimeEventBatch::new();
+        late.push(RuntimeEvent::Timer(TimerEvent {
+            key: status_key,
+            now_ms: u64::MAX,
+        }));
+        let report = handle.submit_runtime_events(late).await.unwrap();
+        assert_eq!(report.applied, 0);
+        assert_eq!(report.side_effects, 0);
+        assert!(
+            handle
+                .drain_render_side_effects(8)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Detached
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.metrics.runtime_timer_events_ignored > 0);
+}
+
+/// Verifies removing the pane that owns a live agent-status overlay closes the
+/// dependent overlay and cancels its accepted refresh timer. A late delivery
+/// of the canceled generation must remain harmless while the surviving pane
+/// and attached client continue running.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_clears_live_status_overlay_when_source_pane_exits() {
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "static-status-after-source-pane-exit".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"ready\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let source = service
+        .start_initial_pane_process(Some("sleep 30"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(source.pane_id.as_str())
+        .unwrap();
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(
+                    b"/status\r".to_vec(),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    service
+        .split_pane_with_process(
+            &primary,
+            mez_mux::layout::SplitDirection::Vertical,
+            Some("sleep 30"),
+        )
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .ensure_client_render_timers(primary.clone())
+            .await
+            .unwrap();
+        let scheduled = handle.drain_timer_side_effects(8).await.unwrap();
+        let status_key = scheduled
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .expect("missing source-pane status refresh timer");
+
+        let mut exited = RuntimeEventBatch::new();
+        exited.push(RuntimeEvent::Process(ProcessEvent::Exited {
+            pane_id: source.pane_id.clone(),
+            primary_pid: Some(source.primary_pid),
+            exit_code: Some(0),
+            signal: None,
+        }));
+        let report = handle.submit_runtime_events(exited).await.unwrap();
+        assert_eq!(report.applied, 1);
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().iter().any(
+            |effect| matches!(effect, RuntimeSideEffect::CancelTimer { key } if key == &status_key)
+        ));
+        let _ = handle
+            .drain_render_side_effects_for_client(primary.clone(), 8)
+            .await
+            .unwrap();
+        let view = handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !view.lines.join("\n").contains("Agent Status"),
+            "removed source pane must not leave stale status rows"
+        );
+
+        let mut late = RuntimeEventBatch::new();
+        late.push(RuntimeEvent::Timer(TimerEvent {
+            key: status_key,
+            now_ms: u64::MAX,
+        }));
+        let report = handle.submit_runtime_events(late).await.unwrap();
+        assert_eq!(report.applied, 0);
+        assert_eq!(report.side_effects, 0);
+        assert!(
+            handle
+                .drain_render_side_effects_for_client(primary.clone(), 8)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert!(exit.metrics.runtime_timer_events_ignored > 0);
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that client output-readiness events are applied only for attached
 /// clients and enqueue a render side effect without composing or writing the
 /// frame inside the actor. This keeps slow or backpressured frame delivery on
@@ -582,6 +1145,168 @@ async fn async_actor_queues_render_side_effects_for_applied_events() {
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.commands_processed, 4);
     exit.service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies ordinary framed `terminal/step` ingress reconciles the exact
+/// client's live-overlay timer for both opening and closing `/status`.
+/// Unix attach clients use this path with `render=false`, so timer ownership
+/// cannot depend on direct attached-terminal actor requests.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_reconciles_live_overlay_timers_for_framed_control_steps() {
+    use crate::control::encode_control_body;
+
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "static-framed-control-status".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"ready\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let opened = handle
+            .handle_control_input_for_connection(
+                encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"open-status","method":"terminal/step","params":{"idempotency_key":"framed-open-status","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[47,115,116,97,116,117,115,13]}}"#,
+                ),
+                4096,
+                ControlConnectionState::trusted_existing_client(primary.clone()),
+            )
+            .await
+            .unwrap();
+        let scheduled = handle.drain_timer_side_effects(8).await.unwrap();
+        let status_key = scheduled
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .expect("ordinary framed status step should schedule refresh");
+
+        handle
+            .handle_control_input_for_connection(
+                encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"close-status","method":"terminal/step","params":{"idempotency_key":"framed-close-status","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[113]}}"#,
+                ),
+                4096,
+                opened.connection,
+            )
+            .await
+            .unwrap();
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().iter().any(
+            |effect| matches!(effect, RuntimeSideEffect::CancelTimer { key } if key == &status_key)
+        ));
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
+/// Verifies snapshot-aware framed control ingress applies the same exact-client
+/// live-overlay timer lifecycle as ordinary control ingress. Iroh control
+/// connections use this path even when a frame contains no snapshot method.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_reconciles_live_overlay_timers_for_snapshot_control_steps() {
+    use crate::control::encode_control_body;
+    use crate::storage::snapshot::SnapshotRepository;
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-framed-status-snapshot-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let snapshots = SnapshotRepository::new(root.join("snapshots"));
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "static-snapshot-control-status".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"ready\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let opened = handle
+            .handle_control_input_for_connection_with_snapshots(
+                encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"open-status","method":"terminal/step","params":{"idempotency_key":"snapshot-open-status","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[47,115,116,97,116,117,115,13]}}"#,
+                ),
+                4096,
+                ControlConnectionState::trusted_existing_client(primary.clone()),
+                snapshots.clone(),
+            )
+            .await
+            .unwrap();
+        let scheduled = handle.drain_timer_side_effects(8).await.unwrap();
+        let status_key = scheduled
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .expect("snapshot framed status step should schedule refresh");
+
+        handle
+            .handle_control_input_for_connection_with_snapshots(
+                encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"close-status","method":"terminal/step","params":{"idempotency_key":"snapshot-close-status","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[113]}}"#,
+                ),
+                4096,
+                opened.connection,
+                snapshots,
+            )
+            .await
+            .unwrap();
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().iter().any(
+            |effect| matches!(effect, RuntimeSideEffect::CancelTimer { key } if key == &status_key)
+        ));
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
 }
 
 /// Verifies that actor metrics expose rendered-view and terminal control

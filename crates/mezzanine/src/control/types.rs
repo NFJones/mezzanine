@@ -58,6 +58,8 @@ pub enum RequestedRole {
 pub enum SessionIntent {
     /// Creates one new lease-backed session and attaches to it.
     Create,
+    /// Resolves the host default or creates one session when none exists.
+    ResolveOrCreate,
     /// Attaches to the existing session selected by `session_target`.
     Attach,
     /// Attaches to an existing session selected by host default policy.

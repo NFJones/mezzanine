@@ -247,6 +247,54 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn ensure_client_render_timers(&mut self, client_id: &ClientId) -> Result<usize> {
+        let side_effects = self.client_render_timer_side_effects(client_id)?;
+        let queued = side_effects.len();
+        self.queue_runtime_side_effects(side_effects)?;
+        Ok(queued)
+    }
+
+    /// Defers timer reconciliation when a pending owner render can recover it.
+    ///
+    /// An attached-terminal step has already mutated presentation state before
+    /// this adapter work runs. If its exact-client render invalidation occupies
+    /// the remaining queue capacity, rendering will recompute the same timers
+    /// after draining that effect. Deferral is allowed only when removing that
+    /// one render creates enough capacity for the complete timer effect batch.
+    pub(super) fn ensure_client_render_timers_or_defer_to_pending_render(
+        &mut self,
+        client_id: &ClientId,
+    ) -> Result<usize> {
+        let side_effects = self.client_render_timer_side_effects(client_id)?;
+        let queued = side_effects.len();
+        let pending_owner_render = self.side_effects.iter().any(|effect| {
+            matches!(
+                effect,
+                RuntimeSideEffect::RenderClient {
+                    client_id: pending_client_id,
+                    ..
+                } if pending_client_id == client_id
+            )
+        });
+        let exceeds_capacity =
+            self.side_effects.len().saturating_add(queued) > self.side_effect_buffer;
+        let fits_after_render = self
+            .side_effects
+            .len()
+            .saturating_sub(usize::from(pending_owner_render))
+            .saturating_add(queued)
+            <= self.side_effect_buffer;
+        if pending_owner_render && exceeds_capacity && fits_after_render {
+            return Ok(0);
+        }
+        self.queue_runtime_side_effects(side_effects)?;
+        Ok(queued)
+    }
+
+    /// Computes cursor and status timer effects for one exact client.
+    fn client_render_timer_side_effects(
+        &mut self,
+        client_id: &ClientId,
+    ) -> Result<Vec<RuntimeSideEffect>> {
         let generation_base_ms = async_runtime_current_unix_millis();
         let mut side_effects = self
             .service
@@ -265,9 +313,7 @@ impl AsyncRuntimeSessionActor {
                 )?
                 .side_effects,
         );
-        let queued = side_effects.len();
-        self.queue_runtime_side_effects(side_effects)?;
-        Ok(queued)
+        Ok(side_effects)
     }
 
     /// Runs the shell transaction timer side effects operation for this subsystem.
@@ -375,6 +421,26 @@ impl AsyncRuntimeSessionActor {
                 generation_base_ms,
             )?
             .side_effects)
+    }
+
+    /// Reconciles every actor-owned status timer after shared lifecycle cleanup.
+    pub(super) fn status_refresh_timer_reconciliation_side_effects(
+        &mut self,
+        generation_base_ms: u64,
+    ) -> Result<Vec<RuntimeSideEffect>> {
+        let client_ids = self
+            .timers
+            .status_refresh
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut side_effects = Vec::new();
+        for client_id in client_ids {
+            side_effects.extend(
+                self.status_refresh_timer_side_effects_for_client(&client_id, generation_base_ms)?,
+            );
+        }
+        Ok(side_effects)
     }
 
     /// Runs the pane pipe health timer side effects for pane operation for this subsystem.

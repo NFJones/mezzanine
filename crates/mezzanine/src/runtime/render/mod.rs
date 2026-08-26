@@ -24,9 +24,9 @@ use mez_mux::overlay::{
 use mez_mux::render::{modal_overlay_max_scroll, modal_overlay_page_rows};
 
 use super::service_state::{
-    RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimeMouseClickState,
-    RuntimePaneAgentStatusSelector, RuntimePrimaryPromptInput, RuntimeRecordBrowserOverlayFrame,
-    RuntimeRecordBrowserOverlaySource,
+    RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimeLiveOverlaySourceKind,
+    RuntimeMouseClickState, RuntimePaneAgentStatusSelector, RuntimePrimaryPromptInput,
+    RuntimeRecordBrowserOverlayFrame, RuntimeRecordBrowserOverlaySource,
 };
 use super::{
     AgentShellVisibility, AgentTurnRecord, AgentTurnState, AttachedClientStepApplication,
@@ -873,6 +873,22 @@ impl RuntimePresentationComponent {
             .retain(|(_, candidate), _| candidate != pane_id);
         for state in self.client_states.values_mut() {
             let before = state.clone();
+            if state
+                .primary_display_overlay
+                .as_ref()
+                .and_then(|overlay| overlay.live_source.as_ref())
+                .is_some_and(|source| {
+                    matches!(
+                        &source.source,
+                        RuntimeLiveOverlaySourceKind::AgentStatus {
+                            pane_id: source_pane_id,
+                            ..
+                        } if source_pane_id == pane_id
+                    )
+                })
+            {
+                state.primary_display_overlay = None;
+            }
             state.agent_prompt_inputs.remove(pane_id);
             state
                 .active_copy_modes

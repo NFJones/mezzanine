@@ -244,10 +244,12 @@ mez --iroh-profile HOST list
 mez --iroh-profile HOST kill <lease-id|session-id|name> --force
 ```
 
-Omitted-target `attach` and `new` explicitly request idempotent creation. An
-explicit target attaches only an authorized existing lease; `--default`
-selects an existing default and never creates. Pairing and profile checks are
-implemented as host-only operations and cannot create or attach a session.
+Omitted-target `attach` atomically selects the existing host default or creates
+one when none exists. `attach --default` selects an existing default and never
+creates. `new` explicitly requests fresh idempotent creation, while an explicit
+attach target selects only an authorized existing lease. Pairing and profile
+checks are implemented as host-only operations and cannot create or attach a
+session.
 Host-only initialization advertises only the methods granted to that trust
 record. Force-kill is distinct from detach and lease administration: it must be
 granted when issuing a primary invitation and durably revokes the selected
