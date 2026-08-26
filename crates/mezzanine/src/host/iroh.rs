@@ -54,6 +54,74 @@ struct RemoteClientConnectionLog {
     route: String,
 }
 
+/// Privacy-safe aggregate of persistent-host Iroh cleanup degradation.
+#[derive(Debug, Default)]
+struct HostIrohShutdownReport {
+    endpoint_close_failed: bool,
+    task_join_failures: usize,
+    unexpected_task_cancellations: usize,
+    forced_aborts: usize,
+}
+
+impl HostIrohShutdownReport {
+    /// Records one connection-task join without retaining panic payloads or
+    /// peer-identifying context.
+    fn record_task_completion(
+        &mut self,
+        joined: std::result::Result<(), tokio::task::JoinError>,
+        cancellation_expected: bool,
+    ) {
+        let Err(error) = joined else {
+            return;
+        };
+        if error.is_cancelled() {
+            if !cancellation_expected {
+                self.unexpected_task_cancellations =
+                    self.unexpected_task_cancellations.saturating_add(1);
+            }
+        } else {
+            self.task_join_failures = self.task_join_failures.saturating_add(1);
+        }
+    }
+
+    /// Returns the accepted count only for a fully clean listener and cleanup
+    /// outcome; otherwise returns one deterministic aggregate service error.
+    fn finish(self, accepted: u64, endpoint_closed_unexpectedly: bool) -> Result<u64> {
+        let mut failures = Vec::new();
+        if endpoint_closed_unexpectedly {
+            failures.push("persistent host Iroh listener closed unexpectedly".to_string());
+        }
+        if self.endpoint_close_failed {
+            failures.push("endpoint close timed out".to_string());
+        }
+        if self.task_join_failures != 0 {
+            failures.push(format!(
+                "{} connection task joins failed",
+                self.task_join_failures
+            ));
+        }
+        if self.unexpected_task_cancellations != 0 {
+            failures.push(format!(
+                "{} connection tasks were cancelled unexpectedly",
+                self.unexpected_task_cancellations
+            ));
+        }
+        if self.forced_aborts != 0 {
+            failures.push(format!(
+                "{} connection tasks required forced abort",
+                self.forced_aborts
+            ));
+        }
+        if failures.is_empty() {
+            return Ok(accepted);
+        }
+        Err(MezError::invalid_state(format!(
+            "{} after accepting {accepted} connections",
+            failures.join("; ")
+        )))
+    }
+}
+
 impl Drop for RemoteClientConnectionLog {
     fn drop(&mut self) {
         eprintln!(
@@ -361,6 +429,7 @@ impl HostIrohRuntime {
         let mut tasks = JoinSet::new();
         let mut accepted = 0u64;
         let mut endpoint_closed_unexpectedly = false;
+        let mut shutdown_report = HostIrohShutdownReport::default();
         eprintln!("mez host: listening for remote clients on Iroh endpoint {server_endpoint_id}");
         tokio::pin!(cancellation);
 
@@ -398,30 +467,39 @@ impl HostIrohRuntime {
                     accepted = accepted.saturating_add(1);
                 }
                 joined = tasks.join_next(), if !tasks.is_empty() => {
-                    let _connection_result = joined;
+                    if let Some(joined) = joined {
+                        shutdown_report.record_task_completion(joined, false);
+                    }
                 }
             }
         }
 
-        let _ = self.endpoint.shutdown_handle().close().await;
-        let drain = async {
-            while let Some(joined) = tasks.join_next().await {
-                let _connection_result = joined;
-            }
-            Ok::<(), MezError>(())
-        };
-        if tokio::time::timeout(policy.setup_timeout, drain)
-            .await
-            .is_err()
-        {
-            tasks.abort_all();
+        shutdown_report.endpoint_close_failed = !self.endpoint.shutdown_handle().close().await;
+        drain_host_iroh_connection_tasks(&mut tasks, policy.setup_timeout, &mut shutdown_report)
+            .await;
+        shutdown_report.finish(accepted, endpoint_closed_unexpectedly)
+    }
+}
+
+/// Drains every persistent-host connection task within policy, then aborts and
+/// joins all remaining work while retaining privacy-safe degradation counts.
+async fn drain_host_iroh_connection_tasks(
+    tasks: &mut JoinSet<()>,
+    timeout: std::time::Duration,
+    report: &mut HostIrohShutdownReport,
+) {
+    let drain = async {
+        while let Some(joined) = tasks.join_next().await {
+            report.record_task_completion(joined, false);
         }
-        if endpoint_closed_unexpectedly {
-            return Err(MezError::invalid_state(format!(
-                "persistent host Iroh listener closed unexpectedly after accepting {accepted} connections",
-            )));
-        }
-        Ok(accepted)
+    };
+    if tokio::time::timeout(timeout, drain).await.is_ok() {
+        return;
+    }
+    report.forced_aborts = report.forced_aborts.saturating_add(tasks.len());
+    tasks.abort_all();
+    while let Some(joined) = tasks.join_next().await {
+        report.record_task_completion(joined, true);
     }
 }
 
@@ -1483,6 +1561,82 @@ mod tests {
             std::process::id(),
             rand::random::<u64>()
         ))
+    }
+
+    /// Endpoint-close degradation and a connection-task panic must both remain
+    /// visible after cleanup without exposing the panic payload.
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_shutdown_report_aggregates_close_and_task_failures() {
+        let mut tasks = JoinSet::new();
+        tasks.spawn(async { panic!("private panic payload") });
+        let joined = tasks.join_next().await.unwrap();
+        let mut report = HostIrohShutdownReport {
+            endpoint_close_failed: true,
+            ..HostIrohShutdownReport::default()
+        };
+        report.record_task_completion(joined, false);
+
+        let error = report.finish(7, true).unwrap_err();
+
+        assert_eq!(error.kind(), MezErrorKind::InvalidState);
+        assert!(
+            error
+                .message()
+                .contains("persistent host Iroh listener closed unexpectedly"),
+            "{error:?}"
+        );
+        assert!(
+            error.message().contains("endpoint close timed out"),
+            "{error:?}"
+        );
+        assert!(
+            error.message().contains("1 connection task joins failed"),
+            "{error:?}"
+        );
+        assert!(
+            error.message().contains("accepting 7 connections"),
+            "{error:?}"
+        );
+        assert!(
+            !error.message().contains("private panic payload"),
+            "{error:?}"
+        );
+    }
+
+    /// A connection task that exceeds the bounded drain is aborted, joined,
+    /// and reported instead of being detached or misreported as clean.
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_shutdown_report_records_forced_abort_and_joins_task() {
+        let mut tasks = JoinSet::new();
+        tasks.spawn(std::future::pending::<()>());
+        let mut report = HostIrohShutdownReport::default();
+
+        drain_host_iroh_connection_tasks(
+            &mut tasks,
+            std::time::Duration::from_millis(10),
+            &mut report,
+        )
+        .await;
+
+        assert!(tasks.is_empty());
+        assert_eq!(report.forced_aborts, 1);
+        assert_eq!(report.unexpected_task_cancellations, 0);
+        let error = report.finish(1, false).unwrap_err();
+        assert!(
+            error
+                .message()
+                .contains("1 connection tasks required forced abort"),
+            "{error:?}"
+        );
+    }
+
+    /// Fully clean endpoint and task cleanup preserves the accepted count.
+    #[test]
+    fn host_shutdown_report_accepts_clean_completion() {
+        assert_eq!(
+            HostIrohShutdownReport::default().finish(3, false).unwrap(),
+            3
+        );
     }
 
     /// A complete malformed setup header is terminal and must fail before the
