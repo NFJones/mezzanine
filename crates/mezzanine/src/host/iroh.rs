@@ -54,6 +54,59 @@ struct RemoteClientConnectionLog {
     route: String,
 }
 
+/// Marks the complete interval in which the persistent-host listener is live.
+struct HostIrohListenerDiagnosticsGuard {
+    diagnostics: RuntimeIrohDiagnostics,
+}
+
+impl HostIrohListenerDiagnosticsGuard {
+    fn new(diagnostics: RuntimeIrohDiagnostics) -> Self {
+        diagnostics.listener_started();
+        Self { diagnostics }
+    }
+}
+
+impl Drop for HostIrohListenerDiagnosticsGuard {
+    fn drop(&mut self) {
+        self.diagnostics.listener_stopped();
+    }
+}
+
+/// Records every pre-session attempt as either one setup success or one setup
+/// failure, including errors returned through `?` before initialization.
+struct HostIrohSetupDiagnosticsGuard {
+    diagnostics: RuntimeIrohDiagnostics,
+    started: std::time::Instant,
+    established: bool,
+}
+
+impl HostIrohSetupDiagnosticsGuard {
+    fn new(diagnostics: RuntimeIrohDiagnostics, started: std::time::Instant) -> Self {
+        Self {
+            diagnostics,
+            started,
+            established: false,
+        }
+    }
+
+    fn connection_started(
+        &mut self,
+        connection: &iroh::endpoint::Connection,
+    ) -> crate::runtime::RuntimeIrohConnectionGuard {
+        self.established = true;
+        self.diagnostics
+            .connection_started(connection, self.started.elapsed())
+    }
+}
+
+impl Drop for HostIrohSetupDiagnosticsGuard {
+    fn drop(&mut self) {
+        if !self.established {
+            self.diagnostics.record_rejected(self.started.elapsed());
+        }
+    }
+}
+
 /// Privacy-safe aggregate of persistent-host Iroh cleanup degradation.
 #[derive(Debug, Default)]
 struct HostIrohShutdownReport {
@@ -430,6 +483,8 @@ impl HostIrohRuntime {
         let mut accepted = 0u64;
         let mut endpoint_closed_unexpectedly = false;
         let mut shutdown_report = HostIrohShutdownReport::default();
+        let _listener_diagnostics_guard =
+            HostIrohListenerDiagnosticsGuard::new(diagnostics.clone());
         eprintln!("mez host: listening for remote clients on Iroh endpoint {server_endpoint_id}");
         tokio::pin!(cancellation);
 
@@ -447,6 +502,7 @@ impl HostIrohRuntime {
                     let server_endpoint_id = server_endpoint_id.clone();
                     let router = router.clone();
                     let diagnostics = diagnostics.clone();
+                    let result_diagnostics = diagnostics.clone();
                     let audit_log = audit_log.clone();
                     tasks.spawn(async move {
                         let result = serve_host_only_connection(
@@ -459,6 +515,7 @@ impl HostIrohRuntime {
                             audit_log,
                             &remote_route,
                         ).await;
+                        result_diagnostics.record_result(&result);
                         match result {
                             Ok(()) => {}
                             Err(error) => eprintln!("mez host: remote client connection from {remote_route} failed: {error}"),
@@ -518,6 +575,8 @@ async fn serve_host_only_connection(
     remote_route: &str,
 ) -> Result<()> {
     let setup_started = std::time::Instant::now();
+    let mut setup_diagnostics =
+        HostIrohSetupDiagnosticsGuard::new(diagnostics.clone(), setup_started);
     let setup_deadline = tokio::time::Instant::now() + policy.setup_timeout;
     let mut accepting = incoming
         .accept()
@@ -570,10 +629,10 @@ async fn serve_host_only_connection(
     )
     .await
     .map_err(|_| MezError::invalid_state("host Iroh initialize read timed out"))??;
+    let connection_guard = setup_diagnostics.connection_started(&connection);
     if let Some(router) = router.as_ref()
         && request_session_intent(&request).as_deref() != Some("host_only")
     {
-        let connection_guard = diagnostics.connection_started(&connection, setup_started.elapsed());
         return serve_routed_initialize(
             request,
             &trust,
@@ -590,6 +649,7 @@ async fn serve_host_only_connection(
         )
         .await;
     }
+    let _connection_guard = connection_guard;
     let initialized = match handle_host_only_initialize_with_audit(
         &request,
         &trust,
@@ -1921,11 +1981,19 @@ mod tests {
             crate::runtime::bind_runtime_iroh_client_endpoint(&policy, iroh::SecretKey::generate())
                 .await
                 .unwrap();
+        let diagnostics = host.endpoint.diagnostics();
         let stop = std::sync::Arc::new(tokio::sync::Notify::new());
         let server_stop = stop.clone();
 
         let server = host.serve(async move { server_stop.notified().await });
         let client_work = async {
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while !diagnostics.snapshot().listener_active {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("live persistent-host listener should report active");
             let invalid = exchange_test_host_initialize(
                 &client,
                 &server_addr,
@@ -1966,6 +2034,19 @@ mod tests {
 
         let (served, ()) = tokio::join!(server, client_work);
         assert_eq!(served.unwrap(), 3);
+        let snapshot = diagnostics.snapshot();
+        assert!(!snapshot.listener_active);
+        assert_eq!(snapshot.active_connections, 0);
+        assert_eq!(snapshot.connections_accepted, 3);
+        assert_eq!(snapshot.connections_rejected, 0);
+        assert_eq!(snapshot.setup_successes, 3);
+        assert_eq!(snapshot.setup_failures, 0);
+        assert_eq!(
+            snapshot
+                .connections_completed
+                .saturating_add(snapshot.connections_failed),
+            3
+        );
         assert_eq!(host.trust.list_records().unwrap().len(), 1);
         client.close().await;
         drop(host);
@@ -1987,6 +2068,7 @@ mod tests {
         };
         let host = HostIrohRuntime::bind(&root, policy).await.unwrap().unwrap();
         let endpoint = host.endpoint.endpoint().clone();
+        let diagnostics = host.endpoint.diagnostics();
         endpoint.close().await;
 
         let error = tokio::time::timeout(
@@ -2003,6 +2085,7 @@ mod tests {
                 .contains("persistent host Iroh listener closed unexpectedly"),
             "{error:?}"
         );
+        assert!(!diagnostics.snapshot().listener_active);
 
         drop(host);
         let _ = fs::remove_dir_all(root);
@@ -2020,6 +2103,7 @@ mod tests {
             ..RuntimeIrohTransportPolicy::default()
         };
         let host = HostIrohRuntime::bind(&root, policy).await.unwrap().unwrap();
+        let diagnostics = host.endpoint.diagnostics();
         let shutdown = host.endpoint.shutdown_handle();
         let (served, closed) = tokio::time::timeout(std::time::Duration::from_secs(3), async {
             tokio::join!(host.serve(std::future::pending()), shutdown.close())
@@ -2028,6 +2112,7 @@ mod tests {
         .expect("intentional host endpoint shutdown should remain bounded");
         assert!(closed);
         assert_eq!(served.unwrap(), 0);
+        assert!(!diagnostics.snapshot().listener_active);
 
         drop(host);
         let _ = fs::remove_dir_all(root);
@@ -2080,13 +2165,14 @@ mod tests {
         .expect("host should accept the silent peer")
         .expect("host endpoint should remain open");
         let remote_route = remote_client_route(incoming.remote_addr());
+        let diagnostics = host.endpoint.diagnostics();
         let handler = serve_host_only_connection(
             incoming,
             handler_policy,
             host.trust.clone(),
             host.endpoint_id().to_string(),
             None,
-            host.endpoint.diagnostics(),
+            diagnostics.clone(),
             None,
             &remote_route,
         );
@@ -2104,6 +2190,12 @@ mod tests {
             error.to_string().contains("initialize read timed out"),
             "{error}"
         );
+        let snapshot = diagnostics.snapshot();
+        assert_eq!(snapshot.active_connections, 0);
+        assert_eq!(snapshot.connections_accepted, 0);
+        assert_eq!(snapshot.connections_rejected, 1);
+        assert_eq!(snapshot.setup_successes, 0);
+        assert_eq!(snapshot.setup_failures, 1);
 
         client.close().await;
         drop(host);
@@ -2133,6 +2225,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        let diagnostics = host.endpoint.diagnostics();
         let router = HostSessionRouter::new(HostSessionRouterConfig {
             runtime_root: root.join("runtime"),
             owner_uid: crate::runtime::current_effective_uid(),
@@ -2434,6 +2527,18 @@ mod tests {
 
         let (served, ()) = tokio::join!(server, client_work);
         assert_eq!(served.unwrap(), 12);
+        let snapshot = diagnostics.snapshot();
+        assert!(!snapshot.listener_active);
+        assert_eq!(snapshot.active_connections, 0);
+        assert_eq!(snapshot.connections_accepted, 12);
+        assert_eq!(snapshot.setup_successes, 12);
+        assert_eq!(snapshot.connections_rejected, snapshot.setup_failures);
+        assert_eq!(
+            snapshot
+                .connections_completed
+                .saturating_add(snapshot.connections_failed),
+            12
+        );
         router
             .shutdown_all(true, std::time::Duration::from_secs(2))
             .await

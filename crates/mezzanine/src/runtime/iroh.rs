@@ -288,11 +288,11 @@ impl RuntimeIrohDiagnostics {
         }
     }
 
-    fn listener_started(&self) {
+    pub(crate) fn listener_started(&self) {
         self.inner.listener_active.store(true, Ordering::Relaxed);
     }
 
-    fn listener_stopped(&self) {
+    pub(crate) fn listener_stopped(&self) {
         self.inner.listener_active.store(false, Ordering::Relaxed);
     }
 
@@ -306,7 +306,7 @@ impl RuntimeIrohDiagnostics {
             .fetch_max(millis, Ordering::Relaxed);
     }
 
-    fn record_rejected(&self, elapsed: std::time::Duration) {
+    pub(crate) fn record_rejected(&self, elapsed: std::time::Duration) {
         self.inner
             .connections_rejected
             .fetch_add(1, Ordering::Relaxed);
@@ -360,7 +360,7 @@ impl RuntimeIrohDiagnostics {
         }
     }
 
-    fn record_result(&self, result: &Result<u64>) {
+    pub(crate) fn record_result<T>(&self, result: &Result<T>) {
         if result.is_ok() {
             self.inner
                 .connections_completed
