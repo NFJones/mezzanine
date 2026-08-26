@@ -906,14 +906,25 @@ mod tests {
         let _ = fs::remove_file(&marker);
         let probe = crate::runtime::processes::NativeBubblewrapCapabilityProbe::for_test(
             "/bin/sh",
-            vec!["-c".to_string(), "printf wrong; exit 7".to_string()],
+            vec![
+                "-c".to_string(),
+                "printf wrong; printf 'bwrap: namespace denied\\033[31m\\n' >&2; exit 7"
+                    .to_string(),
+            ],
             "mez-native-probe-ok",
         );
         let command = format!("printf ran > '{}'", marker.display());
 
         let outcome = execute_native_shell_dispatch(dispatch_with_probe(&command, Some(probe)));
 
-        assert!(outcome.result.is_err());
+        let failure = outcome.result.unwrap_err();
+        assert!(failure.message.contains("exit code 7"), "{failure:?}");
+        assert!(
+            failure.message.contains("bwrap: namespace denied"),
+            "{failure:?}"
+        );
+        assert!(failure.message.contains("\\u{1b}"), "{failure:?}");
+        assert!(!failure.message.contains('\u{1b}'), "{failure:?}");
         assert!(outcome.bubblewrap_capability.is_none());
         assert!(!marker.exists(), "workload ran despite failed probe");
     }

@@ -40,6 +40,8 @@ const NATIVE_BUBBLEWRAP_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const NATIVE_BUBBLEWRAP_PROBE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// Maximum retained output from either native capability-probe pipe.
 const NATIVE_BUBBLEWRAP_PROBE_OUTPUT_LIMIT_BYTES: usize = 8 * 1024;
+/// Maximum escaped probe output included in one user-facing diagnostic.
+const NATIVE_BUBBLEWRAP_PROBE_DIAGNOSTIC_PREVIEW_BYTES: usize = 512;
 
 /// Uncached native capability probe transferred to the external worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -667,7 +669,7 @@ fn run_native_bubblewrap_capability_probe(
         }
     };
     let stdout = join_bounded_probe_reader(stdout_reader);
-    let stderr_present = !join_bounded_probe_reader(stderr_reader).is_empty();
+    let stderr = join_bounded_probe_reader(stderr_reader);
     let stdout = String::from_utf8_lossy(&stdout).into_owned();
     let exit_code = status.code().unwrap_or(-1);
     crate::security::sandbox::parse_bubblewrap_capability_probe(
@@ -679,14 +681,44 @@ fn run_native_bubblewrap_capability_probe(
         &stdout,
     )
     .map_err(|error| {
+        let output_diagnostic = if !stderr.is_empty() {
+            format!(
+                "stderr: {}",
+                native_bubblewrap_probe_output_preview(&stderr)
+            )
+        } else if !stdout.is_empty() {
+            format!(
+                "unexpected stdout: {}",
+                native_bubblewrap_probe_output_preview(stdout.as_bytes())
+            )
+        } else {
+            "no diagnostic output".to_string()
+        };
         MezError::invalid_state(crate::security::sandbox::bubblewrap_failure_remediation(
             &format!(
-                "native Bubblewrap capability probe failed: {} (stderr output present: {})",
+                "native Bubblewrap capability probe failed: {} (exit code {}; {})",
                 error.message(),
-                stderr_present
+                exit_code,
+                output_diagnostic
             ),
         ))
     })
+}
+
+/// Escapes one bounded probe-output prefix for safe inline diagnostics.
+fn native_bubblewrap_probe_output_preview(output: &[u8]) -> String {
+    let output = String::from_utf8_lossy(output);
+    let mut preview = String::new();
+    for character in output.chars() {
+        let escaped = character.escape_default().to_string();
+        if preview.len().saturating_add(escaped.len())
+            > NATIVE_BUBBLEWRAP_PROBE_DIAGNOSTIC_PREVIEW_BYTES
+        {
+            break;
+        }
+        preview.push_str(&escaped);
+    }
+    preview
 }
 
 /// Drains one probe pipe concurrently so a noisy child cannot fill its pipe

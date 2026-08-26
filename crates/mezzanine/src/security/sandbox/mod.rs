@@ -80,9 +80,13 @@ pub(crate) const BUBBLEWRAP_RESTRICTION_IDS: [&str; 4] = [
 /// consumers receive an actionable next step without exposing launch argv or
 /// suggesting that sandbox authority be broadened.
 pub(crate) fn bubblewrap_failure_remediation(message: &str) -> String {
+    let message = message.trim();
+    if message.contains("`mez sandbox status --verbose`") {
+        return message.to_string();
+    }
     format!(
         "{}. Run `mez sandbox status --verbose` to inspect the executable, authority, and configuration remedies.",
-        message.trim().trim_end_matches('.')
+        message.trim_end_matches('.')
     )
 }
 
@@ -496,7 +500,7 @@ pub(crate) fn bubblewrap_capability_probe_plan_for_identity(
     let expected_stdout = "mez-bubblewrap-capability-v6";
     let probe_shell_path = "/bin/sh";
     let probe_script = format!(
-        "test ! -e /etc/passwd && test \"$(id -u)\" = '{user_id}' && test \"$(id -g)\" = '{group_id}' && test -r /proc/self/status && test -c /dev/null && test -w /tmp && test -w \"$HOME\" && test -z \"${{SSH_AUTH_SOCK+x}}\" && printf '%s' '{expected_stdout}'"
+        "uid_ok=; gid_ok=; while read -r key real effective saved filesystem; do case \"$key\" in Uid:) test \"$effective\" = '{user_id}' && uid_ok=1 ;; Gid:) test \"$effective\" = '{group_id}' && gid_ok=1 ;; esac; done < /proc/self/status; test ! -e /etc/passwd && test \"$uid_ok\" = 1 && test \"$gid_ok\" = 1 && test -c /dev/null && test -w /tmp && test -w \"$HOME\" && test -z \"${{SSH_AUTH_SOCK+x}}\" && printf '%s' '{expected_stdout}'"
     );
     let bubblewrap_arguments = vec![
         "--unshare-user",
