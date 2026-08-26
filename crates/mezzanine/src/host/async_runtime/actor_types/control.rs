@@ -258,8 +258,23 @@ where
             return Ok(served);
         }
 
+        let next_frame = async {
+            match config.application_idle_timeout {
+                Some(timeout) => tokio::time::timeout(timeout, framed.next())
+                    .await
+                    .map_err(|_| control_application_idle_error("waiting for a control frame")),
+                None => Ok(framed.next().await),
+            }
+        };
         tokio::select! {
-            frame = framed.next() => {
+            frame = next_frame => {
+                let frame = match frame {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        submit_control_connection_disconnect_event(handle, connection).await?;
+                        return Err(error);
+                    }
+                };
                 let Some(frame) = frame else {
                     submit_control_connection_disconnect_event(handle, connection).await?;
                     return Ok(served);
@@ -276,15 +291,21 @@ where
                     return Err(error);
                 }
                 let input = encode_frame(&frame);
-                let result = match handle_control_input_with_optional_snapshots(
+                let dispatch = handle_control_input_with_optional_snapshots(
                     handle,
                     input,
                     config.max_content_length,
                     connection,
                     snapshots,
-                )
-                .await
-                {
+                );
+                let result = match config.application_idle_timeout {
+                    Some(timeout) => match tokio::time::timeout(timeout, dispatch).await {
+                        Ok(result) => result,
+                        Err(_) => Err(control_application_idle_error("dispatching a control request")),
+                    },
+                    None => dispatch.await,
+                };
+                let result = match result {
                     Ok(result) => result,
                     Err(error) => {
                         submit_control_connection_disconnect_event(handle, connection).await?;
@@ -292,13 +313,32 @@ where
                     }
                 };
                 *connection = result.connection;
-                if let Err(error) = framed.get_mut().write_all(&result.output).await {
+                let write_result = match config.application_idle_timeout {
+                    Some(timeout) => match tokio::time::timeout(
+                        timeout,
+                        framed.get_mut().write_all(&result.output),
+                    )
+                    .await
+                    {
+                        Ok(result) => result.map_err(Into::into),
+                        Err(_) => Err(control_application_idle_error("writing a control response")),
+                    },
+                    None => framed.get_mut().write_all(&result.output).await.map_err(Into::into),
+                };
+                if let Err(error) = write_result {
                     submit_control_connection_disconnect_event(handle, connection).await?;
-                    return Err(error.into());
+                    return Err(error);
                 }
-                if let Err(error) = framed.get_mut().flush().await {
+                let flush_result = match config.application_idle_timeout {
+                    Some(timeout) => match tokio::time::timeout(timeout, framed.get_mut().flush()).await {
+                        Ok(result) => result.map_err(Into::into),
+                        Err(_) => Err(control_application_idle_error("flushing a control response")),
+                    },
+                    None => framed.get_mut().flush().await.map_err(Into::into),
+                };
+                if let Err(error) = flush_result {
                     submit_control_connection_disconnect_event(handle, connection).await?;
-                    return Err(error.into());
+                    return Err(error);
                 }
                 post_flush(connection)?;
                 served = served.saturating_add(1);
@@ -314,6 +354,13 @@ where
             }
         }
     }
+}
+
+/// Returns a payload-free timeout diagnostic for one bounded control wait.
+fn control_application_idle_error(operation: &str) -> MezError {
+    MezError::invalid_state(format!(
+        "control connection application idle timeout while {operation}"
+    ))
 }
 
 /// Submits a best-effort client disconnect event when a control connection EOFs.

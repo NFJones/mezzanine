@@ -478,3 +478,202 @@ async fn authenticated_control_loop_round_trips_over_duplex_stream() {
     let ((), (), exit) = tokio::join!(client, server, actor.run());
     assert_eq!(exit.commands_processed, 2);
 }
+
+/// An authenticated remote peer that sends no complete frame must be reclaimed
+/// by the opt-in application-idle deadline without affecting Unix defaults.
+#[tokio::test(flavor = "current_thread")]
+async fn authenticated_control_loop_times_out_silent_remote_peer() {
+    use crate::control::AuthenticatedPeer;
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let (_client_stream, mut server_stream) = tokio::io::duplex(1024);
+    let server = async {
+        let mut connection = ControlConnectionState::new(true, true);
+        let error = serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
+            &mut server_stream,
+            AuthenticatedPeer::iroh_endpoint("silent-peer"),
+            &handle,
+            &mut connection,
+            AsyncRuntimeControlConnectionConfig::new(4096, current_effective_uid())
+                .unwrap()
+                .with_application_idle_timeout(Duration::from_millis(50)),
+            None,
+            |_, _| false,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.message().contains("application idle timeout"),
+            "{error:?}"
+        );
+        assert!(
+            error.message().contains("waiting for a control frame"),
+            "{error:?}"
+        );
+        let _ = handle.shutdown().await.unwrap();
+    };
+
+    let ((), _exit) = tokio::join!(server, actor.run());
+}
+
+/// Fragmented input remains valid when the complete frame arrives within one
+/// idle interval; partial bytes do not get mistaken for a terminal timeout.
+#[tokio::test(flavor = "current_thread")]
+async fn authenticated_control_loop_accepts_fragmented_frame_within_idle_deadline() {
+    use crate::control::{AuthenticatedPeer, decode_control_frame, encode_control_body};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let (mut client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let input = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+    );
+    let split_at = input.len() / 2;
+    let client = async {
+        client_stream.write_all(&input[..split_at]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        client_stream.write_all(&input[split_at..]).await.unwrap();
+        let mut output = vec![0; 4096];
+        let read = client_stream.read(&mut output).await.unwrap();
+        output.truncate(read);
+        let (body, _) = decode_control_frame(&output, 4096).unwrap();
+        assert!(body.contains(r#""granted_role":"primary""#), "{body}");
+    };
+    let server = async {
+        let mut connection = ControlConnectionState::new(true, true);
+        let served = serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
+            &mut server_stream,
+            AuthenticatedPeer::unix_user(current_effective_uid()),
+            &handle,
+            &mut connection,
+            AsyncRuntimeControlConnectionConfig::new(4096, current_effective_uid())
+                .unwrap()
+                .with_application_idle_timeout(Duration::from_millis(100)),
+            None,
+            |served, _| served >= 1,
+        )
+        .await
+        .unwrap();
+        assert_eq!(served, 1);
+        let _ = handle.shutdown().await.unwrap();
+    };
+
+    let ((), (), _exit) = tokio::join!(client, server, actor.run());
+}
+
+/// Each fully flushed request/response cycle resets the idle interval, so
+/// healthy periodic traffic can outlive one absolute timeout duration.
+#[tokio::test(flavor = "current_thread")]
+async fn authenticated_control_loop_resets_idle_deadline_after_active_traffic() {
+    use crate::control::{AuthenticatedPeer, decode_control_frame, encode_control_body};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let (mut client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let initialize = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+    );
+    let get_session =
+        encode_control_body(r#"{"jsonrpc":"2.0","id":"get","method":"session/get","params":{}}"#);
+    let client = async {
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        client_stream.write_all(&initialize).await.unwrap();
+        let mut first = vec![0; 4096];
+        let read = client_stream.read(&mut first).await.unwrap();
+        first.truncate(read);
+        assert!(
+            decode_control_frame(&first, 4096)
+                .unwrap()
+                .0
+                .contains("granted_role")
+        );
+
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        client_stream.write_all(&get_session).await.unwrap();
+        let mut second = vec![0; 4096];
+        let read = client_stream.read(&mut second).await.unwrap();
+        second.truncate(read);
+        assert!(
+            decode_control_frame(&second, 4096)
+                .unwrap()
+                .0
+                .contains("session_id")
+        );
+    };
+    let server = async {
+        let mut connection = ControlConnectionState::new(true, true);
+        let served = serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
+            &mut server_stream,
+            AuthenticatedPeer::unix_user(current_effective_uid()),
+            &handle,
+            &mut connection,
+            AsyncRuntimeControlConnectionConfig::new(4096, current_effective_uid())
+                .unwrap()
+                .with_application_idle_timeout(Duration::from_millis(60)),
+            None,
+            |served, _| served >= 2,
+        )
+        .await
+        .unwrap();
+        assert_eq!(served, 2);
+        let _ = handle.shutdown().await.unwrap();
+    };
+
+    let ((), (), _exit) = tokio::join!(client, server, actor.run());
+}
+
+/// A peer that submits initialization but never reads its response cannot pin
+/// the connection in an unbounded response write, and disconnect cleanup is
+/// consumed exactly once when the write times out.
+#[tokio::test(flavor = "current_thread")]
+async fn authenticated_control_loop_times_out_blocked_response_write() {
+    use crate::control::{AuthenticatedPeer, encode_control_body};
+    use tokio::io::AsyncWriteExt;
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let (mut client_stream, mut server_stream) = tokio::io::duplex(64);
+    let initialize = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":2,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+    );
+    let client = async {
+        client_stream.write_all(&initialize).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let server = async {
+        let mut connection = ControlConnectionState::new(true, true);
+        let error = serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
+            &mut server_stream,
+            AuthenticatedPeer::unix_user(current_effective_uid()),
+            &handle,
+            &mut connection,
+            AsyncRuntimeControlConnectionConfig::new(4096, current_effective_uid())
+                .unwrap()
+                .with_application_idle_timeout(Duration::from_millis(50)),
+            None,
+            |_, _| false,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.message().contains("application idle timeout"),
+            "{error:?}"
+        );
+        assert!(
+            error.message().contains("writing a control response"),
+            "{error:?}"
+        );
+        assert!(connection.caller_client_id().is_some());
+        assert!(connection.take_disconnect_client_id().is_none());
+        let _ = handle.shutdown().await.unwrap();
+    };
+
+    let ((), (), _exit) = tokio::join!(client, server, actor.run());
+}

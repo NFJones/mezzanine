@@ -756,6 +756,9 @@ pub struct AsyncRuntimeControlConnectionConfig {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub owner_uid: u32,
+    /// Optional application-idle deadline for one complete request/response
+    /// cycle. Unix control leaves this unset; remote transports opt in.
+    pub application_idle_timeout: Option<Duration>,
 }
 
 impl AsyncRuntimeControlConnectionConfig {
@@ -773,7 +776,14 @@ impl AsyncRuntimeControlConnectionConfig {
         Ok(Self {
             max_content_length,
             owner_uid,
+            application_idle_timeout: None,
         })
+    }
+
+    /// Applies a finite application-idle deadline to remote control waits.
+    pub fn with_application_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.application_idle_timeout = Some(timeout);
+        self
     }
 }
 
@@ -787,6 +797,7 @@ impl Default for AsyncRuntimeControlConnectionConfig {
         Self {
             max_content_length: DEFAULT_ASYNC_CONTROL_MAX_CONTENT_LENGTH,
             owner_uid: current_effective_uid(),
+            application_idle_timeout: None,
         }
     }
 }

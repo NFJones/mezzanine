@@ -1157,6 +1157,7 @@ async fn serve_runtime_iroh_control_connection(
     });
     let sample_connection = connection.clone();
     let response_sampler = sampler.clone();
+    let control_config = control_config.with_application_idle_timeout(idle_timeout);
     let result =
         serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush(
             bridge.stream_mut(),
