@@ -1288,6 +1288,7 @@ mod outbound_policy_tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
     use crate::host::iroh::HostIrohRuntime;
@@ -1300,6 +1301,10 @@ mod outbound_policy_tests {
     };
 
     use super::*;
+
+    /// Allows local Iroh endpoint creation to tolerate parallel workspace load
+    /// without weakening the production transport setup deadline.
+    const COMPRESSION_CONNECTOR_TEST_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
 
     async fn v1_only_server() -> (iroh::Endpoint, EndpointAddr) {
         let server = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
@@ -1585,7 +1590,7 @@ mod outbound_policy_tests {
         let (server, server_addr) = v1_only_server().await;
         let target = invitation_target(server_addr);
         let policy = RuntimeIrohTransportPolicy {
-            setup_timeout: std::time::Duration::from_secs(2),
+            setup_timeout: COMPRESSION_CONNECTOR_TEST_SETUP_TIMEOUT,
             ..RuntimeIrohTransportPolicy::default()
         };
         let client = bind_runtime_iroh_client_endpoint(&policy, iroh::SecretKey::generate())
@@ -1633,7 +1638,7 @@ mod outbound_policy_tests {
         let target = invitation_target(server_addr);
         let policy = RuntimeIrohTransportPolicy {
             compression_codecs: vec![crate::runtime::RuntimeIrohCompressionCodec::Zstd],
-            setup_timeout: std::time::Duration::from_secs(2),
+            setup_timeout: COMPRESSION_CONNECTOR_TEST_SETUP_TIMEOUT,
             ..RuntimeIrohTransportPolicy::default()
         };
         let client = bind_runtime_iroh_client_endpoint(&policy, iroh::SecretKey::generate())

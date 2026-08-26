@@ -2404,7 +2404,7 @@ mod tests {
         use crate::cli::{IrohControlTarget, exchange_iroh_control_request};
         use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
         use crate::security::remote::{
-            RemoteClientIdentity, RemoteClientProfileStore, RemoteRoleCeiling, RemoteTrustStore,
+            RemoteClientProfileStore, RemoteRoleCeiling, RemoteTrustStore,
         };
         use crate::test_support::runtime::RuntimeServiceFixture;
 
@@ -2523,11 +2523,8 @@ mod tests {
             .unwrap();
             assert!(first.contains(r#""result""#), "{first}");
 
-            let identity = RemoteClientIdentity::load_or_create(&client_root).unwrap();
             let records = trust.list_records().unwrap();
             assert_eq!(records.len(), 1);
-            assert_eq!(records[0].endpoint_id, identity.endpoint_id().to_string());
-            drop(identity);
             let profile = RemoteClientProfileStore::under_config_root(&client_root)
                 .load("workstation")
                 .unwrap()

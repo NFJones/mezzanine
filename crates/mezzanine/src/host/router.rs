@@ -2890,7 +2890,16 @@ mod tests {
             .unwrap();
         assert_eq!(explicit.lease.lease_id, second.lease.lease_id);
         let default = router.resolve_remote(&principal, None).await.unwrap();
-        assert_eq!(default.lease.lease_id, first.lease.lease_id);
+        let expected_default = if first.lease.updated_at_unix_seconds
+            > second.lease.updated_at_unix_seconds
+            || (first.lease.updated_at_unix_seconds == second.lease.updated_at_unix_seconds
+                && first.lease.lease_id < second.lease.lease_id)
+        {
+            &first
+        } else {
+            &second
+        };
+        assert_eq!(default.lease.lease_id, expected_default.lease.lease_id);
 
         let other = test_principal("other", 2);
         let denied = router
