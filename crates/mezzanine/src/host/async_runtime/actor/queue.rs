@@ -423,6 +423,26 @@ impl AsyncRuntimeSessionActor {
             .side_effects)
     }
 
+    /// Reconciles every actor-owned status timer after shared lifecycle cleanup.
+    pub(super) fn status_refresh_timer_reconciliation_side_effects(
+        &mut self,
+        generation_base_ms: u64,
+    ) -> Result<Vec<RuntimeSideEffect>> {
+        let client_ids = self
+            .timers
+            .status_refresh
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut side_effects = Vec::new();
+        for client_id in client_ids {
+            side_effects.extend(
+                self.status_refresh_timer_side_effects_for_client(&client_id, generation_base_ms)?,
+            );
+        }
+        Ok(side_effects)
+    }
+
     /// Runs the pane pipe health timer side effects for pane operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

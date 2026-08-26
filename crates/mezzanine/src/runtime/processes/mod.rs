@@ -3790,6 +3790,7 @@ impl RuntimeSessionService {
             .session
             .close_exited_pane_with_effects(descriptor.pane_id.as_str())?;
         self.sync_pane_resize_effects(&transition.effects)?;
+        self.cleanup_removed_pane_runtime_state(descriptor.pane_id.as_str())?;
         if remove_recorded_process {
             self.process
                 .pane_processes

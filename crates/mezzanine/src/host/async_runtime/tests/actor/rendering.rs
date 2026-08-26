@@ -487,6 +487,133 @@ async fn async_actor_cancels_live_status_refresh_when_client_disconnects() {
     assert!(exit.metrics.runtime_timer_events_ignored > 0);
 }
 
+/// Verifies removing the pane that owns a live agent-status overlay closes the
+/// dependent overlay and cancels its accepted refresh timer. A late delivery
+/// of the canceled generation must remain harmless while the surviving pane
+/// and attached client continue running.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_clears_live_status_overlay_when_source_pane_exits() {
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "static-status-after-source-pane-exit".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"ready\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let source = service
+        .start_initial_pane_process(Some("sleep 30"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(source.pane_id.as_str())
+        .unwrap();
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(
+                    b"/status\r".to_vec(),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    service
+        .split_pane_with_process(
+            &primary,
+            mez_mux::layout::SplitDirection::Vertical,
+            Some("sleep 30"),
+        )
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .ensure_client_render_timers(primary.clone())
+            .await
+            .unwrap();
+        let scheduled = handle.drain_timer_side_effects(8).await.unwrap();
+        let status_key = scheduled
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .expect("missing source-pane status refresh timer");
+
+        let mut exited = RuntimeEventBatch::new();
+        exited.push(RuntimeEvent::Process(ProcessEvent::Exited {
+            pane_id: source.pane_id.clone(),
+            primary_pid: Some(source.primary_pid),
+            exit_code: Some(0),
+            signal: None,
+        }));
+        let report = handle.submit_runtime_events(exited).await.unwrap();
+        assert_eq!(report.applied, 1);
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().iter().any(
+            |effect| matches!(effect, RuntimeSideEffect::CancelTimer { key } if key == &status_key)
+        ));
+        let _ = handle
+            .drain_render_side_effects_for_client(primary.clone(), 8)
+            .await
+            .unwrap();
+        let view = handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !view.lines.join("\n").contains("Agent Status"),
+            "removed source pane must not leave stale status rows"
+        );
+
+        let mut late = RuntimeEventBatch::new();
+        late.push(RuntimeEvent::Timer(TimerEvent {
+            key: status_key,
+            now_ms: u64::MAX,
+        }));
+        let report = handle.submit_runtime_events(late).await.unwrap();
+        assert_eq!(report.applied, 0);
+        assert_eq!(report.side_effects, 0);
+        assert!(
+            handle
+                .drain_render_side_effects_for_client(primary.clone(), 8)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert!(exit.metrics.runtime_timer_events_ignored > 0);
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that client output-readiness events are applied only for attached
 /// clients and enqueue a render side effect without composing or writing the
 /// frame inside the actor. This keeps slow or backpressured frame delivery on

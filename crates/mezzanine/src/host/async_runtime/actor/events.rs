@@ -1,8 +1,8 @@
 //! Runtime event application and lifecycle notification.
 
 use super::coalesce::{
-    runtime_event_requires_registry_persistence, runtime_timer_kind_is_shell_transaction,
-    side_effects_include_registry_persistence,
+    async_runtime_current_unix_millis, runtime_event_requires_registry_persistence,
+    runtime_timer_kind_is_shell_transaction, side_effects_include_registry_persistence,
 };
 use super::{
     AgentId, AgentProviderEvent, AsyncHookEvent, AsyncRuntimeSessionActor, ClientEvent, ClientId,
@@ -317,6 +317,11 @@ impl AsyncRuntimeSessionActor {
                 transition
                     .side_effects
                     .extend(self.synchronized_output_timer_side_effects_for_pane(&pane_id));
+                transition.side_effects.extend(
+                    self.status_refresh_timer_reconciliation_side_effects(
+                        async_runtime_current_unix_millis(),
+                    )?,
+                );
                 Ok(transition)
             }
         }
