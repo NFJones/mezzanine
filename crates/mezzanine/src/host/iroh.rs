@@ -907,6 +907,28 @@ async fn serve_routed_initialize_inner(
             provisioning = Some(prepared);
             binding
         }
+        SessionIntent::ResolveOrCreate => {
+            let prepared = router
+                .prepare_resolve_or_create_remote(
+                    &principal,
+                    crate::host::router::RemoteSessionCreateRequest {
+                        name: session_name,
+                        idempotency_key: init.idempotency_key.clone().ok_or_else(|| {
+                            MezError::invalid_args(
+                                "resolve_or_create intent requires idempotency_key",
+                            )
+                        })?,
+                        size,
+                    },
+                )
+                .await?;
+            let binding = crate::host::router::RemoteSessionBinding {
+                lease: prepared.lease().clone(),
+                runtime: prepared.runtime()?.clone(),
+            };
+            provisioning = Some(prepared);
+            binding
+        }
         SessionIntent::Attach => {
             router
                 .resolve_remote(&principal, init.session_target_json.as_deref())
@@ -2474,7 +2496,8 @@ mod tests {
             assert_eq!(router.snapshots().await.unwrap().len(), 1);
 
             let (persistent_connection, mut persistent_bridge, persistent_attach) =
-                open_test_routed_attach(&client, &server_addr, &credential, &session_id).await;
+                open_test_routed_attach(&client, &server_addr, &credential, Some(&session_id))
+                    .await;
             assert_eq!(
                 persistent_attach["result"]["lease"]["lease_id"], lease_id,
                 "{persistent_attach}"
@@ -2509,6 +2532,46 @@ mod tests {
             assert!(
                 !status_response.contains("this client has no correlated live Iroh connection"),
                 "{status_response}"
+            );
+            for request_id in ["test-routed-pane-two", "test-routed-pane-three"] {
+                let pane_create_request = json!({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "pane/create",
+                    "params": {
+                        "split": "vertical",
+                        "select": true,
+                        "idempotency_key": request_id
+                    }
+                })
+                .to_string();
+                persistent_bridge
+                    .stream_mut()
+                    .write_all(&encode_control_body(&pane_create_request))
+                    .await
+                    .unwrap();
+                persistent_bridge.stream_mut().flush().await.unwrap();
+                let pane_create_response = read_one_control_frame(
+                    persistent_bridge.stream_mut(),
+                    std::time::Duration::from_secs(3),
+                )
+                .await
+                .unwrap();
+                let pane_create_response: Value =
+                    serde_json::from_str(&pane_create_response).unwrap();
+                assert!(
+                    pane_create_response.get("error").is_none(),
+                    "{pane_create_response}"
+                );
+            }
+            let panes_before_detach = exchange_test_pane_list(&mut persistent_bridge).await;
+            assert_eq!(
+                panes_before_detach["result"]["panes"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                3,
+                "{panes_before_detach}"
             );
             let detach_request = json!({
                 "jsonrpc": "2.0",
@@ -2571,12 +2634,22 @@ mod tests {
                 RemoteSessionLeaseState::Active
             );
 
-            let (persistent_connection, persistent_bridge, persistent_attach) =
-                open_test_routed_attach(&client, &server_addr, &credential, &session_id).await;
+            let (persistent_connection, mut persistent_bridge, persistent_attach) =
+                open_test_routed_attach(&client, &server_addr, &credential, None).await;
             assert_eq!(
                 persistent_attach["result"]["lease"]["lease_id"], lease_id,
                 "{persistent_attach}"
             );
+            let panes_after_reconnect = exchange_test_pane_list(&mut persistent_bridge).await;
+            assert_eq!(
+                panes_after_reconnect["result"]["panes"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                3,
+                "{panes_after_reconnect}"
+            );
+            assert_eq!(router.snapshots().await.unwrap().len(), 1);
             drop(persistent_bridge);
             persistent_connection.close(
                 iroh::endpoint::VarInt::from_u32(1),
@@ -2604,7 +2677,8 @@ mod tests {
             );
 
             let (persistent_connection, mut persistent_bridge, persistent_attach) =
-                open_test_routed_attach(&client, &server_addr, &credential, &session_id).await;
+                open_test_routed_attach(&client, &server_addr, &credential, Some(&session_id))
+                    .await;
             assert_eq!(
                 persistent_attach["result"]["lease"]["lease_id"], lease_id,
                 "{persistent_attach}"
@@ -2776,7 +2850,7 @@ mod tests {
         client: &iroh::Endpoint,
         server_addr: &iroh::EndpointAddr,
         credential: &str,
-        session_id: &str,
+        session_id: Option<&str>,
     ) -> (iroh::endpoint::Connection, IrohCompressionBridge, Value) {
         let connection = client
             .connect(server_addr.clone(), crate::runtime::MEZZANINE_IROH_ALPN)
@@ -2793,27 +2867,37 @@ mod tests {
         let mut bridge =
             IrohCompressionBridge::spawn(recv, send, compression, HOST_CONTROL_MAX_CONTENT_LENGTH)
                 .unwrap();
+        let mut params = json!({
+            "client_name": "test-client",
+            "requested_version": 3,
+            "requested_role": "primary",
+            "detach_primary_on_disconnect": true,
+            "session_intent": if session_id.is_some() {
+                "attach"
+            } else {
+                "resolve_or_create"
+            },
+            "client": {
+                "name": "test-client",
+                "interactive": true,
+                "terminal": {"columns": 80, "rows": 24, "term": "xterm-256color"}
+            },
+            "authentication": {
+                "mechanism": "extension:iroh_device",
+                "token": credential
+            }
+        });
+        if let Some(session_id) = session_id {
+            params["session_target"] = json!({"session_id": session_id});
+        } else {
+            params["idempotency_key"] =
+                Value::String("test-persistent-resolve-or-create".to_string());
+        }
         let request = json!({
             "jsonrpc": "2.0",
             "id": "test-persistent-attach",
             "method": "control/initialize",
-            "params": {
-                "client_name": "test-client",
-                "requested_version": 3,
-                "requested_role": "primary",
-                "detach_primary_on_disconnect": true,
-                "session_intent": "attach",
-                "session_target": {"session_id": session_id},
-                "client": {
-                    "name": "test-client",
-                    "interactive": true,
-                    "terminal": {"columns": 80, "rows": 24, "term": "xterm-256color"}
-                },
-                "authentication": {
-                    "mechanism": "extension:iroh_device",
-                    "token": credential
-                }
-            }
+            "params": params
         })
         .to_string();
         bridge
@@ -2827,6 +2911,27 @@ mod tests {
                 .await
                 .unwrap();
         (connection, bridge, serde_json::from_str(&response).unwrap())
+    }
+
+    async fn exchange_test_pane_list(bridge: &mut IrohCompressionBridge) -> Value {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": "test-persistent-pane-list",
+            "method": "pane/list",
+            "params": {}
+        })
+        .to_string();
+        bridge
+            .stream_mut()
+            .write_all(&encode_control_body(&request))
+            .await
+            .unwrap();
+        bridge.stream_mut().flush().await.unwrap();
+        let response =
+            read_one_control_frame(bridge.stream_mut(), std::time::Duration::from_secs(3))
+                .await
+                .unwrap();
+        serde_json::from_str(&response).unwrap()
     }
 
     async fn exchange_test_initialize_params(

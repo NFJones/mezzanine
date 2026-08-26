@@ -108,6 +108,7 @@ pub(super) async fn run_new<W: Write>(
                 observer: false,
                 default: false,
                 session_id: None,
+                create: false,
                 create_name: None,
             },
             env,

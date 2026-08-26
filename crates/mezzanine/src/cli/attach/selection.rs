@@ -58,22 +58,8 @@ pub(in crate::cli) async fn run_attach<W: Write>(
     };
     let remote_routing = if control_target.is_unix() {
         None
-    } else if parsed.create_name.is_some() {
-        Some(super::super::control_client::IrohSessionRouting::Create {
-            name: parsed.create_name.clone(),
-            idempotency_key: super::super::cli_idempotency_key("remote-session-create"),
-        })
-    } else if parsed.default {
-        Some(super::super::control_client::IrohSessionRouting::Default)
-    } else if let Some(target) = parsed.session_id.as_deref() {
-        Some(super::super::control_client::IrohSessionRouting::Attach {
-            target: target.to_string(),
-        })
     } else {
-        Some(super::super::control_client::IrohSessionRouting::Create {
-            name: None,
-            idempotency_key: super::super::cli_idempotency_key("remote-session-create"),
-        })
+        Some(remote_session_routing(&parsed))
     };
     let request = if control_target.is_unix() {
         attach_request(socket_selection, parsed, env.runtime.uid)?
@@ -269,6 +255,9 @@ pub(in crate::cli) struct AttachCliArgs {
     pub(in crate::cli) default: bool,
     /// Optional registered session id or creation-order index alias to attach to.
     pub(in crate::cli) session_id: Option<String>,
+    /// Internal marker supplied only by `mez new` for remote provisioning.
+    #[arg(skip)]
+    pub(in crate::cli) create: bool,
     /// Internal fresh-session name supplied by `mez new` for remote routing.
     #[arg(skip)]
     pub(in crate::cli) create_name: Option<String>,
@@ -334,5 +323,65 @@ pub(super) fn attachable_record<'a>(
         records.iter().find(|record| record.accepts_primary)
     } else {
         records.first()
+    }
+}
+
+/// Derives the protocol-v3 session intent for one host-profile operation.
+///
+/// Bare `attach` resolves the existing host default and provisions only when
+/// none exists. The internal marker supplied by `mez new` always creates.
+fn remote_session_routing(
+    parsed: &AttachCliArgs,
+) -> super::super::control_client::IrohSessionRouting {
+    if parsed.create {
+        super::super::control_client::IrohSessionRouting::Create {
+            name: parsed.create_name.clone(),
+            idempotency_key: super::super::cli_idempotency_key("remote-session-create"),
+        }
+    } else if parsed.default {
+        super::super::control_client::IrohSessionRouting::Default
+    } else if let Some(target) = parsed.session_id.as_deref() {
+        super::super::control_client::IrohSessionRouting::Attach {
+            target: target.to_string(),
+        }
+    } else {
+        super::super::control_client::IrohSessionRouting::ResolveOrCreate {
+            idempotency_key: super::super::cli_idempotency_key("remote-session-resolve-or-create"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+
+    /// Bare host-profile attach must resolve the existing default, while the
+    /// internal `mez new` marker must remain the only omitted-target creation
+    /// route. This prevents reconnect from substituting a blank fresh session.
+    #[test]
+    fn remote_bare_attach_reconnects_while_new_creates() {
+        let bare_attach = remote_session_routing(&AttachCliArgs {
+            observer: false,
+            default: false,
+            session_id: None,
+            create: false,
+            create_name: None,
+        });
+        let remote_new = remote_session_routing(&AttachCliArgs {
+            observer: false,
+            default: false,
+            session_id: None,
+            create: true,
+            create_name: None,
+        });
+
+        assert!(matches!(
+            bare_attach,
+            super::super::super::control_client::IrohSessionRouting::ResolveOrCreate { .. }
+        ));
+        assert!(matches!(
+            remote_new,
+            super::super::super::control_client::IrohSessionRouting::Create { name: None, .. }
+        ));
     }
 }

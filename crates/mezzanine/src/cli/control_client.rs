@@ -512,6 +512,8 @@ pub(super) enum IrohSessionRouting {
         name: Option<String>,
         idempotency_key: String,
     },
+    /// Selects the existing default or creates one when none exists.
+    ResolveOrCreate { idempotency_key: String },
     /// Attaches one existing lease by stable lease id, session id, or exact name.
     Attach { target: String },
     /// Selects one existing default and never creates.
@@ -522,6 +524,7 @@ impl IrohSessionRouting {
     fn intent(&self) -> &'static str {
         match self {
             Self::Create { .. } => "create",
+            Self::ResolveOrCreate { .. } => "resolve_or_create",
             Self::Attach { .. } => "attach",
             Self::Default => "default",
         }
@@ -536,7 +539,7 @@ impl IrohSessionRouting {
                 Some(serde_json::json!({"session_id": target}))
             }
             Self::Attach { target } => Some(serde_json::json!({"name": target})),
-            Self::Create { .. } | Self::Default => None,
+            Self::Create { .. } | Self::ResolveOrCreate { .. } | Self::Default => None,
         }
     }
 
@@ -544,7 +547,8 @@ impl IrohSessionRouting {
         match self {
             Self::Create {
                 idempotency_key, ..
-            } => Some(idempotency_key),
+            }
+            | Self::ResolveOrCreate { idempotency_key } => Some(idempotency_key),
             Self::Attach { .. } | Self::Default => None,
         }
     }
@@ -552,7 +556,7 @@ impl IrohSessionRouting {
     fn session_name(&self) -> Option<&str> {
         match self {
             Self::Create { name, .. } => name.as_deref(),
-            Self::Attach { .. } | Self::Default => None,
+            Self::ResolveOrCreate { .. } | Self::Attach { .. } | Self::Default => None,
         }
     }
 }

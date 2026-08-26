@@ -7803,6 +7803,10 @@ Version 3 adds `session_intent` and `idempotency_key` to
   non-empty client-generated value. The host creates one authorized,
   lease-backed session or returns the previously committed result for the same
   principal, key, and normalized inputs.
+- `resolve_or_create`: `session_target` MUST be omitted and `idempotency_key`
+  MUST be a non-empty client-generated value. Under one host routing
+  transaction, the host selects the principal's existing attachable default or
+  creates one authorized lease-backed session when none exists.
 - `attach`: `session_target` MUST select one existing lease by `lease_id`,
   session by `session_id`, or exact `name`, and
   `idempotency_key` MUST be omitted. Missing, ambiguous, unauthorized,
@@ -7816,11 +7820,11 @@ Version 3 adds `session_intent` and `idempotency_key` to
 
 Every v3 initialize request MUST include `session_intent`; version-2 requests
 MUST omit both v3 fields. Remote interactive CLI commands MUST derive and send
-an explicit intent before serialization: omitted-target `attach` and `new`
-send `create`, explicit-target `attach` sends `attach`, `attach --default`
-sends `default`, and invitation redemption, profile checks, and host
-administration send `host_only`. Pairing or checking a profile MUST NOT create,
-select, or attach a session as a side effect.
+an explicit intent before serialization: omitted-target `attach` sends
+`resolve_or_create`, `new` sends `create`, explicit-target `attach` sends
+`attach`, `attach --default` sends `default`, and invitation redemption,
+profile checks, and host administration send `host_only`. Pairing or checking
+a profile MUST NOT create, select, or attach a session as a side effect.
 
 The host MUST authenticate the remote transport peer and resolve host trust
 before target lookup, lease reservation, runtime allocation, or session

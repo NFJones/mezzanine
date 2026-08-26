@@ -35,13 +35,15 @@ to its invoking terminal.
 For an explicitly paired remote session, use `mez --iroh-profile PROFILE
 attach`, pair without attaching with `mez remote pair --invite-file PATH --name
 NAME`, or first pair and attach with `mez --iroh-invite-file PATH --save-as NAME
-attach`. Add `--observer` to attach immediately with read-only access. These
-selectors do not inspect the local session registry and never fall back to a
-Unix socket. A role ceiling of `observer` cannot be elevated to primary
-attachment. Remote attach also negotiates an authorized event stream for
-redraw wakeups. An observer receives session-view events only from its atomic
-attachment cutoff onward. Revocation, detach, or stream failure terminates the
-remote attach and requires an explicit reconnect. The configured Iroh setup
+attach`. Bare remote attach reconnects to the existing host default, creating
+one only when none exists; use `new` when a fresh remote session is intentional.
+Add `--observer` to attach immediately with read-only access. These selectors
+do not inspect the local session registry and never fall back to a Unix socket.
+A role ceiling of `observer` cannot be elevated to primary attachment. Remote
+attach also negotiates an authorized event stream for redraw wakeups. An
+observer receives session-view events only from its atomic attachment cutoff
+onward. Revocation, detach, or stream failure terminates the remote attach and
+requires an explicit reconnect. The configured Iroh setup
 timeout bounds both waiting for that stream and receiving its preface; timeout
 closes the connection instead of leaving attach waiting indefinitely.
 

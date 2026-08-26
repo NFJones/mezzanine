@@ -197,11 +197,12 @@ pub(crate) fn initialize_params_from_json(params: &str) -> Result<InitializePara
 fn parse_session_intent(value: &str) -> Result<SessionIntent> {
     match value {
         "create" => Ok(SessionIntent::Create),
+        "resolve_or_create" => Ok(SessionIntent::ResolveOrCreate),
         "attach" => Ok(SessionIntent::Attach),
         "default" => Ok(SessionIntent::Default),
         "host_only" => Ok(SessionIntent::HostOnly),
         _ => Err(MezError::invalid_args(
-            "control/initialize session_intent must be create, attach, default, or host_only",
+            "control/initialize session_intent must be create, resolve_or_create, attach, default, or host_only",
         )),
     }
 }
@@ -235,6 +236,18 @@ fn validate_host_routing_fields(
             if idempotency_key.is_none() {
                 return Err(MezError::invalid_args(
                     "create intent requires idempotency_key",
+                ));
+            }
+        }
+        SessionIntent::ResolveOrCreate => {
+            if session_target_json.is_some() {
+                return Err(MezError::invalid_args(
+                    "resolve_or_create intent must omit session_target",
+                ));
+            }
+            if idempotency_key.is_none() {
+                return Err(MezError::invalid_args(
+                    "resolve_or_create intent requires idempotency_key",
                 ));
             }
         }
