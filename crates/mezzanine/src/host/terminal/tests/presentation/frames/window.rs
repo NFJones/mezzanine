@@ -384,20 +384,19 @@ fn render_window_status_uses_right_aligned_themed_segments() {
     assert!(view.lines[2].find(" ~/repo ").unwrap() < view.lines[2].find(" + ").unwrap());
     assert!(view.lines[2].contains(" 2d 03h 04m "));
     assert!(view.lines[2].contains(" 2026-05-05 10:11:12 "));
-    let trailing_spaces = view.lines[2].len() - view.lines[2].trim_end_matches(' ').len();
-    assert!(
-        trailing_spaces >= crate::host::terminal::TERMINAL_IROH_STATUS_SLOT_WIDTH,
-        "{}",
-        view.lines[2]
-    );
-    assert_eq!(
+    let (iroh_start, iroh_width) =
         super::super::super::super::render::window_iroh_status_slot_layout(
             &config.frame_context,
             96,
         )
-        .map(|(_, width)| width),
-        Some(crate::host::terminal::TERMINAL_IROH_STATUS_SLOT_WIDTH)
+        .expect("default window status should reserve an Iroh slot");
+    assert_eq!(
+        iroh_width,
+        crate::host::terminal::TERMINAL_IROH_STATUS_SLOT_WIDTH
     );
+    let pane_pwd_start_bytes = view.lines[2].find(" ~/repo ").unwrap();
+    let pane_pwd_start = UnicodeWidthStr::width(&view.lines[2][..pane_pwd_start_bytes]);
+    assert!(iroh_start < pane_pwd_start, "{}", view.lines[2]);
     assert_eq!(view.lines[2].chars().last(), Some(' '), "{}", view.lines[2]);
     let uptime_start_bytes = view.lines[2].find(" 2d 03h 04m ").unwrap();
     let uptime_start = UnicodeWidthStr::width(&view.lines[2][..uptime_start_bytes]);

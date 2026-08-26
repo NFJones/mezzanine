@@ -124,35 +124,33 @@ pub(super) fn runtime_choose_client_display(service: &RuntimeSessionService) -> 
 /// on duplicated control-flow logic.
 pub(super) fn runtime_list_clients_display(service: &RuntimeSessionService) -> String {
     let clients = service.session.clients();
+    let mut lines = vec![
+        "| client | name | role | state | interactive | attached at | last seen at | terminal |"
+            .to_string(),
+        "| --- | --- | --- | --- | --- | --- | --- | --- |".to_string(),
+    ];
     if clients.is_empty() {
-        return "clients=0 source=runtime".to_string();
-    }
-    let lines = clients
-        .iter()
-        .map(|client| {
+        lines.push("| — | no clients | — | — | — | — | — | — |".to_string());
+    } else {
+        lines.extend(clients.iter().map(|client| {
             format!(
-                "client={}:name={}:role={}:state={}:interactive={}:attached_at={}:last_seen_at={}:terminal={}",
-                client.id,
-                json_escape(&client.name),
-                runtime_client_role_name(client.role),
-                runtime_client_state_name(client.state),
+                "| {} | {} | {} | {} | {} | {} | {} | {} |",
+                runtime_markdown_table_cell(client.id.as_str()),
+                runtime_markdown_table_cell(&client.name),
+                runtime_markdown_table_cell(runtime_client_role_name(client.role)),
+                runtime_markdown_table_cell(runtime_client_state_name(client.state)),
                 client.interactive,
-                runtime_optional_unix_seconds(client_attached_at_for_display(service, client)),
-                runtime_optional_unix_seconds(client_last_seen_at_for_display(service, client)),
-                runtime_client_terminal_display(service, client)
+                runtime_markdown_table_cell(&runtime_optional_unix_seconds(
+                    client_attached_at_for_display(service, client)
+                )),
+                runtime_markdown_table_cell(&runtime_optional_unix_seconds(
+                    client_last_seen_at_for_display(service, client)
+                )),
+                runtime_markdown_table_cell(&runtime_client_terminal_display(service, client))
             )
-        })
-        .collect::<Vec<_>>();
-    let observer_count = clients
-        .iter()
-        .filter(|client| client.role == mez_mux::session::ClientRole::Observer)
-        .count();
-    format!(
-        "clients={}:observers={}:source=runtime\n{}",
-        clients.len(),
-        observer_count,
-        lines.join("\n")
-    )
+        }));
+    }
+    lines.join("\n")
 }
 
 /// Runs the runtime choose window display operation for this subsystem.

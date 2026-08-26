@@ -283,7 +283,7 @@ impl RuntimeSessionService {
                     source: ContextSourceKind::Policy,
                     placement: mez_agent::ContextPlacement::ConversationAppend,
                     label: "agent shell plan-only mode".to_string(),
-                    content: "[plan-only mode]\nPlan only for the following user prompt. Do not modify files, implement a plan, or perform write-capable actions.".to_string(),
+                    content: "[plan-only mode]\nPlan only for the following user prompt. Do not edit, create, delete, or otherwise modify any files. Do not implement the plan or perform any write-capable actions; only inspect and describe the changes that would be needed.".to_string(),
                 },
             );
         }

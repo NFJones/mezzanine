@@ -228,9 +228,9 @@ fn runtime_non_pager_command_feedback_stays_out_of_pane_log() {
 /// Verifies topology list commands open the command pager with rendered table
 /// rows instead of exposing their compact machine-oriented state strings.
 ///
-/// Windows use the shared session formatter while groups and panes use
-/// runtime-aware formatters, so this covers every command path that must emit
-/// pager-friendly Markdown tables.
+/// Windows use the shared session formatter while groups, panes, and clients
+/// use runtime-aware formatters, so this covers every command path that must
+/// emit pager-friendly Markdown tables.
 #[test]
 fn runtime_topology_lists_render_tables_in_command_pager() {
     let mut service = test_runtime_service();
@@ -242,6 +242,7 @@ fn runtime_topology_lists_render_tables_in_command_pager() {
         ("list-windows", "window"),
         ("list-groups", "group"),
         ("list-panes", "pane"),
+        ("list-clients", "client"),
     ] {
         service
             .execute_attached_display_command(&primary, command)
