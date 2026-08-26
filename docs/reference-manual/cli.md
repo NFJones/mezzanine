@@ -226,8 +226,11 @@ pairing. `mez serve` remains the foreground single-session compatibility path;
 It writes its initial machine-readable readiness record to standard output and
 writes local and remote client connection, rejection, timeout, and failure
 diagnostics to standard error. Local records identify the authenticated Unix
-peer UID. Remote Iroh connection and disconnection records identify the client
-by authenticated endpoint ID and the observed direct or relay network route.
+peer UID and request method. Remote Iroh connection, disconnection, and
+post-authentication failure records identify the client by authenticated
+endpoint ID and a privacy-safe route category (`direct`, `relay`, `custom`, or
+`unknown`). Capacity and recurring maintenance degradation are logged only on
+state transitions so routine operation remains quiet.
 
 An Iroh profile in persistent-host mode identifies one stable host rather than
 one session. The remote forms are:

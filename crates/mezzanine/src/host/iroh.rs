@@ -184,13 +184,13 @@ impl Drop for RemoteClientConnectionLog {
     }
 }
 
-/// Renders the network route observed when a remote client initiates a connection.
-fn remote_client_route(remote_addr: iroh::endpoint::IncomingAddr) -> String {
+/// Renders the privacy-safe network route category observed for a remote client.
+fn remote_client_route(remote_addr: iroh::endpoint::IncomingAddr) -> &'static str {
     match remote_addr {
-        iroh::endpoint::IncomingAddr::Ip(address) => format!("direct {address}"),
-        iroh::endpoint::IncomingAddr::Relay { url, .. } => format!("relay {url}"),
-        iroh::endpoint::IncomingAddr::Custom(address) => format!("custom {address:?}"),
-        _ => "unknown".to_string(),
+        iroh::endpoint::IncomingAddr::Ip(_) => "direct",
+        iroh::endpoint::IncomingAddr::Relay { .. } => "relay",
+        iroh::endpoint::IncomingAddr::Custom(_) => "custom",
+        _ => "unknown",
     }
 }
 
@@ -483,6 +483,7 @@ impl HostIrohRuntime {
         let mut accepted = 0u64;
         let mut endpoint_closed_unexpectedly = false;
         let mut shutdown_report = HostIrohShutdownReport::default();
+        let mut remote_capacity_saturated = false;
         let _listener_diagnostics_guard =
             HostIrohListenerDiagnosticsGuard::new(diagnostics.clone());
         eprintln!("mez host: listening for remote clients on Iroh endpoint {server_endpoint_id}");
@@ -497,6 +498,7 @@ impl HostIrohRuntime {
                         break;
                     };
                     let remote_route = remote_client_route(incoming.remote_addr());
+                    let max_connections = policy.max_connections;
                     let policy = policy.clone();
                     let trust = trust.clone();
                     let server_endpoint_id = server_endpoint_id.clone();
@@ -504,6 +506,7 @@ impl HostIrohRuntime {
                     let diagnostics = diagnostics.clone();
                     let result_diagnostics = diagnostics.clone();
                     let audit_log = audit_log.clone();
+                    let authenticated_endpoint_id = std::sync::Arc::new(std::sync::OnceLock::new());
                     tasks.spawn(async move {
                         let result = serve_host_only_connection(
                             incoming,
@@ -513,19 +516,43 @@ impl HostIrohRuntime {
                             router,
                             diagnostics,
                             audit_log,
-                            &remote_route,
+                            remote_route,
+                            &authenticated_endpoint_id,
                         ).await;
                         result_diagnostics.record_result(&result);
                         match result {
                             Ok(()) => {}
-                            Err(error) => eprintln!("mez host: remote client connection from {remote_route} failed: {error}"),
+                            Err(error) => match authenticated_endpoint_id.get() {
+                                Some(endpoint_id) => eprintln!(
+                                    "mez host: remote client connection failed: endpoint {endpoint_id}, route {remote_route}, class {}, error {error}",
+                                    host_error_name(error.kind())
+                                ),
+                                None => eprintln!(
+                                    "mez host: remote client connection failed before authentication: route {remote_route}, class {}, error {error}",
+                                    host_error_name(error.kind())
+                                ),
+                            },
                         }
                     });
                     accepted = accepted.saturating_add(1);
+                    if tasks.len() == max_connections {
+                        eprintln!(
+                            "mez host: remote client capacity saturated: active {}, limit {}; new clients will wait",
+                            tasks.len(), max_connections
+                        );
+                        remote_capacity_saturated = true;
+                    }
                 }
                 joined = tasks.join_next(), if !tasks.is_empty() => {
                     if let Some(joined) = joined {
                         shutdown_report.record_task_completion(joined, false);
+                        if remote_capacity_saturated && tasks.len() < policy.max_connections {
+                            eprintln!(
+                                "mez host: remote client capacity recovered: active {}, limit {}",
+                                tasks.len(), policy.max_connections
+                            );
+                            remote_capacity_saturated = false;
+                        }
                     }
                 }
             }
@@ -573,6 +600,7 @@ async fn serve_host_only_connection(
     diagnostics: RuntimeIrohDiagnostics,
     audit_log: Option<HostAuditLog>,
     remote_route: &str,
+    authenticated_endpoint_id: &std::sync::OnceLock<String>,
 ) -> Result<()> {
     let setup_started = std::time::Instant::now();
     let mut setup_diagnostics =
@@ -604,6 +632,7 @@ async fn serve_host_only_connection(
     connection.set_max_concurrent_bi_streams(iroh::endpoint::VarInt::from_u32(1));
     connection.set_max_concurrent_uni_streams(iroh::endpoint::VarInt::from_u32(0));
     let client_endpoint_id = connection.remote_id().to_string();
+    let _ = authenticated_endpoint_id.set(client_endpoint_id.clone());
     eprintln!(
         "mez host: remote client connected: endpoint {client_endpoint_id}, route {remote_route}"
     );
@@ -1788,15 +1817,15 @@ mod tests {
         assert_eq!(body.unwrap(), r#"{"jsonrpc":"2.0","id":1}"#);
     }
 
-    /// Connection lifecycle logs retain the direct client socket address so an
-    /// operator can correlate a remote client with its transport connection.
+    /// Routine connection logs expose route intent without retaining peer
+    /// addresses or relay topology.
     #[test]
-    fn remote_client_route_identifies_direct_client_address() {
+    fn remote_client_route_reports_privacy_safe_category() {
         let address = "192.0.2.42:443".parse().unwrap();
 
         assert_eq!(
             remote_client_route(iroh::endpoint::IncomingAddr::Ip(address)),
-            "direct 192.0.2.42:443"
+            "direct"
         );
     }
 
@@ -2167,6 +2196,7 @@ mod tests {
         .expect("host endpoint should remain open");
         let remote_route = remote_client_route(incoming.remote_addr());
         let diagnostics = host.endpoint.diagnostics();
+        let authenticated_endpoint_id = std::sync::OnceLock::new();
         let handler = serve_host_only_connection(
             incoming,
             handler_policy,
@@ -2175,7 +2205,8 @@ mod tests {
             None,
             diagnostics.clone(),
             None,
-            &remote_route,
+            remote_route,
+            &authenticated_endpoint_id,
         );
         let error = tokio::time::timeout(std::time::Duration::from_secs(3), async {
             let (server_result, client_result) = tokio::join!(handler, client_setup);
@@ -2190,6 +2221,10 @@ mod tests {
         assert!(
             error.to_string().contains("initialize read timed out"),
             "{error}"
+        );
+        assert!(
+            authenticated_endpoint_id.get().is_some(),
+            "post-connect failures must retain the authenticated endpoint identity"
         );
         let snapshot = diagnostics.snapshot();
         assert_eq!(snapshot.active_connections, 0);

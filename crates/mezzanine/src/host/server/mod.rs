@@ -7,6 +7,7 @@
 //! live registry is discovery output only and is never treated as durable
 //! lease state.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::future::Future;
@@ -100,6 +101,29 @@ pub(crate) struct HostServer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HostShutdownRequest {
     force: bool,
+}
+
+#[derive(Debug)]
+struct HostConnectionResult {
+    method: String,
+    failure: Option<String>,
+    shutdown: Option<HostShutdownRequest>,
+}
+
+fn record_host_maintenance_state(
+    failures: &mut HashSet<&'static str>,
+    operation: &'static str,
+    failure: Option<String>,
+) {
+    match failure {
+        Some(failure) if failures.insert(operation) => {
+            eprintln!("mez host: maintenance operation {operation} degraded: {failure}");
+        }
+        None if failures.remove(operation) => {
+            eprintln!("mez host: maintenance operation {operation} recovered");
+        }
+        Some(_) | None => {}
+    }
 }
 
 #[derive(Debug)]
@@ -208,6 +232,8 @@ impl HostServer {
             self.config.checkpoint_interval,
         );
         let mut authority_changes = self.router.authority_changes();
+        let mut maintenance_failures = HashSet::new();
+        let mut local_capacity_saturated = false;
         let shutdown = loop {
             let authority_delay = self.router.time_until_next_lease_expiry()?;
             let authority_maintenance = async move {
@@ -222,8 +248,10 @@ impl HostServer {
                     break HostShutdownRequest { force: false };
                 }
                 () = authority_maintenance => {
-                    let _ = self.router.expire_due_leases().await;
-                    let _ = self.router.reconcile_terminal_runtime_cleanup().await;
+                    let expiry_failure = self.router.expire_due_leases().await.err().map(|error| error.to_string());
+                    record_host_maintenance_state(&mut maintenance_failures, "lease expiry", expiry_failure);
+                    let cleanup_failure = self.router.reconcile_terminal_runtime_cleanup().await.err().map(|error| error.to_string());
+                    record_host_maintenance_state(&mut maintenance_failures, "terminal runtime cleanup", cleanup_failure);
                 }
                 changed = authority_changes.changed() => {
                     if changed.is_err() {
@@ -231,15 +259,39 @@ impl HostServer {
                             "host lease authority scheduler stopped unexpectedly",
                         ));
                     }
-                    let _ = self.router.reconcile_terminal_runtime_cleanup().await;
+                    let cleanup_failure = self.router.reconcile_terminal_runtime_cleanup().await.err().map(|error| error.to_string());
+                    record_host_maintenance_state(&mut maintenance_failures, "terminal runtime cleanup", cleanup_failure);
                 }
                 _ = checkpoint_timer.tick() => {
-                    let _ = self.router.checkpoint_active_leases().await;
-                    let _ = Box::pin(self.router.checkpoint_active_local_assignments()).await;
-                    let _ = self.router.reconcile_snapshot_cleanup().await;
-                    let _ = self.router.reconcile_terminal_runtime_cleanup().await;
+                    let lease_checkpoint_failure = match self.router.checkpoint_active_leases().await {
+                        Ok((_, 0)) => None,
+                        Ok((_, failed)) => Some(format!("{failed} active lease checkpoints failed")),
+                        Err(error) => Some(error.to_string()),
+                    };
+                    record_host_maintenance_state(&mut maintenance_failures, "active lease checkpoint", lease_checkpoint_failure);
+                    let local_checkpoint_failure = match Box::pin(self.router.checkpoint_active_local_assignments()).await {
+                        Ok((_, 0)) => None,
+                        Ok((_, failed)) => Some(format!("{failed} active local assignment checkpoints failed")),
+                        Err(error) => Some(error.to_string()),
+                    };
+                    record_host_maintenance_state(&mut maintenance_failures, "active local assignment checkpoint", local_checkpoint_failure);
+                    let snapshot_cleanup_failure = match self.router.reconcile_snapshot_cleanup().await {
+                        Ok(report) if report.failed_deletions == 0 => None,
+                        Ok(report) => Some(format!("{} snapshot deletions failed", report.failed_deletions)),
+                        Err(error) => Some(error.to_string()),
+                    };
+                    record_host_maintenance_state(&mut maintenance_failures, "snapshot cleanup", snapshot_cleanup_failure);
+                    let cleanup_failure = self.router.reconcile_terminal_runtime_cleanup().await.err().map(|error| error.to_string());
+                    record_host_maintenance_state(&mut maintenance_failures, "terminal runtime cleanup", cleanup_failure);
                 }
                 completed = connections.next(), if !connections.is_empty() => {
+                    if local_capacity_saturated && connections.len() < HOST_CONTROL_CONNECTION_LIMIT {
+                        eprintln!(
+                            "mez host: local client capacity recovered: active {}, limit {HOST_CONTROL_CONNECTION_LIMIT}",
+                            connections.len()
+                        );
+                        local_capacity_saturated = false;
+                    }
                     if let Some(Some(request)) = completed {
                         let request: HostShutdownRequest = request;
                         self.router.start_draining()?;
@@ -265,7 +317,6 @@ impl HostServer {
                         );
                         continue;
                     }
-                    eprintln!("mez host: local client connected with uid {peer_uid}");
                     connections.push(async move {
                         match tokio::time::timeout(
                             HOST_CONTROL_CONNECTION_TIMEOUT,
@@ -273,20 +324,36 @@ impl HostServer {
                         )
                         .await
                         {
-                            Ok(Ok(shutdown)) => {
-                                eprintln!("mez host: local client disconnected after request completion");
-                                shutdown
+                            Ok(Ok(result)) => {
+                                match result.failure {
+                                    Some(error) => eprintln!(
+                                        "mez host: local client request failed: uid {peer_uid}, method {:?}, error {error}",
+                                        result.method
+                                    ),
+                                    None => eprintln!(
+                                        "mez host: local client request completed: uid {peer_uid}, method {:?}, outcome succeeded",
+                                        result.method
+                                    ),
+                                }
+                                result.shutdown
                             }
                             Ok(Err(error)) => {
-                                eprintln!("mez host: local client disconnected after request failure: {error}");
+                                eprintln!("mez host: local client request failed: uid {peer_uid}, error {error}");
                                 None
                             }
                             Err(_) => {
-                                eprintln!("mez host: local client disconnected after timeout of {} seconds", HOST_CONTROL_CONNECTION_TIMEOUT.as_secs());
+                                eprintln!("mez host: local client request timed out: uid {peer_uid}, timeout_seconds {}", HOST_CONTROL_CONNECTION_TIMEOUT.as_secs());
                                 None
                             }
                         }
                     });
+                    if connections.len() == HOST_CONTROL_CONNECTION_LIMIT {
+                        eprintln!(
+                            "mez host: local client capacity saturated: active {}, limit {HOST_CONTROL_CONNECTION_LIMIT}; new clients will wait",
+                            connections.len()
+                        );
+                        local_capacity_saturated = true;
+                    }
                 }
             }
         };
@@ -315,8 +382,7 @@ impl HostServer {
     fn serve_connection<'a>(
         &'a self,
         stream: &'a mut tokio::net::UnixStream,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<Option<HostShutdownRequest>>> + Send + 'a>>
-    {
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<HostConnectionResult>> + Send + 'a>> {
         Box::pin(async move {
             let mut framed = Framed::new(
                 stream,
@@ -328,20 +394,34 @@ impl HostServer {
             let request: Value = serde_json::from_str(&frame.body).map_err(|error| {
                 MezError::invalid_args(format!("invalid host control JSON: {error}"))
             })?;
+            let method = request
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or("<missing>")
+                .to_string();
             let id = request.get("id").cloned().unwrap_or(Value::Null);
             let result = self.dispatch_managed_request(&request).await;
-            let (body, shutdown) = match result {
-                Ok((result, shutdown)) => {
-                    (json!({"jsonrpc":"2.0","id":id,"result":result}), shutdown)
+            let (body, shutdown, failure) = match result {
+                Ok((result, shutdown)) => (
+                    json!({"jsonrpc":"2.0","id":id,"result":result}),
+                    shutdown,
+                    None,
+                ),
+                Err(error) => {
+                    let failure = format!("{}: {}", host_error_name(error.kind()), error.message());
+                    (host_error_response(id, &error), None, Some(failure))
                 }
-                Err(error) => (host_error_response(id, &error), None),
             };
             framed
                 .get_mut()
                 .write_all(&crate::control::encode_control_body(&body.to_string()))
                 .await?;
             framed.get_mut().flush().await?;
-            Ok(shutdown)
+            Ok(HostConnectionResult {
+                method,
+                failure,
+                shutdown,
+            })
         })
     }
 
@@ -2298,12 +2378,19 @@ mod tests {
                 if let Ok((body, _)) =
                     crate::control::decode_control_frame(&bytes, HOST_CONTROL_MAX_CONTENT_LENGTH)
                 {
-                    return serde_json::from_str(&body).unwrap();
+                    return serde_json::from_str::<Value>(&body).unwrap();
                 }
             }
         };
         let (served, response) = tokio::join!(server, client);
-        assert!(served.unwrap().is_none());
+        let served = served.unwrap();
+        assert_eq!(served.method, method);
+        assert_eq!(
+            served.failure.is_some(),
+            response.get("error").is_some(),
+            "connection failure metadata must match the JSON-RPC outcome"
+        );
+        assert!(served.shutdown.is_none());
         response
     }
 

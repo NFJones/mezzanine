@@ -255,6 +255,7 @@ pub(crate) struct HostLeaseGarbageCollectionReport {
 pub(crate) struct HostSnapshotCleanupReport {
     pub(crate) deleted_snapshot_ids: Vec<String>,
     pub(crate) retained_snapshot_ids: Vec<String>,
+    pub(crate) failed_deletions: usize,
 }
 
 /// Shared host owner for local discovery and remote durable routing.
@@ -1355,6 +1356,7 @@ impl HostSessionRouter {
             .cloned()
             .collect::<Vec<_>>();
         let mut completed = 0usize;
+        let mut failed = 0usize;
         for session_id in pending {
             match self.supervisor.stop(&session_id, true).await {
                 Ok(()) => {
@@ -1375,10 +1377,16 @@ impl HostSessionRouter {
                         .remove(&session_id);
                     completed = completed.saturating_add(1);
                 }
-                Err(_) => {}
+                Err(_) => failed = failed.saturating_add(1),
             }
         }
-        Ok(completed)
+        if failed == 0 {
+            Ok(completed)
+        } else {
+            Err(MezError::invalid_state(format!(
+                "terminal runtime cleanup failed for {failed} sessions"
+            )))
+        }
     }
 
     async fn stop_or_track_terminal_runtime(&self, session_id: &str) {
@@ -1610,6 +1618,7 @@ impl HostSessionRouter {
             HostSnapshotCleanupReport {
                 deleted_snapshot_ids: Vec::new(),
                 retained_snapshot_ids: Vec::new(),
+                failed_deletions: 0,
             }
         };
         Ok(HostLeaseGarbageCollectionReport {
@@ -1632,6 +1641,7 @@ impl HostSessionRouter {
         let snapshots = SnapshotRepository::new(self.config.config_root.join("layouts"));
         let mut deleted_snapshot_ids = Vec::new();
         let mut retained_snapshot_ids = Vec::new();
+        let mut failed_deletions = 0usize;
         for snapshot_id in candidates {
             if self.leases.snapshot_is_referenced(&snapshot_id)? {
                 retained_snapshot_ids.push(snapshot_id);
@@ -1641,12 +1651,17 @@ impl HostSessionRouter {
                 Ok(_) if self.leases.acknowledge_snapshot_cleanup(&snapshot_id)? => {
                     deleted_snapshot_ids.push(snapshot_id);
                 }
-                Ok(_) | Err(_) => retained_snapshot_ids.push(snapshot_id),
+                Ok(_) => retained_snapshot_ids.push(snapshot_id),
+                Err(_) => {
+                    retained_snapshot_ids.push(snapshot_id);
+                    failed_deletions = failed_deletions.saturating_add(1);
+                }
             }
         }
         Ok(HostSnapshotCleanupReport {
             deleted_snapshot_ids,
             retained_snapshot_ids,
+            failed_deletions,
         })
     }
 
@@ -3327,6 +3342,19 @@ mod tests {
         assert_eq!(
             router.get_lease(&created.lease.lease_id).unwrap().state,
             RemoteSessionLeaseState::Revoked
+        );
+        assert!(router.supervisor.lookup(&created.lease.session_id).is_ok());
+        router.supervisor.fail_next_stop();
+        let retry_error = router
+            .reconcile_terminal_runtime_cleanup()
+            .await
+            .unwrap_err();
+        assert_eq!(retry_error.kind(), MezErrorKind::InvalidState);
+        assert!(
+            retry_error
+                .message()
+                .contains("terminal runtime cleanup failed for 1 sessions"),
+            "{retry_error}"
         );
         assert!(router.supervisor.lookup(&created.lease.session_id).is_ok());
         assert_eq!(
