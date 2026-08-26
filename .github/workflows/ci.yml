@@ -79,7 +79,7 @@ jobs:
       - name: Run managed-shell reliability suite
         run: canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" sh scripts/test-managed-shell-reliability.sh
   release-load:
-    name: "Release load: ${{ matrix.name }}"
+    name: "Release load: ${{ matrix.name }} (${{ matrix.workers }} workers)"
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
