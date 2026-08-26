@@ -356,11 +356,11 @@ pub(super) async fn read_attached_client_input_or_iroh_event<I: AsyncAttachedTer
         wake_deadline,
     );
     tokio::pin!(input);
-    tokio::select! {
+    let mut input = tokio::select! {
         biased;
         input = &mut input => input,
         event = event_receiver.recv() => match event {
-            Some(Ok(render_action)) => Ok(AttachedClientInputPoll {
+            Some(Ok(render_action)) => return Ok(AttachedClientInputPoll {
                 bytes: Vec::new(),
                 eof: false,
                 render_action: coalesce_ready_iroh_render_actions(
@@ -368,14 +368,23 @@ pub(super) async fn read_attached_client_input_or_iroh_event<I: AsyncAttachedTer
                     render_action,
                 )?,
             }),
-            Some(Err(error)) => Err(error),
-            None => Ok(AttachedClientInputPoll {
+            Some(Err(error)) => return Err(error),
+            None => return Ok(AttachedClientInputPoll {
                 bytes: Vec::new(),
                 eof: false,
                 render_action: AttachRenderAction::Disconnect,
             }),
         },
+    }?;
+    if !input.eof && !input.bytes.is_empty() {
+        input.render_action = input
+            .render_action
+            .combine(coalesce_ready_iroh_render_actions(
+                event_receiver,
+                AttachRenderAction::None,
+            )?);
     }
+    Ok(input)
 }
 
 /// Collapses already-ready Iroh redraw wakeups before the next view fetch.
@@ -1169,6 +1178,30 @@ pub(super) fn control_socket_disconnected_without_pending_response(
 #[cfg(test)]
 mod iroh_tests {
     use super::*;
+
+    /// Verifies ready repeated-key input retains a simultaneously queued Iroh
+    /// redraw instead of starving visible updates until terminal input pauses.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_input_poll_preserves_ready_render_action_when_input_wins() {
+        let mut terminal_io = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+        terminal_io.push_input(vec![0x7f]);
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        sender.try_send(Ok(AttachRenderAction::View)).unwrap();
+
+        let input = read_attached_client_input_or_iroh_event(
+            &mut terminal_io,
+            &mut receiver,
+            4096,
+            None,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(input.bytes, vec![0x7f]);
+        assert!(!input.eof);
+        assert_eq!(input.render_action, AttachRenderAction::View);
+    }
 
     /// Verifies an Iroh input poll wakes at the rendered animation deadline
     /// even when neither terminal input nor a runtime event is available.
