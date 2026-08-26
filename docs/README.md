@@ -18,6 +18,9 @@ normative behavior and compatibility contract.
 - **Operators:** use [Operations and troubleshooting](operations/README.md)
   for persistent-host deployment, lifecycle, diagnostics, recovery, and known
   symptoms.
+- **Remote users:** use [Remote pairing and
+  recovery](safety-and-trust/remote-pairing-and-recovery.md) for Iroh pairing,
+  reconnect profiles, revocation, and recovery boundaries.
 - **Contributors:** use [Contributing](contributing/README.md), then consult
   [AGENTS.md](../AGENTS.md) for repository workflow requirements.
 

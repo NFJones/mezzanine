@@ -19,6 +19,25 @@ precedence, trust, and validation. Compare settings against the generated
 - [Example configuration](../examples/config.toml)
 - [SPEC.md Section 8](../../SPEC.md#8-configuration) for normative behavior
 
+## Schema index
+
+- [Files, layers, versions, and migration](#configuration-files-and-layers)
+- [Top-level fields](#top-level-fields)
+- [Persistent host](#host) and [Iroh transport](#transportiroh)
+- [Runtime](#runtime), [terminal](#terminal), [keys](#keys), and [key
+  presets](#key_preset-and-key_presets)
+- [Window frames](#frameswindow), [pane frames](#framespane), and [frame
+  template fields](#frame-template-fields)
+- [Theme selection](#theme) and [named themes](#themesname)
+- [History](#history), [memory](#memory), and [issues](#issues)
+- [Agents](#agents), [providers](#providersname), [model
+  profiles](#model_profilesname), and [model presets](#model_presetsname)
+- [Permissions](#permissions), [subagents](#subagentsname), and
+  [personalities](#personalitiesname)
+- [MCP servers](#mcp_serversname), [authentication](#auth),
+  [instructions](#instructions), [hooks](#hooksname), [audit](#audit), and
+  [extensions](#extensionsname)
+
 ## Configuration Files and Layers
 
 Primary config discovery resolves `$HOME/.config/mezzanine/` directly; it does

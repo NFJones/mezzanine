@@ -104,7 +104,11 @@ Use a human-readable client-local alias while pairing or attaching:
 
 ```console
 mez remote pair --invite-file mez-invite.json --name home-mez
-# Or pair and immediately attach:
+```
+
+To redeem the invitation and attach immediately instead:
+
+```console
 mez --iroh-invite-file mez-invite.json --save-as home-mez attach
 ```
 

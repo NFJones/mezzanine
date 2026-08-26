@@ -26,8 +26,10 @@ command with `mez --version` and inspect top-level operations with `mez --help`.
 Without a subcommand, `mez` attaches to the first session that accepts a
 primary client; when none is available, it creates a session. Use `mez new`
 when creating a session is intentional. Use `mez list` and `mez attach` to
-inspect and select existing sessions. The CLI also provides configuration,
-authentication, MCP, issue, memory, sandbox, and snapshot commands.
+inspect and select existing sessions. Use the [CLI
+reference](../reference-manual/cli.md) or `mez --help` for the complete command
+tree, including configuration, authentication, persistent-host, remote-pairing,
+integration, and diagnostic commands.
 
 ## Before enabling confinement
 

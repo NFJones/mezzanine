@@ -34,7 +34,7 @@ or `mez attach` to select an existing one.
 | --- | --- |
 | `mez new [--dry-run] [--name NAME]` | Start a new background session and attach when interactive. `--name` assigns a session name. With `--dry-run`, validate session construction instead of starting a daemon. Alias: `new-session`. |
 | `mez serve` | Start a foreground session service; it does not attach a primary client unless `--attach-primary` is supplied from an interactive terminal. Alias: `daemon`. |
-| `mez list [--all]` | List hosted local sessions. With the persistent local host, `--all` adds non-terminal remote durable leases to the same scope-tagged aggregate. Alias: `list-sessions`. |
+| `mez list [--all]` | List resumable sessions known to the local client. With the persistent local host, `--all` adds visible remote durable leases to the same scope-tagged aggregate. Alias: `list-sessions`. |
 | `mez attach [SESSION_ID] [--observer\|--default]` | Attach a primary client, request read-only observer access, or select an existing host default without creating when `--default` is used. `--default` conflicts with an explicit target. Alias: `attach-session`. |
 | `mez detach [--client-id ID]` | Detach the selected client. From an interactive attachment, use `Ctrl+A d` to detach that invoking client; a separate administrative invocation needs the target client ID. Alias: `detach-client`. |
 | `mez kill [session-id] --force` | Terminate the selected live session through its control socket; the optional target accepts a registered session id or creation-order index. `--force` confirms the destructive operation. Alias: `kill-session`. |
@@ -110,6 +110,8 @@ to the processes that existed when the snapshot was taken.
 | `mez remote` | Use authenticated local Unix control for `status`, `invite`, `clients`, `rename CLIENT_ID LABEL`, and `revoke CLIENT_ID [--reason TEXT]`. Client-local commands are `pair --invite-file PATH [--name NAME]`, `invitation inspect PATH`, and `profile list|show|rename|remove|check`. Paired Iroh clients cannot use server trust-administration methods. |
 | `mez completion <shell>` | Generate a completion definition for `bash`, `elvish`, `fish`, `powershell`, or `zsh`. |
 
+### Iroh targeting and pairing
+
 `mez remote invite` accepts `--role observer|primary`, `--expires SECONDS`, and
 `--output PATH`. A role ceiling does not grant session creation. Add
 `--allow-create` when the device may use remote `new` or omitted-target
@@ -125,10 +127,11 @@ profile. Add `--save-as NAME` to save invitation-issued authority under a
 human-readable client-local alias. The alias is not a trust input: the pinned
 server identity, client endpoint identity, role ceiling, and protected device
 credential remain authoritative. These selectors conflict with `-S` and `-L`,
-never fall back to Unix, and apply to `mez attach`, `mez kill --force`, and `mez
-detach`. Host-profile attach and kill targets accept a lease ID, stable session
-ID, or exact name. Remote kill requires an explicit target, `--force`, a primary
-role ceiling, and separately granted force-kill authority.
+never fall back to Unix, and apply to the supported remote session commands:
+`new`, `list`, `attach`, `kill`, and `detach`. Host-profile attach and kill
+targets accept a lease ID, stable session ID, or exact name. Remote kill
+requires an explicit target, `--force`, a primary role ceiling, and separately
+granted force-kill authority.
 
 An enabled host-scoped Iroh configuration does not change bare `mez` or `mez
 serve` into remote-listener commands. Those direct session commands use Unix

@@ -174,6 +174,7 @@ The [Mezzanine manual](docs/README.md) is organized by task and audience:
 - [Operations and troubleshooting](docs/operations/README.md)
 - [CLI, key, action, and terminal reference](docs/reference-manual/README.md)
 - [Contributor documentation](docs/contributing/README.md)
+- [Testing and performance guides](docs/testing/README.md)
 
 [SPEC.md](SPEC.md) remains the normative behavior and compatibility contract.
 [AGENTS.md](AGENTS.md) contains repository workflow requirements for contributors.
