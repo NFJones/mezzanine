@@ -404,6 +404,9 @@ struct ManagedPaneStartup {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeForeignShellBoundary {
+    /// Bootstrap ordering is `AwaitingPrompt -> IdentityProbing` (identity
+    /// command only) `-> BootstrappingChild` (loader dispatched) `->`
+    /// `Certified | Failed`.
     /// Primary pane process that owns the PTY containing the foreign group.
     primary_process_id: u32,
     /// Uncertified foreground process group observed by the pane worker.

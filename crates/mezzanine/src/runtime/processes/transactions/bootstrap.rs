@@ -174,26 +174,10 @@ impl RuntimeSessionService {
                 boundary.process_group_id
             ),
         )?;
-        let Some((identity_marker, mut input)) =
-            self.prepare_shell_identity_probe_to_pane(pane_id)?
+        let Some((identity_marker, input)) = self.prepare_shell_identity_probe_to_pane(pane_id)?
         else {
             return Ok(());
         };
-        let loader_token = runtime_random_marker_token(&format!(
-            "dependency-free-foreign-loader\0{pane_id}\0{identity_marker}"
-        ))?;
-        let loader_marker = loader_token
-            .as_str()
-            .get(..32)
-            .ok_or_else(|| MezError::invalid_state("foreign loader nonce is too short"))?;
-        input.push_str(
-            &mez_agent::dependency_free_foreign_shell_loader_command(loader_marker)
-                .map_err(|error| MezError::invalid_state(error.to_string()))?,
-        );
-        if let Some(current) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
-            current.loader_marker = Some(loader_marker.to_string());
-            current.loader_ready = false;
-        }
         if let Err(error) = self.write_runtime_pane_shell_input(pane_id, input.as_bytes()) {
             self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
             return Err(error);
@@ -201,10 +185,9 @@ impl RuntimeSessionService {
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
-                r#"{{"pane_id":"{}","shell_identity_probe":"sent","marker":"{}","foreign_loader":"queued","loader_marker":"{}"}}"#,
+                r#"{{"pane_id":"{}","shell_identity_probe":"sent","marker":"{}"}}"#,
                 json_escape(pane_id),
-                json_escape(&identity_marker),
-                json_escape(loader_marker)
+                json_escape(&identity_marker)
             ),
         )?;
         Ok(())
@@ -505,6 +488,18 @@ impl RuntimeSessionService {
                 "dependency-free child launch does not own foreign identity discovery",
             ));
         }
+        if self.primary_pid_for_live_pane_process(pane_id) != Some(boundary.primary_process_id)
+            || self
+                .process
+                .pane_shell_interaction_generations
+                .get(pane_id)
+                .copied()
+                != Some(boundary.interaction_generation)
+        {
+            return Err(MezError::invalid_state(
+                "foreign shell changed before dependency-free child launch",
+            ));
+        }
         let execution_identity = self
             .process
             .pane_probed_shell_identities
@@ -595,18 +590,13 @@ impl RuntimeSessionService {
             };
             self.register_managed_shell_handoff(&marker, managed_shell, None);
         }
-        let queued_loader_marker = boundary.loader_marker.clone();
-        let loader_marker = if let Some(loader_marker) = queued_loader_marker.as_deref() {
-            loader_marker.to_string()
-        } else {
-            runtime_random_marker_token(&format!(
-                "dependency-free-foreign-loader\0{pane_id}\0{marker}"
-            ))?
-            .as_str()
-            .get(..32)
-            .ok_or_else(|| MezError::invalid_state("foreign loader nonce is too short"))?
-            .to_string()
-        };
+        let loader_marker = runtime_random_marker_token(&format!(
+            "dependency-free-foreign-loader\0{pane_id}\0{marker}"
+        ))?
+        .as_str()
+        .get(..32)
+        .ok_or_else(|| MezError::invalid_state("foreign loader nonce is too short"))?
+        .to_string();
         let loader_input = mez_agent::dependency_free_foreign_shell_loader_input(
             &staging_source,
             execution_identity.shell_path(),
@@ -629,9 +619,8 @@ impl RuntimeSessionService {
             pane_id,
             agent_subshell_exit_marker_bytes(&exit_marker),
         );
-        if queued_loader_marker.is_none()
-            && let Err(error) =
-                self.write_runtime_pane_shell_input(pane_id, loader_input.command.as_bytes())
+        if let Err(error) =
+            self.write_runtime_pane_shell_input(pane_id, loader_input.command.as_bytes())
         {
             self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
             return Err(error);

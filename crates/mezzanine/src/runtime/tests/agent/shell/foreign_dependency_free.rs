@@ -73,6 +73,219 @@ fn runtime_foreign_identity_input_progress_refreshes_both_timeout_clocks() {
     process.terminate(Duration::from_millis(100)).unwrap();
 }
 
+/// Verifies malformed and nonzero dependency-free identity completions fail
+/// before allocating any loader or bootstrap ownership. The identity command
+/// is the sole pre-loader semantic boundary, so failed evidence must not leave
+/// a child command queued behind generic terminal activity.
+#[test]
+fn runtime_dependency_free_identity_failure_dispatches_no_loader() {
+    for (label, exit_code) in [("malformed", 0), ("nonzero", 19)] {
+        let mut service = test_runtime_service();
+        let primary = service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        service.start_initial_pane_process(Some("cat")).unwrap();
+        let pane_id = service
+            .session()
+            .active_window()
+            .unwrap()
+            .active_pane()
+            .id
+            .to_string();
+        let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+        service
+            .pane_processes_mut()
+            .set_foreground_process_group_id_for_test(&pane_id, None);
+        let mut process = service
+            .take_running_pane_process_for_adapter(&pane_id)
+            .unwrap();
+        service
+            .apply_pane_foreground_process_event(
+                &pane_id,
+                "ssh",
+                primary_pid.saturating_add(1),
+                None,
+            )
+            .unwrap();
+        service
+            .execute_terminal_command(&primary, "agent-shell")
+            .unwrap();
+        service.drain_pane_io_transition();
+
+        let (identity_marker, identity_turn_id) = service
+            .running_shell_transactions_for_tests()
+            .iter()
+            .find_map(|(marker, transaction)| {
+                matches!(
+                    transaction.kind,
+                    RunningShellTransactionKind::ShellIdentityProbe { .. }
+                )
+                .then(|| (marker.clone(), transaction.turn_id.clone()))
+            })
+            .expect("dependency-free identity probe should be registered");
+        service
+            .observe_agent_shell_transaction_start(
+                &pane_id,
+                &identity_marker,
+                &identity_turn_id,
+                &format!("agent-{pane_id}"),
+                &pane_id,
+            )
+            .unwrap();
+        let output = if label == "nonzero" {
+            format!(
+                "\u{1e}mez_shell_identity_begin={identity_marker}\n\
+                 \u{1e}mez_shell_path=/bin/bash\n\
+                 \u{1e}mez_shell_version=GNU bash, version 5.2\n\
+                 \u{1e}mez_shell_identity_end={identity_marker}\n"
+            )
+        } else {
+            "malformed identity output".to_string()
+        };
+        let transaction = service
+            .running_shell_transactions_mut_for_tests()
+            .get_mut(&identity_marker)
+            .unwrap();
+        transaction.observed_output_bytes = output.len();
+        transaction.observed_output_preview = output;
+
+        service
+            .observe_agent_shell_transaction_end(
+                &pane_id,
+                &identity_marker,
+                &identity_turn_id,
+                &format!("agent-{pane_id}"),
+                &pane_id,
+                exit_code,
+            )
+            .unwrap();
+
+        assert_eq!(
+            service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+            Some("failed"),
+            "{label} identity completion must fail the boundary"
+        );
+        assert!(
+            service
+                .foreign_shell_loader_marker_for_tests(&pane_id)
+                .is_none(),
+            "{label} identity completion must not allocate a loader"
+        );
+        assert!(
+            service
+                .running_shell_transactions_for_tests()
+                .values()
+                .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap),
+            "{label} identity completion must not register bootstrap ownership"
+        );
+        assert!(pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty());
+        process.terminate(Duration::from_millis(100)).unwrap();
+    }
+}
+
+/// Verifies a shell-interaction generation change invalidates completed
+/// identity evidence before loader launch. Recovery may issue a fresh identity
+/// probe for the new epoch, but it must never dispatch a loader rendered from
+/// the stale process identity.
+#[test]
+fn runtime_dependency_free_stale_identity_dispatches_no_loader() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    service
+        .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service.drain_pane_io_transition();
+
+    let (identity_marker, identity_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )
+            .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("dependency-free identity probe should be registered");
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+        )
+        .unwrap();
+    let output = format!(
+        "\u{1e}mez_shell_identity_begin={identity_marker}\n\
+         \u{1e}mez_shell_path=/bin/bash\n\
+         \u{1e}mez_shell_version=GNU bash, version 5.2\n\
+         \u{1e}mez_shell_identity_end={identity_marker}\n"
+    );
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&identity_marker)
+        .unwrap();
+    transaction.observed_output_bytes = output.len();
+    transaction.observed_output_preview = output;
+    service.advance_pane_shell_interaction_generation_for_tests(&pane_id);
+
+    service
+        .observe_agent_shell_transaction_end(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+            0,
+        )
+        .unwrap();
+
+    assert!(
+        service
+            .foreign_shell_loader_marker_for_tests(&pane_id)
+            .is_none(),
+        "stale identity evidence must not allocate a loader"
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap),
+        "stale identity evidence must not register bootstrap ownership"
+    );
+    let recovery_transition = service.drain_pane_io_transition();
+    let recovery_inputs = pane_input_effects(&recovery_transition.side_effects);
+    assert!(recovery_inputs.iter().all(|effect| {
+        String::from_utf8_lossy(effect.pane_input_parts().1)
+            .lines()
+            .filter(|line| line.starts_with("/bin/sh -c "))
+            .count()
+            <= 1
+    }));
+    process.terminate(Duration::from_millis(100)).unwrap();
+}
+
 /// Verifies explicit agent entry at an ordinary foreign prompt immediately
 /// probes shell identity and launches one ephemeral loader without a retained
 /// adapter. Generated child source must remain withheld until the loader emits
@@ -123,14 +336,35 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
             .lines()
             .filter(|line| line.starts_with("/bin/sh -c "))
             .count(),
-        2,
-        "identity discovery and loader startup should be pipelined in one pane write"
+        1,
+        "identity discovery must be the only interactive command in its pane write"
     );
-    let loader_command = identity_input
-        .lines()
-        .nth(1)
-        .expect("the pipelined write should contain the loader command");
-    assert!(loader_command.len() <= 700, "{loader_command:?}");
+    assert!(
+        service
+            .foreign_shell_loader_marker_for_tests(&pane_id)
+            .is_none(),
+        "identity discovery must not allocate loader ownership"
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap),
+        "identity discovery must not register bootstrap ownership"
+    );
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ForeignShellLoaderReady {
+                    marker: "premature-loader".to_string(),
+                }],
+            )
+            .unwrap(),
+        0,
+        "loader readiness before identity settlement must be ignored"
+    );
+    assert!(pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty());
 
     let (identity_marker, identity_turn_id) = service
         .running_shell_transactions_for_tests()
@@ -164,35 +398,21 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
         .unwrap();
     transaction.observed_output_bytes = identity_output.len();
     transaction.observed_output_preview = identity_output;
-    let loader_marker = service
-        .foreign_shell_loader_marker_for_tests(&pane_id)
-        .expect("dependency-free loader should retain its bounded nonce")
-        .to_string();
-    assert_eq!(loader_marker.len(), 32);
-    let loader_process_group = primary_pid.saturating_add(2);
-    service
-        .pane_processes_mut()
-        .set_foreground_process_group_id_for_test(&pane_id, Some(loader_process_group));
     assert_eq!(
         service
             .observe_agent_shell_transaction_events(
                 &pane_id,
-                &[
-                    TerminalOscEvent::ShellTransactionEnd {
-                        marker: identity_marker.clone(),
-                        turn_id: identity_turn_id.clone(),
-                        agent_id: format!("agent-{pane_id}"),
-                        pane_id: pane_id.clone(),
-                        exit_code: 0,
-                    },
-                    TerminalOscEvent::ForeignShellLoaderReady {
-                        marker: loader_marker.clone(),
-                    },
-                ],
+                &[TerminalOscEvent::ShellTransactionEnd {
+                    marker: identity_marker.clone(),
+                    turn_id: identity_turn_id.clone(),
+                    agent_id: format!("agent-{pane_id}"),
+                    pane_id: pane_id.clone(),
+                    exit_code: 0,
+                }],
             )
             .unwrap(),
-        2,
-        "one SSH output batch should settle identity and admit the queued loader"
+        1,
+        "identity settlement should launch one separately paced loader command"
     );
 
     assert_eq!(
@@ -204,23 +424,57 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
             .running_shell_transactions_for_tests()
             .values()
             .any(|transaction| transaction.kind == RunningShellTransactionKind::Bootstrap),
-        "dependency-free child bootstrap should be registered"
+        "dependency-free child bootstrap should be registered after identity settlement"
     );
+    let loader_marker = service
+        .foreign_shell_loader_marker_for_tests(&pane_id)
+        .expect("dependency-free loader should retain its bounded nonce")
+        .to_string();
+    assert_eq!(loader_marker.len(), 32);
     let launch_effects = service.drain_pane_io_transition().side_effects;
     let launch_inputs = pane_input_effects(&launch_effects);
     assert_eq!(
         launch_inputs.len(),
-        2,
-        "same-batch loader admission should release its payload and prebuffer the bootstrap trigger"
+        1,
+        "identity settlement should emit only the separate loader command"
     );
-    let payload = launch_inputs
+    let loader_command = String::from_utf8_lossy(launch_inputs[0].pane_input_parts().1);
+    assert!(
+        loader_command.starts_with("/bin/sh -c "),
+        "{loader_command:?}"
+    );
+    assert!(
+        loader_command.contains(&loader_marker),
+        "{loader_command:?}"
+    );
+    assert!(loader_command.len() <= 700, "{loader_command:?}");
+
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ForeignShellLoaderReady {
+                    marker: loader_marker.clone(),
+                }],
+            )
+            .unwrap(),
+        1
+    );
+    let release_effects = service.drain_pane_io_transition().side_effects;
+    let release_inputs = pane_input_effects(&release_effects);
+    assert_eq!(
+        release_inputs.len(),
+        1,
+        "correlated loader readiness should release only the loader payload before managed child installation"
+    );
+    let payload = release_inputs
         .iter()
         .map(|effect| String::from_utf8_lossy(effect.pane_input_parts().1))
         .find(|input| input.contains(&format!("MEZ_LOADER_END_{loader_marker}")))
         .expect("one released input should contain the loader payload");
     assert!(payload.contains(&format!("MEZ_LOADER_END_{loader_marker}")));
     assert!(payload.lines().all(|line| line.len() <= 700));
-    let loader_delivery = launch_inputs
+    let loader_delivery = release_inputs
         .iter()
         .find_map(|effect| match effect {
             RuntimeSideEffect::PaneProcessIo {
@@ -241,10 +495,48 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
         mez_mux::process::ShellInputPacing::LoaderAcknowledged,
         "loader payload data must stream until its terminating acknowledgement"
     );
-    assert!(launch_inputs.iter().any(|effect| {
+    assert!(release_inputs.iter().all(|effect| {
         let input = String::from_utf8_lossy(effect.pane_input_parts().1);
-        input.starts_with('\u{7}') && input.contains("MEZ_BASH_RX1_BEGIN")
+        !input.starts_with('\u{7}') && !input.contains("MEZ_BASH_RX1_BEGIN")
     }));
+
+    let bootstrap_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.kind == RunningShellTransactionKind::Bootstrap).then(|| marker.clone())
+        })
+        .expect("dependency-free child bootstrap should remain registered");
+    let child_token = service
+        .foreign_child_token_for_tests(&pane_id)
+        .expect("dependency-free Bash child should retain its token")
+        .to_string();
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_events(
+                &pane_id,
+                &[TerminalOscEvent::ManagedShell {
+                    version: mez_terminal::MANAGED_SHELL_PROTOCOL_VERSION,
+                    shell: mez_terminal::ManagedShellAdapter::Bash,
+                    token: child_token,
+                    event: mez_terminal::ManagedShellProtocolEvent::ChildInstalled {
+                        marker: bootstrap_marker,
+                    },
+                }],
+            )
+            .unwrap(),
+        1
+    );
+    let installed_effects = service.drain_pane_io_transition().side_effects;
+    let installed_inputs = pane_input_effects(&installed_effects);
+    assert_eq!(
+        installed_inputs.len(),
+        1,
+        "authenticated child installation should release the deferred bootstrap wrapper"
+    );
+    let bootstrap_wrapper = String::from_utf8_lossy(installed_inputs[0].pane_input_parts().1);
+    assert!(bootstrap_wrapper.starts_with('\u{7}'));
+    assert!(bootstrap_wrapper.contains("MEZ_BASH_RX1_BEGIN"));
 
     assert_eq!(
         service
@@ -286,6 +578,126 @@ fn runtime_dependency_free_foreign_bash_loader_is_ready_gated() {
             .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap),
         "premature loader exit must settle the bootstrap transaction"
     );
+
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies a failed write of the separately dispatched dependency-free loader
+/// settles every staged child/bootstrap owner. A queued bootstrap wrapper or
+/// retained loader marker would otherwise leave pane input leased after the
+/// interactive loader command never reached the shell.
+#[test]
+fn runtime_dependency_free_loader_write_failure_clears_staged_bootstrap() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    service
+        .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service.drain_pane_io_transition();
+
+    let (identity_marker, identity_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )
+            .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("dependency-free identity probe should be registered");
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+        )
+        .unwrap();
+    let identity_output = format!(
+        "\u{1e}mez_shell_identity_begin={identity_marker}\n\
+         \u{1e}mez_shell_path=/bin/bash\n\
+         \u{1e}mez_shell_version=GNU bash, version 5.2\n\
+         \u{1e}mez_shell_identity_end={identity_marker}\n"
+    );
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&identity_marker)
+        .unwrap();
+    transaction.observed_output_bytes = identity_output.len();
+    transaction.observed_output_preview = identity_output;
+    service
+        .observe_agent_shell_transaction_end(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+            0,
+        )
+        .unwrap();
+
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("bootstrapping-child")
+    );
+    assert!(
+        service
+            .foreign_shell_loader_marker_for_tests(&pane_id)
+            .is_some()
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| transaction.kind == RunningShellTransactionKind::Bootstrap)
+    );
+    service.drain_pane_io_transition();
+
+    assert!(
+        service
+            .apply_pane_write_failure_event(&pane_id, "injected loader write failure")
+            .unwrap()
+    );
+
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("failed")
+    );
+    assert!(
+        service
+            .foreign_shell_loader_marker_for_tests(&pane_id)
+            .is_none()
+    );
+    assert!(service.foreign_child_token_for_tests(&pane_id).is_none());
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| transaction.pane_id != pane_id)
+    );
+    assert!(pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty());
 
     let _ = process.terminate(Duration::from_millis(10));
 }

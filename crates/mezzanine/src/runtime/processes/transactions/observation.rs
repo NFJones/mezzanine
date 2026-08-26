@@ -165,15 +165,20 @@ impl RuntimeSessionService {
         if let Some(delivery_id) = delivery_id.as_deref() {
             self.mark_managed_shell_payload_released(pane_id, delivery_id);
         }
-        let prebuffered_bootstrap =
-            self.process
-                .pane_shell_handoffs
-                .get_mut(pane_id)
-                .and_then(|handoff| {
-                    let bootstrap_marker = handoff.bootstrap_marker.clone()?;
-                    let wrapper = handoff.deferred_bootstrap_wrapper.take()?;
-                    Some((bootstrap_marker, wrapper))
-                });
+        let prebuffered_bootstrap = boundary
+            .child_shell
+            .is_none()
+            .then(|| {
+                self.process
+                    .pane_shell_handoffs
+                    .get_mut(pane_id)
+                    .and_then(|handoff| {
+                        let bootstrap_marker = handoff.bootstrap_marker.clone()?;
+                        let wrapper = handoff.deferred_bootstrap_wrapper.take()?;
+                        Some((bootstrap_marker, wrapper))
+                    })
+            })
+            .flatten();
         if let Some((bootstrap_marker, wrapper)) = prebuffered_bootstrap {
             if let Err(error) = self.write_runtime_pane_shell_input(pane_id, wrapper.as_bytes()) {
                 self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;

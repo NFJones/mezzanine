@@ -2156,3 +2156,188 @@ async fn async_unmanaged_bash_first_prompt_completes_deferred_bootstrap() {
     .expect("first-prompt bootstrap should not time out");
     actor_exit.service.terminate_all_pane_processes().unwrap();
 }
+
+/// Verifies an ordinary unmanaged primary Zsh serializes identity discovery
+/// and dependency-free loader launch through the production actor and pane
+/// worker. Bootstrap must reach certified readiness before fresh shell input
+/// executes, and no identity or bootstrap transaction may remain afterward.
+#[tokio::test(flavor = "current_thread")]
+async fn async_unmanaged_primary_zsh_bootstrap_executes_post_bootstrap_input() {
+    let Some(zsh) = ["/bin/zsh", "/usr/bin/zsh", "/usr/local/bin/zsh"]
+        .into_iter()
+        .find(|path| Path::new(path).is_file())
+    else {
+        eprintln!("skipping async unmanaged primary Zsh bootstrap because Zsh is unavailable");
+        return;
+    };
+    let sentinel = std::env::temp_dir().join(format!(
+        "mez-unmanaged-primary-zsh-bootstrap-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_file(&sentinel);
+    let mut service = test_service_with_shell(zsh);
+    service.disable_legacy_managed_startup_for_tests();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let pane_worker_handle = handle.clone();
+    let client_handle = handle.clone();
+    let pane_worker_done = StdArc::new(AtomicBool::new(false));
+    let pane_worker_stop = StdArc::clone(&pane_worker_done);
+    let client_sentinel = sentinel.clone();
+    let pane_worker = async move {
+        let result = run_async_pane_process_supervisor_service(
+            pane_worker_handle,
+            AsyncPaneProcessSupervisorServiceConfig {
+                max_polls: u64::MAX,
+                take_limit: 8,
+                idle_interval: Duration::from_millis(1),
+                pane_service: AsyncPaneProcessServiceConfig {
+                    max_polls: u64::MAX,
+                    output_drain_limit: 1,
+                    drain_limit: 8,
+                    idle_interval: Duration::from_millis(1),
+                    foreground_metadata_interval: Duration::from_millis(10),
+                },
+            },
+            move |_, state| {
+                pane_worker_stop.load(Ordering::SeqCst)
+                    || matches!(state, RuntimeLifecycleState::Stopping)
+            },
+        )
+        .await;
+        if let Err(error) = result {
+            assert!(
+                matches!(
+                    error.message(),
+                    "async runtime session actor is closed"
+                        | "async runtime session actor reply was dropped"
+                ),
+                "pane supervisor failed before actor shutdown: {error}"
+            );
+        }
+    };
+
+    let client = async move {
+        let prompt_probe =
+            b"PS1='__MEZ_UNMANAGED_ZSH_READY__> '; print -r -- '__MEZ_UNMANAGED_ZSH_ROUND_TRIP__'\n"
+                .to_vec();
+        client_handle
+            .write_input_to_pane(primary.clone(), "%1", prompt_probe)
+            .await
+            .unwrap();
+        let prompt_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let screen = client_handle
+                .managed_shell_process_screen_text("%1")
+                .await
+                .unwrap();
+            if screen
+                .lines()
+                .zip(screen.lines().skip(1))
+                .any(|(output, prompt)| {
+                    output == "__MEZ_UNMANAGED_ZSH_ROUND_TRIP__"
+                        && prompt == "__MEZ_UNMANAGED_ZSH_READY__>"
+                })
+            {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < prompt_deadline,
+                "unmanaged primary Zsh did not reach its initial prompt: {screen:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let shown = client_handle
+            .execute_terminal_command(primary.clone(), "agent-shell".to_string())
+            .await
+            .unwrap();
+        assert!(shown.contains("visibility=visible"), "{shown}");
+        let submitted = client_handle
+            .execute_agent_shell_command(primary.clone(), "inspect the repository".to_string())
+            .await
+            .unwrap();
+        assert!(submitted.contains(r#""state":"running""#), "{submitted}");
+
+        let certification_deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        let last_snapshot = loop {
+            let snapshot = client_handle
+                .pane_certification_snapshot("%1")
+                .await
+                .unwrap();
+            if snapshot.child_active
+                && !snapshot.bootstrap_pending
+                && snapshot.foreign_bootstrap_phase == Some("certified")
+                && snapshot.environment_signature_present
+                && snapshot.readiness == mez_agent::PaneReadinessState::Ready
+                && snapshot.certification_rejection.is_none()
+            {
+                break snapshot;
+            }
+            assert!(
+                tokio::time::Instant::now() < certification_deadline,
+                "unmanaged primary Zsh did not finish dependency-free bootstrap: snapshot={snapshot:?} screen={:?}",
+                client_handle
+                    .managed_shell_process_screen_text("%1")
+                    .await
+                    .unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert_eq!(last_snapshot.foreign_bootstrap_phase, Some("certified"));
+
+        let hidden = client_handle
+            .execute_terminal_command(primary.clone(), "agent-shell".to_string())
+            .await
+            .unwrap();
+        assert!(hidden.contains("visibility=hidden"), "{hidden}");
+        let input = format!(
+            "command touch {}\n",
+            mez_agent::shell::shell_quote(client_sentinel.to_str().unwrap())
+        )
+        .into_bytes();
+        let written = client_handle
+            .write_input_to_pane(primary, "%1", input.clone())
+            .await
+            .unwrap();
+        assert_eq!(written.bytes_written, input.len());
+        let execution_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !client_sentinel.is_file() {
+            assert!(
+                tokio::time::Instant::now() < execution_deadline,
+                "post-bootstrap input did not execute in unmanaged primary Zsh"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        pane_worker_done.store(true, Ordering::SeqCst);
+        assert_eq!(
+            client_handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), (), mut actor_exit) = tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::join!(client, pane_worker, actor.run())
+    })
+    .await
+    .expect("unmanaged primary Zsh bootstrap should not time out");
+    assert!(sentinel.is_file());
+    assert!(
+        actor_exit
+            .service
+            .running_shell_transactions_for_tests()
+            .is_empty(),
+        "identity and bootstrap transactions must settle before acceptance"
+    );
+    actor_exit.service.terminate_all_pane_processes().unwrap();
+    std::fs::remove_file(sentinel).unwrap();
+}

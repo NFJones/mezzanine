@@ -660,15 +660,15 @@ mod tests {
 
     #[test]
     /// Verifies an unmanaged interactive Fish completes the full dependency-free
-    /// bootstrap after the identity probe and loader command are pipelined.
+    /// bootstrap after identity, loader, and child-installation boundaries settle.
     ///
     /// This reproduces the production foreign-shell ordering through the
     /// unmanaged parent, staged loader, managed child, and bootstrap receiver.
     /// Reaching loader-ready alone is insufficient because the pane can still
     /// remain in child bootstrapping if any later ownership boundary stalls.
-    fn dependency_free_foreign_fish_bootstrap_completes_after_pipelined_identity_probe() {
+    fn dependency_free_foreign_fish_bootstrap_completes_after_serialized_identity_probe() {
         let Some(fish) = fish_path_for_tests() else {
-            eprintln!("skipping pipelined Fish loader assertion because Fish is unavailable");
+            eprintln!("skipping serialized Fish loader assertion because Fish is unavailable");
             return;
         };
         let identity_marker = "00112233445566778899aabbccddeeff";
@@ -714,7 +714,6 @@ mod tests {
         .unwrap()
         .with_payload_receiver_acknowledgements(cfg!(target_os = "macos"))
         .render_for_classification_input(ShellClassification::Fish);
-        let input = format!("{identity}\n{}", loader.command);
         let launch = PaneProcessLaunch::new(fish.clone())
             .with_interactive_arguments([
                 "--no-config",
@@ -737,8 +736,19 @@ mod tests {
 
         process
             .process
-            .write_shell_delivery(&ShellInputDelivery::generated_source(input.into_bytes()))
+            .write_shell_delivery(&ShellInputDelivery::generated_source(
+                format!("{identity}\n").into_bytes(),
+            ))
             .unwrap();
+        let identity_end = format!("\x1b]133;D;0;mez_marker={identity_marker};");
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(identity_end.len())
+                .any(|window| window == identity_end.as_bytes())
+        });
+        output.extend(process.write_shell_delivery(&ShellInputDelivery::generated_source(
+            loader.command.into_bytes(),
+        )));
         extend_fish_output_until(&mut process, &mut output, |output| {
             output
                 .windows(b"mez_foreign_loader=ready".len())
@@ -750,12 +760,6 @@ mod tests {
                 bootstrap_marker.as_str(),
             )),
         );
-        output.extend(process.write_shell_delivery(
-            &ShellInputDelivery::generated_source_for_transaction(
-                bootstrap.wrapper.into_bytes(),
-                bootstrap_marker.as_str(),
-            ),
-        ));
         let installed = format!(
             "mez_protocol=2;mez_shell=fish;mez_token={};mez_event=child-installed;mez_marker={}",
             child_token.as_str(),
@@ -766,6 +770,12 @@ mod tests {
                 .windows(installed.len())
                 .any(|window| window == installed.as_bytes())
         });
+        output.extend(process.write_shell_delivery(
+            &ShellInputDelivery::generated_source_for_transaction(
+                bootstrap.wrapper.into_bytes(),
+                bootstrap_marker.as_str(),
+            ),
+        ));
         let start = format!("\x1b]133;C;mez_marker={};", bootstrap_marker.as_str());
         extend_fish_output_until(&mut process, &mut output, |output| {
             output

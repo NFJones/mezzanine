@@ -1,10 +1,11 @@
 //! Protocol violations and pane input write-failure settlement.
 
+use super::super::RuntimeForeignShellBootstrapPhase;
 use super::{
     ActionStatus, EventKind, PaneReadinessState, Result, RunningShellTransactionKind,
     RunningShellTransactionRef, RuntimeSessionService, RuntimeShellTransactionActionFailure,
-    json_escape, pane_write_failure_terminal_observation, runtime_pane_readiness_state_name,
-    shell_transaction_protocol_violation_observation,
+    current_unix_millis, json_escape, pane_write_failure_terminal_observation,
+    runtime_pane_readiness_state_name, shell_transaction_protocol_violation_observation,
 };
 
 impl RuntimeSessionService {
@@ -258,6 +259,44 @@ impl RuntimeSessionService {
                     )?;
                 }
             }
+        }
+        let failed_foreign_bootstrap = self
+            .process
+            .pane_foreign_shell_boundaries
+            .get(pane_id)
+            .is_some_and(|boundary| {
+                matches!(
+                    boundary.phase,
+                    RuntimeForeignShellBootstrapPhase::IdentityProbing
+                        | RuntimeForeignShellBootstrapPhase::BootstrappingChild
+                )
+            });
+        if failed_foreign_bootstrap {
+            if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+                boundary.phase = RuntimeForeignShellBootstrapPhase::Failed;
+                boundary.phase_started_at_unix_ms = current_unix_millis();
+                boundary.child_token = None;
+                boundary.child_shell = None;
+                boundary.loader_marker = None;
+                boundary.loader_payload = None;
+                boundary.loader_ready = false;
+                boundary.child_staging_source = None;
+                boundary.identity_marker = None;
+            }
+            self.process.pane_managed_shell_handoffs.remove(pane_id);
+            self.process.pane_shell_handoffs.remove(pane_id);
+            self.process
+                .pane_agent_subshell_parent_return_pending
+                .remove(pane_id);
+            self.process
+                .pending_agent_subshell_start_observations
+                .remove(pane_id);
+            self.process
+                .pending_agent_subshell_certifications
+                .remove(pane_id);
+            self.process.pane_bootstrap_pending.remove(pane_id);
+            self.process.pane_probed_shell_identities.remove(pane_id);
+            self.clear_agent_subshell_shell_identity(pane_id);
         }
         Ok(failed_count)
     }
