@@ -192,7 +192,7 @@ changes require a daemon restart.
 | `transport.iroh.max_connections` | integer | `16` | Maximum remote connections; valid values are 1 through 1024. |
 | `transport.iroh.max_streams_per_connection` | integer | `1` | Fixed v1 limit for the single client-opened bidirectional control stream; the only valid value is 1. |
 | `transport.iroh.setup_timeout_ms` | integer | `10000` | Bounded connection setup timeout. |
-| `transport.iroh.idle_timeout_ms` | integer | `300000` | Bounded idle timeout. |
+| `transport.iroh.idle_timeout_ms` | integer | `300000` | QUIC liveness timeout for an unresponsive peer. Mezzanine sends transport keepalive probes at one third of this interval, so an application-idle but healthy persistent attach remains connected. |
 | `transport.iroh.compression_codecs` | string array | `["zstd", "lz4", "none"]` | Ordered, unique application-frame codec policy. Valid entries are `zstd`, `lz4`, and `none`; one through three entries are required. |
 | `transport.iroh.compression_min_bytes` | integer | `512` | Complete v2 frames below this decoded size use an identity envelope. Valid values are 0 through 1048576. |
 | `transport.iroh.compression_zstd_level` | integer | `3` | Zstandard level for eligible v2 frames. Valid values are -5 through 22. |

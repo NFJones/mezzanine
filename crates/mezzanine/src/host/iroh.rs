@@ -1066,8 +1066,7 @@ async fn serve_routed_initialize_inner(
             ))
         });
     let control_config =
-        AsyncRuntimeControlConnectionConfig::new(HOST_CONTROL_MAX_CONTENT_LENGTH, 0)?
-            .with_application_idle_timeout(policy.idle_timeout);
+        AsyncRuntimeControlConnectionConfig::new(HOST_CONTROL_MAX_CONTENT_LENGTH, 0)?;
     let authority_principal = principal.clone();
     let authority_lease = binding.lease.clone();
     let request_trust = trust.clone();

@@ -811,7 +811,8 @@ impl AsyncRuntimeControlConnectionConfig {
         })
     }
 
-    /// Applies a finite application-idle deadline to remote control waits.
+    /// Applies a finite application-idle deadline in focused connection tests.
+    #[cfg(test)]
     pub fn with_application_idle_timeout(mut self, timeout: Duration) -> Self {
         self.application_idle_timeout = Some(timeout);
         self
