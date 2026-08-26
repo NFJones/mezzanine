@@ -1226,11 +1226,18 @@ async fn serve_runtime_iroh_event_stream(
             "unsupported Iroh event stream version",
         ));
     }
-    if version == 2 {
-        handle
-            .register_client_clipboard_route(caller_client_id.clone())
-            .await?;
-    }
+    let clipboard_route = if version == 2 {
+        Some(
+            handle
+                .register_client_clipboard_route(caller_client_id.clone())
+                .await?,
+        )
+    } else {
+        None
+    };
+    let clipboard_route_generation = clipboard_route
+        .as_ref()
+        .map(crate::host::async_runtime::ClientClipboardRouteLease::generation);
     let result = serve_registered_runtime_iroh_event_stream(
         connection,
         handle.clone(),
@@ -1240,13 +1247,12 @@ async fn serve_runtime_iroh_event_stream(
         compression_metrics,
         setup_timeout,
         idle_timeout,
+        clipboard_route_generation,
         &mut stop,
     )
     .await;
-    if version == 2 {
-        let _ = handle
-            .unregister_client_clipboard_route(caller_client_id)
-            .await;
+    if let Some(clipboard_route) = clipboard_route {
+        let _ = clipboard_route.close().await;
     }
     result
 }
@@ -1264,6 +1270,7 @@ async fn serve_registered_runtime_iroh_event_stream(
     compression_metrics: IrohCompressionMetrics,
     setup_timeout: std::time::Duration,
     idle_timeout: std::time::Duration,
+    clipboard_route_generation: Option<u64>,
     stop: &mut tokio::sync::watch::Receiver<bool>,
 ) -> Result<u64> {
     let connection_id = format!("iroh-events-{caller_client_id}");
@@ -1309,7 +1316,12 @@ async fn serve_registered_runtime_iroh_event_stream(
         }
         if version == 2
             && let Some(write) = handle
-                .take_client_clipboard_write(caller_client_id.clone())
+                .take_client_clipboard_write(
+                    caller_client_id.clone(),
+                    clipboard_route_generation.ok_or_else(|| {
+                        MezError::invalid_state("Iroh v2 event stream omitted clipboard route")
+                    })?,
+                )
                 .await?
         {
             for frame in encode_iroh_clipboard_effect_frames(&write) {

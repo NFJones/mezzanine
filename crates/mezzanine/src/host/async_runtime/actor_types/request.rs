@@ -487,13 +487,15 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     RegisterClientClipboardRoute {
         /// Exact interactive primary owning the live event stream.
         client_id: ClientId,
-        /// Confirms that the route was installed or reset.
-        reply: oneshot::Sender<()>,
+        /// Generation assigned to this route ownership lifetime.
+        reply: oneshot::Sender<u64>,
     },
     /// Removes one exact route and discards any unsent sensitive payload.
     UnregisterClientClipboardRoute {
         /// Exact interactive primary whose event route ended.
         client_id: ClientId,
+        /// Event-stream generation requesting cleanup.
+        generation: u64,
         /// Confirms whether a live route was removed.
         reply: oneshot::Sender<bool>,
     },
@@ -511,6 +513,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     TakeClientClipboardWrite {
         /// Exact event writer draining its connection-local route.
         client_id: ClientId,
+        /// Event-stream generation authorized to drain the route.
+        generation: u64,
         /// Pending write, if the route is live and currently has one.
         reply: oneshot::Sender<Option<crate::runtime::ClientClipboardWrite>>,
     },

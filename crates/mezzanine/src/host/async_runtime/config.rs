@@ -16,6 +16,23 @@ use crate::storage::snapshot::SnapshotRepository;
 
 // Async runtime, daemon, connection, and client configuration.
 
+/// Generation-fenced clipboard-route cleanup emitted synchronously when an
+/// event-stream owner is dropped or aborted.
+#[derive(Debug)]
+pub(super) struct ClientClipboardRouteCleanup {
+    pub(super) client_id: ClientId,
+    pub(super) generation: u64,
+}
+
+/// Exact clipboard-route ownership for one live Iroh event stream.
+#[derive(Debug)]
+pub(crate) struct ClientClipboardRouteLease {
+    pub(super) handle: AsyncRuntimeSessionHandle,
+    pub(super) client_id: ClientId,
+    pub(super) generation: u64,
+    pub(super) armed: bool,
+}
+
 /// Carries Async Runtime Actor Config state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -410,8 +427,15 @@ pub struct AsyncRuntimeSessionActor {
     /// Pending transient clipboard write keyed by the exact live Iroh primary.
     pub(super) client_clipboard_routes:
         HashMap<ClientId, Option<crate::runtime::ClientClipboardWrite>>,
+    /// Current event-stream generation owning each exact clipboard route.
+    pub(super) client_clipboard_route_generations: HashMap<ClientId, u64>,
+    /// Next generation assigned when an event stream replaces a route.
+    pub(super) next_client_clipboard_route_generation: u64,
     /// Last route-local clipboard sequence assigned to each live Iroh primary.
     pub(super) client_clipboard_sequences: HashMap<ClientId, u64>,
+    /// Cancellation-safe route cleanup sent synchronously by event-task Drop.
+    pub(super) client_clipboard_route_cleanup_rx:
+        mpsc::UnboundedReceiver<ClientClipboardRouteCleanup>,
     /// Stores the message delivery notify value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -480,6 +504,9 @@ pub struct AsyncRuntimeSessionHandle {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) sender: mpsc::Sender<AsyncRuntimeRequestEnvelope>,
+    /// Nonblocking generation-fenced clipboard cleanup for aborted event tasks.
+    pub(super) client_clipboard_route_cleanup_tx:
+        mpsc::UnboundedSender<ClientClipboardRouteCleanup>,
     /// Stores the message delivery notify value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

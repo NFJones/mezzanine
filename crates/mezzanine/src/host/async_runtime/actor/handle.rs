@@ -4,9 +4,10 @@ use super::{
     AgentId, AsyncControlInputResult, AsyncMessageFanout, AsyncMessageInputResult,
     AsyncRenderedClientFrame, AsyncRuntimeRequest, AsyncRuntimeRequestEnvelope,
     AsyncRuntimeSessionHandle, AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot,
-    AttachedClientStepApplication, AttachedTerminalClientStepPlan, ClientId, ClientViewRole,
-    ControlConnectionState, DeliveryCursor, FanoutBatch, MessageConnection, MezError,
-    PaneResizeUpdate, Result, RuntimeAgentProviderDispatch, RuntimeApprovedExternalActionDispatch,
+    AttachedClientStepApplication, AttachedTerminalClientStepPlan, ClientClipboardRouteCleanup,
+    ClientClipboardRouteLease, ClientId, ClientViewRole, ControlConnectionState, DeliveryCursor,
+    FanoutBatch, MessageConnection, MezError, PaneResizeUpdate, Result,
+    RuntimeAgentProviderDispatch, RuntimeApprovedExternalActionDispatch,
     RuntimeApprovedExternalActionOutcome, RuntimeEventBatch, RuntimeEventIngressReport,
     RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSideEffect, Size, TerminalClientLoopConfig,
     oneshot, watch,
@@ -452,18 +453,36 @@ impl AsyncRuntimeSessionHandle {
     }
 
     /// Registers one exact authenticated Iroh v2 primary effect route.
-    pub(crate) async fn register_client_clipboard_route(&self, client_id: ClientId) -> Result<()> {
-        self.request(|reply| AsyncRuntimeRequest::RegisterClientClipboardRoute { client_id, reply })
-            .await
+    pub(crate) async fn register_client_clipboard_route(
+        &self,
+        client_id: ClientId,
+    ) -> Result<ClientClipboardRouteLease> {
+        let generation = self
+            .request(|reply| AsyncRuntimeRequest::RegisterClientClipboardRoute {
+                client_id: client_id.clone(),
+                reply,
+            })
+            .await?;
+        Ok(ClientClipboardRouteLease {
+            handle: self.clone(),
+            client_id,
+            generation,
+            armed: true,
+        })
     }
 
     /// Removes one exact route and clears any unsent clipboard payload.
-    pub(crate) async fn unregister_client_clipboard_route(
+    async fn unregister_client_clipboard_route(
         &self,
         client_id: ClientId,
+        generation: u64,
     ) -> Result<bool> {
         self.request(
-            |reply| AsyncRuntimeRequest::UnregisterClientClipboardRoute { client_id, reply },
+            |reply| AsyncRuntimeRequest::UnregisterClientClipboardRoute {
+                client_id,
+                generation,
+                reply,
+            },
         )
         .await
     }
@@ -487,9 +506,14 @@ impl AsyncRuntimeSessionHandle {
     pub(crate) async fn take_client_clipboard_write(
         &self,
         client_id: ClientId,
+        generation: u64,
     ) -> Result<Option<crate::runtime::ClientClipboardWrite>> {
-        self.request(|reply| AsyncRuntimeRequest::TakeClientClipboardWrite { client_id, reply })
-            .await
+        self.request(|reply| AsyncRuntimeRequest::TakeClientClipboardWrite {
+            client_id,
+            generation,
+            reply,
+        })
+        .await
     }
 
     /// Consumes one short-lived Unix event binding for the authenticated peer.
@@ -1012,5 +1036,36 @@ impl AsyncRuntimeSessionHandle {
         response
             .await
             .map_err(|_| MezError::invalid_state("async runtime session actor reply was dropped"))
+    }
+}
+
+impl ClientClipboardRouteLease {
+    /// Returns the generation fencing this route ownership lifetime.
+    pub(crate) const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Removes this route through the serialized actor and disarms Drop.
+    pub(crate) async fn close(mut self) -> Result<bool> {
+        let removed = self
+            .handle
+            .unregister_client_clipboard_route(self.client_id.clone(), self.generation)
+            .await?;
+        self.armed = false;
+        Ok(removed)
+    }
+}
+
+impl Drop for ClientClipboardRouteLease {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ =
+                self.handle
+                    .client_clipboard_route_cleanup_tx
+                    .send(ClientClipboardRouteCleanup {
+                        client_id: self.client_id.clone(),
+                        generation: self.generation,
+                    });
+        }
     }
 }

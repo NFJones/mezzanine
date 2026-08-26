@@ -181,6 +181,7 @@ pub use client::{
     AsyncAttachedTerminalClientServiceConfig, run_async_agent_provider_service,
     run_async_attached_terminal_client_service,
 };
+pub(crate) use config::ClientClipboardRouteLease;
 pub use config::{
     AsyncAgentProviderPollReport, AsyncAgentProviderServiceConfig, AsyncControlInputResult,
     AsyncMessageFanout, AsyncMessageInputResult, AsyncRuntimeActorConfig, AsyncRuntimeActorExit,
@@ -251,6 +252,7 @@ pub use terminal_io::{
 };
 
 use actor_types::{AsyncRuntimeRequest, AsyncRuntimeRequestEnvelope};
+use config::ClientClipboardRouteCleanup;
 use provider::{
     empty_attached_terminal_loop_report, is_terminal_runtime_lifecycle_state,
     merge_attached_terminal_loop_report,

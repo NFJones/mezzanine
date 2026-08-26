@@ -12,6 +12,21 @@ use crate::host::async_runtime::actor_types::AsyncClientRenderToken;
 use crate::host::terminal::AttachedTerminalClientStepPlan;
 
 impl AsyncRuntimeSessionActor {
+    /// Removes one clipboard route only when the requesting event-stream
+    /// generation still owns it.
+    pub(super) fn cleanup_client_clipboard_route(
+        &mut self,
+        client_id: mez_core::ids::ClientId,
+        generation: u64,
+    ) -> bool {
+        if self.client_clipboard_route_generations.get(&client_id) != Some(&generation) {
+            return false;
+        }
+        self.client_clipboard_route_generations.remove(&client_id);
+        self.client_clipboard_sequences.remove(&client_id);
+        self.client_clipboard_routes.remove(&client_id).is_some()
+    }
+
     /// Captures the exact primary view identity used to derive coordinate actions.
     fn client_render_token(
         &mut self,
@@ -667,14 +682,23 @@ impl AsyncRuntimeSessionActor {
                 false
             }
             AsyncRuntimeRequest::RegisterClientClipboardRoute { client_id, reply } => {
+                self.next_client_clipboard_route_generation = self
+                    .next_client_clipboard_route_generation
+                    .saturating_add(1);
+                let generation = self.next_client_clipboard_route_generation;
                 self.client_clipboard_routes.insert(client_id.clone(), None);
+                self.client_clipboard_route_generations
+                    .insert(client_id.clone(), generation);
                 self.client_clipboard_sequences.insert(client_id, 0);
-                let _ = reply.send(());
+                let _ = reply.send(generation);
                 false
             }
-            AsyncRuntimeRequest::UnregisterClientClipboardRoute { client_id, reply } => {
-                self.client_clipboard_sequences.remove(&client_id);
-                let removed = self.client_clipboard_routes.remove(&client_id).is_some();
+            AsyncRuntimeRequest::UnregisterClientClipboardRoute {
+                client_id,
+                generation,
+                reply,
+            } => {
+                let removed = self.cleanup_client_clipboard_route(client_id, generation);
                 let _ = reply.send(removed);
                 false
             }
@@ -708,11 +732,19 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(accepted);
                 false
             }
-            AsyncRuntimeRequest::TakeClientClipboardWrite { client_id, reply } => {
-                let pending = self
-                    .client_clipboard_routes
-                    .get_mut(&client_id)
-                    .and_then(Option::take);
+            AsyncRuntimeRequest::TakeClientClipboardWrite {
+                client_id,
+                generation,
+                reply,
+            } => {
+                let pending = (self.client_clipboard_route_generations.get(&client_id)
+                    == Some(&generation))
+                .then(|| {
+                    self.client_clipboard_routes
+                        .get_mut(&client_id)
+                        .and_then(Option::take)
+                })
+                .flatten();
                 let _ = reply.send(pending);
                 false
             }

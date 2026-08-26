@@ -67,10 +67,11 @@ async fn iroh_copy_mode_selection_preserves_host_and_buffer_and_routes_exactly()
         .unwrap();
 
     let client = async {
-        handle
+        let route = handle
             .register_client_clipboard_route(primary.clone())
             .await
             .unwrap();
+        let generation = route.generation();
         handle
             .apply_attached_terminal_step_plan(
                 primary.clone(),
@@ -89,14 +90,14 @@ async fn iroh_copy_mode_selection_preserves_host_and_buffer_and_routes_exactly()
             .unwrap();
 
         let write = handle
-            .take_client_clipboard_write(primary.clone())
+            .take_client_clipboard_write(primary.clone(), generation)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(write.content(), "client clipboard integration");
         assert!(
             handle
-                .take_client_clipboard_write(other)
+                .take_client_clipboard_write(other, generation)
                 .await
                 .unwrap()
                 .is_none()
@@ -113,6 +114,7 @@ async fn iroh_copy_mode_selection_preserves_host_and_buffer_and_routes_exactly()
             IROH_COPY_INTEGRATION_WRITES.lock().unwrap().as_slice(),
             ["client clipboard integration"]
         );
+        assert!(route.close().await.unwrap());
         handle.shutdown().await.unwrap();
     };
 
@@ -136,10 +138,11 @@ async fn iroh_client_clipboard_routes_are_bounded_private_and_exact() {
         .unwrap();
 
     let client = async {
-        handle
+        let route = handle
             .register_client_clipboard_route(primary.clone())
             .await
             .unwrap();
+        let generation = route.generation();
         assert!(
             handle
                 .enqueue_client_clipboard_write(primary.clone(), "superseded secret".to_string())
@@ -169,7 +172,7 @@ async fn iroh_client_clipboard_routes_are_bounded_private_and_exact() {
         );
 
         let write = handle
-            .take_client_clipboard_write(primary.clone())
+            .take_client_clipboard_write(primary.clone(), generation)
             .await
             .unwrap()
             .unwrap();
@@ -181,23 +184,119 @@ async fn iroh_client_clipboard_routes_are_bounded_private_and_exact() {
         assert!(!debug.contains("secret"));
         assert!(
             handle
-                .take_client_clipboard_write(primary.clone())
+                .take_client_clipboard_write(primary.clone(), generation)
                 .await
                 .unwrap()
                 .is_none()
         );
-        assert!(
-            handle
-                .unregister_client_clipboard_route(primary.clone())
-                .await
-                .unwrap()
-        );
+        assert!(route.close().await.unwrap());
         assert!(
             !handle
                 .enqueue_client_clipboard_write(primary, "after close".to_string())
                 .await
                 .unwrap()
         );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
+/// Aborting an event task drops its route lease and synchronously queues
+/// generation-fenced actor cleanup, so later clipboard effects are rejected.
+#[tokio::test(flavor = "current_thread")]
+async fn aborted_iroh_event_owner_removes_clipboard_route() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let task_handle = handle.clone();
+        let task_primary = primary.clone();
+        let (registered_tx, registered_rx) = tokio::sync::oneshot::channel();
+        let owner = tokio::spawn(async move {
+            let route = task_handle
+                .register_client_clipboard_route(task_primary)
+                .await
+                .unwrap();
+            registered_tx.send(route.generation()).unwrap();
+            std::future::pending::<()>().await;
+            drop(route);
+        });
+        let _generation = registered_rx.await.unwrap();
+
+        owner.abort();
+        assert!(owner.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if !handle
+                    .enqueue_client_clipboard_write(primary.clone(), "after abort".to_string())
+                    .await
+                    .unwrap()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("aborted event owner should remove its clipboard route");
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
+/// Cleanup from an older event-stream generation cannot remove the route
+/// installed by a replacement stream for the same exact client.
+#[tokio::test(flavor = "current_thread")]
+async fn stale_iroh_event_cleanup_preserves_replacement_clipboard_route() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let stale = handle
+            .register_client_clipboard_route(primary.clone())
+            .await
+            .unwrap();
+        let stale_generation = stale.generation();
+        let replacement = handle
+            .register_client_clipboard_route(primary.clone())
+            .await
+            .unwrap();
+        let replacement_generation = replacement.generation();
+        assert_ne!(stale_generation, replacement_generation);
+
+        drop(stale);
+        assert!(
+            handle
+                .enqueue_client_clipboard_write(primary.clone(), "replacement".to_string())
+                .await
+                .unwrap()
+        );
+        assert!(
+            handle
+                .take_client_clipboard_write(primary.clone(), stale_generation)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let write = handle
+            .take_client_clipboard_write(primary.clone(), replacement_generation)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(write.content(), "replacement");
+        assert!(replacement.close().await.unwrap());
         handle.shutdown().await.unwrap();
     };
 

@@ -122,6 +122,8 @@ impl AsyncRuntimeSessionActor {
         }
 
         let (sender, receiver) = mpsc::channel(config.command_buffer);
+        let (client_clipboard_route_cleanup_tx, client_clipboard_route_cleanup_rx) =
+            mpsc::unbounded_channel();
         let message_delivery_notify = Arc::new(Notify::new());
         let event_delivery_notify = Arc::new(Notify::new());
         let side_effect_delivery_notify = Arc::new(Notify::new());
@@ -139,6 +141,7 @@ impl AsyncRuntimeSessionActor {
         Ok((
             AsyncRuntimeSessionHandle {
                 sender: sender.clone(),
+                client_clipboard_route_cleanup_tx,
                 message_delivery_notify: message_delivery_notify.clone(),
                 event_delivery_notify: event_delivery_notify.clone(),
                 side_effect_delivery_notify: side_effect_delivery_notify.clone(),
@@ -153,7 +156,10 @@ impl AsyncRuntimeSessionActor {
                 message_delivery_notify,
                 event_delivery_notify,
                 client_clipboard_routes: Default::default(),
+                client_clipboard_route_generations: Default::default(),
+                next_client_clipboard_route_generation: 0,
                 client_clipboard_sequences: Default::default(),
+                client_clipboard_route_cleanup_rx,
                 side_effect_delivery_notify,
                 side_effect_delivery_tx,
                 lifecycle_state_tx,
@@ -176,7 +182,18 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub async fn run(mut self) -> AsyncRuntimeActorExit {
-        while let Some(envelope) = self.receiver.recv().await {
+        loop {
+            let envelope = tokio::select! {
+                biased;
+                Some(cleanup) = self.client_clipboard_route_cleanup_rx.recv() => {
+                    self.cleanup_client_clipboard_route(cleanup.client_id, cleanup.generation);
+                    continue;
+                }
+                envelope = self.receiver.recv() => {
+                    let Some(envelope) = envelope else { break; };
+                    envelope
+                }
+            };
             let queue_wait_ms =
                 u64::try_from(envelope.enqueued_at.elapsed().as_millis()).unwrap_or(u64::MAX);
             let handler_started = std::time::Instant::now();
