@@ -107,11 +107,17 @@ fn initial_config_uses_native_shell_and_platform_sandbox_defaults() {
     );
     assert_eq!(
         permissions.get("sandbox").and_then(toml::Value::as_str),
-        Some(if cfg!(target_os = "linux") {
-            "bubblewrap"
-        } else {
-            "policy-only"
-        })
+        Some(
+            if cfg!(target_os = "linux")
+                && crate::security::sandbox::bubblewrap_executable_available(std::path::Path::new(
+                    "/usr/bin/bwrap",
+                ))
+            {
+                "bubblewrap"
+            } else {
+                "policy-only"
+            }
+        )
     );
 }
 
@@ -317,7 +323,11 @@ fn default_config_matches_documented_example() {
 
     let mut documented = documented.replace(
         "sandbox = \"bubblewrap\"",
-        if cfg!(target_os = "linux") {
+        if cfg!(target_os = "linux")
+            && crate::security::sandbox::bubblewrap_executable_available(std::path::Path::new(
+                "/usr/bin/bwrap",
+            ))
+        {
             "sandbox = \"bubblewrap\""
         } else {
             "sandbox = \"policy-only\""
