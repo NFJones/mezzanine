@@ -32,9 +32,11 @@ fn runtime_plan_mode_tags_only_the_active_pane_newest_prompt() {
     assert_eq!(blocks[user_index].content, "inspect the sandbox policy");
     assert_eq!(blocks[user_index - 1].label, "agent shell plan-only mode");
     assert!(blocks[user_index - 1].content.contains("Plan only"));
-    assert!(blocks[user_index - 1]
-        .content
-        .contains("Do not edit, create, delete, or otherwise modify any files"));
+    assert!(
+        blocks[user_index - 1]
+            .content
+            .contains("Do not edit, create, delete, or otherwise modify any files")
+    );
 
     let other_context = service
         .agent_context_for_pane_prompt("%2", "inspect the sandbox policy", 0)
