@@ -24,7 +24,9 @@ use crate::host::session::{
     SessionSupervisorState,
 };
 use crate::host::shell::ResolvedShell;
-use crate::runtime::hosted_session_socket_path;
+use crate::runtime::{
+    AuxiliarySocketKind, auxiliary_socket_path_for_control_socket, hosted_session_socket_path,
+};
 use crate::security::remote::{RemotePrincipal, RemoteSessionAttachScope};
 use crate::storage::lease::{
     LeaseCheckpointReference, LeaseGarbageCollectionPolicy, LeaseGarbageCollectionPreview,
@@ -1991,6 +1993,8 @@ impl HostSessionRouter {
         mut config_layers: Vec<ConfigLayer>,
     ) -> Result<SessionRuntimeHandle> {
         let socket_path = hosted_session_socket_path(&self.config.runtime_root, &session.id)?;
+        let event_path =
+            auxiliary_socket_path_for_control_socket(&socket_path, AuxiliarySocketKind::Event)?;
         config_layers.push(ConfigLayer {
             name: "persistent-host-session-transport".to_string(),
             path: None,
@@ -2012,7 +2016,7 @@ impl HostSessionRouter {
                     control_path: socket_path,
                     publish_control: true,
                     message_path: None,
-                    event_path: None,
+                    event_path: Some(event_path),
                     publish_registry: true,
                 },
                 limits: SessionRuntimeLimits::default(),
@@ -2592,7 +2596,7 @@ mod tests {
     /// durable assignment, and never allocates a replacement runtime.
     #[tokio::test(flavor = "current_thread")]
     async fn hosted_local_missing_checkpoint_fails_without_runtime_allocation() {
-        let root = test_root("local-missing-checkpoint");
+        let root = test_root("missing-checkpoint");
         let config = test_config(&root);
         let initial = HostSessionRouter::new(config.clone());
         let created = initial
@@ -2649,19 +2653,19 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// Hosted session publication uses a compact, collision-free socket name
-    /// so the longest cross-platform runtime root that can fit that name still
-    /// creates, discovers, and cleans up distinct sessions successfully.
+    /// Hosted session publication uses compact, collision-free control and
+    /// event socket names, and the longest cross-platform runtime root that
+    /// fits both still creates and cleans up distinct sessions successfully.
     #[tokio::test(flavor = "current_thread")]
     async fn hosted_session_sockets_fit_the_cross_platform_path_budget() {
         let root = test_root("socket-budget");
         let mut component = format!("mez-hsp-{}-{:x}", std::process::id(), rand::random::<u64>());
-        component.push_str(&"x".repeat(75usize.saturating_sub(component.len())));
-        assert_eq!(component.len(), 75);
+        component.push_str(&"x".repeat(69usize.saturating_sub(component.len())));
+        assert_eq!(component.len(), 69);
         let runtime_root = PathBuf::from("/tmp").join(component);
         fs::create_dir_all(&runtime_root).unwrap();
         fs::set_permissions(&runtime_root, fs::Permissions::from_mode(0o700)).unwrap();
-        assert_eq!(runtime_root.as_os_str().as_encoded_bytes().len(), 80);
+        assert_eq!(runtime_root.as_os_str().as_encoded_bytes().len(), 74);
 
         let mut config = test_config(&root);
         config.runtime_root = runtime_root.clone();
@@ -2674,9 +2678,26 @@ mod tests {
             .create_local(Some("second".to_string()), Size::new(80, 24).unwrap())
             .await
             .unwrap();
+        let first_event = auxiliary_socket_path_for_control_socket(
+            &first.socket_path,
+            AuxiliarySocketKind::Event,
+        )
+        .unwrap();
+        let second_event = auxiliary_socket_path_for_control_socket(
+            &second.socket_path,
+            AuxiliarySocketKind::Event,
+        )
+        .unwrap();
         assert_ne!(first.socket_path, second.socket_path);
+        assert_ne!(first_event, second_event);
         assert!(first.socket_path.starts_with(&runtime_root));
         assert!(second.socket_path.starts_with(&runtime_root));
+        assert!(first_event.starts_with(&runtime_root));
+        assert!(second_event.starts_with(&runtime_root));
+        assert!(first.socket_path.exists());
+        assert!(second.socket_path.exists());
+        assert!(first_event.exists());
+        assert!(second_event.exists());
         assert_eq!(router.registry().list().unwrap().len(), 2);
 
         router
@@ -2685,6 +2706,46 @@ mod tests {
             .unwrap();
         assert!(!first.socket_path.exists());
         assert!(!second.socket_path.exists());
+        assert!(!first_event.exists());
+        assert!(!second_event.exists());
+        let _ = fs::remove_dir_all(runtime_root);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Hosted session creation validates its derived event socket before any
+    /// listener or registry artifact is published.
+    #[tokio::test(flavor = "current_thread")]
+    async fn hosted_session_rejects_overlong_derived_event_socket_before_publication() {
+        let root = test_root("event-socket-budget");
+        let mut component = format!("mez-hep-{}-{:x}", std::process::id(), rand::random::<u64>());
+        component.push_str(&"x".repeat(89usize.saturating_sub(component.len())));
+        assert_eq!(component.len(), 89);
+        let runtime_root = PathBuf::from("/tmp").join(component);
+        fs::create_dir_all(&runtime_root).unwrap();
+        fs::set_permissions(&runtime_root, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let mut config = test_config(&root);
+        config.runtime_root = runtime_root.clone();
+        let router = HostSessionRouter::new(config);
+        let control_path =
+            hosted_session_socket_path(&runtime_root, &mez_core::ids::SessionId::new('$', 1))
+                .unwrap();
+        let event_path = runtime_root.join("h1.event.sock");
+
+        let error = router
+            .create_local(
+                Some("overlong-event".to_string()),
+                Size::new(80, 24).unwrap(),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.kind(), MezErrorKind::InvalidArgs);
+        assert!(error.message().contains("Unix socket limit"), "{error:?}");
+        assert!(!control_path.exists());
+        assert!(!event_path.exists());
+        assert!(router.registry().list().unwrap().is_empty());
+        assert!(router.snapshots().await.unwrap().is_empty());
         let _ = fs::remove_dir_all(runtime_root);
         let _ = fs::remove_dir_all(root);
     }
@@ -3884,8 +3945,9 @@ mod tests {
     }
 
     fn test_root(label: &str) -> PathBuf {
+        let label = label.chars().take(12).collect::<String>();
         let root = std::env::temp_dir().join(format!(
-            "mez-host-router-{label}-{}-{}",
+            "mez-hr-{label}-{}-{}",
             std::process::id(),
             rand::random::<u64>()
         ));
