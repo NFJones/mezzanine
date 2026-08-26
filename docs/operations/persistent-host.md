@@ -61,6 +61,62 @@ mez host stop --timeout 10
 `reconcile` prunes stale compatibility discovery records. It is not a general
 repair or lease-deletion command.
 
+## Run the host with systemd
+
+Run the host as the regular, unprivileged account that owns its configuration
+and sessions. The following system service is a starting point; replace the
+user, group, home directory, and installed binary path with the values for the
+host account:
+
+```ini
+# /etc/systemd/system/mez-host.service
+[Unit]
+Description=Mezzanine persistent host
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+Group=YOUR_GROUP
+Environment=HOME=/home/YOUR_USER
+Environment=XDG_RUNTIME_DIR=/run/mez
+RuntimeDirectory=mez
+RuntimeDirectoryMode=0700
+ExecStart=/home/YOUR_USER/.cargo/bin/mez host serve
+Restart=on-failure
+RestartSec=2
+
+# Do not pass capabilities through exec to Bubblewrap workloads.
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Install and start it with:
+
+```console
+sudo systemctl daemon-reload
+sudo systemctl enable --now mez-host.service
+sudo systemctl status mez-host.service
+```
+
+If the host must bind a reserved port, grant only `CAP_NET_BIND_SERVICE` to the
+`mez` executable itself rather than using `AmbientCapabilities=` in the unit:
+
+```console
+sudo setcap cap_net_bind_service=ep /home/YOUR_USER/.cargo/bin/mez
+getcap /home/YOUR_USER/.cargo/bin/mez
+```
+
+An ambient capability survives `exec` and makes a non-setuid `bwrap` process
+reject its capability state with `Unexpected capabilities but not setuid, old
+file caps config?`. A file capability on `mez` does not normally propagate to a
+capability-free `bwrap` child. Reapply `setcap` after replacing the executable
+during an upgrade. Keep `AmbientCapabilities=` empty when native shell mode
+uses Bubblewrap.
+
 ## Enable local auto-start
 
 To let an ordinary default-target command start the host when it is absent,
