@@ -37,6 +37,24 @@ lock. Do not edit these files directly.
 
 ## Pair a device
 
+For the common persistent-host workflow, run the invitation command on the
+host through its local Unix control path, transfer the resulting file through a
+confidential channel, and run the remaining commands on the client device:
+
+```console
+# Host
+mez remote invite --role primary --allow-create --output mez-invite.json
+
+# Client, after confidential transfer
+mez remote invitation inspect mez-invite.json
+mez remote pair --invite-file mez-invite.json --name home-mez
+mez --iroh-profile home-mez attach
+```
+
+The steps below explain role ceilings, creation authority, explicit-target
+observer attachment, storage, retry, routing, and revocation behind this short
+path.
+
 ### Create a role-limited invitation
 
 Use only the local Unix control path:

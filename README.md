@@ -109,7 +109,11 @@ for its controls and behavior.
 
 Mezzanine integrates with supported interactive shells while preserving their
 normal startup and history behavior. See the shell and terminal documentation
-for shell-specific behavior and nested-session setup.
+for shell-specific behavior and nested-session setup: [Agent
+shell](docs/using-mezzanine/agent-shell.md#choose-a-shell-mode) explains native
+and pane execution, while [Terminal
+compatibility](docs/reference-manual/terminal-compatibility.md) defines the
+implemented terminal surface.
 
 Agent work inside nested SSH or container environments is discovered and
 bootstrapped automatically without installing anything inside that environment.

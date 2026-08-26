@@ -74,6 +74,14 @@ and every connection or batch limit must be greater than zero. A message or
 event connection limit requires the corresponding auxiliary socket to be
 enabled. Use `--no-aux-sockets` for an intentional control-only service.
 
+The built-in Unix attach client discovers the event service at the standard
+path derived from the control socket; it has no separate event-socket selector.
+An explicit `--event-socket` path is therefore suitable only when the attaching
+client already knows that path or when it is the standard derived path. Without
+a reachable event socket, control requests still work, but an idle attachment
+does not receive redraw wakeups and may not fetch a fresh view until input,
+focus, mouse, or resize activity occurs.
+
 ## Snapshot forms
 
 Snapshot payload version 5 preserves recoverable shared topology, canonical
@@ -165,7 +173,7 @@ session-bound and does not interpret an omitted target as creation.
 The persistent-host command surface is:
 
 ```text
-mez host serve
+mez host serve [--max-sessions N] [--max-live-sessions N]
 mez host status
 mez host stop [--timeout SECONDS]
 mez host reconcile
@@ -178,6 +186,10 @@ mez lease release <lease-id|session-id|name> [--terminate]
 mez lease revoke <lease-id|session-id|name> [--reason TEXT] [--terminate]
 mez lease gc [--older-than DURATION] [--dry-run|--apply]
 ```
+
+The `mez host serve` limits override the configured maximum durable session
+records and concurrently live session runtimes for that invocation. Both must
+be positive.
 
 Lease administration uses only the protected local host socket. Active release
 or revocation requires `--terminate`; neither operation revokes device trust.

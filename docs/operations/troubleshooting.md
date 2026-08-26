@@ -54,6 +54,27 @@ applications do not contribute normal scrollback, so their copy behavior is
 limited to visible content. Consult the terminal reference for supported
 compatibility behavior before changing passthrough or profile settings.
 
+## A local attachment refreshes only after input or focus
+
+The built-in Unix attach client uses the standard event socket derived from the
+control socket (for example, `session.sock` and `session.event.sock`) only as a
+redraw wakeup channel; it still fetches each rendered view over control. If the
+event socket is missing or refuses the connection, attachment remains usable,
+but an idle client can wait until keyboard, mouse, focus, or resize activity
+causes another control step.
+
+For `mez serve`, keep the default auxiliary sockets enabled when using the
+built-in attach client. `--no-aux-sockets` intentionally disables this wakeup,
+and a custom `--event-socket` path is not discovered by `mez attach`. Verify
+that the standard derived event socket exists and is owned by the same user as
+the control socket.
+
+Hosted sessions created by `mez host serve` currently do not publish that
+derived event socket. Direct Unix attachment to one of those session sockets
+therefore has this idle-redraw limitation; Iroh attachment uses its independent
+event stream. Until hosted event-socket publication is corrected, use Iroh or a
+regular `mez serve` session when event-driven idle redraws are required.
+
 ## Iroh compression is unavailable or inefficient
 
 Run `show-iroh-status` from the affected remote client. `Codec unavailable`
