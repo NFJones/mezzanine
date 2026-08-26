@@ -411,6 +411,15 @@ fn shell_identity_probe_is_syntax_neutral_and_parses_renamed_fish() {
         shell_identity_probe_command(marker.as_str(), "turn-1", "agent-1", "pane-1").unwrap();
     assert!(command.starts_with("/bin/sh -c "), "{command}");
     assert!(command.ends_with(" \"$SHELL\""), "{command}");
+    assert!(
+        !command.contains('\n'),
+        "the interactive identity probe must remain one logical record"
+    );
+    assert!(
+        command.len() <= 1_024,
+        "identity probe exceeds the supported interactive record bound: {} bytes",
+        command.len()
+    );
 
     let output = format!(
         "noise\n\u{1e}mez_shell_identity_begin={}\r\n\u{1e}mez_shell_path=/opt/custom-shell\r\n\u{1e}mez_shell_version=fish, version 3.7.1\r\n\u{1e}mez_shell_identity_end={}\r\n",

@@ -35,25 +35,11 @@ pub fn shell_identity_probe_command(
     pane_id: &str,
 ) -> AgentShellValidationResult<String> {
     validate_shell_marker_token(marker)?;
-    let script = "printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \"$1\" \"$2\" \"$3\" \"$4\"; \
-printf '\\036mez_shell_identity_begin=%s\\n' \"$1\"; \
-mez_shell_path=$5; \
-mez_shell_command=$(ps -p \"$PPID\" -o comm= 2>/dev/null | sed -n '1p' | tr -d '[:space:]'); \
-mez_shell_command=${mez_shell_command#-}; \
-if [ -n \"$mez_shell_command\" ]; then \
-  case \"$mez_shell_command\" in \
-    /*) mez_shell_path=$mez_shell_command ;; \
-    *) mez_detected_path=$(command -v \"$mez_shell_command\" 2>/dev/null); \
-       if [ -n \"$mez_detected_path\" ] && [ \"${mez_detected_path#/}\" != \"$mez_detected_path\" ]; then mez_shell_path=$mez_detected_path; fi ;; \
-  esac; \
-fi; \
-printf '\\036mez_shell_path=%s\\n' \"$mez_shell_path\"; \
-mez_version=''; \
-if [ -n \"$mez_shell_path\" ] && [ \"${mez_shell_path#/}\" != \"$mez_shell_path\" ]; then \
-  mez_version=$(\"$mez_shell_path\" --version 2>/dev/null | dd bs=4096 count=1 2>/dev/null | sed -n '1p'); \
-fi; \
-printf '\\036mez_shell_version=%s\\n' \"$mez_version\"; \
-printf '\\036mez_shell_identity_end=%s\\n' \"$1\"; \
+    let script = "printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \"$1\" \"$2\" \"$3\" \"$4\";\
+printf '\\036mez_shell_identity_begin=%s\\n' \"$1\";p=$5;c=$(ps -p \"$PPID\" -o comm= 2>/dev/null|sed -n 1p|tr -d '[:space:]');c=${c#-};\
+if [ -n \"$c\" ];then case \"$c\" in /*)p=$c;;*)d=$(command -v \"$c\" 2>/dev/null);[ -n \"$d\" ]&&[ \"${d#/}\" != \"$d\" ]&&p=$d;;esac;fi;\
+printf '\\036mez_shell_path=%s\\n' \"$p\";v=;if [ -n \"$p\" ]&&[ \"${p#/}\" != \"$p\" ];then v=$(\"$p\" --version 2>/dev/null|dd bs=4096 count=1 2>/dev/null|sed -n 1p);fi;\
+printf '\\036mez_shell_version=%s\\n' \"$v\";printf '\\036mez_shell_identity_end=%s\\n' \"$1\";\
 printf '\\033]133;D;0;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \"$1\" \"$2\" \"$3\" \"$4\"";
     Ok(format!(
         "/bin/sh -c {} sh {} {} {} {} \"$SHELL\"",

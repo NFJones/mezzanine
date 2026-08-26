@@ -62,7 +62,9 @@ pub(super) struct PendingShellInputDelivery {
 
 impl PendingShellInputDelivery {
     /// Classifies one typed shell delivery without consuming unrelated effects.
-    pub(super) fn from_effect(effect: &RuntimeSideEffect) -> Option<Self> {
+    pub(super) fn from_effect(
+        effect: &RuntimeSideEffect,
+    ) -> Option<Result<Self, mez_mux::process::ShellInputRecordError>> {
         let (target, delivery) = match effect {
             RuntimeSideEffect::PaneProcessIo {
                 instance,
@@ -77,9 +79,12 @@ impl PendingShellInputDelivery {
             ),
             _ => return None,
         };
+        if let Err(error) = delivery.validate_logical_records() {
+            return Some(Err(error));
+        }
         let record_end = next_record_end(&delivery.bytes, 0);
         let now = Instant::now();
-        Some(Self {
+        Some(Ok(Self {
             target,
             delivery,
             accepted: 0,
@@ -89,12 +94,16 @@ impl PendingShellInputDelivery {
             deadline: now + SHELL_INPUT_RECORD_PROGRESS_TIMEOUT,
             pending_progress_bytes: 0,
             progress_checkpoint_deadline: now + SHELL_INPUT_PROGRESS_CHECKPOINT_INTERVAL,
-        })
+        }))
     }
 
-    /// Returns the exact suffix of the current complete record to retry.
+    /// Returns one bounded physical-write slice of the current logical record.
     pub(super) fn pending_record_suffix(&self) -> &[u8] {
-        &self.delivery.bytes[self.accepted..self.record_end]
+        let write_end = self
+            .accepted
+            .saturating_add(PTY_INPUT_WRITE_CHUNK_BYTES)
+            .min(self.record_end);
+        &self.delivery.bytes[self.accepted..write_end]
     }
 
     /// Records PTY acceptance without advancing to a later record prematurely.
@@ -270,15 +279,12 @@ fn record_wait(
     }
 }
 
-/// Returns the end of one newline-terminated record within the PTY chunk bound.
+/// Returns the end of one newline-terminated logical record or final suffix.
 fn next_record_end(bytes: &[u8], start: usize) -> usize {
-    let limit = start
-        .saturating_add(PTY_INPUT_WRITE_CHUNK_BYTES)
-        .min(bytes.len());
-    bytes[start..limit]
+    bytes[start..]
         .iter()
         .position(|byte| *byte == b'\n')
-        .map_or(limit, |index| start + index + 1)
+        .map_or(bytes.len(), |index| start + index + 1)
 }
 
 /// Counts receiver acknowledgement bytes in one pane-output batch.
@@ -299,6 +305,27 @@ pub(super) fn filter_shell_input_acknowledgements(bytes: &mut Vec<u8>) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies adapter-owned shell delivery rejects an oversized logical
+    /// record while it is still pure pending state, before a pane driver can
+    /// receive any generated payload bytes.
+    #[test]
+    fn oversized_logical_record_is_rejected_before_async_delivery() {
+        let mut bytes = b"private-generated-source:".to_vec();
+        bytes.resize(PTY_INPUT_WRITE_CHUNK_BYTES + 1, b'x');
+        let effect = RuntimeSideEffect::WritePaneShellInput {
+            pane_id: "%1".to_string(),
+            delivery: ShellInputDelivery::generated_source_for_transaction(bytes, "delivery-1"),
+        };
+
+        let error = PendingShellInputDelivery::from_effect(&effect)
+            .expect("shell delivery classification")
+            .expect_err("oversized record must fail closed");
+
+        assert_eq!(error.record_index(), 0);
+        assert_eq!(error.record_len(), PTY_INPUT_WRITE_CHUNK_BYTES + 1);
+        assert!(!error.to_string().contains("private-generated-source"));
+    }
 
     /// Verifies receiver payload records require negotiated acknowledgements,
     /// including the final sentinel record that releases later pane input.
@@ -492,7 +519,9 @@ mod tests {
                 true,
             ),
         };
-        let mut pending = PendingShellInputDelivery::from_effect(&effect).unwrap();
+        let mut pending = PendingShellInputDelivery::from_effect(&effect)
+            .unwrap()
+            .unwrap();
         pending.record_write(b"first\n".len(), true).unwrap();
         assert!(pending.is_waiting());
         assert!(!pending.observe_output(true, 0));
@@ -513,7 +542,9 @@ mod tests {
                 true,
             ),
         };
-        let mut pending = PendingShellInputDelivery::from_effect(&effect).unwrap();
+        let mut pending = PendingShellInputDelivery::from_effect(&effect)
+            .unwrap()
+            .unwrap();
         pending.record_write(2, true).unwrap();
         assert_eq!(pending.pending_record_suffix(), b"cdef\n");
         assert!(!pending.is_waiting());
@@ -545,7 +576,9 @@ mod tests {
                 true,
             ),
         };
-        let mut pending = PendingShellInputDelivery::from_effect(&effect).unwrap();
+        let mut pending = PendingShellInputDelivery::from_effect(&effect)
+            .unwrap()
+            .unwrap();
 
         pending.record_write(b"first\n".len(), false).unwrap();
         assert!(!pending.is_waiting());

@@ -443,6 +443,9 @@ impl PaneProcess {
 
     /// Writes a typed generated-shell delivery through the current pacing owner.
     pub fn write_shell_delivery(&mut self, delivery: &ShellInputDelivery) -> Result<()> {
+        delivery
+            .validate_logical_records()
+            .map_err(|error| MezError::invalid_args(error.to_string()))?;
         let input = delivery.bytes.as_slice();
         #[cfg(not(target_os = "macos"))]
         return self.write_input(input);
@@ -471,15 +474,11 @@ impl PaneProcess {
             }
             let mut written = 0usize;
             while written < input.len() {
-                let limit = written
-                    .saturating_add(PTY_INPUT_WRITE_CHUNK_BYTES)
-                    .min(input.len());
-                let bounded = &input[written..limit];
-                let record_len = bounded
+                let record_len = input[written..]
                     .iter()
                     .position(|byte| *byte == b'\n')
-                    .map_or(bounded.len(), |index| index + 1);
-                let record = &bounded[..record_len];
+                    .map_or(input.len() - written, |index| index + 1);
+                let record = &input[written..written + record_len];
                 // Attribute only output observed after this record boundary.
                 // A delayed acknowledgement from earlier generated work may
                 // already be readable even though it has not reached the

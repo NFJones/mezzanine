@@ -236,8 +236,35 @@ where
                 pending_shell_input = None;
             }
             if let Some(delivery) = PendingShellInputDelivery::from_effect(&effect) {
-                if !delivery.is_complete() {
-                    pending_shell_input = Some(delivery);
+                match delivery {
+                    Ok(delivery) => {
+                        if !delivery.is_complete() {
+                            pending_shell_input = Some(delivery);
+                        }
+                    }
+                    Err(error) => {
+                        let pane_id = match &effect {
+                            RuntimeSideEffect::PaneProcessIo { instance, .. } => {
+                                instance.pane_id.clone()
+                            }
+                            RuntimeSideEffect::WritePaneShellInput { pane_id, .. } => {
+                                pane_id.clone()
+                            }
+                            _ => driver.pane_id().to_string(),
+                        };
+                        let event =
+                            driver.scope_event(RuntimeEvent::Pane(PaneEvent::WriteFailed {
+                                pane_id,
+                                error: format!("InvalidState: {error}"),
+                            }));
+                        submit_pane_runtime_event(
+                            handle,
+                            event,
+                            &mut report.submitted_events,
+                            &mut report.applied_events,
+                        )
+                        .await?;
+                    }
                 }
                 pending_pane_io_side_effects.extend(effects);
                 break;

@@ -4,7 +4,10 @@
 //! status without owning PTY or runtime resources.
 
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::path::{Path, PathBuf};
+
+use super::pane::PTY_INPUT_WRITE_CHUNK_BYTES;
 
 /// Pacing policy for one runtime-generated shell delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +43,50 @@ pub struct ShellInputDelivery {
     /// Whether the rendered receiver negotiated per-record acknowledgements.
     pub receiver_acknowledgements: bool,
 }
+
+/// Describes one oversized logical shell-input record without retaining its payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellInputRecordError {
+    pacing: ShellInputPacing,
+    delivery_id: Option<String>,
+    record_index: usize,
+    record_len: usize,
+    max_record_len: usize,
+}
+
+impl ShellInputRecordError {
+    /// Returns the zero-based index of the invalid logical record.
+    pub fn record_index(&self) -> usize {
+        self.record_index
+    }
+
+    /// Returns the invalid record length in bytes.
+    pub fn record_len(&self) -> usize {
+        self.record_len
+    }
+
+    /// Returns the maximum supported logical record length in bytes.
+    pub fn max_record_len(&self) -> usize {
+        self.max_record_len
+    }
+
+    /// Returns the optional delivery identity used for scoped diagnostics.
+    pub fn delivery_id(&self) -> Option<&str> {
+        self.delivery_id.as_deref()
+    }
+}
+
+impl fmt::Display for ShellInputRecordError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "shell input logical record exceeds the supported bound: record_index={} record_len={} max_record_len={} delivery_id={:?} pacing={:?}",
+            self.record_index, self.record_len, self.max_record_len, self.delivery_id, self.pacing
+        )
+    }
+}
+
+impl std::error::Error for ShellInputRecordError {}
 
 impl ShellInputDelivery {
     /// Builds non-priority generated wrapper source.
@@ -94,6 +141,36 @@ impl ShellInputDelivery {
             delivery_id: Some(delivery_id.into()),
             receiver_acknowledgements: true,
         }
+    }
+
+    /// Validates newline-delimited logical records before any payload bytes are written.
+    ///
+    /// The returned error contains only framing metadata. It never retains or
+    /// formats generated shell source, which may contain sensitive values.
+    pub fn validate_logical_records(&self) -> Result<(), ShellInputRecordError> {
+        let mut record_start = 0usize;
+        let mut record_index = 0usize;
+        for record_end in self
+            .bytes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, byte)| (*byte == b'\n').then_some(index + 1))
+            .chain((!self.bytes.ends_with(b"\n")).then_some(self.bytes.len()))
+        {
+            let record_len = record_end.saturating_sub(record_start);
+            if record_len > PTY_INPUT_WRITE_CHUNK_BYTES {
+                return Err(ShellInputRecordError {
+                    pacing: self.pacing,
+                    delivery_id: self.delivery_id.clone(),
+                    record_index,
+                    record_len,
+                    max_record_len: PTY_INPUT_WRITE_CHUNK_BYTES,
+                });
+            }
+            record_start = record_end;
+            record_index = record_index.saturating_add(1);
+        }
+        Ok(())
     }
 }
 

@@ -287,6 +287,15 @@ where
                 instance,
                 effect: PaneProcessIoEffect::WriteShellInput { delivery },
             } => {
+                if let Err(error) = delivery.validate_logical_records() {
+                    events.push(
+                        driver.scope_event(RuntimeEvent::Pane(PaneEvent::WriteFailed {
+                            pane_id: instance.pane_id,
+                            error: format!("InvalidState: {error}"),
+                        })),
+                    );
+                    continue;
+                }
                 #[cfg(target_os = "macos")]
                 let generated_source = matches!(
                     delivery.pacing,
@@ -406,6 +415,15 @@ where
                 event
             }
             RuntimeSideEffect::WritePaneShellInput { pane_id, delivery } => {
+                if let Err(error) = delivery.validate_logical_records() {
+                    events.push(
+                        driver.scope_event(RuntimeEvent::Pane(PaneEvent::WriteFailed {
+                            pane_id,
+                            error: format!("InvalidState: {error}"),
+                        })),
+                    );
+                    continue;
+                }
                 let bytes = &delivery.bytes;
                 if bytes.is_empty() {
                     continue;
@@ -525,6 +543,44 @@ mod tests {
         AsyncFakePaneProcessIo, AsyncPaneForegroundProcess, AsyncPaneProcessDriverConfig,
         PaneForegroundProcessObservation,
     };
+
+    /// Verifies the compatibility pane-I/O owner rejects an oversized shell
+    /// record before invoking its backend and reports only framing metadata.
+    #[tokio::test(flavor = "current_thread")]
+    async fn compatibility_shell_delivery_rejects_oversized_record_before_write() {
+        let backend = AsyncFakePaneProcessIo::default();
+        let mut driver =
+            AsyncPaneProcessDriver::new("%1", backend, AsyncPaneProcessDriverConfig::default())
+                .unwrap();
+        let mut bytes = b"private-generated-source:".to_vec();
+        bytes.resize(mez_mux::process::PTY_INPUT_WRITE_CHUNK_BYTES + 1, b'x');
+        let effects = vec![RuntimeSideEffect::WritePaneShellInput {
+            pane_id: "%1".to_string(),
+            delivery: mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
+                bytes,
+                "delivery-1",
+            ),
+        }];
+        let mut pending = VecDeque::new();
+
+        let events = pane_io_events_for_side_effects(
+            &mut driver,
+            effects,
+            &mut pending,
+            &mut false,
+            &mut false,
+        )
+        .await;
+
+        assert!(driver.into_backend().writes.is_empty());
+        assert!(pending.is_empty());
+        assert_eq!(events.len(), 1);
+        let RuntimeEvent::Pane(PaneEvent::WriteFailed { error, .. }) = &events[0] else {
+            panic!("oversized shell delivery must emit a write failure");
+        };
+        assert!(error.contains("record_len=1025"), "{error}");
+        assert!(!error.contains("private-generated-source"), "{error}");
+    }
 
     #[test]
     /// Verifies pane-input chunks preserve an appropriate complete shell record.

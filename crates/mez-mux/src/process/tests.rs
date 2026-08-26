@@ -1,7 +1,5 @@
 //! Unit tests for pane process command planning and PTY lifecycle behavior.
 
-#[cfg(target_os = "macos")]
-use super::ShellInputDelivery;
 use super::pane::{
     append_output_chunk_to_backlog, drain_output_backlog, foreground_process_group_id_from_raw,
     shell_input_acknowledgement_count,
@@ -14,8 +12,9 @@ use super::process_metadata::{
     parse_environment_bytes, parse_macos_environment_bytes, process_credentials_for_pid,
 };
 use super::{
-    PaneProcessEnvironment, PaneProcessLaunch, PaneProcessManager, pane_command_plan,
-    shell_command_from_argv, spawn_pane_process, spawn_pane_process_with_start_directory,
+    PTY_INPUT_WRITE_CHUNK_BYTES, PaneProcessEnvironment, PaneProcessLaunch, PaneProcessManager,
+    ShellInputDelivery, pane_command_plan, shell_command_from_argv, spawn_pane_process,
+    spawn_pane_process_with_start_directory,
 };
 use mez_terminal::TerminalSize as Size;
 use std::collections::VecDeque;
@@ -193,6 +192,38 @@ fn shell_input_acknowledgements_are_counted_per_new_chunk() {
         ]),
         2
     );
+}
+
+/// Verifies typed shell deliveries reject an oversized newline-delimited
+/// record before any pane owner can mistake a physical PTY chunk for a semantic
+/// shell boundary. Diagnostics must identify the contract violation without
+/// retaining or rendering the generated payload.
+#[test]
+fn shell_input_delivery_rejects_oversized_logical_records_without_payload() {
+    let mut bytes = b"private-generated-source:".to_vec();
+    bytes.resize(PTY_INPUT_WRITE_CHUNK_BYTES + 1, b'x');
+    let delivery = ShellInputDelivery::generated_source_for_transaction(bytes, "delivery-1");
+
+    let error = delivery.validate_logical_records().unwrap_err();
+
+    assert_eq!(error.record_index(), 0);
+    assert_eq!(error.record_len(), PTY_INPUT_WRITE_CHUNK_BYTES + 1);
+    assert_eq!(error.max_record_len(), PTY_INPUT_WRITE_CHUNK_BYTES);
+    assert_eq!(error.delivery_id(), Some("delivery-1"));
+    assert!(!error.to_string().contains("private-generated-source"));
+}
+
+/// Verifies logical-record validation accepts multiple bounded records and a
+/// final unterminated record. The final suffix is still one complete delivery
+/// record even though it has no trailing interactive newline.
+#[test]
+fn shell_input_delivery_accepts_bounded_final_unterminated_record() {
+    let mut bytes = vec![b'a'; PTY_INPUT_WRITE_CHUNK_BYTES - 1];
+    bytes.push(b'\n');
+    bytes.extend(std::iter::repeat_n(b'b', PTY_INPUT_WRITE_CHUNK_BYTES));
+    let delivery = ShellInputDelivery::generated_source(bytes);
+
+    delivery.validate_logical_records().unwrap();
 }
 
 /// Verifies a delayed acknowledgement from earlier generated work cannot be

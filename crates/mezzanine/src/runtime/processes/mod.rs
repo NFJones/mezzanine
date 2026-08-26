@@ -4392,6 +4392,12 @@ impl RuntimeSessionService {
         pane_id: &str,
         delivery: mez_mux::process::ShellInputDelivery,
     ) -> Result<()> {
+        if delivery.bytes.is_empty() {
+            return Err(MezError::invalid_args("pane input must not be empty"));
+        }
+        delivery
+            .validate_logical_records()
+            .map_err(|error| MezError::invalid_args(error.to_string()))?;
         #[cfg(not(target_os = "macos"))]
         if self.process.pane_processes.contains_pane(pane_id) {
             return Ok(self
@@ -4408,9 +4414,6 @@ impl RuntimeSessionService {
                 .write_pane_shell_delivery(pane_id, &delivery)?);
         }
 
-        if delivery.bytes.is_empty() {
-            return Err(MezError::invalid_args("pane input must not be empty"));
-        }
         if let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) {
             self.persistence
                 .queue_pane_input(RuntimeSideEffect::PaneProcessIo {
