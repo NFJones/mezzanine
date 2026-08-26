@@ -949,3 +949,79 @@ async fn async_actor_refreshes_provider_info_from_interactive_prompt() {
     let ((), mut exit) = tokio::join!(client, actor.run());
     exit.service.terminate_all_pane_processes().unwrap();
 }
+
+/// Verifies an interactive provider-refresh completion invalidates its exact
+/// owning client after the original prompt render has already been consumed.
+/// The explicit completion fence prevents identical render effects from
+/// coalescing and masking this completion-boundary contract.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_invalidates_owner_after_provider_info_refresh_completion() {
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "interactive-provider-refresh-completion".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\"]\ndefault_model = \"gpt-5.5\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let mut refresh = service
+        .prepare_agent_prompt_provider_info_refresh(&primary, "%1", "/refresh-provider-info")
+        .unwrap()
+        .expect("interactive provider refresh should prepare worker-owned work");
+    let work = refresh
+        .work
+        .take()
+        .expect("prepared provider refresh should retain worker-owned work");
+    let outcome = RuntimeSessionService::execute_provider_info_refresh(work).await;
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .complete_agent_prompt_provider_info_refresh_for_tests(refresh, outcome)
+            .await
+            .unwrap();
+        assert_eq!(
+            handle
+                .drain_render_side_effects_for_client(primary.clone(), 8)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::RenderClient {
+                client_id: primary.clone(),
+                reason: RenderInvalidationReason::AgentPrompt,
+            }]
+        );
+        let view = handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            view.lines
+                .join("\n")
+                .contains("providers=1 refreshed=1 failed=0")
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.terminate_all_pane_processes().unwrap();
+}

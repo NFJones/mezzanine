@@ -237,6 +237,23 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Completes one prepared interactive provider refresh and fences actor ordering.
+    #[cfg(test)]
+    pub async fn complete_agent_prompt_provider_info_refresh_for_tests(
+        &self,
+        refresh: crate::runtime::RuntimeAgentPromptProviderInfoRefresh,
+        outcome: crate::runtime::RuntimeProviderInfoRefreshOutcome,
+    ) -> Result<()> {
+        self.sender
+            .send(AsyncRuntimeRequestEnvelope::new(
+                AsyncRuntimeRequest::CompleteAgentPromptProviderInfoRefresh { refresh, outcome },
+            ))
+            .await
+            .map_err(|_| MezError::invalid_state("async runtime session actor is closed"))?;
+        let _ = self.lifecycle_state().await?;
+        Ok(())
+    }
+
     /// Runs the terminal client loop config operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
