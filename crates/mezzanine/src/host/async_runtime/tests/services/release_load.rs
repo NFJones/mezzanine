@@ -122,6 +122,42 @@ fn write_release_load_report(report: &serde_json::Value) {
     println!("{}", serde_json::to_string(report).unwrap());
 }
 
+/// Builds the report written before the workload starts so CI retains useful
+/// platform and configuration evidence when setup, execution, or timeout
+/// handling panics before the successful measurements are available.
+fn incomplete_release_load_report(
+    requested_runtime_worker_threads: Option<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "platform": std::env::consts::OS,
+        "architecture": std::env::consts::ARCH,
+        "profile": "release",
+        "runtime_worker_threads": null,
+        "requested_runtime_worker_threads": requested_runtime_worker_threads,
+        "report_only": true,
+        "completed": false,
+        "diagnostic": "release load workload did not complete; inspect the test log for the primary failure",
+    })
+}
+
+/// Verifies an incomplete report preserves requested worker configuration and
+/// remains explicitly distinguishable from a successful workload artifact.
+#[test]
+fn incomplete_release_load_report_records_failure_context() {
+    let report = incomplete_release_load_report(Some("4".to_string()));
+
+    assert_eq!(report["requested_runtime_worker_threads"], "4");
+    assert_eq!(report["runtime_worker_threads"], serde_json::Value::Null);
+    assert_eq!(report["completed"], false);
+    assert_eq!(report["report_only"], true);
+    assert!(
+        report["diagnostic"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+}
+
 /// Returns the explicit Tokio worker count selected for this load run.
 fn release_load_worker_threads() -> usize {
     let worker_threads = std::env::var("MEZ_RELEASE_LOAD_WORKERS")
@@ -149,6 +185,9 @@ fn release_load_worker_threads() -> usize {
 #[test]
 #[ignore = "release-mode cross-platform load check; run with `just release-load-check`"]
 fn release_load_reports_cross_platform_pty_responsiveness() {
+    write_release_load_report(&incomplete_release_load_report(
+        std::env::var("MEZ_RELEASE_LOAD_WORKERS").ok(),
+    ));
     let worker_threads = release_load_worker_threads();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(worker_threads)
@@ -339,6 +378,8 @@ fn release_load_reports_cross_platform_pty_responsiveness() {
             "profile": "release",
             "runtime_worker_threads": worker_threads,
             "report_only": true,
+            "completed": true,
+            "diagnostic": null,
             "workload": {
                 "minimum_output_bytes": MINIMUM_OUTPUT_BYTES,
                 "input_records": INPUT_RECORDS,

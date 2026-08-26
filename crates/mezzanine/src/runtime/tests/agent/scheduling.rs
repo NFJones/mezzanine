@@ -2131,6 +2131,7 @@ fn runtime_terminal_join_recovery_settles_orphaned_parent_action() {
 #[tokio::test]
 async fn runtime_late_shell_result_resumes_parent_after_three_joined_children() {
     let mut service = test_runtime_service();
+    configure_unmanaged_pane_shell_protocol_fixture(&mut service);
     service
         .agent_scheduler_mut()
         .set_max_concurrent_agents(4)
@@ -2271,6 +2272,7 @@ async fn runtime_late_shell_result_resumes_parent_after_three_joined_children() 
         .unwrap();
     transaction.observed_output_preview = "late-shell-result".to_string();
     transaction.observed_output_bytes = transaction.observed_output_preview.len();
+    transaction.pending_input_payload = None;
     service
         .observe_agent_shell_transaction_start(
             "%1",
@@ -2291,6 +2293,32 @@ async fn runtime_late_shell_result_resumes_parent_after_three_joined_children() 
         )
         .unwrap();
 
+    let execution = service
+        .agent_turn_executions()
+        .get(&parent.turn_id)
+        .unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert!(!execution.final_turn);
+    assert!(
+        execution
+            .action_results
+            .iter()
+            .all(|result| result.status == mez_agent::ActionStatus::Succeeded && !result.is_error),
+        "{:#?}",
+        execution.action_results
+    );
+    for action_id in ["spawn-one", "spawn-two", "spawn-three", "shell-late"] {
+        assert!(
+            service
+                .agent_turn_contexts()
+                .get(&parent.turn_id)
+                .unwrap()
+                .blocks()
+                .iter()
+                .any(|block| block.label == format!("action result {action_id}")),
+            "missing chronological result for {action_id}"
+        );
+    }
     assert_eq!(service.agent_scheduler().snapshot().waiting, 0);
     assert_eq!(
         service

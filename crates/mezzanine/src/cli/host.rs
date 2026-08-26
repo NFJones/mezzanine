@@ -941,9 +941,9 @@ mod tests {
         }
     }
 
-    fn test_root(label: &str) -> PathBuf {
+    fn test_root(_label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
-            "mez-cli-host-{label}-{}-{}",
+            "mc-{}-{:x}",
             std::process::id(),
             rand::random::<u64>()
         ));

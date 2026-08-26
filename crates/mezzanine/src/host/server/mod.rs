@@ -1549,9 +1549,9 @@ mod tests {
 
     use super::*;
 
-    fn test_root(name: &str) -> PathBuf {
+    fn test_root(_name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
-            "mez-host-server-{}-{name}-{}",
+            "mh-{}-{:x}",
             std::process::id(),
             rand::random::<u64>()
         ));

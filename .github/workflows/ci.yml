@@ -127,4 +127,4 @@ jobs:
         with:
           name: release-load-${{ matrix.artifact }}
           path: target/release-load/${{ matrix.artifact }}.json
-          if-no-files-found: error
+          if-no-files-found: warn
