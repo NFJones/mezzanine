@@ -2945,8 +2945,9 @@ impl RuntimeSessionService {
     /// Infers native shell context from pane root-process metadata.
     ///
     /// Native shell mode never runs commands through the pane shell: the
-    /// spawned shell executable, environment, and working directory come
-    /// from host inspection of the live pane root process, with the
+    /// spawned shell executable, environment overlay, and working directory
+    /// come from host inspection of the live pane root process, with the
+    /// parent `mez` environment inherited underneath that overlay and the
     /// spawn-time session shell closing the executable fallback chain.
     pub(crate) fn native_shell_context_for_pane(
         &self,

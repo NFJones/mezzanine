@@ -6,11 +6,13 @@ use super::pane::{
     append_output_chunk_to_backlog, drain_output_backlog, foreground_process_group_id_from_raw,
     shell_input_acknowledgement_count,
 };
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use super::process_metadata::process_environment_for_pid;
+#[cfg(target_os = "linux")]
+use super::process_metadata::process_executable_path_for_pid;
 use super::process_metadata::{
     parse_environment_bytes, parse_macos_environment_bytes, process_credentials_for_pid,
 };
-#[cfg(target_os = "linux")]
-use super::process_metadata::{process_environment_for_pid, process_executable_path_for_pid};
 use super::{
     PaneProcessEnvironment, PaneProcessLaunch, PaneProcessManager, pane_command_plan,
     shell_command_from_argv, spawn_pane_process, spawn_pane_process_with_start_directory,
@@ -759,34 +761,25 @@ fn environment_parsing_preserves_non_utf8_values_and_drops_malformed() {
     assert!(entries[3].value.is_empty());
 }
 
-/// Verifies the macOS argv-skip parser locates the environment region.
+/// Verifies the macOS parser follows the real `KERN_PROCARGS2` layout.
 ///
-/// The parser must skip the leading argc field plus NUL-terminated argv
-/// strings and return the environment region that follows the empty-string
-/// separator, for both the Intel and Apple-Silicon argc encodings, and it
-/// must not fabricate a region from buffers without KEY=VALUE content.
+/// The parser must skip the leading argc field, the separately stored
+/// executable path and its padding, then exactly argc argv strings before
+/// returning the environment region.
 #[test]
-fn macos_environment_parser_skips_argv_to_environment_region() {
-    // Intel layout: plain 4-byte argc followed immediately by argv.
-    let mut intel = vec![3_u8, 0, 0, 0];
-    intel.extend_from_slice(b"/bin/zsh\0-l\0-c\0");
-    intel.extend_from_slice(b"\0");
-    intel.extend_from_slice(b"PATH=/usr/bin\0HOME=/home/neil\0\0");
-    let region = parse_macos_environment_bytes(&intel).expect("intel layout parses");
+fn macos_environment_parser_skips_executable_padding_and_argv() {
+    let mut buffer = 3_i32.to_ne_bytes().to_vec();
+    buffer.extend_from_slice(b"/bin/zsh\0");
+    buffer.extend_from_slice(&[0; 7]);
+    buffer.extend_from_slice(b"/bin/zsh\0-l\0-c\0");
+    buffer.extend_from_slice(b"PATH=/usr/bin\0HOME=/home/neil\0\0");
+
+    let region = parse_macos_environment_bytes(&buffer).expect("real layout parses");
     assert_eq!(region, b"PATH=/usr/bin\0HOME=/home/neil\0\0");
 
-    // Apple-Silicon layout: argc bytes carry a flag bit and argv starts at
-    // offset 8; the scan must recover the same region from either offset.
-    let mut arm = vec![0x83_u8, 0, 0, 0, 0, 0, 0, 0];
-    arm.extend_from_slice(b"/bin/zsh\0-l\0-c\0");
-    arm.extend_from_slice(b"\0");
-    arm.extend_from_slice(b"PATH=/usr/bin\0HOME=/home/neil\0\0");
-    let region = parse_macos_environment_bytes(&arm).expect("arm layout parses");
-    assert_eq!(region, b"PATH=/usr/bin\0HOME=/home/neil\0\0");
-
-    // A buffer without any KEY=VALUE region must not fabricate one.
-    let garbage = b"\x01\x02\x03\x04no-equals-anywhere\0still-not\0\0";
-    assert_eq!(parse_macos_environment_bytes(garbage), None);
+    let mut truncated = 2_i32.to_ne_bytes().to_vec();
+    truncated.extend_from_slice(b"/bin/zsh\0\0/bin/zsh\0");
+    assert_eq!(parse_macos_environment_bytes(&truncated), None);
 }
 
 /// Verifies the Linux environment reader reports the test process's own
@@ -799,6 +792,19 @@ fn linux_environment_reader_reports_own_process_environment() {
     assert!(
         !entries.is_empty(),
         "test process always has an environment"
+    );
+    assert!(entries.iter().all(|entry| !entry.key.is_empty()));
+}
+
+/// Verifies the Darwin environment reader handles the live kernel layout.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_environment_reader_reports_own_process_environment() {
+    let entries =
+        process_environment_for_pid(std::process::id()).expect("own environ readable on macOS");
+    assert!(
+        !entries.is_empty(),
+        "the test process always has an environment"
     );
     assert!(entries.iter().all(|entry| !entry.key.is_empty()));
 }

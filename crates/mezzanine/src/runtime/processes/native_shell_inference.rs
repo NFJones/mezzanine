@@ -22,7 +22,7 @@ pub(crate) struct NativeShellContext {
     shell_path: PathBuf,
     /// Shell grammar selected for the executable.
     classification: ShellClassification,
-    /// Root-process environment forwarded to the spawned shell.
+    /// Root-process environment overlaid on the parent `mez` environment.
     environment: Vec<RawEnvironmentEntry>,
     /// Root-process working directory for the spawned shell.
     working_directory: PathBuf,
@@ -39,7 +39,7 @@ impl NativeShellContext {
         self.classification
     }
 
-    /// Returns the raw environment forwarded to the spawned shell.
+    /// Returns the raw pane-root environment overlaid on the spawned shell.
     pub(crate) fn environment(&self) -> &[RawEnvironmentEntry] {
         &self.environment
     }
@@ -274,6 +274,21 @@ mod tests {
         )
         .expect_err("missing pid must fail");
         assert!(error.to_string().contains("root process"));
+    }
+
+    /// Verifies unavailable pane-root environment metadata leaves an empty
+    /// overlay so the executor can retain the parent `mez` environment.
+    #[test]
+    fn inference_allows_unavailable_root_process_environment_overlay() {
+        let context = infer_native_shell_context(
+            Some(42),
+            Some(PathBuf::from("/bin/bash")),
+            None,
+            Some(PathBuf::from("/tmp/work")),
+            Path::new("/bin/sh"),
+        )
+        .expect("parent environment remains available without an overlay");
+        assert!(context.environment().is_empty());
     }
 
     /// Verifies inference requires a readable root-process working directory.

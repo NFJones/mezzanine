@@ -48,52 +48,33 @@ pub(super) fn parse_environment_bytes(bytes: &[u8]) -> Vec<RawEnvironmentEntry> 
         .collect()
 }
 
-/// Reports whether a raw environment region contains at least one well-formed
-/// KEY=VALUE assignment.
-///
-/// This validates candidate macOS argv/environment splits without trusting
-/// the platform-specific argc encoding.
-#[cfg(any(target_os = "macos", test))]
-fn environment_region_looks_valid(bytes: &[u8]) -> bool {
-    // The region must begin with a well-formed KEY=VALUE assignment; any
-    // argv padding or leftover argv strings at the front indicate a wrong
-    // candidate offset and must not validate.
-    bytes.split(|byte| *byte == 0).next().is_some_and(|first| {
-        !first.is_empty() && first.first() != Some(&b'=') && first.contains(&b'=')
-    })
-}
-
 /// Locates the environment region inside a raw `KERN_PROCARGS2` buffer.
 ///
-/// The buffer layout is a leading argc field followed by NUL-terminated argv
-/// strings, an empty-string end-of-argv marker, and the NUL-separated
-/// environment. The kernel encodes argc differently on Apple Silicon than on
-/// Intel, so the field cannot be parsed portably; instead the argv region is
-/// skipped by scanning for the end-of-argv empty string from either candidate
-/// offset and validating the trailing region against the KEY=VALUE contract.
+/// The buffer layout is a 32-bit argc field, the executable path, NUL padding,
+/// exactly argc NUL-terminated argv strings, and the NUL-separated environment.
+/// Counting argv is required because there is no distinct empty-string marker
+/// between the final argument and the first environment entry.
 #[cfg(any(target_os = "macos", test))]
 pub(super) fn parse_macos_environment_bytes(buffer: &[u8]) -> Option<&[u8]> {
-    if buffer.len() <= 8 {
-        return None;
+    let argc = i32::from_ne_bytes(buffer.get(..4)?.try_into().ok()?);
+    let argc = usize::try_from(argc).ok()?;
+    let mut position = 4;
+
+    // Skip the executable path stored separately from argv.
+    let executable_end = buffer.get(position..)?.iter().position(|byte| *byte == 0)?;
+    position += executable_end + 1;
+
+    // Darwin pads between the executable path and argv[0] with NUL bytes.
+    while buffer.get(position) == Some(&0) {
+        position += 1;
     }
-    for argv_start in [4_usize, 8_usize] {
-        let mut position = argv_start;
-        loop {
-            let remainder = buffer.get(position..)?;
-            let relative_end = remainder.iter().position(|byte| *byte == 0)?;
-            let string_end = position + relative_end;
-            if string_end == position {
-                // Empty string: the end-of-argv marker.
-                break;
-            }
-            position = string_end + 1;
-        }
-        let environment_region = buffer.get(position + 1..)?;
-        if environment_region_looks_valid(environment_region) {
-            return Some(environment_region);
-        }
+
+    for _ in 0..argc {
+        let argument_end = buffer.get(position..)?.iter().position(|byte| *byte == 0)?;
+        position += argument_end + 1;
     }
-    None
+
+    buffer.get(position..)
 }
 
 /// Returns the procfs executable path for `pid` when available.

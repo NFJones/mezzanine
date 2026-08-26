@@ -243,8 +243,10 @@ impl SpawnedShellExecutor {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .env_clear()
             .process_group(0);
+        // Preserve the environment inherited by the parent `mez` process so
+        // native actions retain its PATH and credentials. Pane-root entries
+        // are applied afterward as the authoritative live-context overlay.
         for entry in self.context.environment() {
             command.env(
                 OsStr::from_bytes(&entry.key),
@@ -839,28 +841,54 @@ mod tests {
         assert!(!output.interrupted);
     }
 
+    /// Verifies native execution preserves variables inherited by the parent
+    /// `mez` process even when pane-root metadata does not contain them.
+    ///
+    /// `PATH` is required for ordinary shell command lookup and reproduces the
+    /// macOS failure caused by clearing the child environment before spawn.
+    #[test]
+    fn spawned_executor_inherits_parent_process_environment() {
+        let parent_path = std::env::var("PATH").expect("test process has PATH");
+        let mut executor = SpawnedShellExecutor::new(test_context());
+        let output = executor
+            .execute_shell(&request("printf %s \"$PATH\"", Some(5_000)))
+            .unwrap();
+
+        assert_eq!(output.exit_code, Some(0));
+        assert_eq!(output.stdout, parent_path);
+    }
+
     /// Verifies the inferred environment and working directory reach the
-    /// spawned shell exactly as captured from the pane root process.
+    /// spawned shell as an overlay captured from the pane root process.
     #[test]
     fn spawned_executor_forwards_context_environment_and_working_directory() {
         let directory = std::env::temp_dir().join(format!("mez-native-cwd-{}", std::process::id()));
         fs::create_dir_all(&directory).unwrap();
         let context = NativeShellContext::for_test(
             PathBuf::from("/bin/sh"),
-            vec![RawEnvironmentEntry {
-                key: b"MEZ_NATIVE_TEST".to_vec(),
-                value: b"visible".to_vec(),
-            }],
+            vec![
+                RawEnvironmentEntry {
+                    key: b"MEZ_NATIVE_TEST".to_vec(),
+                    value: b"visible".to_vec(),
+                },
+                RawEnvironmentEntry {
+                    key: b"PATH".to_vec(),
+                    value: b"/pane/root/path".to_vec(),
+                },
+            ],
             directory.clone(),
         );
         let mut executor = SpawnedShellExecutor::new(context);
         let output = executor
-            .execute_shell(&request("printf \"$MEZ_NATIVE_TEST\"; pwd", Some(5_000)))
+            .execute_shell(&request(
+                "printf '%s\\n%s\\n' \"$MEZ_NATIVE_TEST\" \"$PATH\"; pwd",
+                Some(5_000),
+            ))
             .unwrap();
         let _ = fs::remove_dir(&directory);
 
         assert_eq!(output.exit_code, Some(0));
-        assert!(output.stdout.starts_with("visible"));
+        assert!(output.stdout.starts_with("visible\n/pane/root/path\n"));
         assert!(
             output
                 .stdout

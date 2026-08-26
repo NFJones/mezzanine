@@ -3504,10 +3504,12 @@ millisecond-resolution deadline when each turn is created. Reloading the
 setting MUST affect only subsequently created turns.
 `agents.shell_mode` MUST default to `native` and MUST accept only `pane` or
 `native`. `native` executes agent shell actions in a freshly spawned shell
-process whose path, environment, and working directory are inferred from the
-pane's root process; native execution MUST NOT write to or read from the pane
-PTY and MUST NOT run any command through the pane shell to enable or perform
-the execution.
+process whose path and working directory are inferred from the pane's root
+process. The spawned shell MUST inherit the parent Mezzanine process
+environment, then overlay any available environment entries inferred from the
+pane's root process so live pane values take precedence. Native execution MUST
+NOT write to or read from the pane PTY and MUST NOT run any command through the
+pane shell to enable or perform the execution.
 `agents.loop_limit` MUST be a positive integer and MUST default to `8`. It
 bounds the number of work iterations a single `/loop` command may run before
 Mezzanine stops automatic continuation and reports that the iteration limit was
@@ -6289,20 +6291,23 @@ execute local shell actions through an undeclared host-side command runner or
 silently fall back from native mode to pane-shell execution.
 
 Under native shell mode, Mezzanine MUST execute each shell-backed action in a
-freshly spawned shell process whose executable, environment, and working
-directory are inferred from the pane's live root process, never by running
-commands through the pane shell. Agent entry and provider preflight in native
-mode MUST inspect only live root-process metadata and MUST NOT schedule pane
-bootstrap, readiness, shell-identity, or path-resolution transactions. Native
-execution MUST run outside the serialized runtime actor so pane, client,
-rendering, timer, and cancellation events remain responsive while the child is
-active. While native command output is otherwise hidden, bounded stdout and
-stderr progress MUST feed the same transient latest-output preview used by pane
-shell mode, and stale progress MUST be rejected by turn, action, and transaction
-marker ownership. Native output capture MUST remain bounded and MUST stop
-waiting after a bounded post-exit drain period when escaped descendants retain
-inherited output pipes. Native execution MUST work while an alternative screen
-application occupies the pane, MUST reject stateful or interactive actions
+freshly spawned shell process whose executable and working directory are
+inferred from the pane's live root process, never by running commands through
+the pane shell. The child MUST inherit the parent Mezzanine process environment
+and MUST overlay any available environment entries inferred from the live pane
+root process, with pane-root values taking precedence for duplicate names.
+Agent entry and provider preflight in native mode MUST inspect only live root-
+process metadata and MUST NOT schedule pane bootstrap, readiness, shell-identity, or
+path-resolution transactions. Native execution MUST run outside the serialized
+runtime actor so pane, client, rendering, timer, and cancellation events remain
+responsive while the child is active. While native command output is otherwise
+hidden, bounded stdout and stderr progress MUST feed the same transient latest-
+output preview used by pane shell mode, and stale progress MUST be rejected by
+turn, action, and transaction marker ownership. Native output capture MUST
+remain bounded and MUST stop waiting after a bounded post-exit drain period when
+escaped descendants retain inherited output pipes. Native execution MUST work
+while an alternative screen application occupies the pane, MUST reject
+stateful or interactive actions
 without falling back to the pane shell, and MUST report `spawned_shell`
 transport metadata with `sent_to_pane` false. Native
 `apply_patch` actions MUST complete the same read and write phases as pane
