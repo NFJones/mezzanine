@@ -154,8 +154,8 @@ fn runtime_primary_display_overlay_preserves_unwrapped_plain_content() {
     assert_eq!(overlay.lines, vec!["alpha beta gamma"]);
 }
 
-/// Verifies the Iroh status pager retains exact-client source identity rather
-/// than inferring refresh behavior from its rendered command or rows.
+/// Verifies the Iroh status pager retains exact-client source identity and
+/// advertises its refresh cadence to remote attached clients.
 #[test]
 fn runtime_iroh_status_overlay_retains_exact_client_live_source() {
     let mut service = test_runtime_service();
@@ -179,6 +179,18 @@ fn runtime_iroh_status_overlay_retains_exact_client_live_source() {
             client_id,
         } if client_id == primary.as_str()
     ));
+    let view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(80, 24).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        view.animation_refresh_interval_ms,
+        source.refresh_interval_ms
+    );
     service
         .resize_attached_primary_terminal(&primary, Size::new(30, 12).unwrap())
         .unwrap();

@@ -316,6 +316,12 @@ impl RuntimeSessionService {
             && let Some(overlay) = self.presentation.primary_display_overlay.as_ref()
         {
             self.overlay_primary_display_overlay(view, overlay);
+            if let Some(live_source) = overlay.live_source.as_ref() {
+                view.animation_refresh_interval_ms = match view.animation_refresh_interval_ms {
+                    0 => live_source.refresh_interval_ms,
+                    interval_ms => interval_ms.min(live_source.refresh_interval_ms),
+                };
+            }
         }
         if role == ClientViewRole::Primary
             && let Some(view) = view.as_mut()
