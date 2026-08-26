@@ -386,6 +386,11 @@ impl AsyncRuntimeSessionActor {
                         self.queue_runtime_side_effects(transition.side_effects)?;
                         self.queue_pending_provider_dispatch_side_effects()?;
                         self.queue_shell_lifecycle_timer_side_effects()?;
+                        if let Some(client_id) = connection.caller_client_id().cloned() {
+                            self.ensure_client_render_timers_or_defer_to_pending_render(
+                                &client_id,
+                            )?;
+                        }
                         Ok(AsyncControlInputResult {
                             output,
                             consumed,
@@ -498,6 +503,11 @@ impl AsyncRuntimeSessionActor {
                         self.queue_runtime_side_effects(transition.side_effects)?;
                         self.queue_pending_provider_dispatch_side_effects()?;
                         self.queue_shell_lifecycle_timer_side_effects()?;
+                        if let Some(client_id) = connection.caller_client_id().cloned() {
+                            self.ensure_client_render_timers_or_defer_to_pending_render(
+                                &client_id,
+                            )?;
+                        }
                         Ok(consumed)
                     });
                 match result {

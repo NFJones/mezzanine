@@ -1147,6 +1147,168 @@ async fn async_actor_queues_render_side_effects_for_applied_events() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies ordinary framed `terminal/step` ingress reconciles the exact
+/// client's live-overlay timer for both opening and closing `/status`.
+/// Unix attach clients use this path with `render=false`, so timer ownership
+/// cannot depend on direct attached-terminal actor requests.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_reconciles_live_overlay_timers_for_framed_control_steps() {
+    use crate::control::encode_control_body;
+
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "static-framed-control-status".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"ready\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let opened = handle
+            .handle_control_input_for_connection(
+                encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"open-status","method":"terminal/step","params":{"idempotency_key":"framed-open-status","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[47,115,116,97,116,117,115,13]}}"#,
+                ),
+                4096,
+                ControlConnectionState::trusted_existing_client(primary.clone()),
+            )
+            .await
+            .unwrap();
+        let scheduled = handle.drain_timer_side_effects(8).await.unwrap();
+        let status_key = scheduled
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .expect("ordinary framed status step should schedule refresh");
+
+        handle
+            .handle_control_input_for_connection(
+                encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"close-status","method":"terminal/step","params":{"idempotency_key":"framed-close-status","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[113]}}"#,
+                ),
+                4096,
+                opened.connection,
+            )
+            .await
+            .unwrap();
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().iter().any(
+            |effect| matches!(effect, RuntimeSideEffect::CancelTimer { key } if key == &status_key)
+        ));
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
+/// Verifies snapshot-aware framed control ingress applies the same exact-client
+/// live-overlay timer lifecycle as ordinary control ingress. Iroh control
+/// connections use this path even when a frame contains no snapshot method.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_reconciles_live_overlay_timers_for_snapshot_control_steps() {
+    use crate::control::encode_control_body;
+    use crate::storage::snapshot::SnapshotRepository;
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-framed-status-snapshot-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let snapshots = SnapshotRepository::new(root.join("snapshots"));
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "static-snapshot-control-status".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"ready\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let opened = handle
+            .handle_control_input_for_connection_with_snapshots(
+                encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"open-status","method":"terminal/step","params":{"idempotency_key":"snapshot-open-status","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[47,115,116,97,116,117,115,13]}}"#,
+                ),
+                4096,
+                ControlConnectionState::trusted_existing_client(primary.clone()),
+                snapshots.clone(),
+            )
+            .await
+            .unwrap();
+        let scheduled = handle.drain_timer_side_effects(8).await.unwrap();
+        let status_key = scheduled
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .expect("snapshot framed status step should schedule refresh");
+
+        handle
+            .handle_control_input_for_connection_with_snapshots(
+                encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"close-status","method":"terminal/step","params":{"idempotency_key":"snapshot-close-status","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[113]}}"#,
+                ),
+                4096,
+                opened.connection,
+                snapshots,
+            )
+            .await
+            .unwrap();
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().iter().any(
+            |effect| matches!(effect, RuntimeSideEffect::CancelTimer { key } if key == &status_key)
+        ));
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies that actor metrics expose rendered-view and terminal control
 /// request counts that can be used for idle attach benchmarking. The counters
 /// distinguish direct actor render calls from control-socket `terminal/view`
