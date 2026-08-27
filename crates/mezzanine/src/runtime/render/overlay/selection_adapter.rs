@@ -179,17 +179,12 @@ fn restore_record_browser_table_link_selections(
         let Some(command) = record.open_command.as_deref() else {
             continue;
         };
-        let mut existing = false;
         for selection in content
             .selections
             .iter_mut()
             .filter(|selection| selection.command == command)
         {
             selection.logical_id = logical_id;
-            existing = true;
-        }
-        if existing {
-            continue;
         }
         let mut matched_id = String::new();
         let mut fragments = Vec::new();
@@ -210,16 +205,24 @@ fn restore_record_browser_table_link_selections(
                 fragments.clear();
             }
             if matched_id == record.id {
-                content.selections.extend(fragments.drain(..).map(
-                    |(line_index, start_column, width)| OverlaySelection {
+                for (line_index, start_column, width) in fragments.drain(..) {
+                    if content.selections.iter().any(|selection| {
+                        selection.line_index == line_index
+                            && selection.start_column == start_column
+                            && selection.width == width
+                            && selection.command == command
+                    }) {
+                        continue;
+                    }
+                    content.selections.push(OverlaySelection {
                         logical_id,
                         line_index,
                         start_column,
                         width,
                         command: command.to_string(),
                         kind: OverlaySelectionKind::Primary,
-                    },
-                ));
+                    });
+                }
                 break;
             }
         }
@@ -277,4 +280,66 @@ pub(super) fn record_browser_command_name(command: &str) -> Option<String> {
         "list-personalities" | "show-approvals" | "show-context" | "show-issues" | "show-memories"
     )
     .then(|| name.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mez_mux::render::RichTextLineKind;
+
+    /// Verifies restoring a record table with one retained wrapped-link fragment
+    /// adds only the missing continuation fragment and gives both one logical ID.
+    #[test]
+    fn restores_missing_wrapped_record_link_fragment_after_partial_retention() {
+        let command = "/show-issues issue-42";
+        let browser = mez_mux::record_browser::RecordBrowser::new(
+            "Issues",
+            vec![mez_mux::record_browser::RecordBrowserRecord {
+                id: "issue-42".to_string(),
+                open_command: Some(command.to_string()),
+                title: "Wrapped issue".to_string(),
+                metadata: Vec::new(),
+                markdown: String::new(),
+            }],
+            Vec::new(),
+        )
+        .unwrap();
+        let mut content = RuntimeCommandDisplayOverlayContent {
+            command: Some("show-issues".to_string()),
+            live_source: None,
+            lines: vec![
+                "│ issue- │ Wrapped issue │".to_string(),
+                "│ 42 │              │".to_string(),
+            ],
+            line_style_spans: vec![Vec::new(), Vec::new()],
+            line_kinds: vec![RichTextLineKind::Normal, RichTextLineKind::Normal],
+            line_copy_texts: vec![None, None],
+            selections: vec![OverlaySelection {
+                logical_id: 99,
+                line_index: 0,
+                start_column: 2,
+                width: 6,
+                command: command.to_string(),
+                kind: OverlaySelectionKind::Primary,
+            }],
+        };
+
+        restore_record_browser_table_link_selections(&mut content, &browser);
+
+        assert_eq!(content.selections.len(), 2);
+        assert_eq!(
+            content
+                .selections
+                .iter()
+                .map(|selection| (
+                    selection.logical_id,
+                    selection.line_index,
+                    selection.start_column,
+                    selection.width,
+                    selection.command.as_str(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![(0, 0, 2, 6, command), (0, 1, 2, 2, command)]
+        );
+    }
 }
