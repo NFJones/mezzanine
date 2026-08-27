@@ -3357,7 +3357,10 @@ omitted. When present, each value MUST be either a command string parsed with
 shell-like quoting rules or an array of command tokens. The copy command MUST
 receive clipboard contents on stdin. The paste command MUST write clipboard
 contents to stdout. If either direction is omitted, Mezzanine MUST retain the
-default best-effort host clipboard command list for that direction.
+default best-effort host clipboard command list for that direction. On WSL, the
+default copy list MUST first attempt the Windows host clipboard through Windows
+PowerShell with explicit UTF-8 stdin decoding before Linux display-server
+helpers.
 
 `terminal.clipboard_read_timeout_ms` and `terminal.clipboard_read_max_bytes`
 MUST be positive integers and default to 250 milliseconds and 1,048,576 bytes.

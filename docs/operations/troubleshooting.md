@@ -99,7 +99,11 @@ and legacy fallback sessions intentionally retain server-only copy behavior.
 The attaching client, not the server, selects `terminal.clipboard_copy_command`;
 verify that the local command exists and can access the client desktop session.
 Linux clients try `wl-copy`, `xclip`, and `xsel` by default, while macOS clients
-try `pbcopy`. Headless sessions may have no usable provider.
+try `pbcopy`. WSL clients first try Windows PowerShell `Set-Clipboard` with
+explicit UTF-8 stdin decoding so the destination is the Windows host clipboard.
+If Windows executable interoperability is disabled, configure an explicit
+`terminal.clipboard_copy_command` or restore interoperability. Headless sessions
+may have no usable provider.
 
 Clipboard writes are best-effort and bounded to 8 MiB. A local provider failure
 does not undo the server internal paste buffer or server-host clipboard attempt,

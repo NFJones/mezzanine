@@ -513,13 +513,55 @@ fn run_clipboard_copy_command(command: &HostClipboardCommand, content: &str) -> 
     started_rx.recv().unwrap_or(false)
 }
 
+/// PowerShell command body that decodes redirected WSL stdin as UTF-8 before
+/// writing the resulting text to the Windows host clipboard.
+const WSL_POWERSHELL_COPY_SCRIPT: &str = "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false); Set-Clipboard -Value ([Console]::In.ReadToEnd())";
+
+/// Returns whether the current Linux process is running under WSL.
+///
+/// Environment markers cover ordinary launches, while the kernel release
+/// fallback covers stripped environments such as service and multiplexer
+/// processes that do not retain `WSL_INTEROP` or `WSL_DISTRO_NAME`.
+fn is_windows_subsystem_for_linux() -> bool {
+    std::env::var_os("WSL_INTEROP").is_some()
+        || std::env::var_os("WSL_DISTRO_NAME").is_some()
+        || std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .is_ok_and(|release| kernel_release_is_wsl(release.as_str()))
+}
+
+/// Returns whether one kernel release identifies Microsoft's WSL kernel.
+fn kernel_release_is_wsl(release: &str) -> bool {
+    let release = release.to_ascii_lowercase();
+    release.contains("microsoft") || release.contains("wsl")
+}
+
 /// Runs the host clipboard copy commands operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn host_clipboard_copy_commands() -> Vec<HostClipboardCommand> {
-    vec![
+    host_clipboard_copy_commands_for_environment(is_windows_subsystem_for_linux())
+}
+
+/// Builds the ordered default copy commands for one detected environment.
+fn host_clipboard_copy_commands_for_environment(
+    windows_subsystem_for_linux: bool,
+) -> Vec<HostClipboardCommand> {
+    let mut commands = Vec::new();
+    if windows_subsystem_for_linux {
+        commands.push(HostClipboardCommand::new(
+            "powershell.exe",
+            vec![
+                "-NoLogo".to_string(),
+                "-NoProfile".to_string(),
+                "-NonInteractive".to_string(),
+                "-Command".to_string(),
+                WSL_POWERSHELL_COPY_SCRIPT.to_string(),
+            ],
+        ));
+    }
+    commands.extend([
         HostClipboardCommand::new("wl-copy", Vec::new()),
         HostClipboardCommand::new(
             "xclip",
@@ -530,7 +572,8 @@ fn host_clipboard_copy_commands() -> Vec<HostClipboardCommand> {
             vec!["--clipboard".to_string(), "--input".to_string()],
         ),
         HostClipboardCommand::new("pbcopy", Vec::new()),
-    ]
+    ]);
+    commands
 }
 
 /// Runs the host clipboard paste commands operation for this subsystem.
@@ -559,8 +602,59 @@ fn host_clipboard_paste_commands() -> Vec<HostClipboardCommand> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HostClipboard, HostClipboardCommand, read_host_clipboard_plan_async};
+    use super::{
+        HostClipboard, HostClipboardCommand, WSL_POWERSHELL_COPY_SCRIPT,
+        host_clipboard_copy_commands_for_environment, kernel_release_is_wsl,
+        read_host_clipboard_plan_async,
+    };
     use std::time::Duration;
+
+    /// Verifies WSL defaults address the Windows host clipboard before trying
+    /// Linux display-server helpers and explicitly decode redirected UTF-8.
+    ///
+    /// Iroh clipboard effects execute on the attaching client, so a WSL client
+    /// must bridge to Windows rather than relying on unavailable X11/Wayland.
+    #[test]
+    fn wsl_copy_defaults_target_windows_host_clipboard_with_utf8() {
+        let commands = host_clipboard_copy_commands_for_environment(true);
+
+        assert_eq!(
+            commands.first(),
+            Some(&HostClipboardCommand::new(
+                "powershell.exe",
+                vec![
+                    "-NoLogo".to_string(),
+                    "-NoProfile".to_string(),
+                    "-NonInteractive".to_string(),
+                    "-Command".to_string(),
+                    WSL_POWERSHELL_COPY_SCRIPT.to_string(),
+                ],
+            ))
+        );
+        assert!(WSL_POWERSHELL_COPY_SCRIPT.contains("InputEncoding"));
+        assert!(WSL_POWERSHELL_COPY_SCRIPT.contains("Set-Clipboard"));
+        assert_eq!(commands[1].program, "wl-copy");
+    }
+
+    /// Verifies ordinary Linux and macOS command discovery does not acquire a
+    /// Windows-only dependency, and stripped WSL environments remain detected
+    /// from the Microsoft kernel release marker.
+    #[test]
+    fn non_wsl_copy_defaults_remain_portable_and_kernel_detection_is_case_insensitive() {
+        let commands = host_clipboard_copy_commands_for_environment(false);
+
+        assert_eq!(
+            commands.first().map(|command| command.program.as_str()),
+            Some("wl-copy")
+        );
+        assert!(
+            commands
+                .iter()
+                .all(|command| command.program != "powershell.exe")
+        );
+        assert!(kernel_release_is_wsl("6.6.87.2-MICROSOFT-standard-WSL2"));
+        assert!(!kernel_release_is_wsl("6.8.0-52-generic"));
+    }
 
     /// Verifies host clipboard paste output is delivered exactly on successful
     /// UTF-8 decode.
