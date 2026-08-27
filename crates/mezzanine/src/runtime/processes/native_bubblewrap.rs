@@ -86,6 +86,97 @@ impl NativeBubblewrapCapabilityProbe {
     }
 }
 
+/// Uncached native Seatbelt capability probe transferred to an external
+/// worker by the dependent Seatbelt workload-integration boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativeSeatbeltCapabilityProbe {
+    pane_id: String,
+    pane_environment_signature: String,
+    config_generation: u64,
+    plan: crate::security::sandbox::SeatbeltCapabilityProbePlan,
+}
+
+impl NativeSeatbeltCapabilityProbe {
+    /// Builds one exact native probe from already trusted root-process
+    /// environment evidence.
+    pub(crate) fn new(
+        pane_id: String,
+        pane_environment_signature: String,
+        config_generation: u64,
+        plan: crate::security::sandbox::SeatbeltCapabilityProbePlan,
+    ) -> Self {
+        Self {
+            pane_id,
+            pane_environment_signature,
+            config_generation,
+            plan,
+        }
+    }
+
+    /// Runs the exact native probe outside the serialized runtime actor.
+    pub(crate) fn run(self) -> Result<crate::security::sandbox::SeatbeltCapability> {
+        run_native_seatbelt_capability_probe(
+            &self.pane_id,
+            &self.pane_environment_signature,
+            self.config_generation,
+            &self.plan,
+        )
+    }
+
+    /// Builds one deterministic worker-owned Seatbelt probe fixture.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        executable: &str,
+        arguments: Vec<String>,
+        expected_stdout: &'static str,
+    ) -> Self {
+        Self {
+            pane_id: "%native-seatbelt-test".to_string(),
+            pane_environment_signature: "native-seatbelt-test-signature".to_string(),
+            config_generation: 1,
+            plan: crate::security::sandbox::SeatbeltCapabilityProbePlan {
+                executable: executable.to_string(),
+                arguments,
+                expected_stdout,
+                sandbox_executable: "/usr/bin/sandbox-exec".to_string(),
+                executable_identity_sha256: "product-identity".to_string(),
+                sandbox_executable_identity_sha256: "seatbelt-identity".to_string(),
+                child_shell_path: "/bin/sh".to_string(),
+                child_shell_identity_sha256: "shell-identity".to_string(),
+                environment_sha256: "environment-identity".to_string(),
+                host_identity_sha256: "host-identity".to_string(),
+                profile_sha256: "profile-identity".to_string(),
+                probe_sha256: "probe-identity".to_string(),
+            },
+        }
+    }
+}
+
+/// Backend-tagged native capability probe executed by the external shell
+/// worker before any corresponding sandbox workload may start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NativeSandboxCapabilityProbe {
+    /// Linux Bubblewrap namespace capability probe.
+    Bubblewrap(NativeBubblewrapCapabilityProbe),
+    /// macOS Seatbelt operation-level capability probe.
+    Seatbelt(NativeSeatbeltCapabilityProbe),
+}
+
+impl NativeSandboxCapabilityProbe {
+    /// Runs the exact backend probe and returns cacheable typed evidence only
+    /// after strict sentinel validation succeeds.
+    pub(crate) fn run(self) -> Result<crate::security::sandbox::SandboxCapability> {
+        match self {
+            Self::Bubblewrap(probe) => probe
+                .run()
+                .map(crate::security::sandbox::SandboxCapability::Bubblewrap),
+            Self::Seatbelt(probe) => probe
+                .run()
+                .map(crate::security::sandbox::SandboxCapability::Seatbelt),
+        }
+    }
+}
+
 /// Cloneable managed-home lease retained by both actor state and the external
 /// native worker. Turn cleanup may drop the actor's clone, but the worker's
 /// clone keeps maintenance excluded until probe and workload execution end.
@@ -123,6 +214,58 @@ pub(crate) struct NativeBubblewrapDispatch {
 }
 
 impl crate::runtime::RuntimeSessionService {
+    /// Builds an uncached native Seatbelt probe from exact root-process
+    /// environment evidence, or returns `None` when that identity is cached.
+    pub(crate) fn native_seatbelt_capability_probe_for_action(
+        &self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        context: &NativeShellContext,
+        config: &crate::runtime::SeatbeltConfig,
+        program_dialect: LocalProgramDialect,
+    ) -> Result<Option<NativeSeatbeltCapabilityProbe>> {
+        let signature = native_environment_signature_for_context(
+            context,
+            self.primary_pid_for_live_pane_process(&turn.pane_id),
+        )?;
+        let signature_hash = signature.stable_hash();
+        let request = mez_agent::shell::PaneEnvironmentRequest::new(
+            config.env_whitelist.requested_names.clone(),
+        )
+        .map_err(|error| MezError::invalid_args(error.message()))?;
+        let evidence = if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+            PaneEnvironmentEvidence::restrictive(&request, "semantic_patch_not_forwarded")
+        } else {
+            native_environment_evidence(&request, context)
+        };
+        let child_shell_path = program_dialect
+            .interpreter_path()
+            .unwrap_or(&signature.shell_path);
+        let plan = crate::security::sandbox::seatbelt_capability_probe_plan(
+            config,
+            child_shell_path,
+            &signature,
+            &evidence,
+        )
+        .map_err(|error| MezError::invalid_state(error.message()))?;
+        let cache_key = crate::security::sandbox::seatbelt_capability_cache_key(
+            &turn.pane_id,
+            &signature_hash,
+            self.session.config_generation,
+            &plan,
+        )
+        .map_err(|error| MezError::invalid_state(error.message()))?;
+        if self.seatbelt_capability(&cache_key).is_some() {
+            return Ok(None);
+        }
+        Ok(Some(NativeSeatbeltCapabilityProbe::new(
+            turn.pane_id.clone(),
+            signature_hash,
+            self.session.config_generation,
+            plan,
+        )))
+    }
+
     /// Assembles the native Bubblewrap child launch for one authorized action.
     ///
     /// Identity, forwarding evidence, capability, filesystem authority, and
@@ -730,6 +873,80 @@ fn run_native_bubblewrap_capability_probe(
                 exit_code,
                 output_diagnostic
             ),
+        ))
+    })
+}
+
+/// Runs the deterministic Seatbelt capability probe as a native host process.
+fn run_native_seatbelt_capability_probe(
+    pane_id: &str,
+    pane_environment_signature: &str,
+    config_generation: u64,
+    probe_plan: &crate::security::sandbox::SeatbeltCapabilityProbePlan,
+) -> Result<crate::security::sandbox::SeatbeltCapability> {
+    let mut child = Command::new(&probe_plan.executable)
+        .args(&probe_plan.arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            MezError::invalid_state(format!(
+                "native Seatbelt capability probe could not start: {error}"
+            ))
+        })?;
+    let stdout_reader = child.stdout.take().map(spawn_bounded_probe_reader);
+    let stderr_reader = child.stderr.take().map(spawn_bounded_probe_reader);
+    let deadline = Instant::now() + NATIVE_BUBBLEWRAP_PROBE_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(MezError::invalid_state(
+                    "native Seatbelt capability probe exceeded its time budget",
+                ));
+            }
+            Ok(None) => std::thread::sleep(NATIVE_BUBBLEWRAP_PROBE_POLL_INTERVAL),
+            Err(error) => {
+                return Err(MezError::invalid_state(format!(
+                    "native Seatbelt capability probe wait failed: {error}"
+                )));
+            }
+        }
+    };
+    let stdout = join_bounded_probe_reader(stdout_reader);
+    let stderr = join_bounded_probe_reader(stderr_reader);
+    let stdout = String::from_utf8_lossy(&stdout).into_owned();
+    let exit_code = status.code().unwrap_or(-1);
+    crate::security::sandbox::parse_seatbelt_capability_probe(
+        pane_id,
+        pane_environment_signature,
+        config_generation,
+        probe_plan,
+        exit_code,
+        &stdout,
+    )
+    .map_err(|error| {
+        let output_diagnostic = if !stderr.is_empty() {
+            format!(
+                "stderr: {}",
+                native_bubblewrap_probe_output_preview(&stderr)
+            )
+        } else if !stdout.is_empty() {
+            format!(
+                "unexpected stdout: {}",
+                native_bubblewrap_probe_output_preview(stdout.as_bytes())
+            )
+        } else {
+            "no diagnostic output".to_string()
+        };
+        MezError::invalid_state(format!(
+            "native Seatbelt capability probe failed: {} (exit code {}; {})",
+            error.message(),
+            exit_code,
+            output_diagnostic
         ))
     })
 }

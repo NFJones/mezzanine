@@ -33,6 +33,7 @@ use crate::runtime::{
 mod identity;
 mod managed_home;
 pub(crate) mod seatbelt;
+pub(crate) mod seatbelt_probe;
 mod workflow;
 
 pub(crate) use identity::{
@@ -48,6 +49,10 @@ pub(crate) use managed_home::{
     clear_bubblewrap_managed_home, inspect_bubblewrap_managed_home,
     prepare_bubblewrap_managed_home_for_workload_with_identity, prune_bubblewrap_managed_homes,
     remove_bubblewrap_managed_home,
+};
+pub(crate) use seatbelt_probe::{
+    SeatbeltCapability, SeatbeltCapabilityCacheKey, SeatbeltCapabilityProbePlan,
+    parse_seatbelt_capability_probe, seatbelt_capability_cache_key, seatbelt_capability_probe_plan,
 };
 pub(crate) use workflow::{
     SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
@@ -301,6 +306,132 @@ pub(crate) struct BubblewrapCapabilityCacheKey {
 pub(crate) struct BubblewrapCapability {
     /// Exact cache identity that must match before capability reuse.
     pub(crate) cache_key: BubblewrapCapabilityCacheKey,
+}
+
+/// Backend-discriminated deterministic capability probe consumed by pane and
+/// native transports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SandboxCapabilityProbePlan {
+    /// Linux Bubblewrap namespace capability probe.
+    Bubblewrap(BubblewrapCapabilityProbePlan),
+    /// macOS Seatbelt operation-level capability probe.
+    Seatbelt(SeatbeltCapabilityProbePlan),
+}
+
+impl SandboxCapabilityProbePlan {
+    /// Returns the backend executable launched by the transport.
+    pub(crate) fn executable(&self) -> &str {
+        match self {
+            Self::Bubblewrap(plan) => &plan.executable,
+            Self::Seatbelt(plan) => &plan.executable,
+        }
+    }
+
+    /// Returns the fixed typed arguments excluding argv zero.
+    pub(crate) fn arguments(&self) -> &[String] {
+        match self {
+            Self::Bubblewrap(plan) => &plan.arguments,
+            Self::Seatbelt(plan) => &plan.arguments,
+        }
+    }
+
+    /// Returns the exact success sentinel accepted by settlement.
+    pub(crate) fn expected_stdout(&self) -> &'static str {
+        match self {
+            Self::Bubblewrap(plan) => plan.expected_stdout,
+            Self::Seatbelt(plan) => plan.expected_stdout,
+        }
+    }
+
+    /// Returns the backend proven by this plan.
+    pub(crate) const fn backend(&self) -> SandboxBackend {
+        match self {
+            Self::Bubblewrap(_) => SandboxBackend::Bubblewrap,
+            Self::Seatbelt(_) => SandboxBackend::Seatbelt,
+        }
+    }
+}
+
+/// Backend-discriminated exact cache identity for one successful probe.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SandboxCapabilityCacheKey {
+    /// Linux Bubblewrap capability identity.
+    Bubblewrap(BubblewrapCapabilityCacheKey),
+    /// macOS Seatbelt capability identity.
+    Seatbelt(SeatbeltCapabilityCacheKey),
+}
+
+impl SandboxCapabilityCacheKey {
+    /// Returns the logical pane whose environment was proven.
+    pub(crate) fn pane_id(&self) -> &str {
+        match self {
+            Self::Bubblewrap(key) => &key.pane_id,
+            Self::Seatbelt(key) => &key.pane_id,
+        }
+    }
+
+    /// Returns the exact environment signature bound to the probe.
+    pub(crate) fn pane_environment_signature(&self) -> &str {
+        match self {
+            Self::Bubblewrap(key) => &key.pane_environment_signature,
+            Self::Seatbelt(key) => &key.pane_environment_signature,
+        }
+    }
+
+    /// Returns the configuration generation bound to the probe.
+    pub(crate) const fn config_generation(&self) -> u64 {
+        match self {
+            Self::Bubblewrap(key) => key.config_generation,
+            Self::Seatbelt(key) => key.config_generation,
+        }
+    }
+
+    /// Returns the executable launched by the probe transport.
+    pub(crate) fn executable(&self) -> &str {
+        match self {
+            Self::Bubblewrap(key) => &key.executable,
+            Self::Seatbelt(key) => &key.executable,
+        }
+    }
+
+    /// Returns the fixed runtime-profile version under test.
+    pub(crate) const fn runtime_profile_version(&self) -> &'static str {
+        match self {
+            Self::Bubblewrap(key) => key.runtime_profile_version,
+            Self::Seatbelt(key) => key.runtime_profile_version,
+        }
+    }
+
+    /// Returns the deterministic exact probe-plan digest.
+    pub(crate) fn probe_sha256(&self) -> &str {
+        match self {
+            Self::Bubblewrap(key) => &key.probe_sha256,
+            Self::Seatbelt(key) => &key.probe_sha256,
+        }
+    }
+}
+
+/// Verified backend capability in one exact pane or native environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SandboxCapability {
+    /// Linux Bubblewrap capability evidence.
+    Bubblewrap(BubblewrapCapability),
+    /// macOS Seatbelt capability evidence.
+    Seatbelt(SeatbeltCapability),
+}
+
+impl SandboxCapability {
+    /// Returns the exact cache identity proved by this capability.
+    pub(crate) fn cache_key(&self) -> SandboxCapabilityCacheKey {
+        match self {
+            Self::Bubblewrap(capability) => {
+                SandboxCapabilityCacheKey::Bubblewrap(capability.cache_key.clone())
+            }
+            Self::Seatbelt(capability) => {
+                SandboxCapabilityCacheKey::Seatbelt(capability.cache_key.clone())
+            }
+        }
+    }
 }
 
 /// Validated Bubblewrap lifecycle evidence captured outside workload output.

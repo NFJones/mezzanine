@@ -520,7 +520,8 @@ impl RuntimeSessionService {
                 | RunningShellTransactionKind::ShellIdentityProbe { .. }
                 | RunningShellTransactionKind::PathResolution { .. }
                 | RunningShellTransactionKind::EnvironmentEvidence { .. }
-                | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
+                | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. }
+                | RunningShellTransactionKind::SeatbeltCapabilityProbe { .. } => {
                     return PaneOutputRenderMode::HiddenLiveAgentShell;
                 }
             }

@@ -118,6 +118,14 @@ impl RuntimeSessionService {
                         elapsed_ms,
                     )?;
                 }
+                RunningShellTransactionKind::SeatbeltCapabilityProbe { .. } => {
+                    self.expire_seatbelt_capability_probe_transaction(
+                        &marker,
+                        transaction,
+                        timeout_ms,
+                        elapsed_ms,
+                    )?;
+                }
             }
         }
         Ok(expired_count)

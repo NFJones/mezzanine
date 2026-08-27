@@ -194,6 +194,7 @@ pub(super) fn runtime_running_shell_transaction_kind_name(
         RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
             "bubblewrap_capability_probe"
         }
+        RunningShellTransactionKind::SeatbeltCapabilityProbe { .. } => "seatbelt_capability_probe",
     }
 }
 
@@ -307,6 +308,7 @@ mod output;
 mod path_resolution;
 mod readiness;
 mod recovery;
+mod seatbelt;
 mod timers;
 mod write_failures;
 
@@ -342,6 +344,9 @@ fn runtime_shell_transaction_timer_kind(
         }
         RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
             RuntimeShellTransactionTimerKind::BubblewrapCapabilityProbe
+        }
+        RunningShellTransactionKind::SeatbeltCapabilityProbe { .. } => {
+            RuntimeShellTransactionTimerKind::SeatbeltCapabilityProbe
         }
     }
 }

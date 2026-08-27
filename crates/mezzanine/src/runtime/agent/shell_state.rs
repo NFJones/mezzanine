@@ -683,21 +683,47 @@ impl RuntimeSessionService {
             crate::runtime::config::sandbox_applies_to_policy(&sandbox_config, &permission_policy);
         let sandbox_bypassed = bubblewrap_applies
             && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
-        let native_bubblewrap = if bubblewrap_applies && !sandbox_bypassed {
-            Some(self.native_bubblewrap_dispatch_for_action(
-                turn,
-                action,
-                &context,
-                &sandbox_config,
-                permission_evaluation,
-                program_dialect,
-            )?)
+        let mut native_bubblewrap = None;
+        let mut capability_probe_only = false;
+        let capability_probe = if bubblewrap_applies && !sandbox_bypassed {
+            match &sandbox_config {
+                SandboxConfig::Bubblewrap(_) => {
+                    let dispatch = self.native_bubblewrap_dispatch_for_action(
+                        turn,
+                        action,
+                        &context,
+                        &sandbox_config,
+                        permission_evaluation,
+                        program_dialect,
+                    )?;
+                    let probe = dispatch
+                        .capability_probe
+                        .clone()
+                        .map(crate::runtime::processes::NativeSandboxCapabilityProbe::Bubblewrap);
+                    native_bubblewrap = Some(dispatch);
+                    probe
+                }
+                SandboxConfig::Seatbelt(config) => {
+                    let probe = self.native_seatbelt_capability_probe_for_action(
+                        turn,
+                        action,
+                        &context,
+                        config,
+                        program_dialect,
+                    )?;
+                    let Some(probe) = probe else {
+                        return Err(MezError::invalid_state(
+                            "Seatbelt workload integration is unavailable after capability proof; the configured backend remains fail closed",
+                        ));
+                    };
+                    capability_probe_only = true;
+                    Some(crate::runtime::processes::NativeSandboxCapabilityProbe::Seatbelt(probe))
+                }
+                SandboxConfig::PolicyOnly => None,
+            }
         } else {
             None
         };
-        let capability_probe = native_bubblewrap
-            .as_ref()
-            .and_then(|dispatch| dispatch.capability_probe.clone());
         let bubblewrap_activity_lease = native_bubblewrap
             .as_ref()
             .and_then(|dispatch| dispatch.activity_lease.clone());
@@ -796,6 +822,7 @@ impl RuntimeSessionService {
                 marker: marker.as_str().to_string(),
                 context,
                 capability_probe,
+                capability_probe_only,
                 bubblewrap_activity_lease,
                 request,
                 started_at_unix_ms,

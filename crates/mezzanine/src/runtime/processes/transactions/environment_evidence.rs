@@ -84,22 +84,23 @@ impl RuntimeSessionService {
         action_id: &str,
     ) -> Result<bool> {
         let policy = self.permission_policy_for_turn(turn);
-        let crate::runtime::SandboxConfig::Bubblewrap(config) =
-            self.sandbox_config_for_pane(&turn.pane_id)
-        else {
-            return Ok(true);
+        let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
+        let requested_names = match &sandbox_config {
+            crate::runtime::SandboxConfig::Bubblewrap(config) => {
+                config.env_whitelist.requested_names.clone()
+            }
+            crate::runtime::SandboxConfig::Seatbelt(config) => {
+                config.env_whitelist.requested_names.clone()
+            }
+            crate::runtime::SandboxConfig::PolicyOnly => return Ok(true),
         };
-        if !crate::runtime::config::sandbox_applies_to_policy(
-            &crate::runtime::SandboxConfig::Bubblewrap(config.clone()),
-            &policy,
-        ) || config.env_whitelist.requested_names.is_empty()
+        if !crate::runtime::config::sandbox_applies_to_policy(&sandbox_config, &policy)
+            || requested_names.is_empty()
         {
             return Ok(true);
         }
-        let request = mez_agent::shell::PaneEnvironmentRequest::new(
-            config.env_whitelist.requested_names.clone(),
-        )
-        .map_err(|error| crate::MezError::invalid_args(error.message()))?;
+        let request = mez_agent::shell::PaneEnvironmentRequest::new(requested_names)
+            .map_err(|error| crate::MezError::invalid_args(error.message()))?;
         let cache_key = self
             .environment_evidence_cache_key(&turn.pane_id, &turn.turn_id, action_id, &request)
             .ok_or_else(|| {

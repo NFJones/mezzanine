@@ -238,8 +238,19 @@ impl RuntimeSessionService {
         if !current {
             return Ok(false);
         }
-        if let Some(capability) = outcome.bubblewrap_capability.as_deref().cloned() {
-            self.record_bubblewrap_capability(capability.cache_key.clone(), capability);
+        if let Some(capability) = outcome.sandbox_capability.as_deref().cloned() {
+            match capability {
+                crate::security::sandbox::SandboxCapability::Bubblewrap(capability) => {
+                    self.record_bubblewrap_capability(capability.cache_key.clone(), capability);
+                }
+                crate::security::sandbox::SandboxCapability::Seatbelt(capability) => {
+                    self.record_seatbelt_capability(capability.cache_key.clone(), capability);
+                }
+            }
+        }
+        if outcome.capability_probe_only && outcome.result.is_ok() {
+            let _ = self.dispatch_stored_running_shell_actions(&outcome.turn_id)?;
+            return Ok(true);
         }
         let Some(turn) = self
             .agent_turn_ledger()
@@ -1189,14 +1200,24 @@ impl RuntimeSessionService {
                         continue;
                     }
                 }
-                match self
-                    .ensure_bubblewrap_capability_for_action_with_environment_profile_and_child_shell(
-                        turn,
-                        &action.id,
-                        crate::runtime::BubblewrapEnvironmentProfile::SemanticPatchNoForwarding,
-                        Some("/bin/sh"),
-                    )
-                {
+                let capability = match &sandbox_config {
+                    crate::runtime::SandboxConfig::Bubblewrap(_) => self
+                        .ensure_bubblewrap_capability_for_action_with_environment_profile_and_child_shell(
+                            turn,
+                            &action.id,
+                            crate::runtime::BubblewrapEnvironmentProfile::SemanticPatchNoForwarding,
+                            Some("/bin/sh"),
+                        ),
+                    crate::runtime::SandboxConfig::Seatbelt(_) => self
+                        .ensure_seatbelt_capability_for_action(
+                            turn,
+                            &action.id,
+                            Some("/bin/sh"),
+                            true,
+                        ),
+                    crate::runtime::SandboxConfig::PolicyOnly => Ok(true),
+                };
+                match capability {
                     Ok(true) => {}
                     Ok(false) => break,
                     Err(error) => {
@@ -1204,7 +1225,7 @@ impl RuntimeSessionService {
                             turn,
                             action,
                             "apply_patch",
-                            "bubblewrap_capability_probe",
+                            "sandbox_capability_probe",
                             &error,
                         )?;
                         continue;
@@ -1752,7 +1773,16 @@ impl RuntimeSessionService {
                         continue;
                     }
                 }
-                match self.ensure_bubblewrap_capability_for_action(turn, &action.id) {
+                let capability = match &sandbox_config {
+                    crate::runtime::SandboxConfig::Bubblewrap(_) => {
+                        self.ensure_bubblewrap_capability_for_action(turn, &action.id)
+                    }
+                    crate::runtime::SandboxConfig::Seatbelt(_) => {
+                        self.ensure_seatbelt_capability_for_action(turn, &action.id, None, false)
+                    }
+                    crate::runtime::SandboxConfig::PolicyOnly => Ok(true),
+                };
+                match capability {
                     Ok(true) => {}
                     Ok(false) => break,
                     Err(error) => {
@@ -1760,7 +1790,7 @@ impl RuntimeSessionService {
                             turn,
                             action,
                             command,
-                            "bubblewrap_capability_probe",
+                            "sandbox_capability_probe",
                             &error,
                         )?;
                         continue;

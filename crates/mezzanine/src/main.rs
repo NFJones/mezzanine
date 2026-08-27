@@ -11,6 +11,9 @@ use std::process::ExitCode;
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn main() -> ExitCode {
+    if let Some(exit_code) = mezzanine::internal_process_exit_code() {
+        return ExitCode::from(exit_code);
+    }
     let worker_threads = match mezzanine::configured_runtime_cpu_count() {
         Ok(worker_threads) => worker_threads,
         Err(error) => {

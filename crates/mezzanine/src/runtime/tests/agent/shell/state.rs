@@ -938,6 +938,44 @@ fn bubblewrap_probe_service() -> RuntimeSessionService {
     service
 }
 
+/// Builds a ready macOS pane with the fixed Seatbelt backend configured for
+/// capability-probe transaction and cache tests.
+#[cfg(target_os = "macos")]
+fn seatbelt_probe_service() -> RuntimeSessionService {
+    let root = temp_root("runtime-seatbelt-probe");
+    fs::create_dir_all(&root).unwrap();
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let configured =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "seatbelt",
+                "read_scopes": ["."],
+                "write_scopes": ["."],
+                "network_policy": "deny",
+                "seatbelt": {
+                    "executable": "/usr/bin/sandbox-exec",
+                    "unavailable": "fail",
+                    "network": "isolated",
+                    "environment": "minimal",
+                    "env_whitelist": []
+                }
+            }
+        }))
+        .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    mark_test_pane_ready(&mut service, "%1");
+    service
+}
+
 /// Verifies semantic patch phases use one deterministic no-forwarding
 /// environment profile for both Bubblewrap probing and workload compilation.
 ///
@@ -2227,6 +2265,117 @@ fn runtime_bubblewrap_successful_probe_is_cached() {
             .any(|transaction| matches!(
                 transaction.kind,
                 RunningShellTransactionKind::BubblewrapCapabilityProbe { .. }
+            ))
+    );
+}
+
+/// Verifies concurrent Seatbelt pane requests share one exact framed probe,
+/// strict success populates the cache for every waiter, and a configuration
+/// generation change requires a fresh probe rather than reusing stale proof.
+#[cfg(target_os = "macos")]
+#[test]
+fn runtime_seatbelt_probe_deduplicates_caches_and_invalidates_by_generation() {
+    let mut service = seatbelt_probe_service();
+    let turn = path_resolution_turn();
+
+    assert!(
+        !service
+            .ensure_seatbelt_capability_for_action(&turn, "action-1", None, false)
+            .unwrap()
+    );
+    assert!(
+        !service
+            .ensure_seatbelt_capability_for_action(&turn, "action-2", None, false)
+            .unwrap()
+    );
+    assert_eq!(service.running_shell_transactions_for_tests().len(), 1);
+    let (marker, mut transaction) = service
+        .running_shell_transactions_mut_for_tests()
+        .pop_first()
+        .unwrap();
+    let RunningShellTransactionKind::SeatbeltCapabilityProbe {
+        waiters,
+        probe_plan,
+        ..
+    } = &transaction.kind
+    else {
+        panic!("expected Seatbelt capability transaction");
+    };
+    assert_eq!(waiters.len(), 2);
+    transaction.observed_output_preview = probe_plan.expected_stdout.to_string();
+    service
+        .observe_seatbelt_capability_probe_transaction_end(&marker, transaction, 0)
+        .unwrap();
+
+    assert!(
+        service
+            .ensure_seatbelt_capability_for_action(&turn, "action-3", None, false)
+            .unwrap()
+    );
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+
+    service.session.advance_config_generation();
+    assert!(
+        !service
+            .ensure_seatbelt_capability_for_action(&turn, "action-4", None, false)
+            .unwrap()
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| matches!(
+                transaction.kind,
+                RunningShellTransactionKind::SeatbeltCapabilityProbe { .. }
+            ))
+    );
+}
+
+/// Verifies a failed Seatbelt pane probe leaves no negative or successful
+/// cache entry, allowing a later independent action to issue a fresh exact
+/// probe instead of falling back or inheriting the failed result.
+#[cfg(target_os = "macos")]
+#[test]
+fn runtime_seatbelt_probe_failure_is_not_cached_and_allows_reprobe() {
+    let mut service = seatbelt_probe_service();
+    let turn = path_resolution_turn();
+    assert!(
+        !service
+            .ensure_seatbelt_capability_for_action(&turn, "action-1", None, false)
+            .unwrap()
+    );
+    let (marker, transaction) = service
+        .running_shell_transactions_mut_for_tests()
+        .pop_first()
+        .unwrap();
+    service
+        .fail_seatbelt_capability_probe_transaction(
+            &marker,
+            transaction,
+            "seatbelt_probe_failed",
+            "transient Seatbelt capability failure",
+            false,
+            false,
+        )
+        .unwrap();
+
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Ready
+    );
+    assert!(
+        !service
+            .ensure_seatbelt_capability_for_action(&turn, "action-2", None, false)
+            .unwrap()
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| matches!(
+                &transaction.kind,
+                RunningShellTransactionKind::SeatbeltCapabilityProbe { action_id, .. }
+                    if action_id == "action-2"
             ))
     );
 }

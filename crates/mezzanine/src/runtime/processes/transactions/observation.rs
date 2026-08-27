@@ -616,6 +616,9 @@ impl RuntimeSessionService {
         self.process
             .pane_bubblewrap_capabilities
             .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_seatbelt_capabilities
+            .retain(|key, _| key.pane_id != pane_id);
         self.clear_pane_agent_instruction_files(pane_id);
         self.clear_pane_environment_authority_failure(pane_id);
         self.process.pane_bootstrap_pending.remove(pane_id);
@@ -825,6 +828,9 @@ impl RuntimeSessionService {
             .retain(|key, _| key.pane_id != pane_id);
         self.process
             .pane_bubblewrap_capabilities
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_seatbelt_capabilities
             .retain(|key, _| key.pane_id != pane_id);
         self.clear_pane_agent_instruction_files(pane_id);
         self.process
@@ -1716,6 +1722,9 @@ impl RuntimeSessionService {
         self.process
             .pane_bubblewrap_capabilities
             .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_seatbelt_capabilities
+            .retain(|key, _| key.pane_id != pane_id);
         self.clear_pane_agent_instruction_files(pane_id);
         self.process
             .pane_agent_subshell_certification_rejections
@@ -1831,6 +1840,9 @@ impl RuntimeSessionService {
             .retain(|key, _| key.pane_id != pane_id);
         self.process
             .pane_bubblewrap_capabilities
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_seatbelt_capabilities
             .retain(|key, _| key.pane_id != pane_id);
         self.clear_pane_agent_instruction_files(pane_id);
         self.process.pane_bootstrap_pending.remove(pane_id);

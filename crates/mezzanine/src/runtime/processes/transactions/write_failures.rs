@@ -166,6 +166,17 @@ impl RuntimeSessionService {
                 )?;
                 Ok(1)
             }
+            RunningShellTransactionKind::SeatbeltCapabilityProbe { .. } => {
+                self.fail_seatbelt_capability_probe_transaction(
+                    marker,
+                    transaction,
+                    "seatbelt_probe_protocol_violation",
+                    &message,
+                    true,
+                    false,
+                )?;
+                Ok(1)
+            }
         }
     }
 
@@ -254,6 +265,16 @@ impl RuntimeSessionService {
                         transaction,
                         "bubblewrap_probe_write_failed",
                         &format!("pane input write failed while sending Bubblewrap capability probe: {error}"),
+                        true,
+                        false,
+                    )?;
+                }
+                RunningShellTransactionKind::SeatbeltCapabilityProbe { .. } => {
+                    self.fail_seatbelt_capability_probe_transaction(
+                        &marker,
+                        transaction,
+                        "seatbelt_probe_write_failed",
+                        &format!("pane input write failed while sending Seatbelt capability probe: {error}"),
                         true,
                         false,
                     )?;

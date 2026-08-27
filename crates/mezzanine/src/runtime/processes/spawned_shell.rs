@@ -602,13 +602,14 @@ fn execute_native_shell_dispatch_inner(
         marker,
         context,
         capability_probe,
+        capability_probe_only,
         bubblewrap_activity_lease: _bubblewrap_activity_lease,
         request,
         started_at_unix_ms,
     } = dispatch;
     let command = request.transaction.command.clone();
     let executor = SpawnedShellExecutor::new(context);
-    let mut bubblewrap_capability = None;
+    let mut sandbox_capability = None;
     let result = if request.interactive || request.stateful {
         Err(MezError::invalid_args(
             "native transport does not serve stateful or interactive execution",
@@ -617,7 +618,16 @@ fn execute_native_shell_dispatch_inner(
         capability_probe
             .map_or(Ok(None), |probe| probe.run().map(Some))
             .and_then(|capability| {
-                bubblewrap_capability = capability;
+                sandbox_capability = capability;
+                if capability_probe_only {
+                    return Ok(mez_agent::ShellExecutionOutput::new(
+                        Some(0),
+                        String::new(),
+                        String::new(),
+                        false,
+                        false,
+                    ));
+                }
                 executor.interrupted.store(false, Ordering::SeqCst);
                 executor
                     .materialize_launch(&request.transaction)
@@ -647,7 +657,8 @@ fn execute_native_shell_dispatch_inner(
         marker,
         command,
         started_at_unix_ms,
-        bubblewrap_capability: bubblewrap_capability.map(Box::new),
+        sandbox_capability: sandbox_capability.map(Box::new),
+        capability_probe_only,
         result,
     }
 }
@@ -924,11 +935,11 @@ mod tests {
         }
     }
 
-    /// Builds one external-worker dispatch with an optional deferred
-    /// Bubblewrap capability probe.
+    /// Builds one external-worker dispatch with an optional deferred sandbox
+    /// capability probe.
     fn dispatch_with_probe(
         command: &str,
-        probe: Option<crate::runtime::processes::NativeBubblewrapCapabilityProbe>,
+        probe: Option<crate::runtime::processes::NativeSandboxCapabilityProbe>,
     ) -> crate::runtime::RuntimeNativeShellDispatch {
         crate::runtime::RuntimeNativeShellDispatch {
             turn_id: "turn-1".to_string(),
@@ -936,6 +947,7 @@ mod tests {
             marker: "0123456789abcdef0123456789abcdef".to_string(),
             context: test_context(),
             capability_probe: probe,
+            capability_probe_only: false,
             bubblewrap_activity_lease: None,
             request: request(command, Some(5_000)),
             started_at_unix_ms: 1,
@@ -1012,10 +1024,12 @@ mod tests {
             "printf ready > '{}'; printf mez-native-probe-ok",
             marker.display()
         );
-        let probe = crate::runtime::processes::NativeBubblewrapCapabilityProbe::for_test(
-            "/bin/sh",
-            vec!["-c".to_string(), probe_script],
-            "mez-native-probe-ok",
+        let probe = crate::runtime::processes::NativeSandboxCapabilityProbe::Bubblewrap(
+            crate::runtime::processes::NativeBubblewrapCapabilityProbe::for_test(
+                "/bin/sh",
+                vec!["-c".to_string(), probe_script],
+                "mez-native-probe-ok",
+            ),
         );
         let command = format!(
             "test -f '{}' && printf workload-after-probe",
@@ -1028,7 +1042,10 @@ mod tests {
 
         assert_eq!(output.exit_code, Some(0));
         assert_eq!(output.stdout, "workload-after-probe");
-        assert!(outcome.bubblewrap_capability.is_some());
+        assert!(matches!(
+            outcome.sandbox_capability.as_deref(),
+            Some(crate::security::sandbox::SandboxCapability::Bubblewrap(_))
+        ));
     }
 
     /// Verifies a failed deferred capability probe prevents the workload from
@@ -1038,14 +1055,16 @@ mod tests {
         let marker =
             std::env::temp_dir().join(format!("mez-native-probe-failure-{}", std::process::id()));
         let _ = fs::remove_file(&marker);
-        let probe = crate::runtime::processes::NativeBubblewrapCapabilityProbe::for_test(
-            "/bin/sh",
-            vec![
-                "-c".to_string(),
-                "printf wrong; printf 'bwrap: namespace denied\\033[31m\\n' >&2; exit 7"
-                    .to_string(),
-            ],
-            "mez-native-probe-ok",
+        let probe = crate::runtime::processes::NativeSandboxCapabilityProbe::Bubblewrap(
+            crate::runtime::processes::NativeBubblewrapCapabilityProbe::for_test(
+                "/bin/sh",
+                vec![
+                    "-c".to_string(),
+                    "printf wrong; printf 'bwrap: namespace denied\\033[31m\\n' >&2; exit 7"
+                        .to_string(),
+                ],
+                "mez-native-probe-ok",
+            ),
         );
         let command = format!("printf ran > '{}'", marker.display());
 
@@ -1059,7 +1078,7 @@ mod tests {
         );
         assert!(failure.message.contains("\\u{1b}"), "{failure:?}");
         assert!(!failure.message.contains('\u{1b}'), "{failure:?}");
-        assert!(outcome.bubblewrap_capability.is_none());
+        assert!(outcome.sandbox_capability.is_none());
         assert!(!marker.exists(), "workload ran despite failed probe");
     }
 
@@ -1068,14 +1087,16 @@ mod tests {
     /// `SIGPIPE` before publishing its sentinel.
     #[test]
     fn native_worker_drains_noisy_probe_output_without_deadlock() {
-        let probe = crate::runtime::processes::NativeBubblewrapCapabilityProbe::for_test(
-            "/bin/sh",
-            vec![
-                "-c".to_string(),
-                "i=0; while [ \"$i\" -lt 20000 ]; do printf x >&2; i=$((i + 1)); done; printf mez-native-probe-ok"
-                    .to_string(),
-            ],
-            "mez-native-probe-ok",
+        let probe = crate::runtime::processes::NativeSandboxCapabilityProbe::Bubblewrap(
+            crate::runtime::processes::NativeBubblewrapCapabilityProbe::for_test(
+                "/bin/sh",
+                vec![
+                    "-c".to_string(),
+                    "i=0; while [ \"$i\" -lt 20000 ]; do printf x >&2; i=$((i + 1)); done; printf mez-native-probe-ok"
+                        .to_string(),
+                ],
+                "mez-native-probe-ok",
+            ),
         );
         let started = Instant::now();
 
@@ -1084,8 +1105,80 @@ mod tests {
         let output = outcome.result.expect("noisy probe and workload succeed");
 
         assert_eq!(output.stdout, "workload");
-        assert!(outcome.bubblewrap_capability.is_some());
+        assert!(matches!(
+            outcome.sandbox_capability.as_deref(),
+            Some(crate::security::sandbox::SandboxCapability::Bubblewrap(_))
+        ));
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// Verifies a probe-only native Seatbelt worker returns exact cacheable
+    /// capability evidence without executing the user workload. This preserves
+    /// fail-closed behavior until the dependent Seatbelt launch integration is
+    /// available.
+    #[test]
+    fn native_seatbelt_probe_only_worker_never_launches_workload() {
+        let marker = std::env::temp_dir().join(format!(
+            "mez-native-seatbelt-probe-only-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&marker);
+        let probe = crate::runtime::processes::NativeSandboxCapabilityProbe::Seatbelt(
+            super::super::native_bubblewrap::NativeSeatbeltCapabilityProbe::for_test(
+                "/bin/sh",
+                vec![
+                    "-c".to_string(),
+                    "printf mez-native-seatbelt-ok".to_string(),
+                ],
+                "mez-native-seatbelt-ok",
+            ),
+        );
+        let mut dispatch = dispatch_with_probe(
+            &format!("printf workload-ran > '{}'", marker.display()),
+            Some(probe),
+        );
+        dispatch.capability_probe_only = true;
+
+        let outcome = execute_native_shell_dispatch(dispatch);
+        let output = outcome.result.expect("Seatbelt probe succeeds");
+
+        assert_eq!(output.exit_code, Some(0));
+        assert!(output.stdout.is_empty());
+        assert!(outcome.capability_probe_only);
+        assert!(matches!(
+            outcome.sandbox_capability.as_deref(),
+            Some(crate::security::sandbox::SandboxCapability::Seatbelt(_))
+        ));
+        assert!(!marker.exists(), "probe-only worker launched the workload");
+    }
+
+    /// Verifies a failed probe-only Seatbelt worker returns no cache evidence
+    /// and still cannot execute the user workload.
+    #[test]
+    fn native_seatbelt_probe_failure_is_not_cacheable() {
+        let marker = std::env::temp_dir().join(format!(
+            "mez-native-seatbelt-probe-failure-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&marker);
+        let probe = crate::runtime::processes::NativeSandboxCapabilityProbe::Seatbelt(
+            super::super::native_bubblewrap::NativeSeatbeltCapabilityProbe::for_test(
+                "/bin/sh",
+                vec!["-c".to_string(), "printf contaminated; exit 1".to_string()],
+                "mez-native-seatbelt-ok",
+            ),
+        );
+        let mut dispatch = dispatch_with_probe(
+            &format!("printf workload-ran > '{}'", marker.display()),
+            Some(probe),
+        );
+        dispatch.capability_probe_only = true;
+
+        let outcome = execute_native_shell_dispatch(dispatch);
+
+        assert!(outcome.result.is_err());
+        assert!(outcome.sandbox_capability.is_none());
+        assert!(!marker.exists(), "failed probe launched the workload");
     }
 
     /// Verifies the inferred environment and working directory reach the

@@ -354,9 +354,8 @@ impl RuntimeSessionService {
                     | RunningShellTransactionKind::ShellIdentityProbe { .. }
                     | RunningShellTransactionKind::PathResolution { .. }
                     | RunningShellTransactionKind::EnvironmentEvidence { .. }
-                    | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
-                        complete_bytes
-                    }
+                    | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. }
+                    | RunningShellTransactionKind::SeatbeltCapabilityProbe { .. } => complete_bytes,
                 };
                 if let RunningShellTransactionKind::AgentAction { action_id } = &transaction.kind
                     && apply_patch_transaction_phase(&transaction.command)

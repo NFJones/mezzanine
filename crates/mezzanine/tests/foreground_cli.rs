@@ -816,3 +816,37 @@ fn output_excerpt(output: &[u8]) -> String {
         format!("{}...", &escaped[..2000])
     }
 }
+
+/// Verifies the real product binary proves the complete code-owned Seatbelt
+/// capability contract and removes its canonical owner-only probe state. The
+/// integration boundary is required because a library test process resolves
+/// `current_exe` to the Rust test harness rather than the `mez` payload whose
+/// hidden internal modes are admitted before ordinary CLI initialization.
+#[cfg(target_os = "macos")]
+#[test]
+fn real_seatbelt_capability_probe_uses_product_binary_and_cleans_up() {
+    let sandbox_executable = Path::new("/usr/bin/sandbox-exec");
+    if !sandbox_executable.is_file() {
+        return;
+    }
+    let root = test_root("real-seatbelt-probe");
+    fs::create_dir_all(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let root = fs::canonicalize(root).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mez"))
+        .arg("--mez-internal-seatbelt-capability-probe")
+        .arg(sandbox_executable)
+        .env_clear()
+        .env("TMPDIR", &root)
+        .env("MEZ_SEATBELT_PROBE_AMBIENT_SENTINEL", "must-not-leak")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"mez-seatbelt-capability-v1");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+    fs::remove_dir(root).unwrap();
+}

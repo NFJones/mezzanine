@@ -285,6 +285,9 @@ impl RuntimeSessionService {
                         RuntimeShellTransactionTimerKind::BubblewrapCapabilityProbe => {
                             RuntimeTimerKind::ShellTransaction
                         }
+                        RuntimeShellTransactionTimerKind::SeatbeltCapabilityProbe => {
+                            RuntimeTimerKind::ShellTransaction
+                        }
                         RuntimeShellTransactionTimerKind::FocusedShellHook => {
                             RuntimeTimerKind::FocusedShellHook
                         }

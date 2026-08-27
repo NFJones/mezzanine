@@ -17,9 +17,9 @@ mod startup;
 mod transactions;
 mod zsh_compat;
 
-pub(crate) use native_bubblewrap::{
-    NativeBubblewrapActivityLease, NativeBubblewrapCapabilityProbe,
-};
+#[cfg(test)]
+pub(crate) use native_bubblewrap::NativeBubblewrapCapabilityProbe;
+pub(crate) use native_bubblewrap::{NativeBubblewrapActivityLease, NativeSandboxCapabilityProbe};
 pub(crate) use native_shell_inference::{NativeShellContext, infer_native_shell_context};
 #[cfg(test)]
 pub(crate) use spawned_shell::execute_native_shell_dispatch;
@@ -791,6 +791,12 @@ pub(crate) struct RuntimeProcessComponent {
     pane_bubblewrap_capabilities: std::collections::BTreeMap<
         crate::security::sandbox::BubblewrapCapabilityCacheKey,
         crate::security::sandbox::BubblewrapCapability,
+    >,
+    /// Successful Seatbelt probes keyed by exact pane environment, executable
+    /// metadata, host identity, and runtime profile.
+    pane_seatbelt_capabilities: std::collections::BTreeMap<
+        crate::security::sandbox::SeatbeltCapabilityCacheKey,
+        crate::security::sandbox::SeatbeltCapability,
     >,
     /// Panes with an in-flight bootstrap transaction.
     pane_bootstrap_pending: BTreeSet<String>,
@@ -2252,6 +2258,9 @@ impl RuntimeSessionService {
         self.process
             .pane_bubblewrap_capabilities
             .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_seatbelt_capabilities
+            .retain(|key, _| key.pane_id != pane_id);
         self.clear_pane_agent_instruction_files(pane_id);
         self.process
             .pane_environment_authority_failures
@@ -3703,7 +3712,8 @@ impl RuntimeSessionService {
                 | RunningShellTransactionKind::ShellIdentityProbe { .. }
                 | RunningShellTransactionKind::PathResolution { .. }
                 | RunningShellTransactionKind::EnvironmentEvidence { .. }
-                | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => String::new(),
+                | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. }
+                | RunningShellTransactionKind::SeatbeltCapabilityProbe { .. } => String::new(),
             };
             self.append_agent_trace_turn_event(
                 &pane_id,

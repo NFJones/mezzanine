@@ -1839,6 +1839,16 @@ impl RuntimeSessionService {
                 exit_code,
             );
         }
+        if matches!(
+            transaction_ref.kind,
+            RunningShellTransactionKind::SeatbeltCapabilityProbe { .. }
+        ) {
+            return self.observe_seatbelt_capability_probe_transaction_end(
+                marker,
+                transaction_ref,
+                exit_code,
+            );
+        }
         let RunningShellTransactionKind::AgentAction { ref action_id } = transaction_ref.kind
         else {
             return Err(MezError::invalid_state(

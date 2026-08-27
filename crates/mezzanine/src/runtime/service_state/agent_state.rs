@@ -414,6 +414,18 @@ pub(crate) enum RunningShellTransactionKind {
         /// Exact deterministic probe plan whose output must be validated.
         probe_plan: crate::security::sandbox::BubblewrapCapabilityProbePlan,
     },
+    /// Internal Seatbelt runtime-profile capability probe.
+    SeatbeltCapabilityProbe {
+        /// Pending action that initiated the probe.
+        action_id: String,
+        /// Every turn/action pair awaiting this exact probe, including the
+        /// initiating action. Each terminal probe path settles every waiter.
+        waiters: Vec<(String, String)>,
+        /// Exact capability identity captured before pane dispatch.
+        cache_key: Box<crate::security::sandbox::SeatbeltCapabilityCacheKey>,
+        /// Exact deterministic probe plan whose output must be validated.
+        probe_plan: crate::security::sandbox::SeatbeltCapabilityProbePlan,
+    },
 }
 
 /// Timer-visible kind for a live shell transaction.
@@ -431,6 +443,8 @@ pub enum RuntimeShellTransactionTimerKind {
     EnvironmentEvidence,
     /// Bubblewrap runtime-profile capability probe timeout.
     BubblewrapCapabilityProbe,
+    /// Seatbelt runtime-profile capability probe timeout.
+    SeatbeltCapabilityProbe,
     /// Focused-shell hook marker timeout.
     FocusedShellHook,
 }

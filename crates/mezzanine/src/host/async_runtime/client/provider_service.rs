@@ -547,7 +547,8 @@ async fn execute_native_shell_action(
             marker,
             command,
             started_at_unix_ms,
-            bubblewrap_capability: None,
+            sandbox_capability: None,
+            capability_probe_only: false,
             result: Err(RuntimeNativeShellFailure {
                 kind: "invalid_state".to_string(),
                 message: format!("native shell worker join failed: {error}"),
