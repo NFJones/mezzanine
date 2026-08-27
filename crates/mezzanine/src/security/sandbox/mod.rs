@@ -239,8 +239,12 @@ pub(crate) fn bubblewrap_failure_remediation(message: &str) -> String {
 /// and sandbox diagnostics. Full runtime capability remains verified per pane
 /// before any sandboxed workload starts.
 pub(crate) fn sandbox_executable_available(path: &Path) -> bool {
-    match std::fs::metadata(path) {
-        Ok(metadata) => metadata.is_file() && metadata.permissions().mode() & 0o111 != 0,
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            !metadata.file_type().is_symlink()
+                && metadata.is_file()
+                && metadata.permissions().mode() & 0o111 != 0
+        }
         Err(_) => false,
     }
 }

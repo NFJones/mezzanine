@@ -311,11 +311,7 @@ fn validate_directory(path: &Path, require_private: bool) -> Result<(), &'static
 
 fn validate_executable(path: &Path) -> Result<(), &'static str> {
     validate_absolute_path(path)?;
-    let metadata = fs::symlink_metadata(path).map_err(|_| "shell-inspection")?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.permissions().mode() & 0o111 == 0
-    {
+    if !super::sandbox_executable_available(path) {
         return Err("shell-kind");
     }
     Ok(())

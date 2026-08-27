@@ -387,10 +387,7 @@ fn executable_identity(
     }
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| capability_error(format!("{label} metadata is unavailable: {error}")))?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.permissions().mode() & 0o111 == 0
-    {
+    if !super::sandbox_executable_available(path) {
         return Err(capability_error(format!(
             "{label} must be an executable regular file"
         )));
@@ -741,11 +738,7 @@ fn validate_fixed_sandbox_executable(path: &Path) -> Result<(), ProbeError> {
     {
         return Err(ProbeError::InvalidInput);
     }
-    let metadata = fs::symlink_metadata(path).map_err(|_| ProbeError::InvalidInput)?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.permissions().mode() & 0o111 == 0
-    {
+    if !super::sandbox_executable_available(path) {
         return Err(ProbeError::InvalidInput);
     }
     Ok(())

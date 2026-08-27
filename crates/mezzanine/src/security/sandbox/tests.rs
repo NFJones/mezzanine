@@ -362,6 +362,10 @@ fn sandbox_executable_presence_requires_an_executable_regular_file() {
     std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(sandbox_executable_available(&candidate));
 
+    let symlink = root.join("sandbox-launcher-link");
+    std::os::unix::fs::symlink(&candidate, &symlink).unwrap();
+    assert!(!sandbox_executable_available(&symlink));
+
     std::fs::remove_dir_all(root).unwrap();
 }
 
