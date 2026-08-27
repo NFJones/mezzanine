@@ -167,6 +167,15 @@ impl SandboxPlatformAvailability {
             Self::Other => None,
         }
     }
+
+    /// Reports whether this host platform supports the requested sandbox backend.
+    pub(crate) const fn supports_backend(self, backend: SandboxBackend) -> bool {
+        matches!(
+            (self, backend),
+            (Self::Linux { .. }, SandboxBackend::Bubblewrap)
+                | (Self::MacOs { .. }, SandboxBackend::Seatbelt)
+        )
+    }
 }
 
 /// Version of the runtime projection emitted by this compiler.

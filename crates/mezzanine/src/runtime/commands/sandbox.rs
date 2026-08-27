@@ -12,8 +12,9 @@ use super::{
     runtime_apply_persisted_config_mutation_batch, runtime_primary_config_path,
 };
 use crate::integrations::agent::slash::AgentShellPresentation;
-use crate::runtime::SandboxConfig;
+use crate::runtime::{SandboxBackend, SandboxConfig};
 use crate::security::audit::{AuditActor, AuditRecord};
+use crate::security::sandbox::SandboxPlatformAvailability;
 
 /// Scope selected for an enable, disable, or status operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +30,7 @@ enum SandboxScope {
 enum SandboxCommand {
     /// Displays effective pane or persisted global state.
     Status(SandboxScope),
-    /// Enables Bubblewrap confinement in the selected scope.
+    /// Enables the available native confinement backend in the selected scope.
     Enable(SandboxScope),
     /// Selects policy-only execution in the selected scope.
     Disable(SandboxScope),
@@ -125,7 +126,26 @@ impl RuntimeSessionService {
             .get(pane_id)
             .map(|session| session.visibility)
             .unwrap_or(AgentShellVisibility::Visible);
-        let requested = if enable { "bubblewrap" } else { "policy-only" };
+        let enabled_backend = if enable {
+            Some(SandboxPlatformAvailability::current().setup_backend().ok_or_else(|| {
+                MezError::invalid_state(
+                    "sandbox enable is unavailable because this platform has no native sandbox backend",
+                )
+            })?)
+        } else {
+            None
+        };
+        if let Some((backend, available)) = enabled_backend
+            && !available
+        {
+            return Err(MezError::invalid_state(format!(
+                "sandbox enable is unavailable because the fixed {} executable is unavailable",
+                backend.as_str()
+            )));
+        }
+        let requested = enabled_backend
+            .map(|(backend, _)| backend.as_str())
+            .unwrap_or("policy-only");
         let changed = match scope {
             SandboxScope::Pane => {
                 let current = self.sandbox_config_for_pane(pane_id);
@@ -135,7 +155,13 @@ impl RuntimeSessionService {
                             SandboxConfig::Bubblewrap(config.clone())
                         }
                         SandboxConfig::Seatbelt(config) => SandboxConfig::Seatbelt(config.clone()),
-                        SandboxConfig::PolicyOnly => SandboxConfig::default_bubblewrap(),
+                        SandboxConfig::PolicyOnly => match enabled_backend
+                            .map(|(backend, _)| backend)
+                        {
+                            Some(SandboxBackend::Bubblewrap) => SandboxConfig::default_bubblewrap(),
+                            Some(SandboxBackend::Seatbelt) => SandboxConfig::default_seatbelt(),
+                            None => SandboxConfig::PolicyOnly,
+                        },
                     }
                 } else {
                     SandboxConfig::PolicyOnly

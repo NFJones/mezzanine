@@ -236,6 +236,37 @@ fn runtime_uses_platform_sandbox_default_when_omitted() {
     );
 }
 
+/// Verifies explicit backends fail closed when their OS confinement mechanism
+/// is unavailable on the injected host platform rather than entering an
+/// incompatible runtime dispatch path.
+#[test]
+fn runtime_rejects_explicit_backends_on_incompatible_platforms() {
+    for (platform, backend, expected) in [
+        (
+            crate::security::sandbox::SandboxPlatformAvailability::Linux {
+                bubblewrap_available: true,
+            },
+            "seatbelt",
+            "unsupported on this platform",
+        ),
+        (
+            crate::security::sandbox::SandboxPlatformAvailability::MacOs {
+                seatbelt_available: true,
+            },
+            "bubblewrap",
+            "unsupported on this platform",
+        ),
+    ] {
+        let error = runtime_configured_permissions_from_config_for_platform(
+            &serde_json::json!({"permissions": {"sandbox": backend}}),
+            platform,
+        )
+        .unwrap_err();
+
+        assert!(error.message().contains(expected), "{error:?}");
+    }
+}
+
 /// Verifies live config application adds user skill and macro directories to
 /// sandbox authority without replacing explicitly configured resource scopes.
 #[test]

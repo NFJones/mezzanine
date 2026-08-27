@@ -771,6 +771,14 @@ fn runtime_agent_shell_approval_command_mutates_live_policy() {
 #[test]
 fn runtime_agent_shell_sandbox_mutations_are_pane_local_by_default() {
     let mut service = test_runtime_service();
+    let (native_backend, available) =
+        crate::security::sandbox::SandboxPlatformAvailability::current()
+            .setup_backend()
+            .expect("supported test host");
+    assert!(
+        available,
+        "native sandbox executable must be available for enablement"
+    );
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -797,10 +805,10 @@ fn runtime_agent_shell_sandbox_mutations_are_pane_local_by_default() {
         .unwrap();
     assert!(enabled.contains(r#""command":"sandbox""#), "{enabled}");
     assert!(enabled.contains("scope=pane"), "{enabled}");
-    assert!(matches!(
-        service.sandbox_config_for_pane("%1"),
-        SandboxConfig::Bubblewrap(_)
-    ));
+    assert_eq!(
+        service.sandbox_config_for_pane("%1").as_str(),
+        native_backend.as_str()
+    );
     assert!(matches!(
         service.sandbox_config_for_pane(second_pane.as_str()),
         SandboxConfig::PolicyOnly
@@ -815,7 +823,10 @@ fn runtime_agent_shell_sandbox_mutations_are_pane_local_by_default() {
         .execute_agent_shell_command(&primary, "/sandbox status")
         .unwrap();
     assert!(
-        status.contains("Effective backend | `bubblewrap`"),
+        status.contains(&format!(
+            "Effective backend | `{}`",
+            native_backend.as_str()
+        )),
         "{status}"
     );
     assert!(status.contains("Source | pane override"), "{status}");
@@ -835,21 +846,29 @@ fn runtime_agent_shell_sandbox_mutations_are_pane_local_by_default() {
 fn runtime_agent_shell_sandbox_global_mutation_preserves_pane_override() {
     let config = "[permissions]\nsandbox = \"policy-only\"\n";
     let (mut service, primary, path) = sandbox_command_service("runtime-sandbox-global", config);
+    let (native_backend, available) =
+        crate::security::sandbox::SandboxPlatformAvailability::current()
+            .setup_backend()
+            .expect("supported test host");
+    assert!(
+        available,
+        "native sandbox executable must be available for enablement"
+    );
     let initial_generation = service.session.config_generation;
 
     let enabled = service
         .execute_agent_shell_command(&primary, "/sandbox enable --global --yes")
         .unwrap();
     assert!(enabled.contains("scope=global"), "{enabled}");
-    assert!(matches!(
-        service.configured_permissions().sandbox,
-        SandboxConfig::Bubblewrap(_)
-    ));
+    assert_eq!(
+        service.configured_permissions().sandbox.as_str(),
+        native_backend.as_str()
+    );
     assert_eq!(service.session.config_generation, initial_generation + 1);
     assert!(
         fs::read_to_string(&path)
             .unwrap()
-            .contains("sandbox = \"bubblewrap\"")
+            .contains(&format!("sandbox = \"{}\"", native_backend.as_str()))
     );
 
     service
@@ -859,7 +878,7 @@ fn runtime_agent_shell_sandbox_global_mutation_preserves_pane_override() {
         .execute_agent_shell_command(&primary, "/sandbox status --global")
         .unwrap();
     assert!(
-        global_status.contains("Backend | `bubblewrap`"),
+        global_status.contains(&format!("Backend | `{}`", native_backend.as_str())),
         "{global_status}"
     );
     assert!(matches!(

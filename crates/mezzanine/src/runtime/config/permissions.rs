@@ -563,14 +563,40 @@ pub(super) fn runtime_blocked_approval_summary(
 pub(crate) fn runtime_configured_permissions_from_config(
     root: &Value,
 ) -> Result<ConfiguredPermissions> {
-    runtime_configured_permissions_from_config_for_platform(
-        root,
-        crate::security::sandbox::SandboxPlatformAvailability::current(),
-    )
+    let platform = crate::security::sandbox::SandboxPlatformAvailability::current();
+    #[cfg(test)]
+    {
+        runtime_configured_permissions_from_config_unchecked_for_platform(root, platform)
+    }
+    #[cfg(not(test))]
+    {
+        runtime_configured_permissions_from_config_for_platform(root, platform)
+    }
 }
 
-/// Materializes permissions using an injected platform availability state.
+/// Materializes permissions using an injected platform availability state and
+/// rejects explicitly configured backends unsupported by that platform.
 pub(crate) fn runtime_configured_permissions_from_config_for_platform(
+    root: &Value,
+    platform: crate::security::sandbox::SandboxPlatformAvailability,
+) -> Result<ConfiguredPermissions> {
+    let configured =
+        runtime_configured_permissions_from_config_unchecked_for_platform(root, platform)?;
+    if let Some(backend) = configured.sandbox.backend()
+        && !platform.supports_backend(backend)
+    {
+        return Err(MezError::config(format!(
+            "permissions.sandbox={} is unsupported on this platform; use policy-only or {}",
+            backend.as_str(),
+            platform.default_sandbox_name(),
+        )));
+    }
+    Ok(configured)
+}
+
+/// Materializes sandbox configuration for backend protocol fixtures without
+/// applying the host compatibility policy enforced by production loading.
+fn runtime_configured_permissions_from_config_unchecked_for_platform(
     root: &Value,
     platform: crate::security::sandbox::SandboxPlatformAvailability,
 ) -> Result<ConfiguredPermissions> {
