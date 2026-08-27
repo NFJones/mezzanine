@@ -729,7 +729,13 @@ impl RuntimeSessionService {
             .as_ref()
             .map(|view| rendered_client_view_json(view, iroh_status_slot.as_ref()))
             .unwrap_or_else(|| "null".to_string());
-        Ok(format!(r#"{{"view":{view_json}}}"#))
+        let event_cutoff = self
+            .event_log()
+            .map(|event_log| event_log.latest_event_id())
+            .unwrap_or(0);
+        Ok(format!(
+            r#"{{"view":{view_json},"event_cutoff":{event_cutoff}}}"#
+        ))
     }
 
     /// Dispatches runtime-owned agent shell visibility changes.

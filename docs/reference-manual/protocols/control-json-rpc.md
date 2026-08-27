@@ -299,8 +299,10 @@ render with `terminal/view`:
 {"jsonrpc":"2.0","id":2,"method":"terminal/view","params":{"client_size":{"columns":120,"rows":40}}}
 ```
 
-The result is `{ "view": RenderedClientView | null }`. A view includes its
-role; authoritative and client size; viewport and scroll bounds; cursor state;
+The result is `{ "view": RenderedClientView | null, "event_cutoff": integer }`.
+`event_cutoff` is the latest ordered server event whose applied state is
+represented when the authoritative view is rendered. A view includes its role;
+authoritative and client size; viewport and scroll bounds; cursor state;
 input/output modes; an optional agent-prompt region; textual `lines`; and
 `line_style_spans`. A frontend renders this projection, respecting cursor,
 styles, scroll responsibility, bracketed paste, mouse reporting, and any
@@ -380,10 +382,14 @@ blocking the serialized runtime actor or another connection. Reconnect with
 `event/list` and a known `after_event_id`; replay can be refused once retention
 has elapsed, so attach clients refetch the current rendered view after any gap.
 The capabilities limits expose retention. Interactive Iroh clients collapse
-already-ready redraw wakeups into one authoritative view fetch and schedule
-animation-only view refreshes from the interval advertised by the last rendered
-view. Compression therefore does not turn a burst into a queue of stale renders
-or suppress local animation cadence.
+already-ready redraw wakeups into one authoritative view fetch, discard
+ordinary numbered redraw wakeups at or below the returned `event_cutoff`, and
+schedule animation-only view refreshes from the interval advertised by the last
+rendered view. Newer events, unnumbered wakeups, invalidating actions,
+disconnects, and errors remain actionable. This removes redundant round trips
+after an in-flight view without delaying the first redraw, so compression does
+not turn a burst into a queue of stale renders or suppress local animation
+cadence.
 
 Every Iroh event batch re-resolves the live session client before projection.
 Attached observers see only `SessionView` events at or after their atomic

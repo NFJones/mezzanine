@@ -226,6 +226,45 @@ pub(in crate::cli) enum AttachRenderAction {
     Disconnect,
 }
 
+/// One Iroh redraw wakeup paired with its ordered server event identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::cli) struct IrohAttachRenderWakeup {
+    /// Strongest redraw action implied by the decoded event burst.
+    action: AttachRenderAction,
+    /// Latest ordered event represented by this wakeup, when supplied.
+    event_id: Option<u64>,
+}
+
+impl IrohAttachRenderWakeup {
+    /// Builds a wakeup from one decoded event notification.
+    const fn new(action: AttachRenderAction, event_id: Option<u64>) -> Self {
+        Self { action, event_id }
+    }
+
+    /// Combines a burst while retaining the strongest action and newest event.
+    fn combine(self, other: Self) -> Self {
+        if self.action == AttachRenderAction::None {
+            return other;
+        }
+        if other.action == AttachRenderAction::None {
+            return self;
+        }
+        Self {
+            action: self.action.combine(other.action),
+            event_id: match (self.event_id, other.event_id) {
+                (Some(left), Some(right)) => Some(left.max(right)),
+                (Some(_), None) | (None, Some(_)) | (None, None) => None,
+            },
+        }
+    }
+
+    /// Reports whether an authoritative view already represents this ordinary redraw.
+    fn is_covered_by(self, event_cutoff: Option<u64>) -> bool {
+        self.action == AttachRenderAction::View
+            && matches!((self.event_id, event_cutoff), (Some(event_id), Some(cutoff)) if event_id <= cutoff)
+    }
+}
+
 impl AttachRenderAction {
     /// Combines two actions, preserving the strongest action for an event burst.
     const fn combine(self, other: Self) -> Self {
@@ -341,10 +380,11 @@ pub(super) async fn read_attached_client_input_or_runtime_event<I: AsyncAttached
 /// Reads terminal input while accepting negotiated Iroh event wakeups.
 pub(super) async fn read_attached_client_input_or_iroh_event<I: AsyncAttachedTerminalIo>(
     terminal_io: &mut I,
-    event_receiver: &mut tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>,
+    event_receiver: &mut tokio::sync::mpsc::Receiver<Result<IrohAttachRenderWakeup>>,
     max_bytes: usize,
     animation_deadline: Option<tokio::time::Instant>,
     wake_deadline: tokio::time::Instant,
+    event_cutoff: Option<u64>,
 ) -> Result<AttachedClientInputPoll> {
     let wake_deadline = animation_deadline
         .filter(|deadline| *deadline <= wake_deadline)
@@ -360,12 +400,13 @@ pub(super) async fn read_attached_client_input_or_iroh_event<I: AsyncAttachedTer
         biased;
         input = &mut input => input,
         event = event_receiver.recv() => match event {
-            Some(Ok(render_action)) => return Ok(AttachedClientInputPoll {
+            Some(Ok(wakeup)) => return Ok(AttachedClientInputPoll {
                 bytes: Vec::new(),
                 eof: false,
                 render_action: coalesce_ready_iroh_render_actions(
                     event_receiver,
-                    render_action,
+                    wakeup,
+                    event_cutoff,
                 )?,
             }),
             Some(Err(error)) => return Err(error),
@@ -381,7 +422,8 @@ pub(super) async fn read_attached_client_input_or_iroh_event<I: AsyncAttachedTer
             .render_action
             .combine(coalesce_ready_iroh_render_actions(
                 event_receiver,
-                AttachRenderAction::None,
+                IrohAttachRenderWakeup::new(AttachRenderAction::None, None),
+                event_cutoff,
             )?);
     }
     Ok(input)
@@ -389,12 +431,19 @@ pub(super) async fn read_attached_client_input_or_iroh_event<I: AsyncAttachedTer
 
 /// Collapses already-ready Iroh redraw wakeups before the next view fetch.
 fn coalesce_ready_iroh_render_actions(
-    event_receiver: &mut tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>,
-    mut render_action: AttachRenderAction,
+    event_receiver: &mut tokio::sync::mpsc::Receiver<Result<IrohAttachRenderWakeup>>,
+    initial: IrohAttachRenderWakeup,
+    event_cutoff: Option<u64>,
 ) -> Result<AttachRenderAction> {
+    let mut render_action = if initial.is_covered_by(event_cutoff) {
+        AttachRenderAction::None
+    } else {
+        initial.action
+    };
     loop {
         match event_receiver.try_recv() {
-            Ok(Ok(next_action)) => render_action = render_action.combine(next_action),
+            Ok(Ok(wakeup)) if wakeup.is_covered_by(event_cutoff) => {}
+            Ok(Ok(wakeup)) => render_action = render_action.combine(wakeup.action),
             Ok(Err(error)) => return Err(error),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return Ok(render_action),
             Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
@@ -421,7 +470,7 @@ pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
     event_stream_version: u32,
     clipboard: Option<crate::host::terminal::HostClipboard>,
 ) -> (
-    tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>,
+    tokio::sync::mpsc::Receiver<Result<IrohAttachRenderWakeup>>,
     tokio::task::JoinHandle<()>,
 ) {
     let (sender, receiver) = tokio::sync::mpsc::channel(8);
@@ -457,7 +506,7 @@ async fn receive_iroh_runtime_events(
     setup_timeout: std::time::Duration,
     event_stream_version: u32,
     clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
-    sender: &tokio::sync::mpsc::Sender<Result<AttachRenderAction>>,
+    sender: &tokio::sync::mpsc::Sender<Result<IrohAttachRenderWakeup>>,
 ) -> Result<()> {
     if !matches!(event_stream_version, 1 | 2) {
         return Err(MezError::invalid_args(
@@ -541,7 +590,12 @@ async fn receive_iroh_runtime_events(
                     "Iroh event stream closed with an incomplete frame",
                 ));
             }
-            let _ = sender.send(Ok(AttachRenderAction::Disconnect)).await;
+            let _ = sender
+                .send(Ok(IrohAttachRenderWakeup::new(
+                    AttachRenderAction::Disconnect,
+                    None,
+                )))
+                .await;
             return Ok(());
         }
         pending.extend_from_slice(&buffer[..read]);
@@ -556,7 +610,7 @@ async fn receive_iroh_runtime_events(
             clipboard_assembler.as_mut(),
             clipboard_sender,
         )?;
-        if action != AttachRenderAction::None && sender.send(Ok(action)).await.is_err() {
+        if action.action != AttachRenderAction::None && sender.send(Ok(action)).await.is_err() {
             return Ok(());
         }
     }
@@ -568,16 +622,16 @@ fn drain_negotiated_iroh_event_frames(
     compression: IrohCompressionPolicy,
     mut clipboard_assembler: Option<&mut IrohClipboardAssembler>,
     clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
-) -> Result<AttachRenderAction> {
-    let mut action = AttachRenderAction::None;
+) -> Result<IrohAttachRenderWakeup> {
+    let mut wakeup = IrohAttachRenderWakeup::new(AttachRenderAction::None, None);
     loop {
         let (decoded, consumed) = if compression.codec() == RuntimeIrohCompressionCodec::None {
             let Ok((body, consumed)) =
                 decode_control_frame(pending, ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH)
             else {
-                return Ok(action);
+                return Ok(wakeup);
             };
-            action = action.combine(apply_negotiated_iroh_attach_frame(
+            wakeup = wakeup.combine(apply_negotiated_iroh_attach_frame(
                 body.as_str(),
                 clipboard_assembler.as_deref_mut(),
                 clipboard_sender,
@@ -586,11 +640,11 @@ fn drain_negotiated_iroh_event_frames(
             continue;
         } else {
             if pending.len() < IrohCompressionPolicy::envelope_header_length() {
-                return Ok(action);
+                return Ok(wakeup);
             }
             let envelope_length = compression.declared_envelope_length(pending)?;
             if pending.len() < envelope_length {
-                return Ok(action);
+                return Ok(wakeup);
             }
             (
                 compression.decode_frame(&pending[..envelope_length])?,
@@ -604,7 +658,7 @@ fn drain_negotiated_iroh_event_frames(
                 "negotiated Iroh event envelope must contain exactly one frame",
             ));
         }
-        action = action.combine(apply_negotiated_iroh_attach_frame(
+        wakeup = wakeup.combine(apply_negotiated_iroh_attach_frame(
             body.as_str(),
             clipboard_assembler.as_deref_mut(),
             clipboard_sender,
@@ -618,7 +672,7 @@ fn apply_negotiated_iroh_attach_frame(
     body: &str,
     clipboard_assembler: Option<&mut IrohClipboardAssembler>,
     clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
-) -> Result<AttachRenderAction> {
+) -> Result<IrohAttachRenderWakeup> {
     let method = serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .and_then(|value| {
@@ -632,7 +686,7 @@ fn apply_negotiated_iroh_attach_frame(
         .is_some_and(|method| method.starts_with("client/clipboard."))
     {
         let Some(assembler) = clipboard_assembler else {
-            return Ok(AttachRenderAction::None);
+            return Ok(IrohAttachRenderWakeup::new(AttachRenderAction::None, None));
         };
         match assembler.apply(body) {
             Ok(Some(content)) => {
@@ -643,12 +697,12 @@ fn apply_negotiated_iroh_attach_frame(
             Ok(None) => {}
             Err(_) => assembler.transfer = None,
         }
-        return Ok(AttachRenderAction::None);
+        return Ok(IrohAttachRenderWakeup::new(AttachRenderAction::None, None));
     }
     strict_iroh_attach_render_action(body)
 }
 
-fn strict_iroh_attach_render_action(body: &str) -> Result<AttachRenderAction> {
+fn strict_iroh_attach_render_action(body: &str) -> Result<IrohAttachRenderWakeup> {
     let value: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_state("Iroh event stream contained invalid JSON"))?;
     if value.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0") {
@@ -661,10 +715,12 @@ fn strict_iroh_attach_render_action(body: &str) -> Result<AttachRenderAction> {
         .and_then(serde_json::Value::as_str)
         .and_then(|method| method.strip_prefix("event/"))
         .ok_or_else(|| MezError::invalid_state("Iroh event stream contained a non-event frame"))?;
-    let event_type = value
+    let params = value
         .get("params")
         .and_then(serde_json::Value::as_object)
-        .and_then(|params| params.get("event_type"))
+        .ok_or_else(|| MezError::invalid_state("Iroh event stream omitted params"))?;
+    let event_type = params
+        .get("event_type")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| MezError::invalid_state("Iroh event stream omitted event_type"))?;
     if method != event_type {
@@ -672,7 +728,10 @@ fn strict_iroh_attach_render_action(body: &str) -> Result<AttachRenderAction> {
             "Iroh event stream method and event_type did not match",
         ));
     }
-    Ok(attach_render_action_for_event_type(event_type))
+    Ok(IrohAttachRenderWakeup::new(
+        attach_render_action_for_event_type(event_type),
+        params.get("event_id").and_then(serde_json::Value::as_u64),
+    ))
 }
 
 /// Reads auxiliary runtime event notifications and returns the coalesced action.
@@ -1033,7 +1092,7 @@ mod iroh_setup_tests {
             .unwrap()
             .unwrap()
             .unwrap();
-        assert_eq!(action, AttachRenderAction::View);
+        assert_eq!(action.action, AttachRenderAction::View);
 
         client_connection.close(VarInt::from_u32(0), b"test complete");
         task.await.unwrap();
@@ -1091,7 +1150,7 @@ mod iroh_setup_tests {
             .unwrap()
             .unwrap()
             .unwrap();
-        assert_eq!(action, AttachRenderAction::View);
+        assert_eq!(action.action, AttachRenderAction::View);
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             loop {
                 if !IROH_CLIENT_CLIPBOARD_WRITES.lock().unwrap().is_empty() {
@@ -1186,7 +1245,12 @@ mod iroh_tests {
         let mut terminal_io = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
         terminal_io.push_input(vec![0x7f]);
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        sender.try_send(Ok(AttachRenderAction::View)).unwrap();
+        sender
+            .try_send(Ok(IrohAttachRenderWakeup::new(
+                AttachRenderAction::View,
+                Some(8),
+            )))
+            .unwrap();
 
         let input = read_attached_client_input_or_iroh_event(
             &mut terminal_io,
@@ -1194,6 +1258,7 @@ mod iroh_tests {
             4096,
             None,
             tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+            Some(7),
         )
         .await
         .unwrap();
@@ -1219,6 +1284,7 @@ mod iroh_tests {
             4096,
             Some(animation_deadline),
             wake_deadline,
+            None,
         )
         .await
         .unwrap();
@@ -1233,14 +1299,27 @@ mod iroh_tests {
     #[test]
     fn ready_iroh_render_actions_are_coalesced_before_view_fetch() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
-        sender.try_send(Ok(AttachRenderAction::View)).unwrap();
         sender
-            .try_send(Ok(AttachRenderAction::InvalidateAndView))
+            .try_send(Ok(IrohAttachRenderWakeup::new(
+                AttachRenderAction::View,
+                Some(7),
+            )))
+            .unwrap();
+        sender
+            .try_send(Ok(IrohAttachRenderWakeup::new(
+                AttachRenderAction::View,
+                Some(9),
+            )))
             .unwrap();
 
         assert_eq!(
-            coalesce_ready_iroh_render_actions(&mut receiver, AttachRenderAction::View).unwrap(),
-            AttachRenderAction::InvalidateAndView
+            coalesce_ready_iroh_render_actions(
+                &mut receiver,
+                IrohAttachRenderWakeup::new(AttachRenderAction::View, Some(6)),
+                Some(7),
+            )
+            .unwrap(),
+            AttachRenderAction::View
         );
         assert!(matches!(
             receiver.try_recv(),
@@ -1257,9 +1336,46 @@ mod iroh_tests {
             .try_send(Err(MezError::invalid_state("queued Iroh event failure")))
             .unwrap();
 
-        let error = coalesce_ready_iroh_render_actions(&mut receiver, AttachRenderAction::View)
-            .expect_err("queued Iroh event failures must not be discarded");
+        let error = coalesce_ready_iroh_render_actions(
+            &mut receiver,
+            IrohAttachRenderWakeup::new(AttachRenderAction::View, Some(1)),
+            Some(1),
+        )
+        .expect_err("queued Iroh event failures must not be discarded");
         assert!(error.message().contains("queued Iroh event failure"));
+    }
+
+    /// Verifies redraw wakeups covered by the authoritative view cutoff do not
+    /// trigger another RTT, while invalidating actions remain conservative.
+    #[test]
+    fn authoritative_view_cutoff_discards_only_covered_ordinary_redraws() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+        sender
+            .try_send(Ok(IrohAttachRenderWakeup::new(
+                AttachRenderAction::View,
+                Some(12),
+            )))
+            .unwrap();
+        assert_eq!(
+            coalesce_ready_iroh_render_actions(
+                &mut receiver,
+                IrohAttachRenderWakeup::new(AttachRenderAction::View, Some(11)),
+                Some(12),
+            )
+            .unwrap(),
+            AttachRenderAction::None
+        );
+
+        let (_sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        assert_eq!(
+            coalesce_ready_iroh_render_actions(
+                &mut receiver,
+                IrohAttachRenderWakeup::new(AttachRenderAction::InvalidateAndView, Some(12)),
+                Some(12),
+            )
+            .unwrap(),
+            AttachRenderAction::InvalidateAndView
+        );
     }
 
     /// Verifies negotiated Zstandard and LZ4 event envelopes decode to the
@@ -1286,13 +1402,17 @@ mod iroh_tests {
             let split = encoded.as_bytes().len() - 1;
             let mut pending = encoded.as_bytes()[..split].to_vec();
             assert_eq!(
-                drain_negotiated_iroh_event_frames(&mut pending, compression, None, None).unwrap(),
-                AttachRenderAction::None
+                drain_negotiated_iroh_event_frames(&mut pending, compression, None, None)
+                    .unwrap()
+                    .action,
+                AttachRenderAction::None,
             );
             pending.extend_from_slice(&encoded.as_bytes()[split..]);
             assert_eq!(
-                drain_negotiated_iroh_event_frames(&mut pending, compression, None, None).unwrap(),
-                AttachRenderAction::View
+                drain_negotiated_iroh_event_frames(&mut pending, compression, None, None)
+                    .unwrap()
+                    .action,
+                AttachRenderAction::View,
             );
             assert!(pending.is_empty());
         }
@@ -1304,7 +1424,7 @@ mod iroh_tests {
             r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed"}}"#,
         )
         .unwrap();
-        assert_eq!(valid, AttachRenderAction::View);
+        assert_eq!(valid.action, AttachRenderAction::View);
 
         let mismatch = strict_iroh_attach_render_action(
             r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"window_changed"}}"#,

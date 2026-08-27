@@ -567,7 +567,8 @@ pub(super) struct PersistentIrohControlChannel {
     endpoint: iroh::Endpoint,
     connection: iroh::endpoint::Connection,
     bridge: IrohCompressionBridge,
-    event_receiver: Option<tokio::sync::mpsc::Receiver<Result<super::attach::AttachRenderAction>>>,
+    event_receiver:
+        Option<tokio::sync::mpsc::Receiver<Result<super::attach::IrohAttachRenderWakeup>>>,
     event_task: tokio::task::JoinHandle<()>,
     setup_timeout: std::time::Duration,
 }
@@ -586,7 +587,7 @@ impl PersistentIrohControlChannel {
     /// Takes the negotiated event receiver exactly once for the attach loop.
     pub(super) fn take_event_receiver(
         &mut self,
-    ) -> Result<tokio::sync::mpsc::Receiver<Result<super::attach::AttachRenderAction>>> {
+    ) -> Result<tokio::sync::mpsc::Receiver<Result<super::attach::IrohAttachRenderWakeup>>> {
         self.event_receiver
             .take()
             .ok_or_else(|| MezError::invalid_state("Iroh event receiver was already taken"))

@@ -1,9 +1,9 @@
 //! Observer control-socket attach setup and presentation loop.
 
 use super::event_stream::{
-    AttachRenderAction, AttachedRuntimeEventStream, optional_control_socket_event_stream,
-    read_attached_client_input_or_deadline, read_attached_client_input_or_iroh_event,
-    read_attached_client_input_or_runtime_event,
+    AttachRenderAction, AttachedRuntimeEventStream, IrohAttachRenderWakeup,
+    optional_control_socket_event_stream, read_attached_client_input_or_deadline,
+    read_attached_client_input_or_iroh_event, read_attached_client_input_or_runtime_event,
 };
 use super::requests::{
     refresh_attached_client_size_async, render_attach_client_frame_async,
@@ -59,7 +59,7 @@ pub(in crate::cli) async fn run_iroh_attached_observer_client<S>(
     stream: &mut S,
     connection: &iroh::endpoint::Connection,
     client_size: Size,
-    mut event_receiver: tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>,
+    mut event_receiver: tokio::sync::mpsc::Receiver<Result<IrohAttachRenderWakeup>>,
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -113,7 +113,7 @@ async fn run_attached_observer_client_loop_async<I, S>(
     connection: Option<&iroh::endpoint::Connection>,
     mut client_size: Size,
     mut event_stream: Option<&mut AttachedRuntimeEventStream>,
-    mut event_receiver: Option<&mut tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>>,
+    mut event_receiver: Option<&mut tokio::sync::mpsc::Receiver<Result<IrohAttachRenderWakeup>>>,
 ) -> Result<()>
 where
     I: AsyncAttachedTerminalIo,
@@ -125,7 +125,7 @@ where
     let mut size_refresh = AttachTerminalSizeRefresh::default();
     let mut animation_refresh = AttachAnimationRefresh::default();
     let mut health = super::AttachIrohHealthTracker::default();
-    let mut cached_frame = None;
+    let mut cached_frame: Option<super::AttachClientFrame> = None;
     let mut render_requested = true;
 
     loop {
@@ -154,6 +154,7 @@ where
                     4096,
                     animation_refresh.deadline(),
                     wake_deadline,
+                    cached_frame.as_ref().and_then(|frame| frame.event_cutoff),
                 )
                 .await?
             }

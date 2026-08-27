@@ -2,7 +2,7 @@
 
 use super::event_stream::read_attached_client_input_or_deadline;
 use super::event_stream::{
-    AttachRenderAction, AttachedRuntimeEventStream,
+    AttachRenderAction, AttachedRuntimeEventStream, IrohAttachRenderWakeup,
     control_socket_disconnected_without_pending_response, optional_control_socket_event_stream,
     read_attached_client_input_or_iroh_event, read_attached_client_input_or_runtime_event,
 };
@@ -66,7 +66,7 @@ pub(in crate::cli) async fn run_iroh_attached_primary_client<S>(
     primary_client_id: ClientId,
     client_size: Size,
     request_timeout: std::time::Duration,
-    mut event_receiver: tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>,
+    mut event_receiver: tokio::sync::mpsc::Receiver<Result<IrohAttachRenderWakeup>>,
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -127,7 +127,7 @@ async fn run_iroh_attached_primary_client_loop_async_with_events<I, S>(
     primary_client_id: ClientId,
     mut client_size: Size,
     request_timeout: std::time::Duration,
-    mut event_receiver: Option<&mut tokio::sync::mpsc::Receiver<Result<AttachRenderAction>>>,
+    mut event_receiver: Option<&mut tokio::sync::mpsc::Receiver<Result<IrohAttachRenderWakeup>>>,
 ) -> Result<()>
 where
     I: AsyncAttachedTerminalIo,
@@ -140,7 +140,7 @@ where
     let mut size_refresh = AttachTerminalSizeRefresh::default();
     let mut animation_refresh = AttachAnimationRefresh::default();
     let mut health = super::AttachIrohHealthTracker::default();
-    let mut cached_frame = None;
+    let mut cached_frame: Option<super::AttachClientFrame> = None;
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
@@ -172,6 +172,7 @@ where
                     4096,
                     animation_refresh.deadline(),
                     wake_deadline,
+                    cached_frame.as_ref().and_then(|frame| frame.event_cutoff),
                 )
                 .await?
             }

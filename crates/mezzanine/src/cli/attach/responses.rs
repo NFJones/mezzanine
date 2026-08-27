@@ -126,11 +126,16 @@ pub(super) fn terminal_step_response_client_frame(
         .filter(|slot| !slot.is_null())
         .map(parse_terminal_iroh_status_slot)
         .transpose()?;
+    let event_cutoff = parsed
+        .get("result")
+        .and_then(|result| result.get("event_cutoff"))
+        .and_then(serde_json::Value::as_u64);
     Ok(Some(super::AttachClientFrame {
         lines: terminal_step_response_lines(body)?,
         line_style_spans: terminal_step_response_line_style_spans(body)?,
         modes: terminal_step_response_output_modes(body)?.unwrap_or_default(),
         iroh_status_slot,
+        event_cutoff,
     }))
 }
 
@@ -470,6 +475,18 @@ mod tests {
     use super::*;
     use crate::host::terminal::TerminalIrohStatusQuality;
 
+    /// Verifies terminal views retain the server event cutoff used to discard
+    /// only Iroh redraw wakeups already represented by the rendered state.
+    #[test]
+    fn terminal_view_decodes_event_cutoff_for_iroh_redraw_coalescing() {
+        let response = r#"{"result":{"view":{"lines":["plain"],"line_style_spans":[[]],"cursor":{"row":0,"column":0,"visible":false},"output_modes":{}},"event_cutoff":42}}"#;
+        let frame = terminal_step_response_client_frame(response)
+            .unwrap()
+            .expect("view should decode");
+
+        assert_eq!(frame.event_cutoff, Some(42));
+    }
+
     /// Verifies semantic slot decoding and local composition use compact
     /// `up` and `dn` labels while quality changes rendition colors.
     #[test]
@@ -534,6 +551,7 @@ mod tests {
         let frame = terminal_step_response_client_frame(response)
             .unwrap()
             .expect("view should decode");
+        assert_eq!(frame.event_cutoff, None);
         let (lines, spans) = frame.with_iroh_status(true, TerminalIrohStatusQuality::Good);
         assert_eq!(lines, ["plain"]);
         assert_eq!(spans, [Vec::new()]);

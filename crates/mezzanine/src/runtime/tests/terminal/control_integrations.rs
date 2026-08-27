@@ -160,3 +160,25 @@ fn runtime_buffer_controls_round_trip_and_reject_implicit_replace() {
     assert!(delete.contains(r#""deleted":true"#), "{delete}");
     assert!(service.paste_buffers().get("handoff").is_none());
 }
+
+/// Verifies an authoritative terminal view reports the latest applied event.
+///
+/// Iroh attach clients use this cutoff to discard only redraw wakeups already
+/// represented by the returned view, avoiding a redundant control round trip.
+#[test]
+fn runtime_terminal_view_reports_latest_event_cutoff() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let expected_cutoff = service.event_log().unwrap().latest_event_id();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"view","method":"terminal/view","params":{"client_size":{"columns":80,"rows":24}}}"#,
+        &primary,
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+    assert!(!response["result"]["view"].is_null());
+    assert_eq!(response["result"]["event_cutoff"], expected_cutoff);
+}

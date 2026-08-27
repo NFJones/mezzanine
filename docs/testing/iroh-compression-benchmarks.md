@@ -41,6 +41,27 @@ allocation count and bytes, decoded bytes, wire bytes, and wire ratio.
 - Absolute timing and allocation totals are report-only because allocator,
   compiler, CPU, and operating-system versions vary.
 
+## Interactive latency interpretation
+
+OpenSSH keeps compression state in the connection's per-direction packet
+state instead of treating compression as a reason to delay interactive packet
+delivery. Mezzanine follows the latency-relevant part of that design: every
+complete control frame remains independently decodable and is flushed to QUIC
+immediately. It does not wait to accumulate a larger compression batch.
+
+The protocols differ above that boundary. SSH pushes terminal channel bytes,
+whereas an Iroh attach receives event wakeups and fetches an authoritative
+rendered view over the serialized control stream. Consequently, visible
+choppiness can come from redundant view round trips even when codec work is
+small. Each terminal view therefore reports an event cutoff, allowing the
+client to discard only queued ordinary redraw wakeups already represented by
+that view. The first redraw and any newer or invalidating wakeup remain
+immediate, preserving latency while preventing stale-render queues.
+
+The OpenSSH implementation reference used for this comparison is
+[`packet.c`](https://github.com/openssh/openssh-portable/blob/master/packet.c),
+whose session packet state owns separate incoming and outgoing zlib contexts.
+
 The reference run met these budgets and supports retaining
 `compression_min_bytes = 512` and `compression_zstd_level = 3`. Re-run before
 changing defaults, enabling compression broadly, or after codec dependency or

@@ -57,6 +57,8 @@ struct AttachClientFrame {
     modes: AttachedTerminalOutputModes,
     /// Optional client-space Iroh status slot.
     iroh_status_slot: Option<crate::host::terminal::TerminalIrohStatusSlot>,
+    /// Latest server event whose applied state is represented by this view.
+    event_cutoff: Option<u64>,
 }
 
 impl AttachClientFrame {
@@ -302,8 +304,8 @@ mod responses;
 mod selection;
 
 #[cfg(test)]
-pub(super) use event_stream::AttachedRuntimeEventStream;
-pub(in crate::cli) use event_stream::{AttachRenderAction, spawn_iroh_runtime_event_receiver};
+pub(super) use event_stream::{AttachRenderAction, AttachedRuntimeEventStream};
+pub(in crate::cli) use event_stream::{IrohAttachRenderWakeup, spawn_iroh_runtime_event_receiver};
 #[cfg(test)]
 pub(super) use observer::run_control_socket_attached_observer_client_loop_async;
 #[cfg(test)]
