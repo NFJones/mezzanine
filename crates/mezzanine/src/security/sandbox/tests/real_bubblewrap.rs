@@ -359,6 +359,31 @@ fn real_bubblewrap_enforces_maximum_authority_and_isolation() {
     assert!(!fixture.host_home.join("inside.txt").exists());
 }
 
+/// Proves a pane launched from a nested directory under authorized workspace
+/// authority enters that directory after its parent mount is available.
+#[test]
+fn real_bubblewrap_enters_nested_authorized_working_directory() {
+    let config = config();
+    let Some(capability) = verified_capability(&config) else {
+        return;
+    };
+    let fixture = RealBubblewrapFixture::new("nested-working-directory");
+    let mut authority = fixture.authority();
+    authority.current_directory = fixture.source.to_string_lossy().into_owned();
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let plan = real_plan(&config, capability, &authority, &evaluation);
+
+    let output = execute_plan(plan, "pwd");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let expected = fixture.source.to_string_lossy();
+    assert!(
+        stdout.lines().any(|line| line == expected),
+        "status={:?} stdout={stdout:?} stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// Proves a generic external SDK granted only read authority can execute its
 /// binary by absolute path without gaining write access to the SDK root.
 #[test]

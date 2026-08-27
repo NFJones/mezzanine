@@ -544,6 +544,30 @@ fn unknown_effects_compile_to_bounded_maximum_authority() {
     );
 }
 
+/// Verifies a nested pane working directory is created only after its parent
+/// authority has been projected into the otherwise empty Bubblewrap root.
+#[test]
+fn nested_working_directory_is_created_after_its_authority_mount() {
+    let config = config();
+    let mut authority = authority();
+    authority.current_directory = "/workspace/src".to_string();
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+
+    let plan = compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap();
+    let authority_mount = plan
+        .arguments
+        .windows(3)
+        .position(|args| args == ["--ro-bind", "/workspace", "/workspace"])
+        .unwrap();
+    let working_directory = plan
+        .arguments
+        .windows(2)
+        .position(|args| args == ["--dir", "/workspace/src"])
+        .unwrap();
+
+    assert!(authority_mount < working_directory);
+}
+
 /// Verifies every sandbox launch projects the fixed host runtime inputs,
 /// including Debian-style executable alternatives, independent of whether the
 /// workload receives a private network namespace.

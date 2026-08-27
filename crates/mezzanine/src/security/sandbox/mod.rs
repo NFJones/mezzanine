@@ -1742,8 +1742,6 @@ fn bubblewrap_arguments(
         "/var/run",
         "--dir",
         "/run/mez",
-        "--dir",
-        policy.working_directory.as_str(),
         "--ro-bind",
         request.command_file_host_path,
         SANDBOX_COMMAND_PATH,
@@ -1786,6 +1784,11 @@ fn bubblewrap_arguments(
                 .unwrap_or_else(|| grant.enforcement_path.clone()),
         );
     }
+    arguments.extend(
+        ["--dir", policy.working_directory.as_str()]
+            .into_iter()
+            .map(str::to_string),
+    );
     arguments.extend(
         [
             "--setenv",
