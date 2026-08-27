@@ -53,10 +53,14 @@ cargo uninstall mezzanine
 
 ## Before enabling confinement
 
-Bubblewrap confinement requires a Linux pane environment and a configured
-`bwrap` executable there; Mezzanine does not install a privileged helper. Other
-pane environments use `policy-only`, which does not provide OS-level isolation.
-Review Bubblewrap authority, network, and approval settings before enabling it.
+Linux Bubblewrap confinement requires executable `/usr/bin/bwrap`. macOS
+Seatbelt confinement requires executable `/usr/bin/sandbox-exec`; Apple
+deprecates this command/profile interface, so verify it on every supported
+macOS release. Mezzanine installs no privileged helper. Missing fixed
+executables select `policy-only` for new configuration, and explicitly
+configured backends fail closed rather than falling back. Review filesystem,
+network, approval, and backend-specific namespace semantics before enabling
+confinement.
 
 ## Related pages
 

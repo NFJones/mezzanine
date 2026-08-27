@@ -51,7 +51,8 @@ while you inspect, edit, and validate work.
 - **Reviewable actions:** visible shell commands, patches, approvals, MCP calls,
   and subagent work.
 - **Safety controls:** approval policy, project trust, and optional OS-level
-  confinement in Linux pane environments are distinct, visible controls.
+  confinement through Bubblewrap on Linux or Seatbelt on macOS are distinct,
+  visible controls.
 
 ## Prerequisites
 
@@ -165,6 +166,9 @@ scrollback, or other panes.
 Approval policy controls whether Mezzanine permits an action. Optional OS-level
 confinement separately limits what permitted local shell processes can access,
 and web and integration actions have their own capability and approval gates.
+Linux Bubblewrap uses private namespaces. macOS Seatbelt instead enforces
+operation-level policy in the visible host namespace and is not namespace-
+equivalent isolation. See the sandboxing manual for the exact boundary.
 
 Review unfamiliar project overlays and applicable `AGENTS.md` files before
 trusting their guidance. Project instructions can shape workflow but cannot

@@ -47,7 +47,10 @@ that option when running a direct `cargo test` command.
 
 The optional `just test-real-bubblewrap` acceptance test requires Linux and a
 working Bubblewrap environment. Run it when a change affects the real
-confinement path.
+confinement path. `just test-real-seatbelt` requires macOS and executable
+`/usr/bin/sandbox-exec`; it runs the product-binary capability-probe and
+workload-launcher acceptance tests. These backend checks supplement rather than
+replace the required workspace suite.
 
 Use the repository's focused recipes for affected subsystems before the full
 suite:

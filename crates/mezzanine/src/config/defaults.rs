@@ -924,10 +924,11 @@ global_command_rules = []
 # network = false
 # credentials = false
 # process_control = true
-# Under policy-only this affects approval classification only. Under Bubblewrap,
-# deny keeps shell actions network-isolated; allow connects every shell action;
-# prompt connects only authorized network actions. Brokered web and MCP actions
-# are controller-gated.
+# Under policy-only this affects approval classification only. Bubblewrap uses
+# a private network namespace for deny; Seatbelt denies network operations in
+# the visible host namespace. Allow permits networking and prompt permits it
+# only for authorized network actions. Neither backend filters destinations.
+# Brokered web and MCP actions are controller-gated separately.
 network_policy = "prompt"
 # Prompt before destructive actions not already covered by a stronger rule.
 destructive_action_policy = "prompt"

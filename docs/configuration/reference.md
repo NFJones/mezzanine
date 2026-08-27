@@ -906,9 +906,9 @@ profiles when changing provider, model, or provider options.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `permissions.approval_policy` | string | `"full-access"` in generated Linux config when Bubblewrap is available; `"auto-allow"` in generated Linux config without Bubblewrap and on macOS; `"ask"` otherwise | Default approval policy: `ask`, `auto-allow`, `full-access`, or primary-user-only `host-access`. Linux selects the approval policy together with the generated sandbox backend. macOS pairs model-gated `auto-allow` with policy-only execution. `full-access` remains sandboxed; `host-access` executes local shell actions on the host outside the configured sandbox. |
+| `permissions.approval_policy` | string | `"full-access"` when the platform's fixed Bubblewrap or Seatbelt executable is present; `"auto-allow"` on Linux or macOS when it is absent; `"ask"` otherwise | Default approval policy: `ask`, `auto-allow`, `full-access`, or primary-user-only `host-access`. Generated configuration selects this together with the platform sandbox backend. `full-access` remains sandboxed; `host-access` executes local shell actions on the host outside the configured sandbox. |
 | `permissions.preset` | string | omitted | Optional preset, such as `read-only` or `auto`. |
-| `permissions.sandbox` | string | `"bubblewrap"` in generated Linux config when `/usr/bin/bwrap` is executable; `"policy-only"` otherwise | Additive confinement backend. Generated Linux config selects fail-closed `bubblewrap` only when its code-owned executable is available; platforms without Bubblewrap use `policy-only`, which does not provide OS-level isolation. |
+| `permissions.sandbox` | string | `"bubblewrap"` on Linux with executable `/usr/bin/bwrap`; `"seatbelt"` on macOS with executable `/usr/bin/sandbox-exec`; `"policy-only"` otherwise | Additive confinement backend. Executable presence selects generated and omitted defaults but is not runtime capability proof. Existing configurations are preserved by migration. `policy-only` does not provide OS-level isolation. |
 | `permissions.read_scopes` | string array | omitted | Maximum pane-resolved read authority for the primary agent. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. Paths unavailable on the active pane are omitted with a warning. |
 | `permissions.write_scopes` | string array | omitted | Maximum pane-resolved write authority; write also implies read. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. Paths unavailable on the active pane are omitted with a warning. |
 | `permissions.bubblewrap.executable` | string | `"/usr/bin/bwrap"` | Absolute Bubblewrap path resolved and probed in the pane environment. |
@@ -919,10 +919,17 @@ profiles when changing provider, model, or provider options.
 | `permissions.bubblewrap.env_whitelist` | string array | `["PATH"]` when omitted | Schema-v50 primary-user-only portable variable names read from the active pane process for ordinary sandboxed actions. Values are best-effort, bounded, and universally redacted from status/logs. A successfully resolved whitelisted `PATH` controls sandbox command lookup; other fixed sandbox environment invariants remain protected. Set an explicit `[]` to opt out. Internal semantic `apply_patch` phases intentionally use the fixed environment without forwarding these optional values. |
 | `permissions.bubblewrap.git_user_name` | string | omitted | Optional non-secret Git author name. Must be configured with `git_user_email`; projected only through Git command-scope configuration. |
 | `permissions.bubblewrap.git_user_email` | string | omitted | Optional non-secret Git author email. Must be configured with `git_user_name`; projected only through Git command-scope configuration. |
+| `permissions.seatbelt.executable` | string | `"/usr/bin/sandbox-exec"` | Fixed absolute Seatbelt launcher path. Runtime probing verifies the exact executable; arbitrary launcher arguments and raw profiles are not configurable. |
+| `permissions.seatbelt.unavailable` | string | `"fail"` | Fail closed when the executable, profile, probe, or launch cannot be established; never silently select policy-only or host execution. |
+| `permissions.seatbelt.network` | string | `"isolated"` | Deny network operations in the visible host namespace unless the action's network requirement is authorized. This is not a network namespace. |
+| `permissions.seatbelt.environment` | string | `"minimal"` | Clear inherited variables and reconstruct the code-owned minimal environment. |
+| `permissions.seatbelt.env_whitelist` | string array | `["PATH"]` when omitted | Optional pane-derived variable names subject to the same bounded, value-redacted forwarding rules as Bubblewrap. |
+| `permissions.seatbelt.git_user_name` | string | omitted | Optional non-secret Git author name. Must be configured with `git_user_email`; host Git configuration is not inherited. |
+| `permissions.seatbelt.git_user_email` | string | omitted | Optional non-secret Git author email. Must be configured with `git_user_name`; host Git configuration is not inherited. |
 | `permissions.command_rules` | array | `[]` | User/project command rule entries. |
 | `permissions.session_command_rules` | array | `[]` | Session-scoped command rule entries. |
 | `permissions.global_command_rules` | array | `[]` | Global command rule entries. |
-| `permissions.network_policy` | string | `"prompt"` | Shell-network policy: `deny` isolates every Bubblewrap shell action, `allow` connects every action, and `prompt` connects authorized network actions. |
+| `permissions.network_policy` | string | `"prompt"` | Shell-network policy: `deny` uses a private Bubblewrap network namespace or denies Seatbelt network operations; `allow` permits networking; `prompt` permits it only for an authorized network action. Neither backend filters destinations. |
 | `permissions.destructive_action_policy` | string | `"prompt"` | Destructive action policy. |
 | `permissions.bypass_mode` | boolean | `false` | Explicit bypass state; cannot be enabled from config. |
 
@@ -948,43 +955,47 @@ Command rule fields for each entry in a command rule array:
 | `effects.write_scopes` | string array | `[]` | Required write paths, bounded by configured maximum authority. |
 | `effects.network` | boolean | required when complete | Whether network access is required. |
 | `effects.credentials` | boolean | required when complete | Whether credential access is required; it does not expose host credentials. |
-| `effects.process_control` | boolean | required when complete | Whether host process control is required; initially unsupported by Bubblewrap mode. |
+| `effects.process_control` | boolean | required when complete | Whether host process control is required; unsupported sandbox requirements fail closed. |
 
 Effects are accepted only on `allow` rules and may narrow but never grant authority.
 For complete effects, Mezzanine resolves read, write, create, delete, and touch
-paths before probing or launching Bubblewrap. Pane shell mode uses one
+paths before probing or launching the configured backend. Pane shell mode uses one
 action-specific pane-shell request. Native shell mode canonicalizes the same
 authority directly from the pane root process's working directory and host
 filesystem metadata, without sending pane input. Resolver failure, timeout,
 truncation, or stale process identity fails closed. Unknown effects retain
 bounded maximum authority. Scope configuration alone determines filesystem
 exposure,
-including credential-bearing paths; Bubblewrap does not inspect, mask, or
-reject paths based on credential-directory names. The multi-user `/home` root
+including credential-bearing paths; sandbox policy does not grant authority by
+recognizing command or credential-directory names. The multi-user `/home` root
 remains forbidden. Exact primary, subagent, and
 action requests are cached independently for the current pane environment and
 configuration generation. With no explicit scopes, a trusted current project
 provides the default read-write scope; nested trusted projects select the
 deepest matching root, and other working directories remain unresolved.
-Bubblewrap subagents inherit omitted read or write scope axes from that bounded
+Sandboxed subagents inherit omitted read or write scope axes from that bounded
 parent authority. Explicit child or profile scopes may only narrow the parent;
 an explicit empty array remains empty, and nested children never rediscover a
-broader trusted-project root. Bubblewrap activation requires usable scopes.
+broader trusted-project root. Sandbox activation requires usable scopes.
 Schema v20 migration selects `policy-only` and does not infer scopes or effects.
 
 `/permissions` and session permission status distinguish configured scopes from
 the active pane's effective scopes. `effective_scope_provenance` is `explicit`,
 `trusted-project`, or `none`; trusted-project authority also reports the selected
-root. Bubblewrap status reports stable restriction identifiers:
-`authority-mounts-only`, `synthetic-home`, `minimal-path`, `network-policy-enforced`.
-These describe likely denial causes without including raw Bubblewrap arguments,
-environment values, or unrelated host paths.
+root. Bubblewrap status reports `authority-mounts-only`, `synthetic-home`,
+`minimal-path`, and `network-policy-enforced`. Seatbelt reports
+`host-path-authority-only`, `private-host-home`, `minimal-path`,
+`network-operation-policy`, and `visible-host-namespace`. These stable
+identifiers describe likely denial causes without exposing launcher arguments,
+generated SBPL, environment values, lifecycle records, probe output, or host
+paths.
 
 Use `mez sandbox status [PATH] [--verbose]` for a standalone configured/effective
-projection with stable readiness diagnostics. Global `--json` emits the
-versioned structured projection. This command is intentionally read-only: it
+projection with stable readiness diagnostics. Global `--json` emits workflow
+schema version 2 with generic executable, capability, profile, managed-home,
+network, namespace, and restriction fields. This command is intentionally read-only: it
 inspects but does not migrate configuration, change project trust, create
-managed homes, or run/cache the pane-specific Bubblewrap probe. Only a direct
+managed homes, or run/cache a pane or native capability probe. Only a direct
 user may apply policy changes; diagnostics never broaden authority or select
 host execution automatically.
 
@@ -999,10 +1010,12 @@ root. There is no automatic cleanup or persisted quota setting.
 Guided setup is available through `mez sandbox plan`, `enable`, `preset apply`,
 and `disable`. Project trust records are managed through `mez sandbox trust`.
 The code-owned presets are
-`project-safe` (Bubblewrap plus `ask`), `project-auto` (Bubblewrap plus
-`auto-allow`), `project-read-only` (project read scope with no write scope),
+`project-safe` (the platform backend plus `ask`), `project-auto` (the platform
+backend plus `auto-allow`), `project-read-only` (project read scope with no write scope),
 and `off` (policy-only while retaining the other sandbox settings). Planning
-and `--dry-run` are read-only. Every guided setup mutation requires confirmation;
+and `--dry-run` are read-only and report the selected backend plus fixed-
+executable presence. Mutating enablement fails without changing configuration,
+trust, scopes, or caches when the fixed executable is unavailable. Every guided setup mutation requires confirmation;
 noninteractive or JSON mutation requires `--yes`, and setup must explicitly
 choose `trusted-project` or `explicit-scope` authority. Trusted-project mode
 can activate applicable project overlays, macros, and skills, while
@@ -1011,7 +1024,7 @@ explicit-scope mode does not change project trust.
 `mez sandbox profile export [--path PATH]` emits a deterministic version-2 JSON
 recipe with exactly `version`, `preset`, and `authority`. Export derives only
 safe preset-equivalent state; it omits host paths, trust records,
-Bubblewrap executable and identity fields, environment values, command rules,
+sandbox executable and identity fields, environment values, command rules,
 hooks, provider/MCP state, arbitrary mounts, credentials, and `host-access`.
 `mez sandbox profile import FILE [--path PATH] [--dry-run] [--yes]` strictly
 rejects version-1 recipes and unknown or unsupported fields, including the
@@ -1019,12 +1032,17 @@ removed toolchain field. It independently discovers the local project and uses
 the same atomic guided-setup transaction. Import previews by default and never
 auto-applies a repository profile, even when that repository is already trusted.
 
-Bubblewrap disables system and global Git configuration. When both sanitized
-identity fields are configured, Mezzanine projects only `user.name` and
+Both sandbox backends disable system and global Git configuration. When both
+sanitized identity fields are configured, Mezzanine projects only `user.name` and
 `user.email` through Git command-scope configuration, which takes precedence
 over repository-local identity. It never imports credential helpers, signing
 keys, includes, URL rewrites, hooks, or arbitrary host Git settings. When the
 fields are omitted, repository-local Git identity may still apply.
+
+Schema v74 adds the primary-user-only `permissions.seatbelt` table and the
+`seatbelt` backend value. The v73-to-v74 migration advances only the schema
+version: it preserves configured or omitted sandbox and approval values, does
+not inspect `/usr/bin/sandbox-exec`, and does not auto-enable existing users.
 
 Schema v51 removes `permissions.bubblewrap.toolchains` and
 `permissions.bubblewrap.custom_toolchains`. Primary configurations migrating
@@ -1064,7 +1082,12 @@ Mezzanine does not currently enforce a built-in size quota or periodic age-based
 pruning; operators may apply filesystem quotas or remove inactive private cache
 directories while no sandbox command is using them.
 
-Each managed home stores immutable synthetic passwd/group records below an
+Seatbelt managed homes use the same backend/profile-separated private storage
+and activity locking, but `HOME` and XDG variables name the private canonical
+host path directly. Seatbelt does not mount a synthetic home or hide the host
+namespace. Status reports these semantics without disclosing the path.
+
+Each Bubblewrap managed home stores immutable synthetic passwd/group records below an
 identity-hash directory. The passwd entry uses the pane UID and primary GID;
 the group file uses the pane primary-group name and only the configured active
 supplementary groups. Changing the mapping does not discard the project's
@@ -1081,11 +1104,22 @@ Mezzanine then validates the configured Bubblewrap executable inside the target
 pane environment. The probe requires usable
 user, mount, PID, IPC, UTS, cgroup, and network namespaces plus the fixed
 read-only runtime projection. Missing executables and unsupported namespace
-facilities never trigger an automatic unsandboxed retry. For a local action
-whose original policy decision was `prompt`, `ask` mode first requires the
-ordinary action approval; Bubblewrap never substitutes for that approval gate.
-`auto-allow` still requires the model-rationale gate, and `full-access` skips
-whitelist prompts, but both remain confined by Bubblewrap. A subsequent
+facilities never trigger an automatic unsandboxed retry.
+
+Seatbelt validates the fixed `/usr/bin/sandbox-exec` identity and one exact
+code-owned profile, child shell, minimal environment, host identity, and probe
+plan. The probe proves allowed scoped access and denial of sibling, descendant,
+network, Unix-socket, and ambient-environment operations. It provides
+operation-level confinement in the visible host namespace, not mount, PID,
+user, IPC, UTS, cgroup, or network namespaces. Apple deprecates the public
+`sandbox-exec`/SBPL interface, so failed capability proof on a future macOS
+release remains a fail-closed backend failure rather than a host fallback.
+
+For a local action whose original policy decision was `prompt`, `ask` mode
+first requires the ordinary action approval; a sandbox never substitutes for
+that approval gate. `auto-allow` still requires the model-rationale gate, and
+`full-access` skips whitelist prompts, but both remain confined by the selected
+backend. A subsequent
 probe/setup/pre-exec failure may create one normal approval for an exact
 unsandboxed retry only when the retained action decision was `prompt`; sandbox
 failure never weakens `full-access` automatically. A failed or
@@ -1093,9 +1127,10 @@ timed-out probe is not cached; after shell readiness recovers, a later
 independent action may probe the same identity again. Successful capabilities
 remain cached, and concurrent waiters share one in-flight probe.
 
-Bubblewrap lifecycle status is captured separately from command output. A
-validated `exit-code` event proves payload execution; clean status closure
-without that event is pre-payload failure evidence. For a non-zero payload exit,
+Trusted lifecycle status is captured separately from command output. Bubblewrap
+uses ordered child and exit records. Seatbelt uses `sandbox-entered`,
+`child-established`, and `exit`; an established child without an exit fails
+closed and is not pre-payload fallback evidence. For a non-zero established payload exit,
 Mezzanine may run one bounded structured model assessment using redacted policy,
 effect, restriction, status, and output evidence. Only an explicit
 `sandbox_failure` assessment may create an approval, and that approval warns
@@ -1120,8 +1155,8 @@ unsandboxed retry, and the grant is consumed exactly once.
 | `subagents.<name>.shell_env` | map | omitted | Extra shell environment for this role. |
 | `subagents.<name>.default_cooperation_mode` | string | omitted | Cooperation mode default. |
 | `subagents.<name>.default_mode` | string | omitted | Compatibility mode default. |
-| `subagents.<name>.default_read_scopes` | string array | omitted | Default child read-scope narrowing; Bubblewrap intersects it with inherited parent authority. |
-| `subagents.<name>.default_write_scopes` | string array | omitted | Default child write-scope narrowing; Bubblewrap intersects it with inherited parent authority. |
+| `subagents.<name>.default_read_scopes` | string array | omitted | Default child read-scope narrowing; an active sandbox intersects it with inherited parent authority. |
+| `subagents.<name>.default_write_scopes` | string array | omitted | Default child write-scope narrowing; an active sandbox intersects it with inherited parent authority. |
 
 ### `personalities.<name>`
 
@@ -1183,10 +1218,11 @@ The `purpose`, `usage_instructions`, and safety-classification nested scalar
 paths are also supported by the live `config_change` mutation surface.
 
 Sandbox policy is user-only. Agents cannot use `config_change` to mutate
-`permissions.sandbox`, `permissions.bubblewrap`, `permissions.read_scopes`,
-`permissions.write_scopes`, even if the action would otherwise be approved or
-auto-allowed. Change those settings directly with `mez config set`, `mez
-config unset`, or an equivalent primary-client configuration command.
+`permissions.sandbox`, `permissions.bubblewrap`, `permissions.seatbelt`,
+`permissions.read_scopes`, or `permissions.write_scopes`, even if the action
+would otherwise be approved or auto-allowed. Change those settings directly
+with `mez config set`, `mez config unset`, or an equivalent primary-client
+configuration command.
 
 For streamable HTTP servers, `mez mcp login <name>` stores OAuth tokens in the
 auth credential store rather than in `mcp_servers`. Login uses browser
@@ -1260,12 +1296,14 @@ Hook events include `session_start`, `session_stop`, `client_attach`,
 | `audit.hash_chain` | boolean | `false` | Enable hash chaining of audit records. |
 | `audit.required` | boolean | `false` | Require audit logging for sensitive operations. |
 
-Agent shell-command records identify the active sandbox backend. Bubblewrap
-records also contain only redacted plan facts: runtime-profile version,
-maximum/narrowed authority source, read-only and read-write mount counts,
-protected-mask count, and launch-plan SHA-256. Mount paths, Bubblewrap argv,
-command content, and environment values are never included. Policy-only records
-omit plan-specific fields.
+Agent shell-command records identify `policy-only`, `bubblewrap`, or `seatbelt`.
+Sandboxed records contain only redacted plan facts: runtime-profile version,
+maximum/narrowed authority source, read-only and read-write grant counts,
+effective network mode, and launch-plan SHA-256. Approved fallback records name
+the actual origin backend but hash proof and rationale. Paths, launcher argv,
+generated SBPL, command content, environment values, artifacts, lifecycle
+records, probe output, and raw assessment evidence are excluded. Policy-only
+records omit plan-specific fields.
 
 ### `extensions.<name>`
 

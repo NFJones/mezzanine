@@ -30,10 +30,14 @@ attempts, and logout. Records include stable event and session identifiers,
 actor, action, policy and approval state, outcome, and redaction metadata.
 
 Audit records redact secrets by default: they must not contain raw credentials,
-provider tokens, private keys, or approval secrets. Bubblewrap records expose
-bounded profile and authority counts plus a launch-plan digest, not mount paths,
-environment values, or raw command evidence. Configure the audit path and
-retention in the canonical configuration documentation.
+provider tokens, private keys, or approval secrets. Sandboxed records identify
+`bubblewrap` or `seatbelt` and expose only bounded profile version, authority
+source, grant counts, effective network mode, and launch-plan digest. Approved
+fallback records retain the real origin backend but hash the proof or model
+rationale. Records exclude mount or host paths, launcher arguments, generated
+SBPL, command content, environment values, artifacts, lifecycle records, probe
+output, and raw assessment evidence. Configure the audit path and retention in
+the canonical configuration documentation.
 
 Set `audit.hash_chain = true` to cryptographically link consecutive records;
 this provides tamper evidence but is not proof against deletion or rollback.

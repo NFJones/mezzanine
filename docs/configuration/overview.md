@@ -98,17 +98,18 @@ the decision.
 
 ## Schema versions and examples
 
-The current schema is version `73`. Older primary user configurations migrate
+The current schema is version `74`. Older primary user configurations migrate
 on launch; a configuration declaring a newer schema is rejected. Existing
 project overlays must declare the current schema version and are not migrated
 automatically. When `mez config set --scope project` creates or updates an
 eligible overlay, it writes the current version for that managed file.
 
 The checked-in [example configuration](../examples/config.toml) is the
-provider-free first-launch template for version 73. Actual generation adjusts
+provider-free first-launch template for version 74. Actual generation adjusts
 `permissions.approval_policy` and `permissions.sandbox` for the current
-platform and Bubblewrap availability, so those values can differ from the
-portable checked-in template. Use `mez config default` when the complete
+platform and fixed Bubblewrap or Seatbelt executable presence, so those values
+can differ from the portable checked-in template. Presence is not capability,
+and migration does not auto-enable an existing configuration. Use `mez config default` when the complete
 code-owned provider and model catalog is needed for reference.
 
 ## Related pages

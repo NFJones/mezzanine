@@ -46,7 +46,7 @@ or digest rule over a broad prefix rule.
 
 Approval determines whether Mezzanine permits an action. Sandboxing constrains
 what an already-permitted local shell process can access. `full-access` does
-not disable a configured sandbox, and a Bubblewrap sandbox does not bypass
+not disable a configured sandbox, and a sandbox does not bypass
 approval. Approval bypass is a separate, explicit primary-user choice that
 disables Mezzanine gating; it is not a promise of safety or host confinement.
 

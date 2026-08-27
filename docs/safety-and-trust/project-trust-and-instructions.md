@@ -55,15 +55,15 @@ and `revoke` removes the prior trust decision from effect. The agent-shell
 `/sandbox trust` flow can decide an explicit or pending root from the active
 pane. Trust decisions persist in the user-private trust store. Trusting an
 overlay does not itself grant host access, disable approval, or override a
-Bubblewrap boundary.
+sandbox boundary.
 
 Even after trust, project overlays cannot change primary-user-only execution
 authority: approval policy or bypass, sandbox backend, read/write scopes,
-network and destructive-action policy, Bubblewrap authority, host/transport
+network and destructive-action policy, sandbox authority, host/transport
 settings, or model-profile approval policy. Trust activates only otherwise
 eligible project settings, such as hooks, MCP/provider configuration, and
 project command rules. Separately, a trusted project root can provide the
-default Bubblewrap project scope when no user scopes are configured.
+default sandbox project scope when no user scopes are configured.
 
 While an applicable overlay is pending, new agent turns wait for the primary
 user to trust or reject it rather than silently substituting lower-precedence

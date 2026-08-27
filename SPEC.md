@@ -2859,7 +2859,7 @@ explicitly defines replacement behavior.
 Project overlay configuration MUST NOT contain authentication secrets.
 
 Project overlays MAY carry project-local command rules, but MUST NOT change
-sandbox backend or Bubblewrap settings, filesystem scopes, network policy,
+sandbox backend or backend settings, filesystem scopes, network policy,
 approval policy (including model-profile approval policies), permission preset,
 destructive-action policy, or approval-bypass state. Those execution-boundary
 settings are primary-user-only even when the project is trusted, because a
@@ -9459,7 +9459,7 @@ The approval policy `host-access` MUST allow local shell actions without fresh
 prompts and MUST execute them on the host outside any configured sandbox. Only
 the primary user MAY select it; project overlays, model profiles, agents, and
 subagents MUST NOT select or broaden into it. Hooks and explicit command denies
-MUST remain active. Child agents MUST NOT infer Bubblewrap authority while the
+MUST remain active. Child agents MUST NOT infer sandbox authority while the
 parent executes at the host boundary. Status MUST report the configured and
 effective sandbox independently, and audit records MUST use the distinct
 `host-policy-bypass` marker rather than `approved_exact_sandbox_bypass`, which
