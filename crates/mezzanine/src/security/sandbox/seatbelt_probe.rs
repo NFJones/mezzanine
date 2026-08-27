@@ -180,6 +180,11 @@ pub(crate) fn seatbelt_capability_probe_plan(
     environment_signature: &EnvironmentSignature,
     environment_evidence: &mez_agent::shell::PaneEnvironmentEvidence,
 ) -> Result<SeatbeltCapabilityProbePlan, SandboxCompileError> {
+    if config.executable != "/usr/bin/sandbox-exec" {
+        return Err(invalid_input(
+            "Seatbelt executable must be /usr/bin/sandbox-exec",
+        ));
+    }
     let current_executable = std::env::current_exe().map_err(|error| {
         capability_error(format!(
             "Seatbelt probe executable discovery failed: {error}"
@@ -192,6 +197,56 @@ pub(crate) fn seatbelt_capability_probe_plan(
         environment_evidence,
         &current_executable,
     )
+}
+
+#[cfg(test)]
+mod canonical_executable_tests {
+    use super::*;
+
+    /// Verifies the public capability-probe entry rejects an arbitrary
+    /// configured launcher before inspecting or executing host binaries.
+    #[test]
+    fn public_probe_rejects_noncanonical_seatbelt_executable() {
+        let mut config = SeatbeltConfig {
+            executable: "/usr/bin/sandbox-exec".to_string(),
+            unavailable: crate::runtime::SandboxUnavailablePolicy::Fail,
+            network: crate::runtime::SandboxNetworkMode::Isolated,
+            environment: crate::runtime::SandboxEnvironmentPolicy::Minimal,
+            env_whitelist: crate::runtime::ConfiguredSandboxEnvironment::default(),
+            git_user_name: None,
+            git_user_email: None,
+        };
+        config.executable = "/tmp/sandbox-exec".to_string();
+        let request = mez_agent::shell::PaneEnvironmentRequest::new(Vec::new()).unwrap();
+        let evidence = mez_agent::shell::PaneEnvironmentEvidence::restrictive(&request, "test");
+        let signature = EnvironmentSignature::new(
+            "macos",
+            "aarch64",
+            None,
+            "host",
+            "user",
+            None,
+            "/bin/sh",
+            mez_agent::ShellClassification::PosixSh,
+            None,
+            None,
+            "/tmp",
+            None,
+            false,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+
+        let error =
+            seatbelt_capability_probe_plan(&config, "/bin/sh", &signature, &evidence).unwrap_err();
+
+        assert_eq!(error.kind(), SandboxCompileErrorKind::InvalidInput);
+        assert_eq!(
+            error.message(),
+            "Seatbelt executable must be /usr/bin/sandbox-exec"
+        );
+    }
 }
 
 fn seatbelt_capability_probe_plan_for_executable(

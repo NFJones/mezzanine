@@ -920,10 +920,8 @@ pub(super) fn validate_permission_value(path: &str, value: &str) -> Option<Strin
     {
         return Some("Bubblewrap Git identity must be non-empty printable text".to_string());
     }
-    if path == "permissions.seatbelt.executable"
-        && (!value.starts_with('/') || value.bytes().any(|byte| byte.is_ascii_control()))
-    {
-        return Some("Seatbelt executable must be an absolute printable path".to_string());
+    if path == "permissions.seatbelt.executable" && value != "/usr/bin/sandbox-exec" {
+        return Some("Seatbelt executable must be /usr/bin/sandbox-exec".to_string());
     }
     if path == "permissions.seatbelt.unavailable" && value != "fail" {
         return Some("Seatbelt unavailable policy must be fail".to_string());

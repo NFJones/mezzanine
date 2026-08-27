@@ -77,7 +77,7 @@ fn sandbox_status_reports_seatbelt_operation_confinement() {
     let config_root = home.join(".config/mezzanine");
     fs::create_dir_all(&config_root).unwrap();
     let config_path = config_root.join("config.toml");
-    let config_text = "version = 74\n[permissions]\napproval_policy = \"full-access\"\nsandbox = \"seatbelt\"\nread_scopes = [\"/tmp\"]\nwrite_scopes = []\n[permissions.seatbelt]\nexecutable = \"/bin/sh\"\nunavailable = \"fail\"\nnetwork = \"isolated\"\nenvironment = \"minimal\"\n";
+    let config_text = "version = 74\n[permissions]\napproval_policy = \"full-access\"\nsandbox = \"seatbelt\"\nread_scopes = [\"/tmp\"]\nwrite_scopes = []\n[permissions.seatbelt]\nexecutable = \"/usr/bin/sandbox-exec\"\nunavailable = \"fail\"\nnetwork = \"isolated\"\nenvironment = \"minimal\"\n";
     fs::write(&config_path, config_text).unwrap();
     let project = home.join("project");
     fs::create_dir_all(project.join(".git")).unwrap();

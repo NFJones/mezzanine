@@ -720,11 +720,9 @@ pub(crate) fn runtime_configured_permissions_from_config_for_platform(
                 .and_then(|config| runtime_json_string(config.get("executable")))
                 .unwrap_or("/usr/bin/sandbox-exec")
                 .to_string();
-            if !executable.starts_with('/')
-                || executable.bytes().any(|byte| byte.is_ascii_control())
-            {
+            if executable != "/usr/bin/sandbox-exec" {
                 return Err(MezError::config(
-                    "permissions.seatbelt.executable must be an absolute printable path",
+                    "permissions.seatbelt.executable must be /usr/bin/sandbox-exec",
                 ));
             }
             let unavailable = match seatbelt

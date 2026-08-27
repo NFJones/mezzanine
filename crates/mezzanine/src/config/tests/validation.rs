@@ -1045,6 +1045,7 @@ fn validates_explicit_seatbelt_configuration() {
 
     for (field, value) in [
         ("executable", "\"relative\""),
+        ("executable", "\"/tmp/sandbox-exec\""),
         ("unavailable", "\"policy-only\""),
         ("network", "\"connected\""),
         ("environment", "\"inherit\""),

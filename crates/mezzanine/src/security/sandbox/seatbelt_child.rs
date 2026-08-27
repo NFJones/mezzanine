@@ -83,6 +83,9 @@ fn run_outer(
     command_file: &Path,
     environment_file: &Path,
 ) -> Result<u8, &'static str> {
+    if sandbox_executable != Path::new("/usr/bin/sandbox-exec") {
+        return Err("sandbox-executable");
+    }
     validate_executable(sandbox_executable)?;
     validate_private_file(profile_file)?;
     validate_directory(working_directory, false)?;

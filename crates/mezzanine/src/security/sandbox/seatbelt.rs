@@ -159,7 +159,11 @@ pub(crate) fn compile_seatbelt_launch_plan(
 }
 
 fn validate_request(request: &SeatbeltCompileRequest<'_>) -> Result<(), SandboxCompileError> {
-    validate_printable_absolute_path(&request.config.executable, "Seatbelt executable")?;
+    if request.config.executable != "/usr/bin/sandbox-exec" {
+        return Err(invalid_input(
+            "Seatbelt executable must be /usr/bin/sandbox-exec",
+        ));
+    }
     validate_printable_absolute_path(request.child_shell_path, "Seatbelt child shell")?;
     validate_printable_absolute_path(request.child_launcher_path, "Seatbelt child launcher")?;
     validate_printable_absolute_path(request.command_file_path, "Seatbelt command file")?;
@@ -623,6 +627,23 @@ mod tests {
         let plan = compile_seatbelt_launch_plan(request(&config, &policy, &evidence)).unwrap();
 
         assert!(profile(&plan).contains("(literal \"/private/tmp/quoted\\\"back\\\\slash\")"));
+    }
+
+    /// Verifies the compiler rejects a noncanonical launcher before it can
+    /// materialize a workload profile or child-launch plan.
+    #[test]
+    fn compiler_rejects_noncanonical_seatbelt_executable() {
+        let mut config = config();
+        config.executable = "/tmp/sandbox-exec".to_string();
+        let policy = policy(SandboxNetworkMode::Isolated);
+        let error =
+            compile_seatbelt_launch_plan(request(&config, &policy, &evidence())).unwrap_err();
+
+        assert_eq!(error.kind(), SandboxCompileErrorKind::InvalidInput);
+        assert_eq!(
+            error.message(),
+            "Seatbelt executable must be /usr/bin/sandbox-exec"
+        );
     }
 
     #[test]

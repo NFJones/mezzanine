@@ -119,6 +119,24 @@ fn runtime_materializes_explicit_seatbelt_configuration() {
     );
 }
 
+/// Verifies an arbitrary executable cannot be materialized as the fixed
+/// Seatbelt launcher from runtime configuration.
+#[test]
+fn runtime_rejects_noncanonical_seatbelt_executable() {
+    let error = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {
+            "sandbox": "seatbelt",
+            "seatbelt": {"executable": "/tmp/sandbox-exec"}
+        }
+    }))
+    .unwrap_err();
+
+    assert_eq!(
+        error.message(),
+        "permissions.seatbelt.executable must be /usr/bin/sandbox-exec"
+    );
+}
+
 /// Verifies configured Bubblewrap remains active for full access but becomes
 /// ineffective only while the primary-user host-access policy is selected.
 #[test]
