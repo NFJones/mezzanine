@@ -1304,7 +1304,12 @@ impl BubblewrapProtocolFixture {
                fi\n\
                shift\n\
              done\n\
-             if [ -z \"$host_command\" ]; then exit 64; fi\n\
+             if [ -z \"$host_command\" ]; then\n\
+               printf '{\"child-pid\":%s}\\n' \"$$\" >&3\n\
+               printf '{\"exit-code\":0}\\n' >&3\n\
+               printf '%s' 'mez-bubblewrap-capability-v6'\n\
+               exit 0\n\
+             fi\n\
              printf '{\"child-pid\":%s}\\n' \"$$\" >&3\n\
              /bin/sh \"$host_command\"\n\
              status=$?\n\
@@ -1372,15 +1377,29 @@ fn assert_real_bubblewrap_profile_is_available() -> PathBuf {
 /// Verifies the complete routed continuation lifecycle independently of host
 /// namespace support using a deterministic Bubblewrap-protocol executable.
 #[cfg(unix)]
-#[tokio::test(flavor = "current_thread")]
-async fn async_routed_subagent_settles_with_bubblewrap_protocol_fixture() {
-    let fixture = BubblewrapProtocolFixture::new();
-    assert_routed_subagent_settles_after_in_place_selection(
-        &fixture.executable,
-        "printf '%s%s\\n' 'ROUTED_SANDBOX_' 'ACTION'",
-        "ROUTED_SANDBOX_ACTION",
-    )
-    .await;
+#[test]
+fn async_routed_subagent_settles_with_bubblewrap_protocol_fixture() {
+    std::thread::Builder::new()
+        .name("bubblewrap-protocol-fixture".to_string())
+        .stack_size(4 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let fixture = BubblewrapProtocolFixture::new();
+                    assert_routed_subagent_settles_after_in_place_selection(
+                        &fixture.executable,
+                        "printf '%s%s\\n' 'ROUTED_SANDBOX_' 'ACTION'",
+                        "ROUTED_SANDBOX_ACTION",
+                    )
+                    .await;
+                });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 /// Verifies a lineage-owned subagent completes the exact routed sequence with

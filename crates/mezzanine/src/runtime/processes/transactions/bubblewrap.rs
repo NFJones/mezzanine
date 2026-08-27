@@ -226,7 +226,8 @@ impl RuntimeSessionService {
                 .cloned()
                 .map(ShellChildArgument::Literal)
                 .collect(),
-        )?;
+        )?
+        .with_status_fd(crate::security::sandbox::BUBBLEWRAP_STATUS_FD)?;
         let shell_identity = self.shell_execution_identity_for_pane(&turn.pane_id)?;
         let transaction = self.configure_shell_transaction_for_pane(
             &turn.pane_id,
@@ -340,7 +341,14 @@ impl RuntimeSessionService {
             && cache_key.config_generation == self.session.config_generation
             && current_environment.as_deref()
                 == Some(cache_key.pane_environment_signature.as_str());
-        let exact_sentinel = transaction.observed_output_preview == probe_plan.expected_stdout;
+        let probe_output = transaction
+            .observed_output_preview
+            .split_once("__MEZ_SHELL_STATUS_BASE64_BEGIN__")
+            .map_or_else(
+                || transaction.observed_output_preview.clone(),
+                |(output, _)| output.trim_end_matches(['\r', '\n']).to_string(),
+            );
+        let exact_sentinel = probe_output == probe_plan.expected_stdout;
         let parsed = if current_key_matches && !transaction.observed_output_truncated {
             crate::security::sandbox::parse_bubblewrap_capability_probe(
                 &cache_key.pane_id,
@@ -348,7 +356,7 @@ impl RuntimeSessionService {
                 cache_key.config_generation,
                 &probe_plan,
                 exit_code,
-                &transaction.observed_output_preview,
+                &probe_output,
             )
             .map_err(|error| error.message().to_string())
         } else if !current_key_matches {

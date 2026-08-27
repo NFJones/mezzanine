@@ -855,6 +855,11 @@ fn capability_probe_is_deterministic_and_environment_bound() {
 
     assert_eq!(plan.executable, "/usr/bin/bwrap");
     assert_eq!(plan.expected_stdout, "mez-bubblewrap-capability-v6");
+    assert!(
+        plan.arguments
+            .windows(2)
+            .any(|arguments| arguments == ["--json-status-fd", "3"])
+    );
     assert!(plan.arguments.contains(&"--unshare-net".to_string()));
     assert!(plan.arguments.contains(&"--uid".to_string()));
     assert!(plan.arguments.contains(&"--gid".to_string()));

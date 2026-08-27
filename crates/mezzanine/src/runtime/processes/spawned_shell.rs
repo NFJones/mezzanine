@@ -1097,6 +1097,43 @@ mod tests {
         assert!(!marker.exists(), "workload ran despite failed probe");
     }
 
+    /// Verifies a legacy Bubblewrap implementation that accepts the baseline
+    /// probe but rejects the workload-only JSON status descriptor prevents the
+    /// workload from starting before capability can be cached.
+    #[test]
+    fn native_worker_rejects_legacy_bubblewrap_without_json_status_fd() {
+        let marker =
+            std::env::temp_dir().join(format!("mez-native-probe-status-fd-{}", std::process::id()));
+        let _ = fs::remove_file(&marker);
+        let probe = crate::runtime::processes::NativeSandboxCapabilityProbe::Bubblewrap(
+            crate::runtime::processes::NativeBubblewrapCapabilityProbe::for_test(
+                "/bin/sh",
+                vec![
+                    "-c".to_string(),
+                    "if [ \"$1\" = \"--json-status-fd\" ]; then printf '%s' 'bwrap: unknown option --json-status-fd' >&2; exit 64; fi; printf mez-native-probe-ok".to_string(),
+                    "legacy-bwrap".to_string(),
+                    "--json-status-fd".to_string(),
+                    "3".to_string(),
+                ],
+                "mez-native-probe-ok",
+            ),
+        );
+        let command = format!("printf ran > '{}'", marker.display());
+
+        let outcome = execute_native_shell_dispatch(dispatch_with_probe(&command, Some(probe)));
+
+        let failure = outcome.result.unwrap_err();
+        assert!(
+            failure.message.contains("unknown option --json-status-fd"),
+            "{failure:?}"
+        );
+        assert!(outcome.sandbox_capability.is_none());
+        assert!(
+            !marker.exists(),
+            "workload ran despite unsupported status descriptor"
+        );
+    }
+
     /// Verifies probe pipes are drained concurrently beyond the retained
     /// diagnostic bound so a noisy valid probe cannot deadlock or receive
     /// `SIGPIPE` before publishing its sentinel.

@@ -15,6 +15,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
+use std::os::fd::AsRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -926,17 +928,50 @@ fn run_native_bubblewrap_capability_probe(
     config_generation: u64,
     probe_plan: &crate::security::sandbox::BubblewrapCapabilityProbePlan,
 ) -> Result<crate::security::sandbox::BubblewrapCapability> {
-    let mut child = Command::new(&probe_plan.executable)
+    let status_sink = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/null")
+        .map_err(|error| {
+            MezError::invalid_state(crate::security::sandbox::bubblewrap_failure_remediation(
+                &format!(
+                    "native Bubblewrap capability probe could not open its status sink: {error}"
+                ),
+            ))
+        })?;
+    let status_fd = status_sink.as_raw_fd();
+    let mut command = Command::new(&probe_plan.executable);
+    command
         .args(&probe_plan.arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            MezError::invalid_state(crate::security::sandbox::bubblewrap_failure_remediation(
-                &format!("native Bubblewrap capability probe could not start: {error}"),
-            ))
-        })?;
+        .stderr(Stdio::piped());
+    // SAFETY: the hook only duplicates the still-live status sink and clears
+    // close-on-exec on descriptor 3 before the probe executable starts.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::dup2(
+                status_fd,
+                i32::from(crate::security::sandbox::BUBBLEWRAP_STATUS_FD),
+            ) == -1
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::fcntl(
+                i32::from(crate::security::sandbox::BUBBLEWRAP_STATUS_FD),
+                libc::F_SETFD,
+                0,
+            ) == -1
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().map_err(|error| {
+        MezError::invalid_state(crate::security::sandbox::bubblewrap_failure_remediation(
+            &format!("native Bubblewrap capability probe could not start: {error}"),
+        ))
+    })?;
     let stdout_reader = child.stdout.take().map(spawn_bounded_probe_reader);
     let stderr_reader = child.stderr.take().map(spawn_bounded_probe_reader);
     let deadline = Instant::now() + NATIVE_BUBBLEWRAP_PROBE_TIMEOUT;
