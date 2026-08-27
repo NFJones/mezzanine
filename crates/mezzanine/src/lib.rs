@@ -39,6 +39,7 @@ pub use error::{MezError, MezErrorKind, Result};
 pub fn internal_process_exit_code() -> Option<u8> {
     let arguments = std::env::args_os().collect::<Vec<_>>();
     security::sandbox::seatbelt_probe::run_internal_process(&arguments)
+        .or_else(|| security::sandbox::seatbelt_child::run_internal_process(&arguments))
 }
 
 /// Reads the configured Tokio worker count before constructing the runtime.

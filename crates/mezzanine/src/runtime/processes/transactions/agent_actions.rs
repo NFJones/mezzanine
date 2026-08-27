@@ -1760,10 +1760,11 @@ impl RuntimeSessionService {
         let Some(mut transaction_ref) = self.remove_running_shell_transaction(marker) else {
             return Ok(0);
         };
-        let sandboxed = self
+        let sandbox_backend = self
             .process
-            .sandboxed_shell_transaction_markers
-            .contains(marker);
+            .sandboxed_shell_transaction_backends
+            .get(marker)
+            .copied();
         self.clear_shell_transaction_protocol_state(marker);
         if transaction_ref.kind == RunningShellTransactionKind::FocusedShellHook {
             return self.observe_focused_shell_hook_transaction_end(
@@ -1872,21 +1873,48 @@ impl RuntimeSessionService {
             action_id: action_id.clone(),
             marker: marker.to_string(),
         };
-        if sandboxed {
+        if let Some(sandbox_backend) = sandbox_backend {
+            let backend_name = sandbox_backend.as_str();
             let status = if transaction_ref.observed_output_truncated {
-                Err("Bubblewrap status transport was truncated".to_string())
+                Err(format!("{backend_name} status transport was truncated"))
             } else {
                 mez_agent::decode_shell_status_transport(&transaction_ref.observed_output_preview)
                     .map_err(|error| error.message().to_string())
                     .and_then(|status| {
                         crate::security::sandbox::parse_sandbox_lifecycle_status(
-                            crate::runtime::SandboxBackend::Bubblewrap,
+                            sandbox_backend,
                             &status,
                         )
                         .map_err(|error| error.message().to_string())
                     })
             };
             match status {
+                Ok(status)
+                    if sandbox_backend == crate::runtime::SandboxBackend::Seatbelt
+                        && status.payload_established()
+                        && status.exit_code().is_none() =>
+                {
+                    self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
+                    return self.fail_running_shell_transaction_action(
+                        &transaction_ref,
+                        marker,
+                        RuntimeShellTransactionActionFailure {
+                            action_id: action_id.clone(),
+                            status: ActionStatus::Failed,
+                            code: "seatbelt_established_payload_incomplete".to_string(),
+                            message: "Seatbelt payload execution was established but lifecycle completion was not proven".to_string(),
+                            sent_to_pane: true,
+                            terminal_observation: serde_json::json!({
+                                "source": "seatbelt_status",
+                                "marker": marker,
+                                "exit_code": null,
+                                "payload_exec_proven": true,
+                                "boundary_state": "seatbelt-established-payload-incomplete"
+                            }),
+                            trace_reason: "seatbelt_established_payload_incomplete".to_string(),
+                        },
+                    );
+                }
                 Ok(status) if status.exit_code().is_none() => {
                     self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
                     if self.offer_sandbox_pre_payload_fallback_approval(
@@ -1897,74 +1925,99 @@ impl RuntimeSessionService {
                     )? {
                         return Ok(1);
                     }
-                    let message = crate::security::sandbox::bubblewrap_failure_remediation(
-                        "Bubblewrap failed before payload execution",
-                    );
+                    let message = match sandbox_backend {
+                        crate::runtime::SandboxBackend::Bubblewrap => {
+                            crate::security::sandbox::bubblewrap_failure_remediation(
+                                "Bubblewrap failed before payload execution",
+                            )
+                        }
+                        crate::runtime::SandboxBackend::Seatbelt => {
+                            "Seatbelt failed before payload execution".to_string()
+                        }
+                    };
+                    let code = format!("{backend_name}_pre_payload_failure");
                     return self.fail_running_shell_transaction_action(
                         &transaction_ref,
                         marker,
                         RuntimeShellTransactionActionFailure {
                             action_id: action_id.clone(),
                             status: ActionStatus::Failed,
-                            code: "bubblewrap_pre_payload_failure".to_string(),
+                            code: code.clone(),
                             message,
                             sent_to_pane: true,
                             terminal_observation: serde_json::json!({
-                                "source": "bubblewrap_status",
+                                "source": format!("{backend_name}_status"),
                                 "marker": marker,
                                 "exit_code": null,
                                 "payload_exec_proven": false,
-                                "boundary_state": "bubblewrap-pre-payload-failure"
+                                "boundary_state": format!("{backend_name}-pre-payload-failure")
                             }),
-                            trace_reason: "bubblewrap_pre_payload_failure".to_string(),
+                            trace_reason: code,
                         },
                     );
                 }
                 Ok(status) if status.exit_code() != Some(exit_code) => {
-                    let message = crate::security::sandbox::bubblewrap_failure_remediation(
-                        "Bubblewrap status exit code contradicts the shell transaction",
-                    );
+                    let message = match sandbox_backend {
+                        crate::runtime::SandboxBackend::Bubblewrap => {
+                            crate::security::sandbox::bubblewrap_failure_remediation(
+                                "Bubblewrap status exit code contradicts the shell transaction",
+                            )
+                        }
+                        crate::runtime::SandboxBackend::Seatbelt => {
+                            "Seatbelt status exit code contradicts the shell transaction"
+                                .to_string()
+                        }
+                    };
+                    let code = format!("{backend_name}_status_mismatch");
                     return self.fail_running_shell_transaction_action(
                         &transaction_ref,
                         marker,
                         RuntimeShellTransactionActionFailure {
                             action_id: action_id.clone(),
                             status: ActionStatus::Failed,
-                            code: "bubblewrap_status_mismatch".to_string(),
+                            code: code.clone(),
                             message,
                             sent_to_pane: true,
                             terminal_observation: serde_json::json!({
-                                "source": "bubblewrap_status",
+                                "source": format!("{backend_name}_status"),
                                 "marker": marker,
                                 "exit_code": exit_code,
                                 "reported_exit_code": status.exit_code(),
-                                "boundary_state": "bubblewrap-status-mismatch"
+                                "boundary_state": format!("{backend_name}-status-mismatch")
                             }),
-                            trace_reason: "bubblewrap_status_mismatch".to_string(),
+                            trace_reason: code,
                         },
                     );
                 }
                 Err(message) => {
-                    let failure_message = crate::security::sandbox::bubblewrap_failure_remediation(
-                        &format!("Bubblewrap status was invalid: {message}"),
-                    );
+                    let failure_message = match sandbox_backend {
+                        crate::runtime::SandboxBackend::Bubblewrap => {
+                            crate::security::sandbox::bubblewrap_failure_remediation(&format!(
+                                "Bubblewrap status was invalid: {message}"
+                            ))
+                        }
+                        crate::runtime::SandboxBackend::Seatbelt => {
+                            format!("Seatbelt status was invalid: {message}")
+                        }
+                    };
+                    let code = format!("{backend_name}_status_invalid");
                     return self.fail_running_shell_transaction_action(
                         &transaction_ref,
                         marker,
                         RuntimeShellTransactionActionFailure {
                             action_id: action_id.clone(),
                             status: ActionStatus::Failed,
-                            code: "bubblewrap_status_invalid".to_string(),
+                            code: code.clone(),
                             message: failure_message,
                             sent_to_pane: true,
                             terminal_observation: serde_json::json!({
-                                "source": "bubblewrap_status",
+                                "source": format!("{backend_name}_status"),
                                 "marker": marker,
                                 "exit_code": exit_code,
-                                "boundary_state": "bubblewrap-status-invalid",
+                                "boundary_state": format!("{backend_name}-status-invalid"),
                                 "status_error": message
                             }),
-                            trace_reason: "bubblewrap_status_invalid".to_string(),
+                            trace_reason: code,
                         },
                     );
                 }

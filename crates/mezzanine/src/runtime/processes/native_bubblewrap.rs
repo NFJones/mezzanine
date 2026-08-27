@@ -213,6 +213,16 @@ pub(crate) struct NativeBubblewrapDispatch {
     pub(crate) activity_lease: Option<NativeBubblewrapActivityLease>,
 }
 
+/// Everything native dispatch needs to run one Seatbelt-confined action.
+pub(crate) struct NativeSeatbeltDispatch {
+    /// Typed outer-launcher argv carrying the generated Seatbelt profile.
+    pub(crate) child_launch: ShellChildLaunch,
+    /// Redacted plan facts shared with pane dispatch and audit.
+    pub(crate) audit_summary: crate::security::sandbox::SandboxAuditSummary,
+    /// Cloneable action/home/temp cleanup lease retained through settlement.
+    pub(crate) workload_lease: crate::security::sandbox::SeatbeltWorkloadLease,
+}
+
 impl crate::runtime::RuntimeSessionService {
     /// Builds an uncached native Seatbelt probe from exact root-process
     /// environment evidence, or returns `None` when that identity is cached.
@@ -264,6 +274,118 @@ impl crate::runtime::RuntimeSessionService {
             self.session.config_generation,
             plan,
         )))
+    }
+
+    /// Compiles one authorized native action into the same typed Seatbelt
+    /// workload launch used by pane transport after exact capability proof.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the pane dispatch surface's per-action inputs"
+    )]
+    pub(crate) fn native_seatbelt_dispatch_for_action(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        context: &NativeShellContext,
+        config: &crate::runtime::SeatbeltConfig,
+        permission_evaluation: &PermissionEvaluation,
+        program_dialect: LocalProgramDialect,
+        command: &str,
+        input_sidecar: Option<&str>,
+    ) -> Result<NativeSeatbeltDispatch> {
+        let signature = native_environment_signature_for_context(
+            context,
+            self.primary_pid_for_live_pane_process(&turn.pane_id),
+        )?;
+        let signature_hash = signature.stable_hash();
+        let request = mez_agent::shell::PaneEnvironmentRequest::new(
+            config.env_whitelist.requested_names.clone(),
+        )
+        .map_err(|error| MezError::invalid_args(error.message()))?;
+        let evidence = if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+            PaneEnvironmentEvidence::restrictive(&request, "semantic_patch_not_forwarded")
+        } else {
+            native_environment_evidence(&request, context)
+        };
+        let child_shell_path = program_dialect
+            .interpreter_path()
+            .unwrap_or(&signature.shell_path);
+        let probe_plan = crate::security::sandbox::seatbelt_capability_probe_plan(
+            config,
+            child_shell_path,
+            &signature,
+            &evidence,
+        )
+        .map_err(|error| MezError::invalid_state(error.message()))?;
+        let cache_key = crate::security::sandbox::seatbelt_capability_cache_key(
+            &turn.pane_id,
+            &signature_hash,
+            self.session.config_generation,
+            &probe_plan,
+        )
+        .map_err(|error| MezError::invalid_state(error.message()))?;
+        self.seatbelt_capability(&cache_key).ok_or_else(|| {
+            MezError::invalid_state(
+                "Seatbelt capability is unavailable for the active native environment",
+            )
+        })?;
+        let maximum_authority =
+            self.native_bubblewrap_path_scopes_for_turn(turn, context, permission_evaluation)?;
+        let policy = crate::security::sandbox::effective_sandbox_policy_for_authority(
+            &maximum_authority,
+            permission_evaluation,
+            matches!(action.payload, AgentActionPayload::ApplyPatch { .. }),
+            self.configured_permissions().resources.network_policy,
+            config.network,
+            config.environment,
+        )
+        .map_err(|error| MezError::invalid_state(error.message()))?;
+        let trusted_project_root = self.native_trusted_project_root(context);
+        let artifacts = crate::security::sandbox::prepare_seatbelt_workload_artifacts(
+            self.integration.config_root(),
+            trusted_project_root.as_deref(),
+            command,
+            input_sidecar,
+        )
+        .map_err(|error| MezError::invalid_state(error.message()))?;
+        let child_launcher = std::env::current_exe()
+            .and_then(std::fs::canonicalize)
+            .map_err(|error| {
+                MezError::invalid_state(format!(
+                    "Seatbelt child launcher discovery failed: {error}"
+                ))
+            })?;
+        let child_launcher = child_launcher
+            .to_str()
+            .ok_or_else(|| MezError::invalid_state("Seatbelt child launcher path is not UTF-8"))?;
+        let plan = crate::security::sandbox::seatbelt::compile_seatbelt_launch_plan(
+            crate::security::sandbox::seatbelt::SeatbeltCompileRequest {
+                config,
+                policy: &policy,
+                child_shell_path,
+                child_launcher_path: child_launcher,
+                command_file_path: &artifacts.command_file_path.to_string_lossy(),
+                environment_file_path: &artifacts.environment_file_path.to_string_lossy(),
+                home_directory: &artifacts.home_directory.to_string_lossy(),
+                temporary_directory: &artifacts.temporary_directory.to_string_lossy(),
+                user_name: &signature.user,
+                environment_evidence: &evidence,
+                stateful: false,
+                interactive: false,
+            },
+        )
+        .map_err(|error| MezError::invalid_state(error.message()))?;
+        artifacts
+            .write_environment_document(&plan.environment_document)
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+        Ok(NativeSeatbeltDispatch {
+            child_launch: plan
+                .child_launch
+                .with_status_fd(crate::security::sandbox::SANDBOX_STATUS_FD)
+                .map_err(|error| MezError::invalid_state(error.message()))?,
+            audit_summary: plan.audit_summary,
+            workload_lease: artifacts.lease,
+        })
     }
 
     /// Assembles the native Bubblewrap child launch for one authorized action.

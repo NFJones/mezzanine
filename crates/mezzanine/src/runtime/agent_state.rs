@@ -105,9 +105,13 @@ pub(crate) struct RuntimeNativeShellDispatch {
     /// Whether the worker must stop after capability proof without launching
     /// the user workload.
     pub(crate) capability_probe_only: bool,
+    /// Exact backend whose lifecycle evidence must be validated.
+    pub(crate) sandbox_backend: Option<crate::runtime::SandboxBackend>,
     /// Managed-home lease retained through worker probe and workload execution.
     pub(crate) bubblewrap_activity_lease:
         Option<crate::runtime::processes::NativeBubblewrapActivityLease>,
+    /// Seatbelt action/home/temp cleanup lease retained through execution.
+    pub(crate) seatbelt_workload_lease: Option<crate::security::sandbox::SeatbeltWorkloadLease>,
     /// Fully materialized spawned-shell request.
     pub(crate) request: ShellExecutionRequest,
     /// Runtime wall-clock timestamp used by shell completion metrics.

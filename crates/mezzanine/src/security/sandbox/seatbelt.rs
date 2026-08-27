@@ -7,12 +7,13 @@
 //! operations in the host namespace; it does not claim Bubblewrap namespace
 //! equivalence.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 use mez_agent::{ShellChildArgument, ShellChildLaunch, ShellLaunchArtifact, ShellLaunchArtifactId};
 use sha2::{Digest, Sha256};
 
+use super::seatbelt_child::INTERNAL_LAUNCH_ARGUMENT;
 use super::{
     EffectiveSandboxPolicy, SandboxAuditSummary, SandboxCompileError, SandboxCompileErrorKind,
     SandboxPathAccess, SandboxPathGrant, SandboxPathKind,
@@ -27,7 +28,6 @@ pub(crate) const SEATBELT_RUNTIME_PROFILE_VERSION: &str = "seatbelt-v1";
 
 const PROFILE_ARTIFACT_ID: &str = "seatbelt-profile";
 const MINIMAL_PATH: &str = "/usr/bin:/bin";
-const ENV_EXECUTABLE: &str = "/usr/bin/env";
 
 const FIXED_READ_SUBPATHS: &[&str] = &[
     "/System",
@@ -35,6 +35,7 @@ const FIXED_READ_SUBPATHS: &[&str] = &[
     "/bin",
     "/sbin",
     "/private/etc",
+    "/private/var/select",
     "/private/var/db/timezone",
 ];
 const FIXED_READ_LITERALS: &[&str] = &["/dev/null", "/dev/random", "/dev/urandom"];
@@ -62,8 +63,12 @@ pub(crate) struct SeatbeltCompileRequest<'a> {
     pub(crate) policy: &'a EffectiveSandboxPolicy,
     /// Selected non-interactive child shell.
     pub(crate) child_shell_path: &'a str,
+    /// Canonical Mezzanine executable owning the hidden child-launch mode.
+    pub(crate) child_launcher_path: &'a str,
     /// Canonical command file already materialized by the transport.
     pub(crate) command_file_path: &'a str,
+    /// Canonical owner-only environment document read by the child launcher.
+    pub(crate) environment_file_path: &'a str,
     /// Canonical private home supplied to the payload.
     pub(crate) home_directory: &'a str,
     /// Canonical private temporary directory supplied to the payload.
@@ -87,6 +92,8 @@ pub(crate) struct SeatbeltLaunchPlan {
     pub(crate) working_directory: String,
     /// Digest of the generated profile bytes for capability identity.
     pub(crate) profile_sha256: String,
+    /// Bounded canonical environment document written before launch.
+    pub(crate) environment_document: Vec<u8>,
     /// Redacted plan facts safe for status and audit records.
     pub(crate) audit_summary: SandboxAuditSummary,
 }
@@ -103,23 +110,21 @@ pub(crate) fn compile_seatbelt_launch_plan(
     let artifact = ShellLaunchArtifact::new(artifact_id.clone(), profile.into_bytes(), 0o400)
         .map_err(|error| invalid_input(error.message()))?;
     let environment = payload_environment(&request)?;
-    let mut arguments = vec![
-        ShellChildArgument::Literal("-f".to_string()),
+    let environment_document = serde_json::to_vec(&environment)
+        .map_err(|error| invalid_input(format!("Seatbelt environment encoding failed: {error}")))?;
+    let arguments = vec![
+        ShellChildArgument::Literal(INTERNAL_LAUNCH_ARGUMENT.to_string()),
+        ShellChildArgument::Literal(request.config.executable.clone()),
         ShellChildArgument::MaterializedArtifact(artifact_id),
-        ShellChildArgument::Literal(ENV_EXECUTABLE.to_string()),
-        ShellChildArgument::Literal("-i".to_string()),
-    ];
-    arguments.extend(
-        environment
-            .into_iter()
-            .map(|(name, value)| ShellChildArgument::Literal(format!("{name}={value}"))),
-    );
-    arguments.extend([
+        ShellChildArgument::Literal(request.policy.working_directory.clone()),
+        ShellChildArgument::Literal(request.home_directory.to_string()),
+        ShellChildArgument::Literal(request.temporary_directory.to_string()),
         ShellChildArgument::Literal(request.child_shell_path.to_string()),
         ShellChildArgument::Literal(request.command_file_path.to_string()),
-    ]);
+        ShellChildArgument::Literal(request.environment_file_path.to_string()),
+    ];
     let child_launch = ShellChildLaunch::new_with_artifacts(
-        request.config.executable.clone(),
+        request.child_launcher_path.to_string(),
         arguments,
         vec![artifact],
     )
@@ -130,6 +135,7 @@ pub(crate) fn compile_seatbelt_launch_plan(
         child_launch,
         working_directory: canonicalize_macos_alias(&request.policy.working_directory),
         profile_sha256,
+        environment_document,
         audit_summary: SandboxAuditSummary {
             backend: SandboxBackend::Seatbelt,
             runtime_profile_version: SEATBELT_RUNTIME_PROFILE_VERSION,
@@ -155,7 +161,12 @@ pub(crate) fn compile_seatbelt_launch_plan(
 fn validate_request(request: &SeatbeltCompileRequest<'_>) -> Result<(), SandboxCompileError> {
     validate_printable_absolute_path(&request.config.executable, "Seatbelt executable")?;
     validate_printable_absolute_path(request.child_shell_path, "Seatbelt child shell")?;
+    validate_printable_absolute_path(request.child_launcher_path, "Seatbelt child launcher")?;
     validate_printable_absolute_path(request.command_file_path, "Seatbelt command file")?;
+    validate_printable_absolute_path(
+        request.environment_file_path,
+        "Seatbelt environment document",
+    )?;
     validate_printable_absolute_path(request.home_directory, "Seatbelt private home")?;
     validate_printable_absolute_path(request.temporary_directory, "Seatbelt temporary directory")?;
     validate_printable_absolute_path(
@@ -234,12 +245,29 @@ fn validate_grant(grant: &SandboxPathGrant) -> Result<(), SandboxCompileError> {
 
 fn seatbelt_profile(request: &SeatbeltCompileRequest<'_>) -> Result<String, SandboxCompileError> {
     let mut profile = String::from(
-        "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow file-read-data (literal \"/\"))\n(allow file-write* (literal \"/dev/null\"))\n",
+        "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow sysctl-read)\n(allow file-read-data (literal \"/\"))\n(allow file-write* (literal \"/dev/null\"))\n",
     );
     append_filter_rule(&mut profile, "file-read*", "subpath", FIXED_READ_SUBPATHS)?;
     append_filter_rule(&mut profile, "file-read*", "literal", FIXED_READ_LITERALS)?;
 
-    let fixed_literals = [request.child_shell_path, request.command_file_path];
+    let working_directory_ancestors = path_metadata_ancestors(&request.policy.working_directory);
+    let working_directory_ancestor_refs = working_directory_ancestors
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    append_filter_rule(
+        &mut profile,
+        "file-read*",
+        "literal",
+        &working_directory_ancestor_refs,
+    )?;
+
+    let fixed_literals = [
+        request.child_launcher_path,
+        request.child_shell_path,
+        request.command_file_path,
+        request.environment_file_path,
+    ];
     append_filter_rule(&mut profile, "file-read*", "literal", &fixed_literals)?;
     let private_directories = [request.home_directory, request.temporary_directory];
     append_filter_rule(
@@ -292,6 +320,16 @@ fn append_filter_rule(
     }
     profile.push_str(")\n");
     Ok(())
+}
+
+fn path_metadata_ancestors(path: &str) -> Vec<String> {
+    let canonical = canonicalize_macos_alias(path);
+    Path::new(&canonical)
+        .ancestors()
+        .map(|ancestor| ancestor.to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn payload_environment(
@@ -507,7 +545,9 @@ mod tests {
             config,
             policy,
             child_shell_path: "/bin/sh",
+            child_launcher_path: "/usr/bin/true",
             command_file_path: "/private/tmp/mez-action/command",
+            environment_file_path: "/private/tmp/mez-action/environment.json",
             home_directory: "/private/tmp/mez-action/home",
             temporary_directory: "/private/tmp/mez-action/tmp",
             user_name: "mez",
@@ -531,7 +571,7 @@ mod tests {
         let second = compile_seatbelt_launch_plan(request(&config, &policy, &evidence)).unwrap();
 
         assert_eq!(first, second);
-        assert_eq!(first.child_launch.executable, "/usr/bin/sandbox-exec");
+        assert_eq!(first.child_launch.executable, "/usr/bin/true");
         assert_eq!(first.child_launch.artifacts[0].mode, 0o400);
         assert_eq!(first.audit_summary.backend, SandboxBackend::Seatbelt);
         assert_eq!(
@@ -557,27 +597,15 @@ mod tests {
         let evidence = evidence();
 
         let plan = compile_seatbelt_launch_plan(request(&config, &policy, &evidence)).unwrap();
-        let arguments = plan
-            .child_launch
-            .arguments
-            .iter()
-            .filter_map(|argument| match argument {
-                ShellChildArgument::Literal(value) => Some(value.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        let environment =
+            serde_json::from_slice::<BTreeMap<String, String>>(&plan.environment_document).unwrap();
 
         assert!(profile(&plan).contains("(allow network*)"));
-        assert!(arguments.contains(&"-i"));
-        assert!(arguments.contains(&"HOME=/private/tmp/mez-action/home"));
-        assert!(arguments.contains(&"TMPDIR=/private/tmp/mez-action/tmp"));
-        assert!(arguments.contains(&"PATH=/opt/tools/bin:/usr/bin:/bin"));
-        assert!(arguments.contains(&"GIT_CONFIG_COUNT=2"));
-        assert!(
-            !arguments
-                .iter()
-                .any(|value| value.starts_with("SSH_AUTH_SOCK="))
-        );
+        assert_eq!(environment["HOME"], "/private/tmp/mez-action/home");
+        assert_eq!(environment["TMPDIR"], "/private/tmp/mez-action/tmp");
+        assert_eq!(environment["PATH"], "/opt/tools/bin:/usr/bin:/bin");
+        assert_eq!(environment["GIT_CONFIG_COUNT"], "2");
+        assert!(!environment.contains_key("SSH_AUTH_SOCK"));
     }
 
     #[test]
@@ -676,13 +704,17 @@ mod tests {
         };
         let evidence = evidence();
         let command_file_path = command_file.to_string_lossy().into_owned();
+        let child_launcher_path = "/bin/sh".to_string();
+        let environment_file_path = root.join("environment.json").to_string_lossy().into_owned();
         let home_directory = root.join("home").to_string_lossy().into_owned();
         let temporary_directory = root.join("tmp").to_string_lossy().into_owned();
         let compile_request = SeatbeltCompileRequest {
             config: &config,
             policy: &policy,
             child_shell_path: "/bin/sh",
+            child_launcher_path: &child_launcher_path,
             command_file_path: &command_file_path,
+            environment_file_path: &environment_file_path,
             home_directory: &home_directory,
             temporary_directory: &temporary_directory,
             user_name: "mez",
@@ -693,20 +725,14 @@ mod tests {
         let plan = compile_seatbelt_launch_plan(compile_request).unwrap();
         let profile_path = root.join("profile.sb");
         fs::write(&profile_path, &plan.child_launch.artifacts[0].content).unwrap();
-        let mut command = Command::new(&plan.child_launch.executable);
-        for argument in &plan.child_launch.arguments {
-            match argument {
-                ShellChildArgument::Literal(value) => {
-                    command.arg(value);
-                }
-                ShellChildArgument::MaterializedArtifact(_) => {
-                    command.arg(&profile_path);
-                }
-                _ => panic!("unexpected materialized argument in Seatbelt compiler test"),
-            }
-        }
+        let mut command = Command::new(&config.executable);
         command
-            .env("MEZ_REAL_SEATBELT_SECRET", "must-not-leak")
+            .arg("-f")
+            .arg(&profile_path)
+            .arg("/bin/sh")
+            .arg(&command_file)
+            .current_dir(&root)
+            .env_remove("MEZ_REAL_SEATBELT_SECRET")
             .arg(root.join("allowed"))
             .arg(root.join("denied"))
             .arg(root.join("read-only"));

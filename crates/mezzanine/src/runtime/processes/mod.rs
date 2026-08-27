@@ -853,11 +853,17 @@ pub(crate) struct RuntimeProcessComponent {
     shell_receiver_pending_ends: std::collections::BTreeMap<String, (String, String, String, i32)>,
     /// Agent-action markers whose child launch uses the Bubblewrap backend.
     sandboxed_shell_transaction_markers: BTreeSet<String>,
+    /// Exact backend retained for each sandboxed agent-action marker.
+    sandboxed_shell_transaction_backends:
+        std::collections::BTreeMap<String, crate::runtime::SandboxBackend>,
     /// Shared managed-home activity locks retained for sandboxed workloads.
     managed_home_activity_locks: std::collections::BTreeMap<
         String,
         crate::security::sandbox::BubblewrapManagedHomeActivityLock,
     >,
+    /// Seatbelt action/home/temp cleanup leases retained until settlement.
+    seatbelt_workload_leases:
+        std::collections::BTreeMap<String, crate::security::sandbox::SeatbeltWorkloadLease>,
     /// Active pane output pipes keyed by their source pane id.
     active_pane_pipes: std::collections::BTreeMap<String, ActivePanePipe>,
     /// Process identity for panes whose handles are adapter-owned.
@@ -1720,6 +1726,7 @@ impl RuntimeSessionService {
             .get(marker)
             .map(|transaction| transaction.pane_id.clone());
         self.process.managed_home_activity_locks.remove(marker);
+        self.process.seatbelt_workload_leases.remove(marker);
         self.release_shell_transaction_input_lease(marker);
         self.process
             .shell_transaction_encoded_output_markers
@@ -1810,6 +1817,8 @@ impl RuntimeSessionService {
             .clear();
         self.process.pane_shell_output_render_pending.clear();
         self.process.managed_home_activity_locks.clear();
+        self.process.seatbelt_workload_leases.clear();
+        self.process.sandboxed_shell_transaction_backends.clear();
     }
 
     /// Marks one registered action transaction as the owner of encoded output.
@@ -2508,6 +2517,26 @@ impl RuntimeSessionService {
         self.process
             .sandboxed_shell_transaction_markers
             .contains(marker)
+    }
+
+    /// Returns the exact sandbox backend retained for one live transaction.
+    pub(crate) fn shell_transaction_sandbox_backend_for_tests(
+        &self,
+        marker: &str,
+    ) -> Option<crate::runtime::SandboxBackend> {
+        self.process
+            .sandboxed_shell_transaction_backends
+            .get(marker)
+            .copied()
+    }
+
+    /// Returns the private Seatbelt action directory retained by one live
+    /// transaction so cleanup can be verified after settlement.
+    pub(crate) fn seatbelt_workload_directory_for_tests(&self, marker: &str) -> Option<PathBuf> {
+        self.process
+            .seatbelt_workload_leases
+            .get(marker)
+            .map(|lease| lease.action_directory_for_tests().to_path_buf())
     }
 
     /// Reports whether a managed shell still owns parent restoration.

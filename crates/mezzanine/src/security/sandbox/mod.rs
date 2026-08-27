@@ -33,7 +33,9 @@ use crate::runtime::{
 mod identity;
 mod managed_home;
 pub(crate) mod seatbelt;
+pub(crate) mod seatbelt_child;
 pub(crate) mod seatbelt_probe;
+mod seatbelt_workload;
 mod workflow;
 
 pub(crate) use identity::{
@@ -54,6 +56,7 @@ pub(crate) use seatbelt_probe::{
     SeatbeltCapability, SeatbeltCapabilityCacheKey, SeatbeltCapabilityProbePlan,
     parse_seatbelt_capability_probe, seatbelt_capability_cache_key, seatbelt_capability_probe_plan,
 };
+pub(crate) use seatbelt_workload::{SeatbeltWorkloadLease, prepare_seatbelt_workload_artifacts};
 pub(crate) use workflow::{
     SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
     effective_sandbox_boundary, plan_sandbox_workflow,
@@ -61,8 +64,10 @@ pub(crate) use workflow::{
 
 /// Version of the runtime projection emitted by this compiler.
 pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v14";
-/// Runtime-owned descriptor used for Bubblewrap lifecycle status documents.
-pub(crate) const BUBBLEWRAP_STATUS_FD: u8 = 3;
+/// Runtime-owned descriptor used for trusted sandbox lifecycle documents.
+pub(crate) const SANDBOX_STATUS_FD: u8 = 3;
+/// Compatibility name for the descriptor used by Bubblewrap lifecycle status.
+pub(crate) const BUBBLEWRAP_STATUS_FD: u8 = SANDBOX_STATUS_FD;
 
 const SANDBOX_COMMAND_PATH: &str = "/run/mez/command";
 /// Sentinel replaced by the pane transaction's materialized command-file
@@ -443,11 +448,35 @@ pub(crate) struct BubblewrapStatus {
     pub(crate) exit_code: Option<i32>,
 }
 
+/// Stable failure emitted by the code-owned Seatbelt child launcher.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SeatbeltStatusFailure {
+    /// The payload process could not be spawned after Seatbelt entry.
+    PayloadSpawn,
+    /// The established payload process could not be waited to completion.
+    PayloadWait,
+}
+
+/// Validated ordered lifecycle evidence emitted inside the Seatbelt profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SeatbeltStatus {
+    /// Whether the code-owned launcher proved execution after Seatbelt entry.
+    pub(crate) sandbox_entered: bool,
+    /// Payload child process identity after successful spawn.
+    pub(crate) child_pid: Option<u32>,
+    /// Payload exit status after successful wait.
+    pub(crate) exit_code: Option<i32>,
+    /// Typed launcher failure when payload establishment or wait failed.
+    pub(crate) failure: Option<SeatbeltStatusFailure>,
+}
+
 /// Backend-tagged trusted lifecycle evidence captured outside workload output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SandboxLifecycleStatus {
     /// Ordered status documents emitted by Bubblewrap.
     Bubblewrap(BubblewrapStatus),
+    /// Ordered status documents emitted by the code-owned Seatbelt launcher.
+    Seatbelt(SeatbeltStatus),
 }
 
 impl SandboxLifecycleStatus {
@@ -455,6 +484,7 @@ impl SandboxLifecycleStatus {
     pub(crate) const fn child_pid(self) -> Option<u32> {
         match self {
             Self::Bubblewrap(status) => status.child_pid,
+            Self::Seatbelt(status) => status.child_pid,
         }
     }
 
@@ -462,6 +492,23 @@ impl SandboxLifecycleStatus {
     pub(crate) const fn exit_code(self) -> Option<i32> {
         match self {
             Self::Bubblewrap(status) => status.exit_code,
+            Self::Seatbelt(status) => status.exit_code,
+        }
+    }
+
+    /// Returns whether trusted evidence proves the backend boundary was entered.
+    pub(crate) const fn sandbox_entered(self) -> bool {
+        match self {
+            Self::Bubblewrap(status) => status.child_pid.is_some(),
+            Self::Seatbelt(status) => status.sandbox_entered,
+        }
+    }
+
+    /// Returns whether trusted lifecycle evidence proves payload establishment.
+    pub(crate) const fn payload_established(self) -> bool {
+        match self {
+            Self::Bubblewrap(status) => status.exit_code.is_some(),
+            Self::Seatbelt(status) => status.child_pid.is_some(),
         }
     }
 }
@@ -475,11 +522,132 @@ pub(crate) fn parse_sandbox_lifecycle_status(
         SandboxBackend::Bubblewrap => {
             parse_bubblewrap_status(status).map(SandboxLifecycleStatus::Bubblewrap)
         }
-        SandboxBackend::Seatbelt => Err(SandboxCompileError::new(
-            SandboxCompileErrorKind::InvalidInput,
-            "Seatbelt lifecycle evidence is unavailable before runtime integration",
-        )),
+        SandboxBackend::Seatbelt => {
+            parse_seatbelt_status(status).map(SandboxLifecycleStatus::Seatbelt)
+        }
     }
+}
+
+/// Parses the strict lifecycle sequence emitted by the Seatbelt child launcher.
+pub(crate) fn parse_seatbelt_status(status: &str) -> Result<SeatbeltStatus, SandboxCompileError> {
+    let mut parsed = SeatbeltStatus {
+        sandbox_entered: false,
+        child_pid: None,
+        exit_code: None,
+        failure: None,
+    };
+    for line in status.lines().filter(|line| !line.trim().is_empty()) {
+        let value = serde_json::from_str::<serde_json::Value>(line).map_err(|_| {
+            SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                "Seatbelt status contains malformed JSON",
+            )
+        })?;
+        let object = value.as_object().ok_or_else(|| {
+            SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                "Seatbelt status document must be a JSON object",
+            )
+        })?;
+        if object.get("version").and_then(serde_json::Value::as_u64) != Some(1) {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                "Seatbelt status version is unsupported",
+            ));
+        }
+        let event = object
+            .get("event")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    "Seatbelt status event is missing",
+                )
+            })?;
+        match event {
+            "sandbox-entered"
+                if !parsed.sandbox_entered
+                    && parsed.child_pid.is_none()
+                    && parsed.exit_code.is_none()
+                    && parsed.failure.is_none()
+                    && object.len() == 2 =>
+            {
+                parsed.sandbox_entered = true;
+            }
+            "child-established"
+                if parsed.sandbox_entered
+                    && parsed.child_pid.is_none()
+                    && parsed.exit_code.is_none()
+                    && parsed.failure.is_none()
+                    && object.len() == 3 =>
+            {
+                parsed.child_pid = object
+                    .get("child-pid")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .filter(|value| *value > 0);
+                if parsed.child_pid.is_none() {
+                    return Err(SandboxCompileError::new(
+                        SandboxCompileErrorKind::InvalidInput,
+                        "Seatbelt child-established status requires a positive child-pid",
+                    ));
+                }
+            }
+            "exit"
+                if parsed.sandbox_entered
+                    && parsed.child_pid.is_some()
+                    && parsed.exit_code.is_none()
+                    && parsed.failure.is_none()
+                    && object.len() == 3 =>
+            {
+                parsed.exit_code = object
+                    .get("exit-code")
+                    .and_then(serde_json::Value::as_i64)
+                    .and_then(|value| i32::try_from(value).ok());
+                if parsed.exit_code.is_none() {
+                    return Err(SandboxCompileError::new(
+                        SandboxCompileErrorKind::InvalidInput,
+                        "Seatbelt exit status requires an i32 exit-code",
+                    ));
+                }
+            }
+            "spawn-failed"
+                if parsed.sandbox_entered
+                    && parsed.child_pid.is_none()
+                    && parsed.exit_code.is_none()
+                    && parsed.failure.is_none()
+                    && object.len() == 3
+                    && object.get("code").and_then(serde_json::Value::as_str)
+                        == Some("payload-spawn") =>
+            {
+                parsed.failure = Some(SeatbeltStatusFailure::PayloadSpawn);
+            }
+            "wait-failed"
+                if parsed.sandbox_entered
+                    && parsed.child_pid.is_some()
+                    && parsed.exit_code.is_none()
+                    && parsed.failure.is_none()
+                    && object.len() == 3
+                    && object.get("code").and_then(serde_json::Value::as_str)
+                        == Some("payload-wait") =>
+            {
+                parsed.failure = Some(SeatbeltStatusFailure::PayloadWait);
+            }
+            _ => {
+                return Err(SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    "Seatbelt status documents are unknown, duplicate, or out of order",
+                ));
+            }
+        }
+    }
+    if !parsed.sandbox_entered {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            "Seatbelt status does not prove sandbox entry",
+        ));
+    }
+    Ok(parsed)
 }
 
 /// Parses ordered JSON status documents emitted by Bubblewrap.
@@ -964,37 +1132,73 @@ fn validate_request(request: &BubblewrapCompileRequest<'_>) -> Result<(), Sandbo
 fn effective_sandbox_policy(
     request: &BubblewrapCompileRequest<'_>,
 ) -> Result<EffectiveSandboxPolicy, SandboxCompileError> {
-    validate_maximum_authority(request.maximum_authority)?;
-    let evaluation = request.permission_evaluation;
-    let (grants, authority_source) = if request.preserve_maximum_authority {
+    effective_sandbox_policy_for_authority(
+        request.maximum_authority,
+        request.permission_evaluation,
+        request.preserve_maximum_authority,
+        request.network_policy,
+        request.config.network,
+        request.config.environment,
+    )
+}
+
+/// Builds one backend-neutral effective policy from trusted maximum authority
+/// and the structured permission decision for the original command.
+pub(crate) fn effective_sandbox_policy_for_authority(
+    maximum_authority: &PathScopes,
+    evaluation: &PermissionEvaluation,
+    preserve_maximum_authority: bool,
+    network_policy: NetworkPolicy,
+    configured_network: SandboxNetworkMode,
+    environment: SandboxEnvironmentPolicy,
+) -> Result<EffectiveSandboxPolicy, SandboxCompileError> {
+    if evaluation.decision != RuleDecision::Allow {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::Unauthorized,
+            "sandbox policy construction requires an explicitly allowed permission evaluation",
+        ));
+    }
+    if evaluation.effects.credentials {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::UnsupportedRequirement,
+            "credential access requires a dedicated sandbox credential broker",
+        ));
+    }
+    if evaluation.effects.process_control || evaluation.effects.privilege_change {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::UnsupportedRequirement,
+            "host process control and privilege changes are unsupported by sandboxed execution",
+        ));
+    }
+    validate_maximum_authority(maximum_authority)?;
+    let (grants, authority_source) = if preserve_maximum_authority {
         (
-            maximum_grants(request.maximum_authority),
+            maximum_grants(maximum_authority),
             SandboxAuthoritySource::Maximum,
         )
     } else if let Some(effects) = evaluation.confinement_effects.as_ref() {
         (
-            narrowed_grants(request.maximum_authority, effects)?,
+            narrowed_grants(maximum_authority, effects)?,
             SandboxAuthoritySource::Narrowed,
         )
     } else {
         (
-            maximum_grants(request.maximum_authority),
+            maximum_grants(maximum_authority),
             SandboxAuthoritySource::Maximum,
         )
     };
     Ok(EffectiveSandboxPolicy {
-        working_directory: request.maximum_authority.current_directory.clone(),
+        working_directory: maximum_authority.current_directory.clone(),
         grants,
         authority_source,
-        network: if matches!(request.network_policy, NetworkPolicy::Allow)
-            || (evaluation.effects.network
-                && matches!(request.network_policy, NetworkPolicy::Prompt))
+        network: if matches!(network_policy, NetworkPolicy::Allow)
+            || (evaluation.effects.network && matches!(network_policy, NetworkPolicy::Prompt))
         {
             SandboxNetworkMode::Connected
         } else {
-            request.config.network
+            configured_network
         },
-        environment: request.config.environment,
+        environment,
     })
 }
 

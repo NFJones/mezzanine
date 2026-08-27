@@ -8,11 +8,14 @@
 
 use mezzanine::control_client::{decode_control_frame, encode_control_body};
 use portable_pty::{Child as PtyChild, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::ops::{Deref, DerefMut};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child as ProcessChild, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -849,4 +852,133 @@ fn real_seatbelt_capability_probe_uses_product_binary_and_cleans_up() {
     assert!(output.stderr.is_empty(), "{output:?}");
     assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
     fs::remove_dir(root).unwrap();
+}
+
+/// Verifies the real product launcher enters Seatbelt, rebuilds the minimal
+/// payload environment, forwards trusted lifecycle records on FD 3, prevents
+/// descriptor inheritance from hanging completion, and mirrors payload exit.
+#[cfg(target_os = "macos")]
+#[test]
+fn real_seatbelt_workload_launcher_forwards_lifecycle_and_exit() {
+    use std::os::unix::net::UnixStream;
+
+    let sandbox_executable = Path::new("/usr/bin/sandbox-exec");
+    if !sandbox_executable.is_file() {
+        return;
+    }
+    let root = test_root("real-seatbelt-workload");
+    for directory in [
+        root.clone(),
+        root.join("home"),
+        root.join("home/.cache"),
+        root.join("home/.config"),
+        root.join("home/.local/share"),
+        root.join("home/.local/state"),
+        root.join("tmp"),
+    ] {
+        fs::create_dir_all(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let root = fs::canonicalize(root).unwrap();
+    let binary = fs::canonicalize(env!("CARGO_BIN_EXE_mez")).unwrap();
+    let home = root.join("home");
+    let temporary = root.join("tmp");
+    let command_file = root.join("command");
+    let environment_file = root.join("environment.json");
+    let profile_file = root.join("profile.sb");
+    fs::write(
+        &command_file,
+        "test -z \"${MEZ_SEATBELT_AMBIENT+x}\" || exit 90\nprintf workload-ok\ntouch \"$HOME/created\"\nexit 7\n",
+    )
+    .unwrap();
+    fs::set_permissions(&command_file, fs::Permissions::from_mode(0o600)).unwrap();
+    let environment = BTreeMap::from([
+        ("HOME".to_string(), home.to_string_lossy().into_owned()),
+        ("LANG".to_string(), "C".to_string()),
+        ("LC_ALL".to_string(), "C".to_string()),
+        ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+        ("SHELL".to_string(), "/bin/sh".to_string()),
+        (
+            "TMPDIR".to_string(),
+            temporary.to_string_lossy().into_owned(),
+        ),
+    ]);
+    fs::write(&environment_file, serde_json::to_vec(&environment).unwrap()).unwrap();
+    fs::set_permissions(&environment_file, fs::Permissions::from_mode(0o400)).unwrap();
+
+    let mut ancestors = root.ancestors().map(Path::to_path_buf).collect::<Vec<_>>();
+    ancestors.sort();
+    ancestors.dedup();
+    let literal_reads = ancestors
+        .iter()
+        .map(PathBuf::as_path)
+        .chain([
+            binary.as_path(),
+            Path::new("/bin/sh"),
+            command_file.as_path(),
+            environment_file.as_path(),
+        ])
+        .map(|path| {
+            format!(
+                "(allow file-read* (literal {:?}))\n",
+                path.to_string_lossy()
+            )
+        })
+        .collect::<String>();
+    let profile = format!(
+        "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow sysctl-read)\n(allow file-read-data (literal \"/\"))\n(allow file-write* (literal \"/dev/null\"))\n(allow file-read* (subpath \"/System\") (subpath \"/usr\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"/private/etc\") (subpath \"/private/var/select\") (subpath \"/private/var/db/timezone\"))\n(allow file-read* (literal \"/dev/null\") (literal \"/dev/random\") (literal \"/dev/urandom\"))\n{literal_reads}(allow file-read* file-write* (subpath {:?}) (subpath {:?}))\n",
+        home.to_string_lossy(),
+        temporary.to_string_lossy(),
+    );
+    fs::write(&profile_file, profile).unwrap();
+    fs::set_permissions(&profile_file, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let (mut status_reader, status_writer) = UnixStream::pair().unwrap();
+    let writer_fd = status_writer.as_raw_fd();
+    let mut command = Command::new(&binary);
+    command
+        .arg("--mez-internal-seatbelt-launch")
+        .arg(sandbox_executable)
+        .arg(&profile_file)
+        .arg(&root)
+        .arg(&home)
+        .arg(&temporary)
+        .arg("/bin/sh")
+        .arg(&command_file)
+        .arg(&environment_file)
+        .env("MEZ_SEATBELT_AMBIENT", "must-not-leak")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // SAFETY: the socket writer remains alive until spawn and is duplicated
+    // only into the fixed runtime-owned status descriptor.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::dup2(writer_fd, 3) == -1 || libc::fcntl(3, libc::F_SETFD, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let child = command.spawn().unwrap();
+    drop(status_writer);
+    let output = child.wait_with_output().unwrap();
+    let mut status = String::new();
+    status_reader.read_to_string(&mut status).unwrap();
+
+    assert_eq!(output.status.code(), Some(7), "{output:?}");
+    assert_eq!(output.stdout, b"workload-ok");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let records = status
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 3, "{status}");
+    assert_eq!(records[0]["event"], "sandbox-entered");
+    assert_eq!(records[1]["event"], "child-established");
+    assert!(records[1]["child-pid"].as_u64().is_some_and(|pid| pid > 0));
+    assert_eq!(records[2]["event"], "exit");
+    assert_eq!(records[2]["exit-code"], 7);
+    assert!(home.join("created").is_file());
+    fs::remove_dir_all(root).unwrap();
 }

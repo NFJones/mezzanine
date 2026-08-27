@@ -290,18 +290,126 @@ impl RuntimeSessionService {
             .with_input_sidecar(input_sidecar.map(ToString::to_string));
         let mut sandbox_audit_summary = None;
         let mut managed_home_activity_lock = None;
+        let mut seatbelt_workload_lease = None;
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
         let bubblewrap_applies =
             crate::runtime::config::sandbox_applies_to_policy(&sandbox_config, &permission_policy);
         let sandbox_bypassed = bubblewrap_applies
             && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
-        if matches!(&sandbox_config, SandboxConfig::Seatbelt(_))
+        if let SandboxConfig::Seatbelt(config) = &sandbox_config
             && bubblewrap_applies
             && !sandbox_bypassed
         {
-            return Err(MezError::invalid_state(
-                "Seatbelt runtime integration is unavailable; the configured backend fails closed",
-            ));
+            let evaluation = permission_evaluation.ok_or_else(|| {
+                MezError::invalid_state(
+                    "Seatbelt dispatch requires the retained structured permission evaluation",
+                )
+            })?;
+            let signature = self
+                .pane_environment_signature(&turn.pane_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state("pane environment is unavailable for Seatbelt dispatch")
+                })?;
+            let environment_request = mez_agent::shell::PaneEnvironmentRequest::new(
+                config.env_whitelist.requested_names.clone(),
+            )
+            .map_err(|error| MezError::invalid_args(error.message()))?;
+            let environment_profile =
+                if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+                    crate::runtime::BubblewrapEnvironmentProfile::SemanticPatchNoForwarding
+                } else {
+                    crate::runtime::BubblewrapEnvironmentProfile::ConfiguredForwarding
+                };
+            let environment_evidence = self
+                .bubblewrap_environment_evidence_for_action(
+                    turn,
+                    &action.id,
+                    &environment_request,
+                    environment_profile,
+                )
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "pane environment evidence is unavailable for Seatbelt dispatch",
+                    )
+                })?;
+            let child_shell_path = program_dialect
+                .interpreter_path()
+                .unwrap_or(&signature.shell_path);
+            let probe_plan = crate::security::sandbox::seatbelt_capability_probe_plan(
+                config,
+                child_shell_path,
+                &signature,
+                &environment_evidence,
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+            let cache_key = crate::security::sandbox::seatbelt_capability_cache_key(
+                &turn.pane_id,
+                &signature.stable_hash(),
+                self.session.config_generation,
+                &probe_plan,
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+            self.seatbelt_capability(&cache_key).ok_or_else(|| {
+                MezError::invalid_state(
+                    "Seatbelt capability is unavailable for the active pane environment",
+                )
+            })?;
+            let maximum_authority = self.bubblewrap_path_scopes_for_turn(turn, evaluation)?;
+            let policy = crate::security::sandbox::effective_sandbox_policy_for_authority(
+                &maximum_authority,
+                evaluation,
+                matches!(action.payload, AgentActionPayload::ApplyPatch { .. }),
+                self.configured_permissions().resources.network_policy,
+                config.network,
+                config.environment,
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+            let trusted_project_root = self.trusted_project_root_for_pane(&turn.pane_id);
+            let artifacts = crate::security::sandbox::prepare_seatbelt_workload_artifacts(
+                self.integration.config_root(),
+                trusted_project_root.as_deref(),
+                command,
+                input_sidecar,
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+            let child_launcher = std::env::current_exe()
+                .and_then(std::fs::canonicalize)
+                .map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "Seatbelt child launcher discovery failed: {error}"
+                    ))
+                })?;
+            let child_launcher = child_launcher.to_str().ok_or_else(|| {
+                MezError::invalid_state("Seatbelt child launcher path is not UTF-8")
+            })?;
+            let launch_plan = crate::security::sandbox::seatbelt::compile_seatbelt_launch_plan(
+                crate::security::sandbox::seatbelt::SeatbeltCompileRequest {
+                    config,
+                    policy: &policy,
+                    child_shell_path,
+                    child_launcher_path: child_launcher,
+                    command_file_path: &artifacts.command_file_path.to_string_lossy(),
+                    environment_file_path: &artifacts.environment_file_path.to_string_lossy(),
+                    home_directory: &artifacts.home_directory.to_string_lossy(),
+                    temporary_directory: &artifacts.temporary_directory.to_string_lossy(),
+                    user_name: &signature.user,
+                    environment_evidence: &environment_evidence,
+                    stateful,
+                    interactive,
+                },
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+            artifacts
+                .write_environment_document(&launch_plan.environment_document)
+                .map_err(|error| MezError::invalid_state(error.message()))?;
+            sandbox_audit_summary = Some(launch_plan.audit_summary.clone());
+            transaction = transaction.with_child_launch(
+                launch_plan
+                    .child_launch
+                    .with_status_fd(crate::security::sandbox::SANDBOX_STATUS_FD)?,
+            );
+            seatbelt_workload_lease = Some(artifacts.lease);
         }
         if let SandboxConfig::Bubblewrap(config) = sandbox_config
             && bubblewrap_applies
@@ -589,11 +697,14 @@ impl RuntimeSessionService {
         if let Some(receiver_payload) = receiver_payload {
             self.register_shell_receiver_payload(&marker_id, receiver_payload);
         }
-        if sandbox_audit_summary.is_some() {
-            self.register_sandboxed_shell_transaction_marker(&marker_id);
+        if let Some(summary) = sandbox_audit_summary.as_ref() {
+            self.register_sandboxed_shell_transaction_backend(&marker_id, summary.backend);
         }
         if let Some(activity_lock) = managed_home_activity_lock {
             self.register_managed_home_activity_lock(&marker_id, activity_lock);
+        }
+        if let Some(lease) = seatbelt_workload_lease {
+            self.register_seatbelt_workload_lease(&marker_id, lease);
         }
         if let Err(error) = self.write_runtime_pane_shell_input(&turn.pane_id, wrapper.as_bytes()) {
             self.remove_running_shell_transaction(&marker_id);
@@ -684,6 +795,7 @@ impl RuntimeSessionService {
         let sandbox_bypassed = bubblewrap_applies
             && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
         let mut native_bubblewrap = None;
+        let mut native_seatbelt = None;
         let mut capability_probe_only = false;
         let capability_probe = if bubblewrap_applies && !sandbox_bypassed {
             match &sandbox_config {
@@ -711,13 +823,29 @@ impl RuntimeSessionService {
                         config,
                         program_dialect,
                     )?;
-                    let Some(probe) = probe else {
-                        return Err(MezError::invalid_state(
-                            "Seatbelt workload integration is unavailable after capability proof; the configured backend remains fail closed",
-                        ));
-                    };
-                    capability_probe_only = true;
-                    Some(crate::runtime::processes::NativeSandboxCapabilityProbe::Seatbelt(probe))
+                    match probe {
+                        Some(probe) => {
+                            capability_probe_only = true;
+                            Some(
+                                crate::runtime::processes::NativeSandboxCapabilityProbe::Seatbelt(
+                                    probe,
+                                ),
+                            )
+                        }
+                        None => {
+                            native_seatbelt = Some(self.native_seatbelt_dispatch_for_action(
+                                turn,
+                                action,
+                                &context,
+                                config,
+                                permission_evaluation,
+                                program_dialect,
+                                command,
+                                input_sidecar,
+                            )?);
+                            None
+                        }
+                    }
                 }
                 SandboxConfig::PolicyOnly => None,
             }
@@ -727,9 +855,17 @@ impl RuntimeSessionService {
         let bubblewrap_activity_lease = native_bubblewrap
             .as_ref()
             .and_then(|dispatch| dispatch.activity_lease.clone());
+        let seatbelt_workload_lease = native_seatbelt
+            .as_ref()
+            .map(|dispatch| dispatch.workload_lease.clone());
         let sandbox_audit_summary = native_bubblewrap
             .as_ref()
-            .map(|dispatch| dispatch.audit_summary.clone());
+            .map(|dispatch| dispatch.audit_summary.clone())
+            .or_else(|| {
+                native_seatbelt
+                    .as_ref()
+                    .map(|dispatch| dispatch.audit_summary.clone())
+            });
         let emitted_action_log = if is_internal_apply_patch_write_phase {
             false
         } else if let Some(path) = apply_patch_read_path {
@@ -782,6 +918,8 @@ impl RuntimeSessionService {
                     .clone()
                     .with_status_fd(crate::security::sandbox::BUBBLEWRAP_STATUS_FD)?,
             );
+        } else if let Some(dispatch) = native_seatbelt.as_ref() {
+            transaction = transaction.with_child_launch(dispatch.child_launch.clone());
         } else if let Some(interpreter) = program_dialect.interpreter_path() {
             transaction = transaction.with_child_launch(ShellChildLaunch::new(
                 interpreter,
@@ -823,7 +961,11 @@ impl RuntimeSessionService {
                 context,
                 capability_probe,
                 capability_probe_only,
+                sandbox_backend: sandbox_audit_summary
+                    .as_ref()
+                    .map(|summary| summary.backend),
                 bubblewrap_activity_lease,
+                seatbelt_workload_lease,
                 request,
                 started_at_unix_ms,
             },

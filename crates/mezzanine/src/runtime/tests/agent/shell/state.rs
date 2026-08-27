@@ -2380,6 +2380,91 @@ fn runtime_seatbelt_probe_failure_is_not_cached_and_allows_reprobe() {
     );
 }
 
+/// Verifies pane dispatch consumes an exact successful Seatbelt capability,
+/// retains backend-tagged lifecycle and private workload ownership, and drops
+/// the action/home/temp lease when the transaction is removed.
+#[cfg(target_os = "macos")]
+#[test]
+fn runtime_seatbelt_pane_dispatch_retains_backend_and_cleans_workload_lease() {
+    let mut service = seatbelt_probe_service();
+    let turn = path_resolution_turn();
+    let working_directory = PathBuf::from(
+        service
+            .pane_environment_signature("%1")
+            .unwrap()
+            .working_directory
+            .clone(),
+    );
+    cache_path_resolution_maximum(&mut service, &working_directory);
+    service.permission_policy_mut().set_approval_bypass(true);
+
+    assert!(
+        !service
+            .ensure_seatbelt_capability_for_action(&turn, "workload", None, false)
+            .unwrap()
+    );
+    let (probe_marker, mut probe_transaction) = service
+        .running_shell_transactions_mut_for_tests()
+        .pop_first()
+        .unwrap();
+    let RunningShellTransactionKind::SeatbeltCapabilityProbe { probe_plan, .. } =
+        &probe_transaction.kind
+    else {
+        panic!("expected Seatbelt capability transaction");
+    };
+    probe_transaction.observed_output_preview = probe_plan.expected_stdout.to_string();
+    service
+        .observe_seatbelt_capability_probe_transaction_end(&probe_marker, probe_transaction, 0)
+        .unwrap();
+
+    let action = mez_agent::AgentAction {
+        id: "workload".to_string(),
+        rationale: "exercise Seatbelt workload ownership".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Print working directory".to_string(),
+            command: "pwd".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let evaluation = path_resolution_evaluation(
+        mez_agent::permissions::EffectCompleteness::Unknown,
+        path_resolution_effects(),
+    );
+    assert!(
+        service
+            .dispatch_shell_action_to_pane_for_tests(&turn, &action, "pwd", Some(&evaluation),)
+            .unwrap()
+    );
+    let marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::AgentAction { ref action_id }
+                    if action_id == "workload"
+            )
+            .then(|| marker.clone())
+        })
+        .unwrap();
+    assert_eq!(
+        service.shell_transaction_sandbox_backend_for_tests(&marker),
+        Some(crate::runtime::SandboxBackend::Seatbelt)
+    );
+    let action_directory = service
+        .seatbelt_workload_directory_for_tests(&marker)
+        .unwrap();
+    assert!(action_directory.exists());
+
+    service.remove_running_shell_transaction(&marker);
+    service.clear_shell_transaction_protocol_state(&marker);
+    assert!(!action_directory.exists());
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(working_directory).unwrap();
+}
+
 /// Verifies a Fish pane runs the fixed internal capability script under POSIX
 /// sh without an unused command-payload receiver, accepts the exact sentinel,
 /// and preserves Fish pane identity.

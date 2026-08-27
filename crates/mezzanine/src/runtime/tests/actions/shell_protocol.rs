@@ -103,7 +103,10 @@ fn runtime_shell_transaction_observation_retains_trailing_bubblewrap_status() {
             observed_output_truncated: false,
         },
     );
-    service.register_sandboxed_shell_transaction_marker("marker-1");
+    service.register_sandboxed_shell_transaction_backend(
+        "marker-1",
+        crate::runtime::SandboxBackend::Bubblewrap,
+    );
     let encoded_bytes = mez_agent::SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
         .div_ceil(3)
         .saturating_mul(4);

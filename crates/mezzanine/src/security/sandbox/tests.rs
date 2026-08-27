@@ -301,6 +301,31 @@ fn sandbox_lifecycle_parser_dispatches_to_bubblewrap_contract() {
     );
 }
 
+/// The Seatbelt lifecycle parser accepts only the ordered code-owned launcher
+/// sequence and distinguishes sandbox entry from payload establishment and
+/// completion. Duplicate, reordered, and unknown records remain untrusted.
+#[test]
+fn sandbox_lifecycle_parser_validates_seatbelt_launcher_sequence() {
+    let status = parse_sandbox_lifecycle_status(
+        SandboxBackend::Seatbelt,
+        "{\"version\":1,\"event\":\"sandbox-entered\"}\n{\"version\":1,\"event\":\"child-established\",\"child-pid\":42}\n{\"version\":1,\"event\":\"exit\",\"exit-code\":7}\n",
+    )
+    .unwrap();
+
+    assert!(status.sandbox_entered());
+    assert!(status.payload_established());
+    assert_eq!(status.child_pid(), Some(42));
+    assert_eq!(status.exit_code(), Some(7));
+    for invalid in [
+        "{\"version\":1,\"event\":\"child-established\",\"child-pid\":42}\n",
+        "{\"version\":1,\"event\":\"sandbox-entered\"}\n{\"version\":1,\"event\":\"sandbox-entered\"}\n",
+        "{\"version\":1,\"event\":\"sandbox-entered\"}\n{\"version\":1,\"event\":\"exit\",\"exit-code\":0}\n",
+        "{\"version\":2,\"event\":\"sandbox-entered\"}\n",
+    ] {
+        assert!(parse_sandbox_lifecycle_status(SandboxBackend::Seatbelt, invalid).is_err());
+    }
+}
+
 /// Live Bubblewrap failures provide one concise, authority-preserving command
 /// that expands into the existing structured sandbox diagnostics and remedies.
 #[test]

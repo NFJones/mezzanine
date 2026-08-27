@@ -406,6 +406,7 @@ impl SpawnedShellExecutor {
         timeout_ms: Option<u64>,
         output_budget: usize,
         progress: Option<SpawnedChildProgressReporter>,
+        sandbox_backend: Option<crate::runtime::SandboxBackend>,
     ) -> Result<ShellExecutionOutput> {
         let SpawnedChild {
             mut child,
@@ -530,7 +531,12 @@ impl SpawnedShellExecutor {
         };
         if let Some(status_reader) = status_reader {
             let status_capture = join_output_reader(status_reader)?;
-            validate_spawned_child_status(&status_capture.bytes, status_capture.dropped, &output)?;
+            validate_spawned_child_status(
+                sandbox_backend.unwrap_or(crate::runtime::SandboxBackend::Bubblewrap),
+                &status_capture.bytes,
+                status_capture.dropped,
+                &output,
+            )?;
         }
         Ok(output)
     }
@@ -556,6 +562,7 @@ impl SpawnedShellExecutorPort for SpawnedShellExecutor {
                     child,
                     request.timeout_ms,
                     request.transaction.output_max_raw_bytes,
+                    None,
                     None,
                 )
             });
@@ -603,7 +610,9 @@ fn execute_native_shell_dispatch_inner(
         context,
         capability_probe,
         capability_probe_only,
+        sandbox_backend,
         bubblewrap_activity_lease: _bubblewrap_activity_lease,
+        seatbelt_workload_lease: _seatbelt_workload_lease,
         request,
         started_at_unix_ms,
     } = dispatch;
@@ -640,6 +649,7 @@ fn execute_native_shell_dispatch_inner(
                                     request.timeout_ms,
                                     request.transaction.output_max_raw_bytes,
                                     progress,
+                                    sandbox_backend,
                                 )
                             });
                         materialized.cleanup();
@@ -851,6 +861,7 @@ fn join_output_reader(reader: SpawnedChildPipeReader) -> Result<CapturedPipeOutp
 /// Validates trusted sandbox lifecycle evidence captured outside stdout and
 /// stderr for one completed typed child launch.
 fn validate_spawned_child_status(
+    backend: crate::runtime::SandboxBackend,
     status_bytes: &[u8],
     status_dropped: usize,
     output: &ShellExecutionOutput,
@@ -866,22 +877,24 @@ fn validate_spawned_child_status(
     let status_text = std::str::from_utf8(status_bytes).map_err(|_| {
         MezError::invalid_state("spawned shell lifecycle status was not valid UTF-8")
     })?;
-    let status = crate::security::sandbox::parse_sandbox_lifecycle_status(
-        crate::runtime::SandboxBackend::Bubblewrap,
-        status_text,
-    )
-    .map_err(|error| MezError::invalid_state(error.message()))?;
+    let status = crate::security::sandbox::parse_sandbox_lifecycle_status(backend, status_text)
+        .map_err(|error| MezError::invalid_state(error.message()))?;
     let reported_exit_code = status.exit_code().ok_or_else(|| {
-        MezError::invalid_state(crate::security::sandbox::bubblewrap_failure_remediation(
-            "Bubblewrap failed before payload execution",
-        ))
+        let message = if status.payload_established() {
+            format!(
+                "{} payload execution was established but lifecycle completion was not proven",
+                backend.as_str()
+            )
+        } else {
+            format!("{} failed before payload execution", backend.as_str())
+        };
+        MezError::invalid_state(message)
     })?;
     if output.exit_code != Some(reported_exit_code) {
-        return Err(MezError::invalid_state(
-            crate::security::sandbox::bubblewrap_failure_remediation(
-                "Bubblewrap status exit code contradicts the spawned process",
-            ),
-        ));
+        return Err(MezError::invalid_state(format!(
+            "{} status exit code contradicts the spawned process",
+            backend.as_str()
+        )));
     }
     Ok(())
 }
@@ -948,7 +961,9 @@ mod tests {
             context: test_context(),
             capability_probe: probe,
             capability_probe_only: false,
+            sandbox_backend: None,
             bubblewrap_activity_lease: None,
+            seatbelt_workload_lease: None,
             request: request(command, Some(5_000)),
             started_at_unix_ms: 1,
         }
@@ -1181,6 +1196,35 @@ mod tests {
         assert!(!marker.exists(), "failed probe launched the workload");
     }
 
+    /// Verifies native worker settlement validates Seatbelt lifecycle records
+    /// with the selected backend rather than the legacy Bubblewrap parser.
+    #[test]
+    fn native_worker_validates_seatbelt_lifecycle_status() {
+        let mut dispatch = dispatch_with_probe("printf native-seatbelt-status", None);
+        dispatch.sandbox_backend = Some(crate::runtime::SandboxBackend::Seatbelt);
+        let status_script = "printf '{\"version\":1,\"event\":\"sandbox-entered\"}\\n{\"version\":1,\"event\":\"child-established\",\"child-pid\":%s}\\n' \"$$\" >&3; /bin/sh \"$1\"; status=$?; printf '{\"version\":1,\"event\":\"exit\",\"exit-code\":%s}\\n' \"$status\" >&3; exit \"$status\"";
+        dispatch.request.transaction = dispatch.request.transaction.with_child_launch(
+            ShellChildLaunch::new(
+                "/bin/sh",
+                vec![
+                    ShellChildArgument::Literal("-c".to_string()),
+                    ShellChildArgument::Literal(status_script.to_string()),
+                    ShellChildArgument::Literal("sh".to_string()),
+                    ShellChildArgument::MaterializedCommandFile,
+                ],
+            )
+            .unwrap()
+            .with_status_fd(crate::security::sandbox::SANDBOX_STATUS_FD)
+            .unwrap(),
+        );
+
+        let outcome = execute_native_shell_dispatch(dispatch);
+        let output = outcome.result.unwrap();
+
+        assert_eq!(output.exit_code, Some(0));
+        assert_eq!(output.stdout, "native-seatbelt-status");
+    }
+
     /// Verifies the inferred environment and working directory reach the
     /// spawned shell as an overlay captured from the pane root process.
     #[test]
@@ -1233,6 +1277,32 @@ mod tests {
         assert!(!output.interrupted);
         assert_eq!(output.exit_code, None);
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    /// Verifies a timed-out native worker retains its Seatbelt workload lease
+    /// until process-group termination settles, then removes the private
+    /// action, HOME, temporary, command, and environment artifact tree.
+    #[test]
+    fn native_seatbelt_timeout_cleans_workload_lease() {
+        let artifacts = crate::security::sandbox::prepare_seatbelt_workload_artifacts(
+            None, None, "sleep 30", None,
+        )
+        .unwrap();
+        let action_directory = artifacts.action_directory.clone();
+        let lease = artifacts.lease.clone();
+        drop(artifacts);
+        assert!(action_directory.exists());
+
+        let mut dispatch = dispatch_with_probe("sleep 30", None);
+        dispatch.request.timeout_ms = Some(300);
+        dispatch.seatbelt_workload_lease = Some(lease);
+        let outcome = execute_native_shell_dispatch(dispatch);
+        let output = outcome.result.unwrap();
+
+        assert!(output.timed_out);
+        assert!(!output.interrupted);
+        assert_eq!(output.exit_code, None);
+        assert!(!action_directory.exists());
     }
 
     /// Verifies normal completion does not wait indefinitely when a detached
