@@ -1052,13 +1052,14 @@ async fn serve_routed_initialize_inner(
     });
     let (event_stop_tx, event_stop_rx) = tokio::sync::watch::channel(false);
     let mut event_task = connection_state.take_event_stream_start().map(
-        |(client_id, version, client_clipboard_write)| {
+        |(client_id, version, client_clipboard_write, push_render)| {
             tokio::spawn(serve_host_routed_iroh_event_stream(
                 (*connection).clone(),
                 binding.runtime.actor().clone(),
                 client_id,
                 version,
                 client_clipboard_write,
+                push_render,
                 compression,
                 policy.setup_timeout,
                 policy.idle_timeout,

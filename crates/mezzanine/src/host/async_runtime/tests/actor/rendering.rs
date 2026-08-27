@@ -1376,6 +1376,41 @@ async fn async_actor_metrics_track_render_and_terminal_control_requests() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies the Iroh v3 snapshot request captures an exact primary view,
+/// semantic status slot, event cutoff, and output invalidation in one actor
+/// turn rather than composing those fields across independently changing state.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_captures_authoritative_iroh_primary_snapshot() {
+    let mut service = test_service_with_event_log();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let expected_cutoff = service.event_log().unwrap().latest_event_id();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let snapshot = handle
+            .render_iroh_primary_snapshot(primary, true)
+            .await
+            .unwrap()
+            .expect("attached primary should render");
+
+        assert_eq!(snapshot.view.role, ClientViewRole::Primary);
+        assert_eq!(snapshot.view.client_size, Size::new(80, 24).unwrap());
+        assert_eq!(snapshot.event_cutoff, expected_cutoff);
+        assert!(snapshot.invalidate_output);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.render_client_frame_requests, 1);
+}
+
 /// Verifies actor latency metrics use fixed request families and reset without
 /// changing previously returned snapshots.
 ///

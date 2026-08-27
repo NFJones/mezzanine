@@ -5,9 +5,9 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 use super::actor_types::{AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot};
 use super::{
-    AgentId, AgentProviderEvent, Arc, AsyncControlInputResult, AsyncHookEvent, AsyncMessageFanout,
-    AsyncMessageInputResult, AsyncRenderedClientFlush, AsyncRenderedClientFrame,
-    AsyncRuntimeActorConfig, AsyncRuntimeActorExit, AsyncRuntimeRequest,
+    AgentId, AgentProviderEvent, Arc, AsyncControlInputResult, AsyncHookEvent,
+    AsyncIrohRenderSnapshot, AsyncMessageFanout, AsyncMessageInputResult, AsyncRenderedClientFlush,
+    AsyncRenderedClientFrame, AsyncRuntimeActorConfig, AsyncRuntimeActorExit, AsyncRuntimeRequest,
     AsyncRuntimeRequestEnvelope, AsyncRuntimeSessionActor, AsyncRuntimeSessionHandle,
     AttachedClientStepApplication, AttachedTerminalClientStepPlan, AttachedTerminalOutputModes,
     ClientClipboardRouteCleanup, ClientClipboardRouteLease, ClientEvent, ClientId, ClientState,

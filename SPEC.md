@@ -3191,12 +3191,25 @@ MUST remain visible failures and MUST NOT cause downgrade. Unix clients and
 legacy or non-negotiating Iroh clients MUST use event-stream version 1.
 
 Event-stream version 3 is the negotiated boundary for pushed rendered-state
-updates. Until those update frames are present, it retains the ordered event
-notification behavior of the lower versions. Version 2 remains limited to an
-authenticated interactive Iroh primary. Primary versions 2 and 3 MUST receive
-explicit `client_clipboard_write` capability confirmation before treating
-client-local clipboard effects as negotiated; observer version 3 MUST NOT
-receive that authority. Version 1 uses the exact preface
+updates. An authenticated primary v3 stream MUST send an authoritative
+`render/snapshot` immediately after its preface and MUST use pushed render
+state rather than `terminal/view` responses for subsequent presentation
+changes. Each snapshot MUST contain a stream-local monotonic revision, the
+latest ordered event represented by the view, an output-invalidation flag, and
+one complete primary `RenderedClientView`. The view, Iroh status slot, event
+cutoff, and invalidation requirement MUST be captured in one serialized actor
+turn. Clients MUST validate a complete snapshot atomically and MUST reject
+missing, malformed, non-primary, misaligned, or non-monotonic snapshots.
+
+Primary v3 control responses are mutation acknowledgements and MUST NOT replace
+the event stream's render state. The server MUST send the first available
+snapshot immediately and MUST NOT add a debounce, compression batching window,
+or delayed flush. Observer v3 retains notification-plus-fetch behavior until
+observer-local pushed-render geometry is negotiated. Version 2 remains limited
+to an authenticated interactive Iroh primary. Primary versions 2 and 3 MUST
+receive explicit `client_clipboard_write` capability confirmation before
+treating client-local clipboard effects as negotiated; observer version 3 MUST
+NOT receive that authority. Version 1 uses the exact preface
 `mezzanine/events/1\n`; version 2 uses `mezzanine/events/2\n`; version 3 uses
 `mezzanine/events/3\n`. The server MUST NOT open an event stream before the
 successful initialize response is flushed, and then MUST open at most one

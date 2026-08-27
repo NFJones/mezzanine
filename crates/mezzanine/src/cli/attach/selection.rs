@@ -95,6 +95,7 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         ensure_control_response_success(&initialize_body)?;
         let event_receiver = channel.take_event_receiver()?;
         let connection = channel.connection();
+        let pushed_render_owner = channel.pushed_render_owner();
         let run_result = if request.requested_role == "observer" {
             run_iroh_attached_observer_client(
                 channel.stream_mut(),
@@ -112,6 +113,7 @@ pub(in crate::cli) async fn run_attach<W: Write>(
                 terminal_size,
                 std::time::Duration::from_secs(30),
                 event_receiver,
+                pushed_render_owner,
             )
             .await
         };

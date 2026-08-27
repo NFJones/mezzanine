@@ -575,7 +575,7 @@ fn authenticated_iroh_primary_negotiates_event_stream_version_two() {
     assert!(body.contains(r#""client_clipboard_write":true"#), "{body}");
     assert_eq!(
         connection.take_event_stream_start(),
-        Some((expected_client, 2, true))
+        Some((expected_client, 2, true, false))
     );
     assert!(connection.take_event_stream_start().is_none());
 }
@@ -622,7 +622,7 @@ fn authenticated_iroh_primary_negotiates_event_stream_version_three() {
     assert!(body.contains(r#""client_clipboard_write":true"#), "{body}");
     assert_eq!(
         connection.take_event_stream_start(),
-        Some((expected_client, 3, true))
+        Some((expected_client, 3, true, true))
     );
 }
 
@@ -666,7 +666,7 @@ fn authenticated_iroh_observer_negotiates_event_stream_version_three_without_eff
     assert!(body.contains(r#""client_clipboard_write":false"#), "{body}");
     assert_eq!(
         connection.take_event_stream_start(),
-        Some((expected_client, 3, false))
+        Some((expected_client, 3, false, false))
     );
 }
 

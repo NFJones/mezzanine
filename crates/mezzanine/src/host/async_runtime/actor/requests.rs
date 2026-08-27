@@ -2,9 +2,9 @@
 
 use super::construction::execute_snapshot_control_async_work;
 use super::{
-    AsyncControlInputResult, AsyncMessageFanout, AsyncMessageInputResult, AsyncRenderedClientFrame,
-    AsyncRuntimeRequest, AsyncRuntimeRequestEnvelope, AsyncRuntimeSessionActor,
-    AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot,
+    AsyncControlInputResult, AsyncIrohRenderSnapshot, AsyncMessageFanout, AsyncMessageInputResult,
+    AsyncRenderedClientFrame, AsyncRuntimeRequest, AsyncRuntimeRequestEnvelope,
+    AsyncRuntimeSessionActor, AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot,
     DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS, RuntimeSessionService, decode_control_frame,
     delivery_batch_json, encode_control_body, encode_mmp_body,
 };
@@ -337,6 +337,59 @@ impl AsyncRuntimeSessionActor {
                             view,
                         })
                     });
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::RenderIrohPrimarySnapshot {
+                client_id,
+                invalidate_output,
+                reply,
+            } => {
+                self.metrics.render_client_frame_requests =
+                    self.metrics.render_client_frame_requests.saturating_add(1);
+                let result = (|| {
+                    let Some(client_size) = self.attached_client_size(&client_id)? else {
+                        return Ok(None);
+                    };
+                    self.service.prepare_client_render(
+                        &client_id,
+                        mez_mux::presentation::ClientViewRole::Primary,
+                    )?;
+                    let config = self
+                        .service
+                        .terminal_client_loop_config(Default::default())?;
+                    let Some(view) = self
+                        .service
+                        .render_client_view_for_client_with_resolved_config(
+                            &client_id,
+                            mez_mux::presentation::ClientViewRole::Primary,
+                            client_size,
+                            &config,
+                        )?
+                    else {
+                        return Ok(None);
+                    };
+                    let iroh_status_slot = self.service.terminal_iroh_status_slot(&view, &config);
+                    let event_cutoff = self
+                        .service
+                        .event_log()
+                        .map(|event_log| event_log.latest_event_id())
+                        .unwrap_or(0);
+                    let effects = self
+                        .service
+                        .drain_status_pill_refresh_transition()
+                        .side_effects;
+                    if !effects.is_empty() {
+                        self.queue_runtime_side_effects(effects)?;
+                    }
+                    self.ensure_client_render_timers(&client_id)?;
+                    Ok(Some(AsyncIrohRenderSnapshot {
+                        view,
+                        iroh_status_slot,
+                        event_cutoff,
+                        invalidate_output,
+                    }))
+                })();
                 let _ = reply.send(result);
                 false
             }

@@ -211,6 +211,8 @@ pub(super) struct AttachedClientInputPoll {
     pub(super) eof: bool,
     /// Render action requested by an auxiliary runtime event.
     pub(super) render_action: AttachRenderAction,
+    /// Latest authoritative v3 snapshot received with this input poll.
+    pub(super) pushed_snapshot: Option<IrohPushedRenderSnapshot>,
 }
 
 /// Render action requested by an attached runtime event stream notification.
@@ -227,39 +229,65 @@ pub(in crate::cli) enum AttachRenderAction {
 }
 
 /// One Iroh redraw wakeup paired with its ordered server event identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::cli) struct IrohAttachRenderWakeup {
     /// Strongest redraw action implied by the decoded event burst.
     action: AttachRenderAction,
     /// Latest ordered event represented by this wakeup, when supplied.
     event_id: Option<u64>,
+    /// Latest authoritative pushed snapshot in this decoded burst.
+    pushed_snapshot: Option<IrohPushedRenderSnapshot>,
+}
+
+/// One validated authoritative render snapshot received on event-stream v3.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct IrohPushedRenderSnapshot {
+    /// Stream-local monotonic revision assigned by the server.
+    pub(super) revision: u64,
+    /// Complete logical client frame ready for the shared terminal renderer.
+    pub(super) frame: super::AttachClientFrame,
+    /// Whether the retained physical-output diff base must be discarded first.
+    pub(super) invalidate_output: bool,
 }
 
 impl IrohAttachRenderWakeup {
     /// Builds a wakeup from one decoded event notification.
     const fn new(action: AttachRenderAction, event_id: Option<u64>) -> Self {
-        Self { action, event_id }
+        Self {
+            action,
+            event_id,
+            pushed_snapshot: None,
+        }
+    }
+
+    /// Builds one immediately applicable authoritative v3 snapshot payload.
+    pub(super) fn pushed_snapshot(snapshot: IrohPushedRenderSnapshot) -> Self {
+        Self {
+            action: AttachRenderAction::None,
+            event_id: Some(snapshot.frame.event_cutoff.unwrap_or(0)),
+            pushed_snapshot: Some(snapshot),
+        }
     }
 
     /// Combines a burst while retaining the strongest action and newest event.
     fn combine(self, other: Self) -> Self {
-        if self.action == AttachRenderAction::None {
-            return other;
-        }
-        if other.action == AttachRenderAction::None {
-            return self;
-        }
         Self {
             action: self.action.combine(other.action),
             event_id: match (self.event_id, other.event_id) {
                 (Some(left), Some(right)) => Some(left.max(right)),
                 (Some(_), None) | (None, Some(_)) | (None, None) => None,
             },
+            pushed_snapshot: match (self.pushed_snapshot, other.pushed_snapshot) {
+                (Some(left), Some(right)) if left.revision >= right.revision => Some(left),
+                (_, Some(right)) => Some(right),
+                (Some(left), None) => Some(left),
+                (None, None) => None,
+            },
         }
     }
 
     /// Reports whether an authoritative view already represents this ordinary redraw.
-    fn is_covered_by(self, event_cutoff: Option<u64>) -> bool {
+    fn is_covered_by(&self, event_cutoff: Option<u64>) -> bool {
         self.action == AttachRenderAction::View
             && matches!((self.event_id, event_cutoff), (Some(event_id), Some(cutoff)) if event_id <= cutoff)
     }
@@ -306,11 +334,13 @@ pub(super) async fn read_attached_client_input_or_deadline<I: AsyncAttachedTermi
             bytes,
             eof: true,
             render_action: AttachRenderAction::None,
+            pushed_snapshot: None,
         }),
         Ok(Ok(bytes)) => Ok(AttachedClientInputPoll {
             bytes,
             eof: false,
             render_action: AttachRenderAction::None,
+            pushed_snapshot: None,
         }),
         Ok(Err(error)) => Err(error),
         Err(_) => Ok(idle_deadline_input_poll(animation_deadline)),
@@ -327,6 +357,7 @@ pub(super) fn idle_deadline_input_poll(
             bytes: Vec::new(),
             eof: false,
             render_action: AttachRenderAction::None,
+            pushed_snapshot: None,
         }
     }
 }
@@ -366,6 +397,7 @@ pub(super) async fn read_attached_client_input_or_runtime_event<I: AsyncAttached
                 bytes: Vec::new(),
                 eof: false,
                 render_action: render_action?,
+                pushed_snapshot: None,
             });
         }
     }?;
@@ -400,31 +432,36 @@ pub(super) async fn read_attached_client_input_or_iroh_event<I: AsyncAttachedTer
         biased;
         input = &mut input => input,
         event = event_receiver.recv() => match event {
-            Some(Ok(wakeup)) => return Ok(AttachedClientInputPoll {
-                bytes: Vec::new(),
-                eof: false,
-                render_action: coalesce_ready_iroh_render_actions(
+            Some(Ok(wakeup)) => {
+                let wakeup = coalesce_ready_iroh_render_actions(
                     event_receiver,
                     wakeup,
                     event_cutoff,
-                )?,
-            }),
+                )?;
+                return Ok(AttachedClientInputPoll {
+                    bytes: Vec::new(),
+                    eof: false,
+                    render_action: wakeup.action,
+                    pushed_snapshot: wakeup.pushed_snapshot,
+                });
+            }
             Some(Err(error)) => return Err(error),
             None => return Ok(AttachedClientInputPoll {
                 bytes: Vec::new(),
                 eof: false,
                 render_action: AttachRenderAction::Disconnect,
+                pushed_snapshot: None,
             }),
         },
     }?;
     if !input.eof && !input.bytes.is_empty() {
-        input.render_action = input
-            .render_action
-            .combine(coalesce_ready_iroh_render_actions(
-                event_receiver,
-                IrohAttachRenderWakeup::new(AttachRenderAction::None, None),
-                event_cutoff,
-            )?);
+        let wakeup = coalesce_ready_iroh_render_actions(
+            event_receiver,
+            IrohAttachRenderWakeup::new(AttachRenderAction::None, None),
+            event_cutoff,
+        )?;
+        input.render_action = input.render_action.combine(wakeup.action);
+        input.pushed_snapshot = wakeup.pushed_snapshot;
     }
     Ok(input)
 }
@@ -434,20 +471,23 @@ fn coalesce_ready_iroh_render_actions(
     event_receiver: &mut tokio::sync::mpsc::Receiver<Result<IrohAttachRenderWakeup>>,
     initial: IrohAttachRenderWakeup,
     event_cutoff: Option<u64>,
-) -> Result<AttachRenderAction> {
-    let mut render_action = if initial.is_covered_by(event_cutoff) {
-        AttachRenderAction::None
+) -> Result<IrohAttachRenderWakeup> {
+    let mut wakeup = if initial.is_covered_by(event_cutoff) {
+        IrohAttachRenderWakeup::new(AttachRenderAction::None, initial.event_id)
     } else {
-        initial.action
+        initial
     };
     loop {
         match event_receiver.try_recv() {
-            Ok(Ok(wakeup)) if wakeup.is_covered_by(event_cutoff) => {}
-            Ok(Ok(wakeup)) => render_action = render_action.combine(wakeup.action),
+            Ok(Ok(ready)) if ready.is_covered_by(event_cutoff) => {}
+            Ok(Ok(ready)) => wakeup = wakeup.combine(ready),
             Ok(Err(error)) => return Err(error),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return Ok(render_action),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return Ok(wakeup),
             Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                return Ok(render_action.combine(AttachRenderAction::Disconnect));
+                return Ok(wakeup.combine(IrohAttachRenderWakeup::new(
+                    AttachRenderAction::Disconnect,
+                    None,
+                )));
             }
         }
     }
@@ -459,6 +499,7 @@ pub(super) fn animation_refresh_input_poll() -> AttachedClientInputPoll {
         bytes: Vec::new(),
         eof: false,
         render_action: AttachRenderAction::View,
+        pushed_snapshot: None,
     }
 }
 
@@ -468,6 +509,7 @@ pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
     compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
     event_stream_version: u32,
+    allow_pushed_render: bool,
     clipboard: Option<crate::host::terminal::HostClipboard>,
 ) -> (
     tokio::sync::mpsc::Receiver<Result<IrohAttachRenderWakeup>>,
@@ -484,6 +526,7 @@ pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
             compression,
             setup_timeout,
             event_stream_version,
+            allow_pushed_render,
             clipboard_sender.as_ref(),
             &sender,
         )
@@ -505,6 +548,7 @@ async fn receive_iroh_runtime_events(
     compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
     event_stream_version: u32,
+    allow_pushed_render: bool,
     clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
     sender: &tokio::sync::mpsc::Sender<Result<IrohAttachRenderWakeup>>,
 ) -> Result<()> {
@@ -558,6 +602,7 @@ async fn receive_iroh_runtime_events(
     let mut clipboard_assembler = clipboard_sender
         .is_some()
         .then(IrohClipboardAssembler::default);
+    let mut last_render_revision = 0u64;
     let mut buffer = [0u8; ATTACH_EVENT_STREAM_READ_BUFFER_BYTES];
     loop {
         let read = if let Some(deadline) = clipboard_assembler
@@ -611,8 +656,12 @@ async fn receive_iroh_runtime_events(
             compression,
             clipboard_assembler.as_mut(),
             clipboard_sender,
+            allow_pushed_render,
+            &mut last_render_revision,
         )?;
-        if action.action != AttachRenderAction::None && sender.send(Ok(action)).await.is_err() {
+        if (action.action != AttachRenderAction::None || action.pushed_snapshot.is_some())
+            && sender.send(Ok(action)).await.is_err()
+        {
             return Ok(());
         }
     }
@@ -624,6 +673,8 @@ fn drain_negotiated_iroh_event_frames(
     compression: IrohCompressionPolicy,
     mut clipboard_assembler: Option<&mut IrohClipboardAssembler>,
     clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
+    allow_pushed_render: bool,
+    last_render_revision: &mut u64,
 ) -> Result<IrohAttachRenderWakeup> {
     let mut wakeup = IrohAttachRenderWakeup::new(AttachRenderAction::None, None);
     loop {
@@ -637,6 +688,8 @@ fn drain_negotiated_iroh_event_frames(
                 body.as_str(),
                 clipboard_assembler.as_deref_mut(),
                 clipboard_sender,
+                allow_pushed_render,
+                last_render_revision,
             )?);
             pending.drain(..consumed);
             continue;
@@ -664,6 +717,8 @@ fn drain_negotiated_iroh_event_frames(
             body.as_str(),
             clipboard_assembler.as_deref_mut(),
             clipboard_sender,
+            allow_pushed_render,
+            last_render_revision,
         )?);
         pending.drain(..consumed);
     }
@@ -674,19 +729,21 @@ fn apply_negotiated_iroh_attach_frame(
     body: &str,
     clipboard_assembler: Option<&mut IrohClipboardAssembler>,
     clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
+    allow_pushed_render: bool,
+    last_render_revision: &mut u64,
 ) -> Result<IrohAttachRenderWakeup> {
-    let method = serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("method")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        });
-    if method
-        .as_deref()
-        .is_some_and(|method| method.starts_with("client/clipboard."))
-    {
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_state("Iroh event stream contained invalid JSON"))?;
+    let method = value.get("method").and_then(serde_json::Value::as_str);
+    if method == Some("render/snapshot") {
+        if !allow_pushed_render {
+            return Err(MezError::invalid_state(
+                "legacy Iroh event stream contained a pushed render snapshot",
+            ));
+        }
+        return parse_iroh_pushed_render_snapshot(&value, last_render_revision);
+    }
+    if method.is_some_and(|method| method.starts_with("client/clipboard.")) {
         let Some(assembler) = clipboard_assembler else {
             return Ok(IrohAttachRenderWakeup::new(AttachRenderAction::None, None));
         };
@@ -702,6 +759,83 @@ fn apply_negotiated_iroh_attach_frame(
         return Ok(IrohAttachRenderWakeup::new(AttachRenderAction::None, None));
     }
     strict_iroh_attach_render_action(body)
+}
+
+/// Validates one complete authoritative v3 render snapshot atomically.
+fn parse_iroh_pushed_render_snapshot(
+    value: &serde_json::Value,
+    last_render_revision: &mut u64,
+) -> Result<IrohAttachRenderWakeup> {
+    if value.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0") {
+        return Err(MezError::invalid_state(
+            "Iroh render snapshot omitted JSON-RPC 2.0",
+        ));
+    }
+    let params = value
+        .get("params")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| MezError::invalid_state("Iroh render snapshot omitted params"))?;
+    if params.get("kind").and_then(serde_json::Value::as_str) != Some("snapshot") {
+        return Err(MezError::invalid_state(
+            "Iroh render snapshot used an unsupported kind",
+        ));
+    }
+    let revision = params
+        .get("revision")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|revision| *revision > *last_render_revision)
+        .ok_or_else(|| MezError::invalid_state("Iroh render snapshot revision is not monotonic"))?;
+    let event_cutoff = params
+        .get("event_cutoff")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| MezError::invalid_state("Iroh render snapshot omitted event cutoff"))?;
+    let invalidate_output = params
+        .get("invalidate_output")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| {
+            MezError::invalid_state("Iroh render snapshot omitted invalidation state")
+        })?;
+    let view = params
+        .get("view")
+        .filter(|view| view.is_object())
+        .ok_or_else(|| MezError::invalid_state("Iroh render snapshot omitted its view"))?;
+    if view.get("role").and_then(serde_json::Value::as_str) != Some("primary") {
+        return Err(MezError::invalid_state(
+            "Iroh render snapshot was not a primary view",
+        ));
+    }
+    let line_count = view
+        .get("lines")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .ok_or_else(|| MezError::invalid_state("Iroh render snapshot lines are missing"))?;
+    let style_row_count = view
+        .get("line_style_spans")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .ok_or_else(|| MezError::invalid_state("Iroh render snapshot styles are missing"))?;
+    if line_count != style_row_count {
+        return Err(MezError::invalid_state(
+            "Iroh render snapshot lines and styles are misaligned",
+        ));
+    }
+    let response = serde_json::json!({
+        "result": {
+            "view": view,
+            "event_cutoff": event_cutoff,
+        }
+    })
+    .to_string();
+    let frame = super::responses::terminal_step_response_client_frame(&response)?
+        .ok_or_else(|| MezError::invalid_state("Iroh render snapshot decoded no frame"))?;
+    *last_render_revision = revision;
+    Ok(IrohAttachRenderWakeup::pushed_snapshot(
+        IrohPushedRenderSnapshot {
+            revision,
+            frame,
+            invalidate_output,
+        },
+    ))
 }
 
 fn strict_iroh_attach_render_action(body: &str) -> Result<IrohAttachRenderWakeup> {
@@ -1036,6 +1170,7 @@ mod iroh_setup_tests {
             .unwrap(),
             std::time::Duration::from_millis(50),
             1,
+            false,
             None,
         );
 
@@ -1074,6 +1209,7 @@ mod iroh_setup_tests {
             .unwrap(),
             std::time::Duration::from_secs(1),
             1,
+            false,
             None,
         );
         let mut stream = server_connection.open_uni().await.unwrap();
@@ -1120,6 +1256,7 @@ mod iroh_setup_tests {
             .unwrap(),
             std::time::Duration::from_secs(1),
             3,
+            false,
             None,
         );
         let mut stream = server_connection.open_uni().await.unwrap();
@@ -1171,6 +1308,7 @@ mod iroh_setup_tests {
             .unwrap(),
             std::time::Duration::from_secs(1),
             2,
+            false,
             Some(clipboard),
         );
         let mut stream = server_connection.open_uni().await.unwrap();
@@ -1286,6 +1424,122 @@ pub(super) fn control_socket_disconnected_without_pending_response(
 mod iroh_tests {
     use super::*;
 
+    /// Verifies v3 snapshots decode atomically, retain the authoritative
+    /// cutoff and invalidation state, and reject non-monotonic revisions.
+    #[test]
+    fn pushed_render_snapshots_require_monotonic_complete_primary_frames() {
+        let snapshot = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "render/snapshot",
+            "params": {
+                "kind": "snapshot",
+                "revision": 1,
+                "event_cutoff": 9,
+                "invalidate_output": true,
+                "view": {
+                    "role": "primary",
+                    "lines": ["pushed"],
+                    "line_style_spans": [[]],
+                    "cursor": {"row": 0, "column": 6, "visible": true},
+                    "output_modes": {}
+                }
+            }
+        });
+        let mut revision = 0;
+        let decoded = parse_iroh_pushed_render_snapshot(&snapshot, &mut revision).unwrap();
+        let pushed = decoded.pushed_snapshot.expect("snapshot should decode");
+
+        assert_eq!(revision, 1);
+        assert_eq!(pushed.revision, 1);
+        assert_eq!(pushed.frame.lines, ["pushed"]);
+        assert_eq!(pushed.frame.event_cutoff, Some(9));
+        assert!(pushed.invalidate_output);
+
+        let error = parse_iroh_pushed_render_snapshot(&snapshot, &mut revision)
+            .expect_err("duplicate revisions must be rejected atomically");
+        assert!(error.message().contains("not monotonic"), "{error:?}");
+        assert_eq!(revision, 1);
+    }
+
+    /// Verifies identity, Zstandard, and LZ4 envelopes each carry one
+    /// independently decodable pushed snapshot, while legacy ownership rejects
+    /// the same frame rather than silently treating it as a redraw wakeup.
+    #[test]
+    fn pushed_render_snapshots_decode_across_negotiated_compression_modes() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "render/snapshot",
+            "params": {
+                "kind": "snapshot",
+                "revision": 1,
+                "event_cutoff": 4,
+                "invalidate_output": false,
+                "view": {
+                    "role": "primary",
+                    "lines": ["compressed pushed snapshot"],
+                    "line_style_spans": [[]],
+                    "cursor": {"row": 0, "column": 0, "visible": false},
+                    "output_modes": {}
+                }
+            }
+        })
+        .to_string();
+        let framed = encode_control_body(&body);
+
+        for codec in [
+            RuntimeIrohCompressionCodec::None,
+            RuntimeIrohCompressionCodec::Zstd,
+            RuntimeIrohCompressionCodec::Lz4,
+        ] {
+            let compression = IrohCompressionPolicy::new(
+                codec,
+                1,
+                3,
+                ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+            )
+            .unwrap();
+            let mut pending = if codec == RuntimeIrohCompressionCodec::None {
+                framed.clone()
+            } else {
+                compression
+                    .encode_frame(&framed, crate::runtime::IrohFrameCompressionMode::Eligible)
+                    .unwrap()
+                    .as_bytes()
+                    .to_vec()
+            };
+            let mut revision = 0;
+            let decoded = drain_negotiated_iroh_event_frames(
+                &mut pending,
+                compression,
+                None,
+                None,
+                true,
+                &mut revision,
+            )
+            .unwrap();
+            let snapshot = decoded.pushed_snapshot.expect("snapshot should decode");
+            assert_eq!(snapshot.frame.lines, ["compressed pushed snapshot"]);
+            assert_eq!(revision, 1);
+            assert!(pending.is_empty());
+        }
+
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let mut revision = 0;
+        let error = apply_negotiated_iroh_attach_frame(
+            &value.to_string(),
+            None,
+            None,
+            false,
+            &mut revision,
+        )
+        .expect_err("legacy render ownership must reject pushed snapshots");
+        assert!(
+            error.message().contains("legacy Iroh event stream"),
+            "{error:?}"
+        );
+        assert_eq!(revision, 0);
+    }
+
     /// Verifies ready repeated-key input retains a simultaneously queued Iroh
     /// redraw instead of starving visible updates until terminal input pauses.
     #[tokio::test(flavor = "current_thread")]
@@ -1366,7 +1620,8 @@ mod iroh_tests {
                 IrohAttachRenderWakeup::new(AttachRenderAction::View, Some(6)),
                 Some(7),
             )
-            .unwrap(),
+            .unwrap()
+            .action,
             AttachRenderAction::View
         );
         assert!(matches!(
@@ -1410,7 +1665,8 @@ mod iroh_tests {
                 IrohAttachRenderWakeup::new(AttachRenderAction::View, Some(11)),
                 Some(12),
             )
-            .unwrap(),
+            .unwrap()
+            .action,
             AttachRenderAction::None
         );
 
@@ -1421,7 +1677,8 @@ mod iroh_tests {
                 IrohAttachRenderWakeup::new(AttachRenderAction::InvalidateAndView, Some(12)),
                 Some(12),
             )
-            .unwrap(),
+            .unwrap()
+            .action,
             AttachRenderAction::InvalidateAndView
         );
     }
@@ -1437,6 +1694,7 @@ mod iroh_tests {
             RuntimeIrohCompressionCodec::Zstd,
             RuntimeIrohCompressionCodec::Lz4,
         ] {
+            let mut last_render_revision = 0;
             let compression = IrohCompressionPolicy::new(
                 codec,
                 1,
@@ -1450,16 +1708,30 @@ mod iroh_tests {
             let split = encoded.as_bytes().len() - 1;
             let mut pending = encoded.as_bytes()[..split].to_vec();
             assert_eq!(
-                drain_negotiated_iroh_event_frames(&mut pending, compression, None, None)
-                    .unwrap()
-                    .action,
+                drain_negotiated_iroh_event_frames(
+                    &mut pending,
+                    compression,
+                    None,
+                    None,
+                    false,
+                    &mut last_render_revision,
+                )
+                .unwrap()
+                .action,
                 AttachRenderAction::None,
             );
             pending.extend_from_slice(&encoded.as_bytes()[split..]);
             assert_eq!(
-                drain_negotiated_iroh_event_frames(&mut pending, compression, None, None)
-                    .unwrap()
-                    .action,
+                drain_negotiated_iroh_event_frames(
+                    &mut pending,
+                    compression,
+                    None,
+                    None,
+                    false,
+                    &mut last_render_revision,
+                )
+                .unwrap()
+                .action,
                 AttachRenderAction::View,
             );
             assert!(pending.is_empty());

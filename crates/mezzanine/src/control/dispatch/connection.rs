@@ -58,6 +58,8 @@ pub struct ControlConnectionState {
     pub(super) event_stream_version: Option<u32>,
     /// Whether the negotiated stream may carry client-local clipboard effects.
     pub(super) event_stream_client_clipboard_write: bool,
+    /// Whether v3 rendering is owned by pushed snapshots for this connection.
+    pub(super) event_stream_push_render: bool,
     /// First runtime event visible to an observer initialized on this connection.
     pub(super) observer_visible_from_event_id: Option<u64>,
     /// Whether the negotiated event stream start was already consumed.
@@ -83,6 +85,7 @@ impl ControlConnectionState {
             detach_client_on_disconnect: false,
             event_stream_version: None,
             event_stream_client_clipboard_write: false,
+            event_stream_push_render: false,
             observer_visible_from_event_id: None,
             event_stream_started: false,
             disconnect_submitted: false,
@@ -105,6 +108,7 @@ impl ControlConnectionState {
             detach_client_on_disconnect: false,
             event_stream_version: None,
             event_stream_client_clipboard_write: false,
+            event_stream_push_render: false,
             observer_visible_from_event_id: None,
             event_stream_started: false,
             disconnect_submitted: false,
@@ -215,14 +219,19 @@ impl ControlConnectionState {
     }
 
     /// Takes the negotiated event-stream start exactly once after initialization.
-    pub fn take_event_stream_start(&mut self) -> Option<(ClientId, u32, bool)> {
+    pub fn take_event_stream_start(&mut self) -> Option<(ClientId, u32, bool, bool)> {
         if self.event_stream_started || !self.initialized {
             return None;
         }
         let version = self.event_stream_version?;
         let client_id = self.caller_client_id.clone()?;
         self.event_stream_started = true;
-        Some((client_id, version, self.event_stream_client_clipboard_write))
+        Some((
+            client_id,
+            version,
+            self.event_stream_client_clipboard_write,
+            self.event_stream_push_render,
+        ))
     }
 
     /// Takes the connection-owned client that should receive a disconnect event.
@@ -494,6 +503,7 @@ pub(super) fn initialize_control_connection(
                 matches!(init.event_stream_version, Some(2 | 3));
             connection.event_stream_client_clipboard_write =
                 capabilities.features.client_clipboard_write;
+            connection.event_stream_push_render = init.event_stream_version == Some(3);
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),
@@ -520,6 +530,7 @@ pub(super) fn initialize_control_connection(
             connection.detach_client_on_disconnect = true;
             connection.event_stream_version = init.event_stream_version;
             connection.event_stream_client_clipboard_write = false;
+            connection.event_stream_push_render = false;
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),

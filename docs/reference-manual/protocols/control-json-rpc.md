@@ -49,12 +49,17 @@ malformed initialization, transport, or post-initialization failures. After
 the initialize response is flushed, the server may open one unidirectional
 stream with preface `mezzanine/events/1\n`, `mezzanine/events/2\n`, or
 `mezzanine/events/3\n`, matching the negotiated version. Version 3 is the
-boundary for pushed rendered-state updates and initially retains ordered event
-notifications. Version 2 is primary-only; primary versions 2 and 3 support
-negotiated client-local clipboard writes, while observer v3 does not. Setup,
-idle operation, writes, and teardown are bounded; wrong ALPNs, excess streams,
-malformed frames, stalled setup, and one failed connection are isolated from
-later clients and from the Unix listener.
+boundary for pushed rendered-state updates. A primary v3 stream sends an
+authoritative `render/snapshot` immediately after its preface and sends another
+complete snapshot for later actionable presentation changes. Each snapshot
+contains a stream-local revision, `event_cutoff`, `invalidate_output`, and a
+complete primary `RenderedClientView`. The client validates the entire frame
+before replacing its retained logical view and then reuses the normal local
+ANSI differential renderer. Version 2 is primary-only; primary versions 2 and
+3 support negotiated client-local clipboard writes, while observer v3 does
+not. Setup, idle operation, writes, and teardown are bounded; wrong ALPNs,
+excess streams, malformed frames, stalled setup, and one failed connection are
+isolated from later clients and from the Unix listener.
 
 Schema v71 defines two compressed application-framing ALPNs:
 `mezzanine/transport/2/zstd` and
@@ -386,9 +391,11 @@ primary input requests a conditional inline view and falls back to one
 remain redraw wakeups that refetch authoritative rendered state over control.
 Iroh primaries negotiate `3 → 2 → 1`; observers negotiate `3 → 1`, using only
 explicit unsupported-version initialization results to continue to the next
-candidate. Negotiated v3 currently preserves the notification-plus-fetch
-rendering behavior until pushed render-update frames are introduced behind
-that boundary. This is rendered-view/input-step control, not raw PTY export;
+candidate. A primary v3 client renders the initial and subsequent pushed
+snapshots without issuing steady-state `terminal/view` requests; its control
+responses acknowledge input and resize mutations only. Observer v3 remains on
+notification-plus-fetch rendering until observer-local pushed geometry is
+available. This is rendered-view/input-step control, not raw PTY export;
 specialized frontends should design around the supplied view model.
 
 ## Events and replay

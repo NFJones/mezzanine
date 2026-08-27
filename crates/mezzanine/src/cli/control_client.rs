@@ -570,6 +570,7 @@ pub(super) struct PersistentIrohControlChannel {
     event_receiver:
         Option<tokio::sync::mpsc::Receiver<Result<super::attach::IrohAttachRenderWakeup>>>,
     event_task: tokio::task::JoinHandle<()>,
+    pushed_render_owner: bool,
     setup_timeout: std::time::Duration,
 }
 
@@ -582,6 +583,11 @@ impl PersistentIrohControlChannel {
     /// Returns a clone of the retained connection for local attach health sampling.
     pub(super) fn connection(&self) -> iroh::endpoint::Connection {
         self.connection.clone()
+    }
+
+    /// Reports whether negotiated v3 owns this primary's rendered state.
+    pub(super) fn pushed_render_owner(&self) -> bool {
+        self.pushed_render_owner
     }
 
     /// Takes the negotiated event receiver exactly once for the attach loop.
@@ -602,6 +608,7 @@ impl PersistentIrohControlChannel {
             bridge,
             event_receiver: _,
             mut event_task,
+            pushed_render_owner: _,
             setup_timeout,
         } = self;
         let _ = bridge.shutdown(setup_timeout).await;
@@ -784,6 +791,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
         compression,
         policy.setup_timeout,
         requested_event_stream_version,
+        requested_role == "primary" && requested_event_stream_version == 3,
         client_clipboard_negotiated.then_some(client_clipboard),
     );
     Ok((
@@ -794,6 +802,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
             bridge,
             event_receiver: Some(event_receiver),
             event_task,
+            pushed_render_owner: requested_role == "primary" && requested_event_stream_version == 3,
             setup_timeout: policy.setup_timeout,
         },
         response,

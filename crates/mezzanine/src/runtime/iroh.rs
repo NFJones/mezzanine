@@ -22,7 +22,7 @@ use crate::host::async_runtime::{
     AsyncRuntimeSessionHandle,
     serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush,
 };
-use crate::protocol::event::encode_event_notification;
+use crate::protocol::event::{EventKind, encode_event_notification};
 use crate::storage::snapshot::SnapshotRepository;
 use mez_core::ids::ClientId;
 use tokio::io::AsyncWriteExt;
@@ -42,6 +42,55 @@ pub(crate) const MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE: &[u8] = b"mezzanine/eve
 pub(crate) const MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE: &[u8] = b"mezzanine/events/3\n";
 const IROH_EVENT_BATCH_LIMIT: usize = 64;
 const IROH_CLIPBOARD_CHUNK_BYTES: usize = 256 * 1024;
+
+/// Encodes one authoritative primary render snapshot for event-stream v3.
+fn encode_iroh_render_snapshot_frame(
+    snapshot: &crate::host::async_runtime::AsyncIrohRenderSnapshot,
+    revision: u64,
+) -> Vec<u8> {
+    let view = super::rendered_client_view_json(&snapshot.view, snapshot.iroh_status_slot.as_ref());
+    encode_control_body(&format!(
+        r#"{{"jsonrpc":"2.0","method":"render/snapshot","params":{{"kind":"snapshot","revision":{revision},"event_cutoff":{},"invalidate_output":{},"view":{view}}}}}"#,
+        snapshot.event_cutoff, snapshot.invalidate_output,
+    ))
+}
+
+/// Classifies one retained event for primary v3 render ownership.
+fn iroh_event_render_invalidation(kind: EventKind) -> Option<bool> {
+    match kind {
+        EventKind::Diagnostic | EventKind::SnapshotChanged => None,
+        EventKind::ClientAttached
+        | EventKind::ClientDetached
+        | EventKind::ConfigChanged
+        | EventKind::WindowChanged => Some(true),
+        EventKind::PaneChanged
+        | EventKind::AgentStatus
+        | EventKind::Message
+        | EventKind::ApprovalChanged
+        | EventKind::McpServerChanged
+        | EventKind::HookFailed => Some(false),
+    }
+}
+
+/// Classifies exact-client render side effects for primary v3 snapshot push.
+fn iroh_side_effect_render_invalidation(effects: &[super::RuntimeSideEffect]) -> Option<bool> {
+    let mut render_required = false;
+    let mut invalidate_output = false;
+    for effect in effects {
+        let super::RuntimeSideEffect::RenderClient { reason, .. } = effect else {
+            continue;
+        };
+        render_required = true;
+        invalidate_output |= matches!(
+            reason,
+            super::RenderInvalidationReason::ResizeDrag
+                | super::RenderInvalidationReason::Resize
+                | super::RenderInvalidationReason::Layout
+                | super::RenderInvalidationReason::FullRedraw
+        );
+    }
+    render_required.then_some(invalidate_output)
+}
 
 /// Encodes one bounded clipboard write as transient version-two notifications.
 fn encode_iroh_clipboard_effect_frames(write: &super::ClientClipboardWrite) -> Vec<Vec<u8>> {
@@ -1122,14 +1171,16 @@ async fn serve_runtime_iroh_control_connection(
         control_config.max_content_length,
     )?;
     let mut connection_state = ControlConnectionState::new(false, false);
-    let (event_start_tx, event_start_rx) = tokio::sync::oneshot::channel::<(ClientId, u32, bool)>();
+    let (event_start_tx, event_start_rx) =
+        tokio::sync::oneshot::channel::<(ClientId, u32, bool, bool)>();
     let mut event_start_tx = Some(event_start_tx);
     let (event_stop_tx, event_stop_rx) = tokio::sync::watch::channel(false);
     let event_connection = connection.clone();
     let event_handle = handle.clone();
     let event_compression_metrics = compression_metrics.clone();
     let mut event_task = tokio::spawn(async move {
-        let Ok((client_id, version, client_clipboard_write)) = event_start_rx.await else {
+        let Ok((client_id, version, client_clipboard_write, push_render)) = event_start_rx.await
+        else {
             return Ok(0);
         };
         serve_runtime_iroh_event_stream(
@@ -1138,6 +1189,7 @@ async fn serve_runtime_iroh_control_connection(
             client_id,
             version,
             client_clipboard_write,
+            push_render,
             compression,
             event_compression_metrics,
             setup_timeout,
@@ -1219,6 +1271,7 @@ async fn serve_runtime_iroh_event_stream(
     caller_client_id: ClientId,
     version: u32,
     client_clipboard_write: bool,
+    push_render: bool,
     compression: IrohCompressionPolicy,
     compression_metrics: IrohCompressionMetrics,
     setup_timeout: std::time::Duration,
@@ -1247,6 +1300,7 @@ async fn serve_runtime_iroh_event_stream(
         handle.clone(),
         caller_client_id.clone(),
         version,
+        push_render,
         compression,
         compression_metrics,
         setup_timeout,
@@ -1270,6 +1324,7 @@ async fn serve_registered_runtime_iroh_event_stream(
     handle: AsyncRuntimeSessionHandle,
     caller_client_id: ClientId,
     version: u32,
+    push_render: bool,
     compression: IrohCompressionPolicy,
     compression_metrics: IrohCompressionMetrics,
     setup_timeout: std::time::Duration,
@@ -1280,10 +1335,12 @@ async fn serve_registered_runtime_iroh_event_stream(
     let connection_id = format!("iroh-events-{caller_client_id}");
     let mut last_delivered_event_id = 0u64;
     let mut event_delivery = handle.event_delivery_watcher();
+    let mut side_effect_delivery = handle.side_effect_delivery_watcher();
     if *stop.borrow() {
         return Ok(0);
     }
     let _ = event_delivery.borrow_and_update();
+    let _ = side_effect_delivery.borrow_and_update();
     let mut pending = match handle
         .event_wakeups_for_client(
             caller_client_id.clone(),
@@ -1316,18 +1373,40 @@ async fn serve_registered_runtime_iroh_event_stream(
         .map_err(|_| MezError::invalid_state("Iroh event stream preface flush timed out"))?
         .map_err(|_| MezError::invalid_state("failed to flush Iroh event stream preface"))?;
     let mut delivered = 0u64;
+    let mut render_revision = 0u64;
+    if push_render {
+        let snapshot = handle
+            .render_iroh_primary_snapshot(caller_client_id.clone(), true)
+            .await?
+            .ok_or_else(|| {
+                MezError::invalid_state("Iroh v3 primary was not renderable after initialization")
+            })?;
+        render_revision = 1;
+        let frame = encode_iroh_render_snapshot_frame(&snapshot, render_revision);
+        let frame = compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?;
+        compression_metrics.record_frame(
+            frame.as_bytes().len(),
+            frame.decoded_bytes(),
+            frame.compressed(),
+        );
+        tokio::time::timeout(idle_timeout, send.write_all(frame.as_bytes()))
+            .await
+            .map_err(|_| MezError::invalid_state("Iroh render snapshot write timed out"))?
+            .map_err(|_| MezError::invalid_state("Iroh render snapshot write failed"))?;
+        tokio::time::timeout(idle_timeout, send.flush())
+            .await
+            .map_err(|_| MezError::invalid_state("Iroh render snapshot flush timed out"))?
+            .map_err(|_| MezError::invalid_state("Iroh render snapshot flush failed"))?;
+        last_delivered_event_id = snapshot.event_cutoff;
+        pending.clear();
+    }
     loop {
         if *stop.borrow() {
             break;
         }
-        if matches!(version, 2 | 3)
+        if let Some(clipboard_route_generation) = clipboard_route_generation
             && let Some(write) = handle
-                .take_client_clipboard_write(
-                    caller_client_id.clone(),
-                    clipboard_route_generation.ok_or_else(|| {
-                        MezError::invalid_state("Iroh v2 event stream omitted clipboard route")
-                    })?,
-                )
+                .take_client_clipboard_write(caller_client_id.clone(), clipboard_route_generation)
                 .await?
         {
             for frame in encode_iroh_clipboard_effect_frames(&write) {
@@ -1362,6 +1441,61 @@ async fn serve_registered_runtime_iroh_event_stream(
                 Err(_) => break,
             };
         }
+        let side_effect_invalidation = if push_render {
+            let _ = side_effect_delivery.borrow_and_update();
+            let effects = handle
+                .drain_render_side_effects_for_client(
+                    caller_client_id.clone(),
+                    IROH_EVENT_BATCH_LIMIT,
+                )
+                .await?;
+            iroh_side_effect_render_invalidation(&effects)
+        } else {
+            None
+        };
+        if push_render && (!pending.is_empty() || side_effect_invalidation.is_some()) {
+            let mut batch_last = None;
+            let mut render_required = side_effect_invalidation.is_some();
+            let mut invalidate_output = side_effect_invalidation.unwrap_or(false);
+            for wakeup in pending.drain(..) {
+                for event in wakeup.events {
+                    if let Some(invalidate) = iroh_event_render_invalidation(event.kind) {
+                        render_required = true;
+                        invalidate_output |= invalidate;
+                    }
+                    batch_last = Some(event.id);
+                    delivered = delivered.saturating_add(1);
+                }
+            }
+            if render_required {
+                let snapshot = handle
+                    .render_iroh_primary_snapshot(caller_client_id.clone(), invalidate_output)
+                    .await?
+                    .ok_or_else(|| {
+                        MezError::invalid_state("Iroh v3 primary stopped being renderable")
+                    })?;
+                render_revision = render_revision.saturating_add(1);
+                let frame = encode_iroh_render_snapshot_frame(&snapshot, render_revision);
+                let frame = compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?;
+                compression_metrics.record_frame(
+                    frame.as_bytes().len(),
+                    frame.decoded_bytes(),
+                    frame.compressed(),
+                );
+                tokio::time::timeout(idle_timeout, send.write_all(frame.as_bytes()))
+                    .await
+                    .map_err(|_| MezError::invalid_state("Iroh render snapshot write timed out"))?
+                    .map_err(|_| MezError::invalid_state("Iroh render snapshot write failed"))?;
+                tokio::time::timeout(idle_timeout, send.flush())
+                    .await
+                    .map_err(|_| MezError::invalid_state("Iroh render snapshot flush timed out"))?
+                    .map_err(|_| MezError::invalid_state("Iroh render snapshot flush failed"))?;
+                last_delivered_event_id = snapshot.event_cutoff;
+            } else if let Some(batch_last) = batch_last {
+                last_delivered_event_id = batch_last;
+            }
+            continue;
+        }
         let mut batch_last = None;
         for wakeup in pending.drain(..) {
             for event in wakeup.events {
@@ -1394,6 +1528,11 @@ async fn serve_registered_runtime_iroh_event_stream(
                     break;
                 }
             }
+            changed = side_effect_delivery.changed(), if push_render => {
+                if changed.is_err() {
+                    break;
+                }
+            }
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
                     break;
@@ -1418,6 +1557,7 @@ pub(crate) async fn serve_host_routed_iroh_event_stream(
     caller_client_id: ClientId,
     version: u32,
     client_clipboard_write: bool,
+    push_render: bool,
     compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
     idle_timeout: std::time::Duration,
@@ -1430,6 +1570,7 @@ pub(crate) async fn serve_host_routed_iroh_event_stream(
         caller_client_id,
         version,
         client_clipboard_write,
+        push_render,
         compression,
         metrics,
         setup_timeout,
@@ -2084,6 +2225,7 @@ mod tests {
         let server_addr = server_endpoint.endpoint().addr();
         let (handle, actor) =
             AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let render_handle = handle.clone();
 
         let client_endpoint = Endpoint::builder(presets::Minimal)
             .secret_key(SecretKey::generate())
@@ -2106,7 +2248,7 @@ mod tests {
                 "requested_role": "primary",
                 "requested_version": 2,
                 "client_name": "remote-primary",
-                "event_stream_version": 1,
+                "event_stream_version": 3,
                 "client": {
                     "name": "remote-primary",
                     "interactive": true,
@@ -2161,22 +2303,46 @@ mod tests {
             let initialize_body = read_test_control_body(&mut recv).await;
             assert!(initialize_body.contains(r#""granted_role":"primary""#));
             assert!(initialize_body.contains(r#""device_credential""#));
+            let primary_client_id = serde_json::from_str::<serde_json::Value>(&initialize_body)
+                .unwrap()["result"]["client"]["id"]
+                .as_str()
+                .and_then(|id| ClientId::parse('c', id.to_string()))
+                .unwrap();
 
             let mut events =
                 tokio::time::timeout(std::time::Duration::from_secs(3), connection.accept_uni())
                     .await
                     .unwrap()
                     .unwrap();
-            let mut preface = vec![0u8; MEZZANINE_IROH_EVENT_STREAM_PREFACE.len()];
+            let mut preface = vec![0u8; MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE.len()];
             events.read_exact(&mut preface).await.unwrap();
-            assert_eq!(preface, MEZZANINE_IROH_EVENT_STREAM_PREFACE);
+            assert_eq!(preface, MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE);
             let event_body = read_test_control_body(&mut events).await;
-            assert!(event_body.contains(r#""method":"event/"#), "{event_body}");
+            assert!(
+                event_body.contains(r#""method":"render/snapshot""#),
+                "{event_body}"
+            );
+            assert!(event_body.contains(r#""revision":1"#), "{event_body}");
+            assert!(event_body.contains(r#""role":"primary""#), "{event_body}");
             assert!(!event_body.contains("device_credential"), "{event_body}");
             assert!(
                 !event_body.contains(invitation.token.expose_secret()),
                 "{event_body}"
             );
+
+            render_handle
+                .queue_runtime_side_effects(vec![crate::runtime::RuntimeSideEffect::RenderClient {
+                    client_id: primary_client_id,
+                    reason: crate::runtime::RenderInvalidationReason::CursorBlink,
+                }])
+                .await
+                .unwrap();
+            let repaint_body = read_test_control_body(&mut events).await;
+            assert!(
+                repaint_body.contains(r#""method":"render/snapshot""#),
+                "{repaint_body}"
+            );
+            assert!(repaint_body.contains(r#""revision":2"#), "{repaint_body}");
 
             tokio::time::sleep(std::time::Duration::from_millis(900)).await;
 

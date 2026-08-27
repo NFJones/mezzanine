@@ -272,6 +272,11 @@ observer v3 does not receive that authority.
 Authorized events wake a fresh `terminal/view`; observers receive only
 session-view events at or after their atomic attachment cutoff, and detach or
 event-stream failure ends the attach visibly.
+For a negotiated primary v3 stream, the event stream instead sends an initial
+authoritative rendered snapshot and later snapshots for presentation changes.
+Primary v3 control responses remain mutation acknowledgements, so steady-state
+rendering does not issue `terminal/view`. Observer v3 continues to use redraw
+wakeups and view fetches until observer-local pushed geometry is supported.
 Acceptance and preface receipt share the configured Iroh setup timeout; expiry
 closes the connection and requires an explicit reattach.
 Terminal resize, input, and view requests remain ordered one at a time behind

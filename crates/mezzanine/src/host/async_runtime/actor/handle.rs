@@ -1,16 +1,16 @@
 //! Public asynchronous handle API for the serialized runtime actor.
 
 use super::{
-    AgentId, AsyncControlInputResult, AsyncMessageFanout, AsyncMessageInputResult,
-    AsyncRenderedClientFrame, AsyncRuntimeRequest, AsyncRuntimeRequestEnvelope,
-    AsyncRuntimeSessionHandle, AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot,
-    AttachedClientStepApplication, AttachedTerminalClientStepPlan, ClientClipboardRouteCleanup,
-    ClientClipboardRouteLease, ClientId, ClientViewRole, ControlConnectionState, DeliveryCursor,
-    FanoutBatch, MessageConnection, MezError, PaneResizeUpdate, Result,
-    RuntimeAgentProviderDispatch, RuntimeApprovedExternalActionDispatch,
-    RuntimeApprovedExternalActionOutcome, RuntimeEventBatch, RuntimeEventIngressReport,
-    RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSideEffect, Size, TerminalClientLoopConfig,
-    oneshot, watch,
+    AgentId, AsyncControlInputResult, AsyncIrohRenderSnapshot, AsyncMessageFanout,
+    AsyncMessageInputResult, AsyncRenderedClientFrame, AsyncRuntimeRequest,
+    AsyncRuntimeRequestEnvelope, AsyncRuntimeSessionHandle, AsyncTerminalClientConfigInput,
+    AsyncTerminalClientConfigSnapshot, AttachedClientStepApplication,
+    AttachedTerminalClientStepPlan, ClientClipboardRouteCleanup, ClientClipboardRouteLease,
+    ClientId, ClientViewRole, ControlConnectionState, DeliveryCursor, FanoutBatch,
+    MessageConnection, MezError, PaneResizeUpdate, Result, RuntimeAgentProviderDispatch,
+    RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome, RuntimeEventBatch,
+    RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSideEffect, Size,
+    TerminalClientLoopConfig, oneshot, watch,
 };
 #[cfg(test)]
 use super::{
@@ -179,6 +179,20 @@ impl AsyncRuntimeSessionHandle {
             client_size,
             config: AsyncTerminalClientConfigInput::Raw(Box::new(config)),
             render,
+            reply,
+        })
+        .await?
+    }
+
+    /// Captures one authoritative exact-primary snapshot for an Iroh v3 stream.
+    pub(crate) async fn render_iroh_primary_snapshot(
+        &self,
+        client_id: ClientId,
+        invalidate_output: bool,
+    ) -> Result<Option<AsyncIrohRenderSnapshot>> {
+        self.request(|reply| AsyncRuntimeRequest::RenderIrohPrimarySnapshot {
+            client_id,
+            invalidate_output,
             reply,
         })
         .await?
