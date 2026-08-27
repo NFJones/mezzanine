@@ -250,7 +250,7 @@ pub(crate) use config::ConfiguredSandboxEnvironment;
 pub(crate) use config::{
     BubblewrapConfig, ConfiguredPermissions, ConfiguredSandboxGroups, NetworkPolicy,
     SandboxBackend, SandboxConfig, SandboxEnvironmentPolicy, SandboxNetworkMode,
-    SandboxUnavailablePolicy, runtime_configured_permissions_from_config,
+    SandboxUnavailablePolicy, SeatbeltConfig, runtime_configured_permissions_from_config,
 };
 /// Exposes the control module boundary.
 ///

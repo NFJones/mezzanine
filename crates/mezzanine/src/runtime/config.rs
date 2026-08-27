@@ -82,7 +82,7 @@ pub(crate) use permissions::ConfiguredSandboxEnvironment;
 pub(crate) use permissions::{
     BubblewrapConfig, ConfiguredPermissions, ConfiguredSandboxGroups, NetworkPolicy,
     SandboxBackend, SandboxConfig, SandboxEnvironmentPolicy, SandboxNetworkMode,
-    SandboxUnavailablePolicy, runtime_approval_decision_name_to_kind,
+    SandboxUnavailablePolicy, SeatbeltConfig, runtime_approval_decision_name_to_kind,
     runtime_blocked_approval_request, runtime_config_permission_preset,
     runtime_configured_permissions_from_config, runtime_message_recipient,
     sandbox_applies_to_policy,

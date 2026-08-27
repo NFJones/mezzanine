@@ -32,6 +32,7 @@ use crate::runtime::{
 
 mod identity;
 mod managed_home;
+pub(crate) mod seatbelt;
 mod workflow;
 
 pub(crate) use identity::{
