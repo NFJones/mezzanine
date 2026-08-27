@@ -3181,13 +3181,24 @@ traffic or publishes invitation-issued profile authority.
 
 Interactive Iroh attach MUST retain one initialized bidirectional control
 stream for its lifetime and MUST preserve request/response ordering across
-terminal resize, input, and view operations. Observers, Unix clients, and
-legacy or non-negotiating Iroh clients MUST use event-stream version 1. An
-authenticated interactive Iroh primary MAY request event-stream version 2 and
-MUST receive explicit `client_clipboard_write` capability confirmation before
-treating client-local clipboard effects as negotiated. Version 1 uses the exact
-preface `mezzanine/events/1\n`; version 2 uses the exact preface
-`mezzanine/events/2\n`. The server MUST NOT open an event stream before the
+terminal resize, input, and view operations. New primary clients MUST attempt
+event-stream versions `3`, `2`, then `1`; new observer clients MUST attempt
+versions `3`, then `1`. A client MUST retry initialization only after the
+server returns the structured `unsupported_event_stream_version` result or the
+exact legacy unsupported-version result. Authentication, authorization,
+malformed initialization, transport, and post-initialization stream failures
+MUST remain visible failures and MUST NOT cause downgrade. Unix clients and
+legacy or non-negotiating Iroh clients MUST use event-stream version 1.
+
+Event-stream version 3 is the negotiated boundary for pushed rendered-state
+updates. Until those update frames are present, it retains the ordered event
+notification behavior of the lower versions. Version 2 remains limited to an
+authenticated interactive Iroh primary. Primary versions 2 and 3 MUST receive
+explicit `client_clipboard_write` capability confirmation before treating
+client-local clipboard effects as negotiated; observer version 3 MUST NOT
+receive that authority. Version 1 uses the exact preface
+`mezzanine/events/1\n`; version 2 uses `mezzanine/events/2\n`; version 3 uses
+`mezzanine/events/3\n`. The server MUST NOT open an event stream before the
 successful initialize response is flushed, and then MUST open at most one
 unidirectional stream on that same QUIC connection. Client-opened
 unidirectional streams remain forbidden. The client MUST apply one configured
@@ -3195,7 +3206,7 @@ Iroh setup deadline to both accepting the negotiated event stream and receiving
 its complete preface. If that deadline expires, the client MUST close the QUIC
 connection and fail the attach visibly rather than wait indefinitely.
 
-Event-stream version 2 MAY carry transient `client/clipboard.begin`,
+Primary event-stream versions 2 and 3 MAY carry transient `client/clipboard.begin`,
 `client/clipboard.chunk`, and `client/clipboard.commit` notifications in
 addition to retained `event/*` notifications. A clipboard transfer MUST be
 addressed only to the exact authenticated primary that initiated the copy,

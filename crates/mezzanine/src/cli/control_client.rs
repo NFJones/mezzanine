@@ -703,7 +703,8 @@ pub(super) async fn open_persistent_iroh_control_channel(
     if let Some(session_name) = routing.and_then(IrohSessionRouting::session_name) {
         client["metadata"] = serde_json::json!({"session_name": session_name});
     }
-    let mut requested_event_stream_version = if requested_role == "primary" { 2 } else { 1 };
+    let event_stream_version_candidates = iroh_event_stream_version_candidates(requested_role)?;
+    let mut requested_event_stream_version = event_stream_version_candidates[0];
     let mut params = serde_json::json!({
         "client_name": "remote-cli",
         "requested_version": if host_scoped { 3 } else { 2 },
@@ -732,18 +733,22 @@ pub(super) async fn open_persistent_iroh_control_channel(
         "params": params
     })
     .to_string();
-    write_iroh_control_frame(bridge.stream_mut(), &initialize, policy.idle_timeout).await?;
-    let mut response =
-        read_persistent_iroh_control_frame(bridge.stream_mut(), policy.idle_timeout).await?;
-    if requested_event_stream_version == 2 && iroh_initialize_rejected_event_stream_v2(&response) {
-        requested_event_stream_version = 1;
+    let mut response = String::new();
+    for (index, candidate) in event_stream_version_candidates.iter().copied().enumerate() {
+        requested_event_stream_version = candidate;
         let mut initialize_value: serde_json::Value = serde_json::from_str(&initialize)
             .map_err(|_| MezError::invalid_state("invalid local Iroh initialize request"))?;
-        initialize_value["params"]["event_stream_version"] = serde_json::Value::from(1);
+        initialize_value["params"]["event_stream_version"] = serde_json::Value::from(candidate);
         initialize = initialize_value.to_string();
         write_iroh_control_frame(bridge.stream_mut(), &initialize, policy.idle_timeout).await?;
         response =
             read_persistent_iroh_control_frame(bridge.stream_mut(), policy.idle_timeout).await?;
+        if !iroh_initialize_rejected_event_stream_version(&response) {
+            break;
+        }
+        if index + 1 == event_stream_version_candidates.len() {
+            break;
+        }
     }
     let issued_credential = validate_iroh_initialize_response(&response, requested_role)?;
     let client_clipboard_negotiated = iroh_client_clipboard_negotiated(
@@ -2050,14 +2055,41 @@ fn validate_iroh_initialize_response(
         .map(|credential| SecretString::from(credential.to_string())))
 }
 
-/// Returns whether a failed initialize response permits a same-connection v1 retry.
-fn iroh_initialize_rejected_event_stream_v2(body: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| value.get("error").cloned())
-        .and_then(|error| error.get("message").cloned())
-        .and_then(|message| message.as_str().map(str::to_string))
-        .is_some_and(|message| message == "unsupported event stream version")
+/// Returns the role-limited event-stream versions attempted by Iroh attach.
+fn iroh_event_stream_version_candidates(requested_role: &str) -> Result<Vec<u32>> {
+    match requested_role {
+        "primary" => Ok(vec![3, 2, 1]),
+        "observer" => Ok(vec![3, 1]),
+        _ => Err(MezError::invalid_args("unsupported Iroh requested role")),
+    }
+}
+
+/// Returns whether an initialize response permits a same-connection retry.
+fn iroh_initialize_rejected_event_stream_version(body: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    let Some(error) = value.get("error") else {
+        return false;
+    };
+    let code = error.get("code").and_then(serde_json::Value::as_i64);
+    let message = error.get("message").and_then(serde_json::Value::as_str);
+    let mezzanine_code = error
+        .get("data")
+        .and_then(|data| data.get("mezzanine_code"))
+        .and_then(serde_json::Value::as_str);
+    matches!(
+        (code, message, mezzanine_code),
+        (
+            Some(-32003),
+            Some("unsupported event stream version"),
+            Some("unsupported_event_stream_version")
+        ) | (
+            Some(-32602),
+            Some("unsupported event stream version"),
+            Some("invalid_params")
+        )
+    )
 }
 
 /// Returns whether client clipboard effects were explicitly negotiated.
@@ -2081,7 +2113,7 @@ fn iroh_client_clipboard_negotiated(
         .and_then(|features| features.get("client_clipboard_write"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    Ok(event_stream_version == 2
+    Ok(matches!(event_stream_version, 2 | 3)
         && requested_role == "primary"
         && granted_role == Some("primary")
         && clipboard_capable)
@@ -2232,8 +2264,8 @@ pub(super) fn incomplete_control_response_error(
 mod tests {
     use super::{
         RemoteRoleCeiling, ensure_iroh_attach_role_allowed, iroh_client_clipboard_negotiated,
-        iroh_initialize_rejected_event_stream_v2, validate_iroh_host_only_initialize_response,
-        validate_iroh_initialize_response,
+        iroh_event_stream_version_candidates, iroh_initialize_rejected_event_stream_version,
+        validate_iroh_host_only_initialize_response, validate_iroh_initialize_response,
     };
 
     #[test]
@@ -2299,14 +2331,37 @@ mod tests {
         assert!(!iroh_client_clipboard_negotiated(observer, "observer", 1).unwrap());
     }
 
-    /// Verifies fallback is limited to the exact legacy event-version rejection.
+    /// Verifies primary and observer attach use their role-specific event-stream
+    /// negotiation order without enabling primary-only v2 for observers.
     #[test]
-    fn iroh_initialize_v2_fallback_rejects_unrelated_failures() {
-        assert!(iroh_initialize_rejected_event_stream_v2(
-            r#"{"jsonrpc":"2.0","id":"cli-init","error":{"code":-32602,"message":"unsupported event stream version"}}"#,
+    fn iroh_initialize_uses_role_specific_event_stream_candidates() {
+        assert_eq!(
+            iroh_event_stream_version_candidates("primary").unwrap(),
+            [3, 2, 1]
+        );
+        assert_eq!(
+            iroh_event_stream_version_candidates("observer").unwrap(),
+            [3, 1]
+        );
+        assert!(iroh_event_stream_version_candidates("agent").is_err());
+    }
+
+    /// Verifies fallback is limited to structured current or exact legacy
+    /// unsupported-version results and never hides unrelated failures.
+    #[test]
+    fn iroh_initialize_event_stream_fallback_rejects_unrelated_failures() {
+        assert!(iroh_initialize_rejected_event_stream_version(
+            r#"{"jsonrpc":"2.0","id":"cli-init","error":{"code":-32003,"message":"unsupported event stream version","data":{"mezzanine_code":"unsupported_event_stream_version"}}}"#,
         ));
-        assert!(!iroh_initialize_rejected_event_stream_v2(
-            r#"{"jsonrpc":"2.0","id":"cli-init","error":{"code":-32001,"message":"authentication failed"}}"#,
+        assert!(iroh_initialize_rejected_event_stream_version(
+            r#"{"jsonrpc":"2.0","id":"cli-init","error":{"code":-32602,"message":"unsupported event stream version","data":{"mezzanine_code":"invalid_params"}}}"#,
         ));
+        assert!(!iroh_initialize_rejected_event_stream_version(
+            r#"{"jsonrpc":"2.0","id":"cli-init","error":{"code":-32001,"message":"unsupported event stream version","data":{"mezzanine_code":"forbidden"}}}"#,
+        ));
+        assert!(!iroh_initialize_rejected_event_stream_version(
+            r#"{"jsonrpc":"2.0","id":"cli-init","error":{"code":-32001,"message":"authentication failed","data":{"mezzanine_code":"forbidden"}}}"#,
+        ));
+        assert!(!iroh_initialize_rejected_event_stream_version("not-json"));
     }
 }

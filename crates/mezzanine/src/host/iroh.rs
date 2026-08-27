@@ -1051,20 +1051,21 @@ async fn serve_routed_initialize_inner(
         }
     });
     let (event_stop_tx, event_stop_rx) = tokio::sync::watch::channel(false);
-    let mut event_task = connection_state
-        .take_event_stream_start()
-        .map(|(client_id, version)| {
+    let mut event_task = connection_state.take_event_stream_start().map(
+        |(client_id, version, client_clipboard_write)| {
             tokio::spawn(serve_host_routed_iroh_event_stream(
                 (*connection).clone(),
                 binding.runtime.actor().clone(),
                 client_id,
                 version,
+                client_clipboard_write,
                 compression,
                 policy.setup_timeout,
                 policy.idle_timeout,
                 event_stop_rx,
             ))
-        });
+        },
+    );
     let control_config =
         AsyncRuntimeControlConnectionConfig::new(HOST_CONTROL_MAX_CONTENT_LENGTH, 0)?;
     let authority_principal = principal.clone();

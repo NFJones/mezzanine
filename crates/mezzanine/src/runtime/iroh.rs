@@ -39,6 +39,7 @@ use super::{
 pub(crate) const MEZZANINE_IROH_ALPN: &[u8] = b"mezzanine/transport/1";
 pub(crate) const MEZZANINE_IROH_EVENT_STREAM_PREFACE: &[u8] = b"mezzanine/events/1\n";
 pub(crate) const MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE: &[u8] = b"mezzanine/events/2\n";
+pub(crate) const MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE: &[u8] = b"mezzanine/events/3\n";
 const IROH_EVENT_BATCH_LIMIT: usize = 64;
 const IROH_CLIPBOARD_CHUNK_BYTES: usize = 256 * 1024;
 
@@ -1121,14 +1122,14 @@ async fn serve_runtime_iroh_control_connection(
         control_config.max_content_length,
     )?;
     let mut connection_state = ControlConnectionState::new(false, false);
-    let (event_start_tx, event_start_rx) = tokio::sync::oneshot::channel::<(ClientId, u32)>();
+    let (event_start_tx, event_start_rx) = tokio::sync::oneshot::channel::<(ClientId, u32, bool)>();
     let mut event_start_tx = Some(event_start_tx);
     let (event_stop_tx, event_stop_rx) = tokio::sync::watch::channel(false);
     let event_connection = connection.clone();
     let event_handle = handle.clone();
     let event_compression_metrics = compression_metrics.clone();
     let mut event_task = tokio::spawn(async move {
-        let Ok((client_id, version)) = event_start_rx.await else {
+        let Ok((client_id, version, client_clipboard_write)) = event_start_rx.await else {
             return Ok(0);
         };
         serve_runtime_iroh_event_stream(
@@ -1136,6 +1137,7 @@ async fn serve_runtime_iroh_control_connection(
             event_handle,
             client_id,
             version,
+            client_clipboard_write,
             compression,
             event_compression_metrics,
             setup_timeout,
@@ -1216,18 +1218,19 @@ async fn serve_runtime_iroh_event_stream(
     handle: AsyncRuntimeSessionHandle,
     caller_client_id: ClientId,
     version: u32,
+    client_clipboard_write: bool,
     compression: IrohCompressionPolicy,
     compression_metrics: IrohCompressionMetrics,
     setup_timeout: std::time::Duration,
     idle_timeout: std::time::Duration,
     mut stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<u64> {
-    if !matches!(version, 1 | 2) {
+    if !matches!(version, 1..=3) {
         return Err(MezError::invalid_args(
             "unsupported Iroh event stream version",
         ));
     }
-    let clipboard_route = if version == 2 {
+    let clipboard_route = if client_clipboard_write {
         Some(
             handle
                 .register_client_clipboard_route(caller_client_id.clone())
@@ -1299,10 +1302,10 @@ async fn serve_registered_runtime_iroh_event_stream(
         .map_err(|_| MezError::invalid_state("failed to open Iroh event stream"))?;
     tokio::time::timeout(
         idle_timeout,
-        send.write_all(if version == 2 {
-            MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE
-        } else {
-            MEZZANINE_IROH_EVENT_STREAM_PREFACE
+        send.write_all(match version {
+            3 => MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE,
+            2 => MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE,
+            _ => MEZZANINE_IROH_EVENT_STREAM_PREFACE,
         }),
     )
     .await
@@ -1317,7 +1320,7 @@ async fn serve_registered_runtime_iroh_event_stream(
         if *stop.borrow() {
             break;
         }
-        if version == 2
+        if matches!(version, 2 | 3)
             && let Some(write) = handle
                 .take_client_clipboard_write(
                     caller_client_id.clone(),
@@ -1414,6 +1417,7 @@ pub(crate) async fn serve_host_routed_iroh_event_stream(
     handle: AsyncRuntimeSessionHandle,
     caller_client_id: ClientId,
     version: u32,
+    client_clipboard_write: bool,
     compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
     idle_timeout: std::time::Duration,
@@ -1425,6 +1429,7 @@ pub(crate) async fn serve_host_routed_iroh_event_stream(
         handle,
         caller_client_id,
         version,
+        client_clipboard_write,
         compression,
         metrics,
         setup_timeout,

@@ -575,9 +575,144 @@ fn authenticated_iroh_primary_negotiates_event_stream_version_two() {
     assert!(body.contains(r#""client_clipboard_write":true"#), "{body}");
     assert_eq!(
         connection.take_event_stream_start(),
-        Some((expected_client, 2))
+        Some((expected_client, 2, true))
     );
     assert!(connection.take_event_stream_start().is_none());
+}
+
+/// Verifies authenticated Iroh primary initialization can select the v3
+/// boundary while retaining primary clipboard capability negotiation.
+#[test]
+fn authenticated_iroh_primary_negotiates_event_stream_version_three() {
+    use crate::security::remote::{RemoteHostRoutingAuthority, RemotePrincipal, RemoteRoleCeiling};
+
+    let mut session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let mut connection = ControlConnectionState::new(false, false);
+    connection
+        .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint("endpoint-v3-primary"))
+        .unwrap();
+    connection
+        .bind_remote_principal(RemotePrincipal {
+            trust_record_id: "trust-v3-primary".to_string(),
+            endpoint_id: "endpoint-v3-primary".to_string(),
+            role_ceiling: RemoteRoleCeiling::Primary,
+            host_routing: RemoteHostRoutingAuthority::default(),
+            requested_role: RequestedRole::Primary,
+        })
+        .unwrap();
+    let mut cache = ControlIdempotencyCache::default();
+    let input = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"remote-v3","requested_version":2,"requested_role":"primary","detach_primary_on_disconnect":true,"event_stream_version":3,"client":{"name":"remote-v3","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+    );
+
+    let (output, _) = handle_control_frames_for_connection(
+        &input,
+        4096,
+        &mut session,
+        &mut connection,
+        &mut cache,
+    )
+    .unwrap();
+    let (body, _) = decode_control_frame(&output, 4096).unwrap();
+
+    let expected_client = connection.caller_client_id().unwrap().clone();
+    assert!(body.contains(r#""client_clipboard_write":true"#), "{body}");
+    assert_eq!(
+        connection.take_event_stream_start(),
+        Some((expected_client, 3, true))
+    );
+}
+
+/// Verifies authenticated Iroh observers may negotiate the v3 protocol
+/// boundary without receiving primary-only client clipboard authority.
+#[test]
+fn authenticated_iroh_observer_negotiates_event_stream_version_three_without_effects() {
+    use crate::security::remote::{RemoteHostRoutingAuthority, RemotePrincipal, RemoteRoleCeiling};
+
+    let (mut session, _primary) = test_session();
+    let mut connection = ControlConnectionState::new(false, false);
+    connection
+        .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint("endpoint-v3-observer"))
+        .unwrap();
+    connection
+        .bind_remote_principal(RemotePrincipal {
+            trust_record_id: "trust-v3-observer".to_string(),
+            endpoint_id: "endpoint-v3-observer".to_string(),
+            role_ceiling: RemoteRoleCeiling::Observer,
+            host_routing: RemoteHostRoutingAuthority::default(),
+            requested_role: RequestedRole::Observer,
+        })
+        .unwrap();
+    let mut cache = ControlIdempotencyCache::default();
+    let input = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"remote-v3-observer","requested_version":2,"requested_role":"observer","event_stream_version":3,"client":{"name":"remote-v3-observer","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+    );
+
+    let (output, _) = handle_control_frames_for_connection(
+        &input,
+        4096,
+        &mut session,
+        &mut connection,
+        &mut cache,
+    )
+    .unwrap();
+    let (body, _) = decode_control_frame(&output, 4096).unwrap();
+
+    let expected_client = connection.caller_client_id().unwrap().clone();
+    assert!(body.contains(r#""granted_role":"observer""#), "{body}");
+    assert!(body.contains(r#""client_clipboard_write":false"#), "{body}");
+    assert_eq!(
+        connection.take_event_stream_start(),
+        Some((expected_client, 3, false))
+    );
+}
+
+/// Verifies unsupported event-stream versions use a distinct structured
+/// initialization result so clients never infer downgrade from auth text.
+#[test]
+fn unsupported_event_stream_version_is_structured() {
+    use crate::security::remote::{RemoteHostRoutingAuthority, RemotePrincipal, RemoteRoleCeiling};
+
+    let mut session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let mut connection = ControlConnectionState::new(false, false);
+    connection
+        .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint("endpoint-future"))
+        .unwrap();
+    connection
+        .bind_remote_principal(RemotePrincipal {
+            trust_record_id: "trust-future".to_string(),
+            endpoint_id: "endpoint-future".to_string(),
+            role_ceiling: RemoteRoleCeiling::Primary,
+            host_routing: RemoteHostRoutingAuthority::default(),
+            requested_role: RequestedRole::Primary,
+        })
+        .unwrap();
+    let mut cache = ControlIdempotencyCache::default();
+    let input = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"remote-future","requested_version":2,"requested_role":"primary","event_stream_version":99,"client":{"name":"remote-future","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+    );
+
+    let (output, _) = handle_control_frames_for_connection(
+        &input,
+        4096,
+        &mut session,
+        &mut connection,
+        &mut cache,
+    )
+    .unwrap();
+    let (body, _) = decode_control_frame(&output, 4096).unwrap();
+
+    assert!(
+        body.contains(r#""mezzanine_code":"unsupported_event_stream_version""#),
+        "{body}"
+    );
+    assert!(!connection.initialized());
 }
 
 /// Verifies a local Unix primary cannot opt into Iroh-only event-stream v2.

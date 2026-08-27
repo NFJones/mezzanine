@@ -41,16 +41,20 @@ stronger configured mechanism before receiving session data or mutating state.
 The opt-in Iroh adapter uses ALPN `mezzanine/transport/1` and carries bounded
 control frames on exactly one long-lived, client-opened bidirectional control
 stream. The server accepts no client-opened unidirectional streams and lowers
-each connection to one concurrent bidirectional control stream. Observers
-request `event_stream_version: 1`; primaries request version 2 and may retry
-version 1 only after a legacy server explicitly rejects version 2. After the
-initialize response is flushed, the server may open one unidirectional stream
-with preface `mezzanine/events/1\n` or `mezzanine/events/2\n`, matching the
-negotiated version. Version 2 is limited to authenticated Iroh primaries and
-supports negotiated client-local clipboard writes. Setup, idle operation,
-writes, and teardown are bounded; wrong ALPNs, excess streams, malformed
-frames, stalled setup, and one failed connection are isolated from later
-clients and from the Unix listener.
+each connection to one concurrent bidirectional control stream. Primaries
+attempt event-stream versions `3 → 2 → 1`; observers attempt `3 → 1`.
+Downgrade occurs only for the structured unsupported-event-version result or
+the exact legacy equivalent, never for authentication, authorization,
+malformed initialization, transport, or post-initialization failures. After
+the initialize response is flushed, the server may open one unidirectional
+stream with preface `mezzanine/events/1\n`, `mezzanine/events/2\n`, or
+`mezzanine/events/3\n`, matching the negotiated version. Version 3 is the
+boundary for pushed rendered-state updates and initially retains ordered event
+notifications. Version 2 is primary-only; primary versions 2 and 3 support
+negotiated client-local clipboard writes, while observer v3 does not. Setup,
+idle operation, writes, and teardown are bounded; wrong ALPNs, excess streams,
+malformed frames, stalled setup, and one failed connection are isolated from
+later clients and from the Unix listener.
 
 Schema v71 defines two compressed application-framing ALPNs:
 `mezzanine/transport/2/zstd` and
@@ -380,9 +384,11 @@ request a fresh `terminal/view`. Local clients use the Unix event socket. Iroh
 primary input requests a conditional inline view and falls back to one
 `terminal/view` when an older server returns no view. Asynchronous Iroh events
 remain redraw wakeups that refetch authoritative rendered state over control.
-Iroh observers negotiate event-stream version 1; Iroh primaries request
-version 2 and use version 1 only as the explicit legacy fallback described
-above. This is rendered-view/input-step control, not raw PTY export;
+Iroh primaries negotiate `3 → 2 → 1`; observers negotiate `3 → 1`, using only
+explicit unsupported-version initialization results to continue to the next
+candidate. Negotiated v3 currently preserves the notification-plus-fetch
+rendering behavior until pushed render-update frames are introduced behind
+that boundary. This is rendered-view/input-step control, not raw PTY export;
 specialized frontends should design around the supplied view model.
 
 ## Events and replay

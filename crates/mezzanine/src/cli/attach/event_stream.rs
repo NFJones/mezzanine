@@ -508,7 +508,7 @@ async fn receive_iroh_runtime_events(
     clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
     sender: &tokio::sync::mpsc::Sender<Result<IrohAttachRenderWakeup>>,
 ) -> Result<()> {
-    if !matches!(event_stream_version, 1 | 2) {
+    if !matches!(event_stream_version, 1..=3) {
         return Err(MezError::invalid_args(
             "unsupported negotiated Iroh event stream version",
         ));
@@ -524,10 +524,10 @@ async fn receive_iroh_runtime_events(
                 ));
             }
         };
-        let expected_preface = if event_stream_version == 2 {
-            crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE
-        } else {
-            crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE
+        let expected_preface = match event_stream_version {
+            3 => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE,
+            2 => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V2_PREFACE,
+            _ => crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE,
         };
         let mut preface = vec![0u8; expected_preface.len()];
         stream
@@ -555,7 +555,9 @@ async fn receive_iroh_runtime_events(
     };
 
     let mut pending = Vec::new();
-    let mut clipboard_assembler = (event_stream_version == 2).then(IrohClipboardAssembler::default);
+    let mut clipboard_assembler = clipboard_sender
+        .is_some()
+        .then(IrohClipboardAssembler::default);
     let mut buffer = [0u8; ATTACH_EVENT_STREAM_READ_BUFFER_BYTES];
     loop {
         let read = if let Some(deadline) = clipboard_assembler
@@ -1077,6 +1079,52 @@ mod iroh_setup_tests {
         let mut stream = server_connection.open_uni().await.unwrap();
         stream
             .write_all(crate::runtime::MEZZANINE_IROH_EVENT_STREAM_PREFACE)
+            .await
+            .unwrap();
+        stream
+            .write_all(&crate::control::encode_control_body(
+                r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed"}}"#,
+            ))
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+
+        let action = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(action.action, AttachRenderAction::View);
+
+        client_connection.close(VarInt::from_u32(0), b"test complete");
+        task.await.unwrap();
+        client.close().await;
+        server.close().await;
+    }
+
+    /// Verifies a negotiated v3 receiver requires the exact v3 preface and
+    /// continues to deliver legacy redraw notifications until pushed render
+    /// frames are introduced behind that negotiated boundary.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_v3_event_receiver_accepts_preface_and_delivers_event() {
+        let (server, client, server_connection, client_connection) =
+            connected_iroh_event_pair().await;
+        let (mut receiver, task) = spawn_iroh_runtime_event_receiver(
+            client_connection.clone(),
+            IrohCompressionPolicy::new(
+                RuntimeIrohCompressionCodec::None,
+                1,
+                3,
+                ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+            )
+            .unwrap(),
+            std::time::Duration::from_secs(1),
+            3,
+            None,
+        );
+        let mut stream = server_connection.open_uni().await.unwrap();
+        stream
+            .write_all(crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE)
             .await
             .unwrap();
         stream

@@ -262,11 +262,13 @@ distinct.
 Interactive remote attach requires a terminal and keeps one initialized Iroh
 control stream open for its lifetime. A `primary` profile may attach as primary
 or observer; an `observer` profile cannot attach as primary. The client also
-negotiates one server-opened event stream. Observers use version 1. Primaries
-request version 2 and retry version 1 only when a legacy server explicitly
-rejects the newer event-stream version. Client-local clipboard writes are
-enabled only when a primary receives explicit `client_clipboard_write`
-capability confirmation; otherwise copy behavior remains the version-1 behavior.
+negotiates one server-opened event stream. Primaries attempt versions
+`3 → 2 → 1`; observers attempt `3 → 1`. Only a structured unsupported-version
+initialization result advances to the next candidate; authentication,
+authorization, malformed data, transport, and later stream failures remain
+visible. Client-local clipboard writes are enabled only when a primary on v2
+or v3 receives explicit `client_clipboard_write` capability confirmation;
+observer v3 does not receive that authority.
 Authorized events wake a fresh `terminal/view`; observers receive only
 session-view events at or after their atomic attachment cutoff, and detach or
 event-stream failure ends the attach visibly.

@@ -56,6 +56,8 @@ pub struct ControlConnectionState {
     pub(super) detach_client_on_disconnect: bool,
     /// Negotiated server-opened event stream version for this connection.
     pub(super) event_stream_version: Option<u32>,
+    /// Whether the negotiated stream may carry client-local clipboard effects.
+    pub(super) event_stream_client_clipboard_write: bool,
     /// First runtime event visible to an observer initialized on this connection.
     pub(super) observer_visible_from_event_id: Option<u64>,
     /// Whether the negotiated event stream start was already consumed.
@@ -80,6 +82,7 @@ impl ControlConnectionState {
             caller_client_id: None,
             detach_client_on_disconnect: false,
             event_stream_version: None,
+            event_stream_client_clipboard_write: false,
             observer_visible_from_event_id: None,
             event_stream_started: false,
             disconnect_submitted: false,
@@ -101,6 +104,7 @@ impl ControlConnectionState {
             caller_client_id: Some(caller_client_id),
             detach_client_on_disconnect: false,
             event_stream_version: None,
+            event_stream_client_clipboard_write: false,
             observer_visible_from_event_id: None,
             event_stream_started: false,
             disconnect_submitted: false,
@@ -211,14 +215,14 @@ impl ControlConnectionState {
     }
 
     /// Takes the negotiated event-stream start exactly once after initialization.
-    pub fn take_event_stream_start(&mut self) -> Option<(ClientId, u32)> {
+    pub fn take_event_stream_start(&mut self) -> Option<(ClientId, u32, bool)> {
         if self.event_stream_started || !self.initialized {
             return None;
         }
         let version = self.event_stream_version?;
         let client_id = self.caller_client_id.clone()?;
         self.event_stream_started = true;
-        Some((client_id, version))
+        Some((client_id, version, self.event_stream_client_clipboard_write))
     }
 
     /// Takes the connection-owned client that should receive a disconnect event.
@@ -296,6 +300,12 @@ pub fn dispatch_control_request_for_connection(
             {
                 json_rpc_error(&request.id, -32003, error.message(), "unsupported_version")
             }
+            Err(error) if error.message() == "unsupported event stream version" => json_rpc_error(
+                &request.id,
+                -32003,
+                error.message(),
+                "unsupported_event_stream_version",
+            ),
             Err(error) => json_rpc_error(
                 &request.id,
                 error_code(error.kind()),
@@ -422,7 +432,7 @@ pub(super) fn initialize_control_connection(
         require_session_target_matches_value(session, &session_target)?;
     }
     if let Some(version) = init.event_stream_version {
-        if !matches!(version, 1 | 2) {
+        if !matches!(version, 1..=3) {
             return Err(MezError::invalid_args("unsupported event stream version"));
         }
         if !matches!(
@@ -441,6 +451,16 @@ pub(super) fn initialize_control_connection(
         {
             return Err(MezError::forbidden(
                 "event stream version 2 requires an authenticated Iroh primary",
+            ));
+        }
+        if version == 3
+            && !matches!(
+                connection.authenticated_peer(),
+                Some(AuthenticatedPeer::IrohEndpoint { .. })
+            )
+        {
+            return Err(MezError::forbidden(
+                "event stream version 3 requires an authenticated Iroh client",
             ));
         }
     }
@@ -470,7 +490,10 @@ pub(super) fn initialize_control_connection(
             connection.detach_client_on_disconnect = init.detach_primary_on_disconnect;
             connection.event_stream_version = init.event_stream_version;
             let mut capabilities = Capabilities::primary();
-            capabilities.features.client_clipboard_write = init.event_stream_version == Some(2);
+            capabilities.features.client_clipboard_write =
+                matches!(init.event_stream_version, Some(2 | 3));
+            connection.event_stream_client_clipboard_write =
+                capabilities.features.client_clipboard_write;
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),
@@ -496,6 +519,7 @@ pub(super) fn initialize_control_connection(
             connection.caller_client_id = Some(client_id.clone());
             connection.detach_client_on_disconnect = true;
             connection.event_stream_version = init.event_stream_version;
+            connection.event_stream_client_clipboard_write = false;
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),
