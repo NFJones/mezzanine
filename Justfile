@@ -53,10 +53,12 @@ test-real-bubblewrap:
     test "$(uname -s)" = Linux
     timeout 120s cargo test -p mezzanine --lib --all-features --quiet -- --exact host::async_runtime::tests::services::providers::async_routed_subagent_settles_with_real_bubblewrap --ignored --nocapture
 
-# Run the product-binary Seatbelt probe and workload launcher acceptance tests.
+# Run the complete macOS Seatbelt compiler, pane/native runtime, cleanup,
+# recovery, and product-binary acceptance surface serially.
 test-real-seatbelt:
     test "$(uname -s)" = Darwin
     test -x /usr/bin/sandbox-exec
+    canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" timeout 300s cargo test -p mezzanine --lib --all-features --quiet seatbelt -- --test-threads=1
     canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" timeout 120s cargo test -p mezzanine --test foreground_cli --all-features --quiet real_seatbelt_ -- --nocapture --test-threads=1
 
 # Run the report-only cross-platform responsiveness workload in release mode.
