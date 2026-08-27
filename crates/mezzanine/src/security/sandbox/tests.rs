@@ -319,6 +319,8 @@ fn sandbox_lifecycle_parser_validates_seatbelt_launcher_sequence() {
     assert_eq!(status.exit_code(), Some(7));
     for invalid in [
         "{\"version\":1,\"event\":\"child-established\",\"child-pid\":42}\n",
+        "{\"version\":1,\"event\":\"sandbox-entered\"}\n",
+        "{\"version\":1,\"event\":\"sandbox-entered\"}\n{\"version\":1,\"event\":\"child-established\",\"child-pid\":42}\n",
         "{\"version\":1,\"event\":\"sandbox-entered\"}\n{\"version\":1,\"event\":\"sandbox-entered\"}\n",
         "{\"version\":1,\"event\":\"sandbox-entered\"}\n{\"version\":1,\"event\":\"exit\",\"exit-code\":0}\n",
         "{\"version\":2,\"event\":\"sandbox-entered\"}\n",

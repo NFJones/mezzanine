@@ -780,6 +780,12 @@ pub(crate) fn parse_seatbelt_status(status: &str) -> Result<SeatbeltStatus, Sand
             "Seatbelt status does not prove sandbox entry",
         ));
     }
+    if parsed.exit_code.is_none() && parsed.failure.is_none() {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            "Seatbelt status does not prove lifecycle completion",
+        ));
+    }
     Ok(parsed)
 }
 
