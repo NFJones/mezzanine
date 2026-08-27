@@ -568,10 +568,11 @@ use json::{
     runtime_initialize_terminal_size, runtime_json_bool_field, runtime_json_creation_command,
     runtime_json_input_bytes, runtime_json_optional_client_size, runtime_json_optional_size_field,
     runtime_json_optional_view_offset, runtime_json_rpc_error, runtime_json_size,
-    runtime_json_start_directory, runtime_json_string_field, runtime_json_value,
-    runtime_mezzanine_error_code, runtime_mutating_method, runtime_pane_by_id,
-    runtime_pane_readiness_state_name, runtime_split_direction, runtime_subagent_placement_mode,
-    runtime_subagent_spawn_request, runtime_subagent_state_json, runtime_terminal_step_result_json,
+    runtime_json_start_directory, runtime_json_string_field,
+    runtime_json_terminal_step_render_if_changed, runtime_json_value, runtime_mezzanine_error_code,
+    runtime_mutating_method, runtime_pane_by_id, runtime_pane_readiness_state_name,
+    runtime_split_direction, runtime_subagent_placement_mode, runtime_subagent_spawn_request,
+    runtime_subagent_state_json, runtime_terminal_step_result_json,
 };
 use mez_agent::turn_state_from_action_results as runtime_agent_turn_state_from_action_results;
 use service_state::{

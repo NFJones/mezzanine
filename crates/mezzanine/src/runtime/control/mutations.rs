@@ -16,7 +16,8 @@ use super::{
     route_client_input_actions, runtime_json_bool_field, runtime_json_creation_command,
     runtime_json_input_bytes, runtime_json_optional_client_size, runtime_json_optional_size_field,
     runtime_json_optional_view_offset, runtime_json_rpc_error, runtime_json_size,
-    runtime_json_start_directory, runtime_json_string_field, runtime_mcp_retry_event_payload,
+    runtime_json_start_directory, runtime_json_string_field,
+    runtime_json_terminal_step_render_if_changed, runtime_mcp_retry_event_payload,
     runtime_mcp_retry_result_json, runtime_mutating_response_is_cacheable, runtime_pane_by_id,
     runtime_pane_readiness_state_name, runtime_split_direction, runtime_terminal_step_result_json,
     source_pane_target_checked_resolved, window_target_checked_resolved,
@@ -625,6 +626,7 @@ impl RuntimeSessionService {
         }
         let input = runtime_json_input_bytes(params)?;
         let render = runtime_json_bool_field(params, "render").unwrap_or(true);
+        let render_if_changed = runtime_json_terminal_step_render_if_changed(params)?;
         let client_size =
             runtime_json_optional_client_size(params)?.unwrap_or(self.session.authoritative_size);
         if client_size != self.session.authoritative_size {
@@ -656,7 +658,10 @@ impl RuntimeSessionService {
             error_roles: Vec::new(),
         };
         let application = self.apply_attached_terminal_step_plan(primary_client_id, &step)?;
-        let view = if render {
+        let view = if render
+            || (render_if_changed
+                && (application.view_refresh_required || application.full_redraw_required))
+        {
             self.render_client_view_with_resolved_config(
                 ClientViewRole::Primary,
                 client_size,
@@ -665,6 +670,14 @@ impl RuntimeSessionService {
         } else {
             None
         };
+        let iroh_status_slot = view
+            .as_ref()
+            .and_then(|view| self.terminal_iroh_status_slot(view, &terminal_config));
+        let event_cutoff = view.as_ref().map(|_| {
+            self.event_log()
+                .map(|event_log| event_log.latest_event_id())
+                .unwrap_or(0)
+        });
         let session_terminated = matches!(
             self.lifecycle_state(),
             RuntimeLifecycleState::Killed | RuntimeLifecycleState::Failed
@@ -674,6 +687,8 @@ impl RuntimeSessionService {
             input.len(),
             &application,
             view.as_ref(),
+            iroh_status_slot.as_ref(),
+            event_cutoff,
             client_detached,
             session_terminated,
         ))

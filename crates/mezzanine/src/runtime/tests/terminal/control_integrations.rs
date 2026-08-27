@@ -182,3 +182,51 @@ fn runtime_terminal_view_reports_latest_event_cutoff() {
     assert!(!response["result"]["view"].is_null());
     assert_eq!(response["result"]["event_cutoff"], expected_cutoff);
 }
+
+/// Verifies conditional terminal-step rendering returns a view only when the
+/// applied mutation changes presentation, with a cutoff from the same runtime
+/// boundary.
+///
+/// The client retains `render = false` for old-server compatibility and adds
+/// `extensions.render_mode = "if_changed"` for new servers. Invalid modes must
+/// remain a visible protocol error rather than silently changing legacy behavior.
+#[test]
+fn runtime_terminal_step_renders_inline_only_if_changed() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+
+    let changed = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"changed","method":"terminal/step","params":{"idempotency_key":"changed","client_size":{"columns":80,"rows":24},"render":false,"extensions":{"render_mode":"if_changed"},"input_bytes":[1,58]}}"#,
+        &primary,
+    );
+    let changed: serde_json::Value = serde_json::from_str(&changed).unwrap();
+    assert!(changed["result"]["application"]["view_refresh_required"] == true);
+    assert!(!changed["result"]["view"].is_null());
+    assert_eq!(
+        changed["result"]["event_cutoff"],
+        service.event_log().unwrap().latest_event_id()
+    );
+
+    let unchanged = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"unchanged","method":"terminal/step","params":{"idempotency_key":"unchanged","client_size":{"columns":80,"rows":24},"render":false,"extensions":{"render_mode":"if_changed"},"input_bytes":[]}}"#,
+        &primary,
+    );
+    let unchanged: serde_json::Value = serde_json::from_str(&unchanged).unwrap();
+    assert!(unchanged["result"]["view"].is_null());
+    assert!(unchanged["result"]["event_cutoff"].is_null());
+
+    let invalid = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"invalid","method":"terminal/step","params":{"idempotency_key":"invalid","render":false,"extensions":{"render_mode":"always_later"},"input_bytes":[]}}"#,
+        &primary,
+    );
+    assert!(
+        invalid.contains(r#""mezzanine_code":"invalid_params""#),
+        "{invalid}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}

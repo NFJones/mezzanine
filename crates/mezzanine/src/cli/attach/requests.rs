@@ -21,13 +21,57 @@ pub(in crate::cli) fn terminal_step_control_request(
     input: &[u8],
     render: bool,
 ) -> String {
+    terminal_step_control_request_with_mode(
+        iteration,
+        primary_client_id,
+        client_size,
+        input,
+        render,
+        None,
+    )
+}
+
+/// Builds a compatible Iroh input step that renders only after presentation changes.
+pub(super) fn terminal_step_if_changed_control_request(
+    iteration: u64,
+    primary_client_id: &ClientId,
+    client_size: Size,
+    input: &[u8],
+) -> String {
+    terminal_step_control_request_with_mode(
+        iteration,
+        primary_client_id,
+        client_size,
+        input,
+        false,
+        Some("if_changed"),
+    )
+}
+
+/// Builds one terminal-step request with an optional negotiated render mode.
+fn terminal_step_control_request_with_mode(
+    iteration: u64,
+    primary_client_id: &ClientId,
+    client_size: Size,
+    input: &[u8],
+    render: bool,
+    render_mode: Option<&str>,
+) -> String {
     let input_bytes = input
         .iter()
         .map(u8::to_string)
         .collect::<Vec<_>>()
         .join(",");
+    let render_mode = render_mode
+        .map(|mode| {
+            format!(
+                r#", "extensions":{{"render_mode":"{}"}}"#,
+                json_escape(mode)
+            )
+        })
+        .unwrap_or_default();
     format!(
-        r#"{{"jsonrpc":"2.0","id":"cli-terminal-step-{iteration}","method":"terminal/step","params":{{"idempotency_key":"cli-{}-terminal-step-{iteration}","client_size":{{"columns":{},"rows":{}}},"render":{},"input_bytes":[{}]}}}}"#,
+        r#"{{"jsonrpc":"2.0","id":"cli-terminal-step-{iteration}","method":"terminal/step","params":{{"idempotency_key":"cli-{}-terminal-step-{iteration}","client_size":{{"columns":{},"rows":{}}},"render":{}{render_mode},"input_bytes":[{}]}}}}"#,
         json_escape(primary_client_id.as_str()),
         client_size.columns,
         client_size.rows,

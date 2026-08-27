@@ -1239,6 +1239,21 @@ async fn iroh_primary_attach_loop_orders_resize_input_and_view() {
                         .and_then(serde_json::Value::as_u64),
                     Some(u64::from(b'x'))
                 );
+                assert_eq!(
+                    parsed
+                        .get("params")
+                        .and_then(|params| params.get("render"))
+                        .and_then(serde_json::Value::as_bool),
+                    Some(false)
+                );
+                assert_eq!(
+                    parsed
+                        .get("params")
+                        .and_then(|params| params.get("extensions"))
+                        .and_then(|extensions| extensions.get("render_mode"))
+                        .and_then(serde_json::Value::as_str),
+                    Some("if_changed")
+                );
             }
             let id = parsed.get("id").cloned().unwrap();
             let result = if expected == "view" {
@@ -1318,6 +1333,92 @@ async fn iroh_primary_attach_loop_orders_resize_input_and_view() {
     assert_eq!(io.invalidated_output_frames, 1);
     assert_eq!(io.written_frames.len(), 1);
     assert_eq!(io.written_frames[0].lines, vec!["remote ordered"]);
+}
+
+/// Verifies a remote primary renders an inline changed view without issuing a
+/// second RTT-bound terminal-view request.
+///
+/// New servers answer the compatible `render_mode = "if_changed"` extension
+/// directly, while the retained `render = false` field keeps old-server
+/// behavior safe. A regression that ignores the inline frame attempts another
+/// request and times out because this fixture intentionally serves only the
+/// terminal-step response.
+#[tokio::test(flavor = "current_thread")]
+async fn iroh_primary_attach_loop_renders_changed_step_view_inline() {
+    let (mut client_stream, mut server_stream) = tokio::io::duplex(64 * 1024);
+    let server = tokio::spawn(async move {
+        let request = crate::cli::attach::read_async_control_response_frames(
+            &mut server_stream,
+            1024 * 1024,
+            1,
+        )
+        .await
+        .unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["method"], "terminal/step");
+        assert_eq!(parsed["params"]["render"], false);
+        assert_eq!(parsed["params"]["extensions"]["render_mode"], "if_changed");
+
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": parsed["id"],
+            "result": {
+                "input_bytes": 1,
+                "application": {
+                    "forwarded_bytes": 0,
+                    "mux_actions_applied": 1,
+                    "mouse_actions_reported": 0,
+                    "agent_prompt_inputs_applied": 0,
+                    "view_refresh_required": true,
+                    "full_redraw_required": false,
+                    "unsupported_actions": []
+                },
+                "view": {
+                    "lines": ["inline changed"],
+                    "line_style_spans": [[]],
+                    "cursor": {
+                        "row": 0,
+                        "column": 14,
+                        "visible": true,
+                        "style": "bar",
+                        "blink": false
+                    },
+                    "output_modes": {"application_keypad": false}
+                },
+                "event_cutoff": 17,
+                "ui_theme": null,
+                "client_detached": false,
+                "session_terminated": false
+            }
+        })
+        .to_string();
+        tokio::io::AsyncWriteExt::write_all(&mut server_stream, &encode_control_body(&response))
+            .await
+            .unwrap();
+        tokio::io::AsyncWriteExt::flush(&mut server_stream)
+            .await
+            .unwrap();
+    });
+
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_input(b"x".to_vec());
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    run_iroh_attached_primary_client_loop_async(
+        &mut client_stream,
+        &mut io,
+        primary_client_id,
+        Size::new(80, 24).unwrap(),
+        Duration::from_millis(100),
+    )
+    .await
+    .unwrap();
+
+    server.await.unwrap();
+    assert_eq!(io.presentation_entries, 1);
+    assert_eq!(io.invalidated_output_frames, 0);
+    assert_eq!(io.written_frames.len(), 1);
+    assert_eq!(io.written_frames[0].lines, vec!["inline changed"]);
 }
 
 /// Verifies an acknowledged remote detach exits cleanly without issuing a

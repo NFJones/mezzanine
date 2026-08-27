@@ -11,9 +11,12 @@ use super::requests::{
     refresh_attached_client_size_async, render_iroh_attach_client_frame_async,
     request_and_render_primary_view_async, request_primary_resize_async,
     request_primary_view_frame_async, terminal_step_control_request,
-    write_async_control_body_or_disconnected,
+    terminal_step_if_changed_control_request, write_async_control_body_or_disconnected,
 };
-use super::responses::{control_response_forbidden, terminal_step_response_refresh_requirement};
+use super::responses::{
+    control_response_forbidden, terminal_step_response_client_frame,
+    terminal_step_response_refresh_requirement,
+};
 use super::{
     AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
     AttachAnimationRefresh, AttachTerminalSizeRefresh, ClientId, MezError, Result, Size,
@@ -279,12 +282,11 @@ where
             continue;
         }
 
-        let request = terminal_step_control_request(
+        let request = terminal_step_if_changed_control_request(
             iteration,
             &primary_client_id,
             client_size,
             input.bytes.as_slice(),
-            false,
         );
         let write_result = tokio::time::timeout(request_timeout, async {
             tokio::io::AsyncWriteExt::write_all(stream, &super::encode_control_body(&request))
@@ -318,28 +320,32 @@ where
             return Err(MezError::forbidden("Iroh terminal input was rejected"));
         }
         let refresh_requirement = terminal_step_response_refresh_requirement(body.as_str())?;
+        let inline_frame = terminal_step_response_client_frame(body.as_str())?;
         if refresh_requirement.client_detached || refresh_requirement.session_terminated {
             return Ok(());
         }
         if refresh_requirement.full_redraw_required {
             terminal_io.invalidate_output_frame().await?;
         }
-        if render_requested || refresh_requirement.view_refresh_required {
-            let frame = tokio::time::timeout(
-                request_timeout,
-                request_primary_view_frame_async(stream, client_size, iteration),
-            )
-            .await
-            .map_err(|_| {
-                MezError::invalid_state(
-                    "Iroh terminal view acknowledgement timed out; reattach required",
+        if inline_frame.is_some() || render_requested || refresh_requirement.view_refresh_required {
+            let frame = match inline_frame {
+                Some(frame) => frame,
+                None => tokio::time::timeout(
+                    request_timeout,
+                    request_primary_view_frame_async(stream, client_size, iteration),
                 )
-            })??
-            .ok_or_else(|| {
-                MezError::invalid_state(
-                    "Iroh attach disconnected while reading a terminal view; reattach required",
-                )
-            })?;
+                .await
+                .map_err(|_| {
+                    MezError::invalid_state(
+                        "Iroh terminal view acknowledgement timed out; reattach required",
+                    )
+                })??
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "Iroh attach disconnected while reading a terminal view; reattach required",
+                    )
+                })?,
+            };
             if let Some(connection) = connection {
                 health.sample(connection);
             }

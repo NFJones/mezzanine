@@ -118,7 +118,11 @@ pub(super) fn terminal_step_response_client_frame(
             json_escape(&error.to_string())
         )));
     }
-    let Some(view) = parsed.get("result").and_then(|result| result.get("view")) else {
+    let Some(view) = parsed
+        .get("result")
+        .and_then(|result| result.get("view"))
+        .filter(|view| !view.is_null())
+    else {
         return Ok(None);
     };
     let iroh_status_slot = view
@@ -474,6 +478,19 @@ pub(in crate::cli) fn terminal_step_response_output_modes(
 mod tests {
     use super::*;
     use crate::host::terminal::TerminalIrohStatusQuality;
+
+    /// Verifies an explicit null view remains distinguishable from an empty
+    /// rendered frame so compatible Iroh clients perform one legacy fetch.
+    #[test]
+    fn terminal_step_null_view_requires_fallback_fetch() {
+        let response = r#"{"result":{"view":null,"event_cutoff":42}}"#;
+
+        assert!(
+            terminal_step_response_client_frame(response)
+                .unwrap()
+                .is_none()
+        );
+    }
 
     /// Verifies terminal views retain the server event cutoff used to discard
     /// only Iroh redraw wakeups already represented by the rendered state.

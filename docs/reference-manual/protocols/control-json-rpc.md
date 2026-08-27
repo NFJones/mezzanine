@@ -310,14 +310,31 @@ animation refresh interval.
 
 Send user input through `terminal/step`, with bytes as integers in `0..255`.
 Include `client_size` whenever geometry changes and set `render` false only
-when the caller deliberately wants no immediate view. Its result reports input
-count, forwarded bytes, multiplexer/agent/mouse actions, redraw requirements,
-unsupported actions, optional `view`, UI theme, acknowledged client detach,
-and session termination. A true `client_detached` ends that attach loop cleanly
-without implying that the durable session was terminated.
+when the caller deliberately wants no unconditional immediate view. A caller
+that can consume conditional inline views may retain `render: false` and add
+`extensions: {"render_mode":"if_changed"}`. The runtime then renders only
+when the applied step requires a presentation refresh. This extension placement
+lets older strict servers ignore the hint safely; their null view causes the
+client to perform one ordinary `terminal/view` fallback. Unsupported mode
+values are rejected by servers that implement the extension.
+
+The result reports input count, forwarded bytes,
+multiplexer/agent/mouse actions, redraw requirements, unsupported actions,
+optional `view`, optional `event_cutoff`, UI theme, acknowledged client detach,
+and session termination. When an inline view is present, `event_cutoff` is from
+the same authoritative render boundary and can cover queued ordinary redraw
+wakeups. A true `client_detached` ends that attach loop cleanly without implying
+that the durable session was terminated.
 
 ```json
 {"jsonrpc":"2.0","id":3,"method":"terminal/step","params":{"idempotency_key":"ui-step-0001","client_size":{"columns":120,"rows":40},"render":true,"input_bytes":[108,115,13]}}
+```
+
+Iroh primary input uses the compatible conditional form to avoid a second
+request/response RTT when input changes the rendered presentation:
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"terminal/step","params":{"idempotency_key":"ui-step-0001","client_size":{"columns":120,"rows":40},"render":false,"extensions":{"render_mode":"if_changed"},"input_bytes":[108,115,13]}}
 ```
 
 Use `terminal/command` for explicit terminal command text, not for arbitrary
@@ -360,11 +377,13 @@ host clipboard.
 The recommended loop is initialize, fetch a view, render it, pass physical
 input and size updates via `terminal/step`, then apply the returned view or
 request a fresh `terminal/view`. Local clients use the Unix event socket. Iroh
-observers negotiate event-stream version 1; Iroh primaries request version 2
-and use version 1 only as the explicit legacy fallback described above. Both
-transports use events as redraw wakeups and refetch authoritative rendered
-state over control. This is rendered-view/input-step control, not raw PTY
-export; specialized frontends should design around the supplied view model.
+primary input requests a conditional inline view and falls back to one
+`terminal/view` when an older server returns no view. Asynchronous Iroh events
+remain redraw wakeups that refetch authoritative rendered state over control.
+Iroh observers negotiate event-stream version 1; Iroh primaries request
+version 2 and use version 1 only as the explicit legacy fallback described
+above. This is rendered-view/input-step control, not raw PTY export;
+specialized frontends should design around the supplied view model.
 
 ## Events and replay
 

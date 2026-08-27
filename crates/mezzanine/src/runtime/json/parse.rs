@@ -368,6 +368,32 @@ pub(crate) fn runtime_json_input_bytes(body: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
+/// Reports whether a terminal step requests rendering only after a change.
+///
+/// The optional mode augments the legacy `render` boolean. Unknown or
+/// non-string modes are rejected so protocol mistakes do not silently change
+/// rendering behavior.
+pub(crate) fn runtime_json_terminal_step_render_if_changed(body: &str) -> Result<bool> {
+    let value = runtime_json_value(body)?;
+    let Some(mode) = value
+        .as_object()
+        .and_then(|object| object.get("extensions"))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|extensions| extensions.get("render_mode"))
+    else {
+        return Ok(false);
+    };
+    match mode.as_str() {
+        Some("if_changed") => Ok(true),
+        Some(_) => Err(MezError::invalid_args(
+            "terminal/step render_mode is unsupported",
+        )),
+        None => Err(MezError::invalid_args(
+            "terminal/step render_mode must be a string",
+        )),
+    }
+}
+
 /// Runs the runtime json value operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

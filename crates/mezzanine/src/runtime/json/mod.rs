@@ -42,8 +42,8 @@ pub(super) use parse::{
     runtime_initialize_terminal_size, runtime_json_bool_field, runtime_json_creation_command,
     runtime_json_input_bytes, runtime_json_optional_client_size, runtime_json_optional_size_field,
     runtime_json_optional_view_offset, runtime_json_rpc_error, runtime_json_size,
-    runtime_json_start_directory, runtime_json_string_field, runtime_json_value,
-    runtime_mezzanine_error_code,
+    runtime_json_start_directory, runtime_json_string_field,
+    runtime_json_terminal_step_render_if_changed, runtime_json_value, runtime_mezzanine_error_code,
 };
 pub(super) use presentation::rendered_client_view_json;
 pub(super) use status::{

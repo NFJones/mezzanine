@@ -19,6 +19,8 @@ pub(crate) fn runtime_terminal_step_result_json(
     input_bytes: usize,
     application: &AttachedClientStepApplication,
     view: Option<&RenderedClientView>,
+    iroh_status_slot: Option<&crate::host::terminal::TerminalIrohStatusSlot>,
+    event_cutoff: Option<u64>,
     client_detached: bool,
     session_terminated: bool,
 ) -> String {
@@ -28,13 +30,16 @@ pub(crate) fn runtime_terminal_step_result_json(
         .map(|action| format!(r#""{}""#, json_escape(action)))
         .collect::<Vec<_>>();
     let view_json = view
-        .map(|view| rendered_client_view_json(view, None))
+        .map(|view| rendered_client_view_json(view, iroh_status_slot))
+        .unwrap_or_else(|| "null".to_string());
+    let event_cutoff = event_cutoff
+        .map(|event_cutoff| event_cutoff.to_string())
         .unwrap_or_else(|| "null".to_string());
     let ui_theme = view
         .map(|view| super::presentation::ui_theme_json(&view.ui_theme))
         .unwrap_or_else(|| "null".to_string());
     format!(
-        r#"{{"input_bytes":{},"application":{{"forwarded_bytes":{},"mux_actions_applied":{},"mouse_actions_reported":{},"agent_prompt_inputs_applied":{},"view_refresh_required":{},"full_redraw_required":{},"unsupported_actions":[{}]}},"view":{},"ui_theme":{},"client_detached":{},"session_terminated":{}}}"#,
+        r#"{{"input_bytes":{},"application":{{"forwarded_bytes":{},"mux_actions_applied":{},"mouse_actions_reported":{},"agent_prompt_inputs_applied":{},"view_refresh_required":{},"full_redraw_required":{},"unsupported_actions":[{}]}},"view":{},"event_cutoff":{},"ui_theme":{},"client_detached":{},"session_terminated":{}}}"#,
         input_bytes,
         application.forwarded_bytes,
         application.mux_actions_applied,
@@ -44,6 +49,7 @@ pub(crate) fn runtime_terminal_step_result_json(
         application.full_redraw_required,
         unsupported.join(","),
         view_json,
+        event_cutoff,
         ui_theme,
         client_detached,
         session_terminated
