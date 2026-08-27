@@ -77,8 +77,6 @@ pub(super) use model::{
     runtime_model_override_scope_name, runtime_model_profile_display,
     runtime_validate_latency_preference,
 };
-#[cfg(test)]
-pub(crate) use permissions::ConfiguredSandboxEnvironment;
 pub(crate) use permissions::{
     BubblewrapConfig, ConfiguredPermissions, ConfiguredSandboxGroups, NetworkPolicy,
     SandboxBackend, SandboxConfig, SandboxEnvironmentPolicy, SandboxNetworkMode,
@@ -86,6 +84,10 @@ pub(crate) use permissions::{
     runtime_blocked_approval_request, runtime_config_permission_preset,
     runtime_configured_permissions_from_config, runtime_message_recipient,
     sandbox_applies_to_policy,
+};
+#[cfg(test)]
+pub(crate) use permissions::{
+    ConfiguredSandboxEnvironment, runtime_configured_permissions_from_config_for_platform,
 };
 pub(crate) use providers::runtime_default_models_for_provider;
 pub(super) use providers::{

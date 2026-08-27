@@ -118,7 +118,7 @@ impl RuntimeServiceFixture {
                 format: ConfigFormat::Toml,
                 scope: ConfigScope::Primary,
                 trusted: true,
-                text: "[agents]\nshell_mode = \"pane\"\n[permissions]\nsandbox = \"policy-only\"\n"
+                text: "[agents]\nshell_mode = \"pane\"\n[permissions]\napproval_policy = \"ask\"\nsandbox = \"policy-only\"\n"
                     .to_string(),
             }])
             .unwrap();

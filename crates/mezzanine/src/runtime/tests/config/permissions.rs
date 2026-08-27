@@ -3,7 +3,7 @@
 use super::*;
 use crate::runtime::config::{
     NetworkPolicy, SandboxConfig, runtime_configured_permissions_from_config,
-    sandbox_applies_to_policy,
+    runtime_configured_permissions_from_config_for_platform, sandbox_applies_to_policy,
 };
 use mez_agent::permissions::EffectCompleteness;
 
@@ -150,22 +150,72 @@ fn runtime_allows_bubblewrap_without_explicit_scopes() {
     assert!(matches!(configured.sandbox, SandboxConfig::Bubblewrap(_)));
 }
 
-/// Verifies omitted sandbox configuration selects Bubblewrap only on Linux
-/// while explicit policy-only configuration remains an available override.
+/// Verifies omitted permission defaults use the complete platform/presence
+/// matrix while explicit policy-only configuration remains authoritative.
 #[test]
 fn runtime_uses_platform_sandbox_default_when_omitted() {
-    let configured = runtime_configured_permissions_from_config(&serde_json::json!({})).unwrap();
-    if cfg!(target_os = "linux") {
-        assert!(matches!(configured.sandbox, SandboxConfig::Bubblewrap(_)));
-    } else {
-        assert!(matches!(configured.sandbox, SandboxConfig::PolicyOnly));
+    let cases = [
+        (
+            crate::security::sandbox::SandboxPlatformAvailability::Linux {
+                bubblewrap_available: true,
+            },
+            "bubblewrap",
+            mez_agent::ApprovalPolicy::FullAccess,
+        ),
+        (
+            crate::security::sandbox::SandboxPlatformAvailability::Linux {
+                bubblewrap_available: false,
+            },
+            "policy-only",
+            mez_agent::ApprovalPolicy::AutoAllow,
+        ),
+        (
+            crate::security::sandbox::SandboxPlatformAvailability::MacOs {
+                seatbelt_available: true,
+            },
+            "seatbelt",
+            mez_agent::ApprovalPolicy::FullAccess,
+        ),
+        (
+            crate::security::sandbox::SandboxPlatformAvailability::MacOs {
+                seatbelt_available: false,
+            },
+            "policy-only",
+            mez_agent::ApprovalPolicy::AutoAllow,
+        ),
+        (
+            crate::security::sandbox::SandboxPlatformAvailability::Other,
+            "policy-only",
+            mez_agent::ApprovalPolicy::Ask,
+        ),
+    ];
+    for (platform, expected_sandbox, expected_approval) in cases {
+        let configured = runtime_configured_permissions_from_config_for_platform(
+            &serde_json::json!({}),
+            platform,
+        )
+        .unwrap();
+        assert_eq!(configured.sandbox.as_str(), expected_sandbox);
+        assert_eq!(configured.authorization.approval_policy, expected_approval);
     }
 
-    let explicit = runtime_configured_permissions_from_config(&serde_json::json!({
-        "permissions": {"sandbox": "policy-only"}
-    }))
+    let explicit = runtime_configured_permissions_from_config_for_platform(
+        &serde_json::json!({
+            "permissions": {
+                "sandbox": "policy-only",
+                "approval_policy": "ask"
+            }
+        }),
+        crate::security::sandbox::SandboxPlatformAvailability::MacOs {
+            seatbelt_available: true,
+        },
+    )
     .unwrap();
     assert!(matches!(explicit.sandbox, SandboxConfig::PolicyOnly));
+    assert_eq!(
+        explicit.authorization.approval_policy,
+        mez_agent::ApprovalPolicy::Ask
+    );
 }
 
 /// Verifies live config application adds user skill and macro directories to

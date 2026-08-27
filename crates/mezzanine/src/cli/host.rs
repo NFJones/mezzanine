@@ -938,6 +938,7 @@ mod tests {
                 tmpdir: None,
                 uid: crate::runtime::effective_uid_for_tests(),
             },
+            sandbox_platform_availability: None,
         }
     }
 

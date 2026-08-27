@@ -108,28 +108,48 @@ fn initial_config_uses_native_shell_and_platform_sandbox_defaults() {
     assert_eq!(
         permissions.get("sandbox").and_then(toml::Value::as_str),
         Some(
-            if cfg!(target_os = "linux")
-                && crate::security::sandbox::bubblewrap_executable_available(std::path::Path::new(
-                    "/usr/bin/bwrap",
-                ))
-            {
-                "bubblewrap"
-            } else {
-                "policy-only"
-            }
+            crate::security::sandbox::SandboxPlatformAvailability::current().default_sandbox_name()
         )
     );
 }
 
+/// Verifies newly generated macOS configuration enables Seatbelt with
+/// full-access approval when the fixed executable is present.
+#[test]
+fn initial_macos_config_uses_full_access_with_available_seatbelt() {
+    let config = initial_config_toml_for_platform(GeneratedConfigPlatform::MacOs {
+        seatbelt_available: true,
+    })
+    .unwrap();
+    let parsed: toml::Value = toml::from_str(&config).unwrap();
+    let permissions = parsed
+        .get("permissions")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    assert_eq!(
+        permissions
+            .get("approval_policy")
+            .and_then(toml::Value::as_str),
+        Some("full-access")
+    );
+    assert_eq!(
+        permissions.get("sandbox").and_then(toml::Value::as_str),
+        Some("seatbelt")
+    );
+}
+
 /// Verifies newly generated macOS configuration pairs model-gated automatic
-/// approval with policy-only execution because Bubblewrap is Linux-specific.
+/// approval with policy-only execution when the fixed executable is absent.
 ///
 /// Keeping both values in one platform-targeted regression prevents first-run
-/// macOS configuration from combining policy-only execution with the template's
-/// more restrictive interactive approval default.
+/// macOS configuration from selecting an unavailable fail-closed backend.
 #[test]
 fn initial_macos_config_uses_auto_allow_with_policy_only_sandboxing() {
-    let config = initial_config_toml_for_platform(GeneratedConfigPlatform::MacOs).unwrap();
+    let config = initial_config_toml_for_platform(GeneratedConfigPlatform::MacOs {
+        seatbelt_available: false,
+    })
+    .unwrap();
     let parsed: toml::Value = toml::from_str(&config).unwrap();
     let permissions = parsed
         .get("permissions")
@@ -199,6 +219,29 @@ fn initial_linux_config_uses_auto_allow_without_bubblewrap() {
             .get("approval_policy")
             .and_then(toml::Value::as_str),
         Some("auto-allow")
+    );
+    assert_eq!(
+        permissions.get("sandbox").and_then(toml::Value::as_str),
+        Some("policy-only")
+    );
+}
+
+/// Verifies platforms without a supported native backend retain the
+/// conservative ask plus policy-only default pair.
+#[test]
+fn initial_other_platform_config_uses_ask_with_policy_only_sandboxing() {
+    let config = initial_config_toml_for_platform(GeneratedConfigPlatform::Other).unwrap();
+    let parsed: toml::Value = toml::from_str(&config).unwrap();
+    let permissions = parsed
+        .get("permissions")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    assert_eq!(
+        permissions
+            .get("approval_policy")
+            .and_then(toml::Value::as_str),
+        Some("ask")
     );
     assert_eq!(
         permissions.get("sandbox").and_then(toml::Value::as_str),
@@ -320,36 +363,19 @@ fn rejects_ambiguous_primary_config_files() {
 #[test]
 fn default_config_matches_documented_example() {
     let documented = include_str!("../../../../../docs/examples/config.toml");
+    let platform = crate::security::sandbox::SandboxPlatformAvailability::current();
 
-    let mut documented = documented.replace(
+    let documented = documented.replace(
         "sandbox = \"bubblewrap\"",
-        if cfg!(target_os = "linux")
-            && crate::security::sandbox::bubblewrap_executable_available(std::path::Path::new(
-                "/usr/bin/bwrap",
-            ))
-        {
-            "sandbox = \"bubblewrap\""
-        } else {
-            "sandbox = \"policy-only\""
-        },
+        &format!("sandbox = \"{}\"", platform.default_sandbox_name()),
     );
-    if cfg!(target_os = "linux") {
-        documented = documented.replace(
-            "approval_policy = \"ask\"",
-            if crate::security::sandbox::bubblewrap_executable_available(std::path::Path::new(
-                "/usr/bin/bwrap",
-            )) {
-                "approval_policy = \"full-access\""
-            } else {
-                "approval_policy = \"auto-allow\""
-            },
-        );
-    } else if cfg!(target_os = "macos") {
-        documented = documented.replace(
-            "approval_policy = \"ask\"",
-            "approval_policy = \"auto-allow\"",
-        );
-    }
+    let documented = documented.replace(
+        "approval_policy = \"ask\"",
+        &format!(
+            "approval_policy = \"{}\"",
+            platform.default_approval_policy_name()
+        ),
+    );
     assert_eq!(initial_config_toml().unwrap().trim(), documented.trim());
 }
 

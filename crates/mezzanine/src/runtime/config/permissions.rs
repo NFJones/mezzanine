@@ -42,24 +42,33 @@ pub(crate) struct ConfiguredPermissions {
 
 impl Default for ConfiguredPermissions {
     fn default() -> Self {
+        Self::for_platform(crate::security::sandbox::SandboxPlatformAvailability::current())
+    }
+}
+
+impl ConfiguredPermissions {
+    /// Builds omitted permission defaults for one explicit platform state.
+    pub(crate) fn for_platform(
+        platform: crate::security::sandbox::SandboxPlatformAvailability,
+    ) -> Self {
+        let mut authorization = PermissionPolicy::default();
+        authorization.approval_policy = platform.default_approval_policy();
         Self {
-            authorization: PermissionPolicy::default(),
+            authorization,
             resources: ResourceAuthorityConfig::default(),
-            sandbox: default_sandbox_config(),
+            sandbox: default_sandbox_config_for_platform(platform),
         }
     }
 }
 
-/// Selects the supported built-in confinement backend for this platform.
-///
-/// Bubblewrap is the default on Linux, where the runtime supports its launch
-/// contract. Other platforms retain policy-only execution until they provide
-/// an equivalent OS-level backend.
-fn default_sandbox_config() -> SandboxConfig {
-    if cfg!(target_os = "linux") {
-        SandboxConfig::default_bubblewrap()
-    } else {
-        SandboxConfig::PolicyOnly
+/// Selects the present built-in confinement backend for one platform state.
+fn default_sandbox_config_for_platform(
+    platform: crate::security::sandbox::SandboxPlatformAvailability,
+) -> SandboxConfig {
+    match platform.default_sandbox_name() {
+        "bubblewrap" => SandboxConfig::default_bubblewrap(),
+        "seatbelt" => SandboxConfig::default_seatbelt(),
+        _ => SandboxConfig::PolicyOnly,
     }
 }
 
@@ -145,6 +154,19 @@ impl SandboxConfig {
             network: SandboxNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
             group_whitelist: ConfiguredSandboxGroups::default(),
+            env_whitelist: ConfiguredSandboxEnvironment::default(),
+            git_user_name: None,
+            git_user_email: None,
+        })
+    }
+
+    /// Builds the fixed fail-closed Seatbelt defaults for macOS hosts.
+    pub(crate) fn default_seatbelt() -> Self {
+        Self::Seatbelt(SeatbeltConfig {
+            executable: "/usr/bin/sandbox-exec".to_string(),
+            unavailable: SandboxUnavailablePolicy::Fail,
+            network: SandboxNetworkMode::Isolated,
+            environment: SandboxEnvironmentPolicy::Minimal,
             env_whitelist: ConfiguredSandboxEnvironment::default(),
             git_user_name: None,
             git_user_email: None,
@@ -541,10 +563,22 @@ pub(super) fn runtime_blocked_approval_summary(
 pub(crate) fn runtime_configured_permissions_from_config(
     root: &Value,
 ) -> Result<ConfiguredPermissions> {
-    let mut policy = PermissionPolicy::default();
+    runtime_configured_permissions_from_config_for_platform(
+        root,
+        crate::security::sandbox::SandboxPlatformAvailability::current(),
+    )
+}
+
+/// Materializes permissions using an injected platform availability state.
+pub(crate) fn runtime_configured_permissions_from_config_for_platform(
+    root: &Value,
+    platform: crate::security::sandbox::SandboxPlatformAvailability,
+) -> Result<ConfiguredPermissions> {
+    let defaults = ConfiguredPermissions::for_platform(platform);
     let Some(permissions) = runtime_json_object(root, "permissions") else {
-        return Ok(ConfiguredPermissions::default());
+        return Ok(defaults);
     };
+    let mut policy = defaults.authorization;
     if let Some(preset) = runtime_json_string(permissions.get("preset")) {
         policy.preset = runtime_config_permission_preset(preset)?;
     }
@@ -586,7 +620,7 @@ pub(crate) fn runtime_configured_permissions_from_config(
             _ => return Err(MezError::config("unsupported permissions.network_policy")),
         };
     let sandbox = match runtime_json_string(permissions.get("sandbox")) {
-        None => default_sandbox_config(),
+        None => default_sandbox_config_for_platform(platform),
         Some("policy-only") => SandboxConfig::PolicyOnly,
         Some("bubblewrap") => {
             let bubblewrap = permissions.get("bubblewrap").and_then(Value::as_object);

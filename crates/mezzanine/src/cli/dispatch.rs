@@ -66,6 +66,10 @@ pub struct CliEnv {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub runtime: RuntimeEnv,
+    /// Injected sandbox platform evidence for deterministic unit tests.
+    #[cfg(test)]
+    pub sandbox_platform_availability:
+        Option<crate::security::sandbox::SandboxPlatformAvailability>,
 }
 
 impl CliEnv {
@@ -80,7 +84,20 @@ impl CliEnv {
             shell: std::env::var_os("SHELL"),
             mez: std::env::var_os("MEZ"),
             runtime: RuntimeEnv::from_process(),
+            #[cfg(test)]
+            sandbox_platform_availability: None,
         }
+    }
+
+    /// Returns current or test-injected fixed-executable platform evidence.
+    pub(super) fn sandbox_platform_availability(
+        &self,
+    ) -> crate::security::sandbox::SandboxPlatformAvailability {
+        #[cfg(test)]
+        if let Some(platform) = self.sandbox_platform_availability {
+            return platform;
+        }
+        crate::security::sandbox::SandboxPlatformAvailability::current()
     }
 
     /// Runs the config paths operation for this subsystem.

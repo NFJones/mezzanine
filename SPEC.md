@@ -3746,13 +3746,21 @@ non-actionable empty state.
 The `permissions` table MUST support `approval_policy`, `sandbox`,
 `read_scopes`, `write_scopes`, `command_rules`, `session_command_rules`, `global_command_rules`,
 `network_policy`, `destructive_action_policy`, `bypass_mode`, and the typed
-`bubblewrap` table. Newly generated macOS configuration MUST pair
-`approval_policy = "auto-allow"` with `sandbox = "policy-only"`. Generated
-Linux configuration MUST pair `approval_policy = "full-access"` with
+`bubblewrap` and `seatbelt` tables. Newly generated macOS configuration MUST
+pair `approval_policy = "full-access"` with `sandbox = "seatbelt"` when
+`/usr/bin/sandbox-exec` is an executable regular file. When that executable is
+unavailable, generated macOS configuration MUST pair `approval_policy =
+"auto-allow"` with `sandbox = "policy-only"`. Generated Linux configuration
+MUST pair `approval_policy = "full-access"` with
 `sandbox = "bubblewrap"` when `/usr/bin/bwrap` is an executable regular file.
 When that executable is unavailable, generated Linux configuration MUST pair
 `approval_policy = "auto-allow"` with `sandbox = "policy-only"`. Generated
-configuration on other platforms MUST use `policy-only`. Policy-only execution provides approval
+configuration on other platforms MUST pair `approval_policy = "ask"` with
+`sandbox = "policy-only"`. Omitted runtime permission settings MUST use the
+same platform and fixed-executable matrix. Executable presence MUST NOT be
+treated as runtime capability proof. Schema migration MUST NOT inspect either
+fixed executable or change existing approval and sandbox values or omissions.
+Policy-only execution provides approval
 classification and auditing, not operating-system filesystem or shell-network
 confinement. Under policy-only execution, configured and subagent scopes are
 advisory approval and coordination metadata. When Bubblewrap is active,
@@ -3978,7 +3986,12 @@ Guided setup MUST provide code-owned `project-safe`, `project-auto`,
 `project-read-only`, and `off` presets through `mez sandbox plan`, `enable`,
 `preset apply`, and `disable`. Project trust inspection and mutation MUST be
 provided through `mez sandbox trust`. Planning and `--dry-run`
-MUST be side-effect-free. Every guided setup mutation MUST require direct-user confirmation;
+MUST be side-effect-free. Guided setup MUST select Bubblewrap on Linux and
+Seatbelt on macOS, report the selected backend and fixed-executable presence,
+and reject mutating enablement without changing config, trust, scopes, or
+caches when that executable is unavailable. A read-only plan MAY report an
+unavailable selected backend, but MUST NOT report it as enabled. Presence MUST
+NOT bypass the exact runtime capability probe. Every guided setup mutation MUST require direct-user confirmation;
 noninteractive or JSON mutation MUST require `--yes`, and noninteractive setup
 MUST explicitly select `trusted-project` or `explicit-scope` authority. Preset
 changes MUST be composed and validated as one final config document and written

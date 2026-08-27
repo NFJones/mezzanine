@@ -82,6 +82,11 @@ fn test_env(name: &str) -> (CliEnv, PathBuf) {
                 tmpdir: None,
                 uid: effective_uid_for_tests(),
             },
+            sandbox_platform_availability: Some(
+                crate::security::sandbox::SandboxPlatformAvailability::Linux {
+                    bubblewrap_available: true,
+                },
+            ),
         },
         home,
     )

@@ -4,6 +4,7 @@
 mod real_bubblewrap;
 
 use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 
@@ -336,6 +337,30 @@ fn bubblewrap_failure_remediation_points_to_verbose_status() {
         "Bubblewrap probe failed. Run `mez sandbox status --verbose` to inspect the executable, authority, and configuration remedies."
     );
     assert_eq!(bubblewrap_failure_remediation(&remediated), remediated);
+}
+
+/// Verifies generated defaults and guided setup treat only executable regular
+/// files as present, without running the candidate or confusing a directory or
+/// non-executable file with runtime capability proof.
+#[test]
+fn sandbox_executable_presence_requires_an_executable_regular_file() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-sandbox-executable-presence-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let candidate = root.join("sandbox-launcher");
+
+    assert!(!sandbox_executable_available(&candidate));
+    assert!(!sandbox_executable_available(&root));
+    std::fs::write(&candidate, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(!sandbox_executable_available(&candidate));
+    std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(sandbox_executable_available(&candidate));
+
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// Builds resolver-backed authority for one protected IPC path so tests prove

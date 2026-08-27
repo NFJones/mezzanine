@@ -151,7 +151,12 @@ fn sandbox_status_reports_seatbelt_operation_confinement() {
 /// code-owned preset mutation set without creating config or trust state.
 #[test]
 fn sandbox_setup_plan_is_read_only_and_requires_explicit_authority() {
-    let (env, home) = test_env("sandbox-setup-plan");
+    let (mut env, home) = test_env("sandbox-setup-plan");
+    env.sandbox_platform_availability = Some(
+        crate::security::sandbox::SandboxPlatformAvailability::MacOs {
+            seatbelt_available: true,
+        },
+    );
     let project = home.join("project");
     fs::create_dir_all(project.join(".git")).unwrap();
     let mut stdout = Vec::new();
@@ -180,11 +185,81 @@ fn sandbox_setup_plan_is_read_only_and_requires_explicit_authority() {
     let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
     assert_eq!(output["preset"], "project-safe");
     assert_eq!(output["authority"], "explicit-scope");
+    assert_eq!(output["sandbox_backend"], "seatbelt");
+    assert_eq!(output["sandbox_executable_available"], true);
     assert_eq!(output["dry_run"], true);
     assert_eq!(output["applied"], false);
     assert_eq!(output["trust_current_project"], false);
     assert!(!home.join(".config/mezzanine").exists());
     assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Guided Seatbelt enablement fails before any configuration, trust, or cache
+/// mutation when the fixed executable is unavailable, while read-only planning
+/// still reports the selected backend and failed presence check.
+#[test]
+fn sandbox_setup_unavailable_seatbelt_reports_plan_and_refuses_mutation() {
+    let (mut env, home) = test_env("sandbox-setup-seatbelt-unavailable");
+    env.sandbox_platform_availability = Some(
+        crate::security::sandbox::SandboxPlatformAvailability::MacOs {
+            seatbelt_available: false,
+        },
+    );
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_root = home.join(".config/mezzanine");
+    let mut stdout = Vec::new();
+
+    let plan_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "plan".to_string(),
+            "--preset".to_string(),
+            "project-safe".to_string(),
+            "--authority".to_string(),
+            "explicit-scope".to_string(),
+            "--path".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut Vec::new(),
+    ))
+    .unwrap();
+    assert_eq!(plan_code, 0);
+    let plan: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(plan["sandbox_backend"], "seatbelt");
+    assert_eq!(plan["sandbox_executable_available"], false);
+    assert!(!config_root.exists());
+
+    stdout.clear();
+    let error = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "enable".to_string(),
+            "--preset".to_string(),
+            "project-safe".to_string(),
+            "--authority".to_string(),
+            "explicit-scope".to_string(),
+            "--path".to_string(),
+            project.to_string_lossy().into_owned(),
+            "--yes".to_string(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut Vec::new(),
+    ))
+    .unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(error.message().contains("/usr/bin/sandbox-exec"));
+    assert!(!config_root.exists());
+    assert!(stdout.is_empty());
 
     let _ = fs::remove_dir_all(home);
 }

@@ -19,8 +19,8 @@ use crate::security::project::{ProjectRootDiscovery, ProjectRootMarkerKind, Trus
 use super::managed_home::inspect_seatbelt_managed_home;
 use super::seatbelt::SEATBELT_RUNTIME_PROFILE_VERSION;
 use super::{
-    BUBBLEWRAP_RUNTIME_PROFILE_VERSION, bubblewrap_executable_available,
-    inspect_bubblewrap_managed_home, sandbox_restriction_ids,
+    BUBBLEWRAP_RUNTIME_PROFILE_VERSION, inspect_bubblewrap_managed_home,
+    sandbox_executable_available, sandbox_restriction_ids,
 };
 
 /// Inputs used to build one side-effect-free sandbox workflow projection.
@@ -261,7 +261,7 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
         ),
         SandboxConfig::Bubblewrap(config) => {
             let executable = PathBuf::from(&config.executable);
-            let executable_state = if bubblewrap_executable_available(&executable) {
+            let executable_state = if sandbox_executable_available(&executable) {
                 "available"
             } else {
                 "unavailable"
@@ -289,7 +289,7 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
         }
         SandboxConfig::Seatbelt(config) => {
             let executable = PathBuf::from(&config.executable);
-            let executable_state = if bubblewrap_executable_available(&executable) {
+            let executable_state = if sandbox_executable_available(&executable) {
                 "available"
             } else {
                 "unavailable"

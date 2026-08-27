@@ -20,8 +20,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 
 use mez_agent::permissions::{
-    EffectiveCommandEffects, PathResolutionStatus, PathScopes, PermissionEvaluation,
-    ResolvedPathEvidence, ResolvedPathKind, ResolvedPathObjectKind, RuleDecision,
+    ApprovalPolicy, EffectiveCommandEffects, PathResolutionStatus, PathScopes,
+    PermissionEvaluation, ResolvedPathEvidence, ResolvedPathKind, ResolvedPathObjectKind,
+    RuleDecision,
 };
 use sha2::{Digest, Sha256};
 
@@ -61,6 +62,112 @@ pub(crate) use workflow::{
     SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
     effective_sandbox_boundary, plan_sandbox_workflow,
 };
+
+/// Host platform and fixed-executable presence used for local sandbox defaults.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SandboxPlatformAvailability {
+    /// Linux, where Bubblewrap provides namespace confinement when installed.
+    Linux {
+        /// Whether `/usr/bin/bwrap` is a regular executable file.
+        bubblewrap_available: bool,
+    },
+    /// macOS, where Seatbelt provides operation confinement when installed.
+    MacOs {
+        /// Whether `/usr/bin/sandbox-exec` is a regular executable file.
+        seatbelt_available: bool,
+    },
+    /// Any other supported platform without a native sandbox backend.
+    Other,
+}
+
+impl SandboxPlatformAvailability {
+    /// Inspects only the code-owned executable path for the current build host.
+    pub(crate) fn current() -> Self {
+        if cfg!(target_os = "linux") {
+            Self::Linux {
+                bubblewrap_available: sandbox_executable_available(Path::new("/usr/bin/bwrap")),
+            }
+        } else if cfg!(target_os = "macos") {
+            Self::MacOs {
+                seatbelt_available: sandbox_executable_available(Path::new(
+                    "/usr/bin/sandbox-exec",
+                )),
+            }
+        } else {
+            Self::Other
+        }
+    }
+
+    /// Returns the sandbox selected for omitted or newly generated settings.
+    pub(crate) const fn default_sandbox_name(self) -> &'static str {
+        match self {
+            Self::Linux {
+                bubblewrap_available: true,
+            } => "bubblewrap",
+            Self::MacOs {
+                seatbelt_available: true,
+            } => "seatbelt",
+            Self::Linux {
+                bubblewrap_available: false,
+            }
+            | Self::MacOs {
+                seatbelt_available: false,
+            }
+            | Self::Other => "policy-only",
+        }
+    }
+
+    /// Returns the approval policy paired with the selected default sandbox.
+    pub(crate) const fn default_approval_policy_name(self) -> &'static str {
+        match self {
+            Self::Linux {
+                bubblewrap_available: true,
+            }
+            | Self::MacOs {
+                seatbelt_available: true,
+            } => "full-access",
+            Self::Linux {
+                bubblewrap_available: false,
+            }
+            | Self::MacOs {
+                seatbelt_available: false,
+            } => "auto-allow",
+            Self::Other => "ask",
+        }
+    }
+
+    /// Returns the typed approval policy paired with the default sandbox.
+    pub(crate) const fn default_approval_policy(self) -> ApprovalPolicy {
+        match self {
+            Self::Linux {
+                bubblewrap_available: true,
+            }
+            | Self::MacOs {
+                seatbelt_available: true,
+            } => ApprovalPolicy::FullAccess,
+            Self::Linux {
+                bubblewrap_available: false,
+            }
+            | Self::MacOs {
+                seatbelt_available: false,
+            } => ApprovalPolicy::AutoAllow,
+            Self::Other => ApprovalPolicy::Ask,
+        }
+    }
+
+    /// Returns the backend supported by this platform and its presence state.
+    pub(crate) const fn setup_backend(self) -> Option<(SandboxBackend, bool)> {
+        match self {
+            Self::Linux {
+                bubblewrap_available,
+            } => Some((SandboxBackend::Bubblewrap, bubblewrap_available)),
+            Self::MacOs { seatbelt_available } => {
+                Some((SandboxBackend::Seatbelt, seatbelt_available))
+            }
+            Self::Other => None,
+        }
+    }
+}
 
 /// Version of the runtime projection emitted by this compiler.
 pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v14";
@@ -117,12 +224,12 @@ pub(crate) fn bubblewrap_failure_remediation(message: &str) -> String {
     )
 }
 
-/// Returns whether a configured Bubblewrap path names an executable file.
+/// Returns whether a fixed sandbox path names a regular executable file.
 ///
 /// This side-effect-free check is shared by first-run configuration selection
 /// and sandbox diagnostics. Full runtime capability remains verified per pane
 /// before any sandboxed workload starts.
-pub(crate) fn bubblewrap_executable_available(path: &Path) -> bool {
+pub(crate) fn sandbox_executable_available(path: &Path) -> bool {
     match std::fs::metadata(path) {
         Ok(metadata) => metadata.is_file() && metadata.permissions().mode() & 0o111 != 0,
         Err(_) => false,

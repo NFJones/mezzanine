@@ -29,9 +29,9 @@ use crate::security::project::{
     default_trust_database_path, discover_existing_overlays, discover_project_root_with_metadata,
 };
 use crate::security::sandbox::{
-    BubblewrapManagedHomeMaintenance, SandboxDiagnosticSeverity, SandboxWorkflowPlan,
-    SandboxWorkflowRequest, clear_bubblewrap_managed_home, inspect_bubblewrap_managed_home,
-    plan_sandbox_workflow, prune_bubblewrap_managed_homes,
+    BubblewrapManagedHomeMaintenance, SandboxDiagnosticSeverity, SandboxPlatformAvailability,
+    SandboxWorkflowPlan, SandboxWorkflowRequest, clear_bubblewrap_managed_home,
+    inspect_bubblewrap_managed_home, plan_sandbox_workflow, prune_bubblewrap_managed_homes,
 };
 
 /// Typed arguments accepted by `mez sandbox`.
@@ -222,6 +222,8 @@ struct SandboxSetupResult {
     project_root: PathBuf,
     preset: String,
     authority: String,
+    sandbox_backend: String,
+    sandbox_executable_available: Option<bool>,
     mutations: Vec<String>,
     trust_current_project: bool,
     confirmation_required: bool,
@@ -656,6 +658,19 @@ fn run_sandbox_setup<W: Write>(
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<u8> {
+    let platform = env.sandbox_platform_availability();
+    run_sandbox_setup_for_platform(command, env, interactive, output_format, platform, stdout)
+}
+
+/// Plans or applies setup using one explicit host-platform availability state.
+fn run_sandbox_setup_for_platform<W: Write>(
+    command: SandboxSetupCommand,
+    env: CliEnv,
+    interactive: bool,
+    output_format: CliOutputFormat,
+    platform: SandboxPlatformAvailability,
+    stdout: &mut W,
+) -> Result<u8> {
     let (preset, authority, path, dry_run, yes, force_read_only, trust_only) = match command {
         SandboxSetupCommand::Plan(args) => (
             args.preset,
@@ -694,6 +709,25 @@ fn run_sandbox_setup<W: Write>(
             false,
         ),
     };
+    let (sandbox_backend, sandbox_executable_available) = if preset == "off" {
+        ("policy-only", None)
+    } else {
+        let Some((backend, available)) = platform.setup_backend() else {
+            return Err(MezError::invalid_state(
+                "guided sandbox setup is unavailable on this platform",
+            ));
+        };
+        if !available && !force_read_only {
+            return Err(MezError::invalid_state(format!(
+                "guided sandbox setup requires the fixed {} executable",
+                match backend {
+                    crate::runtime::SandboxBackend::Bubblewrap => "/usr/bin/bwrap",
+                    crate::runtime::SandboxBackend::Seatbelt => "/usr/bin/sandbox-exec",
+                }
+            )));
+        }
+        (backend.as_str(), Some(available))
+    };
     let path = path.unwrap_or(std::env::current_dir()?);
     let discovery = discover_project_root_with_metadata(
         &path,
@@ -717,7 +751,13 @@ fn run_sandbox_setup<W: Write>(
     let mutations = if trust_only {
         Vec::new()
     } else {
-        sandbox_setup_mutations(&preset, &authority, &project, &mut trust_current_project)?
+        sandbox_setup_mutations(
+            &preset,
+            &authority,
+            &project,
+            sandbox_backend,
+            &mut trust_current_project,
+        )?
     };
     let paths = env.config_paths()?;
     let config_path = paths
@@ -746,10 +786,12 @@ fn run_sandbox_setup<W: Write>(
         None
     };
     let mut result = SandboxSetupResult {
-        version: 1,
+        version: 2,
         project_root: discovery.canonical_root.clone(),
         preset,
         authority,
+        sandbox_backend: sandbox_backend.to_string(),
+        sandbox_executable_available,
         mutations: batch
             .mutations
             .iter()
@@ -839,6 +881,7 @@ fn sandbox_setup_mutations(
     preset: &str,
     authority: &str,
     project: &str,
+    sandbox_backend: &str,
     trust_current_project: &mut bool,
 ) -> Result<Vec<ConfigMutation>> {
     let mut mutations = Vec::new();
@@ -855,7 +898,7 @@ fn sandbox_setup_mutations(
             ));
         }
     };
-    mutations.push(set_setup_string("permissions.sandbox", "bubblewrap"));
+    mutations.push(set_setup_string("permissions.sandbox", sandbox_backend));
     mutations.push(set_setup_string(
         "permissions.approval_policy",
         approval_policy,
@@ -917,6 +960,15 @@ fn write_setup_result<W: Write>(
     } else {
         writeln!(stdout, "preset: {}", result.preset)?;
         writeln!(stdout, "authority: {}", result.authority)?;
+        writeln!(stdout, "sandbox_backend: {}", result.sandbox_backend)?;
+        writeln!(
+            stdout,
+            "sandbox_executable_available: {}",
+            result
+                .sandbox_executable_available
+                .map(|available| available.to_string())
+                .unwrap_or_else(|| "not-applicable".to_string())
+        )?;
         writeln!(stdout, "project_root: {}", result.project_root.display())?;
         writeln!(stdout, "mutations: {}", result.mutations.join(","))?;
         writeln!(

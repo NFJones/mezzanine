@@ -1579,6 +1579,7 @@ mod outbound_policy_tests {
                     tmpdir: None,
                     uid: crate::runtime::effective_uid_for_tests(),
                 },
+                sandbox_platform_availability: None,
             },
             crate::cli::ControlTargetSelection::IrohInvitation {
                 path,

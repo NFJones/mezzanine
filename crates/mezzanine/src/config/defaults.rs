@@ -7,35 +7,7 @@
 // Generated default configuration.
 
 /// Target platform used to select first-run permission defaults.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GeneratedConfigPlatform {
-    /// Linux, where Bubblewrap can provide operating-system confinement.
-    Linux {
-        /// Whether the code-owned Bubblewrap executable is available.
-        bubblewrap_available: bool,
-    },
-    /// macOS, where first-run actions use model-gated automatic approval.
-    MacOs,
-    /// Any other supported platform without a native sandbox backend.
-    Other,
-}
-
-impl GeneratedConfigPlatform {
-    /// Returns the platform targeted by the current build.
-    fn current() -> Self {
-        if cfg!(target_os = "linux") {
-            Self::Linux {
-                bubblewrap_available: crate::security::sandbox::bubblewrap_executable_available(
-                    std::path::Path::new("/usr/bin/bwrap"),
-                ),
-            }
-        } else if cfg!(target_os = "macos") {
-            Self::MacOs
-        } else {
-            Self::Other
-        }
-    }
-}
+pub(crate) type GeneratedConfigPlatform = crate::security::sandbox::SandboxPlatformAvailability;
 
 /// Returns the initial primary configuration without provider-specific entries.
 ///
@@ -95,16 +67,7 @@ pub(crate) fn initial_config_toml_for_platform(
                 "built-in default config is missing `permissions.approval_policy`",
             )
         })?;
-    *approval_policy = toml_edit::Value::from(match platform {
-        GeneratedConfigPlatform::MacOs => "auto-allow",
-        GeneratedConfigPlatform::Linux {
-            bubblewrap_available: true,
-        } => "full-access",
-        GeneratedConfigPlatform::Linux {
-            bubblewrap_available: false,
-        } => "auto-allow",
-        GeneratedConfigPlatform::Other => "ask",
-    });
+    *approval_policy = toml_edit::Value::from(platform.default_approval_policy_name());
     let sandbox = permissions
         .get_mut("sandbox")
         .and_then(toml_edit::Item::as_value_mut)
@@ -113,15 +76,7 @@ pub(crate) fn initial_config_toml_for_platform(
                 "built-in default config is missing `permissions.sandbox`",
             )
         })?;
-    *sandbox = toml_edit::Value::from(match platform {
-        GeneratedConfigPlatform::Linux {
-            bubblewrap_available: true,
-        } => "bubblewrap",
-        GeneratedConfigPlatform::Linux {
-            bubblewrap_available: false,
-        } => "policy-only",
-        GeneratedConfigPlatform::MacOs | GeneratedConfigPlatform::Other => "policy-only",
-    });
+    *sandbox = toml_edit::Value::from(platform.default_sandbox_name());
     Ok(document.to_string())
 }
 
@@ -893,8 +848,8 @@ auto_sizing_large_model_profile = "anthropic-default"
 allowed_reasoning_efforts = ["high"]
 
 [permissions]
-# Generated Linux configuration selects full-access when Bubblewrap is
-# available and auto-allow otherwise. macOS also selects auto-allow.
+# Generated Linux and macOS configuration selects full-access when the fixed
+# Bubblewrap or Seatbelt executable is present, and auto-allow otherwise.
 # auto-allow uses the model gate; full-access skips prompts but stays sandboxed.
 # host-access is primary-user-only and executes
 # local shell actions on the host outside the configured sandbox.
@@ -903,9 +858,10 @@ allowed_reasoning_efforts = ["high"]
 approval_policy = "ask"
 # Optional named permission preset applied before explicit settings.
 # preset = "default"
-# Generated Linux configuration uses Bubblewrap for OS-level confinement when
-# its code-owned executable is available, and policy-only otherwise. macOS and
-# other platforms use policy-only until they provide an equivalent backend.
+# Generated Linux configuration selects Bubblewrap when /usr/bin/bwrap is an
+# executable regular file. Generated macOS configuration selects Seatbelt when
+# /usr/bin/sandbox-exec is executable. Either platform uses policy-only when its
+# fixed executable is absent; other platforms always use policy-only.
 sandbox = "bubblewrap"
 # Scope paths may name files or directories. A Unix-domain socket may also be
 # placed in read_scopes for an explicitly trusted service endpoint; a read-only
@@ -934,9 +890,10 @@ sandbox = "bubblewrap"
 # env_whitelist = ["ACME_HOME"]
 # git_user_name = "Your Name"
 # git_user_email = "you@example.invalid"
-# Explicit macOS Seatbelt configuration uses the same fail-closed policy
-# surface without exposing raw SBPL or launcher arguments. Generated macOS
-# defaults remain policy-only until the dedicated enablement rollout lands.
+# macOS Seatbelt uses the same fail-closed policy surface without exposing raw
+# SBPL or launcher arguments. Executable presence selects generated defaults
+# and guided setup, but every workload still requires its runtime capability
+# probe and never falls back to policy-only or host execution.
 # [permissions.seatbelt]
 # executable = "/usr/bin/sandbox-exec"
 # unavailable = "fail"
