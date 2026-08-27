@@ -347,9 +347,13 @@ fn sandbox_fallback_audit_records(
                 "sandbox-audit-marker",
                 &turn_id,
                 &action_id,
-                reason,
-                proof,
-                partial_effect_warning,
+                crate::runtime::RuntimeSandboxFallbackAudit {
+                    backend: crate::runtime::SandboxBackend::Bubblewrap,
+                    reason: reason.to_string(),
+                    proof: proof.to_string(),
+                    partial_effect_warning,
+                    approving_client_id: None,
+                },
             )
             .unwrap()
     );
@@ -1461,6 +1465,7 @@ fn runtime_bubblewrap_pre_payload_failure_offers_exact_fallback_approval() {
     assert!(
         service
             .offer_sandbox_pre_payload_fallback_approval(
+                crate::runtime::SandboxBackend::Bubblewrap,
                 "sandbox-marker",
                 &turn_id,
                 &action_id,
@@ -1630,6 +1635,7 @@ fn runtime_sandbox_failure_assessment_offers_warned_fallback_approval() {
     assert!(
         service
             .queue_sandbox_failure_assessment(
+                crate::runtime::SandboxBackend::Bubblewrap,
                 &turn,
                 &action_id,
                 "sandbox-assessment-marker",
@@ -1696,6 +1702,78 @@ fn runtime_sandbox_failure_assessment_offers_warned_fallback_approval() {
     );
 }
 
+/// Verifies Seatbelt assessment evidence names only Seatbelt restrictions and
+/// preserves the Seatbelt origin when a high-confidence result offers one
+/// warned, approval-gated unsandboxed retry.
+#[test]
+fn runtime_seatbelt_failure_assessment_preserves_backend_provenance() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+    assert!(
+        service
+            .queue_sandbox_failure_assessment(
+                crate::runtime::SandboxBackend::Seatbelt,
+                &turn,
+                &action_id,
+                "seatbelt-assessment-marker",
+                sandbox_failure_transaction(&turn_id, &action_id),
+                1,
+            )
+            .unwrap()
+    );
+    let request = service
+        .sandbox_failure_assessment_request_for_tests(&turn_id)
+        .unwrap();
+    let request_text = request
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(request_text.contains(r#""backend":"seatbelt""#));
+    for restriction in crate::security::sandbox::SEATBELT_RESTRICTION_IDS {
+        assert!(request_text.contains(restriction), "{request_text}");
+    }
+    assert!(!request_text.contains("synthetic-home"), "{request_text}");
+    let response = mez_agent::ModelResponse {
+        provider: "runtime-batch".to_string(),
+        model: "test".to_string(),
+        raw_text: r#"{"version":1,"class":"sandbox_failure","confidence":0.94,"rationale":"the required host path is denied by the active operation policy","decision":"unsandboxed_approval","restriction_id":"host-path-authority-only","sandboxed_recovery_exhausted":true}"#.to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: None,
+        provider_transcript_events: Vec::new(),
+    };
+
+    service
+        .apply_sandbox_failure_assessment_provider_response(&turn, &response)
+        .unwrap();
+
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Blocked);
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(structured.contains(r#""backend":"seatbelt""#));
+    assert!(structured.contains(r#""reason":"model_assessed_sandbox_failure""#));
+    assert!(structured.contains(r#""partial_effect_warning":true"#));
+    assert_eq!(
+        service
+            .blocked_agent_approval_ids_by_turn()
+            .get(&turn_id)
+            .map(Vec::len),
+        Some(1)
+    );
+}
+
 /// Verifies a plausible sandbox-preserving correction returns structured
 /// failure facts to the acting model without approval or automatic replay.
 #[test]
@@ -1716,6 +1794,7 @@ fn runtime_sandbox_failure_assessment_prefers_model_recovery() {
     append_test_execution_assistant_context(&mut service, &turn, &execution);
     service
         .queue_sandbox_failure_assessment(
+            crate::runtime::SandboxBackend::Bubblewrap,
             &turn,
             &action_id,
             "sandbox-model-recovery-marker",
@@ -1747,7 +1826,8 @@ fn runtime_sandbox_failure_assessment_prefers_model_recovery() {
         .as_deref()
         .unwrap();
     assert!(structured.contains(r#""decision":"model_recovery""#));
-    assert!(structured.contains(r#""bubblewrap_status":"payload_executed_nonzero""#));
+    assert!(structured.contains(r#""backend":"bubblewrap""#));
+    assert!(structured.contains(r#""sandbox_status":"payload_executed_nonzero""#));
     assert!(structured.contains(r#""partial_effect_warning":true"#));
     assert!(structured.contains(r#""automatic_replay":false"#));
     assert!(structured.contains(r#""exit_code":1"#));
@@ -1781,6 +1861,7 @@ fn runtime_stale_sandbox_failure_action_skips_assessment() {
     assert!(
         !service
             .queue_sandbox_failure_assessment(
+                crate::runtime::SandboxBackend::Bubblewrap,
                 &turn,
                 &action_id,
                 "stale-sandbox-assessment-marker",
@@ -1816,6 +1897,7 @@ fn runtime_command_failure_assessment_does_not_offer_unsandboxed_retry() {
     append_test_execution_assistant_context(&mut service, &turn, &execution);
     service
         .queue_sandbox_failure_assessment(
+            crate::runtime::SandboxBackend::Bubblewrap,
             &turn,
             &action_id,
             "sandbox-command-failure-marker",
@@ -1875,6 +1957,7 @@ fn runtime_malformed_sandbox_assessment_does_not_offer_unsandboxed_retry() {
     append_test_execution_assistant_context(&mut service, &turn, &execution);
     service
         .queue_sandbox_failure_assessment(
+            crate::runtime::SandboxBackend::Bubblewrap,
             &turn,
             &action_id,
             "sandbox-malformed-assessment-marker",
@@ -1930,6 +2013,7 @@ fn runtime_failed_sandbox_assessment_does_not_offer_unsandboxed_retry() {
     append_test_execution_assistant_context(&mut service, &turn, &execution);
     service
         .queue_sandbox_failure_assessment(
+            crate::runtime::SandboxBackend::Bubblewrap,
             &turn,
             &action_id,
             "sandbox-provider-failure-marker",

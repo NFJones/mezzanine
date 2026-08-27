@@ -1,4 +1,4 @@
-//! Runtime lifecycle for ambiguous Bubblewrap payload-failure assessment.
+//! Runtime lifecycle for ambiguous sandbox payload-failure assessment.
 //!
 //! The provider-independent request and response contract lives in
 //! `mez-agent`. This module owns only actor-scoped pending state and the
@@ -8,13 +8,15 @@
 use crate::runtime::{
     AgentTurnRecord, MezError, ModelRequest, ModelResponse, PaneReadinessState, Result,
     RunningShellTransactionRef, RuntimeSandboxFailureAssessment, RuntimeSessionService,
+    SandboxBackend,
 };
 
 impl RuntimeSessionService {
-    /// Queues one bounded internal model assessment after Bubblewrap proves
+    /// Queues one bounded internal model assessment after a sandbox backend proves
     /// that an explicitly allowed payload executed and then exited non-zero.
     pub(crate) fn queue_sandbox_failure_assessment(
         &mut self,
+        backend: SandboxBackend,
         turn: &AgentTurnRecord,
         action_id: &str,
         marker: &str,
@@ -86,6 +88,7 @@ impl RuntimeSessionService {
             .cloned()
             .collect();
         let evidence = mez_agent::SandboxFailureAssessmentEvidence {
+            sandbox_backend: backend.as_str().to_string(),
             action_kind: action.action_type().to_string(),
             permission_decision: "allow".to_string(),
             matched_rule_ids: evaluation.matched_rule_ids.clone(),
@@ -101,9 +104,9 @@ impl RuntimeSessionService {
             output_truncated: transaction.observed_output_truncated
                 || decoded.diagnostics.output_truncated()
                 || decoded.diagnostics.transport_incomplete(),
-            sandbox_restrictions: crate::security::sandbox::BUBBLEWRAP_RESTRICTION_IDS
-                .into_iter()
-                .map(str::to_string)
+            sandbox_restrictions: crate::security::sandbox::sandbox_restriction_ids(backend)
+                .iter()
+                .map(|restriction| (*restriction).to_string())
                 .collect(),
         };
         let request = mez_agent::sandbox_failure_assessment_request(turn, model_profile, &evidence)
@@ -111,6 +114,7 @@ impl RuntimeSessionService {
         self.agent.sandbox_failure_assessments.insert(
             turn.turn_id.clone(),
             RuntimeSandboxFailureAssessment {
+                backend,
                 action_id: action_id.to_string(),
                 marker: marker.to_string(),
                 transaction,
@@ -132,13 +136,16 @@ impl RuntimeSessionService {
         )?;
         self.append_agent_status_text_to_terminal_buffer(
             &turn.pane_id,
-            "agent: assessing whether Bubblewrap caused the command failure",
+            &format!(
+                "agent: assessing whether {} caused the command failure",
+                backend.as_str()
+            ),
         )?;
         Ok(true)
     }
 
     /// Returns the dedicated structured request retained for one pending
-    /// Bubblewrap failure assessment.
+    /// sandbox failure assessment.
     pub(super) fn sandbox_failure_assessment_request_for_turn(
         &self,
         turn_id: &str,
@@ -189,7 +196,8 @@ impl RuntimeSessionService {
                 .restriction_id
                 .as_deref()
                 .is_some_and(|restriction| {
-                    crate::security::sandbox::BUBBLEWRAP_RESTRICTION_IDS.contains(&restriction)
+                    crate::security::sandbox::sandbox_restriction_ids(pending.backend)
+                        .contains(&restriction)
                 })
         {
             let proof = format!(
@@ -211,9 +219,13 @@ impl RuntimeSessionService {
                 &pending.marker,
                 &turn.turn_id,
                 &pending.action_id,
-                "model_assessed_sandbox_failure",
-                &proof,
-                true,
+                crate::runtime::RuntimeSandboxFallbackAudit {
+                    backend: pending.backend,
+                    reason: "model_assessed_sandbox_failure".to_string(),
+                    proof,
+                    partial_effect_warning: true,
+                    approving_client_id: None,
+                },
             )? {
                 return Ok(());
             }

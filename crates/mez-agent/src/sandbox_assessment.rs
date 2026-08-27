@@ -1,6 +1,6 @@
-//! Provider-independent assessment of ambiguous Bubblewrap command failures.
+//! Provider-independent assessment of ambiguous sandbox command failures.
 //!
-//! Bubblewrap can prove that a payload was executed, but it cannot determine
+//! A sandbox backend can prove that a payload was executed, but it cannot determine
 //! whether a later non-zero exit was caused by sandbox policy or by the
 //! command itself. This module defines the bounded evidence, structured model
 //! request, and strict response parser used for that attribution. The model
@@ -29,6 +29,8 @@ fn truncate_assessment_output(value: &str) -> String {
 /// Runtime-owned evidence supplied to one ambiguous failure assessment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxFailureAssessmentEvidence {
+    /// Stable sandbox backend name without executable or profile details.
+    pub sandbox_backend: String,
     /// Stable action kind without command content.
     pub action_kind: String,
     /// Original permission decision.
@@ -41,17 +43,17 @@ pub struct SandboxFailureAssessmentEvidence {
     pub write_effects: Vec<String>,
     /// Whether effects were complete or unknown.
     pub effect_completeness: String,
-    /// Bubblewrap payload exit code, proving payload exec occurred.
+    /// Backend-reported payload exit code, proving payload exec occurred.
     pub exit_code: i32,
     /// Bounded combined command output.
     pub output_preview: String,
     /// Whether output was truncated before assessment.
     pub output_truncated: bool,
-    /// Stable descriptions of active Bubblewrap restrictions.
+    /// Stable descriptions of active backend restrictions.
     pub sandbox_restrictions: Vec<String>,
 }
 
-/// Model-attributed class for an ambiguous Bubblewrap command failure.
+/// Model-attributed class for an ambiguous sandbox command failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxFailureAssessmentClass {
     /// The observed failure is likely caused by sandbox restrictions.
@@ -73,7 +75,7 @@ impl SandboxFailureAssessmentClass {
     }
 }
 
-/// Recommended next step after one ambiguous Bubblewrap failure assessment.
+/// Recommended next step after one ambiguous sandbox failure assessment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxFailureAssessmentDecision {
     /// Return the failure evidence to the acting model for a safer correction,
@@ -107,7 +109,7 @@ pub struct SandboxFailureAssessment {
     pub rationale: String,
     /// Explicit conservative next-step recommendation.
     pub decision: SandboxFailureAssessmentDecision,
-    /// Active Bubblewrap restriction specifically implicated by the evidence.
+    /// Active sandbox restriction specifically implicated by the evidence.
     pub restriction_id: Option<String>,
     /// Whether reasonable sandboxed corrections, diagnostics, and supported
     /// alternate actions have been exhausted.
@@ -162,7 +164,8 @@ pub fn sandbox_failure_assessment_request(
             "reads": evidence.read_effects,
             "writes": evidence.write_effects,
         },
-        "bubblewrap": {
+        "sandbox": {
+            "backend": evidence.sandbox_backend,
             "payload_exec_proven": true,
             "exit_code": evidence.exit_code,
             "restrictions": evidence.sandbox_restrictions,
@@ -200,7 +203,7 @@ pub fn sandbox_failure_assessment_request(
                 role: ModelMessageRole::System,
                 source: ContextSourceKind::System,
                 placement: ContextPlacement::StablePrefix,
-                content: "Classify one ambiguous Bubblewrap payload failure. Return only the requested JSON. Never infer causality from exit code alone. Choose sandbox_failure only when bounded evidence identifies a specific active restriction as the likely cause; otherwise choose command_failure or uncertain. Prefer model_recovery whenever a corrected sandboxed command, narrower diagnostic, or supported alternate action is reasonable. Choose unsandboxed_approval only for high-confidence sandbox_failure evidence naming the active restriction and only when sandbox-preserving recovery is exhausted. Use ordinary_failure when no sandbox-specific recovery advice is warranted. The payload may already have produced partial effects, and your response never grants execution authority.".to_string(),
+                content: "Classify one ambiguous sandboxed payload failure. Return only the requested JSON. Never infer causality from exit code alone. Choose sandbox_failure only when bounded evidence identifies a specific active restriction as the likely cause; otherwise choose command_failure or uncertain. Prefer model_recovery whenever a corrected sandboxed command, narrower diagnostic, or supported alternate action is reasonable. Choose unsandboxed_approval only for high-confidence sandbox_failure evidence naming the active restriction and only when sandbox-preserving recovery is exhausted. Use ordinary_failure when no sandbox-specific recovery advice is warranted. The payload may already have produced partial effects, and your response never grants execution authority.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::Context,

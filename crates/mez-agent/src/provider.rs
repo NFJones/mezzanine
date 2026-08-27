@@ -619,13 +619,13 @@ pub fn openai_macro_judge_response_format() -> serde_json::Value {
     })
 }
 
-/// Builds the OpenAI structured-output schema for ambiguous Bubblewrap
+/// Builds the OpenAI structured-output schema for ambiguous sandbox
 /// payload-failure assessments.
 pub fn openai_sandbox_failure_assessment_response_format() -> serde_json::Value {
     serde_json::json!({
         "type": "json_schema",
         "name": "mezzanine_sandbox_failure_assessment",
-        "description": "Internal Mezzanine assessment of an ambiguous Bubblewrap payload failure.",
+        "description": "Internal Mezzanine assessment of an ambiguous sandbox payload failure.",
         "strict": true,
         "schema": {
             "type": "object",

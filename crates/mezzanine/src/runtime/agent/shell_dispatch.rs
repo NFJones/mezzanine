@@ -990,7 +990,7 @@ impl RuntimeSessionService {
                 &turn,
                 turn.state,
                 AgentTurnState::Blocked,
-                "bubblewrap_preparation_fallback_approval",
+                "sandbox_preparation_fallback_approval",
             )?;
             self.start_ready_agent_turns()?;
         } else {
@@ -1842,12 +1842,9 @@ impl RuntimeSessionService {
                     )?;
                     break;
                 }
-                Ok(super::shell_state::ShellActionDispatchOutcome::SandboxFallbackEligible {
-                    marker,
-                    proof,
-                }) => {
+                Ok(fallback @ super::shell_state::ShellActionDispatchOutcome::SandboxFallbackEligible { .. }) => {
                     self.mark_sandbox_preparation_fallback_pending(
-                        turn, action, execution, index, &marker, &proof,
+                        turn, action, execution, index, fallback,
                     )?;
                     continue;
                 }
@@ -1883,7 +1880,7 @@ impl RuntimeSessionService {
         Ok(dispatched)
     }
 
-    /// Marks one typed Bubblewrap preparation failure as approval-pending.
+    /// Marks one typed sandbox preparation failure as approval-pending.
     ///
     /// The caller owns the in-flight execution, so this transition mutates
     /// that execution in place and records only the exact fallback identity.
@@ -1895,9 +1892,18 @@ impl RuntimeSessionService {
         action: &AgentAction,
         execution: &mut AgentTurnExecution,
         result_index: usize,
-        marker: &str,
-        proof: &str,
+        fallback: super::shell_state::ShellActionDispatchOutcome,
     ) -> Result<()> {
+        let super::shell_state::ShellActionDispatchOutcome::SandboxFallbackEligible {
+            backend,
+            marker,
+            proof,
+        } = fallback
+        else {
+            return Err(MezError::invalid_state(
+                "sandbox preparation fallback outcome is not eligible",
+            ));
+        };
         let plan = local_action_plan(action)?.ok_or_else(|| {
             MezError::invalid_state("sandbox preparation fallback action is not shell-backed")
         })?;
@@ -1914,12 +1920,14 @@ impl RuntimeSessionService {
                 "sandbox preparation fallback requires an explicitly allowed action",
             ));
         }
+        let backend_name = backend.as_str();
         let mut blocked = ActionResult::blocked(
             turn,
             action,
             vec![
-                "Bubblewrap could not represent the approved policy requirements before payload execution"
-                    .to_string(),
+                format!(
+                    "{backend_name} could not represent the approved policy requirements before payload execution"
+                ),
                 "approval is required for one exact unsandboxed retry".to_string(),
             ],
             mez_agent::shell_action_structured_content_json(
@@ -1933,9 +1941,9 @@ impl RuntimeSessionService {
                     "action_id": action.id.as_str(),
                     "command": plan.policy_command,
                     "sandbox_fallback": {
-                        "backend": "bubblewrap",
+                        "backend": backend_name,
                         "reason": "preparation_failure",
-                        "proof": proof,
+                        "proof": proof.as_str(),
                         "payload_exec_proven": false,
                         "partial_effect_warning": false
                     }
@@ -1943,7 +1951,7 @@ impl RuntimeSessionService {
                 &evaluation.matched_rule_ids,
                 serde_json::json!({
                     "source": "runtime",
-                    "marker": marker,
+                    "marker": marker.as_str(),
                     "boundary_state": "preparation_failure",
                     "payload_exec_proven": false,
                     "partial_effect_warning": false
@@ -1955,8 +1963,9 @@ impl RuntimeSessionService {
         self.agent.sandbox_fallback_audits.insert(
             (turn.turn_id.clone(), action.id.clone()),
             RuntimeSandboxFallbackAudit {
+                backend,
                 reason: "preparation_failure".to_string(),
-                proof: proof.to_string(),
+                proof,
                 partial_effect_warning: false,
                 approving_client_id: None,
             },
@@ -1965,8 +1974,8 @@ impl RuntimeSessionService {
             &turn.pane_id,
             &turn.turn_id,
             &format!(
-                "action {} blocked reason=bubblewrap_preparation_failure marker={marker}",
-                action.id
+                "action {} blocked reason={backend_name}_preparation_failure marker={marker}",
+                action.id,
             ),
         )?;
         Ok(())

@@ -336,11 +336,8 @@ fn append_shell_action_result_context(
             .get("sandbox_assessment")
             .and_then(serde_json::Value::as_object)
         {
-            append_json_scalar_line(
-                lines,
-                "bubblewrap_status",
-                assessment.get("bubblewrap_status"),
-            );
+            append_json_scalar_line(lines, "sandbox_backend", assessment.get("backend"));
+            append_json_scalar_line(lines, "sandbox_status", assessment.get("sandbox_status"));
             append_json_scalar_line(lines, "sandbox_assessment_class", assessment.get("class"));
             append_json_scalar_line(
                 lines,

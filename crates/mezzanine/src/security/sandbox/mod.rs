@@ -84,6 +84,23 @@ pub(crate) const BUBBLEWRAP_RESTRICTION_IDS: [&str; 4] = [
     "network-policy-enforced",
 ];
 
+/// Stable, non-sensitive restrictions reported for Seatbelt assessment and status.
+pub(crate) const SEATBELT_RESTRICTION_IDS: [&str; 5] = [
+    "host-path-authority-only",
+    "private-host-home",
+    "minimal-path",
+    "network-operation-policy",
+    "visible-host-namespace",
+];
+
+/// Returns stable restriction identifiers for one exact sandbox backend.
+pub(crate) const fn sandbox_restriction_ids(backend: SandboxBackend) -> &'static [&'static str] {
+    match backend {
+        SandboxBackend::Bubblewrap => &BUBBLEWRAP_RESTRICTION_IDS,
+        SandboxBackend::Seatbelt => &SEATBELT_RESTRICTION_IDS,
+    }
+}
+
 /// Adds the direct-user sandbox diagnostic command to one concise live error.
 ///
 /// Runtime failures use this shared wording so pane, transcript, and model

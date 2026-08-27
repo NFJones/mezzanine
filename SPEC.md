@@ -3882,10 +3882,17 @@ Successful probe results MUST remain cached only for their exact identity, and
 concurrent waiters MUST share one in-flight probe and settle atomically. For a
 local action whose retained permission decision is `prompt`, a setup, launch,
 or separately proven pre-payload failure MAY create one normal approval for an
-exact unsandboxed retry. Bubblewrap lifecycle status MUST remain separate from command output. A
-validated `exit-code` event proves payload execution; clean closure without that
-event proves only that payload execution was not established. A non-zero payload
-exit MAY enter one bounded structured model assessment. Sandbox-preserving model
+exact unsandboxed retry. Trusted sandbox lifecycle status MUST remain separate
+from command output and MUST identify the backend whose lifecycle is being
+validated. For Bubblewrap, a validated `exit-code` event proves payload
+execution; clean closure without that event proves only that payload execution
+was not established. For Seatbelt, `sandbox-entered` alone is pre-payload
+evidence, `child-established` proves payload establishment, and a following
+`exit` record proves the payload outcome. A Seatbelt lifecycle that establishes
+the child but does not report its exit MUST fail closed as an incomplete
+established-payload result and MUST NOT be eligible for pre-payload fallback.
+A non-zero established payload exit MAY enter one bounded structured model
+assessment. Sandbox-preserving model
 recovery MUST be the default when a corrected sandboxed command, narrower
 diagnostic, or supported alternate action remains reasonable. Only an explicit,
 high-confidence `sandbox_failure` assessment that names an active restriction
@@ -3893,16 +3900,22 @@ and states that reasonable sandbox-preserving recovery is exhausted MAY create
 an approval, which MUST warn that partial effects may already exist.
 Command-failure, uncertain, malformed, timed-out, failed, or non-escalating
 assessments MUST settle the original command normally and return bounded command,
-Bubblewrap, assessment, and partial-effect facts to the acting model. The failed
-command MUST NOT be replayed automatically. Approval grants only the retained
-turn/action one unsandboxed retry and MUST never execute it automatically. For
-shell actions, Bubblewrap MUST enforce network denial with
+backend, assessment, and partial-effect facts to the acting model. Assessment
+evidence and approved-fallback state MUST retain the exact `bubblewrap` or
+`seatbelt` origin. The failed command MUST NOT be replayed automatically.
+Approval grants only the retained turn/action one unsandboxed retry and MUST
+never execute it automatically. For shell actions, Bubblewrap MUST enforce network denial with
 an isolated network namespace when `permissions.network_policy` is `deny`.
 When that policy is `allow`, Bubblewrap MUST use an explicit connected profile
 for every shell action without inferring network access from the command.
 With `prompt`, Bubblewrap MUST use the connected profile only after the
 action's network requirement is authorized. Destination-level filtering is
-outside this binary connected/isolated contract. Every Bubblewrap profile MUST
+outside this binary connected/isolated contract. Seatbelt MUST enforce denied
+network authority by denying TCP, UDP, and Unix-domain socket operations in the
+visible host namespace. It MUST NOT describe that operation-level boundary as
+a private network namespace. Authorized Seatbelt network actions MAY use host
+networking according to the same `deny`, `prompt`, and `allow` authorization
+decisions. Every Bubblewrap profile MUST
 project the host TLS trust store at `/etc/ssl/certs` read-only, regardless of
 network mode. Brokered
 `web_search`, `fetch_url`, and MCP actions execute through product-owned
@@ -3915,25 +3928,34 @@ behavior and MUST NOT invent scopes, rule identities, or effects.
 Permission status MUST distinguish configured scopes from the active pane's
 effective scopes and MUST report effective scope provenance as `explicit`,
 `trusted-project`, or `none`. Trusted-project provenance MUST include the
-selected trusted root. Bubblewrap status and bounded failure-assessment evidence
-MUST use stable, non-sensitive restriction identifiers for authority-only
-mounts, the synthetic home, the minimal executable path, enforced shell network
-policy, and hidden host credentials. Diagnostics MUST NOT expose raw Bubblewrap
-arguments, environment values, or unrelated host paths.
+selected trusted root. Sandbox status and bounded failure-assessment evidence
+MUST use stable, non-sensitive restriction identifiers. Bubblewrap identifiers
+MUST cover authority-only mounts, the synthetic home, the minimal executable
+path, and enforced shell network policy. Seatbelt identifiers MUST cover
+host-path authority, the private host-path home, the minimal executable path,
+network-operation policy, and visible host namespaces. Diagnostics MUST NOT
+expose raw launcher arguments, generated SBPL, profile or environment contents,
+artifact paths, raw lifecycle records, probe output, assessment evidence, or
+unrelated host paths.
 
-Live Bubblewrap preparation, path-resolution, capability-probe, and lifecycle
+Live sandbox preparation, path-resolution, capability-probe, and lifecycle
 failures MUST provide a concise direct-user remediation that points to
 `mez sandbox status --verbose` for structured executable, authority, and
 configuration diagnostics. The remediation MUST NOT suggest automatic
 authority broadening or host fallback.
 
 `mez sandbox status [PATH] [--verbose]` MUST build one deterministic, read-only
-workflow projection containing configured and effective sandbox boundaries,
-approval policy, canonical project-root discovery and source, trust state, scope
-provenance, Bubblewrap executable and pane-probe state, managed-home readiness,
-byte usage and active state, network isolation, reload freshness, and stable
-diagnostics. Inspection MUST NOT migrate or persist configuration, mutate trust,
-create managed homes, or populate probe caches. Diagnostics MUST contain stable
+version-2 workflow projection containing configured and effective sandbox
+boundaries, approval policy, canonical project-root discovery and source, trust
+state, scope provenance, backend executable and capability state, runtime-profile
+version, managed-home readiness, byte usage, active state and path semantics,
+network boundary, namespace boundary, reload freshness, and stable restrictions
+and diagnostics. Bubblewrap status MUST report its private namespace boundary
+and synthetic mounted-home semantics. Seatbelt status MUST report operation-level
+network denial, a visible host namespace, and private canonical host-path home
+semantics without describing any of them as mounts or namespaces. Inspection
+MUST NOT migrate or persist configuration, mutate trust, create managed homes,
+or populate probe caches. Diagnostics MUST contain stable
 `id`, `severity`, `summary`, `details`, `remedy`, `affected_path`, and `source`
 fields. Remedies MUST remain direct-user actions and MUST NOT suggest automatic
 authority broadening or host fallback.
@@ -4063,6 +4085,16 @@ configuration into a managed home. Revoking project trust MUST best-effort
 remove the matching managed home without removing other projects' homes.
 Implementations MAY leave cleanup or storage quotas to external private
 filesystem policy; status and documentation MUST disclose that limitation.
+
+When Seatbelt authority comes from a trusted project and a private Mezzanine
+configuration root is available, Mezzanine MUST create or reuse a backend- and
+profile-separated private managed home keyed by the canonical project root.
+Seatbelt MUST use that directory at its canonical host path for `HOME` and the
+XDG home variables. It MUST NOT represent the directory as a synthetic mount or
+claim that the host namespace is hidden. Seatbelt workloads MUST retain the same
+shared activity-lock protection for their complete lifetime, and inspection and
+maintenance MUST apply the same owner-only, symbolic-link-rejecting boundaries
+without disclosing the canonical home path in status output.
 
 Project configuration overlays SHOULD be created at `.mezzanine/config.toml`
 with a minimal `[permissions]` table and `approval_policy = "ask"` when a
@@ -6327,11 +6359,14 @@ without falling back to the pane shell, and MUST report `spawned_shell`
 transport metadata with `sent_to_pane` false. Native
 `apply_patch` actions MUST complete the same read and write phases as pane
 transport, materializing final content sidecar records into the spawned
-command file instead of the pane PTY. When Bubblewrap is active in native mode,
+command file instead of the pane PTY. When a sandbox backend is active in native mode,
 Mezzanine MUST derive process identity and optional environment forwarding from
 the live root process, canonicalize filesystem authority directly through host
-filesystem metadata, probe and launch Bubblewrap without pane transactions,
-and capture trusted Bubblewrap lifecycle status outside command output.
+filesystem metadata, probe and launch the configured backend without pane
+transactions, and capture trusted backend-tagged lifecycle status outside
+command output. Native Seatbelt execution MUST use the same code-owned profile,
+minimal environment, managed-home semantics, and fail-closed lifecycle contract
+as pane-shell execution.
 
 For non-interactive shell actions, the harness SHOULD send a complete command
 followed by the pane's configured submit sequence.
@@ -9394,7 +9429,7 @@ the model has determined that the action is reasonable for the active user
 request and has emitted a non-empty rationale for the action. Configured deny
 rules MUST still block matching actions. `auto-allow` MUST NOT be treated as
 full access; command, effect, and advisory scope classification MAY invoke the
-model gate, and any configured Bubblewrap backend MUST still enforce its
+model gate, and any configured sandbox backend MUST still enforce its
 resolved filesystem and network authority.
 
 The approval policy `full-access` MUST allow actions without whitelist approval
@@ -9403,7 +9438,7 @@ create whitelist rules as actions execute, bypass a configured sandbox, or
 weaken sandbox failure behavior. Advisory path and network classifications MUST
 NOT create fresh approval restrictions in full-access mode. Subagent requested
 read and write scopes MUST remain available as coordination metadata and MUST
-NOT cause controller-side command denials. When Bubblewrap is active, its
+NOT cause controller-side command denials. When a sandbox backend is active, its
 separately resolved maximum filesystem authority and network mode MUST still be
 enforced for every shell launch; configured deny rules remain authoritative.
 
@@ -10742,15 +10777,18 @@ configuration changes, subagent spawns, local protocol bridge changes, external
 connector use, credential access attempts, and logout.
 
 Agent shell-command audit records MUST identify `sandbox_backend` as
-`policy-only` or `bubblewrap`. Bubblewrap records MUST also include the fixed
-runtime-profile version, maximum or narrowed authority source, read-only and
-read-write host-mount counts, protected-mask count, and deterministic launch-plan
-SHA-256. An approved unsandboxed fallback MUST be recorded as `policy-only` and
-MUST identify the Bubblewrap origin, fallback classification, partial-effect
-warning, approving client, exact retry result, and a digest rather than raw
-proof or model rationale. These records MUST NOT include mount paths, Bubblewrap
-argv, command content, environment values, or raw assessment evidence; ordinary
-policy-only records MUST omit Bubblewrap plan-specific fields.
+`policy-only`, `bubblewrap`, or `seatbelt`. Sandboxed records MUST also include
+the fixed runtime-profile version, maximum or narrowed authority source,
+read-only and read-write grant counts, effective network mode, and deterministic
+launch-plan SHA-256. Backend-specific aggregate fields MAY distinguish
+Bubblewrap mount protection from Seatbelt operation grants but MUST remain
+path-free. An approved unsandboxed fallback MUST be recorded as `policy-only`
+and MUST identify the exact Bubblewrap or Seatbelt origin, fallback
+classification, partial-effect warning, approving client, exact retry result,
+and a digest rather than raw proof or model rationale. These records MUST NOT
+include mount or host paths, launcher argv, generated SBPL, command content,
+environment values, artifacts, raw lifecycle records, probe output, or raw
+assessment evidence; ordinary policy-only records MUST omit sandbox-plan fields.
 
 Audit records MUST redact secrets by default.
 

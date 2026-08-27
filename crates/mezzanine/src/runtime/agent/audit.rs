@@ -132,7 +132,7 @@ impl RuntimeSessionService {
         } else if let Some(fallback) = fallback_audit {
             record = record
                 .with_metadata("sandbox_fallback", "approved_exact_retry")
-                .with_metadata("sandbox_fallback_origin_backend", "bubblewrap")
+                .with_metadata("sandbox_fallback_origin_backend", fallback.backend.as_str())
                 .with_metadata("sandbox_fallback_reason", fallback.reason)
                 .with_metadata(
                     "sandbox_fallback_proof_sha256",
@@ -156,7 +156,7 @@ impl RuntimeSessionService {
     }
 
     /// Appends and consumes redacted outcome metadata for one approved
-    /// unsandboxed Bubblewrap fallback retry.
+    /// unsandboxed sandbox fallback retry.
     pub(crate) fn append_sandbox_fallback_result_audit(
         &mut self,
         turn_id: &str,
@@ -184,7 +184,7 @@ impl RuntimeSessionService {
         )
         .with_metadata("turn_id", turn_id.to_string())
         .with_metadata("action_id", action_id.to_string())
-        .with_metadata("sandbox_fallback_origin_backend", "bubblewrap")
+        .with_metadata("sandbox_fallback_origin_backend", fallback.backend.as_str())
         .with_metadata("sandbox_fallback_reason", fallback.reason)
         .with_metadata(
             "sandbox_fallback_proof_sha256",

@@ -130,10 +130,11 @@ impl RuntimeSessionService {
         Ok(approval_ids)
     }
 
-    /// Converts a trusted pre-payload Bubblewrap failure into one ordinary
+    /// Converts a trusted pre-payload sandbox failure into one ordinary
     /// approval for an exact, one-shot unsandboxed retry.
     pub(crate) fn offer_sandbox_pre_payload_fallback_approval(
         &mut self,
+        backend: crate::runtime::SandboxBackend,
         marker: &str,
         turn_id: &str,
         action_id: &str,
@@ -143,22 +144,24 @@ impl RuntimeSessionService {
             marker,
             turn_id,
             action_id,
-            "pre_payload_failure",
-            proof,
-            false,
+            RuntimeSandboxFallbackAudit {
+                backend,
+                reason: "pre_payload_failure".to_string(),
+                proof: proof.to_string(),
+                partial_effect_warning: false,
+                approving_client_id: None,
+            },
         )
     }
 
-    /// Converts one trusted or model-assessed Bubblewrap failure into an
+    /// Converts one trusted or model-assessed sandbox failure into an
     /// approval for an exact, one-shot unsandboxed retry.
     pub(crate) fn offer_sandbox_fallback_approval(
         &mut self,
         marker: &str,
         turn_id: &str,
         action_id: &str,
-        reason: &str,
-        proof: &str,
-        partial_effect_warning: bool,
+        fallback: RuntimeSandboxFallbackAudit,
     ) -> Result<bool> {
         let Some(turn) = self
             .agent_turn_ledger()
@@ -201,14 +204,17 @@ impl RuntimeSessionService {
         let plan = local_action_plan(&action)?.ok_or_else(|| {
             MezError::invalid_state("sandbox fallback action is not shell-backed")
         })?;
+        let backend_name = fallback.backend.as_str();
         let mut blocked = ActionResult::blocked(
             &turn,
             &action,
             vec![
-                if partial_effect_warning {
-                    "Bubblewrap may have caused the command failure after payload execution; partial effects may already exist".to_string()
+                if fallback.partial_effect_warning {
+                    format!(
+                        "{backend_name} may have caused the command failure after payload execution; partial effects may already exist"
+                    )
                 } else {
-                    "Bubblewrap failed before payload execution was proven".to_string()
+                    format!("{backend_name} failed before payload execution was proven")
                 },
                 "approval is required for one exact unsandboxed retry".to_string(),
             ],
@@ -223,20 +229,20 @@ impl RuntimeSessionService {
                     "action_id": action.id.as_str(),
                     "command": plan.policy_command,
                     "sandbox_fallback": {
-                        "backend": "bubblewrap",
-                        "reason": reason,
-                        "proof": proof,
-                        "payload_exec_proven": partial_effect_warning,
-                        "partial_effect_warning": partial_effect_warning
+                        "backend": backend_name,
+                        "reason": fallback.reason.as_str(),
+                        "proof": fallback.proof.as_str(),
+                        "payload_exec_proven": fallback.partial_effect_warning,
+                        "partial_effect_warning": fallback.partial_effect_warning
                     }
                 }),
                 &evaluation.matched_rule_ids,
                 serde_json::json!({
                     "source": "runtime",
                     "marker": marker,
-                    "boundary_state": reason,
-                    "payload_exec_proven": partial_effect_warning,
-                    "partial_effect_warning": partial_effect_warning
+                    "boundary_state": fallback.reason.as_str(),
+                    "payload_exec_proven": fallback.partial_effect_warning,
+                    "partial_effect_warning": fallback.partial_effect_warning
                 }),
             ),
         );
@@ -252,15 +258,12 @@ impl RuntimeSessionService {
             ));
         }
 
-        self.agent.sandbox_fallback_audits.insert(
-            (turn_id.to_string(), action_id.to_string()),
-            RuntimeSandboxFallbackAudit {
-                reason: reason.to_string(),
-                proof: proof.to_string(),
-                partial_effect_warning,
-                approving_client_id: None,
-            },
-        );
+        let fallback_reason = fallback.reason.clone();
+        let partial_effect_warning = fallback.partial_effect_warning;
+
+        self.agent
+            .sandbox_fallback_audits
+            .insert((turn_id.to_string(), action_id.to_string()), fallback);
 
         self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
         let transcript_entries =
@@ -281,15 +284,16 @@ impl RuntimeSessionService {
             &turn,
             turn.state,
             AgentTurnState::Blocked,
-            "bubblewrap_pre_payload_fallback_approval",
+            &format!("{backend_name}_pre_payload_fallback_approval"),
         )?;
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
-                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"blocked","sandbox_fallback":"{}","marker":"{}","partial_effect_warning":{},"transcript_entries":{}}}"#,
+                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"blocked","sandbox_backend":"{}","sandbox_fallback":"{}","marker":"{}","partial_effect_warning":{},"transcript_entries":{}}}"#,
                 json_escape(&turn.pane_id),
                 json_escape(turn_id),
-                json_escape(reason),
+                json_escape(backend_name),
+                json_escape(&fallback_reason),
                 json_escape(marker),
                 partial_effect_warning,
                 transcript_entries

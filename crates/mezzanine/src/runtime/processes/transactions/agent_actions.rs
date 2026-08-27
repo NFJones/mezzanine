@@ -26,8 +26,10 @@ use mez_agent::semantic_patch_planning::{
 struct ShellTransactionSettlement<'a> {
     /// Exit status reported by the pane transaction.
     exit_code: i32,
-    /// Optional Bubblewrap assessment retained for model recovery.
+    /// Optional sandbox assessment retained for model recovery.
     sandbox_assessment: Option<&'a mez_agent::SandboxFailureAssessment>,
+    /// Backend that produced the retained assessment, when present.
+    sandbox_backend: Option<crate::runtime::SandboxBackend>,
 }
 
 impl RuntimeSessionService {
@@ -911,6 +913,7 @@ impl RuntimeSessionService {
             ShellTransactionSettlement {
                 exit_code: pending.exit_code,
                 sandbox_assessment: assessment,
+                sandbox_backend: Some(pending.backend),
             },
         )?;
         Ok(())
@@ -1669,12 +1672,13 @@ impl RuntimeSessionService {
             ShellTransactionSettlement {
                 exit_code,
                 sandbox_assessment: None,
+                sandbox_backend: None,
             },
         )
     }
 
     /// Settles one shell transaction while optionally retaining a bounded
-    /// Bubblewrap assessment for the acting model's next recovery decision.
+    /// sandbox assessment for the acting model's next recovery decision.
     fn observe_agent_shell_transaction_end_with_sandbox_assessment(
         &mut self,
         output_pane_id: &str,
@@ -1687,6 +1691,7 @@ impl RuntimeSessionService {
         let ShellTransactionSettlement {
             exit_code,
             sandbox_assessment,
+            sandbox_backend: assessment_backend,
         } = settlement;
         let Some(transaction_ref) = self.process.running_shell_transactions.get(marker).cloned()
         else {
@@ -1918,6 +1923,7 @@ impl RuntimeSessionService {
                 Ok(status) if status.exit_code().is_none() => {
                     self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
                     if self.offer_sandbox_pre_payload_fallback_approval(
+                        sandbox_backend,
                         marker,
                         turn_id,
                         action_id,
@@ -2024,6 +2030,7 @@ impl RuntimeSessionService {
                 Ok(_) => {
                     if exit_code != 0
                         && self.queue_sandbox_failure_assessment(
+                            sandbox_backend,
                             &turn,
                             action_id,
                             marker,
@@ -2158,13 +2165,14 @@ impl RuntimeSessionService {
             };
             let sandbox_assessment = sandbox_assessment.map(|assessment| {
                 serde_json::json!({
+                    "backend": assessment_backend.map(|backend| backend.as_str()),
                     "class": assessment.class.as_str(),
                     "decision": assessment.decision.as_str(),
                     "confidence": assessment.confidence,
                     "rationale": assessment.rationale,
                     "restriction_id": assessment.restriction_id,
                     "sandboxed_recovery_exhausted": assessment.sandboxed_recovery_exhausted,
-                    "bubblewrap_status": "payload_executed_nonzero",
+                    "sandbox_status": "payload_executed_nonzero",
                     "partial_effect_warning": true,
                     "automatic_replay": false
                 })

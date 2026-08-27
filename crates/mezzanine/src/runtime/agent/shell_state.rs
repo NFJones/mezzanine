@@ -131,9 +131,11 @@ pub(super) struct ShellActionDispatch<'a> {
 pub(super) enum ShellActionDispatchOutcome {
     /// The pane accepted a concrete shell transaction.
     Dispatched,
-    /// Bubblewrap could not represent an otherwise prompt-eligible action, so
+    /// A sandbox could not represent an otherwise prompt-eligible action, so
     /// the caller may offer one exact approval-gated unsandboxed retry.
     SandboxFallbackEligible {
+        /// Exact backend that could not represent the approved requirements.
+        backend: crate::runtime::SandboxBackend,
         /// Fresh transaction identity retained for audit and approval facts.
         marker: String,
         /// Typed, redacted preparation evidence.
@@ -542,6 +544,7 @@ impl RuntimeSessionService {
                         && error.kind().approval_fallback_eligible() =>
                 {
                     return Ok(ShellActionDispatchOutcome::SandboxFallbackEligible {
+                        backend: crate::runtime::SandboxBackend::Bubblewrap,
                         marker: marker_id,
                         proof: format!("{}: {}", error.kind().as_str(), error.message()),
                     });

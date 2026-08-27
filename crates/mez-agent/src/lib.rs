@@ -124,7 +124,7 @@ pub mod request_accounting;
 pub mod response_progress;
 pub mod routed_workflow;
 pub mod routing;
-/// Provider-independent ambiguous Bubblewrap failure assessment.
+/// Provider-independent ambiguous sandbox failure assessment.
 pub mod sandbox_assessment;
 /// Provider-independent agent scheduling policy and queue state.
 pub mod scheduler;

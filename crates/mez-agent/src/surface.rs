@@ -36,7 +36,7 @@ pub enum ModelInteractionKind {
     /// constrained JSON decision that the runtime validates and executes; it is
     /// not a MAAP action batch and is not replayed as conversation content.
     MacroJudge,
-    /// The model is classifying an ambiguous Bubblewrap payload failure from
+    /// The model is classifying an ambiguous sandbox payload failure from
     /// bounded runtime evidence. The response is structured JSON and cannot
     /// grant execution authority.
     SandboxFailureAssessment,

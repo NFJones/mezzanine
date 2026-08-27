@@ -2,7 +2,8 @@
 //!
 //! These tests protect the status output contract and, critically, the
 //! invariant that inspection never migrates configuration, creates runtime
-//! directories, writes trust state, prepares managed homes, or probes Bubblewrap.
+//! directories, writes trust state, prepares managed homes, or probes a sandbox
+//! backend.
 
 use super::*;
 
@@ -39,13 +40,23 @@ fn sandbox_status_is_structured_and_strictly_read_only() {
     assert_eq!(exit_code, 0);
     let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
     assert_eq!(output["configured"]["sandbox"], "bubblewrap");
+    assert_eq!(output["version"], 2);
     assert_eq!(output["effective"]["sandbox"], "bubblewrap");
     assert_eq!(output["effective"]["scope_provenance"], "explicit");
+    assert_eq!(output["effective"]["sandbox_executable_state"], "available");
+    assert_eq!(output["effective"]["capability_state"], "not-probed");
     assert_eq!(
-        output["effective"]["bubblewrap_executable_state"],
-        "available"
+        output["effective"]["runtime_profile_version"],
+        "bubblewrap-v14"
     );
-    assert_eq!(output["effective"]["bubblewrap_probe_state"], "not-probed");
+    assert_eq!(
+        output["effective"]["network_boundary"],
+        "per-action-network-namespace-or-authorized-host-network"
+    );
+    assert_eq!(
+        output["effective"]["namespace_boundary"],
+        "private-mount-pid-user-uts-ipc-namespaces"
+    );
     assert_eq!(output["mutations"], serde_json::json!([]));
     assert_eq!(output["confirmation"]["required"], false);
     assert!(stderr.is_empty());
@@ -53,6 +64,85 @@ fn sandbox_status_is_structured_and_strictly_read_only() {
     assert!(!config_root.join("project-trust.tsv").exists());
     assert!(!config_root.join("sandbox").exists());
     assert!(!home.join("runtime/mez-0").exists());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies Seatbelt status reports operation-level confinement in the visible
+/// host namespace without describing its network policy or private home as a
+/// Bubblewrap namespace or mount.
+#[test]
+fn sandbox_status_reports_seatbelt_operation_confinement() {
+    let (env, home) = test_env("sandbox-status-seatbelt");
+    let config_root = home.join(".config/mezzanine");
+    fs::create_dir_all(&config_root).unwrap();
+    let config_path = config_root.join("config.toml");
+    let config_text = "version = 74\n[permissions]\napproval_policy = \"full-access\"\nsandbox = \"seatbelt\"\nread_scopes = [\"/tmp\"]\nwrite_scopes = []\n[permissions.seatbelt]\nexecutable = \"/bin/sh\"\nunavailable = \"fail\"\nnetwork = \"isolated\"\nenvironment = \"minimal\"\n";
+    fs::write(&config_path, config_text).unwrap();
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let before_config = fs::read(&config_path).unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "status".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+
+    assert_eq!(exit_code, 0);
+    let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(output["version"], 2);
+    assert_eq!(output["configured"]["sandbox"], "seatbelt");
+    assert_eq!(output["effective"]["sandbox"], "seatbelt");
+    assert_eq!(output["effective"]["sandbox_executable_state"], "available");
+    assert_eq!(output["effective"]["capability_state"], "not-probed");
+    assert_eq!(
+        output["effective"]["runtime_profile_version"],
+        "seatbelt-v1"
+    );
+    assert_eq!(
+        output["effective"]["managed_home_path_semantics"],
+        "private-canonical-host-path"
+    );
+    assert_eq!(
+        output["effective"]["network_boundary"],
+        "per-action-operation-denial-or-authorized-host-network"
+    );
+    assert_eq!(
+        output["effective"]["namespace_boundary"],
+        "visible-host-namespace"
+    );
+    assert_eq!(
+        output["effective"]["restrictions"],
+        serde_json::json!([
+            "host-path-authority-only",
+            "private-host-home",
+            "minimal-path",
+            "network-operation-policy",
+            "visible-host-namespace"
+        ])
+    );
+    let diagnostics = output["diagnostics"].as_array().unwrap();
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic["id"] == "sandbox.visible-host-namespace"
+            && diagnostic["details"].as_str().is_some_and(|details| {
+                details.contains("does not provide mount, PID, user, or network namespaces")
+            })
+    }));
+    assert!(stderr.is_empty());
+    assert_eq!(fs::read(&config_path).unwrap(), before_config);
+    assert!(!config_root.join("project-trust.tsv").exists());
+    assert!(!config_root.join("sandbox").exists());
 
     let _ = fs::remove_dir_all(home);
 }

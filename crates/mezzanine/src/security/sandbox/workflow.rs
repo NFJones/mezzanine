@@ -13,11 +13,14 @@ use serde::Serialize;
 
 use mez_agent::ApprovalPolicy;
 
-use crate::runtime::{ConfiguredPermissions, SandboxConfig};
+use crate::runtime::{ConfiguredPermissions, SandboxBackend, SandboxConfig};
 use crate::security::project::{ProjectRootDiscovery, ProjectRootMarkerKind, TrustDecision};
 
+use super::managed_home::inspect_seatbelt_managed_home;
+use super::seatbelt::SEATBELT_RUNTIME_PROFILE_VERSION;
 use super::{
-    BUBBLEWRAP_RESTRICTION_IDS, bubblewrap_executable_available, inspect_bubblewrap_managed_home,
+    BUBBLEWRAP_RUNTIME_PROFILE_VERSION, bubblewrap_executable_available,
+    inspect_bubblewrap_managed_home, sandbox_restriction_ids,
 };
 
 /// Inputs used to build one side-effect-free sandbox workflow projection.
@@ -101,7 +104,7 @@ pub(crate) struct SandboxConfiguredState {
 /// Effective sandbox boundary and local read-only readiness evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct SandboxEffectiveState {
-    /// Effective execution boundary: policy-only, bubblewrap, or host.
+    /// Effective execution boundary: policy-only, bubblewrap, seatbelt, or host.
     pub(crate) sandbox: String,
     /// Provenance for effective filesystem authority.
     pub(crate) scope_provenance: String,
@@ -109,24 +112,30 @@ pub(crate) struct SandboxEffectiveState {
     pub(crate) read_scopes: Vec<String>,
     /// Effective write scopes known outside a live pane.
     pub(crate) write_scopes: Vec<String>,
-    /// Configured Bubblewrap executable, when applicable.
-    pub(crate) bubblewrap_executable: Option<PathBuf>,
+    /// Configured backend executable, when applicable.
+    pub(crate) sandbox_executable: Option<PathBuf>,
     /// Read-only local executable inspection state.
-    pub(crate) bubblewrap_executable_state: String,
+    pub(crate) sandbox_executable_state: String,
+    /// Code-owned runtime profile version for the configured backend.
+    pub(crate) runtime_profile_version: Option<String>,
     /// Group resolution state for the active pane environment.
     pub(crate) supplementary_group_state: String,
     /// Number of configured supplementary groups after successful resolution.
     pub(crate) supplementary_group_count: usize,
-    /// Pane-specific capability probe state.
-    pub(crate) bubblewrap_probe_state: String,
+    /// Pane- or native-worker-specific capability probe state.
+    pub(crate) capability_state: String,
     /// Managed-home readiness without creating a home.
     pub(crate) managed_home_state: String,
     /// Regular-file bytes currently retained in the selected managed home.
     pub(crate) managed_home_bytes: u64,
-    /// Whether the selected managed home is currently mounted by a workload.
+    /// Whether the selected managed home is currently active in a workload.
     pub(crate) managed_home_active: bool,
-    /// Whether Bubblewrap uses an isolated network namespace.
-    pub(crate) network_isolated: bool,
+    /// Stable description of how the managed home appears to the workload.
+    pub(crate) managed_home_path_semantics: String,
+    /// Backend-specific network confinement mechanism.
+    pub(crate) network_boundary: String,
+    /// Backend-specific host namespace visibility.
+    pub(crate) namespace_boundary: String,
     /// Stable restriction identifiers for the configured backend.
     pub(crate) restrictions: Vec<String>,
     /// Freshness of this standalone projection relative to live sessions.
@@ -229,14 +238,27 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
         };
 
     let (
-        bubblewrap_executable,
+        sandbox_executable,
         executable_state,
+        runtime_profile_version,
         managed_home_state,
         managed_home_bytes,
         managed_home_active,
-        network_isolated,
+        managed_home_path_semantics,
+        network_boundary,
+        namespace_boundary,
     ) = match &request.permissions.sandbox {
-        SandboxConfig::PolicyOnly => (None, "not-configured", "not-applicable", 0, false, false),
+        SandboxConfig::PolicyOnly => (
+            None,
+            "not-configured",
+            None,
+            "not-applicable",
+            0,
+            false,
+            "not-applicable",
+            "policy-only",
+            "visible-host-namespace",
+        ),
         SandboxConfig::Bubblewrap(config) => {
             let executable = PathBuf::from(&config.executable);
             let executable_state = if bubblewrap_executable_available(&executable) {
@@ -245,17 +267,24 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
                 "unavailable"
             };
             let (managed_home_state, managed_home_bytes, managed_home_active) = if trusted {
-                inspect_managed_home_state(request.config_root, &request.discovery.canonical_root)
+                inspect_managed_home_state(
+                    SandboxBackend::Bubblewrap,
+                    request.config_root,
+                    &request.discovery.canonical_root,
+                )
             } else {
                 ("not-applicable", 0, false)
             };
             (
                 Some(executable),
                 executable_state,
+                Some(BUBBLEWRAP_RUNTIME_PROFILE_VERSION.to_string()),
                 managed_home_state,
                 managed_home_bytes,
                 managed_home_active,
-                true,
+                "synthetic-mounted-home",
+                "per-action-network-namespace-or-authorized-host-network",
+                "private-mount-pid-user-uts-ipc-namespaces",
             )
         }
         SandboxConfig::Seatbelt(config) => {
@@ -265,13 +294,25 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             } else {
                 "unavailable"
             };
+            let (managed_home_state, managed_home_bytes, managed_home_active) = if trusted {
+                inspect_managed_home_state(
+                    SandboxBackend::Seatbelt,
+                    request.config_root,
+                    &request.discovery.canonical_root,
+                )
+            } else {
+                ("not-applicable", 0, false)
+            };
             (
                 Some(executable),
                 executable_state,
-                "not-applicable",
-                0,
-                false,
-                true,
+                Some(SEATBELT_RUNTIME_PROFILE_VERSION.to_string()),
+                managed_home_state,
+                managed_home_bytes,
+                managed_home_active,
+                "private-canonical-host-path",
+                "per-action-operation-denial-or-authorized-host-network",
+                "visible-host-namespace",
             )
         }
     };
@@ -288,23 +329,38 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             source: "project-discovery",
         });
     }
-    if matches!(request.permissions.sandbox, SandboxConfig::Bubblewrap(_)) {
+    if let Some(backend) = request.permissions.sandbox.backend() {
+        let backend_name = backend.as_str();
+        let (source, executable_id, display_name, executable_setting) = match backend {
+            SandboxBackend::Bubblewrap => (
+                "bubblewrap",
+                "sandbox.bubblewrap-executable-unavailable",
+                "Bubblewrap",
+                "permissions.bubblewrap.executable",
+            ),
+            SandboxBackend::Seatbelt => (
+                "seatbelt",
+                "sandbox.seatbelt-executable-unavailable",
+                "Seatbelt",
+                "permissions.seatbelt.executable",
+            ),
+        };
         if executable_state != "available" {
             diagnostics.push(SandboxWorkflowDiagnostic {
-                id: "sandbox.bubblewrap-executable-unavailable",
+                id: executable_id,
                 severity: SandboxDiagnosticSeverity::Error,
-                summary: "Configured Bubblewrap executable is unavailable".to_string(),
+                summary: format!("Configured {display_name} executable is unavailable"),
                 details: "The configured absolute path is missing, not a regular file, or not executable.".to_string(),
-                remedy: "Install Bubblewrap or set permissions.bubblewrap.executable to an existing executable path.".to_string(),
-                affected_path: bubblewrap_executable.clone(),
-                source: "bubblewrap",
+                remedy: format!("Install {display_name} or set {executable_setting} to the code-owned executable path."),
+                affected_path: sandbox_executable.clone(),
+                source,
             });
         }
         if scope_provenance == "none" {
             diagnostics.push(SandboxWorkflowDiagnostic {
                 id: "sandbox.filesystem-authority-unresolved",
                 severity: SandboxDiagnosticSeverity::Error,
-                summary: "Bubblewrap has no filesystem authority".to_string(),
+                summary: format!("{display_name} has no filesystem authority"),
                 details: "No explicit scopes or trusted-project default are available for this project.".to_string(),
                 remedy: "As the direct user, configure narrow read/write scopes or explicitly trust the intended project.".to_string(),
                 affected_path: Some(request.discovery.canonical_root.clone()),
@@ -312,48 +368,78 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             });
         }
         diagnostics.push(SandboxWorkflowDiagnostic {
-            id: "sandbox.bubblewrap-probe-pane-specific",
+            id: "sandbox.capability-probe-execution-specific",
             severity: SandboxDiagnosticSeverity::Info,
-            summary: "Bubblewrap capability is verified per pane".to_string(),
-            details: "This read-only command does not run or populate the pane capability probe cache.".to_string(),
-            remedy: "Start a sandboxed action in the target pane to perform the fail-closed capability probe.".to_string(),
-            affected_path: bubblewrap_executable.clone(),
-            source: "bubblewrap",
+            summary: format!("{display_name} capability is verified per execution context"),
+            details: "This read-only command does not run or populate pane or native-worker capability caches.".to_string(),
+            remedy: "Start a sandboxed action in the intended execution mode to perform the fail-closed capability probe.".to_string(),
+            affected_path: sandbox_executable.clone(),
+            source,
         });
+        let network_details = match backend {
+            SandboxBackend::Bubblewrap => {
+                "A deny policy uses an isolated network namespace; allow and approved prompt actions may use the host network."
+            }
+            SandboxBackend::Seatbelt => {
+                "A deny policy rejects network operations in the visible host namespace; allow and approved prompt actions may use host networking."
+            }
+        };
         diagnostics.push(SandboxWorkflowDiagnostic {
             id: "sandbox.network-policy-enforced",
             severity: SandboxDiagnosticSeverity::Info,
-            summary: "Bubblewrap enforces shell network policy".to_string(),
-            details: "A deny policy uses an isolated namespace, an allow policy uses an explicit connected profile for every shell action, and prompt connects authorized network actions.".to_string(),
+            summary: format!("{display_name} enforces shell network policy"),
+            details: network_details.to_string(),
             remedy: "Review permissions.network_policy and the active approval policy before running shell actions.".to_string(),
             affected_path: None,
-            source: "bubblewrap",
+            source,
         });
         diagnostics.push(SandboxWorkflowDiagnostic {
             id: "sandbox.minimal-path",
             severity: SandboxDiagnosticSeverity::Info,
-            summary: "Bubblewrap uses a controlled executable path".to_string(),
-            details: "A successfully resolved whitelisted PATH controls sandbox command lookup; otherwise Bubblewrap falls back to /usr/bin:/bin.".to_string(),
-            remedy: "Use narrow read scopes for external executable roots and include PATH in permissions.bubblewrap.env_whitelist when command lookup requires it.".to_string(),
+            summary: format!("{display_name} uses a controlled executable path"),
+            details: format!("A successfully resolved whitelisted PATH controls sandbox command lookup; otherwise {display_name} falls back to /usr/bin:/bin."),
+            remedy: format!("Use narrow read scopes for external executable roots and include PATH in permissions.{backend_name}.env_whitelist when command lookup requires it."),
             affected_path: None,
-            source: "bubblewrap",
+            source,
         });
-        diagnostics.push(SandboxWorkflowDiagnostic {
-            id: "sandbox.synthetic-home",
-            severity: SandboxDiagnosticSeverity::Info,
-            summary: "Bubblewrap uses a synthetic home".to_string(),
-            details: "The real user home and host credentials remain hidden.".to_string(),
-            remedy: "Store non-secret build caches in the managed home; do not project host credentials.".to_string(),
-            affected_path: None,
-            source: "managed-home",
-        });
+        match backend {
+            SandboxBackend::Bubblewrap => diagnostics.push(SandboxWorkflowDiagnostic {
+                id: "sandbox.synthetic-home",
+                severity: SandboxDiagnosticSeverity::Info,
+                summary: "Bubblewrap uses a synthetic mounted home".to_string(),
+                details: "The real user home and host credentials remain hidden by mount projection.".to_string(),
+                remedy: "Store non-secret build caches in the managed home; do not project host credentials.".to_string(),
+                affected_path: None,
+                source: "managed-home",
+            }),
+            SandboxBackend::Seatbelt => {
+                diagnostics.push(SandboxWorkflowDiagnostic {
+                    id: "sandbox.private-host-home",
+                    severity: SandboxDiagnosticSeverity::Info,
+                    summary: "Seatbelt uses a private canonical host-path home".to_string(),
+                    details: "The managed home is visible at its canonical host path; Seatbelt denies operations outside authorized paths rather than mounting a synthetic namespace.".to_string(),
+                    remedy: "Store non-secret build caches in the managed home; do not grant access to host credential directories.".to_string(),
+                    affected_path: None,
+                    source: "managed-home",
+                });
+                diagnostics.push(SandboxWorkflowDiagnostic {
+                    id: "sandbox.visible-host-namespace",
+                    severity: SandboxDiagnosticSeverity::Info,
+                    summary: "Seatbelt retains the visible host namespace".to_string(),
+                    details: "Seatbelt is operation-level mandatory access control and does not provide mount, PID, user, or network namespaces.".to_string(),
+                    remedy: "Treat Seatbelt as operation confinement, not namespace isolation, when reviewing workload risk.".to_string(),
+                    affected_path: None,
+                    source: "seatbelt",
+                });
+            }
+        }
     }
     if approval_policy.bypasses_sandbox() {
         diagnostics.push(SandboxWorkflowDiagnostic {
             id: "sandbox.host-policy-bypass",
             severity: SandboxDiagnosticSeverity::Warning,
             summary: "Host-access bypasses the configured sandbox".to_string(),
-            details: "Local shell actions execute on the host even though the Bubblewrap configuration remains selected.".to_string(),
+            details: format!("Local shell actions execute on the host even though the {configured_sandbox} configuration remains selected."),
             remedy: "As the direct user, select ask, auto-allow, or full-access to restore the configured sandbox boundary.".to_string(),
             affected_path: None,
             source: "approval-policy",
@@ -361,7 +447,7 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
     }
 
     SandboxWorkflowPlan {
-        version: 1,
+        version: 2,
         project: SandboxProjectState {
             canonical_start: request.discovery.canonical_start.clone(),
             canonical_root: request.discovery.canonical_root.clone(),
@@ -397,14 +483,12 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             scope_provenance: scope_provenance.to_string(),
             read_scopes,
             write_scopes,
-            bubblewrap_executable,
-            bubblewrap_executable_state: executable_state.to_string(),
+            sandbox_executable,
+            sandbox_executable_state: executable_state.to_string(),
+            runtime_profile_version,
             supplementary_group_state,
             supplementary_group_count,
-            bubblewrap_probe_state: if matches!(
-                request.permissions.sandbox,
-                SandboxConfig::Bubblewrap(_)
-            ) {
+            capability_state: if request.permissions.sandbox.backend().is_some() {
                 "not-probed"
             } else {
                 "not-applicable"
@@ -413,15 +497,18 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             managed_home_state: managed_home_state.to_string(),
             managed_home_bytes,
             managed_home_active,
-            network_isolated,
-            restrictions: if matches!(request.permissions.sandbox, SandboxConfig::Bubblewrap(_)) {
-                BUBBLEWRAP_RESTRICTION_IDS
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect()
-            } else {
-                Vec::new()
-            },
+            managed_home_path_semantics: managed_home_path_semantics.to_string(),
+            network_boundary: network_boundary.to_string(),
+            namespace_boundary: namespace_boundary.to_string(),
+            restrictions: request
+                .permissions
+                .sandbox
+                .backend()
+                .map(sandbox_restriction_ids)
+                .unwrap_or_default()
+                .iter()
+                .map(|restriction| (*restriction).to_string())
+                .collect(),
             reload_freshness: "standalone-current-config".to_string(),
         },
         mutations: Vec::new(),
@@ -434,10 +521,15 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
 }
 
 fn inspect_managed_home_state(
+    backend: SandboxBackend,
     config_root: &Path,
     project_root: &Path,
 ) -> (&'static str, u64, bool) {
-    match inspect_bubblewrap_managed_home(config_root, project_root) {
+    let inspection = match backend {
+        SandboxBackend::Bubblewrap => inspect_bubblewrap_managed_home(config_root, project_root),
+        SandboxBackend::Seatbelt => inspect_seatbelt_managed_home(config_root, project_root),
+    };
+    match inspection {
         Ok(inspection) if inspection.exists && inspection.active => {
             ("active", inspection.bytes, true)
         }
