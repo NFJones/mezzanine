@@ -1,8 +1,8 @@
-//! Managed persistent home directories for trusted-project Bubblewrap runs.
+//! Managed persistent home directories for trusted-project sandbox runs.
 //!
 //! Homes live below the private Mezzanine configuration root and are keyed by
-//! canonical project identity plus the fixed sandbox profile. A shared activity
-//! lock excludes maintenance for each mounted workload, while a separate
+//! canonical project identity, backend, and fixed sandbox profile. A shared
+//! activity lock excludes maintenance for each workload, while a separate
 //! exclusive preparation lock serializes directory and metadata updates without
 //! upgrading the activity lock. The helper never copies host-home content and
 //! rejects symlinked storage components.
@@ -19,12 +19,14 @@ use sha2::{Digest, Sha256};
 
 #[cfg(test)]
 use super::resolve_sandbox_identity;
+use super::seatbelt::SEATBELT_RUNTIME_PROFILE_VERSION;
 use super::{
     BUBBLEWRAP_RUNTIME_PROFILE_VERSION, ResolvedSandboxIdentity, SandboxCompileError,
     SandboxCompileErrorKind,
 };
 #[cfg(test)]
 use crate::runtime::ConfiguredSandboxGroups;
+use crate::runtime::SandboxBackend;
 
 const MANAGED_HOME_METADATA_FILE: &str = "metadata.json";
 const MANAGED_HOME_LOCK_FILE: &str = ".active.lock";
@@ -33,13 +35,16 @@ const MANAGED_HOME_IDENTITIES_DIRECTORY: &str = "identities";
 const MANAGED_HOME_PASSWD_FILE: &str = "passwd";
 const MANAGED_HOME_GROUP_FILE: &str = "group";
 
-/// Private lifecycle metadata retained beside one managed home.
+/// Private backend-tagged lifecycle metadata retained beside one managed home.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct BubblewrapManagedHomeMetadata {
+pub(crate) struct SandboxManagedHomeMetadata {
     /// Metadata contract version.
     pub(crate) version: u32,
-    /// Bubblewrap runtime profile that owns this home.
+    /// Stable backend name that owns this home.
+    #[serde(default = "bubblewrap_backend_name")]
+    pub(crate) backend: String,
+    /// Runtime profile that owns this home.
     pub(crate) profile_version: String,
     /// Stable project/profile storage identity.
     pub(crate) project_key: String,
@@ -51,7 +56,7 @@ pub(crate) struct BubblewrapManagedHomeMetadata {
 
 /// Side-effect-free inspection result for one managed home.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct BubblewrapManagedHomeInspection {
+pub(crate) struct SandboxManagedHomeInspection {
     /// Stable project/profile storage identity.
     pub(crate) project_key: String,
     /// Whether the managed home exists.
@@ -61,18 +66,18 @@ pub(crate) struct BubblewrapManagedHomeInspection {
     /// Whether a live workload currently holds the shared activity lock.
     pub(crate) active: bool,
     /// Valid lifecycle metadata when present.
-    pub(crate) metadata: Option<BubblewrapManagedHomeMetadata>,
+    pub(crate) metadata: Option<SandboxManagedHomeMetadata>,
 }
 
-/// Shared activity lock retained while one managed home is mounted.
+/// Shared activity lock retained while one managed home is in use.
 #[derive(Debug)]
-pub(crate) struct BubblewrapManagedHomeActivityLock {
+pub(crate) struct SandboxManagedHomeActivityLock {
     _file: fs::File,
 }
 
 /// Result of one scoped clear or prune candidate operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct BubblewrapManagedHomeMaintenance {
+pub(crate) struct SandboxManagedHomeMaintenance {
     /// Stable project/profile storage identity.
     pub(crate) project_key: String,
     /// Whether the scoped managed home existed when maintenance began.
@@ -85,6 +90,21 @@ pub(crate) struct BubblewrapManagedHomeMaintenance {
     pub(crate) candidate: bool,
     /// Whether the managed home was removed.
     pub(crate) removed: bool,
+}
+
+/// Compatibility name for existing Bubblewrap metadata consumers.
+pub(crate) type BubblewrapManagedHomeMetadata = SandboxManagedHomeMetadata;
+/// Compatibility name for existing Bubblewrap inspection consumers.
+pub(crate) type BubblewrapManagedHomeInspection = SandboxManagedHomeInspection;
+/// Compatibility name for existing Bubblewrap activity-lock consumers.
+pub(crate) type BubblewrapManagedHomeActivityLock = SandboxManagedHomeActivityLock;
+/// Compatibility name for existing Bubblewrap maintenance consumers.
+pub(crate) type BubblewrapManagedHomeMaintenance = SandboxManagedHomeMaintenance;
+
+/// Supplies the legacy backend identity when reading pre-generalization
+/// Bubblewrap metadata that did not persist an explicit backend field.
+fn bubblewrap_backend_name() -> String {
+    SandboxBackend::Bubblewrap.as_str().to_string()
 }
 
 /// Prepared host-side home projected at the invoking user's synthetic home.
@@ -109,6 +129,30 @@ pub(crate) struct BubblewrapManagedHome {
     pub(crate) supplementary_group_ids: Vec<u32>,
     /// Stable non-secret project/profile key used for isolation and cleanup.
     pub(crate) project_key: String,
+}
+
+/// Persistent canonical host-path home used by the Seatbelt backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SeatbeltManagedHome {
+    /// Private canonical host directory used directly as `HOME`.
+    pub(crate) host_path: PathBuf,
+    /// Stable non-secret project/backend/profile storage identity.
+    pub(crate) project_key: String,
+}
+
+/// Ephemeral canonical Seatbelt home removed when its action lease is dropped.
+#[derive(Debug)]
+pub(crate) struct SeatbeltEphemeralHome {
+    /// Private canonical host directory used directly as `HOME`.
+    pub(crate) host_path: PathBuf,
+}
+
+impl Drop for SeatbeltEphemeralHome {
+    fn drop(&mut self) {
+        if self.host_path.exists() {
+            let _ = remove_managed_tree(&self.host_path);
+        }
+    }
 }
 
 /// Creates or reuses one private managed home for a canonical trusted project.
@@ -217,13 +261,77 @@ pub(crate) fn prepare_bubblewrap_managed_home_for_workload_with_identity(
     ))
 }
 
+/// Creates or reuses a private persistent Seatbelt home and retains its
+/// shared activity lock for the workload lifetime.
+pub(crate) fn prepare_seatbelt_managed_home_for_workload(
+    config_root: &Path,
+    project_root: &Path,
+) -> Result<(SeatbeltManagedHome, SandboxManagedHomeActivityLock), SandboxCompileError> {
+    validate_canonical_directory(config_root, "Seatbelt configuration root", true)?;
+    validate_canonical_directory(project_root, "Seatbelt project root", false)?;
+    let project_key = seatbelt_managed_home_project_key(project_root);
+    ensure_managed_homes_root(config_root)?;
+    let project_directory = managed_home_project_directory(config_root, &project_key);
+    ensure_private_managed_directory(&project_directory)?;
+    let activity = lock_managed_home(config_root, &project_key, "Seatbelt")?;
+    let preparation = open_managed_home_preparation_lock(&project_directory)?;
+    flock(&preparation, FlockOperation::LockExclusive).map_err(|error| {
+        managed_home_error(format!(
+            "managed Seatbelt home preparation lock failed: {error}"
+        ))
+    })?;
+    let home = project_directory.join("home");
+    ensure_managed_home_directories(&home)?;
+    write_backend_managed_home_metadata(
+        &project_directory,
+        &project_key,
+        SandboxBackend::Seatbelt,
+        SEATBELT_RUNTIME_PROFILE_VERSION,
+    )?;
+    let host_path = fs::canonicalize(&home).map_err(|error| {
+        managed_home_error(format!(
+            "managed Seatbelt home canonicalization failed: {error}"
+        ))
+    })?;
+    Ok((
+        SeatbeltManagedHome {
+            host_path,
+            project_key,
+        },
+        activity,
+    ))
+}
+
+/// Creates a private ephemeral Seatbelt home below one owner-controlled action
+/// directory. Dropping the returned lease removes only that home subtree.
+pub(crate) fn prepare_seatbelt_ephemeral_home(
+    action_directory: &Path,
+) -> Result<SeatbeltEphemeralHome, SandboxCompileError> {
+    validate_canonical_directory(action_directory, "Seatbelt action directory", true)?;
+    let home = action_directory.join("home");
+    ensure_managed_home_directories(&home)?;
+    let host_path = fs::canonicalize(&home).map_err(|error| {
+        managed_home_error(format!(
+            "ephemeral Seatbelt home canonicalization failed: {error}"
+        ))
+    })?;
+    Ok(SeatbeltEphemeralHome { host_path })
+}
+
 /// Removes the managed home associated with a revoked canonical project.
 pub(crate) fn remove_bubblewrap_managed_home(
     config_root: &Path,
     project_root: &Path,
 ) -> Result<bool, SandboxCompileError> {
     let project_key = bubblewrap_managed_home_project_key(project_root);
-    Ok(maintain_managed_home(config_root, &project_key, false)?.removed)
+    Ok(maintain_managed_home(
+        config_root,
+        &project_key,
+        SandboxBackend::Bubblewrap,
+        BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
+        false,
+    )?
+    .removed)
 }
 
 /// Acquires the shared activity lock held for one mounted managed home.
@@ -240,7 +348,7 @@ pub(crate) fn lock_bubblewrap_managed_home(
             ))
         })?;
         if managed_home_lock_is_current(&project_directory, &file)? {
-            return Ok(BubblewrapManagedHomeActivityLock { _file: file });
+            return Ok(SandboxManagedHomeActivityLock { _file: file });
         }
     }
 }
@@ -250,9 +358,11 @@ pub(crate) fn inspect_bubblewrap_managed_home(
     config_root: &Path,
     project_root: &Path,
 ) -> Result<BubblewrapManagedHomeInspection, SandboxCompileError> {
-    inspect_managed_home_key(
+    inspect_backend_managed_home_key(
         config_root,
         &bubblewrap_managed_home_project_key(project_root),
+        SandboxBackend::Bubblewrap,
+        BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
     )
 }
 
@@ -260,29 +370,11 @@ pub(crate) fn inspect_bubblewrap_managed_home(
 pub(crate) fn list_bubblewrap_managed_homes(
     config_root: &Path,
 ) -> Result<Vec<BubblewrapManagedHomeInspection>, SandboxCompileError> {
-    let Some(root) = validate_existing_managed_homes_root(config_root)? else {
-        return Ok(Vec::new());
-    };
-    let entries = match fs::read_dir(&root) {
-        Ok(entries) => entries,
-        Err(error) => {
-            return Err(managed_home_error(format!(
-                "managed home listing failed: {error}"
-            )));
-        }
-    };
-    let mut inspections = Vec::new();
-    for entry in entries {
-        let entry = entry
-            .map_err(|error| managed_home_error(format!("managed home listing failed: {error}")))?;
-        let key = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| managed_home_error("managed home key is not UTF-8"))?;
-        inspections.push(inspect_managed_home_key(config_root, &key)?);
-    }
-    inspections.sort_by(|left, right| left.project_key.cmp(&right.project_key));
-    Ok(inspections)
+    list_backend_managed_homes(
+        config_root,
+        SandboxBackend::Bubblewrap,
+        BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
+    )
 }
 
 /// Clears one project-scoped managed home or reports a dry-run candidate.
@@ -294,6 +386,8 @@ pub(crate) fn clear_bubblewrap_managed_home(
     maintain_managed_home(
         config_root,
         &bubblewrap_managed_home_project_key(project_root),
+        SandboxBackend::Bubblewrap,
+        BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
         dry_run,
     )
 }
@@ -305,8 +399,44 @@ pub(crate) fn prune_bubblewrap_managed_homes(
 ) -> Result<Vec<BubblewrapManagedHomeMaintenance>, SandboxCompileError> {
     list_bubblewrap_managed_homes(config_root)?
         .into_iter()
-        .map(|inspection| maintain_managed_home(config_root, &inspection.project_key, dry_run))
+        .map(|inspection| {
+            maintain_managed_home(
+                config_root,
+                &inspection.project_key,
+                SandboxBackend::Bubblewrap,
+                BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
+                dry_run,
+            )
+        })
         .collect()
+}
+
+/// Inspects one Seatbelt-managed home using its backend/profile identity.
+pub(crate) fn inspect_seatbelt_managed_home(
+    config_root: &Path,
+    project_root: &Path,
+) -> Result<SandboxManagedHomeInspection, SandboxCompileError> {
+    inspect_backend_managed_home_key(
+        config_root,
+        &seatbelt_managed_home_project_key(project_root),
+        SandboxBackend::Seatbelt,
+        SEATBELT_RUNTIME_PROFILE_VERSION,
+    )
+}
+
+/// Clears one inactive Seatbelt-managed home or reports a dry-run candidate.
+pub(crate) fn clear_seatbelt_managed_home(
+    config_root: &Path,
+    project_root: &Path,
+    dry_run: bool,
+) -> Result<SandboxManagedHomeMaintenance, SandboxCompileError> {
+    maintain_managed_home(
+        config_root,
+        &seatbelt_managed_home_project_key(project_root),
+        SandboxBackend::Seatbelt,
+        SEATBELT_RUNTIME_PROFILE_VERSION,
+        dry_run,
+    )
 }
 
 /// Returns the stable project/profile storage key without disclosing the path.
@@ -314,6 +444,22 @@ pub(crate) fn bubblewrap_managed_home_project_key(project_root: &Path) -> String
     let mut digest = Sha256::new();
     digest.update(b"mez-bubblewrap-managed-home-v1\0");
     digest.update(BUBBLEWRAP_RUNTIME_PROFILE_VERSION.as_bytes());
+    digest.update(b"\0");
+    digest.update(project_root.as_os_str().as_encoded_bytes());
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Returns the Seatbelt-specific project/profile storage key.
+pub(crate) fn seatbelt_managed_home_project_key(project_root: &Path) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"mez-sandbox-managed-home-v2\0");
+    digest.update(SandboxBackend::Seatbelt.as_str().as_bytes());
+    digest.update(b"\0");
+    digest.update(SEATBELT_RUNTIME_PROFILE_VERSION.as_bytes());
     digest.update(b"\0");
     digest.update(project_root.as_os_str().as_encoded_bytes());
     digest
@@ -437,6 +583,7 @@ fn write_managed_home_metadata(
                     managed_home_error(format!("managed home metadata is invalid: {error}"))
                 })?;
             if metadata.version != 1
+                || metadata.backend != SandboxBackend::Bubblewrap.as_str()
                 || metadata.profile_version != BUBBLEWRAP_RUNTIME_PROFILE_VERSION
                 || metadata.project_key != project_key
             {
@@ -455,6 +602,7 @@ fn write_managed_home_metadata(
     };
     let metadata = BubblewrapManagedHomeMetadata {
         version: 1,
+        backend: bubblewrap_backend_name(),
         profile_version: BUBBLEWRAP_RUNTIME_PROFILE_VERSION.to_string(),
         project_key: project_key.to_string(),
         created_at_unix_seconds,
@@ -481,8 +629,104 @@ fn write_managed_home_metadata(
     Ok(())
 }
 
+/// Writes metadata for one non-legacy backend/profile storage identity.
+fn write_backend_managed_home_metadata(
+    project_directory: &Path,
+    project_key: &str,
+    backend: SandboxBackend,
+    profile_version: &str,
+) -> Result<(), SandboxCompileError> {
+    validate_project_key(project_key)?;
+    ensure_private_managed_directory(project_directory)?;
+    let path = project_directory.join(MANAGED_HOME_METADATA_FILE);
+    let now = unix_now_seconds();
+    let created_at_unix_seconds = match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(managed_home_error(
+                "managed home metadata must be an ordinary file",
+            ));
+        }
+        Ok(metadata) if metadata.permissions().mode() & 0o077 != 0 => {
+            return Err(managed_home_error(
+                "managed home metadata must be user-private",
+            ));
+        }
+        Ok(_) => {
+            let text = fs::read_to_string(&path).map_err(|error| {
+                managed_home_error(format!("managed home metadata read failed: {error}"))
+            })?;
+            let metadata =
+                serde_json::from_str::<SandboxManagedHomeMetadata>(&text).map_err(|error| {
+                    managed_home_error(format!("managed home metadata is invalid: {error}"))
+                })?;
+            if metadata.version != 1
+                || metadata.backend != backend.as_str()
+                || metadata.profile_version != profile_version
+                || metadata.project_key != project_key
+            {
+                return Err(managed_home_error(
+                    "managed home metadata does not match its storage identity",
+                ));
+            }
+            metadata.created_at_unix_seconds
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => now,
+        Err(error) => {
+            return Err(managed_home_error(format!(
+                "managed home metadata read failed: {error}"
+            )));
+        }
+    };
+    let metadata = SandboxManagedHomeMetadata {
+        version: 1,
+        backend: backend.as_str().to_string(),
+        profile_version: profile_version.to_string(),
+        project_key: project_key.to_string(),
+        created_at_unix_seconds,
+        last_used_at_unix_seconds: now,
+    };
+    let mut rendered = serde_json::to_string_pretty(&metadata)
+        .map_err(|error| managed_home_error(format!("managed home metadata failed: {error}")))?;
+    rendered.push('\n');
+    let temporary = project_directory.join(format!(
+        ".{MANAGED_HOME_METADATA_FILE}.{}.tmp",
+        std::process::id()
+    ));
+    fs::write(&temporary, rendered).map_err(|error| {
+        managed_home_error(format!("managed home metadata write failed: {error}"))
+    })?;
+    fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600)).map_err(|error| {
+        managed_home_error(format!(
+            "managed home metadata permission update failed: {error}"
+        ))
+    })?;
+    fs::rename(&temporary, &path).map_err(|error| {
+        managed_home_error(format!("managed home metadata replace failed: {error}"))
+    })
+}
+
 fn open_managed_home_lock(project_directory: &Path) -> Result<fs::File, SandboxCompileError> {
     open_managed_home_lock_file(project_directory, MANAGED_HOME_LOCK_FILE)
+}
+
+/// Acquires one backend-neutral shared activity lock for a prepared home.
+fn lock_managed_home(
+    config_root: &Path,
+    project_key: &str,
+    backend_label: &str,
+) -> Result<SandboxManagedHomeActivityLock, SandboxCompileError> {
+    let project_directory = managed_home_project_directory(config_root, project_key);
+    loop {
+        let file = open_managed_home_lock(&project_directory)?;
+        flock(&file, FlockOperation::LockShared).map_err(|error| {
+            managed_home_error(format!(
+                "managed {backend_label} home activity lock failed: {error}"
+            ))
+        })?;
+        if managed_home_lock_is_current(&project_directory, &file)? {
+            return Ok(SandboxManagedHomeActivityLock { _file: file });
+        }
+    }
 }
 
 /// Opens the mutex used only for short-lived directory and metadata updates.
@@ -543,10 +787,10 @@ fn managed_home_lock_is_current(
 fn inspect_managed_home_key(
     config_root: &Path,
     project_key: &str,
-) -> Result<BubblewrapManagedHomeInspection, SandboxCompileError> {
+) -> Result<SandboxManagedHomeInspection, SandboxCompileError> {
     validate_project_key(project_key)?;
     if validate_existing_managed_homes_root(config_root)?.is_none() {
-        return Ok(BubblewrapManagedHomeInspection {
+        return Ok(SandboxManagedHomeInspection {
             project_key: project_key.to_string(),
             exists: false,
             bytes: 0,
@@ -563,7 +807,7 @@ fn inspect_managed_home_key(
         }
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            return Ok(BubblewrapManagedHomeInspection {
+            return Ok(SandboxManagedHomeInspection {
                 project_key: project_key.to_string(),
                 exists: false,
                 bytes: 0,
@@ -590,10 +834,7 @@ fn inspect_managed_home_key(
                 serde_json::from_str::<BubblewrapManagedHomeMetadata>(&text).map_err(|error| {
                     managed_home_error(format!("managed home metadata is invalid: {error}"))
                 })?;
-            if metadata.version != 1
-                || metadata.profile_version != BUBBLEWRAP_RUNTIME_PROFILE_VERSION
-                || metadata.project_key != project_key
-            {
+            if metadata.version != 1 || metadata.project_key != project_key {
                 return Err(managed_home_error(
                     "managed home metadata does not match its storage identity",
                 ));
@@ -608,13 +849,71 @@ fn inspect_managed_home_key(
         }
     };
     let active = managed_home_is_active(&project_directory)?;
-    Ok(BubblewrapManagedHomeInspection {
+    Ok(SandboxManagedHomeInspection {
         project_key: project_key.to_string(),
         exists: true,
         bytes,
         active,
         metadata: lifecycle,
     })
+}
+
+fn inspect_backend_managed_home_key(
+    config_root: &Path,
+    project_key: &str,
+    backend: SandboxBackend,
+    profile_version: &str,
+) -> Result<SandboxManagedHomeInspection, SandboxCompileError> {
+    let inspection = inspect_managed_home_key(config_root, project_key)?;
+    match &inspection.metadata {
+        Some(metadata)
+            if metadata.backend == backend.as_str()
+                && metadata.profile_version == profile_version =>
+        {
+            Ok(inspection)
+        }
+        None if backend == SandboxBackend::Bubblewrap => Ok(inspection),
+        _ => Err(managed_home_error(
+            "managed home metadata does not match its backend and profile identity",
+        )),
+    }
+}
+
+fn list_backend_managed_homes(
+    config_root: &Path,
+    backend: SandboxBackend,
+    profile_version: &str,
+) -> Result<Vec<SandboxManagedHomeInspection>, SandboxCompileError> {
+    let Some(root) = validate_existing_managed_homes_root(config_root)? else {
+        return Ok(Vec::new());
+    };
+    let entries = fs::read_dir(&root)
+        .map_err(|error| managed_home_error(format!("managed home listing failed: {error}")))?;
+    let mut inspections = Vec::new();
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| managed_home_error(format!("managed home listing failed: {error}")))?;
+        let key = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| managed_home_error("managed home key is not UTF-8"))?;
+        let inspection = inspect_managed_home_key(config_root, &key)?;
+        let belongs_to_backend = match &inspection.metadata {
+            Some(metadata) => metadata.backend == backend.as_str(),
+            None => backend == SandboxBackend::Bubblewrap,
+        };
+        if !belongs_to_backend {
+            continue;
+        }
+        inspections.push(inspect_backend_managed_home_key(
+            config_root,
+            &key,
+            backend,
+            profile_version,
+        )?);
+    }
+    inspections.sort_by(|left, right| left.project_key.cmp(&right.project_key));
+    Ok(inspections)
 }
 
 fn managed_home_is_active(project_directory: &Path) -> Result<bool, SandboxCompileError> {
@@ -683,11 +982,14 @@ fn measure_managed_tree(path: &Path) -> Result<u64, SandboxCompileError> {
 fn maintain_managed_home(
     config_root: &Path,
     project_key: &str,
+    backend: SandboxBackend,
+    profile_version: &str,
     dry_run: bool,
-) -> Result<BubblewrapManagedHomeMaintenance, SandboxCompileError> {
-    let inspection = inspect_managed_home_key(config_root, project_key)?;
+) -> Result<SandboxManagedHomeMaintenance, SandboxCompileError> {
+    let inspection =
+        inspect_backend_managed_home_key(config_root, project_key, backend, profile_version)?;
     if !inspection.exists || inspection.active {
-        return Ok(BubblewrapManagedHomeMaintenance {
+        return Ok(SandboxManagedHomeMaintenance {
             project_key: project_key.to_string(),
             exists: inspection.exists,
             bytes: inspection.bytes,
@@ -701,7 +1003,7 @@ fn maintain_managed_home(
     match flock(&lock, FlockOperation::NonBlockingLockExclusive) {
         Ok(()) => {}
         Err(error) if error == rustix::io::Errno::WOULDBLOCK => {
-            return Ok(BubblewrapManagedHomeMaintenance {
+            return Ok(SandboxManagedHomeMaintenance {
                 project_key: project_key.to_string(),
                 exists: true,
                 bytes: inspection.bytes,
@@ -719,7 +1021,7 @@ fn maintain_managed_home(
     if !dry_run {
         remove_managed_tree(&project_directory)?;
     }
-    Ok(BubblewrapManagedHomeMaintenance {
+    Ok(SandboxManagedHomeMaintenance {
         project_key: project_key.to_string(),
         exists: true,
         bytes: inspection.bytes,
@@ -797,6 +1099,50 @@ fn ensure_private_managed_directory(path: &Path) -> Result<(), SandboxCompileErr
             format!("managed Bubblewrap home permission update failed: {error}"),
         )
     })?;
+    Ok(())
+}
+
+/// Creates the fixed private HOME and XDG directory tree shared by backends.
+fn ensure_managed_home_directories(home: &Path) -> Result<(), SandboxCompileError> {
+    for directory in [
+        home.to_path_buf(),
+        home.join(".cache"),
+        home.join(".config"),
+        home.join(".local"),
+        home.join(".local/share"),
+        home.join(".local/state"),
+    ] {
+        ensure_private_managed_directory(&directory)?;
+    }
+    Ok(())
+}
+
+/// Validates an existing host directory before it becomes part of a Seatbelt
+/// policy path. Canonical spelling prevents policy grants from targeting an
+/// alias, while private roots prevent another user from replacing descendants.
+fn validate_canonical_directory(
+    path: &Path,
+    label: &str,
+    require_private: bool,
+) -> Result<(), SandboxCompileError> {
+    if !path.is_absolute() {
+        return Err(managed_home_error(format!("{label} must be absolute")));
+    }
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| managed_home_error(format!("{label} inspection failed: {error}")))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(managed_home_error(format!(
+            "{label} must be an ordinary directory"
+        )));
+    }
+    if require_private && metadata.permissions().mode() & 0o077 != 0 {
+        return Err(managed_home_error(format!("{label} must be user-private")));
+    }
+    let canonical = fs::canonicalize(path)
+        .map_err(|error| managed_home_error(format!("{label} canonicalization failed: {error}")))?;
+    if canonical != path {
+        return Err(managed_home_error(format!("{label} must be canonical")));
+    }
     Ok(())
 }
 
@@ -987,6 +1333,185 @@ mod tests {
         assert!(clear_error.message().contains("refuses symbolic links"));
         assert_eq!(fs::read(&external).unwrap(), b"retained");
         assert!(managed.host_path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Verifies Bubblewrap and Seatbelt use distinct storage identities for
+    /// the same canonical project. It also proves Seatbelt metadata, canonical
+    /// owner-only paths, and the shared activity lock protect persistent state
+    /// without exposing Seatbelt homes through Bubblewrap maintenance.
+    #[test]
+    fn seatbelt_managed_home_is_backend_separated_private_and_lock_protected() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-seatbelt-persistent-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let config_root = root.join("config");
+        let project = root.join("project");
+        fs::create_dir_all(&config_root).unwrap();
+        fs::set_permissions(&config_root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::create_dir_all(&project).unwrap();
+
+        let bubblewrap = prepare_bubblewrap_managed_home(&config_root, &project).unwrap();
+        let (seatbelt, activity) =
+            prepare_seatbelt_managed_home_for_workload(&config_root, &project).unwrap();
+
+        assert_ne!(seatbelt.project_key, bubblewrap.project_key);
+        assert_ne!(seatbelt.host_path, bubblewrap.host_path);
+        assert_eq!(
+            fs::canonicalize(&seatbelt.host_path).unwrap(),
+            seatbelt.host_path
+        );
+        assert_eq!(
+            fs::metadata(&seatbelt.host_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        let inspection = inspect_seatbelt_managed_home(&config_root, &project).unwrap();
+        assert!(inspection.exists);
+        assert!(inspection.active);
+        let metadata = inspection.metadata.unwrap();
+        assert_eq!(metadata.backend, SandboxBackend::Seatbelt.as_str());
+        assert_eq!(metadata.profile_version, SEATBELT_RUNTIME_PROFILE_VERSION);
+        assert_eq!(metadata.project_key, seatbelt.project_key);
+        assert_eq!(
+            list_bubblewrap_managed_homes(&config_root)
+                .unwrap()
+                .into_iter()
+                .map(|home| home.project_key)
+                .collect::<Vec<_>>(),
+            vec![bubblewrap.project_key.clone()]
+        );
+
+        let active = clear_seatbelt_managed_home(&config_root, &project, false).unwrap();
+        assert!(active.active);
+        assert!(!active.removed);
+        drop(activity);
+        let removed = clear_seatbelt_managed_home(&config_root, &project, false).unwrap();
+        assert!(removed.removed);
+        assert!(!seatbelt.host_path.exists());
+        assert!(bubblewrap.host_path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Verifies an ephemeral Seatbelt home is canonical and owner-only, keeps
+    /// its private XDG subtree for the lease lifetime, and removes only that
+    /// home when the lease is dropped while retaining the action directory.
+    #[test]
+    fn seatbelt_ephemeral_home_is_private_canonical_and_cleans_up_on_drop() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-seatbelt-ephemeral-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let action_directory = fs::canonicalize(&root).unwrap();
+
+        let ephemeral = prepare_seatbelt_ephemeral_home(&action_directory).unwrap();
+        assert_eq!(
+            fs::canonicalize(&ephemeral.host_path).unwrap(),
+            ephemeral.host_path
+        );
+        assert_eq!(
+            fs::metadata(&ephemeral.host_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert!(ephemeral.host_path.join(".local/state").is_dir());
+        fs::write(ephemeral.host_path.join("payload"), b"temporary").unwrap();
+        let home_path = ephemeral.host_path.clone();
+        drop(ephemeral);
+
+        assert!(!home_path.exists());
+        assert!(action_directory.exists());
+        fs::remove_dir_all(action_directory).unwrap();
+    }
+
+    /// Verifies ephemeral Seatbelt preparation fails closed for a symlinked or
+    /// non-private action root so generated policy never grants a replaceable
+    /// or other-user-accessible HOME path.
+    #[test]
+    fn seatbelt_ephemeral_home_rejects_unsafe_action_roots() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-seatbelt-unsafe-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let accessible = root.join("accessible");
+        fs::create_dir_all(&accessible).unwrap();
+        fs::set_permissions(&accessible, fs::Permissions::from_mode(0o755)).unwrap();
+        let accessible_error = prepare_seatbelt_ephemeral_home(&accessible).unwrap_err();
+        assert!(accessible_error.message().contains("must be user-private"));
+
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
+        let alias = root.join("alias");
+        symlink(&target, &alias).unwrap();
+        let alias_error = prepare_seatbelt_ephemeral_home(&alias).unwrap_err();
+        assert!(
+            alias_error
+                .message()
+                .contains("must be an ordinary directory")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Verifies metadata written before backend tagging still deserializes as
+    /// Bubblewrap state and remains inspectable under the unchanged legacy key
+    /// and path contract.
+    #[test]
+    fn legacy_bubblewrap_metadata_without_backend_remains_compatible() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-bubblewrap-legacy-metadata-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let config_root = root.join("config");
+        let project = root.join("project");
+        fs::create_dir_all(&project).unwrap();
+        let managed = prepare_bubblewrap_managed_home(&config_root, &project).unwrap();
+        let project_directory = managed.host_path.parent().unwrap();
+        let metadata_path = project_directory.join(MANAGED_HOME_METADATA_FILE);
+        let mut document =
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&metadata_path).unwrap())
+                .unwrap();
+        document.as_object_mut().unwrap().remove("backend");
+        fs::write(
+            &metadata_path,
+            format!("{}\n", serde_json::to_string_pretty(&document).unwrap()),
+        )
+        .unwrap();
+        fs::set_permissions(&metadata_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let inspection = inspect_bubblewrap_managed_home(&config_root, &project).unwrap();
+        let metadata = inspection.metadata.unwrap();
+        assert_eq!(metadata.backend, SandboxBackend::Bubblewrap.as_str());
+        assert_eq!(metadata.project_key, managed.project_key);
+        assert_eq!(
+            managed.project_key,
+            bubblewrap_managed_home_project_key(&project)
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }
