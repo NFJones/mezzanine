@@ -341,6 +341,18 @@ fn bubblewrap_failure_remediation_points_to_verbose_status() {
     assert_eq!(bubblewrap_failure_remediation(&remediated), remediated);
 }
 
+/// Verifies Seatbelt lifecycle failures include the same actionable sandbox
+/// status command without duplicating an already remediated diagnostic.
+#[test]
+fn seatbelt_failure_remediation_points_to_verbose_status() {
+    let remediated = seatbelt_failure_remediation("Seatbelt status was invalid.");
+    assert_eq!(
+        remediated,
+        "Seatbelt status was invalid. Run `mez sandbox status --verbose` to inspect the executable, authority, and configuration remedies."
+    );
+    assert_eq!(seatbelt_failure_remediation(&remediated), remediated);
+}
+
 /// Verifies generated defaults and guided setup treat only executable regular
 /// files as present, without running the candidate or confusing a directory or
 /// non-executable file with runtime capability proof.

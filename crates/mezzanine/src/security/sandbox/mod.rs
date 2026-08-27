@@ -233,6 +233,18 @@ pub(crate) fn bubblewrap_failure_remediation(message: &str) -> String {
     )
 }
 
+/// Adds the direct-user Seatbelt diagnostic command to one concise live error.
+pub(crate) fn seatbelt_failure_remediation(message: &str) -> String {
+    let message = message.trim();
+    if message.contains("`mez sandbox status --verbose`") {
+        return message.to_string();
+    }
+    format!(
+        "{}. Run `mez sandbox status --verbose` to inspect the executable, authority, and configuration remedies.",
+        message.trim_end_matches('.')
+    )
+}
+
 /// Returns whether a fixed sandbox path names a regular executable file.
 ///
 /// This side-effect-free check is shared by first-run configuration selection

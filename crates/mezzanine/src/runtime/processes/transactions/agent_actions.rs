@@ -1938,7 +1938,9 @@ impl RuntimeSessionService {
                             )
                         }
                         crate::runtime::SandboxBackend::Seatbelt => {
-                            "Seatbelt failed before payload execution".to_string()
+                            crate::security::sandbox::seatbelt_failure_remediation(
+                                "Seatbelt failed before payload execution",
+                            )
                         }
                     };
                     let code = format!("{backend_name}_pre_payload_failure");
@@ -1970,8 +1972,9 @@ impl RuntimeSessionService {
                             )
                         }
                         crate::runtime::SandboxBackend::Seatbelt => {
-                            "Seatbelt status exit code contradicts the shell transaction"
-                                .to_string()
+                            crate::security::sandbox::seatbelt_failure_remediation(
+                                "Seatbelt status exit code contradicts the shell transaction",
+                            )
                         }
                     };
                     let code = format!("{backend_name}_status_mismatch");
@@ -2003,7 +2006,9 @@ impl RuntimeSessionService {
                             ))
                         }
                         crate::runtime::SandboxBackend::Seatbelt => {
-                            format!("Seatbelt status was invalid: {message}")
+                            crate::security::sandbox::seatbelt_failure_remediation(&format!(
+                                "Seatbelt status was invalid: {message}"
+                            ))
                         }
                     };
                     let code = format!("{backend_name}_status_invalid");
