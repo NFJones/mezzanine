@@ -565,6 +565,15 @@ fn maap_issue_add_action_schema() -> serde_json::Value {
                     "description": "Optional initial issue state. Use null to create an open issue."
                 }),
             ),
+            (
+                "priority",
+                serde_json::json!({
+                    "type": ["integer", "null"],
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": "Optional issue priority from 0 to 100. Use null for the default priority."
+                }),
+            ),
             described_string_property("title", "Single-line issue title."),
             (
                 "body",
@@ -589,7 +598,15 @@ fn maap_issue_add_action_schema() -> serde_json::Value {
                 }),
             ),
         ],
-        &["kind", "state", "title", "body", "notes", "depends_on"],
+        &[
+            "kind",
+            "state",
+            "priority",
+            "title",
+            "body",
+            "notes",
+            "depends_on",
+        ],
     )
 }
 
@@ -613,6 +630,15 @@ fn maap_issue_update_action_schema() -> serde_json::Value {
                     "type": ["string", "null"],
                     "enum": ["open", "in-progress", "resolved", null],
                     "description": "Optional replacement issue state. Use null to leave unchanged."
+                }),
+            ),
+            (
+                "priority",
+                serde_json::json!({
+                    "type": ["integer", "null"],
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": "Optional replacement priority from 0 to 100. Use null to leave unchanged."
                 }),
             ),
             (
@@ -670,6 +696,7 @@ fn maap_issue_update_action_schema() -> serde_json::Value {
             "id",
             "kind",
             "state",
+            "priority",
             "title",
             "body",
             "clear_body",

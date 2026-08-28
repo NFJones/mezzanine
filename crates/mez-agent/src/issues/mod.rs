@@ -22,10 +22,15 @@ pub use types::{
 };
 pub use validation::{
     IssueQueryValidation, IssueUpdateValidation, validate_issue_body,
-    validate_issue_dependency_ids, validate_issue_kind, validate_issue_notes, validate_issue_query,
-    validate_issue_state, validate_issue_title, validate_issue_update, validate_project_key,
+    validate_issue_dependency_ids, validate_issue_kind, validate_issue_notes,
+    validate_issue_priority, validate_issue_query, validate_issue_state, validate_issue_title,
+    validate_issue_update, validate_project_key,
 };
 
+/// Default priority assigned when an issue creator does not specify one.
+pub const DEFAULT_ISSUE_PRIORITY: u8 = 10;
+/// Highest valid issue priority.
+pub const MAX_ISSUE_PRIORITY: u8 = 100;
 /// Default maximum issue records returned by one query.
 pub const DEFAULT_ISSUE_QUERY_LIMIT: usize = 50;
 /// Hard upper bound for one issue query result set.

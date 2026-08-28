@@ -118,6 +118,56 @@ fn issue_store_defaults_to_open_and_filters_resolved_state() {
     assert_eq!(resolved_results, vec![resolved]);
 }
 
+/// Verifies issue priority defaults to 10, persists explicit boundaries, and
+/// can be the only field changed by an update.
+#[test]
+fn issue_store_persists_and_updates_bounded_priority() {
+    let store = temp_store("priority");
+    let defaulted = store
+        .add_issue(
+            "/repo".to_string(),
+            IssueKind::Task,
+            "Default priority".to_string(),
+            None,
+            None,
+            10,
+        )
+        .unwrap();
+    assert_eq!(defaulted.priority, 10);
+
+    let explicit = store
+        .add_issue_with_dependencies(
+            NewIssueRecord {
+                project: "/repo".to_string(),
+                kind: IssueKind::Defect,
+                state: None,
+                priority: 100,
+                title: "Explicit priority".to_string(),
+                body: None,
+                notes: None,
+                depends_on: Vec::new(),
+            },
+            20,
+        )
+        .unwrap();
+    assert_eq!(explicit.priority, 100);
+
+    let updated = store
+        .update_issue(
+            "/repo".to_string(),
+            explicit.id,
+            IssueUpdate {
+                priority: Some(0),
+                ..IssueUpdate::default()
+            },
+            30,
+        )
+        .unwrap()
+        .record
+        .unwrap();
+    assert_eq!(updated.priority, 0);
+}
+
 /// Verifies opening a legacy issue database preserves existing records while
 /// expanding its state constraint to accept the in-progress lifecycle state.
 #[test]
@@ -171,13 +221,14 @@ fn issue_store_migrates_legacy_state_constraint_for_in_progress() {
         .unwrap();
 
     assert_eq!(updated.state, IssueState::InProgress);
+    assert_eq!(updated.priority, 10);
     assert_eq!(
         store
             .get_issue("/repo".to_string(), "legacy-resolved".to_string())
             .unwrap()
             .unwrap()
-            .state,
-        IssueState::Resolved
+            .priority,
+        10
     );
     assert_eq!(
         store
@@ -459,6 +510,7 @@ fn issue_store_persists_dependencies_and_rejects_cycles() {
                 project: "/repo".to_string(),
                 kind: IssueKind::Task,
                 state: None,
+                priority: mez_agent::issues::DEFAULT_ISSUE_PRIORITY,
                 title: "Teach skills".to_string(),
                 body: None,
                 notes: None,
@@ -482,6 +534,7 @@ fn issue_store_persists_dependencies_and_rejects_cycles() {
             project: "/repo".to_string(),
             kind: IssueKind::Task,
             state: None,
+            priority: mez_agent::issues::DEFAULT_ISSUE_PRIORITY,
             title: "Blocked by missing issue".to_string(),
             body: None,
             notes: None,
@@ -524,6 +577,7 @@ fn issue_store_delete_rejects_open_dependents_and_allows_resolved_dependents() {
                 project: "/repo".to_string(),
                 kind: IssueKind::Task,
                 state: None,
+                priority: mez_agent::issues::DEFAULT_ISSUE_PRIORITY,
                 title: "Teach skills".to_string(),
                 body: None,
                 notes: None,
@@ -595,6 +649,7 @@ fn issue_store_migrates_old_schema_to_notes_column() {
         .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].notes, None);
+    assert_eq!(results[0].priority, 10);
     let updated = store
         .update_issue(
             "/repo".to_string(),

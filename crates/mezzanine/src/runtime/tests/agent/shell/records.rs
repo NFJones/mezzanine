@@ -592,6 +592,34 @@ fn focused_issue_fix_browser_fixture(
     (service, primary, pane_id, root, vec![recent.id, older.id])
 }
 
+/// Verifies `/show-issues` renders priority between state and updated and
+/// populates the column from each canonical issue record.
+#[test]
+fn runtime_agent_shell_show_issues_renders_priority_column() {
+    let (service, _primary, _pane_id, root, _issue_ids) =
+        focused_issue_fix_browser_fixture("runtime-show-issues-priority-column");
+    let page = service
+        .primary_display_overlay()
+        .unwrap()
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser
+        .render_page();
+    assert!(
+        page.raw_markdown
+            .contains("| Issue | Summary | Project | Kind | State | Priority | Updated |"),
+        "{}",
+        page.raw_markdown
+    );
+    assert!(
+        page.raw_markdown.contains("| 10 |"),
+        "{}",
+        page.raw_markdown
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies `f` from the issue list dispatches `$fix-issues` for only the
 /// selected issue through the current pane agent.
 #[test]
@@ -860,7 +888,7 @@ enabled = true
         .render_page();
     assert!(
         page.raw_markdown
-            .contains("| Issue | Summary | Project | Kind | State | Updated |"),
+            .contains("| Issue | Summary | Project | Kind | State | Priority | Updated |"),
         "{}",
         page.raw_markdown
     );
@@ -2686,6 +2714,7 @@ fn runtime_agent_shell_show_issues_blocks_open_dependents_then_deletes() {
                 project: project.clone(),
                 kind: mez_agent::issues::IssueKind::Task,
                 state: None,
+                priority: mez_agent::issues::DEFAULT_ISSUE_PRIORITY,
                 title: "Open dependent".to_string(),
                 body: None,
                 notes: None,

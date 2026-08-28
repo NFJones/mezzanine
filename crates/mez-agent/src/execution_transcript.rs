@@ -425,6 +425,7 @@ fn assistant_transcript_action_summary(action: &AgentAction) -> String {
             body,
             notes,
             depends_on,
+            ..
         } => format!(
             "issue_add kind={} state={} title={} body_bytes={} notes_bytes={} depends_on_count={}",
             bounded_transcript_field(kind),

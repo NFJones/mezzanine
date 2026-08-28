@@ -39,6 +39,7 @@ fn runtime_issue_add_batch(action_id: &str) -> mez_agent::MaapBatch {
             payload: mez_agent::AgentActionPayload::IssueAdd {
                 kind: "task".to_string(),
                 state: None,
+                priority: None,
                 title: "Exercise query freshness invalidation".to_string(),
                 body: None,
                 notes: None,

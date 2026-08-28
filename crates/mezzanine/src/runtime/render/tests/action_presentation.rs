@@ -76,6 +76,7 @@ fn agent_action_execution_header_summarizes_issue_actions() {
         payload: AgentActionPayload::IssueAdd {
             kind: "defect".to_string(),
             state: None,
+            priority: None,
             title: "Fix issue rendering".to_string(),
             body: Some("show useful issue arguments".to_string()),
             notes: Some("progress notes".to_string()),
@@ -89,6 +90,7 @@ fn agent_action_execution_header_summarizes_issue_actions() {
             id: "issue-123".to_string(),
             kind: Some("task".to_string()),
             state: Some("resolved".to_string()),
+            priority: None,
             title: Some("Update issue rendering".to_string()),
             body: None,
             clear_body: true,

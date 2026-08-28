@@ -898,6 +898,7 @@ fn configure_issue_record_browser(browser: &mut RecordBrowser) {
         ("Project".to_string(), "project".to_string()),
         ("Kind".to_string(), "kind".to_string()),
         ("State".to_string(), "state".to_string()),
+        ("Priority".to_string(), "priority".to_string()),
         ("Updated".to_string(), "updated_at_unix_seconds".to_string()),
     ]);
     browser.set_help(
@@ -1232,6 +1233,7 @@ fn issue_browser_record(record: mez_agent::issues::IssueRecord) -> RecordBrowser
             ("project".to_string(), record.project),
             ("kind".to_string(), record.kind.as_str().to_string()),
             ("state".to_string(), record.state.as_str().to_string()),
+            ("priority".to_string(), record.priority.to_string()),
             (
                 "depends_on".to_string(),
                 serde_json::json!(record.depends_on).to_string(),

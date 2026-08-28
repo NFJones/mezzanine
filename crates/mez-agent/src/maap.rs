@@ -293,6 +293,8 @@ pub enum AgentActionPayload {
         kind: String,
         /// Optional initial issue workflow state; omitted issues start open.
         state: Option<String>,
+        /// Optional scheduling priority from 0 to 100.
+        priority: Option<u64>,
         /// Single-line issue title.
         title: String,
         /// Optional issue detail text.
@@ -310,6 +312,8 @@ pub enum AgentActionPayload {
         kind: Option<String>,
         /// Optional replacement issue workflow state: open, in-progress, or resolved.
         state: Option<String>,
+        /// Optional replacement scheduling priority from 0 to 100.
+        priority: Option<u64>,
         /// Optional replacement single-line issue title.
         title: Option<String>,
         /// Optional replacement issue detail text.
@@ -763,6 +767,7 @@ impl AgentAction {
             AgentActionPayload::IssueAdd {
                 kind,
                 state,
+                priority,
                 title,
                 body,
                 notes,
@@ -773,6 +778,9 @@ impl AgentAction {
                 if let Some(state) = state.as_deref() {
                     validate_agent_contract(crate::issues::validate_issue_state(state))?;
                 }
+                if let Some(priority) = priority {
+                    validate_agent_contract(crate::issues::validate_issue_priority(*priority))?;
+                }
                 validate_agent_contract(validate_issue_title(title))?;
                 validate_agent_contract(validate_issue_body(body.as_deref()))?;
                 validate_agent_contract(validate_issue_notes(notes.as_deref()))?;
@@ -782,6 +790,7 @@ impl AgentAction {
                 id,
                 kind,
                 state,
+                priority,
                 title,
                 body,
                 clear_body,
@@ -794,6 +803,7 @@ impl AgentAction {
                 validate_agent_contract(validate_issue_update(IssueUpdateValidation {
                     kind: kind.as_deref(),
                     state: state.as_deref(),
+                    priority: *priority,
                     title: title.as_deref(),
                     body: body.as_deref(),
                     clear_body: *clear_body,
@@ -1249,6 +1259,7 @@ fn parse_maap_action_value(
         "issue_add" => AgentActionPayload::IssueAdd {
             kind: required_string(object, "kind")?.to_string(),
             state: optional_string(object, "state")?.map(str::to_string),
+            priority: optional_nullable_u64(object, "priority")?,
             title: required_string(object, "title")?.to_string(),
             body: optional_string(object, "body")?.map(str::to_string),
             notes: optional_string(object, "notes")?.map(str::to_string),
@@ -1258,6 +1269,7 @@ fn parse_maap_action_value(
             id: required_string(object, "id")?.to_string(),
             kind: optional_string(object, "kind")?.map(str::to_string),
             state: optional_string(object, "state")?.map(str::to_string),
+            priority: optional_nullable_u64(object, "priority")?,
             title: optional_string(object, "title")?.map(str::to_string),
             body: optional_string(object, "body")?.map(str::to_string),
             clear_body: optional_bool(object, "clear_body")?.unwrap_or(false),

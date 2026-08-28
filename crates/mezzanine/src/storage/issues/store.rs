@@ -9,6 +9,9 @@ use std::collections::BTreeSet;
 use rusqlite::{Connection, OptionalExtension, params};
 
 #[cfg(test)]
+use mez_agent::issues::DEFAULT_ISSUE_PRIORITY;
+
+#[cfg(test)]
 use super::Path;
 use super::{
     DeleteIssueResult, IssueBrowserQuery, IssueDatabasePath, IssueKind, IssueQuery, IssueRecord,
@@ -76,6 +79,7 @@ impl IssueStore {
                 project,
                 kind,
                 state: None,
+                priority: DEFAULT_ISSUE_PRIORITY,
                 title,
                 body,
                 notes,
@@ -111,7 +115,7 @@ impl IssueStore {
     pub fn query_issues(&self, query: &IssueQuery) -> Result<Vec<IssueRecord>> {
         let connection = self.open()?;
         let mut sql = String::from(
-            "SELECT id, project, kind, state, title, body, notes, created_at, updated_at FROM issues WHERE project = ?1",
+            "SELECT id, project, kind, state, priority, title, body, notes, created_at, updated_at FROM issues WHERE project = ?1",
         );
         let kind_name = query.kind.map(IssueKind::as_str);
         let state_name = query.state.map(IssueState::as_str);
@@ -181,7 +185,7 @@ impl IssueStore {
     pub fn query_issue_browser(&self, query: &IssueBrowserQuery) -> Result<Vec<IssueRecord>> {
         let connection = self.open()?;
         let mut sql = String::from(
-            "SELECT id, project, kind, state, title, body, notes, created_at, updated_at FROM issues WHERE 1 = 1",
+            "SELECT id, project, kind, state, priority, title, body, notes, created_at, updated_at FROM issues WHERE 1 = 1",
         );
         let project_glob = query.project_glob.as_deref().map(project_glob_like_pattern);
         let kind_name = query.kind.map(IssueKind::as_str);
@@ -365,6 +369,9 @@ impl IssueStore {
         if let Some(state) = update.state {
             record.state = state;
         }
+        if let Some(priority) = update.priority {
+            record.priority = priority;
+        }
         if let Some(title) = update.title {
             record.title = title;
         }
@@ -418,6 +425,7 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
              project TEXT NOT NULL,
              kind TEXT NOT NULL CHECK (kind IN ('defect', 'task')),
              state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'in-progress', 'resolved')),
+             priority INTEGER NOT NULL DEFAULT 10 CHECK (priority >= 0 AND priority <= 100),
              title TEXT NOT NULL,
              body TEXT,
              notes TEXT,
@@ -438,6 +446,7 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
              ON issue_dependencies(project, depends_on_id);",
     )?;
     ensure_notes_column(connection)?;
+    ensure_priority_column(connection)?;
     ensure_state_column(connection)?;
     connection.execute_batch(
         "CREATE INDEX IF NOT EXISTS issues_project_kind_idx
@@ -488,6 +497,7 @@ fn ensure_in_progress_state_constraint(connection: &Connection) -> Result<()> {
              project TEXT NOT NULL,
              kind TEXT NOT NULL CHECK (kind IN ('defect', 'task')),
              state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'in-progress', 'resolved')),
+             priority INTEGER NOT NULL DEFAULT 10 CHECK (priority >= 0 AND priority <= 100),
              title TEXT NOT NULL,
              body TEXT,
              notes TEXT,
@@ -495,8 +505,8 @@ fn ensure_in_progress_state_constraint(connection: &Connection) -> Result<()> {
              updated_at INTEGER NOT NULL
          );
          INSERT INTO issues_with_in_progress
-             (id, project, kind, state, title, body, notes, created_at, updated_at)
-             SELECT id, project, kind, state, title, body, notes, created_at, updated_at
+             (id, project, kind, state, priority, title, body, notes, created_at, updated_at)
+             SELECT id, project, kind, state, priority, title, body, notes, created_at, updated_at
              FROM issues;
          DROP TABLE issues;
          ALTER TABLE issues_with_in_progress RENAME TO issues;
@@ -518,16 +528,33 @@ fn ensure_notes_column(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Adds bounded priority storage to issue databases created by older releases.
+fn ensure_priority_column(connection: &Connection) -> Result<()> {
+    let mut statement = connection.prepare("PRAGMA table_info(issues)")?;
+    let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+    for column in columns {
+        if column? == "priority" {
+            return Ok(());
+        }
+    }
+    connection.execute(
+        "ALTER TABLE issues ADD COLUMN priority INTEGER NOT NULL DEFAULT 10 CHECK (priority >= 0 AND priority <= 100)",
+        [],
+    )?;
+    Ok(())
+}
+
 fn insert_issue(connection: &Connection, record: &IssueRecord) -> Result<()> {
     record.validate()?;
     connection.execute(
-        "INSERT INTO issues (id, project, kind, state, title, body, notes, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO issues (id, project, kind, state, priority, title, body, notes, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             record.id,
             record.project,
             record.kind.as_str(),
             record.state.as_str(),
+            record.priority,
             record.title,
             record.body,
             record.notes,
@@ -546,24 +573,26 @@ fn row_to_issue_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<IssueRecord>
         project: row.get(1)?,
         kind: IssueKind::parse(&kind).map_err(|error| rusqlite_from_mez_error(error.into()))?,
         state: IssueState::parse(&state).map_err(|error| rusqlite_from_mez_error(error.into()))?,
-        title: row.get(4)?,
-        body: row.get(5)?,
-        notes: row.get(6)?,
+        priority: row.get(4)?,
+        title: row.get(5)?,
+        body: row.get(6)?,
+        notes: row.get(7)?,
         depends_on: Vec::new(),
-        created_at_unix_seconds: row_u64(row, 7)?,
-        updated_at_unix_seconds: row_u64(row, 8)?,
+        created_at_unix_seconds: row_u64(row, 8)?,
+        updated_at_unix_seconds: row_u64(row, 9)?,
     })
 }
 
 fn update_issue_row(connection: &Connection, record: &IssueRecord) -> Result<()> {
     connection.execute(
-        "UPDATE issues SET kind = ?3, state = ?4, title = ?5, body = ?6, notes = ?7, updated_at = ?8
+        "UPDATE issues SET kind = ?3, state = ?4, priority = ?5, title = ?6, body = ?7, notes = ?8, updated_at = ?9
          WHERE project = ?1 AND id = ?2",
         params![
             record.project,
             record.id,
             record.kind.as_str(),
             record.state.as_str(),
+            record.priority,
             record.title,
             record.body,
             record.notes,
@@ -576,7 +605,7 @@ fn update_issue_row(connection: &Connection, record: &IssueRecord) -> Result<()>
 fn select_issue(connection: &Connection, project: &str, id: &str) -> Result<Option<IssueRecord>> {
     let mut record = connection
         .query_row(
-            "SELECT id, project, kind, state, title, body, notes, created_at, updated_at FROM issues WHERE project = ?1 AND id = ?2",
+            "SELECT id, project, kind, state, priority, title, body, notes, created_at, updated_at FROM issues WHERE project = ?1 AND id = ?2",
             params![project, id],
             row_to_issue_record,
         )

@@ -708,12 +708,14 @@ pub(super) fn runtime_maap_action_payload_trace_json(
         }
         AgentActionPayload::IssueAdd {
             kind,
+            priority,
             title,
             body,
             notes,
             ..
         } => {
             data.insert("kind".to_string(), serde_json::json!(kind));
+            data.insert("priority".to_string(), serde_json::json!(priority));
             data.insert(
                 "title".to_string(),
                 runtime_bounded_trace_string_value(title),
@@ -735,6 +737,7 @@ pub(super) fn runtime_maap_action_payload_trace_json(
         AgentActionPayload::IssueUpdate {
             id,
             kind,
+            priority,
             title,
             body,
             clear_body,
@@ -744,6 +747,7 @@ pub(super) fn runtime_maap_action_payload_trace_json(
         } => {
             data.insert("id".to_string(), runtime_bounded_trace_string_value(id));
             data.insert("kind".to_string(), serde_json::json!(kind));
+            data.insert("priority".to_string(), serde_json::json!(priority));
             data.insert(
                 "title".to_string(),
                 title

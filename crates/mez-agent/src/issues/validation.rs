@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 
-use super::{IssueError, IssueKind, IssueResult, IssueState, MAX_ISSUE_QUERY_LIMIT};
+use super::{
+    IssueError, IssueKind, IssueResult, IssueState, MAX_ISSUE_PRIORITY, MAX_ISSUE_QUERY_LIMIT,
+};
 
 /// Borrowed fields used to validate one model-authored issue update.
 #[derive(Debug, Clone, Copy)]
@@ -11,6 +13,8 @@ pub struct IssueUpdateValidation<'a> {
     pub kind: Option<&'a str>,
     /// Optional replacement issue state.
     pub state: Option<&'a str>,
+    /// Optional replacement scheduling priority.
+    pub priority: Option<u64>,
     /// Optional replacement title.
     pub title: Option<&'a str>,
     /// Optional replacement body.
@@ -53,6 +57,16 @@ pub fn validate_issue_kind(kind: &str) -> IssueResult<()> {
 /// Validates the stable model-facing issue state grammar.
 pub fn validate_issue_state(state: &str) -> IssueResult<()> {
     IssueState::parse(state).map(|_| ())
+}
+
+/// Validates the stable issue priority range.
+pub fn validate_issue_priority(priority: u64) -> IssueResult<()> {
+    if priority > u64::from(MAX_ISSUE_PRIORITY) {
+        return Err(IssueError::invalid_args(
+            "issue priority must be between 0 and 100",
+        ));
+    }
+    Ok(())
 }
 
 /// Validates an issue title.
@@ -98,6 +112,7 @@ pub fn validate_issue_dependency_ids(
 pub fn validate_issue_update(update: IssueUpdateValidation<'_>) -> IssueResult<()> {
     if !(update.kind.is_some()
         || update.state.is_some()
+        || update.priority.is_some()
         || update.title.is_some()
         || update.body.is_some()
         || update.clear_body
@@ -130,6 +145,9 @@ pub fn validate_issue_update(update: IssueUpdateValidation<'_>) -> IssueResult<(
     }
     if let Some(state) = update.state {
         validate_issue_state(state)?;
+    }
+    if let Some(priority) = update.priority {
+        validate_issue_priority(priority)?;
     }
     if let Some(title) = update.title {
         validate_issue_title(title)?;

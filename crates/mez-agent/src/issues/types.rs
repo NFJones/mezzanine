@@ -4,9 +4,9 @@
 //! process CLI, runtime slash commands, and model-authored semantic actions.
 
 use super::{
-    DEFAULT_ISSUE_QUERY_LIMIT, IssueError, IssueResult as Result, MAX_ISSUE_QUERY_LIMIT,
-    validate_issue_body, validate_issue_dependency_ids, validate_issue_notes, validate_issue_title,
-    validate_project_key,
+    DEFAULT_ISSUE_PRIORITY, DEFAULT_ISSUE_QUERY_LIMIT, IssueError, IssueResult as Result,
+    MAX_ISSUE_QUERY_LIMIT, validate_issue_body, validate_issue_dependency_ids,
+    validate_issue_notes, validate_issue_priority, validate_issue_title, validate_project_key,
 };
 
 /// Classification for one locally tracked issue.
@@ -82,6 +82,8 @@ pub struct NewIssueRecord {
     pub kind: IssueKind,
     /// Optional initial workflow state; omitted records start open.
     pub state: Option<IssueState>,
+    /// Scheduling priority from 0 to 100.
+    pub priority: u8,
     /// Required single-line issue summary.
     pub title: String,
     /// Optional issue detail text.
@@ -103,6 +105,8 @@ pub struct IssueRecord {
     pub kind: IssueKind,
     /// Open, in-progress, or resolved workflow state.
     pub state: IssueState,
+    /// Scheduling priority from 0 to 100.
+    pub priority: u8,
     /// Required single-line issue summary.
     pub title: String,
     /// Optional issue detail text.
@@ -134,6 +138,7 @@ impl IssueRecord {
                 project,
                 kind,
                 state: None,
+                priority: DEFAULT_ISSUE_PRIORITY,
                 title,
                 body,
                 notes,
@@ -154,6 +159,7 @@ impl IssueRecord {
             project: fields.project,
             kind: fields.kind,
             state: fields.state.unwrap_or(IssueState::Open),
+            priority: fields.priority,
             title: fields.title,
             body: fields.body,
             notes: fields.notes,
@@ -168,6 +174,7 @@ impl IssueRecord {
     /// Validates that this record can be persisted.
     pub fn validate(&self) -> Result<()> {
         validate_project_key(&self.project)?;
+        validate_issue_priority(u64::from(self.priority))?;
         validate_issue_title(&self.title)?;
         validate_issue_body(self.body.as_deref())?;
         validate_issue_notes(self.notes.as_deref())?;
@@ -195,6 +202,8 @@ pub struct IssueUpdate {
     pub kind: Option<IssueKind>,
     /// Optional replacement open/in-progress/resolved workflow state.
     pub state: Option<IssueState>,
+    /// Optional replacement scheduling priority from 0 to 100.
+    pub priority: Option<u8>,
     /// Optional replacement single-line title.
     pub title: Option<String>,
     /// Optional replacement issue description.
@@ -216,6 +225,7 @@ impl IssueUpdate {
     pub fn has_changes(&self) -> bool {
         self.kind.is_some()
             || self.state.is_some()
+            || self.priority.is_some()
             || self.title.is_some()
             || self.body.is_some()
             || self.clear_body
@@ -246,6 +256,9 @@ impl IssueUpdate {
             return Err(IssueError::invalid_args(
                 "issue update cannot set and clear dependencies",
             ));
+        }
+        if let Some(priority) = self.priority {
+            validate_issue_priority(u64::from(priority))?;
         }
         if let Some(title) = self.title.as_deref() {
             validate_issue_title(title)?;

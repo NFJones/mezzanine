@@ -49,6 +49,7 @@ pub(super) fn run_issue<W: Write>(
         IssueCliCommand::Add {
             kind,
             state,
+            priority,
             title,
             body,
             notes,
@@ -59,6 +60,7 @@ pub(super) fn run_issue<W: Write>(
                     project,
                     kind: IssueKind::parse(&kind)?,
                     state: state.as_deref().map(IssueState::parse).transpose()?,
+                    priority,
                     title,
                     body,
                     notes,
@@ -101,6 +103,7 @@ pub(super) fn run_issue<W: Write>(
             id,
             kind,
             state,
+            priority,
             title,
             body,
             clear_body,
@@ -115,6 +118,7 @@ pub(super) fn run_issue<W: Write>(
                 IssueUpdate {
                     kind: kind.as_deref().map(IssueKind::parse).transpose()?,
                     state: state.as_deref().map(IssueState::parse).transpose()?,
+                    priority,
                     title,
                     body,
                     clear_body,
@@ -153,6 +157,9 @@ enum IssueCliCommand {
         /// Optional initial workflow state: open, in-progress, or resolved.
         #[arg(long)]
         state: Option<String>,
+        /// Scheduling priority from 0 to 100.
+        #[arg(long, default_value_t = mez_agent::issues::DEFAULT_ISSUE_PRIORITY, value_parser = clap::value_parser!(u8).range(0..=100))]
+        priority: u8,
         /// Single-line issue title.
         #[arg(long, allow_hyphen_values = true)]
         title: String,
@@ -181,6 +188,9 @@ enum IssueCliCommand {
         /// Optional replacement workflow state: open, in-progress, or resolved.
         #[arg(long)]
         state: Option<String>,
+        /// Optional replacement scheduling priority from 0 to 100.
+        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=100))]
+        priority: Option<u8>,
         /// Optional replacement single-line issue title.
         #[arg(long, allow_hyphen_values = true)]
         title: Option<String>,

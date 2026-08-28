@@ -155,6 +155,7 @@ pub(crate) fn execute_issue_action_with_context(
         AgentActionPayload::IssueAdd {
             kind,
             state,
+            priority,
             title,
             body,
             notes,
@@ -168,6 +169,9 @@ pub(crate) fn execute_issue_action_with_context(
                         .as_deref()
                         .map(mez_agent::issues::IssueState::parse)
                         .transpose()?,
+                    priority: priority
+                        .and_then(|value| u8::try_from(value).ok())
+                        .unwrap_or(mez_agent::issues::DEFAULT_ISSUE_PRIORITY),
                     title: title.clone(),
                     body: body.clone(),
                     notes: notes.clone(),
@@ -199,6 +203,7 @@ pub(crate) fn execute_issue_action_with_context(
             id,
             kind,
             state,
+            priority,
             title,
             body,
             clear_body,
@@ -219,6 +224,7 @@ pub(crate) fn execute_issue_action_with_context(
                         .as_deref()
                         .map(mez_agent::issues::IssueState::parse)
                         .transpose()?,
+                    priority: priority.and_then(|value| u8::try_from(value).ok()),
                     title: title.clone(),
                     body: body.clone(),
                     clear_body: *clear_body,

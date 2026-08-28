@@ -393,6 +393,7 @@ async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
         payload: mez_agent::AgentActionPayload::IssueAdd {
             kind: "task".to_string(),
             state: None,
+            priority: None,
             title: "Deferred provider persistence".to_string(),
             body: None,
             notes: None,

@@ -44,6 +44,7 @@ pub(super) fn execute_agent_shell_issue_command(
         RuntimeIssueArgs::Add {
             kind,
             state,
+            priority,
             title,
             body,
             notes,
@@ -54,6 +55,7 @@ pub(super) fn execute_agent_shell_issue_command(
                     project,
                     kind,
                     state,
+                    priority,
                     title,
                     body,
                     notes,
@@ -140,6 +142,7 @@ enum RuntimeIssueArgs {
     Add {
         kind: mez_agent::issues::IssueKind,
         state: Option<mez_agent::issues::IssueState>,
+        priority: u8,
         title: String,
         body: Option<String>,
         notes: Option<String>,
@@ -189,6 +192,7 @@ fn parse_issue_args(args: &str) -> Result<RuntimeIssueArgs> {
 fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
     let mut kind = mez_agent::issues::IssueKind::Defect;
     let mut state = None;
+    let mut priority = mez_agent::issues::DEFAULT_ISSUE_PRIORITY;
     let mut title = None;
     let mut body = None;
     let mut notes = None;
@@ -208,6 +212,10 @@ fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
                     tokens, index, "state",
                 )?)?);
             }
+            "--priority" => {
+                index = index.saturating_add(1);
+                priority = parse_issue_priority(required_issue_value(tokens, index, "priority")?)?;
+            }
             "--title" => {
                 index = index.saturating_add(1);
                 title = Some(required_issue_value(tokens, index, "title")?.to_string());
@@ -226,7 +234,7 @@ fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
             }
             _ => {
                 return Err(MezError::invalid_args(
-                    "issue add accepts --kind, --state, --title, --body, --notes, and --depends-on",
+                    "issue add accepts --kind, --state, --priority, --title, --body, --notes, and --depends-on",
                 ));
             }
         }
@@ -235,6 +243,7 @@ fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
     Ok(RuntimeIssueArgs::Add {
         kind,
         state,
+        priority,
         title: title.ok_or_else(|| MezError::invalid_args("issue add requires --title"))?,
         body,
         notes,
@@ -271,6 +280,12 @@ fn parse_issue_update_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
                     tokens, index, "state",
                 )?)?);
             }
+            "--priority" => {
+                index = index.saturating_add(1);
+                update.priority = Some(parse_issue_priority(required_issue_value(
+                    tokens, index, "priority",
+                )?)?);
+            }
             "--title" => {
                 index = index.saturating_add(1);
                 update.title = Some(required_issue_value(tokens, index, "title")?.to_string());
@@ -295,7 +310,7 @@ fn parse_issue_update_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
             "--clear-depends-on" => update.clear_depends_on = true,
             _ => {
                 return Err(MezError::invalid_args(
-                    "issue update accepts --kind, --state, --title, --body, --clear-body, --notes, --clear-notes, --depends-on, and --clear-depends-on",
+                    "issue update accepts --kind, --state, --priority, --title, --body, --clear-body, --notes, --clear-notes, --depends-on, and --clear-depends-on",
                 ));
             }
         }
@@ -380,16 +395,27 @@ fn required_issue_value<'a>(tokens: &'a [String], index: usize, name: &str) -> R
     Ok(value)
 }
 
+fn parse_issue_priority(value: &str) -> Result<u8> {
+    value
+        .parse::<u8>()
+        .map_err(|_| MezError::invalid_args("issue priority must be an integer between 0 and 100"))
+        .and_then(|priority| {
+            mez_agent::issues::validate_issue_priority(u64::from(priority))?;
+            Ok(priority)
+        })
+}
+
 fn runtime_issue_record_detail_display(record: Option<&mez_agent::issues::IssueRecord>) -> String {
     let Some(record) = record else {
         return "issue found=false".to_string();
     };
     format!(
-        "issue found=true\nid={}\nproject={}\nkind={}\nstate={}\ntitle={}\nbody={}\nnotes={}\ndepends_on={}\ncreated_at_unix_seconds={}\nupdated_at_unix_seconds={}",
+        "issue found=true\nid={}\nproject={}\nkind={}\nstate={}\npriority={}\ntitle={}\nbody={}\nnotes={}\ndepends_on={}\ncreated_at_unix_seconds={}\nupdated_at_unix_seconds={}",
         record.id,
         json_escape(&record.project),
         record.kind.as_str(),
         record.state.as_str(),
+        record.priority,
         json_escape(&record.title),
         record
             .body
@@ -414,11 +440,12 @@ fn runtime_issue_records_display(records: &[mez_agent::issues::IssueRecord]) -> 
     let mut lines = vec![format!("issues count={}", records.len())];
     for record in records {
         lines.push(format!(
-            "id={} project={} kind={} state={} title={} depends_on={}",
+            "id={} project={} kind={} state={} priority={} title={} depends_on={}",
             record.id,
             json_escape(&record.project),
             record.kind.as_str(),
             record.state.as_str(),
+            record.priority,
             json_escape(&record.title),
             runtime_issue_depends_on_display(&record.depends_on)
         ));
@@ -460,26 +487,33 @@ pub(crate) fn runtime_issue_database_path(
 mod tests {
     use super::{RuntimeIssueArgs, parse_issue_args};
 
-    /// Verifies `/issue` parsing accepts notes on add, update, and show commands
-    /// so runtime users can store progress separately from issue descriptions.
+    /// Verifies `/issue` parsing accepts priority and notes on add, update, and
+    /// show commands so runtime users can manage scheduling and progress.
     #[test]
     fn issue_parser_accepts_notes_update_and_show() {
-        match parse_issue_args("add --state in-progress --title Work --notes progress").unwrap() {
+        match parse_issue_args(
+            "add --state in-progress --priority 100 --title Work --notes progress",
+        )
+        .unwrap()
+        {
             RuntimeIssueArgs::Add {
                 state,
+                priority,
                 title,
                 notes,
                 ..
             } => {
                 assert_eq!(state, Some(mez_agent::issues::IssueState::InProgress));
+                assert_eq!(priority, 100);
                 assert_eq!(title, "Work");
                 assert_eq!(notes.as_deref(), Some("progress"));
             }
             other => panic!("expected add args, got {other:?}"),
         }
-        match parse_issue_args("update issue-1 --notes progressed").unwrap() {
+        match parse_issue_args("update issue-1 --priority 0 --notes progressed").unwrap() {
             RuntimeIssueArgs::Update { id, update } => {
                 assert_eq!(id, "issue-1");
+                assert_eq!(update.priority, Some(0));
                 assert_eq!(update.notes.as_deref(), Some("progressed"));
                 assert!(!update.clear_notes);
             }
@@ -509,6 +543,12 @@ mod tests {
             conflict.message().contains("set and clear notes"),
             "{}",
             conflict.message()
+        );
+        let priority = parse_issue_args("add --priority 101 --title Work").unwrap_err();
+        assert!(
+            priority.message().contains("between 0 and 100"),
+            "{}",
+            priority.message()
         );
     }
 }

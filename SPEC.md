@@ -7631,7 +7631,9 @@ The baseline command capabilities are:
   project paths for the value after `--project` or `--project-glob` without
   changing glob matching. Its list MUST be a table with one selectable stable
   issue-id link in the left-most column for each record; those links MUST open
-  issue details. It MUST allow deleting the selected issue with
+  issue details. The table columns MUST be `Issue`, `Summary`, `Project`,
+  `Kind`, `State`, `Priority`, and `Updated` in that order. It MUST allow
+  deleting the selected issue with
   `d` only when no open issue depends on it, and allow saving the rendered raw
   Markdown view to a user-supplied file path, overwriting the destination. Save prompts
   MUST complete paths relative to the owning pane working directory: Tab and Shift-Tab
@@ -10489,13 +10491,15 @@ execute through the runtime-owned local issue store, MUST scope records to the
 active pane project, and MUST return bounded action results for provider
 continuation. `issue_query` MUST default to open issues when no state filter is
 provided and MAY filter by open, in-progress, or resolved state. `issue_add`
-MAY set an initial state and MUST default it to open when omitted.
+MAY set an initial state and MUST default it to open when omitted. Issues MUST
+have an integer priority from 0 through 100 inclusive and MUST default to 10
+when creation omits priority. `issue_add` MAY set the initial priority.
 `issue_update` MAY mark issues open, in-progress, or resolved while preserving
 resolved records for history. Agents following an issue-fixing workflow MUST
 mark selected work in-progress before implementation, then mark it resolved
 only after verification. Reopening MUST use open. `issue_add` and
 `issue_update` MAY set dependency issue ids through a `depends_on` list;
-`issue_update` MAY also mutate body text, title, kind, notes, state, and
+`issue_update` MAY also mutate body text, title, kind, notes, state, priority, and
 dependencies. Dependencies MUST reference existing same-project issues and
 MUST NOT introduce cycles. Notes are the intended field for model working
 progress and handoff state.

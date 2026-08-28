@@ -14,6 +14,7 @@ fn issue_action_validation_accepts_valid_fields() {
     validate_issue_update(IssueUpdateValidation {
         kind: Some("task"),
         state: Some("in-progress"),
+        priority: Some(100),
         title: Some("Implement agent contract"),
         body: None,
         clear_body: false,
@@ -42,6 +43,7 @@ fn issue_action_validation_rejects_invalid_fields() {
     let error = validate_issue_update(IssueUpdateValidation {
         kind: None,
         state: None,
+        priority: None,
         title: None,
         body: Some("replacement"),
         clear_body: true,
@@ -52,6 +54,24 @@ fn issue_action_validation_rejects_invalid_fields() {
     })
     .unwrap_err();
     assert!(error.to_string().contains("set and clear body"), "{error}");
+
+    let priority_error = validate_issue_update(IssueUpdateValidation {
+        kind: None,
+        state: None,
+        priority: Some(101),
+        title: None,
+        body: None,
+        clear_body: false,
+        notes: None,
+        clear_notes: false,
+        depends_on: None,
+        clear_depends_on: false,
+    })
+    .unwrap_err();
+    assert!(
+        priority_error.to_string().contains("between 0 and 100"),
+        "{priority_error}"
+    );
 
     for query in [
         IssueQueryValidation {
