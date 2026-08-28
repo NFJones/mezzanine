@@ -3325,6 +3325,14 @@ continue to apply the normal ANSI differential renderer to that frame.
 presentation, the exact client’s geometry change, decoder recovery, or an
 uncertain partially committed terminal write.
 
+Render publication MUST target only attached client projections that can show
+the changed state. Pane-scoped changes MUST wake primaries whose active window
+contains that pane and observers whose exact source primary is among those
+primaries; unrelated primary windows and their observers MUST remain idle.
+Primary-projected prompt and overlay changes MUST wake the owning primary and
+its exact attached observers, not unrelated primaries. Client-local geometry
+and presentation changes remain exact-client.
+
 Each observer v3 stream MUST render with terminal geometry retained for that
 exact authenticated observer. Observer resize and disconnect state MUST be
 isolated from the primary and other observers, and reattachment MUST begin

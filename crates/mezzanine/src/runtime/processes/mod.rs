@@ -1915,7 +1915,11 @@ impl RuntimeSessionService {
             screen.synchronized_output_begin_epoch() == Some(begin_epoch)
                 && screen.force_release_synchronized_output()
         });
-        self.runtime_transition_with_render(released, Some(RenderInvalidationReason::FullRedraw))
+        self.runtime_pane_transition_with_render(
+            pane_id,
+            released,
+            Some(RenderInvalidationReason::FullRedraw),
+        )
     }
 
     /// Releases a pane synchronized-output transaction before a lifecycle mutation.
@@ -3575,12 +3579,14 @@ impl RuntimeSessionService {
         &mut self,
         event: PaneEvent,
     ) -> Result<RuntimeTransition> {
-        let (applied, render_reason) = match event {
+        let (pane_id, applied, render_reason) = match event {
             PaneEvent::WriteFailed { pane_id, error } => (
+                pane_id.clone(),
                 self.apply_pane_write_failure_event(pane_id, error)?,
                 Some(RenderInvalidationReason::FullRedraw),
             ),
             PaneEvent::Resized { pane_id, size } => (
+                pane_id.clone(),
                 self.apply_pane_resize_completion_event(pane_id, size)?,
                 Some(RenderInvalidationReason::Layout),
             ),
@@ -3590,6 +3596,7 @@ impl RuntimeSessionService {
                 process_group_id,
                 current_working_directory,
             } => (
+                pane_id.clone(),
                 self.apply_pane_foreground_process_event(
                     pane_id,
                     process_name,
@@ -3598,16 +3605,111 @@ impl RuntimeSessionService {
                 )?,
                 Some(RenderInvalidationReason::PaneOutput),
             ),
-            PaneEvent::InputWritten { pane_id, bytes } => {
-                (self.apply_pane_input_written_event(pane_id, bytes)?, None)
-            }
+            PaneEvent::InputWritten { pane_id, bytes } => (
+                pane_id.clone(),
+                self.apply_pane_input_written_event(pane_id, bytes)?,
+                None,
+            ),
             PaneEvent::Output { .. } => {
                 return Err(MezError::invalid_state(
                     "pane output must use the output transition path",
                 ));
             }
         };
-        Ok(self.runtime_transition_with_render(applied, render_reason))
+        Ok(self.runtime_pane_transition_with_render(&pane_id, applied, render_reason))
+    }
+
+    /// Builds render effects for attached clients currently projecting one pane.
+    ///
+    /// Observers render their source primary's projection, so an observer is
+    /// selected only when its exact source primary projects the changed pane.
+    pub(crate) fn render_effects_for_clients_projecting_pane(
+        &self,
+        pane_id: &str,
+        reason: RenderInvalidationReason,
+    ) -> Vec<RuntimeSideEffect> {
+        let source_client_ids = self
+            .session
+            .clients()
+            .iter()
+            .filter(|client| {
+                client.role == mez_mux::session::ClientRole::Primary
+                    && client.state == mez_mux::session::ClientState::Attached
+            })
+            .filter_map(|client| {
+                self.session
+                    .active_window_for(&client.id)
+                    .ok()
+                    .filter(|window| {
+                        window
+                            .panes()
+                            .iter()
+                            .any(|pane| pane.id.as_str() == pane_id)
+                    })
+                    .map(|_| client.id.clone())
+            })
+            .collect::<Vec<_>>();
+
+        self.session
+            .clients()
+            .iter()
+            .filter(|client| client.state == mez_mux::session::ClientState::Attached)
+            .filter(|client| {
+                source_client_ids.contains(&client.id)
+                    || self.session.observer_attachments().iter().any(|observer| {
+                        observer.client_id == client.id
+                            && source_client_ids.contains(&observer.view_source_client_id)
+                    })
+            })
+            .map(|client| RuntimeSideEffect::RenderClient {
+                client_id: client.id.clone(),
+                reason,
+            })
+            .collect()
+    }
+
+    /// Builds render effects for one primary projection and its attached observers.
+    pub(crate) fn render_effects_for_primary_projection(
+        &self,
+        primary_client_id: &mez_core::ids::ClientId,
+        reason: RenderInvalidationReason,
+    ) -> Vec<RuntimeSideEffect> {
+        self.session
+            .clients()
+            .iter()
+            .filter(|client| client.state == mez_mux::session::ClientState::Attached)
+            .filter(|client| {
+                client.id == *primary_client_id
+                    || self.session.observer_attachments().iter().any(|observer| {
+                        observer.client_id == client.id
+                            && observer.view_source_client_id == *primary_client_id
+                    })
+            })
+            .map(|client| RuntimeSideEffect::RenderClient {
+                client_id: client.id.clone(),
+                reason,
+            })
+            .collect()
+    }
+
+    /// Builds a pane-scoped transition with render effects for visible projections.
+    pub(crate) fn runtime_pane_transition_with_render(
+        &self,
+        pane_id: &str,
+        applied: bool,
+        render_reason: Option<RenderInvalidationReason>,
+    ) -> RuntimeTransition {
+        let side_effects = if applied {
+            render_reason.map_or_else(Vec::new, |reason| {
+                self.render_effects_for_clients_projecting_pane(pane_id, reason)
+            })
+        } else {
+            Vec::new()
+        };
+        RuntimeTransition {
+            applied,
+            side_effects,
+        }
     }
 
     /// Builds a transition with one render invalidation for every attached client.
@@ -3895,7 +3997,8 @@ impl RuntimeSessionService {
         pane_id: impl Into<String>,
         bytes: Vec<u8>,
     ) -> Result<RuntimeTransition> {
-        let update = self.apply_pane_output_bytes(pane_id, bytes)?;
+        let pane_id = pane_id.into();
+        let update = self.apply_pane_output_bytes(pane_id.clone(), bytes)?;
         let applied = update.is_some();
         let render_reason = update.and_then(|update| {
             (!update.defer_render).then_some(if update.invalidate_output_frame {
@@ -3904,7 +4007,17 @@ impl RuntimeSessionService {
                 RenderInvalidationReason::PaneOutput
             })
         });
-        Ok(self.runtime_transition_with_render(applied, render_reason))
+        let side_effects = if applied {
+            render_reason.map_or_else(Vec::new, |reason| {
+                self.render_effects_for_clients_projecting_pane(&pane_id, reason)
+            })
+        } else {
+            Vec::new()
+        };
+        Ok(RuntimeTransition {
+            applied,
+            side_effects,
+        })
     }
 
     /// Runs the poll pane outputs operation for this subsystem.

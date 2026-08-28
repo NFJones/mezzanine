@@ -125,6 +125,41 @@ fn runtime_observer_render_follows_exact_source_navigation() {
     );
 }
 
+/// Verifies pane output wakes only primaries projecting its window and the
+/// observers attached to those exact primary projections.
+#[test]
+fn runtime_pane_output_targets_projecting_primary_and_observer_only() {
+    let mut service = test_runtime_service();
+    let size = Size::new(80, 24).unwrap();
+    let source = service.attach_primary("source", true, size, 120).unwrap();
+    let observer = service
+        .session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    let unrelated = service
+        .attach_primary("unrelated", true, size, 121)
+        .unwrap();
+    service
+        .session
+        .new_window(&unrelated, "background", true)
+        .unwrap();
+
+    let transition = service
+        .apply_pane_output_transition("%1", b"source output".to_vec())
+        .unwrap();
+    let rendered_client_ids = transition
+        .side_effects
+        .iter()
+        .filter_map(|effect| match effect {
+            RuntimeSideEffect::RenderClient { client_id, .. } => Some(client_id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(transition.applied);
+    assert_eq!(rendered_client_ids, vec![source, observer]);
+}
+
 /// Verifies primary and observer frames render the visibility-selected screen
 /// without allowing hidden process application modes to affect agent input.
 #[test]

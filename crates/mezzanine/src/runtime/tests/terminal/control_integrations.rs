@@ -256,6 +256,10 @@ fn runtime_terminal_step_without_inline_view_invalidates_agent_prompt() {
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     let _ = service.drain_deferred_effects_transition();
+    let observer = service
+        .session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
 
     let response = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"agent-edit","method":"terminal/step","params":{"idempotency_key":"agent-edit","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[97]}}"#,
@@ -279,10 +283,16 @@ fn runtime_terminal_step_without_inline_view_invalidates_agent_prompt() {
     );
     assert_eq!(
         service.drain_deferred_effects_transition().side_effects,
-        vec![RuntimeSideEffect::RenderClient {
-            client_id: primary.clone(),
-            reason: crate::runtime::RenderInvalidationReason::AgentPrompt,
-        }]
+        vec![
+            RuntimeSideEffect::RenderClient {
+                client_id: primary.clone(),
+                reason: crate::runtime::RenderInvalidationReason::AgentPrompt,
+            },
+            RuntimeSideEffect::RenderClient {
+                client_id: observer,
+                reason: crate::runtime::RenderInvalidationReason::AgentPrompt,
+            },
+        ]
     );
 
     let unchanged = service.dispatch_runtime_control_body(

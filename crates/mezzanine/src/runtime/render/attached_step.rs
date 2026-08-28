@@ -213,9 +213,8 @@ impl RuntimeSessionService {
         self.presentation.capture_projected_client_state();
         let (application, mut side_effects) = result?;
         let render_reason = self.attached_terminal_step_render_reason(&application, step);
-        side_effects.extend(render_reason.map(|reason| RuntimeSideEffect::RenderClient {
-            client_id: primary_client_id.clone(),
-            reason,
+        side_effects.extend(render_reason.map_or_else(Vec::new, |reason| {
+            self.render_effects_for_primary_projection(primary_client_id, reason)
         }));
         let applied = application.forwarded_bytes > 0
             || application.mux_actions_applied > 0

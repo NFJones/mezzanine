@@ -698,11 +698,9 @@ impl RuntimeSessionService {
         if view.is_none()
             && let Some(reason) = render_reason
         {
-            self.presentation
-                .defer_render_effects([RuntimeSideEffect::RenderClient {
-                    client_id: primary_client_id.clone(),
-                    reason,
-                }]);
+            self.presentation.defer_render_effects(
+                self.render_effects_for_primary_projection(primary_client_id, reason),
+            );
         }
         let iroh_status_slot = view
             .as_ref()
