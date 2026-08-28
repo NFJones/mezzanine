@@ -92,9 +92,10 @@ attached through Iroh.
 
 The bottom window bar independently shows a privacy-safe plain-text Iroh status
 pill, such as `good` or `degraded`, for that same live Iroh client.
-It is omitted for local Unix-socket clients and contains no path, endpoint,
-address, relay, peer, or diagnostic information; use `show-iroh-status` for
-the detailed client-local table.
+It is hidden while a command-output pager is active and returns after that
+pager closes. It is omitted for local Unix-socket clients and contains no path,
+endpoint, address, relay, peer, or diagnostic information; use
+`show-iroh-status` for the detailed client-local table.
 
 ## Related pages
 

@@ -3525,6 +3525,8 @@ rendered client has a live Iroh connection, using `iroh_status_good`,
 `iroh_status_degraded`, `iroh_status_poor`, or `iroh_status_unknown` according
 to the same stale, RTT, jitter, loss, and congestion classification used by
 `show-iroh-status`.
+It MUST be omitted while the primary command-output pager is active and return
+when that pager closes, alongside the other window-status pills.
 It MUST be omitted with no associated padding for Unix-socket clients,
 never-Iroh clients, and ended Iroh connections. The generated default
 right-status template MUST include the field at its far right before the

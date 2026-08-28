@@ -131,6 +131,11 @@ impl RuntimeSessionService {
         view: &RenderedClientView,
         config: &TerminalClientLoopConfig,
     ) -> Option<crate::host::terminal::TerminalIrohStatusSlot> {
+        if view.role == ClientViewRole::Primary
+            && self.presentation.primary_display_overlay.is_some()
+        {
+            return None;
+        }
         let window = self.session.active_window()?;
         let row = self.window_presentation_plan(window)?.window_frame_row?;
         let (column, width) = crate::host::terminal::window_iroh_status_slot_layout(

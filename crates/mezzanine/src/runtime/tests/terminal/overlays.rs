@@ -111,6 +111,76 @@ fn runtime_primary_display_overlay_renders_and_clears_via_terminal_step() {
     assert!(service.primary_display_overlay().is_none());
 }
 
+/// Verifies the client-local Iroh health pill disappears while a primary pager
+/// owns the view and returns after dismissal. The pager already replaces the
+/// ordinary window-status surface, so retaining the locally composed pill
+/// would leak a status element over modal command content for remote clients.
+#[test]
+fn runtime_iroh_status_slot_hides_while_primary_display_overlay_is_active() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(40, 6).unwrap(), 120)
+        .unwrap();
+    let config = TerminalClientLoopConfig {
+        frame_context: crate::host::terminal::TerminalFrameContext {
+            window_status: Some(mez_mux::presentation::TerminalWindowStatusContext {
+                template: "#{iroh.status}".to_string(),
+                active_pane_working_directory: None,
+                status_pills: std::collections::BTreeMap::new(),
+                system_uptime: String::new(),
+                datetime_local: String::new(),
+            }),
+            ..crate::host::terminal::TerminalFrameContext::default()
+        },
+        ..TerminalClientLoopConfig::default()
+    };
+    let base_view = service
+        .render_client_view(ClientViewRole::Primary, Size::new(40, 6).unwrap(), &config)
+        .unwrap()
+        .unwrap();
+    assert!(
+        service
+            .terminal_iroh_status_slot(&base_view, &config)
+            .is_some()
+    );
+
+    service
+        .show_primary_display_overlay(vec!["pager content".to_string()])
+        .unwrap();
+    let pager_view = service
+        .render_client_view(ClientViewRole::Primary, Size::new(40, 6).unwrap(), &config)
+        .unwrap()
+        .unwrap();
+    assert!(
+        service
+            .terminal_iroh_status_slot(&pager_view, &config)
+            .is_none()
+    );
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    let restored_view = service
+        .render_client_view(ClientViewRole::Primary, Size::new(40, 6).unwrap(), &config)
+        .unwrap()
+        .unwrap();
+    assert!(
+        service
+            .terminal_iroh_status_slot(&restored_view, &config)
+            .is_some()
+    );
+}
+
 /// Verifies ordinary input that has no pager binding remains captured by the
 /// modal overlay instead of falling through to the active pane.
 #[test]
