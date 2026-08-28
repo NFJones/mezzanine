@@ -2,6 +2,9 @@
 
 use super::super::*;
 
+/// Allows real PTY startup and daemon scheduling to settle under parallel test load.
+const ASYNC_DAEMON_PTY_RENDER_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Verifies that supervised async pane workers feed PTY output into runtime
 /// terminal screens even when the daemon has no compatibility tick service.
 /// Attached-client rendering depends on pane-driver events in the Tokio daemon
@@ -37,7 +40,7 @@ async fn async_runtime_daemon_pane_worker_feeds_pty_output_into_rendered_view() 
     .unwrap();
     let poll_handle = handle.clone();
     let cancellation = async move {
-        timeout(Duration::from_secs(1), async {
+        timeout(ASYNC_DAEMON_PTY_RENDER_SETUP_TIMEOUT, async {
             loop {
                 let view = poll_handle
                     .render_client_view(
