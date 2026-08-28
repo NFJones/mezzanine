@@ -171,7 +171,8 @@ impl RuntimeSessionService {
             Ok(transition) => Ok(transition),
             Err(error) => {
                 self.recover_routed_worker_selection_failure(&turn, error.message())?;
-                Ok(self.runtime_transition_with_render(
+                Ok(self.runtime_pane_transition_with_render(
+                    &turn.pane_id,
                     true,
                     Some(crate::runtime::RenderInvalidationReason::FullRedraw),
                 ))
@@ -221,7 +222,8 @@ impl RuntimeSessionService {
             ),
         )?;
         self.queue_agent_provider_task(turn.turn_id.clone());
-        Ok(self.runtime_transition_with_render(
+        Ok(self.runtime_pane_transition_with_render(
+            &turn.pane_id,
             true,
             Some(crate::runtime::RenderInvalidationReason::FullRedraw),
         ))
@@ -417,7 +419,8 @@ impl RuntimeSessionService {
                 "scheduler running -> waiting reason=waiting_for_routed_worker capacity=released",
             )?;
             self.start_ready_agent_turns()?;
-            Ok(self.runtime_transition_with_render(
+            Ok(self.runtime_pane_transition_with_render(
+                &turn.pane_id,
                 true,
                 Some(crate::runtime::RenderInvalidationReason::FullRedraw),
             ))
