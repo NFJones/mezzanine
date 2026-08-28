@@ -79,7 +79,9 @@ regular `mez serve` session when event-driven idle redraws are required.
 
 Run `show-iroh-status` from the affected remote client. `Codec unavailable`
 means that client has no correlated live Iroh connection; `insufficient sample`
-means the current connection/codec interval has not carried a complete frame.
+means the current connection/codec has not yet carried a complete frame. The
+reported compression ratio, bytes saved or expanded, and frame counts aggregate
+the active connection's lifetime and reset on reconnect or codec change.
 An ALPN failure usually means the peers have no mutually configured codec; keep
 `none` in the preference list during mixed-version rollout. Malformed envelope,
 decoded-size, or unsupported-codec failures close only that connection; retain

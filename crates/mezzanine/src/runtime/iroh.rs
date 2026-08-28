@@ -542,10 +542,6 @@ struct RuntimeIrohPathSample {
     rx_bytes: u64,
     lost_packets: u64,
     congestion_events: u64,
-    compression_wire_bytes: u64,
-    compression_decoded_bytes: u64,
-    compression_compressed_frames: u64,
-    compression_identity_frames: u64,
     render_triggers_coalesced: u64,
     render_updates_suppressed: u64,
     render_snapshot_fallbacks: u64,
@@ -865,18 +861,6 @@ impl RuntimeIrohPathSampler {
         let tx_delta = delta(stats.udp_tx.bytes, |sample| sample.tx_bytes);
         let rx_delta = delta(stats.udp_rx.bytes, |sample| sample.rx_bytes);
         let compression = self.compression_metrics.snapshot();
-        let compression_wire_bytes = delta(compression.wire_bytes, |sample| {
-            sample.compression_wire_bytes
-        });
-        let compression_decoded_bytes = delta(compression.decoded_bytes, |sample| {
-            sample.compression_decoded_bytes
-        });
-        let compression_compressed_frames = delta(compression.compressed_frames, |sample| {
-            sample.compression_compressed_frames
-        });
-        let compression_identity_frames = delta(compression.identity_frames, |sample| {
-            sample.compression_identity_frames
-        });
         let render_triggers_coalesced = delta(compression.render_triggers_coalesced, |sample| {
             sample.render_triggers_coalesced
         });
@@ -925,10 +909,10 @@ impl RuntimeIrohPathSampler {
             cwnd_bytes: stats.cwnd,
             mtu: stats.current_mtu,
             compression_codec: compression.codec,
-            compression_wire_bytes,
-            compression_decoded_bytes,
-            compression_compressed_frames,
-            compression_identity_frames,
+            compression_wire_bytes: compression.wire_bytes,
+            compression_decoded_bytes: compression.decoded_bytes,
+            compression_compressed_frames: compression.compressed_frames,
+            compression_identity_frames: compression.identity_frames,
             render_triggers_coalesced,
             render_updates_suppressed,
             render_snapshot_fallbacks,
@@ -962,10 +946,6 @@ impl RuntimeIrohPathSampler {
             rx_bytes: stats.udp_rx.bytes,
             lost_packets: stats.lost_packets,
             congestion_events: stats.congestion_events,
-            compression_wire_bytes: compression.wire_bytes,
-            compression_decoded_bytes: compression.decoded_bytes,
-            compression_compressed_frames: compression.compressed_frames,
-            compression_identity_frames: compression.identity_frames,
             render_triggers_coalesced: compression.render_triggers_coalesced,
             render_updates_suppressed: compression.render_updates_suppressed,
             render_snapshot_fallbacks: compression.render_snapshot_fallbacks,

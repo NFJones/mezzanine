@@ -76,13 +76,14 @@ values and their source layers.
 `show-iroh-status` displays a table for the invoking remote client's selected
 Iroh path. It includes RTT, jitter, recent transfer rates, loss and congestion
 deltas, congestion window, MTU, sample freshness, negotiated codec, and
-connection-local interval compression effectiveness. Compression reports the
+connection-local session compression effectiveness. Compression reports the
 decoded-to-wire ratio, bytes saved or expanded, and compressed versus identity
-frame counts. Render-update diagnostics report snapshot and delta counts,
+frame counts accumulated for the current connection and codec. Render-update diagnostics report snapshot and delta counts,
 changed rows, selected wire/decoded bytes, full-snapshot candidate bytes,
 coalescing, suppression, snapshot fallback, maximum ready depth, and total and
 maximum write-and-flush wait. A new connection or codec context starts with an
-`insufficient sample` state rather than comparing counters across reconnects.
+`insufficient sample` state until it carries a complete frame, rather than
+comparing counters across reconnects.
 Path type and quality remain independent from compression effectiveness.
 Topology identifiers, addresses, credentials, terminal contents, and
 payload-derived samples are intentionally omitted.

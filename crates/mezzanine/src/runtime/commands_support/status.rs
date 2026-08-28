@@ -764,7 +764,7 @@ fn iroh_compression_effectiveness(
         .compression_compressed_frames
         .saturating_add(status.compression_identity_frames);
     if frames == 0 || status.compression_decoded_bytes == 0 {
-        return "| Compression | insufficient sample | no complete frames in this interval |"
+        return "| Compression | insufficient sample | no complete frames on this connection |"
             .to_string();
     }
     let ratio =
@@ -783,7 +783,7 @@ fn iroh_compression_effectiveness(
         )
     };
     format!(
-        "| Compression | {ratio:.2}× · {saved} | interval wire {}; decoded {}; frames compressed {} · identity {} |",
+        "| Compression | {ratio:.2}× · {saved} | connection wire {}; decoded {}; frames compressed {} · identity {} |",
         format_bytes(status.compression_wire_bytes),
         format_bytes(status.compression_decoded_bytes),
         status.compression_compressed_frames,

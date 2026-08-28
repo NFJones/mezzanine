@@ -64,13 +64,13 @@ also verifies that unchanged steps do not create spurious render work.
 ## Live content-safe counters
 
 During a controlled session, `show-iroh-status` reports the invoking
-connection's interval values for:
+connection's recent transport values and connection-lifetime compression values for:
 
 - `terminal/step` and `terminal/view` requests through actor metrics;
 - render composition and encoding histograms through `show-metrics`;
 - snapshot and delta counts, changed rows, selected wire/decoded bytes, and
   full-snapshot candidate bytes;
-- compressed versus identity envelopes and total compression effectiveness;
+- compressed versus identity envelopes and aggregate connection compression effectiveness;
 - coalesced triggers, suppressed identical updates, snapshot fallbacks,
   maximum ready depth, and total/maximum render write-and-flush wait; and
 - RTT, jitter, loss, congestion, and path class without endpoint or address

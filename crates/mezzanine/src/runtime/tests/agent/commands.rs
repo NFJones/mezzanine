@@ -267,10 +267,10 @@ fn runtime_show_iroh_status_reports_connection_quality_without_topology() {
     }
 }
 
-/// Verifies a newly sampled connection reports its codec without comparing
-/// cumulative counters against a prior connection or codec baseline.
+/// Verifies a connection that has not yet carried a complete frame reports an
+/// insufficient compression sample without inferring efficacy from transport data.
 #[test]
-fn runtime_show_iroh_status_labels_empty_compression_interval() {
+fn runtime_show_iroh_status_labels_empty_connection_compression_sample() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
