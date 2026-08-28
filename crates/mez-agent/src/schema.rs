@@ -744,7 +744,7 @@ fn maap_issue_delete_action_schema() -> serde_json::Value {
 
 /// Runs the maap memory search action schema operation for this subsystem.
 fn maap_memory_search_action_schema() -> serde_json::Value {
-    maap_action_object_schema(
+    let mut schema = maap_action_object_schema(
         "memory_search",
         [
             described_string_property(
@@ -762,7 +762,13 @@ fn maap_memory_search_action_schema() -> serde_json::Value {
             ),
         ],
         &["query", "limit"],
-    )
+    );
+    if let Some(description) = schema["properties"]["query"]["description"].as_str() {
+        schema["properties"]["query"]["description"] = serde_json::Value::String(format!(
+            "{description} A valid memory UUID query retrieves that record exactly when it is visible to the current runtime scopes and satisfies the requested active-state filter."
+        ));
+    }
+    schema
 }
 
 /// Runs the maap memory store action schema operation for this subsystem.

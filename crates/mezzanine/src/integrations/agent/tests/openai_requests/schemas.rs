@@ -241,6 +241,7 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
         .as_str()
         .unwrap();
     assert!(query_description.contains("Do not use memory_search by default"));
+    assert!(query_description.contains("A valid memory UUID query retrieves that record exactly"));
     assert!(query_description.contains("Treat it as optional support"));
     assert!(query_description.contains("generic way to make progress"));
     assert!(query_description.contains("at most one focused search in ordinary turns"));

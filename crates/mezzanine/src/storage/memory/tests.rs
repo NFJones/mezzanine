@@ -221,6 +221,61 @@ fn persistent_memory_search_filters_before_limiting_results() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies a UUID query retrieves its record exactly without depending on FTS.
+///
+/// This regression ensures a model can retrieve a memory record by the stable
+/// identifier returned from earlier memory actions, even when full-text search
+/// is unavailable. Scope and state filters remain enforced for direct lookup.
+#[test]
+fn persistent_memory_search_retrieves_uuid_exactly_without_fts() {
+    let root = std::env::temp_dir().join(format!("mez-memory-uuid-query-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let target_id = "dba31bdf-a076-8de8-bbf4-fa1058460db8";
+    let store = PersistentMemoryStore::under_config_root(&root).with_fts_enabled(false);
+    store
+        .upsert(record(
+            target_id,
+            MemoryScope::Global,
+            "durable research note",
+        ))
+        .unwrap();
+    store
+        .upsert(record("other", MemoryScope::Global, "unrelated memory"))
+        .unwrap();
+
+    let matches = store
+        .search(&MemorySearchRequest {
+            query: Some(target_id.to_uppercase()),
+            scope: Some(MemoryScope::Global),
+            state: Some(MemoryState::Active),
+            limit: 10,
+            ..MemorySearchRequest::default()
+        })
+        .unwrap();
+
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].record.id, target_id);
+    assert_eq!(
+        matches[0].reason,
+        "exact UUID match plus deterministic metadata ranking"
+    );
+
+    let hidden = store
+        .search(&MemorySearchRequest {
+            query: Some(target_id.to_string()),
+            scope: Some(MemoryScope::Project {
+                root: "/work/other".to_string(),
+            }),
+            state: Some(MemoryState::Archived),
+            limit: 10,
+            ..MemorySearchRequest::default()
+        })
+        .unwrap();
+    assert!(hidden.is_empty());
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies punctuation-only FTS queries never reach SQLite as empty MATCH text.
 ///
 /// This regression scenario exercises untrusted free-text normalization with a

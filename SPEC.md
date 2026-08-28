@@ -5988,7 +5988,9 @@ The baseline action types are:
 - `config_change`: Propose a live configuration change.
 - `memory_search`: Search runtime-owned persistent memory records after the
   `memory` capability has been granted. This action MUST be available only when
-  persistent memory is enabled in the effective runtime configuration.
+  persistent memory is enabled in the effective runtime configuration. A valid
+  memory UUID query MUST retrieve that record exactly when it is visible to the
+  current runtime scopes and satisfies the requested active-state filter.
 - `memory_store`: Store one runtime-owned persistent memory record after the
   `memory` capability has been granted. This action MUST be available only when
   persistent memory is enabled in the effective runtime configuration and MUST

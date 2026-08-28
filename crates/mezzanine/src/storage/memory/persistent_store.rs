@@ -8,7 +8,7 @@ use std::cmp::Ordering;
 use mez_agent::memory::{
     MemoryRecord, MemoryRetentionPolicy, MemoryScope, MemorySearchRequest, MemorySearchResult,
     MemoryState, canonical_memory_uuid, compare_memory_search_results, decode_scope, encode_scope,
-    kind_name, parse_kind, parse_source, parse_state, source_name, state_name,
+    is_memory_uuid, kind_name, parse_kind, parse_source, parse_state, source_name, state_name,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -763,6 +763,13 @@ fn search_records(
     request: &MemorySearchRequest,
     fts_enabled: bool,
 ) -> Result<Vec<MemorySearchResult>> {
+    if let Some(id) = request
+        .query
+        .as_deref()
+        .filter(|query| is_memory_uuid(query))
+    {
+        return search_records_by_uuid(connection, request, id);
+    }
     if let Some(query) = request
         .query
         .as_deref()
@@ -777,6 +784,34 @@ fn search_records(
     } else {
         search_records_without_query(connection, request)
     }
+}
+
+/// Retrieves one UUID-addressed memory record while preserving metadata filters.
+fn search_records_by_uuid(
+    connection: &Connection,
+    request: &MemorySearchRequest,
+    id: &str,
+) -> Result<Vec<MemorySearchResult>> {
+    let id = canonical_memory_uuid(id);
+    let mut statement = connection.prepare(
+        "SELECT id, scope, created_at, updated_at, source, priority, kind, state,
+                last_used_at, use_count, confirmed_count, last_confirmed_at,
+                supersedes_id, expires_at, expiration_duration_seconds, content
+         FROM memory_records
+         WHERE id = ?1",
+    )?;
+    let record = statement.query_row(params![id], row_to_record).optional()?;
+    Ok(record
+        .filter(|record| record_matches_request(record, request))
+        .map(|record| {
+            vec![MemorySearchResult {
+                score: deterministic_score(&record),
+                record,
+                fts_rank: None,
+                reason: "exact UUID match plus deterministic metadata ranking".to_string(),
+            }]
+        })
+        .unwrap_or_default())
 }
 
 /// Normalizes untrusted free text into a safe SQLite FTS5 query.
