@@ -19,6 +19,9 @@ these workloads.
 - [Iroh render-update benchmarks](iroh-render-update-benchmarks.md): measure
   snapshot/delta selection, request-RTT cost, codec cadence, and the controlled
   direct/relay WAN matrix.
+- [Iroh pushed-render rollout evidence](iroh-pushed-render-rollout-evidence.md):
+  distinguish integrated repository-local results from outstanding network,
+  platform, packaging, and production gates.
 - [Cross-platform release load checks](release-load-checks.md): collect and
   interpret report-only responsiveness evidence on Linux and macOS.
 
