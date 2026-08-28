@@ -1458,13 +1458,24 @@ impl RuntimeSessionService {
             provider_failure_json,
             provider_raw_text,
         )?;
-        if let Some(pane_id) = pane_id {
-            self.discard_agent_streaming_say_presentation(&pane_id, Some(turn_id))?;
-            self.clear_agent_shell_output_status_line(&pane_id)?;
+        if let Some(ref pane_id) = pane_id {
+            self.discard_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
+            self.clear_agent_shell_output_status_line(pane_id)?;
         }
-        Ok(self.runtime_transition_with_render(
-            applied,
-            Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+        Ok(pane_id.map_or_else(
+            || {
+                self.runtime_transition_with_render(
+                    applied,
+                    Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+                )
+            },
+            |pane_id| {
+                self.runtime_pane_transition_with_render(
+                    &pane_id,
+                    applied,
+                    Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+                )
+            },
         ))
     }
 
