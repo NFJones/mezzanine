@@ -88,6 +88,12 @@ struct IrohCompressionMetricsInner {
     decoded_bytes: AtomicU64,
     compressed_frames: AtomicU64,
     identity_frames: AtomicU64,
+    render_snapshot_frames: AtomicU64,
+    render_delta_frames: AtomicU64,
+    render_changed_rows: AtomicU64,
+    render_selected_wire_bytes: AtomicU64,
+    render_selected_decoded_bytes: AtomicU64,
+    render_snapshot_candidate_bytes: AtomicU64,
     render_triggers_coalesced: AtomicU64,
     render_updates_suppressed: AtomicU64,
     render_snapshot_fallbacks: AtomicU64,
@@ -104,6 +110,12 @@ pub(crate) struct IrohCompressionMetricsSnapshot {
     pub(crate) decoded_bytes: u64,
     pub(crate) compressed_frames: u64,
     pub(crate) identity_frames: u64,
+    pub(crate) render_snapshot_frames: u64,
+    pub(crate) render_delta_frames: u64,
+    pub(crate) render_changed_rows: u64,
+    pub(crate) render_selected_wire_bytes: u64,
+    pub(crate) render_selected_decoded_bytes: u64,
+    pub(crate) render_snapshot_candidate_bytes: u64,
     pub(crate) render_triggers_coalesced: u64,
     pub(crate) render_updates_suppressed: u64,
     pub(crate) render_snapshot_fallbacks: u64,
@@ -129,6 +141,21 @@ impl IrohCompressionMetrics {
             decoded_bytes: self.inner.decoded_bytes.load(Ordering::Relaxed),
             compressed_frames: self.inner.compressed_frames.load(Ordering::Relaxed),
             identity_frames: self.inner.identity_frames.load(Ordering::Relaxed),
+            render_snapshot_frames: self.inner.render_snapshot_frames.load(Ordering::Relaxed),
+            render_delta_frames: self.inner.render_delta_frames.load(Ordering::Relaxed),
+            render_changed_rows: self.inner.render_changed_rows.load(Ordering::Relaxed),
+            render_selected_wire_bytes: self
+                .inner
+                .render_selected_wire_bytes
+                .load(Ordering::Relaxed),
+            render_selected_decoded_bytes: self
+                .inner
+                .render_selected_decoded_bytes
+                .load(Ordering::Relaxed),
+            render_snapshot_candidate_bytes: self
+                .inner
+                .render_snapshot_candidate_bytes
+                .load(Ordering::Relaxed),
             render_triggers_coalesced: self.inner.render_triggers_coalesced.load(Ordering::Relaxed),
             render_updates_suppressed: self.inner.render_updates_suppressed.load(Ordering::Relaxed),
             render_snapshot_fallbacks: self.inner.render_snapshot_fallbacks.load(Ordering::Relaxed),
@@ -156,6 +183,42 @@ impl IrohCompressionMetrics {
         } else {
             self.inner.identity_frames.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Records one successfully flushed render update without retaining rows.
+    pub(crate) fn record_render_update(
+        &self,
+        delta: bool,
+        changed_rows: usize,
+        wire_bytes: usize,
+        decoded_bytes: usize,
+        snapshot_candidate_bytes: usize,
+    ) {
+        if delta {
+            self.inner
+                .render_delta_frames
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.inner
+                .render_snapshot_frames
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        self.inner.render_changed_rows.fetch_add(
+            u64::try_from(changed_rows).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.inner.render_selected_wire_bytes.fetch_add(
+            u64::try_from(wire_bytes).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.inner.render_selected_decoded_bytes.fetch_add(
+            u64::try_from(decoded_bytes).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.inner.render_snapshot_candidate_bytes.fetch_add(
+            u64::try_from(snapshot_candidate_bytes).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
     }
 
     /// Records bounded latest-state render coalescing without terminal content.
@@ -952,6 +1015,12 @@ mod tests {
                 decoded_bytes: 0,
                 compressed_frames: 0,
                 identity_frames: 0,
+                render_snapshot_frames: 0,
+                render_delta_frames: 0,
+                render_changed_rows: 0,
+                render_selected_wire_bytes: 0,
+                render_selected_decoded_bytes: 0,
+                render_snapshot_candidate_bytes: 0,
                 render_triggers_coalesced: 0,
                 render_updates_suppressed: 0,
                 render_snapshot_fallbacks: 0,
@@ -963,6 +1032,8 @@ mod tests {
 
         metrics.record_frame(128, 512, true);
         metrics.record_frame(48, 32, false);
+        metrics.record_render_update(false, 24, 128, 512, 512);
+        metrics.record_render_update(true, 1, 48, 96, 512);
         metrics.record_render_coalescing(5, true, true);
         metrics.record_render_write_wait(std::time::Duration::from_micros(250));
 
@@ -974,6 +1045,12 @@ mod tests {
                 decoded_bytes: 544,
                 compressed_frames: 1,
                 identity_frames: 1,
+                render_snapshot_frames: 1,
+                render_delta_frames: 1,
+                render_changed_rows: 25,
+                render_selected_wire_bytes: 176,
+                render_selected_decoded_bytes: 608,
+                render_snapshot_candidate_bytes: 1_024,
                 render_triggers_coalesced: 4,
                 render_updates_suppressed: 1,
                 render_snapshot_fallbacks: 1,

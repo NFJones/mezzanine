@@ -180,6 +180,40 @@ fn encode_iroh_render_snapshot_frame(
     )
 }
 
+/// Content-free accounting for one selected v3 render update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IrohRenderUpdateKind {
+    Snapshot,
+    Delta,
+}
+
+/// Selected render frame plus the complete logical base retained after flush.
+#[derive(Debug)]
+struct IrohRenderUpdateFrame {
+    frame: Vec<u8>,
+    view: serde_json::Value,
+    kind: IrohRenderUpdateKind,
+    changed_rows: usize,
+    snapshot_candidate_bytes: usize,
+}
+
+impl IrohRenderUpdateFrame {
+    fn snapshot(frame: Vec<u8>, view: serde_json::Value) -> Self {
+        let changed_rows = view
+            .get("lines")
+            .and_then(serde_json::Value::as_array)
+            .map_or(0, Vec::len);
+        let snapshot_candidate_bytes = frame.len();
+        Self {
+            frame,
+            view,
+            kind: IrohRenderUpdateKind::Snapshot,
+            changed_rows,
+            snapshot_candidate_bytes,
+        }
+    }
+}
+
 /// Encodes a whole-row delta when it is safe and smaller than a snapshot.
 ///
 /// The returned complete view becomes the next server base only after the
@@ -189,20 +223,20 @@ fn encode_iroh_render_update_frame(
     base_view: Option<&serde_json::Value>,
     base_revision: u64,
     revision: u64,
-) -> Result<Option<(Vec<u8>, serde_json::Value)>> {
+) -> Result<Option<IrohRenderUpdateFrame>> {
     let view = iroh_render_view_value(snapshot)?;
     if base_view == Some(&view) && !snapshot.invalidate_output {
         return Ok(None);
     }
     let snapshot_frame = encode_iroh_render_snapshot_frame(snapshot, revision, &view);
     let Some(base_view) = base_view else {
-        return Ok(Some((snapshot_frame, view)));
+        return Ok(Some(IrohRenderUpdateFrame::snapshot(snapshot_frame, view)));
     };
     if snapshot.invalidate_output {
-        return Ok(Some((snapshot_frame, view)));
+        return Ok(Some(IrohRenderUpdateFrame::snapshot(snapshot_frame, view)));
     }
     let (Some(base), Some(current)) = (base_view.as_object(), view.as_object()) else {
-        return Ok(Some((snapshot_frame, view)));
+        return Ok(Some(IrohRenderUpdateFrame::snapshot(snapshot_frame, view)));
     };
     let (Some(base_lines), Some(base_styles), Some(lines), Some(styles)) = (
         base.get("lines").and_then(serde_json::Value::as_array),
@@ -213,13 +247,13 @@ fn encode_iroh_render_update_frame(
             .get("line_style_spans")
             .and_then(serde_json::Value::as_array),
     ) else {
-        return Ok(Some((snapshot_frame, view)));
+        return Ok(Some(IrohRenderUpdateFrame::snapshot(snapshot_frame, view)));
     };
     if lines.len() != styles.len()
         || base_lines.len() != base_styles.len()
         || lines.len() != base_lines.len()
     {
-        return Ok(Some((snapshot_frame, view)));
+        return Ok(Some(IrohRenderUpdateFrame::snapshot(snapshot_frame, view)));
     }
 
     let rows = lines
@@ -258,11 +292,17 @@ fn encode_iroh_render_update_frame(
         .to_string(),
     );
     let selected = if delta_frame.len() < snapshot_frame.len() {
-        delta_frame
+        IrohRenderUpdateFrame {
+            snapshot_candidate_bytes: snapshot_frame.len(),
+            changed_rows: rows.len(),
+            kind: IrohRenderUpdateKind::Delta,
+            frame: delta_frame,
+            view,
+        }
     } else {
-        snapshot_frame
+        IrohRenderUpdateFrame::snapshot(snapshot_frame, view)
     };
-    Ok(Some((selected, view)))
+    Ok(Some(selected))
 }
 
 /// Classifies one retained event for primary v3 render ownership.
@@ -397,6 +437,12 @@ pub(crate) struct RuntimeIrohConnectionQualitySnapshot {
     pub(crate) render_ready_depth_max: u64,
     pub(crate) render_write_wait_micros: u64,
     pub(crate) render_write_wait_max_micros: u64,
+    pub(crate) render_snapshot_frames: u64,
+    pub(crate) render_delta_frames: u64,
+    pub(crate) render_changed_rows: u64,
+    pub(crate) render_selected_wire_bytes: u64,
+    pub(crate) render_selected_decoded_bytes: u64,
+    pub(crate) render_snapshot_candidate_bytes: u64,
     path: u8,
 }
 
@@ -444,6 +490,12 @@ impl RuntimeIrohConnectionQualitySnapshot {
             render_ready_depth_max: 5,
             render_write_wait_micros: 250,
             render_write_wait_max_micros: 250,
+            render_snapshot_frames: 1,
+            render_delta_frames: 1,
+            render_changed_rows: 25,
+            render_selected_wire_bytes: 176,
+            render_selected_decoded_bytes: 608,
+            render_snapshot_candidate_bytes: 1_024,
             path: match path {
                 "direct" => 1,
                 "relay" => 2,
@@ -498,6 +550,12 @@ struct RuntimeIrohPathSample {
     render_updates_suppressed: u64,
     render_snapshot_fallbacks: u64,
     render_write_wait_micros: u64,
+    render_snapshot_frames: u64,
+    render_delta_frames: u64,
+    render_changed_rows: u64,
+    render_selected_wire_bytes: u64,
+    render_selected_decoded_bytes: u64,
+    render_snapshot_candidate_bytes: u64,
 }
 
 /// Copyable status projection that contains no endpoint or peer identifiers.
@@ -831,6 +889,26 @@ impl RuntimeIrohPathSampler {
         let render_write_wait_micros = delta(compression.render_write_wait_micros, |sample| {
             sample.render_write_wait_micros
         });
+        let render_snapshot_frames = delta(compression.render_snapshot_frames, |sample| {
+            sample.render_snapshot_frames
+        });
+        let render_delta_frames = delta(compression.render_delta_frames, |sample| {
+            sample.render_delta_frames
+        });
+        let render_changed_rows = delta(compression.render_changed_rows, |sample| {
+            sample.render_changed_rows
+        });
+        let render_selected_wire_bytes = delta(compression.render_selected_wire_bytes, |sample| {
+            sample.render_selected_wire_bytes
+        });
+        let render_selected_decoded_bytes =
+            delta(compression.render_selected_decoded_bytes, |sample| {
+                sample.render_selected_decoded_bytes
+            });
+        let render_snapshot_candidate_bytes =
+            delta(compression.render_snapshot_candidate_bytes, |sample| {
+                sample.render_snapshot_candidate_bytes
+            });
         let snapshot = RuntimeIrohConnectionQualitySnapshot {
             connected_millis: u64::try_from(now.duration_since(self.connected_at).as_millis())
                 .unwrap_or(u64::MAX),
@@ -857,6 +935,12 @@ impl RuntimeIrohPathSampler {
             render_ready_depth_max: compression.render_ready_depth_max,
             render_write_wait_micros,
             render_write_wait_max_micros: compression.render_write_wait_max_micros,
+            render_snapshot_frames,
+            render_delta_frames,
+            render_changed_rows,
+            render_selected_wire_bytes,
+            render_selected_decoded_bytes,
+            render_snapshot_candidate_bytes,
             path: if path.is_ip() {
                 1
             } else if path.is_relay() {
@@ -886,6 +970,12 @@ impl RuntimeIrohPathSampler {
             render_updates_suppressed: compression.render_updates_suppressed,
             render_snapshot_fallbacks: compression.render_snapshot_fallbacks,
             render_write_wait_micros: compression.render_write_wait_micros,
+            render_snapshot_frames: compression.render_snapshot_frames,
+            render_delta_frames: compression.render_delta_frames,
+            render_changed_rows: compression.render_changed_rows,
+            render_selected_wire_bytes: compression.render_selected_wire_bytes,
+            render_selected_decoded_bytes: compression.render_selected_decoded_bytes,
+            render_snapshot_candidate_bytes: compression.render_snapshot_candidate_bytes,
         });
     }
 }
@@ -1648,6 +1738,13 @@ async fn serve_registered_runtime_iroh_event_stream(
             .await
             .map_err(|_| MezError::invalid_state("Iroh render snapshot flush timed out"))?
             .map_err(|_| MezError::invalid_state("Iroh render snapshot flush failed"))?;
+        compression_metrics.record_render_update(
+            false,
+            snapshot.view.lines.len(),
+            frame.as_bytes().len(),
+            frame.decoded_bytes(),
+            frame.decoded_bytes(),
+        );
         compression_metrics.record_render_write_wait(write_started.elapsed());
         sent_render_view = Some(view);
         last_delivered_event_id = snapshot.event_cutoff;
@@ -1724,19 +1821,17 @@ async fn serve_registered_runtime_iroh_event_stream(
                     next_revision,
                 )?;
                 let suppressed = update.is_none();
-                let snapshot_fallback = update.as_ref().is_some_and(|(frame, _)| {
-                    frame
-                        .windows(b"\"method\":\"render/snapshot\"".len())
-                        .any(|window| window == b"\"method\":\"render/snapshot\"")
-                });
+                let snapshot_fallback = update
+                    .as_ref()
+                    .is_some_and(|update| update.kind == IrohRenderUpdateKind::Snapshot);
                 compression_metrics.record_render_coalescing(
                     triggers.ready_depth(),
                     suppressed,
                     snapshot_fallback,
                 );
-                if let Some((frame, view)) = update {
-                    let frame =
-                        compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?;
+                if let Some(update) = update {
+                    let frame = compression
+                        .encode_frame(&update.frame, IrohFrameCompressionMode::Eligible)?;
                     compression_metrics.record_frame(
                         frame.as_bytes().len(),
                         frame.decoded_bytes(),
@@ -1751,9 +1846,16 @@ async fn serve_registered_runtime_iroh_event_stream(
                         .await
                         .map_err(|_| MezError::invalid_state("Iroh render update flush timed out"))?
                         .map_err(|_| MezError::invalid_state("Iroh render update flush failed"))?;
+                    compression_metrics.record_render_update(
+                        update.kind == IrohRenderUpdateKind::Delta,
+                        update.changed_rows,
+                        frame.as_bytes().len(),
+                        frame.decoded_bytes(),
+                        update.snapshot_candidate_bytes,
+                    );
                     compression_metrics.record_render_write_wait(write_started.elapsed());
                     render_revision = next_revision;
-                    sent_render_view = Some(view);
+                    sent_render_view = Some(update.view);
                 }
                 last_delivered_event_id = snapshot.event_cutoff;
             } else if let Some(batch_last) = triggers.last_event_id {
@@ -2088,10 +2190,13 @@ mod tests {
                 .first_mut()
                 .expect("primary view should contain at least one row");
             *row = "changed visible row".to_string();
-            let (delta_frame, changed_view) =
-                encode_iroh_render_update_frame(&changed, Some(&base_view), 1, 2)
-                    .unwrap()
-                    .expect("changed view should produce an update");
+            let delta_update = encode_iroh_render_update_frame(&changed, Some(&base_view), 1, 2)
+                .unwrap()
+                .expect("changed view should produce an update");
+            assert_eq!(delta_update.kind, IrohRenderUpdateKind::Delta);
+            assert_eq!(delta_update.changed_rows, 1);
+            let delta_frame = delta_update.frame;
+            let changed_view = delta_update.view;
             let (delta_body, _) =
                 crate::control::decode_control_frame(&delta_frame, 1024 * 1024).unwrap();
             assert!(
@@ -2117,10 +2222,12 @@ mod tests {
             for (index, line) in broad_change.view.lines.iter_mut().enumerate() {
                 *line = format!("replacement row {index} with enough changed content");
             }
-            let (broad_frame, _) =
+            let broad_update =
                 encode_iroh_render_update_frame(&broad_change, Some(&changed_view), 2, 3)
                     .unwrap()
                     .expect("broad change should produce an update");
+            assert_eq!(broad_update.kind, IrohRenderUpdateKind::Snapshot);
+            let broad_frame = broad_update.frame;
             let (broad_body, _) =
                 crate::control::decode_control_frame(&broad_frame, 1024 * 1024).unwrap();
             assert!(
@@ -2130,10 +2237,12 @@ mod tests {
 
             let mut invalidating = changed;
             invalidating.invalidate_output = true;
-            let (snapshot_frame, _) =
+            let snapshot_update =
                 encode_iroh_render_update_frame(&invalidating, Some(&changed_view), 2, 3)
                     .unwrap()
                     .expect("invalidation must force an update");
+            assert_eq!(snapshot_update.kind, IrohRenderUpdateKind::Snapshot);
+            let snapshot_frame = snapshot_update.frame;
             let (snapshot_body, _) =
                 crate::control::decode_control_frame(&snapshot_frame, 1024 * 1024).unwrap();
             assert!(
@@ -2144,6 +2253,184 @@ mod tests {
             let _ = handle.shutdown().await.unwrap();
         };
         let ((), _) = tokio::join!(client, actor.run());
+    }
+
+    /// Writes a content-safe release report for render-update selection,
+    /// compression cadence, and the v2/v3 serialized-request RTT model.
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "release-mode report; run with `just iroh-render-bench`"]
+    async fn iroh_render_update_release_benchmark() {
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::test_support::runtime::RuntimeServiceFixture;
+
+        const ITERATIONS: usize = 2_000;
+
+        fn latency_summary(mut samples: Vec<u64>) -> serde_json::Value {
+            samples.sort_unstable();
+            let percentile = |percent: usize| {
+                let index = samples
+                    .len()
+                    .saturating_sub(1)
+                    .saturating_mul(percent)
+                    .saturating_add(99)
+                    / 100;
+                samples[index.min(samples.len().saturating_sub(1))]
+            };
+            serde_json::json!({
+                "samples": samples.len(),
+                "p50_ns": percentile(50),
+                "p95_ns": percentile(95),
+                "p99_ns": percentile(99),
+                "max_ns": samples.last().copied().unwrap_or(0),
+            })
+        }
+
+        let mut service = RuntimeServiceFixture::new().build();
+        let primary = service
+            .attach_primary(
+                "render-benchmark",
+                true,
+                mez_mux::layout::Size::new(120, 40).unwrap(),
+                120,
+            )
+            .unwrap();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let client = async {
+            let snapshot = handle
+                .render_iroh_client_snapshot(primary, true)
+                .await
+                .unwrap()
+                .expect("attached benchmark primary should render");
+            handle.shutdown().await.unwrap();
+            snapshot
+        };
+        let (base, _) = tokio::join!(client, actor.run());
+        let base_view = iroh_render_view_value(&base).unwrap();
+
+        let mut one_row = base.clone();
+        one_row.invalidate_output = false;
+        *one_row
+            .view
+            .lines
+            .first_mut()
+            .expect("benchmark view should contain a row") = "changed benchmark row".to_string();
+        let mut broad_rows = one_row.clone();
+        for (index, line) in broad_rows.view.lines.iter_mut().enumerate() {
+            *line = format!("benchmark replacement row {index} with changed content");
+        }
+        let mut invalidating = one_row.clone();
+        invalidating.invalidate_output = true;
+        let workloads = [
+            ("one_row", one_row),
+            ("broad_rows", broad_rows),
+            ("invalidating", invalidating),
+        ];
+
+        let mut results = Vec::new();
+        for codec in [
+            RuntimeIrohCompressionCodec::None,
+            RuntimeIrohCompressionCodec::Zstd,
+            RuntimeIrohCompressionCodec::Lz4,
+        ] {
+            for (workload, snapshot) in &workloads {
+                let selected = encode_iroh_render_update_frame(snapshot, Some(&base_view), 1, 2)
+                    .unwrap()
+                    .expect("benchmark workload should select an update");
+                let selected_kind = match selected.kind {
+                    IrohRenderUpdateKind::Snapshot => "snapshot",
+                    IrohRenderUpdateKind::Delta => "delta",
+                };
+                let policy = IrohCompressionPolicy::new(
+                    codec,
+                    512,
+                    3,
+                    selected.snapshot_candidate_bytes.saturating_add(1024),
+                )
+                .unwrap();
+                let snapshot_frame = encode_iroh_render_snapshot_frame(snapshot, 2, &selected.view);
+                let snapshot_wire_bytes = policy
+                    .encode_frame(&snapshot_frame, IrohFrameCompressionMode::Eligible)
+                    .unwrap()
+                    .as_bytes()
+                    .len();
+                let mut samples = Vec::with_capacity(ITERATIONS);
+                let mut selected_wire_bytes = 0u64;
+                for _ in 0..ITERATIONS {
+                    let started = std::time::Instant::now();
+                    let update = encode_iroh_render_update_frame(snapshot, Some(&base_view), 1, 2)
+                        .unwrap()
+                        .expect("benchmark workload should keep selecting an update");
+                    let encoded = policy
+                        .encode_frame(&update.frame, IrohFrameCompressionMode::Eligible)
+                        .unwrap();
+                    selected_wire_bytes = selected_wire_bytes.saturating_add(
+                        u64::try_from(encoded.as_bytes().len()).unwrap_or(u64::MAX),
+                    );
+                    let decoded = policy.decode_frame(encoded.as_bytes()).unwrap();
+                    assert_eq!(decoded, update.frame);
+                    samples.push(u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX));
+                    std::hint::black_box(decoded);
+                }
+                results.push(serde_json::json!({
+                    "codec": codec.as_str(),
+                    "workload": workload,
+                    "selected_kind": selected_kind,
+                    "changed_rows": selected.changed_rows,
+                    "selected_decoded_bytes": selected.frame.len(),
+                    "selected_wire_bytes_per_update": selected_wire_bytes as f64 / ITERATIONS as f64,
+                    "snapshot_candidate_decoded_bytes": selected.snapshot_candidate_bytes,
+                    "snapshot_candidate_wire_bytes": snapshot_wire_bytes,
+                    "decoded_fraction_of_snapshot": selected.frame.len() as f64
+                        / selected.snapshot_candidate_bytes.max(1) as f64,
+                    "wire_fraction_of_snapshot": selected_wire_bytes as f64
+                        / ITERATIONS as f64 / snapshot_wire_bytes.max(1) as f64,
+                    "selection_encode_decode_latency": latency_summary(samples),
+                    "envelopes_per_update": 1,
+                    "flushes_per_update": 1,
+                }));
+            }
+        }
+
+        let rtt_models = [0u64, 25, 75, 150]
+            .into_iter()
+            .map(|rtt_ms| {
+                serde_json::json!({
+                    "rtt_ms": rtt_ms,
+                    "v2": {
+                        "terminal_step_requests": 1,
+                        "terminal_view_requests": 1,
+                        "serialized_control_round_trips": 2,
+                        "modeled_no_processing_input_to_visible_floor_ms": rtt_ms.saturating_mul(2),
+                    },
+                    "v3": {
+                        "terminal_step_requests": 1,
+                        "terminal_view_requests": 0,
+                        "serialized_control_round_trips": 1,
+                        "modeled_no_processing_input_to_visible_floor_ms": rtt_ms,
+                    },
+                    "avoidable_v2_view_fetch_ms": rtt_ms,
+                })
+            })
+            .collect::<Vec<_>>();
+        let report = serde_json::to_string_pretty(&serde_json::json!({
+            "format_version": 1,
+            "report_only": true,
+            "iterations_per_fixture": ITERATIONS,
+            "compression_min_bytes": 512,
+            "compression_zstd_level": 3,
+            "rtt_model": {
+                "kind": "serialized_request_count_model",
+                "excludes": ["server_render", "codec", "scheduling", "relay", "client_apply"],
+                "matrix": rtt_models,
+            },
+            "results": results,
+        }))
+        .unwrap();
+        if let Ok(path) = std::env::var("MEZ_IROH_RENDER_BENCH_REPORT") {
+            std::fs::write(path, format!("{report}\n")).unwrap();
+        }
+        println!("{report}");
     }
 
     #[derive(Debug, Clone)]

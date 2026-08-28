@@ -133,6 +133,23 @@ benchmarks](../testing/iroh-compression-benchmarks.md) for fixtures, budgets,
 and interpretation. Keep point-in-time measurements in generated reports
 rather than this operational runbook.
 
+### Reproduce render-update measurements
+
+Run the content-safe, single-threaded release harness from the repository root:
+
+```text
+just iroh-render-bench
+```
+
+It writes `target/iroh-render-bench.json` by default; override the path with
+`MEZ_IROH_RENDER_BENCH_REPORT`. The report measures snapshot/delta selection,
+changed rows, selected and candidate bytes, codec cadence, and a clearly
+labelled serialized-request RTT model. It does not claim to measure a real
+direct or relay path. Follow [Iroh render-update
+benchmarks](../testing/iroh-render-update-benchmarks.md) for the controlled
+0/25/75/150 ms direct and relay matrix, separate jitter/loss runs, workloads,
+sample counts, and interpretation limits.
+
 ## Enable and verify
 
 1. Confirm the private Unix control socket works and retain a local primary
@@ -149,8 +166,9 @@ rather than this operational runbook.
    diagnostics are needed. It is not a host-wide preflight surface.
 7. From the paired remote client, run `show-iroh-status` in the command prompt
    to inspect its selected path, RTT, traffic, negotiated codec, interval wire
-   savings, recent loss/congestion, and quality rating without exposing endpoint,
-   route, credential, or payload data.
+   savings, snapshot/delta counts, changed rows, selected/candidate bytes,
+   coalescing, write wait, recent loss/congestion, and quality rating without
+   exposing endpoint, route, credential, or payload data.
 8. Pair one role-limited test device, exercise attach and detach, revoke it, and
    verify future initialization fails.
 9. Confirm a local Unix client can still inspect, revoke, detach, and stop the

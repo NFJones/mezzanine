@@ -16,6 +16,9 @@ these workloads.
 
 - [Iroh compression benchmarks](iroh-compression-benchmarks.md): reproduce the
   application-frame codec measurements used for transport rollout decisions.
+- [Iroh render-update benchmarks](iroh-render-update-benchmarks.md): measure
+  snapshot/delta selection, request-RTT cost, codec cadence, and the controlled
+  direct/relay WAN matrix.
 - [Cross-platform release load checks](release-load-checks.md): collect and
   interpret report-only responsiveness evidence on Linux and macOS.
 

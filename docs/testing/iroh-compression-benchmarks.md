@@ -49,14 +49,12 @@ delivery. Mezzanine follows the latency-relevant part of that design: every
 complete control frame remains independently decodable and is flushed to QUIC
 immediately. It does not wait to accumulate a larger compression batch.
 
-The protocols differ above that boundary. SSH pushes terminal channel bytes,
-whereas an Iroh attach receives event wakeups and fetches an authoritative
-rendered view over the serialized control stream. Consequently, visible
-choppiness can come from redundant view round trips even when codec work is
-small. Each terminal view therefore reports an event cutoff, allowing the
-client to discard only queued ordinary redraw wakeups already represented by
-that view. The first redraw and any newer or invalidating wakeup remain
-immediate, preserving latency while preventing stale-render queues.
+The protocols differ above that boundary. SSH pushes terminal channel bytes.
+Legacy Iroh event streams use redraw wakeups followed by an authoritative view
+fetch, while negotiated v3 streams push exact-client snapshots or deltas.
+Consequently, legacy visible choppiness can come from redundant view round
+trips even when codec work is small. V3 removes that fetch while retaining one
+independently decodable, immediately flushed envelope per update.
 
 The OpenSSH implementation reference used for this comparison is
 [`packet.c`](https://github.com/openssh/openssh-portable/blob/master/packet.c),
@@ -69,6 +67,7 @@ compiler upgrades.
 
 ## Related pages
 
+- [Iroh render-update benchmarks](iroh-render-update-benchmarks.md)
 - [Iroh production operations and rollout](../operations/iroh-production-operations-and-rollout.md)
 - [Cross-platform release load checks](release-load-checks.md)
 - [Development and validation](../contributing/development-and-validation.md)

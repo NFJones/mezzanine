@@ -78,10 +78,14 @@ Iroh path. It includes RTT, jitter, recent transfer rates, loss and congestion
 deltas, congestion window, MTU, sample freshness, negotiated codec, and
 connection-local interval compression effectiveness. Compression reports the
 decoded-to-wire ratio, bytes saved or expanded, and compressed versus identity
-frame counts. A new connection or codec context starts with an `insufficient
-sample` state rather than comparing counters across reconnects. Path type and
-quality remain independent from compression effectiveness. Topology identifiers,
-addresses, credentials, and payload-derived samples are intentionally omitted.
+frame counts. Render-update diagnostics report snapshot and delta counts,
+changed rows, selected wire/decoded bytes, full-snapshot candidate bytes,
+coalescing, suppression, snapshot fallback, maximum ready depth, and total and
+maximum write-and-flush wait. A new connection or codec context starts with an
+`insufficient sample` state rather than comparing counters across reconnects.
+Path type and quality remain independent from compression effectiveness.
+Topology identifiers, addresses, credentials, terminal contents, and
+payload-derived samples are intentionally omitted.
 Local control-socket clients see an unavailable state because they are not
 attached through Iroh.
 
