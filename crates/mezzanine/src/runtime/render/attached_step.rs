@@ -213,6 +213,26 @@ impl RuntimeSessionService {
             .active_window_for(primary_client_id)
             .ok()
             .map(|window| window.id.to_string());
+        let pre_mutation_primary_client_ids =
+            pre_mutation_window_id
+                .as_ref()
+                .map_or_else(Vec::new, |window_id| {
+                    self.session
+                        .clients()
+                        .iter()
+                        .filter(|client| {
+                            client.role == mez_mux::session::ClientRole::Primary
+                                && client.state == mez_mux::session::ClientState::Attached
+                        })
+                        .filter_map(|client| {
+                            self.session
+                                .active_window_for(&client.id)
+                                .ok()
+                                .filter(|window| window.id.as_str() == window_id)
+                                .map(|_| client.id.clone())
+                        })
+                        .collect()
+                });
         let result =
             self.apply_attached_terminal_step_plan_inner(primary_client_id, step, true, true);
         self.presentation.capture_projected_client_state();
@@ -245,7 +265,15 @@ impl RuntimeSessionService {
                 {
                     window_ids.push(window.id.to_string());
                 }
-                self.render_effects_for_clients_projecting_windows(&window_ids, reason)
+                let mut effects =
+                    self.render_effects_for_clients_projecting_windows(&window_ids, reason);
+                let prior_effects = self.render_effects_for_primary_projections(
+                    &pre_mutation_primary_client_ids,
+                    reason,
+                );
+                effects.retain(|effect| !prior_effects.contains(effect));
+                effects.extend(prior_effects);
+                effects
             } else {
                 self.render_effects_for_primary_projection(primary_client_id, reason)
             }

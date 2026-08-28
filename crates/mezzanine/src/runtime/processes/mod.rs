@@ -3769,6 +3769,30 @@ impl RuntimeSessionService {
             .collect()
     }
 
+    /// Builds render effects for source-primary projections and their observers.
+    pub(crate) fn render_effects_for_primary_projections(
+        &self,
+        primary_client_ids: &[mez_core::ids::ClientId],
+        reason: RenderInvalidationReason,
+    ) -> Vec<RuntimeSideEffect> {
+        self.session
+            .clients()
+            .iter()
+            .filter(|client| client.state == mez_mux::session::ClientState::Attached)
+            .filter(|client| {
+                primary_client_ids.contains(&client.id)
+                    || self.session.observer_attachments().iter().any(|observer| {
+                        observer.client_id == client.id
+                            && primary_client_ids.contains(&observer.view_source_client_id)
+                    })
+            })
+            .map(|client| RuntimeSideEffect::RenderClient {
+                client_id: client.id.clone(),
+                reason,
+            })
+            .collect()
+    }
+
     /// Builds render effects for one primary projection and its attached observers.
     pub(crate) fn render_effects_for_primary_projection(
         &self,
