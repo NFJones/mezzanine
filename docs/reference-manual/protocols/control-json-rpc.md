@@ -84,6 +84,11 @@ The client continues consuming and presenting authoritative v3 updates while a
 primary `terminal/step` acknowledgement is outstanding, so the independent
 render stream is not held behind the control RTT. The control response remains
 the ordered mutation acknowledgement and is still awaited exactly once.
+Presentation advances in bounded output passes: an incomplete or backpressured
+terminal frame cannot prevent acknowledgement polling or capture of follow-on
+stdin. Captured input remains buffered until the preceding acknowledgement is
+decoded, preserving stop-and-wait mutation ordering without leaving keystrokes
+stuck behind physical-terminal output.
 Connection-local status exposes content-free coalesced-trigger, suppressed
 update, snapshot-fallback, maximum-ready-depth, and render-write-wait metrics.
 

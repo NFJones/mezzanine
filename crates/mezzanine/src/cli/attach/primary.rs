@@ -2,16 +2,16 @@
 
 use super::event_stream::read_attached_client_input_or_deadline;
 use super::event_stream::{
-    AttachRenderAction, AttachedRuntimeEventStream, IrohAttachRenderWakeup,
-    coalesce_ready_iroh_render_actions, control_socket_disconnected_without_pending_response,
-    optional_control_socket_event_stream, read_attached_client_input_or_iroh_event,
-    read_attached_client_input_or_runtime_event,
+    AttachRenderAction, AttachedClientInputPoll, AttachedRuntimeEventStream,
+    IrohAttachRenderWakeup, coalesce_ready_iroh_render_actions,
+    control_socket_disconnected_without_pending_response, optional_control_socket_event_stream,
+    read_attached_client_input_or_iroh_event, read_attached_client_input_or_runtime_event,
 };
 use super::requests::{
     read_async_control_response_frames, read_async_control_response_frames_or_disconnected,
     refresh_attached_client_size_async, render_iroh_attach_client_frame_async,
-    request_and_render_primary_view_async, request_primary_resize_async,
-    request_primary_view_frame_async, terminal_step_control_request,
+    render_iroh_attach_client_frame_bounded_async, request_and_render_primary_view_async,
+    request_primary_resize_async, request_primary_view_frame_async, terminal_step_control_request,
     terminal_step_if_changed_control_request, write_async_control_body_or_disconnected,
 };
 use super::responses::{
@@ -127,19 +127,86 @@ where
     .await
 }
 
-/// Presents one authoritative v3 wakeup while its input acknowledgement is pending.
+/// Tracks animation cadence for terminal output retained across bounded passes.
+#[derive(Debug, Default)]
+struct PendingIrohOutput {
+    /// Cadence belonging to the newest frame queued in the terminal adapter.
+    animation_refresh_interval_ms: Option<u64>,
+}
+
+/// Queues one frame and performs at most one bounded terminal-output pass.
+async fn queue_iroh_frame_bounded<I: AsyncAttachedTerminalIo>(
+    terminal_io: &mut I,
+    frame: &super::AttachClientFrame,
+    connected: bool,
+    quality: crate::host::terminal::TerminalIrohStatusQuality,
+    cursor_blink_epoch: std::time::Instant,
+    pending_output: &mut PendingIrohOutput,
+    animation_refresh: &mut AttachAnimationRefresh,
+) -> Result<bool> {
+    let (outcome, report) = render_iroh_attach_client_frame_bounded_async(
+        terminal_io,
+        frame,
+        connected,
+        quality,
+        cursor_blink_epoch,
+    )
+    .await?;
+    if !outcome.connected {
+        return Ok(false);
+    }
+    pending_output.animation_refresh_interval_ms = Some(outcome.animation_refresh_interval_ms);
+    if !report.is_partial()
+        && terminal_io.pending_output_bytes() == 0
+        && let Some(interval_ms) = pending_output.animation_refresh_interval_ms.take()
+    {
+        animation_refresh.update_from_rendered_view(interval_ms);
+    }
+    Ok(true)
+}
+
+/// Advances retained terminal output by at most one bounded flush pass.
+async fn flush_pending_iroh_output<I: AsyncAttachedTerminalIo>(
+    terminal_io: &mut I,
+    pending_output: &mut PendingIrohOutput,
+    animation_refresh: &mut AttachAnimationRefresh,
+) -> Result<bool> {
+    if terminal_io.pending_output_bytes() == 0 {
+        return Ok(true);
+    }
+    let report = match terminal_io
+        .flush_pending_output(
+            crate::host::async_runtime::DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
+        )
+        .await
+    {
+        Ok(report) => report,
+        Err(error) if super::attached_terminal_output_disconnected(&error) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if !report.is_partial()
+        && terminal_io.pending_output_bytes() == 0
+        && let Some(interval_ms) = pending_output.animation_refresh_interval_ms.take()
+    {
+        animation_refresh.update_from_rendered_view(interval_ms);
+    }
+    Ok(true)
+}
+
+/// Presents one authoritative v3 wakeup in a bounded output pass.
 ///
-/// Keeping the control-response future alive while rendering prevents the
-/// independent pushed-render stream from sitting behind a full control RTT.
+/// The response wait regains control after each pass, so pushed rendering can
+/// start before the acknowledgement without starving it or follow-on input.
 #[allow(
     clippy::too_many_arguments,
-    reason = "terminal presentation, queued wakeups, retained frame state, animation cadence, path quality, and cursor timing are independent attach-loop state"
+    reason = "terminal presentation, queued wakeups, retained frame state, output scheduling, animation cadence, path quality, and cursor timing are independent attach-loop state"
 )]
 async fn present_iroh_wakeup_while_step_pending<I: AsyncAttachedTerminalIo>(
     terminal_io: &mut I,
     event_receiver: &mut tokio::sync::mpsc::Receiver<Result<IrohAttachRenderWakeup>>,
     wakeup: IrohAttachRenderWakeup,
     cached_frame: &mut Option<super::AttachClientFrame>,
+    pending_output: &mut PendingIrohOutput,
     animation_refresh: &mut AttachAnimationRefresh,
     quality: crate::host::terminal::TerminalIrohStatusQuality,
     cursor_blink_epoch: std::time::Instant,
@@ -154,52 +221,56 @@ async fn present_iroh_wakeup_while_step_pending<I: AsyncAttachedTerminalIo>(
         if snapshot.invalidate_output {
             terminal_io.invalidate_output_frame().await?;
         }
-        let outcome = render_iroh_attach_client_frame_async(
+        let connected = queue_iroh_frame_bounded(
             terminal_io,
             &snapshot.frame,
             true,
             quality,
             cursor_blink_epoch,
+            pending_output,
+            animation_refresh,
         )
         .await?;
-        if !outcome.connected {
+        if !connected {
             return Err(MezError::invalid_state(
                 "Iroh attach disconnected while rendering a pushed snapshot",
             ));
         }
         *cached_frame = Some(snapshot.frame);
-        animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
     }
     match wakeup.action {
         AttachRenderAction::None | AttachRenderAction::View if received_pushed_snapshot => Ok(()),
         AttachRenderAction::View => {
             if let Some(frame) = cached_frame.as_ref() {
-                let outcome = render_iroh_attach_client_frame_async(
+                let connected = queue_iroh_frame_bounded(
                     terminal_io,
                     frame,
                     true,
                     quality,
                     cursor_blink_epoch,
+                    pending_output,
+                    animation_refresh,
                 )
                 .await?;
-                if !outcome.connected {
+                if !connected {
                     return Err(MezError::invalid_state(
                         "Iroh attach terminal disconnected during local repaint",
                     ));
                 }
-                animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
             }
             Ok(())
         }
         AttachRenderAction::InvalidateAndView => terminal_io.invalidate_output_frame().await,
         AttachRenderAction::Disconnect => {
             if let Some(frame) = cached_frame.as_ref() {
-                let _ = render_iroh_attach_client_frame_async(
+                let _ = queue_iroh_frame_bounded(
                     terminal_io,
                     frame,
                     false,
                     quality,
                     cursor_blink_epoch,
+                    pending_output,
+                    animation_refresh,
                 )
                 .await;
             }
@@ -237,7 +308,13 @@ where
     let mut animation_refresh = AttachAnimationRefresh::default();
     let mut health = super::AttachIrohHealthTracker::default();
     let mut cached_frame: Option<super::AttachClientFrame> = None;
+    let mut pending_output = PendingIrohOutput::default();
+    let mut buffered_input = Vec::new();
+    let mut buffered_eof = false;
     loop {
+        if buffered_eof {
+            return Ok(());
+        }
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
             let outcome = tokio::time::timeout(
@@ -260,29 +337,43 @@ where
         let wake_deadline = connection
             .map(|_| health.deadline().min(size_refresh.deadline()))
             .unwrap_or_else(|| size_refresh.deadline());
-        let input = match event_receiver.as_deref_mut() {
-            Some(event_receiver) => {
-                read_attached_client_input_or_iroh_event(
-                    terminal_io,
-                    event_receiver,
-                    4096,
-                    animation_refresh.deadline(),
-                    wake_deadline,
-                    cached_frame.as_ref().and_then(|frame| frame.event_cutoff),
-                )
-                .await?
+        let wake_deadline = if pushed_render_owner && terminal_io.pending_output_bytes() > 0 {
+            tokio::time::Instant::now() + std::time::Duration::from_millis(1)
+        } else {
+            wake_deadline
+        };
+        let input = if !buffered_input.is_empty() {
+            AttachedClientInputPoll {
+                bytes: std::mem::take(&mut buffered_input),
+                eof: false,
+                render_action: AttachRenderAction::None,
+                pushed_snapshot: None,
             }
-            None => {
-                read_attached_client_input_or_deadline(
-                    terminal_io,
-                    4096,
-                    animation_refresh.deadline(),
-                    animation_refresh
-                        .deadline()
-                        .filter(|deadline| *deadline <= wake_deadline)
-                        .unwrap_or(wake_deadline),
-                )
-                .await?
+        } else {
+            match event_receiver.as_deref_mut() {
+                Some(event_receiver) => {
+                    read_attached_client_input_or_iroh_event(
+                        terminal_io,
+                        event_receiver,
+                        4096,
+                        animation_refresh.deadline(),
+                        wake_deadline,
+                        cached_frame.as_ref().and_then(|frame| frame.event_cutoff),
+                    )
+                    .await?
+                }
+                None => {
+                    read_attached_client_input_or_deadline(
+                        terminal_io,
+                        4096,
+                        animation_refresh.deadline(),
+                        animation_refresh
+                            .deadline()
+                            .filter(|deadline| *deadline <= wake_deadline)
+                            .unwrap_or(wake_deadline),
+                    )
+                    .await?
+                }
             }
         };
         size_refresh.reschedule();
@@ -291,42 +382,60 @@ where
             if snapshot.invalidate_output {
                 terminal_io.invalidate_output_frame().await?;
             }
-            let outcome = render_iroh_attach_client_frame_async(
-                terminal_io,
-                &snapshot.frame,
-                true,
-                health.quality(),
-                cursor_blink_epoch,
-            )
-            .await?;
-            if !outcome.connected {
-                return Err(MezError::invalid_state(
-                    "Iroh attach disconnected while rendering a pushed snapshot",
-                ));
+            if pushed_render_owner {
+                if !queue_iroh_frame_bounded(
+                    terminal_io,
+                    &snapshot.frame,
+                    true,
+                    health.quality(),
+                    cursor_blink_epoch,
+                    &mut pending_output,
+                    &mut animation_refresh,
+                )
+                .await?
+                {
+                    return Err(MezError::invalid_state(
+                        "Iroh attach disconnected while rendering a pushed snapshot",
+                    ));
+                }
+            } else {
+                let outcome = render_iroh_attach_client_frame_async(
+                    terminal_io,
+                    &snapshot.frame,
+                    true,
+                    health.quality(),
+                    cursor_blink_epoch,
+                )
+                .await?;
+                if !outcome.connected {
+                    return Err(MezError::invalid_state(
+                        "Iroh attach disconnected while rendering a pushed snapshot",
+                    ));
+                }
+                animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
             }
             cached_frame = Some(snapshot.frame);
-            animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
             render_requested = false;
         }
         match input.render_action {
             AttachRenderAction::None => {}
             AttachRenderAction::View if pushed_render_owner && !received_pushed_snapshot => {
                 if let Some(frame) = cached_frame.as_ref() {
-                    let outcome = render_iroh_attach_client_frame_async(
+                    let connected = queue_iroh_frame_bounded(
                         terminal_io,
                         frame,
                         true,
                         health.quality(),
                         cursor_blink_epoch,
+                        &mut pending_output,
+                        &mut animation_refresh,
                     )
                     .await?;
-                    if !outcome.connected {
+                    if !connected {
                         return Err(MezError::invalid_state(
                             "Iroh attach terminal disconnected during local animation repaint",
                         ));
                     }
-                    animation_refresh
-                        .update_from_rendered_view(outcome.animation_refresh_interval_ms);
                 }
             }
             AttachRenderAction::View => render_requested = !pushed_render_owner,
@@ -336,14 +445,27 @@ where
             }
             AttachRenderAction::Disconnect => {
                 if let Some(frame) = cached_frame.as_ref() {
-                    let _ = render_iroh_attach_client_frame_async(
-                        terminal_io,
-                        frame,
-                        false,
-                        health.quality(),
-                        cursor_blink_epoch,
-                    )
-                    .await;
+                    if pushed_render_owner {
+                        let _ = queue_iroh_frame_bounded(
+                            terminal_io,
+                            frame,
+                            false,
+                            health.quality(),
+                            cursor_blink_epoch,
+                            &mut pending_output,
+                            &mut animation_refresh,
+                        )
+                        .await;
+                    } else {
+                        let _ = render_iroh_attach_client_frame_async(
+                            terminal_io,
+                            frame,
+                            false,
+                            health.quality(),
+                            cursor_blink_epoch,
+                        )
+                        .await;
+                    }
                 }
                 return Err(MezError::invalid_state(
                     "Iroh event stream disconnected; reattach required",
@@ -354,23 +476,54 @@ where
             return Ok(());
         }
         if input.bytes.is_empty() {
+            if pushed_render_owner
+                && terminal_io.pending_output_bytes() > 0
+                && !flush_pending_iroh_output(
+                    terminal_io,
+                    &mut pending_output,
+                    &mut animation_refresh,
+                )
+                .await?
+            {
+                return Err(MezError::invalid_state(
+                    "Iroh attach terminal disconnected while flushing pushed output",
+                ));
+            }
             let quality_changed = connection.is_some_and(|connection| {
                 health.deadline() <= tokio::time::Instant::now() && health.sample(connection)
             });
             if !render_requested && quality_changed {
                 if let Some(frame) = cached_frame.as_ref() {
-                    let outcome = render_iroh_attach_client_frame_async(
-                        terminal_io,
-                        frame,
-                        true,
-                        health.quality(),
-                        cursor_blink_epoch,
-                    )
-                    .await?;
-                    if !outcome.connected {
-                        return Err(MezError::invalid_state(
-                            "Iroh attach terminal disconnected during local status repaint",
-                        ));
+                    if pushed_render_owner {
+                        if !queue_iroh_frame_bounded(
+                            terminal_io,
+                            frame,
+                            true,
+                            health.quality(),
+                            cursor_blink_epoch,
+                            &mut pending_output,
+                            &mut animation_refresh,
+                        )
+                        .await?
+                        {
+                            return Err(MezError::invalid_state(
+                                "Iroh attach terminal disconnected during local status repaint",
+                            ));
+                        }
+                    } else {
+                        let outcome = render_iroh_attach_client_frame_async(
+                            terminal_io,
+                            frame,
+                            true,
+                            health.quality(),
+                            cursor_blink_epoch,
+                        )
+                        .await?;
+                        if !outcome.connected {
+                            return Err(MezError::invalid_state(
+                                "Iroh attach terminal disconnected during local status repaint",
+                            ));
+                        }
                     }
                 }
                 continue;
@@ -447,6 +600,7 @@ where
             }
         }
         let response = {
+            let response_deadline = tokio::time::Instant::now() + request_timeout;
             let response = tokio::time::timeout(
                 request_timeout,
                 read_async_control_response_frames(stream, 1024 * 1024, 1),
@@ -455,16 +609,51 @@ where
             if pushed_render_owner {
                 if let Some(event_receiver) = event_receiver.as_deref_mut() {
                     loop {
-                        tokio::select! {
-                            biased;
-                            response = response.as_mut() => break response,
-                            event = event_receiver.recv() => match event {
+                        if terminal_io.pending_output_bytes() > 0
+                            && !flush_pending_iroh_output(
+                                terminal_io,
+                                &mut pending_output,
+                                &mut animation_refresh,
+                            )
+                            .await?
+                        {
+                            return Err(MezError::invalid_state(
+                                "Iroh attach terminal disconnected while flushing pushed output",
+                            ));
+                        }
+                        let event = {
+                            let input = read_attached_client_input_or_deadline(
+                                terminal_io,
+                                4096usize.saturating_sub(buffered_input.len()),
+                                None,
+                                response_deadline,
+                            );
+                            tokio::pin!(input);
+                            tokio::select! {
+                                biased;
+                                response = response.as_mut() => break response,
+                                input = &mut input, if !buffered_eof && buffered_input.len() < 4096 => {
+                                    let input = input?;
+                                    if input.eof {
+                                        buffered_input.clear();
+                                        buffered_eof = true;
+                                    } else {
+                                        buffered_input.extend_from_slice(&input.bytes);
+                                    }
+                                    None
+                                }
+                                event = event_receiver.recv() => Some(event),
+                            }
+                        };
+                        if let Some(event) = event {
+                            match event {
                                 Some(Ok(wakeup)) => {
                                     present_iroh_wakeup_while_step_pending(
                                         terminal_io,
                                         event_receiver,
                                         wakeup,
                                         &mut cached_frame,
+                                        &mut pending_output,
                                         &mut animation_refresh,
                                         health.quality(),
                                         cursor_blink_epoch,
@@ -477,7 +666,7 @@ where
                                         "Iroh event stream disconnected; reattach required",
                                     ));
                                 }
-                            },
+                            }
                         }
                     }
                 } else {
@@ -565,6 +754,144 @@ where
 )]
 mod pushed_snapshot_tests {
     use super::*;
+
+    /// Shared synchronization and observation state for slow terminal output.
+    #[derive(Debug, Default)]
+    struct SlowOutputState {
+        input: std::sync::Mutex<std::collections::VecDeque<Vec<u8>>>,
+        input_ready: tokio::sync::Notify,
+        first_output_pass: tokio::sync::Notify,
+        pending_output_bytes: std::sync::atomic::AtomicUsize,
+    }
+
+    /// Terminal fake that retains a pushed frame across many bounded passes.
+    #[derive(Debug)]
+    struct SlowBoundedTerminalIo {
+        state: std::sync::Arc<SlowOutputState>,
+    }
+
+    impl SlowBoundedTerminalIo {
+        /// Creates a slow-output terminal and a handle for deterministic gates.
+        fn new() -> (Self, std::sync::Arc<SlowOutputState>) {
+            let state = std::sync::Arc::new(SlowOutputState::default());
+            (
+                Self {
+                    state: state.clone(),
+                },
+                state,
+            )
+        }
+    }
+
+    impl AsyncAttachedTerminalIo for SlowBoundedTerminalIo {
+        fn poll_readiness<'a>(
+            &'a mut self,
+        ) -> crate::host::async_runtime::AsyncTerminalIoFuture<
+            'a,
+            Vec<crate::host::terminal::AttachedTerminalFdReadiness>,
+        > {
+            self.poll_input_readiness()
+        }
+
+        fn poll_input_readiness<'a>(
+            &'a mut self,
+        ) -> crate::host::async_runtime::AsyncTerminalIoFuture<
+            'a,
+            Vec<crate::host::terminal::AttachedTerminalFdReadiness>,
+        > {
+            Box::pin(async move {
+                loop {
+                    let notified = self.state.input_ready.notified();
+                    if !self.state.input.lock().unwrap().is_empty() {
+                        return Ok(Vec::new());
+                    }
+                    notified.await;
+                }
+            })
+        }
+
+        fn read_input<'a>(
+            &'a mut self,
+            max_bytes: usize,
+        ) -> crate::host::async_runtime::AsyncTerminalIoFuture<'a, Vec<u8>> {
+            Box::pin(async move {
+                let mut input = self
+                    .state
+                    .input
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or_default();
+                input.truncate(max_bytes);
+                Ok(input)
+            })
+        }
+
+        fn write_styled_output_with_modes<'a>(
+            &'a mut self,
+            lines: &'a [String],
+            _line_style_spans: &'a [Vec<super::super::TerminalStyleSpan>],
+            _modes: super::super::AttachedTerminalOutputModes,
+        ) -> crate::host::async_runtime::AsyncTerminalIoFuture<'a, usize> {
+            Box::pin(async move { Ok(lines.iter().map(String::len).sum()) })
+        }
+
+        fn pending_output_bytes(&self) -> usize {
+            self.state
+                .pending_output_bytes
+                .load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn flush_pending_output<'a>(
+            &'a mut self,
+            _max_bytes: usize,
+        ) -> crate::host::async_runtime::AsyncTerminalIoFuture<
+            'a,
+            crate::host::async_runtime::AsyncTerminalOutputWriteReport,
+        > {
+            Box::pin(async move {
+                let pending = self.pending_output_bytes();
+                if pending == 0 {
+                    return Ok(
+                        crate::host::async_runtime::AsyncTerminalOutputWriteReport::completed(0),
+                    );
+                }
+                let remaining = pending - 1;
+                self.state
+                    .pending_output_bytes
+                    .store(remaining, std::sync::atomic::Ordering::SeqCst);
+                Ok(crate::host::async_runtime::AsyncTerminalOutputWriteReport {
+                    bytes_written: 1,
+                    completed: remaining == 0,
+                    pending_bytes: remaining,
+                })
+            })
+        }
+
+        fn write_owned_styled_output_with_modes_bounded<'a>(
+            &'a mut self,
+            _lines: Vec<String>,
+            _line_style_spans: Vec<Vec<super::super::TerminalStyleSpan>>,
+            _modes: super::super::AttachedTerminalOutputModes,
+            _max_bytes: usize,
+        ) -> crate::host::async_runtime::AsyncTerminalIoFuture<
+            'a,
+            crate::host::async_runtime::AsyncTerminalOutputWriteReport,
+        > {
+            Box::pin(async move {
+                const RETAINED_BYTES: usize = 128;
+                self.state
+                    .pending_output_bytes
+                    .store(RETAINED_BYTES - 1, std::sync::atomic::Ordering::SeqCst);
+                self.state.first_output_pass.notify_one();
+                Ok(crate::host::async_runtime::AsyncTerminalOutputWriteReport {
+                    bytes_written: 1,
+                    completed: false,
+                    pending_bytes: RETAINED_BYTES - 1,
+                })
+            })
+        }
+    }
 
     /// Verifies negotiated v3 renders its initial pushed snapshot and exits on
     /// terminal EOF without issuing the legacy RTT-bound `terminal/view`.
@@ -675,6 +1002,102 @@ mod pushed_snapshot_tests {
             terminal_io.written_frames[0].lines,
             ["visible before acknowledgement"]
         );
+    }
+
+    /// Verifies incomplete v3 terminal output cannot starve acknowledgement
+    /// handling or capture of the next keystroke. The second ordered step must
+    /// reach the server while bytes from the pushed frame remain retained.
+    #[tokio::test(flavor = "current_thread")]
+    async fn primary_v3_routes_follow_on_input_before_pushed_output_drains() {
+        let (mut client_stream, mut server_stream) = tokio::io::duplex(16 * 1024);
+        let (mut terminal_io, terminal_state) = SlowBoundedTerminalIo::new();
+        terminal_state
+            .input
+            .lock()
+            .unwrap()
+            .push_back(b"x".to_vec());
+        terminal_state.input_ready.notify_one();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+
+        let server = async {
+            let first_request =
+                read_async_control_response_frames(&mut server_stream, 1024 * 1024, 1)
+                    .await
+                    .unwrap();
+            let (body, _) = decode_control_frame(&first_request, 1024 * 1024).unwrap();
+            assert!(body.contains(r#""input_bytes":[120]"#), "{body}");
+            sender
+                .send(Ok(IrohAttachRenderWakeup::pushed_snapshot(
+                    super::super::event_stream::IrohPushedRenderSnapshot {
+                        revision: 3,
+                        frame: super::super::AttachClientFrame {
+                            lines: vec!["large pushed frame".to_string()],
+                            line_style_spans: vec![Vec::new()],
+                            modes: super::super::AttachedTerminalOutputModes::default(),
+                            iroh_status_slot: None,
+                            event_cutoff: Some(9),
+                        },
+                        invalidate_output: false,
+                    },
+                )))
+                .await
+                .unwrap();
+            terminal_state.first_output_pass.notified().await;
+            terminal_state
+                .input
+                .lock()
+                .unwrap()
+                .push_back(b"y".to_vec());
+            terminal_state.input_ready.notify_one();
+            tokio::io::AsyncWriteExt::write_all(
+                &mut server_stream,
+                &super::super::encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"cli-terminal-step-0","result":{"input_bytes":1,"application":{"forwarded_bytes":1,"mux_actions_applied":0,"mouse_actions_reported":0,"agent_prompt_inputs_applied":0,"view_refresh_required":false,"full_redraw_required":false,"unsupported_actions":[]},"view":null,"ui_theme":null}}"#,
+                ),
+            )
+            .await
+            .unwrap();
+            tokio::io::AsyncWriteExt::flush(&mut server_stream)
+                .await
+                .unwrap();
+
+            let second_request =
+                read_async_control_response_frames(&mut server_stream, 1024 * 1024, 1)
+                    .await
+                    .unwrap();
+            let (body, _) = decode_control_frame(&second_request, 1024 * 1024).unwrap();
+            assert!(body.contains(r#""input_bytes":[121]"#), "{body}");
+            assert!(
+                terminal_state
+                    .pending_output_bytes
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                    > 0,
+                "follow-on input must advance before the pushed frame drains"
+            );
+            tokio::io::AsyncWriteExt::write_all(
+                &mut server_stream,
+                &super::super::encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"cli-terminal-step-1","result":{"input_bytes":1,"application":{"forwarded_bytes":1,"mux_actions_applied":0,"mouse_actions_reported":0,"agent_prompt_inputs_applied":0,"view_refresh_required":false,"full_redraw_required":false,"unsupported_actions":[]},"view":null,"ui_theme":null,"client_detached":true}}"#,
+                ),
+            )
+            .await
+            .unwrap();
+            tokio::io::AsyncWriteExt::flush(&mut server_stream)
+                .await
+                .unwrap();
+        };
+        let client = run_iroh_attached_primary_client_loop_async_with_events(
+            &mut client_stream,
+            &mut terminal_io,
+            None,
+            ClientId::parse('c', "c1".to_string()).unwrap(),
+            Size::new(80, 24).unwrap(),
+            std::time::Duration::from_millis(200),
+            Some(&mut receiver),
+            true,
+        );
+        let (client, ()) = tokio::join!(client, server);
+        client.unwrap();
     }
 }
 

@@ -40,6 +40,12 @@ acknowledgement, injects an authoritative v3 update after the request is in
 flight, and requires local presentation before releasing the acknowledgement.
 This deterministic gate prevents client-side control-RTT head-of-line blocking;
 it is not a substitute for the controlled end-to-end WAN measurements below.
+A second scheduler regression retains most of a pushed terminal frame after
+its first bounded output pass, then makes the acknowledgement and a follow-on
+input byte ready. It requires the next ordered `terminal/step` to reach the
+server while output bytes are still pending. This proves acknowledgement and
+input fairness during incomplete output; it is not an end-to-end latency
+benchmark.
 
 ## Live content-safe counters
 

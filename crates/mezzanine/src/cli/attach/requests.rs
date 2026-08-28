@@ -10,6 +10,9 @@ use super::{
     attached_terminal_output_disconnected, decode_control_frame, encode_control_body,
     incomplete_control_response_error, json_escape,
 };
+use crate::host::async_runtime::{
+    AsyncTerminalOutputWriteReport, DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Runs the terminal step control request operation for this subsystem.
@@ -301,6 +304,48 @@ pub(super) async fn render_iroh_attach_client_frame_async<I: AsyncAttachedTermin
             0
         },
     })
+}
+
+/// Presents at most one bounded output pass for an Iroh-decorated frame.
+///
+/// The owned frame API lets the foreground terminal adapter retain an
+/// incomplete ANSI frame and safely defer a newer snapshot behind bytes that
+/// have already reached the physical terminal.
+pub(super) async fn render_iroh_attach_client_frame_bounded_async<I: AsyncAttachedTerminalIo>(
+    terminal_io: &mut I,
+    frame: &super::AttachClientFrame,
+    connected: bool,
+    quality: crate::host::terminal::TerminalIrohStatusQuality,
+    cursor_blink_epoch: std::time::Instant,
+) -> Result<(PrimaryViewRenderOutcome, AsyncTerminalOutputWriteReport)> {
+    let (lines, line_style_spans) = frame.with_iroh_status(connected, quality);
+    let animation_refresh_interval_ms = frame.modes.animation_refresh_interval_ms;
+    let modes = control_socket_cursor_blink_elapsed(frame.modes, cursor_blink_epoch);
+    let report = match terminal_io
+        .write_owned_styled_output_with_modes_bounded(
+            lines,
+            line_style_spans,
+            modes,
+            DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
+        )
+        .await
+    {
+        Ok(report) => report,
+        Err(error) if attached_terminal_output_disconnected(&error) => {
+            return Ok((
+                PrimaryViewRenderOutcome::disconnected(),
+                AsyncTerminalOutputWriteReport::completed(0),
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    Ok((
+        PrimaryViewRenderOutcome {
+            connected: true,
+            animation_refresh_interval_ms,
+        },
+        report,
+    ))
 }
 
 /// Runs the write async control body or disconnected operation for this subsystem.

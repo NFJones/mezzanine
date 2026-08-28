@@ -3249,7 +3249,12 @@ or delayed flush. At most one encoded render update MAY occupy the write path.
 While a primary mutation acknowledgement is outstanding, the client MUST
 continue consuming and presenting authoritative v3 render updates instead of
 holding them behind the control round trip. Receiving a pushed update MUST NOT
-cancel, duplicate, or reorder the outstanding mutation acknowledgement.
+cancel, duplicate, or reorder the outstanding mutation acknowledgement. The
+client MUST present pushed output in bounded incremental passes and return to
+acknowledgement and terminal-input polling between incomplete passes. It MAY
+buffer follow-on terminal input while one mutation is outstanding, but MUST
+send that input only after the preceding acknowledgement has been decoded so
+primary mutations remain ordered and exactly once.
 After that write and flush complete, the server MUST drain all currently ready
 authorized event slices and exact-client render invalidations to a bounded
 trigger summary, render the latest authoritative state once, and derive the
