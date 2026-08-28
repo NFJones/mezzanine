@@ -238,6 +238,32 @@ fn runtime_terminal_step_renders_inline_only_if_changed() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies `:exit` acknowledges terminal-session termination instead of
+/// attempting to render command feedback against the killed runtime.
+#[test]
+fn runtime_terminal_step_exit_returns_terminated_response() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let prompt = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"exit-prompt","method":"terminal/step","params":{"idempotency_key":"exit-prompt","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[1,58]}}"#,
+        &primary,
+    );
+    let prompt: serde_json::Value = serde_json::from_str(&prompt).unwrap();
+    assert!(prompt.get("result").is_some(), "{prompt}");
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"exit-submit","method":"terminal/step","params":{"idempotency_key":"exit-submit","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[101,120,105,116,13]}}"#,
+        &primary,
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert!(response.get("error").is_none(), "{response}");
+    assert_eq!(response["result"]["session_terminated"], true);
+    assert_eq!(service.lifecycle_state(), RuntimeLifecycleState::Killed);
+}
+
 /// Verifies a framed agent-prompt edit without an inline view wakes the exact
 /// primary client's pushed-render stream.
 ///

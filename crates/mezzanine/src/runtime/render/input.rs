@@ -130,7 +130,9 @@ impl RuntimeSessionService {
                                 )
                             }) {
                             Ok(content) => {
-                                self.present_runtime_command_display_content(content)?;
+                                if self.require_live().is_ok() {
+                                    self.present_runtime_command_display_content(content)?;
+                                }
                             }
                             Err(error) => {
                                 self.show_primary_display_overlay(vec![format!(
@@ -170,7 +172,9 @@ impl RuntimeSessionService {
                                 )
                             }) {
                             Ok(content) => {
-                                self.present_runtime_command_display_content(content)?;
+                                if self.require_live().is_ok() {
+                                    self.present_runtime_command_display_content(content)?;
+                                }
                             }
                             Err(error) => {
                                 self.show_primary_display_overlay(vec![format!(

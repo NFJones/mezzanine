@@ -2021,6 +2021,11 @@ mod tests {
     use super::*;
     use crate::runtime::{RenderInvalidationReason, RuntimeSideEffect};
 
+    // Endpoint construction starts background networking tasks; permit CI
+    // scheduler contention without weakening the shorter behavior deadlines.
+    const IROH_ENDPOINT_TEST_SETUP_TIMEOUT: std::time::Duration =
+        std::time::Duration::from_secs(10);
+
     /// Verifies logical render triggers retain the terminal output frame while
     /// exact-client resize effects still invalidate its unsafe geometry base.
     #[test]
@@ -2747,7 +2752,7 @@ mod tests {
             AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
         let policy = RuntimeIrohTransportPolicy {
             enabled: true,
-            setup_timeout: std::time::Duration::from_secs(2),
+            setup_timeout: IROH_ENDPOINT_TEST_SETUP_TIMEOUT,
             ..RuntimeIrohTransportPolicy::default()
         };
         let server = bind_runtime_iroh_endpoint(policy, SecretKey::generate())
@@ -2816,7 +2821,7 @@ mod tests {
         let policy = RuntimeIrohTransportPolicy {
             enabled: true,
             max_connections: 1,
-            setup_timeout: std::time::Duration::from_secs(2),
+            setup_timeout: IROH_ENDPOINT_TEST_SETUP_TIMEOUT,
             idle_timeout: std::time::Duration::from_secs(5),
             ..RuntimeIrohTransportPolicy::default()
         };
@@ -3826,7 +3831,7 @@ mod tests {
         let policy = RuntimeIrohTransportPolicy {
             enabled: true,
             max_connections: 1,
-            setup_timeout: std::time::Duration::from_secs(2),
+            setup_timeout: IROH_ENDPOINT_TEST_SETUP_TIMEOUT,
             idle_timeout: std::time::Duration::from_secs(5),
             ..RuntimeIrohTransportPolicy::default()
         };
@@ -4184,7 +4189,7 @@ mod tests {
             enabled: true,
             max_connections: 1,
             max_streams_per_connection: 1,
-            setup_timeout: std::time::Duration::from_secs(2),
+            setup_timeout: IROH_ENDPOINT_TEST_SETUP_TIMEOUT,
             idle_timeout: std::time::Duration::from_secs(5),
             ..RuntimeIrohTransportPolicy::default()
         };
