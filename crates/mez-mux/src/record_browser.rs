@@ -510,6 +510,26 @@ impl RecordBrowser {
         self.render_list_page()
     }
 
+    /// Renders the current page with list rows limited to records matching an
+    /// in-page pager query.
+    ///
+    /// Detail and prompt pages remain intact because they do not expose a
+    /// record list for the pager to narrow.
+    pub fn render_page_matching(&self, query: &str) -> RecordBrowserPage {
+        if let Some(detail_index) = self.detail_index {
+            return self.render_detail_page(detail_index);
+        }
+        if query.is_empty() {
+            return self.render_list_page();
+        }
+        let records = self
+            .records
+            .iter()
+            .filter(|record| record_matches_pager_query(self, record, query))
+            .collect::<Vec<_>>();
+        self.render_list_page_with_records(&records)
+    }
+
     fn submit_prompt(&mut self) -> Result<RecordBrowserOutcome> {
         if let Some(RecordBrowserPrompt::Save { input }) = self.prompt.as_ref() {
             let path = input.trim().to_string();
@@ -551,7 +571,13 @@ impl RecordBrowser {
     }
 
     fn render_list_page(&self) -> RecordBrowserPage {
-        let raw_markdown = list_markdown(self);
+        let records = self.records.iter().collect::<Vec<_>>();
+        self.render_list_page_with_records(&records)
+    }
+
+    /// Renders list chrome around the supplied visible record rows.
+    fn render_list_page_with_records(&self, records: &[&RecordBrowserRecord]) -> RecordBrowserPage {
+        let raw_markdown = list_markdown(self, records);
         let mut markdown = String::new();
         if let Some(error) = &self.error {
             markdown.push_str(&format!("Error: {error}\n\n"));
@@ -686,7 +712,7 @@ fn filter_field_name(field: RecordBrowserFilterField) -> &'static str {
     }
 }
 
-fn list_markdown(browser: &RecordBrowser) -> String {
+fn list_markdown(browser: &RecordBrowser, records: &[&RecordBrowserRecord]) -> String {
     let mut lines = vec![format!("# {}", browser.title), String::new()];
     if let Some(scope_indicator) = browser.scope_indicator.as_deref() {
         lines.push(format!("**Scope:** {scope_indicator}"));
@@ -701,7 +727,7 @@ fn list_markdown(browser: &RecordBrowser) -> String {
         "**Keys:** `a` all/default scope · `k` kind · `p` project · `x` text · `s` save".to_string()
     }));
     lines.push(String::new());
-    if browser.records.is_empty() {
+    if records.is_empty() {
         lines.push(
             browser
                 .empty_message
@@ -724,7 +750,7 @@ fn list_markdown(browser: &RecordBrowser) -> String {
                 .collect::<Vec<_>>()
                 .join(" | ")
         ));
-        for record in &browser.records {
+        for record in records {
             let id = if let Some(command) = record.open_command.as_deref() {
                 format!(
                     "[`{}`](mez-agent:{})",
@@ -750,7 +776,7 @@ fn list_markdown(browser: &RecordBrowser) -> String {
             lines.push(format!("| {id} | {values} |"));
         }
     } else {
-        for record in &browser.records {
+        for record in records {
             let label = list_record_label(record);
             if let Some(command) = record.open_command.as_deref() {
                 lines.push(format!(
@@ -764,6 +790,25 @@ fn list_markdown(browser: &RecordBrowser) -> String {
         }
     }
     lines.join("\n")
+}
+
+/// Reports whether a visible list row contains an in-page pager query.
+fn record_matches_pager_query(
+    browser: &RecordBrowser,
+    record: &RecordBrowserRecord,
+    query: &str,
+) -> bool {
+    if browser.table_columns.is_empty() {
+        return list_record_label(record).contains(query);
+    }
+    record.id.contains(query)
+        || browser.table_column_keys.iter().any(|key| {
+            record
+                .metadata
+                .iter()
+                .find(|(record_key, _)| record_key == key)
+                .is_some_and(|(_, value)| value.contains(query))
+        })
 }
 
 fn detail_markdown(

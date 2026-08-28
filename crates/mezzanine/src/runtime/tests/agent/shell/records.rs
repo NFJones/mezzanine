@@ -55,14 +55,13 @@ fn runtime_agent_shell_record_browser_display_retains_overlay_state() {
     assert!(service.pending_record_browser_overlays_is_empty());
 }
 
-/// Verifies record-browser Ctrl+Up and Ctrl+Down move by five lines, while
-/// PageUp and PageDown move by the active modal page.
+/// Verifies record-browser arrows cycle across rows and Ctrl+Up/Ctrl+Down move
+/// the retained cursor by five records.
 ///
-/// Ctrl-arrow navigation provides bounded fine scrolling without changing the
-/// selected record. Page navigation still uses the modal's content-row capacity
-/// and returns to the initial viewport on PageUp.
+/// Browsing long record lists must remain fast without losing a stable logical
+/// selection, including when movement crosses either end of the list.
 #[test]
-fn runtime_record_browser_ctrl_arrows_scroll_five_lines_and_paging_uses_modal_height() {
+fn runtime_record_browser_cursor_wraps_and_ctrl_arrows_move_five_records() {
     let mut service = test_runtime_service();
     let size = Size::new(80, 30).unwrap();
     let primary = service.attach_primary("primary", true, size, 120).unwrap();
@@ -93,24 +92,124 @@ fn runtime_record_browser_ctrl_arrows_scroll_five_lines_and_paging_uses_modal_he
         .unwrap();
 
     apply_record_browser_input(&mut service, &primary, b"\x1b[1;5B");
-    assert_eq!(service.primary_display_overlay().unwrap().scroll_offset, 5);
-
-    apply_record_browser_input(&mut service, &primary, b"\x1b[1;5A");
-    assert_eq!(service.primary_display_overlay().unwrap().scroll_offset, 0);
-
-    apply_record_browser_input(&mut service, &primary, b"\x1b[6~");
     assert_eq!(
-        service.primary_display_overlay().unwrap().scroll_offset,
-        mez_mux::render::modal_overlay_page_rows(size)
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .active_record_id(),
+        Some("issue-5")
     );
 
-    apply_record_browser_input(&mut service, &primary, b"\x1b[5~");
-    assert_eq!(service.primary_display_overlay().unwrap().scroll_offset, 0);
+    apply_record_browser_input(&mut service, &primary, b"\x1b[1;5A");
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .active_record_id(),
+        Some("issue-0")
+    );
 
-    apply_record_browser_input(&mut service, &primary, b"\x1b[6~");
-    assert!(service.primary_display_overlay().unwrap().scroll_offset > 0);
-    apply_record_browser_input(&mut service, &primary, b"s");
-    assert_eq!(service.primary_display_overlay().unwrap().scroll_offset, 0);
+    apply_record_browser_input(&mut service, &primary, b"\x1b[A");
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .active_record_id(),
+        Some("issue-99")
+    );
+    apply_record_browser_input(&mut service, &primary, b"\x1b[B");
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .active_record_id(),
+        Some("issue-0")
+    );
+}
+
+/// Verifies submitting the generic pager search keeps its match highlight and
+/// narrows a record-browser list to matching rows.
+///
+/// Record lists can contain many similarly shaped rows, so search must reduce
+/// the browsable set rather than only moving the viewport to one substring.
+#[test]
+fn runtime_record_browser_search_filters_rows_while_retaining_match_state() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let browser = mez_mux::record_browser::RecordBrowser::new(
+        "Issues",
+        vec![
+            mez_mux::record_browser::RecordBrowserRecord {
+                id: "issue-match".to_string(),
+                open_command: Some("/show-issues issue-match".to_string()),
+                title: "Needle issue".to_string(),
+                metadata: Vec::new(),
+                markdown: String::new(),
+            },
+            mez_mux::record_browser::RecordBrowserRecord {
+                id: "issue-other".to_string(),
+                open_command: Some("/show-issues issue-other".to_string()),
+                title: "Other issue".to_string(),
+                metadata: Vec::new(),
+                markdown: String::new(),
+            },
+        ],
+        Vec::new(),
+    )
+    .unwrap();
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    apply_record_browser_input(&mut service, &primary, b"/");
+    apply_record_browser_input(&mut service, &primary, b"Needle");
+    apply_record_browser_input(&mut service, &primary, b"\r");
+
+    let overlay = service.primary_display_overlay().unwrap();
+    assert_eq!(overlay.search_query.as_deref(), Some("Needle"));
+    assert!(overlay.search_match.is_some());
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("issue-match"))
+    );
+    assert!(
+        !overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("issue-other"))
+    );
+    assert_eq!(overlay.selections.len(), 1);
 }
 
 /// Verifies kind-selector navigation preserves the retained record cursor.
@@ -1094,6 +1193,7 @@ fn runtime_agent_shell_failed_nested_record_command_preserves_parent_overlay() {
         .unwrap();
 
     apply_record_browser_input(&mut service, &primary, b"\x1b[1;5B");
+    apply_record_browser_input(&mut service, &primary, b"\x1b[6~");
     let overlay = service.primary_display_overlay().unwrap();
     let expected_id = overlay
         .record_browser

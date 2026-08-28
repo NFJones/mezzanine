@@ -7644,8 +7644,10 @@ The baseline command capabilities are:
   memory with `d`, and allow
   saving the rendered raw Markdown view to a user-supplied file path,
   overwriting the destination.
-  The shared record browser MUST preserve the generic `/` in-page pager search
-  and MUST support browser-specific keys: `k` for kind dropdown selectors, `p` for
+  The shared record browser MUST preserve the generic `/` in-page pager search,
+  filtering list rows while highlighting matches, and list-row cursor movement
+  MUST wrap at either boundary; Ctrl-Up and Ctrl-Down MUST move that cursor by
+  five records. It MUST support browser-specific keys: `k` for kind dropdown selectors, `p` for
   project/scope filters, `x` for backing-database full-text filters, `s` for
   save-to-file prompts, `Enter` for opening the focused record, and `Esc` for
   closing prompts, returning from detail views to lists, or exiting the

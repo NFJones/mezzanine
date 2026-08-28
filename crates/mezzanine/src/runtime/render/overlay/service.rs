@@ -78,6 +78,49 @@ fn synchronize_record_browser_active_index(overlay: &mut RuntimeDisplayOverlay) 
     }
 }
 
+/// Moves record-browser focus through its visible logical rows, wrapping at
+/// either end and keeping the selected row inside the overlay viewport.
+fn move_record_browser_cursor(
+    overlay: &mut RuntimeDisplayOverlay,
+    delta: isize,
+    size: Size,
+) -> bool {
+    let mut logical_ids = Vec::new();
+    for selection in &overlay.selections {
+        if logical_ids.last() != Some(&selection.logical_id) {
+            logical_ids.push(selection.logical_id);
+        }
+    }
+    let Some(current) = overlay
+        .active_selection_index
+        .and_then(|index| overlay.selections.get(index))
+        .map(|selection| selection.logical_id)
+    else {
+        return false;
+    };
+    let Some(current_index) = logical_ids.iter().position(|id| *id == current) else {
+        return false;
+    };
+    let len = logical_ids.len();
+    let step = delta.rem_euclid(len as isize) as usize;
+    let next = logical_ids[(current_index + step) % len];
+    let Some(selection_index) = overlay
+        .selections
+        .iter()
+        .position(|selection| selection.logical_id == next)
+    else {
+        return false;
+    };
+    if let Some(record_browser) = overlay.record_browser.as_mut() {
+        record_browser.browser.set_active_index(next);
+    }
+    overlay.active_selection_index = Some(selection_index);
+    if let Some(selection) = overlay.selections.get(selection_index) {
+        mez_mux::overlay::scroll_overlay_to_line(overlay, selection.line_index, size);
+    }
+    next != current
+}
+
 impl RuntimeSessionService {
     /// Reflows an active record browser after terminal geometry changes.
     ///
@@ -95,11 +138,13 @@ impl RuntimeSessionService {
         if overlay.record_browser.is_none() {
             return false;
         }
-        let changed = render_record_browser_overlay(
+        let search_query = overlay.search_query.clone();
+        let changed = render_record_browser_overlay_matching(
             overlay,
             &self.presentation.settings.ui_theme,
             terminal_width,
             prose_width,
+            search_query.as_deref(),
         );
         clamp_overlay_scroll(overlay, self.session.authoritative_size);
         changed
@@ -461,20 +506,35 @@ impl RuntimeSessionService {
                 prose_width,
             )));
         }
-        let scroll_delta = match input {
+        let cursor_delta = match input {
             b"\x1b[1;5A" => Some(-5),
             b"\x1b[1;5B" => Some(5),
-            _ => match overlay_input_action(input) {
-                OverlayInputAction::ScrollBy(delta) => {
-                    let page_rows = modal_overlay_page_rows(self.session.authoritative_size).max(1);
-                    Some(if delta.is_negative() {
-                        -(page_rows as isize)
-                    } else {
-                        page_rows as isize
-                    })
-                }
+            _ => match selector_input_action(input) {
+                SelectorInputAction::Previous => Some(-1),
+                SelectorInputAction::Next => Some(1),
                 _ => None,
             },
+        };
+        if let Some(cursor_delta) = cursor_delta {
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(Some(false));
+            };
+            return Ok(Some(move_record_browser_cursor(
+                overlay,
+                cursor_delta,
+                self.session.authoritative_size,
+            )));
+        }
+        let scroll_delta = match overlay_input_action(input) {
+            OverlayInputAction::ScrollBy(delta) => {
+                let page_rows = modal_overlay_page_rows(self.session.authoritative_size).max(1);
+                Some(if delta.is_negative() {
+                    -(page_rows as isize)
+                } else {
+                    page_rows as isize
+                })
+            }
+            _ => None,
         };
         if let Some(scroll_delta) = scroll_delta {
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
@@ -947,10 +1007,20 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         input: &[u8],
     ) -> Result<bool> {
-        let Some(overlay) = self.presentation.primary_display_overlay.as_ref() else {
+        let Some((search_input_is_none, is_record_browser)) = self
+            .presentation
+            .primary_display_overlay
+            .as_ref()
+            .map(|overlay| {
+                (
+                    overlay.search_input.is_none(),
+                    overlay.record_browser.is_some(),
+                )
+            })
+        else {
             return Ok(false);
         };
-        if overlay.search_input.is_none()
+        if search_input_is_none
             && let Some(changed) =
                 self.apply_primary_record_browser_overlay_input(primary_client_id, input)?
         {
@@ -960,6 +1030,9 @@ impl RuntimeSessionService {
         let input_text = std::str::from_utf8(input).ok().filter(|text| {
             !text.is_empty() && text.chars().all(|character| !character.is_control())
         });
+        let submitted_record_browser_search = is_record_browser
+            && !search_input_is_none
+            && matches!(action, OverlayInputAction::SelectActive);
         let outcome = {
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                 return Ok(false);
@@ -972,6 +1045,23 @@ impl RuntimeSessionService {
                 self.session.authoritative_size,
             )
         };
+        if submitted_record_browser_search && matches!(outcome, OverlayInputOutcome::Updated) {
+            let terminal_width = usize::from(self.session.authoritative_size.columns).max(1);
+            let prose_width = terminal_width
+                .min(self.presentation.settings.terminal_agent_wrap_column_cap)
+                .max(1);
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(false);
+            };
+            let query = overlay.search_query.clone();
+            return Ok(render_record_browser_overlay_matching(
+                overlay,
+                &self.presentation.settings.ui_theme,
+                terminal_width,
+                prose_width,
+                query.as_deref(),
+            ));
+        }
         if matches!(outcome, OverlayInputOutcome::Updated)
             && let Some(overlay) = self.presentation.primary_display_overlay.as_mut()
         {

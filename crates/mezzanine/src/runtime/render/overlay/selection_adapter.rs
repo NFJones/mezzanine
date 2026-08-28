@@ -96,10 +96,24 @@ pub(super) fn render_record_browser_overlay(
     terminal_width: usize,
     prose_width: usize,
 ) -> bool {
+    render_record_browser_overlay_matching(overlay, ui_theme, terminal_width, prose_width, None)
+}
+
+/// Rebuilds a record-browser overlay, optionally restricting its list rows to
+/// an in-page pager search while retaining the generic match highlight state.
+pub(super) fn render_record_browser_overlay_matching(
+    overlay: &mut RuntimeDisplayOverlay,
+    ui_theme: &mez_mux::theme::UiTheme,
+    terminal_width: usize,
+    prose_width: usize,
+    search_query: Option<&str>,
+) -> bool {
     let Some(record_browser) = overlay.record_browser.as_ref() else {
         return false;
     };
-    let page = record_browser.browser.render_page();
+    let page = record_browser
+        .browser
+        .render_page_matching(search_query.unwrap_or_default());
     let prompt_selection = record_browser.browser.prompt_selection();
     let list_active_index =
         (!record_browser.browser.is_detail_view()).then(|| record_browser.browser.active_index());
@@ -165,6 +179,17 @@ pub(super) fn render_record_browser_overlay(
     overlay.search_query = None;
     overlay.search_match = None;
     overlay.search_status = None;
+    if let Some(query) = search_query.filter(|query| !query.is_empty()) {
+        overlay.search_query = Some(query.to_string());
+        overlay.search_match = mez_mux::overlay::overlay_next_search_match(overlay, query, 0);
+        overlay.search_status = overlay
+            .search_match
+            .is_none()
+            .then(|| format!("pattern not found: {query}"));
+        if let Some(search_match) = overlay.search_match {
+            overlay.scroll_offset = search_match.line_index;
+        }
+    }
     true
 }
 
