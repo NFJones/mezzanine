@@ -2078,19 +2078,6 @@ fn runtime_posix_dirty_prompt_is_interrupted_before_agent_admission() {
     assert!(hide.contains("visibility=hidden"), "{hide}");
     assert!(!service.agent_subshell_is_active("%1"));
 
-    let interrupt_deadline = Instant::now() + Duration::from_secs(15);
-    while Instant::now() < interrupt_deadline {
-        let updates = service.poll_pane_outputs(8192).unwrap();
-        if !updates.is_empty() {
-            break;
-        }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-    }
-    assert!(
-        !draft_side_effect.exists(),
-        "the dirty POSIX draft executed after cancelled agent-shell admission"
-    );
-
     let responsive_side_effect = root.join("post-interrupt-parent-responsive");
     service
         .write_input_to_pane(
@@ -2107,6 +2094,10 @@ fn runtime_posix_dirty_prompt_is_interrupted_before_agent_admission() {
     assert!(
         responsive_side_effect.is_file(),
         "the interrupted POSIX parent did not accept fresh input"
+    );
+    assert!(
+        !draft_side_effect.exists(),
+        "the dirty POSIX draft executed after cancelled agent-shell admission"
     );
     assert!(service.poll_pane_processes().unwrap().is_empty());
     assert!(service.pane_processes().contains_pane("%1"));

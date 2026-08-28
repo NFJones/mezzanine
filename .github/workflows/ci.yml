@@ -33,6 +33,7 @@ jobs:
       - name: Lint
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
+        timeout-minutes: 15
         run: canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" cargo test --workspace --all-targets --all-features --no-fail-fast --quiet
   macos-release-build:
     name: "Validate: macOS"

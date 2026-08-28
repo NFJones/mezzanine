@@ -13,8 +13,10 @@ use std::os::linux::net::SocketAddrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::fs::symlink;
 use std::os::unix::net::{SocketAddr, UnixListener};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
@@ -27,9 +29,13 @@ use mez_agent::{
     MarkerToken, ShellChildArgument, ShellChildLaunch, ShellClassification, ShellTransaction,
 };
 
+use crate::host::process::wait_for_child_with_timeout;
+
 use super::*;
 
 static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
+static REAL_BUBBLEWRAP_EXECUTION_LOCK: Mutex<()> = Mutex::new(());
+const REAL_BUBBLEWRAP_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Filesystem and host-service fixtures used by one real sandbox launch.
 struct RealBubblewrapFixture {
@@ -182,11 +188,18 @@ fn verified_capability(config: &BubblewrapConfig) -> Option<BubblewrapCapability
         );
         return None;
     }
+    let _execution_guard = REAL_BUBBLEWRAP_EXECUTION_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let plan = bubblewrap_capability_probe_plan(config, "/bin/sh").unwrap();
-    let output = Command::new(&plan.executable)
+    let mut command = Command::new(&plan.executable);
+    command
         .args(&plan.arguments)
-        .output()
-        .unwrap();
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    let output = bounded_child_output(command.spawn().unwrap(), "Bubblewrap capability probe");
     if !output.status.success() {
         eprintln!(
             "skipping real Bubblewrap test: production profile unsupported: {}",
@@ -212,8 +225,54 @@ fn shell_quote(value: &Path) -> String {
     format!("'{}'", value.to_string_lossy().replace('\'', "'\"'\"'"))
 }
 
+/// Collects one test-owned subprocess and terminates its process group at the
+/// shared real-Bubblewrap deadline so a kernel or runner stall cannot pin the
+/// complete libtest harness.
+fn bounded_child_output(mut child: std::process::Child, label: &str) -> Output {
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let timed_out = wait_for_child_with_timeout(&mut child, REAL_BUBBLEWRAP_EXECUTION_TIMEOUT)
+        .unwrap()
+        .is_none();
+    if timed_out {
+        let process_group_id = i32::try_from(child.id()).unwrap();
+        // SAFETY: callers use `process_group(0)`, making the child PID its
+        // process-group ID; the negative value targets only that test group.
+        unsafe {
+            libc::kill(-process_group_id, libc::SIGKILL);
+        }
+        let _ = child.kill();
+    }
+    let status = child.wait().unwrap();
+    let output = Output {
+        status,
+        stdout: stdout_reader.join().unwrap(),
+        stderr: stderr_reader.join().unwrap(),
+    };
+    assert!(
+        !timed_out,
+        "{label} exceeded {REAL_BUBBLEWRAP_EXECUTION_TIMEOUT:?}: stdout={:?} stderr={:?}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
 /// Executes a production launch plan through the typed pane transaction seam.
 fn execute_plan(plan: BubblewrapLaunchPlan, command: &str) -> Output {
+    let _execution_guard = REAL_BUBBLEWRAP_EXECUTION_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let arguments = plan
         .arguments
         .into_iter()
@@ -250,6 +309,7 @@ fn execute_plan(plan: BubblewrapLaunchPlan, command: &str) -> Output {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
@@ -257,7 +317,7 @@ fn execute_plan(plan: BubblewrapLaunchPlan, command: &str) -> Output {
     thread::sleep(Duration::from_millis(50));
     stdin.write_all(input.payload.as_bytes()).unwrap();
     drop(stdin);
-    child.wait_with_output().unwrap()
+    bounded_child_output(child, "real Bubblewrap subprocess")
 }
 
 /// Compiles a real launch plan with the fixture's pane-resolved authority.
