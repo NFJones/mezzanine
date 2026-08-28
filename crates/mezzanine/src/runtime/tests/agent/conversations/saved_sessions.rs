@@ -188,7 +188,6 @@ fn runtime_agent_shell_sorts_named_sessions_first_without_changing_latest() {
     let primary = service
         .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
         .unwrap();
-    service.start_initial_pane_process(None).unwrap();
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -279,6 +278,108 @@ fn runtime_resume_browser_orders_session_columns() {
         ],
         "{row}"
     );
+}
+
+/// Verifies bare `/resume` initially limits conversations to the active pane
+/// directory and that `a` switches between that scoped result and every saved
+/// conversation without closing the picker.
+#[test]
+fn runtime_resume_browser_filters_current_directory_and_toggles_all_sessions() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-directory-scope"));
+    for (conversation_id, directory, created_at) in [
+        ("current-directory", "/tmp/resume-current", 20),
+        ("other-directory", "/tmp/resume-other", 10),
+    ] {
+        transcript_store
+            .append(&TranscriptEntry {
+                conversation_id: conversation_id.to_string(),
+                sequence: 1,
+                created_at_unix_seconds: created_at,
+                role: TranscriptRole::System,
+                turn_id: format!("turn-{conversation_id}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("cwd={directory}"),
+            })
+            .unwrap();
+        transcript_store
+            .append(&TranscriptEntry {
+                conversation_id: conversation_id.to_string(),
+                sequence: 2,
+                created_at_unix_seconds: created_at,
+                role: TranscriptRole::User,
+                turn_id: format!("turn-{conversation_id}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("saved prompt for {conversation_id}"),
+            })
+            .unwrap();
+        transcript_store
+            .name_session(
+                conversation_id,
+                conversation_id,
+                created_at,
+                Some(directory.to_string()),
+            )
+            .unwrap();
+    }
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .set_pane_current_working_directory(pane_id.clone(), PathBuf::from("/tmp/resume-current"));
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/resume")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    let record_ids = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .expect("resume picker should open")
+        .browser
+        .records()
+        .iter()
+        .map(|record| record.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(record_ids, vec!["current-directory"]);
+
+    service
+        .apply_primary_display_overlay_input(&primary, b"a")
+        .unwrap();
+    let all_record_ids = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .expect("all-sessions picker should remain open")
+        .browser
+        .records()
+        .iter()
+        .map(|record| record.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(all_record_ids, vec!["current-directory", "other-directory"]);
+
+    service
+        .apply_primary_display_overlay_input(&primary, b"a")
+        .unwrap();
+    let scoped_record_ids = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .expect("directory-scoped picker should remain open")
+        .browser
+        .records()
+        .iter()
+        .map(|record| record.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(scoped_record_ids, vec!["current-directory"]);
 }
 
 /// Verifies `/resume` lists only conversations that retain a user prompt.
@@ -609,7 +710,10 @@ fn runtime_resume_browser_rejects_deleting_active_sessions() {
 
     let error = service
         .delete_record_browser_entry(
-            &crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::SavedSessions,
+            &crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::SavedSessions {
+                directory: None,
+                default_directory: None,
+            },
             "active-saved",
             0,
         )
@@ -883,6 +987,18 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
             conversation_id: "latest".to_string(),
             sequence: 1,
             created_at_unix_seconds: 10,
+            role: mez_agent::transcript::TranscriptRole::System,
+            turn_id: "turn-latest".to_string(),
+            agent_id: "agent-%8".to_string(),
+            pane_id: "%8".to_string(),
+            content: format!("cwd={}", cwd.display()),
+        })
+        .unwrap();
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "latest".to_string(),
+            sequence: 2,
+            created_at_unix_seconds: 10,
             role: mez_agent::transcript::TranscriptRole::User,
             turn_id: "turn-latest".to_string(),
             agent_id: "agent-%8".to_string(),
@@ -944,6 +1060,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    service.set_pane_current_working_directory("%1", cwd.clone());
 
     let picker = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"resume-list","method":"agent/shell/command","params":{"idempotency_key":"resume-list","input":"/resume"}}"#,

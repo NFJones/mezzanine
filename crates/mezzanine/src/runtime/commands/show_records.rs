@@ -187,7 +187,7 @@ impl RuntimeSessionService {
                     "approval browser records cannot be deleted",
                 ));
             }
-            RuntimeRecordBrowserOverlaySource::SavedSessions => {
+            RuntimeRecordBrowserOverlaySource::SavedSessions { .. } => {
                 if self
                     .agent_shell_store()
                     .sessions()
@@ -291,6 +291,7 @@ impl RuntimeSessionService {
     /// it from the named partition into the ordinary activity ordering.
     pub(crate) fn clear_saved_session_name_from_browser(
         &mut self,
+        source: &RuntimeRecordBrowserOverlaySource,
         record_id: &str,
     ) -> Result<RecordBrowser> {
         let store = self
@@ -299,7 +300,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
         store.clear_session_name(record_id)?;
         self.invalidate_agent_prompt_selector_extra_candidates();
-        let mut browser = self.saved_sessions_record_browser()?;
+        let mut browser = self.refresh_record_browser_overlay_source(source)?;
         browser.set_active_record_id(record_id);
         Ok(browser)
     }
@@ -573,8 +574,11 @@ impl RuntimeSessionService {
     ) -> Result<RecordBrowser> {
         match source {
             RuntimeRecordBrowserOverlaySource::Approvals => self.approval_record_browser(),
-            RuntimeRecordBrowserOverlaySource::SavedSessions => {
-                self.saved_sessions_record_browser()
+            RuntimeRecordBrowserOverlaySource::SavedSessions { directory, .. } => {
+                let mut browser =
+                    self.saved_sessions_record_browser_for_directory(directory.as_deref())?;
+                browser.enable_scope_toggle();
+                Ok(browser)
             }
             RuntimeRecordBrowserOverlaySource::Personalities { pane_id } => {
                 self.personality_record_browser(pane_id)
@@ -681,7 +685,17 @@ impl RuntimeSessionService {
     ) -> RuntimeRecordBrowserOverlaySource {
         match source {
             RuntimeRecordBrowserOverlaySource::Approvals => source.clone(),
-            RuntimeRecordBrowserOverlaySource::SavedSessions => source.clone(),
+            RuntimeRecordBrowserOverlaySource::SavedSessions {
+                directory,
+                default_directory,
+            } => RuntimeRecordBrowserOverlaySource::SavedSessions {
+                directory: if directory.is_some() {
+                    None
+                } else {
+                    default_directory.clone()
+                },
+                default_directory: default_directory.clone(),
+            },
             RuntimeRecordBrowserOverlaySource::Personalities { .. } => source.clone(),
             RuntimeRecordBrowserOverlaySource::Context { .. } => source.clone(),
             RuntimeRecordBrowserOverlaySource::Issues {
@@ -764,7 +778,7 @@ impl RuntimeSessionService {
         let value = value.trim();
         match source {
             RuntimeRecordBrowserOverlaySource::Approvals => Ok(source.clone()),
-            RuntimeRecordBrowserOverlaySource::SavedSessions => Ok(source.clone()),
+            RuntimeRecordBrowserOverlaySource::SavedSessions { .. } => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Personalities { .. } => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Context { .. } => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Issues {
@@ -921,7 +935,9 @@ fn set_record_browser_scope_indicator(
 ) {
     let indicator = match source {
         RuntimeRecordBrowserOverlaySource::Approvals => "live session".to_string(),
-        RuntimeRecordBrowserOverlaySource::SavedSessions => "saved conversations".to_string(),
+        RuntimeRecordBrowserOverlaySource::SavedSessions { directory, .. } => directory
+            .clone()
+            .unwrap_or_else(|| "all directories".to_string()),
         RuntimeRecordBrowserOverlaySource::Personalities { pane_id } => {
             format!("current pane {pane_id}")
         }

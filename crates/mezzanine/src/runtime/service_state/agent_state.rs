@@ -94,7 +94,12 @@ pub(crate) enum RuntimeRecordBrowserOverlaySource {
     /// Live session-wide pending approval queue.
     Approvals,
     /// Durable saved agent conversations displayed by bare `/resume`.
-    SavedSessions,
+    SavedSessions {
+        /// Current directory filter; `None` displays all saved conversations.
+        directory: Option<String>,
+        /// Active pane directory restored when the all-sessions view is toggled off.
+        default_directory: Option<String>,
+    },
     /// Configured personality profiles selectable for one pane.
     Personalities {
         /// Pane whose effective personality is displayed and changed.

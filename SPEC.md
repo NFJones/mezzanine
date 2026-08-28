@@ -7468,7 +7468,9 @@ The baseline command capabilities are:
   modes, duplicate or unknown flags, and extra positional arguments MUST fail
   without changing state.
 - Bare `/resume`: Show resumable saved agent sessions in the shared interactive
-  record-browser table keyed by conversation UUID. The table MUST include name,
+  record-browser table keyed by conversation UUID. The table MUST default to
+  sessions whose saved directory matches the active pane directory; `a` MUST
+  toggle between that directory and all saved sessions. The table MUST include name,
   last activity, directory, transcript entry count, and latest prompt columns.
   Named sessions MUST appear before UUID-only sessions; each partition MUST be
   sorted by last activity with the most recent session first. Prompt summaries
@@ -10220,7 +10222,9 @@ values. New, cleared, and forked conversations MUST start unnamed; forking
 MUST NOT copy the source name.
 
 The `/resume` command MUST provide an interactive picker for saved
-conversations or snapshots. Agent prompt completion for `/resume` MUST include
+conversations or snapshots. Its default conversation view MUST be scoped to the
+active pane directory when known, and `a` MUST toggle to or from all directories.
+Agent prompt completion for `/resume` MUST include
 saved conversation UUIDs from the active transcript store, including named
 conversations with no transcript entries. The picker MUST place named
 conversations before UUID-only conversations and MUST order each partition by

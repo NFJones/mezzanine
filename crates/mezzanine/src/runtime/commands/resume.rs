@@ -399,13 +399,19 @@ impl RuntimeSessionService {
                 body: self.runtime_current_session_display(),
             });
         };
-        let browser = self.saved_sessions_record_browser()?;
+        let directory = self
+            .pane_current_working_directory(pane_id)
+            .map(|path| path.to_string_lossy().into_owned());
+        let browser = self.saved_sessions_record_browser_for_directory(directory.as_deref())?;
         let page = browser.render_page();
         self.register_pending_record_browser_overlay(
             pane_id,
             "resume",
             browser,
-            Some(RuntimeRecordBrowserOverlaySource::SavedSessions),
+            Some(RuntimeRecordBrowserOverlaySource::SavedSessions {
+                directory: directory.clone(),
+                default_directory: directory,
+            }),
         );
         Ok(AgentShellCommandOutcome::Display {
             command: "resume".to_string(),
@@ -414,7 +420,16 @@ impl RuntimeSessionService {
     }
 
     /// Builds the shared table browser for durable saved agent conversations.
+    #[cfg(test)]
     pub(crate) fn saved_sessions_record_browser(&self) -> Result<RecordBrowser> {
+        self.saved_sessions_record_browser_for_directory(None)
+    }
+
+    /// Builds the saved-session browser filtered to one directory when supplied.
+    pub(crate) fn saved_sessions_record_browser_for_directory(
+        &self,
+        directory: Option<&str>,
+    ) -> Result<RecordBrowser> {
         let store = self
             .persistence
             .transcript_store()
@@ -423,6 +438,10 @@ impl RuntimeSessionService {
             .saved_sessions()?
             .into_iter()
             .filter(|session| session.summary.latest_user_prompt.is_some())
+            .filter(|session| {
+                directory
+                    .is_none_or(|directory| session.summary.directory.as_deref() == Some(directory))
+            })
             .collect::<Vec<_>>();
         Self::sort_agent_saved_sessions_for_picker(&mut sessions);
         let prompt_width = usize::from(self.session.authoritative_size.columns)
@@ -444,11 +463,17 @@ impl RuntimeSessionService {
         ]);
         browser.set_help(
             Some(
-                "**Keys:** `↑`/`↓` focus conversation UUID · `Enter` resume · `i` details · `c` clear name · `d` delete · `/` search"
+                "**Keys:** `↑`/`↓` focus conversation UUID · `Enter` resume · `i` details · `a` all/current directory · `c` clear name · `d` delete · `/` search"
                     .to_string(),
             ),
-            Some("**Keys:** `Esc` back · `d` delete · `/` search".to_string()),
+            Some("**Keys:** `Esc` back · `a` all/current directory · `d` delete · `/` search".to_string()),
         );
+        if directory.is_some() {
+            browser.enable_scope_toggle();
+            browser.set_scope_indicator(directory.map(ToOwned::to_owned));
+        } else {
+            browser.set_scope_indicator(Some("all directories".to_string()));
+        }
         browser.set_empty_message(Some("No saved agent sessions are available.".to_string()));
         Ok(browser)
     }
