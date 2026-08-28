@@ -1625,10 +1625,10 @@ async fn serve_registered_runtime_iroh_event_stream(
     let mut sent_render_view: Option<serde_json::Value> = None;
     if push_render {
         let snapshot = handle
-            .render_iroh_primary_snapshot(caller_client_id.clone(), true)
+            .render_iroh_client_snapshot(caller_client_id.clone(), true)
             .await?
             .ok_or_else(|| {
-                MezError::invalid_state("Iroh v3 primary was not renderable after initialization")
+                MezError::invalid_state("Iroh v3 client was not renderable after initialization")
             })?;
         render_revision = 1;
         let view = iroh_render_view_value(&snapshot)?;
@@ -1708,13 +1708,13 @@ async fn serve_registered_runtime_iroh_event_stream(
                 delivered.saturating_add(u64::try_from(triggers.events).unwrap_or(u64::MAX));
             if triggers.render_required {
                 let snapshot = handle
-                    .render_iroh_primary_snapshot(
+                    .render_iroh_client_snapshot(
                         caller_client_id.clone(),
                         triggers.invalidate_output,
                     )
                     .await?
                     .ok_or_else(|| {
-                        MezError::invalid_state("Iroh v3 primary stopped being renderable")
+                        MezError::invalid_state("Iroh v3 client stopped being renderable")
                     })?;
                 let next_revision = render_revision.saturating_add(1);
                 let update = encode_iroh_render_update_frame(
@@ -2074,7 +2074,7 @@ mod tests {
 
         let client = async {
             let base = handle
-                .render_iroh_primary_snapshot(primary, true)
+                .render_iroh_client_snapshot(primary, true)
                 .await
                 .unwrap()
                 .expect("attached primary should render");
@@ -2876,6 +2876,199 @@ mod tests {
             send.finish().unwrap();
             let kill_body = read_test_control_body(&mut recv).await;
             assert!(kill_body.contains(r#""killed":true"#), "{kill_body}");
+            connection.close(VarInt::from_u32(0), b"test complete");
+            client_endpoint.close().await;
+        };
+
+        let actor_task = tokio::spawn(actor.run());
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            let ((), ()) = tokio::join!(listener, client);
+        })
+        .await
+        .unwrap();
+        actor_task.abort();
+        let _ = actor_task.await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Verifies an observer v3 stream pushes exact-observer snapshots over a
+    /// direct listener and applies observer-local resize without a view fetch.
+    #[tokio::test(flavor = "current_thread")]
+    async fn paired_iroh_observer_v3_pushes_resized_snapshot_over_direct_listener() {
+        use secrecy::ExposeSecret;
+
+        use crate::control::encode_control_body;
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::security::remote::{RemoteRoleCeiling, RemoteTrustStore};
+        use crate::test_support::runtime::RuntimeServiceFixture;
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-iroh-observer-v3-listener-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut service = RuntimeServiceFixture::new().build();
+        service
+            .attach_primary(
+                "local-primary",
+                true,
+                mez_mux::layout::Size::new(80, 24).unwrap(),
+                1,
+            )
+            .unwrap();
+        service
+            .start_initial_pane_process(Some("cat >/dev/null"))
+            .unwrap();
+        service.set_config_root(root.clone());
+        let session_id = service.session().id.to_string();
+        let (server_secret, server_endpoint_id) = {
+            let identity = service
+                .integration
+                .ensure_remote_endpoint_identity(&session_id)
+                .unwrap();
+            (
+                identity.secret_key().clone(),
+                identity.endpoint_id().to_string(),
+            )
+        };
+        let invitation = RemoteTrustStore::under_config_root(&root, &session_id)
+            .unwrap()
+            .create_invitation(
+                &server_endpoint_id,
+                RemoteRoleCeiling::Observer,
+                600,
+                crate::runtime::current_unix_seconds(),
+            )
+            .unwrap();
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            max_connections: 1,
+            max_streams_per_connection: 1,
+            setup_timeout: std::time::Duration::from_secs(10),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let server_endpoint = bind_runtime_iroh_endpoint(policy, server_secret)
+            .await
+            .unwrap()
+            .unwrap();
+        let server_addr = server_endpoint.endpoint().addr();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let shutdown_handle = handle.clone();
+
+        let client_endpoint = Endpoint::builder(presets::Minimal)
+            .secret_key(SecretKey::generate())
+            .transport_config(
+                QuicTransportConfig::builder()
+                    .max_concurrent_uni_streams(VarInt::from_u32(1))
+                    .build(),
+            )
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "init",
+            "method": "control/initialize",
+            "params": {
+                "requested_role": "observer",
+                "requested_version": 2,
+                "client_name": "remote-observer",
+                "event_stream_version": 3,
+                "client": {
+                    "name": "remote-observer",
+                    "interactive": true,
+                    "metadata": {"pushed_render_updates": true},
+                    "terminal": {"columns": 70, "rows": 20, "term": "xterm-256color"}
+                },
+                "authentication": {
+                    "mechanism": "extension:iroh_invitation",
+                    "token": invitation.token.expose_secret()
+                }
+            }
+        })
+        .to_string();
+
+        let listener_handle = handle.clone();
+        drop(handle);
+        let listener = async move {
+            let served = serve_runtime_iroh_control_listener(
+                &server_endpoint,
+                &listener_handle,
+                AsyncRuntimeControlConnectionConfig::new(1024 * 1024, 0).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(served, 1);
+            server_endpoint.close().await;
+        };
+        let client = async {
+            let connection = client_endpoint
+                .connect(server_addr, MEZZANINE_IROH_ALPN)
+                .await
+                .unwrap();
+            let (mut send, mut recv) = connection.open_bi().await.unwrap();
+            send.write_all(&encode_control_body(&initialize))
+                .await
+                .unwrap();
+            send.flush().await.unwrap();
+            let initialize_body = read_test_control_body(&mut recv).await;
+            assert!(initialize_body.contains(r#""granted_role":"observer""#));
+            assert!(initialize_body.contains(r#""client_clipboard_write":false"#));
+
+            let mut events =
+                tokio::time::timeout(std::time::Duration::from_secs(3), connection.accept_uni())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            let mut preface = vec![0u8; MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE.len()];
+            events.read_exact(&mut preface).await.unwrap();
+            assert_eq!(preface, MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE);
+            let initial = read_test_control_body(&mut events).await;
+            assert!(
+                initial.contains(r#""method":"render/snapshot""#),
+                "{initial}"
+            );
+            assert!(initial.contains(r#""role":"observer""#), "{initial}");
+            assert!(
+                initial.contains(r#""client_size":{"columns":70,"rows":20}"#),
+                "{initial}"
+            );
+
+            let resize = r#"{"jsonrpc":"2.0","id":"resize","method":"terminal/resize","params":{"idempotency_key":"observer-resize","client_size":{"columns":100,"rows":30}}}"#;
+            send.write_all(&encode_control_body(resize)).await.unwrap();
+            send.flush().await.unwrap();
+            let resize_body = read_test_control_body(&mut recv).await;
+            assert!(resize_body.contains(r#""resized":true"#), "{resize_body}");
+            let resized = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("observer resize should push an authoritative snapshot");
+            assert!(
+                resized.contains(r#""method":"render/snapshot""#),
+                "{resized}"
+            );
+            assert!(resized.contains(r#""revision":2"#), "{resized}");
+            assert!(resized.contains(r#""role":"observer""#), "{resized}");
+            assert!(
+                resized.contains(r#""client_size":{"columns":100,"rows":30}"#),
+                "{resized}"
+            );
+
+            assert_eq!(
+                shutdown_handle.shutdown().await.unwrap(),
+                crate::runtime::RuntimeLifecycleState::Running
+            );
+            send.finish().unwrap();
             connection.close(VarInt::from_u32(0), b"test complete");
             client_endpoint.close().await;
         };

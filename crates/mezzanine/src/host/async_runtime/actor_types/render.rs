@@ -108,10 +108,10 @@ pub struct AsyncRenderedClientFrame {
     pub view: Option<RenderedClientView>,
 }
 
-/// Authoritative rendered state captured for one primary Iroh v3 stream.
+/// Authoritative rendered state captured for one exact-client Iroh v3 stream.
 #[derive(Debug, Clone)]
 pub struct AsyncIrohRenderSnapshot {
-    /// Complete logical view for the exact attached primary.
+    /// Complete logical view for the exact attached primary or observer.
     pub view: RenderedClientView,
     /// Optional client-space slot reserved for the locally composed Iroh pill.
     pub iroh_status_slot: Option<crate::host::terminal::TerminalIrohStatusSlot>,

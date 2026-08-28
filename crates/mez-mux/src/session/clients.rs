@@ -240,6 +240,30 @@ impl Session {
         Ok(client_id)
     }
 
+    /// Updates one attached observer's client-local terminal geometry.
+    pub fn resize_observer_terminal(
+        &mut self,
+        client_id: &ClientId,
+        size: crate::layout::Size,
+    ) -> Result<()> {
+        let client = self
+            .clients
+            .iter_mut()
+            .find(|client| client.id == *client_id)
+            .filter(|client| {
+                client.role == ClientRole::Observer && client.state == ClientState::Attached
+            })
+            .ok_or_else(|| MezError::forbidden("operation requires an attached observer"))?;
+        let terminal = client.terminal.as_mut().ok_or_else(|| {
+            MezError::invalid_state("attached observer has no terminal descriptor")
+        })?;
+        terminal.columns = size.columns;
+        terminal.rows = size.rows;
+        client.last_seen_at_unix_seconds = Some(current_unix_seconds());
+        self.record_event();
+        Ok(())
+    }
+
     /// Runs the attach control client operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

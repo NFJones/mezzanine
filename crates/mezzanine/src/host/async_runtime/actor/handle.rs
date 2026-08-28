@@ -184,13 +184,13 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
-    /// Captures one authoritative exact-primary snapshot for an Iroh v3 stream.
-    pub(crate) async fn render_iroh_primary_snapshot(
+    /// Captures one authoritative exact-client snapshot for an Iroh v3 stream.
+    pub(crate) async fn render_iroh_client_snapshot(
         &self,
         client_id: ClientId,
         invalidate_output: bool,
     ) -> Result<Option<AsyncIrohRenderSnapshot>> {
-        self.request(|reply| AsyncRuntimeRequest::RenderIrohPrimarySnapshot {
+        self.request(|reply| AsyncRuntimeRequest::RenderIrohClientSnapshot {
             client_id,
             invalidate_output,
             reply,

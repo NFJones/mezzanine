@@ -3191,17 +3191,25 @@ MUST remain visible failures and MUST NOT cause downgrade. Unix clients and
 legacy or non-negotiating Iroh clients MUST use event-stream version 1.
 
 Event-stream version 3 is the negotiated boundary for pushed rendered-state
-updates. An authenticated primary v3 stream MUST send an authoritative
-`render/snapshot` immediately after its preface and MUST use pushed render
-state rather than `terminal/view` responses for subsequent presentation
-changes. Each snapshot MUST contain a stream-local monotonic revision, the
-latest ordered event represented by the view, an output-invalidation flag, and
-one complete primary `RenderedClientView`. The view, Iroh status slot, event
-cutoff, and invalidation requirement MUST be captured in one serialized actor
-turn. Clients MUST validate a complete snapshot atomically and MUST reject
-missing, malformed, non-primary, misaligned, or non-monotonic snapshots.
+updates. An authenticated primary or observer v3 stream MUST send an
+authoritative `render/snapshot` immediately after its preface and MUST use
+pushed render state rather than `terminal/view` responses for subsequent
+presentation changes. Each snapshot MUST contain a stream-local monotonic
+revision, the latest ordered event represented by the view, an
+output-invalidation flag, and one complete exact-client `RenderedClientView`.
+The view, Iroh status slot, event cutoff, and invalidation requirement MUST be
+captured in one serialized actor turn. Clients MUST validate a complete
+snapshot atomically and MUST reject missing, malformed, wrong-role,
+misaligned, or non-monotonic snapshots.
 
-After the initial snapshot, a primary v3 stream MAY send `render/delta` when
+Observer push ownership MUST be negotiated in both directions. A new observer
+client MUST opt in through `client.metadata.pushed_render_updates: true`, and
+the server MUST confirm `capabilities.features.pushed_render_updates: true`.
+Without either signal, observer v3 MUST retain notification-plus-fetch behavior
+for compatibility. Primary v3 push ownership remains defined by version 3.
+
+After the initial snapshot, a primary or observer v3 stream MAY send
+`render/delta` when
 the update is non-invalidating, has the same row count, and its framed
 uncompressed JSON is smaller than the corresponding snapshot. A delta MUST
 identify the exact retained `base_revision`, advance to a strictly greater
@@ -3219,8 +3227,11 @@ visibly without partially changing retained state; reattachment starts with a
 fresh authoritative snapshot. ANSI encoding and physical-terminal diffing
 remain client-local.
 
-Primary v3 control responses are mutation acknowledgements and MUST NOT replace
-the event stream's render state. The server MUST send the first available
+Primary and observer v3 control responses are mutation acknowledgements and
+MUST NOT replace the event stream's render state. An observer MAY use
+`terminal/resize` only to update its own retained client terminal dimensions;
+that mutation MUST NOT change primary geometry, another observer's geometry,
+or canonical pane layout. The server MUST send the first available
 snapshot immediately and MUST NOT add a debounce, compression batching window,
 or delayed flush. At most one encoded render update MAY occupy the write path.
 After that write and flush complete, the server MUST drain all currently ready
@@ -3235,8 +3246,10 @@ report coalesced trigger counts, suppressed updates, snapshot fallbacks,
 maximum ready depth, and aggregate/max render-write wait without recording
 terminal contents.
 
-Observer v3 retains notification-plus-fetch behavior until observer-local
-pushed-render geometry is negotiated. Version 2 remains limited to an
+Each observer v3 stream MUST render with terminal geometry retained for that
+exact authenticated observer. Observer resize and disconnect state MUST be
+isolated from the primary and other observers, and reattachment MUST begin
+with a fresh authoritative snapshot. Version 2 remains limited to an
 authenticated interactive Iroh primary. Primary versions 2 and 3 MUST receive
 explicit `client_clipboard_write` capability confirmation before treating
 client-local clipboard effects as negotiated; observer version 3 MUST NOT
@@ -8266,7 +8279,7 @@ The baseline control methods are:
 
 | Method | Params | Result | Notes |
 | --- | --- | --- | --- |
-| `control/initialize` | `{ "client_name": string, "requested_version": integer, "requested_role": string, "client_version": string \| null, "session_target": SessionTarget \| null, "detach_primary_on_disconnect": boolean \| null, "client": ClientDescriptor \| null, "authentication": AuthenticationMaterial \| null }` | `{ "selected_version": integer, "server": ServerIdentity, "session": SessionSummary \| null, "client": ClientState \| null, "granted_role": string, "capabilities": Capabilities }` | First request on a connection unless negotiated externally. Observer initialization returns an attached read-only client immediately. Foreground primary attach clients and one-shot administrative clients set `detach_primary_on_disconnect` when they may create a primary. Cleanup is armed only when that connection actually creates the primary; local same-name reuse preserves the existing owner. |
+| `control/initialize` | `{ "client_name": string, "requested_version": integer, "requested_role": string, "client_version": string \| null, "session_target": SessionTarget \| null, "detach_primary_on_disconnect": boolean \| null, "client": ClientDescriptor \| null, "authentication": AuthenticationMaterial \| null }` | `{ "selected_version": integer, "server": ServerIdentity, "session": SessionSummary \| null, "client": ClientState \| null, "granted_role": string, "capabilities": Capabilities }` | First request on a connection unless negotiated externally. Observer initialization returns an attached read-only client immediately. Observer v3 push requires `client.metadata.pushed_render_updates: true` and server confirmation through `capabilities.features.pushed_render_updates`. Foreground primary attach clients and one-shot administrative clients set `detach_primary_on_disconnect` when they may create a primary. Cleanup is armed only when that connection actually creates the primary; local same-name reuse preserves the existing owner. |
 | `control/shutdown` | `{}` | `{ "closed": boolean }` | Orderly client disconnect. Naturally idempotent. |
 | `control/cancel` | `{ "request_id": string }` | `{ "cancel_requested": boolean }` | May cancel only requests owned by the caller unless primary policy permits broader cancellation. |
 | `session/list` | `{}` | `{ "sessions": [SessionSummary] }` | Read-only and naturally idempotent. |
@@ -8305,6 +8318,7 @@ The baseline control methods are:
 | `buffer/delete` | `{ "name": string, "idempotency_key": string }` | `{ "name": string, "deleted": true }` | Primary-only mutation; unknown names return `not_found`. |
 | `frame/read` | `{ "target": WindowTarget \| PaneTarget }` | `{ "fields": object, "rendered": string }` | Read-only and naturally idempotent. |
 | `terminal/view` | `{ "client_size": { "columns": integer, "rows": integer } \| null, "view_offset": { "row": integer, "column": integer } \| null }` | `{ "view": RenderedClientView \| null, "event_cutoff": integer }` | Read-only for an attached primary or observer. `event_cutoff` identifies the latest ordered event whose applied state is represented when the view is rendered, so clients MAY discard queued ordinary redraw wakeups at or below that cutoff without delaying newer or invalidating events. Observer output begins at its atomic attachment cutoff. `viewport` MAY be accepted as a compatibility alias for `view_offset`. |
+| `terminal/resize` | `{ "idempotency_key": string, "client_size": { "columns": integer, "rows": integer } }` | `{ "resized": true, "client_size": { "columns": integer, "rows": integer } }` | Observer-only mutation of the exact authenticated caller's retained terminal geometry. It MUST NOT change primary geometry, another observer, or canonical pane layout. Negotiated observer v3 uses the resulting exact-client pushed render instead of fetching `terminal/view`. |
 | `terminal/step` | `{ "idempotency_key": string, "client_size": { "columns": integer, "rows": integer } \| null, "render": boolean \| null, "input_bytes": [integer], "extensions": { "render_mode": "if_changed" } \| null }` | `{ "input_bytes": integer, "application": object, "view": RenderedClientView \| null, "event_cutoff": integer \| null, "ui_theme": object \| null, "client_detached": boolean, "session_terminated": boolean }` | Primary-only mutating input and resize step. Every input byte MUST be in `0..255`; `render` defaults to true. `extensions.render_mode = "if_changed"` requests an inline view only when the applied step requires a presentation refresh; it augments rather than overrides `render`, and unsupported values MUST be rejected. When a view is returned, `event_cutoff` identifies the latest ordered event represented at that render boundary; otherwise it is null. `client_detached` reports that this acknowledged step detached the invoking client while leaving the session available for reattachment. |
 | `terminal/command` | `{ "idempotency_key": string, "input": string }` | `{ "executed": integer, "outcomes": [CommandOutcome] }` | Primary-only mutating command-prompt execution. `input` MUST use the terminal command language rather than a JSON-RPC method alias. |
 | `agent/shell/show` | `{ "target": PaneTarget, "idempotency_key": string }` | `{ "agent": AgentState, "visible": true }` | Mutating UI state. |

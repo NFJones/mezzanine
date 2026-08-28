@@ -501,6 +501,7 @@ pub(super) fn initialize_control_connection(
             let mut capabilities = Capabilities::primary();
             capabilities.features.client_clipboard_write =
                 matches!(init.event_stream_version, Some(2 | 3));
+            capabilities.features.pushed_render_updates = init.event_stream_version == Some(3);
             connection.event_stream_client_clipboard_write =
                 capabilities.features.client_clipboard_write;
             connection.event_stream_push_render = init.event_stream_version == Some(3);
@@ -514,6 +515,17 @@ pub(super) fn initialize_control_connection(
             })
         }
         RequestedRole::Observer => {
+            let pushed_render_opt_in = init
+                .client
+                .as_ref()
+                .and_then(|client| client.metadata_json.as_deref())
+                .and_then(|metadata| serde_json::from_str::<serde_json::Value>(metadata).ok())
+                .and_then(|metadata| {
+                    metadata
+                        .get("pushed_render_updates")
+                        .and_then(serde_json::Value::as_bool)
+                })
+                .unwrap_or(false);
             let terminal = init.client.as_ref().and_then(|client| {
                 client_terminal_descriptor_from_control(client.terminal.as_ref())
             });
@@ -530,7 +542,10 @@ pub(super) fn initialize_control_connection(
             connection.detach_client_on_disconnect = true;
             connection.event_stream_version = init.event_stream_version;
             connection.event_stream_client_clipboard_write = false;
-            connection.event_stream_push_render = false;
+            connection.event_stream_push_render =
+                init.event_stream_version == Some(3) && pushed_render_opt_in;
+            let mut capabilities = Capabilities::observer();
+            capabilities.features.pushed_render_updates = connection.event_stream_push_render;
             Ok(InitializeResult {
                 selected_version,
                 server: ServerIdentity::current(),
@@ -541,7 +556,7 @@ pub(super) fn initialize_control_connection(
                     .find(|client| client.id == client_id)
                     .map(|client| client_json(session, client)),
                 granted_role: GrantedRole::Observer,
-                capabilities: Capabilities::observer(),
+                capabilities,
             })
         }
         RequestedRole::Agent => {

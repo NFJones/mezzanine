@@ -209,13 +209,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<AsyncRenderedClientFrame>>,
     },
-    /// Captures one exact primary view and event boundary for Iroh v3 push.
-    RenderIrohPrimarySnapshot {
-        /// Exact attached primary whose authoritative view is requested.
+    /// Captures one exact attached-client view and event boundary for Iroh v3 push.
+    RenderIrohClientSnapshot {
+        /// Exact attached primary or observer whose view is requested.
         client_id: ClientId,
         /// Whether the client must invalidate its retained output frame.
         invalidate_output: bool,
-        /// Receives the complete snapshot when the primary remains renderable.
+        /// Receives the complete snapshot when the client remains renderable.
         reply: oneshot::Sender<Result<Option<super::AsyncIrohRenderSnapshot>>>,
     },
     /// Represents the Render Client Side Effect case for this enumeration.
@@ -1143,7 +1143,7 @@ impl AsyncRuntimeRequest {
             },
             Self::RenderClientView { .. }
             | Self::RenderClientFrame { .. }
-            | Self::RenderIrohPrimarySnapshot { .. }
+            | Self::RenderIrohClientSnapshot { .. }
             | Self::RenderClientSideEffect { .. }
             | Self::EnsureClientRenderTimers { .. }
             | Self::TerminalClientLoopConfigSnapshot { .. } => Family::Render,

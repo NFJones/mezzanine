@@ -56,6 +56,7 @@ pub(super) fn authorize_observer_method(
     match request.method.as_str() {
         "control/initialize" | "control/shutdown" | "control/cancel" => Ok(()),
         "client/detach" => authorize_client_self_detach(caller_client_id, request),
+        "terminal/resize" => Ok(()),
         "terminal/view" => Ok(()),
         "event/list" => Ok(()),
         _ => Err(MezError::forbidden(

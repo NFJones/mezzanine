@@ -710,6 +710,12 @@ pub(super) async fn open_persistent_iroh_control_channel(
     if let Some(session_name) = routing.and_then(IrohSessionRouting::session_name) {
         client["metadata"] = serde_json::json!({"session_name": session_name});
     }
+    if requested_role == "observer" {
+        if client.get("metadata").is_none() {
+            client["metadata"] = serde_json::json!({});
+        }
+        client["metadata"]["pushed_render_updates"] = serde_json::Value::Bool(true);
+    }
     let event_stream_version_candidates = iroh_event_stream_version_candidates(requested_role)?;
     let mut requested_event_stream_version = event_stream_version_candidates[0];
     let mut params = serde_json::json!({
@@ -763,6 +769,8 @@ pub(super) async fn open_persistent_iroh_control_channel(
         requested_role,
         requested_event_stream_version,
     )?;
+    let pushed_render_owner =
+        iroh_pushed_render_negotiated(&response, requested_role, requested_event_stream_version)?;
     if let IrohControlTarget::Invitation {
         profile_name,
         server_addr,
@@ -791,7 +799,8 @@ pub(super) async fn open_persistent_iroh_control_channel(
         compression,
         policy.setup_timeout,
         requested_event_stream_version,
-        requested_role == "primary" && requested_event_stream_version == 3,
+        pushed_render_owner,
+        pushed_render_owner.then(|| requested_role.to_string()),
         client_clipboard_negotiated.then_some(client_clipboard),
     );
     Ok((
@@ -802,7 +811,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
             bridge,
             event_receiver: Some(event_receiver),
             event_task,
-            pushed_render_owner: requested_role == "primary" && requested_event_stream_version == 3,
+            pushed_render_owner,
             setup_timeout: policy.setup_timeout,
         },
         response,
@@ -2128,6 +2137,40 @@ fn iroh_client_clipboard_negotiated(
         && clipboard_capable)
 }
 
+/// Returns whether the negotiated event stream owns rendered state.
+fn iroh_pushed_render_negotiated(
+    body: &str,
+    requested_role: &str,
+    event_stream_version: u32,
+) -> Result<bool> {
+    if event_stream_version != 3 {
+        return Ok(false);
+    }
+    if requested_role == "primary" {
+        return Ok(true);
+    }
+    if requested_role != "observer" {
+        return Err(MezError::invalid_args("unsupported Iroh requested role"));
+    }
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_state("invalid Iroh initialize response"))?;
+    let result = value
+        .get("result")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| MezError::invalid_state("Iroh initialize response omitted result"))?;
+    let observer_granted = result
+        .get("granted_role")
+        .and_then(serde_json::Value::as_str)
+        == Some("observer");
+    let capable = result
+        .get("capabilities")
+        .and_then(|capabilities| capabilities.get("features"))
+        .and_then(|features| features.get("pushed_render_updates"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    Ok(observer_granted && capable)
+}
+
 fn validate_iroh_host_only_initialize_response(body: &str) -> Result<Option<SecretString>> {
     let value: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_state("invalid host-only Iroh initialize response"))?;
@@ -2274,7 +2317,8 @@ mod tests {
     use super::{
         RemoteRoleCeiling, ensure_iroh_attach_role_allowed, iroh_client_clipboard_negotiated,
         iroh_event_stream_version_candidates, iroh_initialize_rejected_event_stream_version,
-        validate_iroh_host_only_initialize_response, validate_iroh_initialize_response,
+        iroh_pushed_render_negotiated, validate_iroh_host_only_initialize_response,
+        validate_iroh_initialize_response,
     };
 
     #[test]
@@ -2338,6 +2382,20 @@ mod tests {
         assert!(iroh_client_clipboard_negotiated(capable_primary, "primary", 2).unwrap());
         assert!(!iroh_client_clipboard_negotiated(legacy_primary, "primary", 2).unwrap());
         assert!(!iroh_client_clipboard_negotiated(observer, "observer", 1).unwrap());
+    }
+
+    /// Verifies observer v3 takes render ownership only when the server
+    /// explicitly advertises pushed updates; older observer-v3 servers retain
+    /// notification-plus-fetch behavior.
+    #[test]
+    fn iroh_observer_pushed_render_requires_explicit_capability() {
+        let capable_observer = r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"observer","capabilities":{"features":{"pushed_render_updates":true}}}}"#;
+        let legacy_observer = r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"observer","capabilities":{"features":{}}}}"#;
+
+        assert!(iroh_pushed_render_negotiated(capable_observer, "observer", 3).unwrap());
+        assert!(!iroh_pushed_render_negotiated(legacy_observer, "observer", 3).unwrap());
+        assert!(!iroh_pushed_render_negotiated(capable_observer, "observer", 1).unwrap());
+        assert!(iroh_pushed_render_negotiated(legacy_observer, "primary", 3).unwrap());
     }
 
     /// Verifies primary and observer attach use their role-specific event-stream

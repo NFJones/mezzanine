@@ -1,6 +1,9 @@
 //! Attached-client JSON-RPC request construction and control transport helpers.
 
-use super::responses::{control_response_forbidden, terminal_step_response_refresh_requirement};
+use super::responses::{
+    control_response_forbidden, ensure_control_response_success,
+    terminal_step_response_refresh_requirement,
+};
 use super::{
     AsyncAttachedTerminalIo, AttachedTerminalOutputModes, ClientId, MezError,
     PrimaryResizeRequestOutcome, PrimaryViewRenderOutcome, Result, Size, TerminalStyleSpan,
@@ -88,6 +91,20 @@ pub(super) fn terminal_resize_control_request(
     format!(
         r#"{{"jsonrpc":"2.0","id":"cli-terminal-resize-{iteration}","method":"terminal/step","params":{{"idempotency_key":"cli-{}-terminal-resize-{iteration}","client_size":{{"columns":{},"rows":{}}},"render":false,"input_bytes":[]}}}}"#,
         json_escape(primary_client_id.as_str()),
+        client_size.columns,
+        client_size.rows,
+    )
+}
+
+/// Builds an observer-local terminal resize request for pushed rendering.
+pub(super) fn observer_resize_control_request(
+    iteration: u64,
+    observer_client_id: &ClientId,
+    client_size: Size,
+) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":"cli-observer-resize-{iteration}","method":"terminal/resize","params":{{"idempotency_key":"cli-{}-observer-resize-{iteration}","client_size":{{"columns":{},"rows":{}}}}}}}"#,
+        json_escape(observer_client_id.as_str()),
         client_size.columns,
         client_size.rows,
     )
@@ -201,6 +218,33 @@ where
         return Ok(PrimaryResizeRequestOutcome::disconnected());
     }
     let _ = terminal_step_response_refresh_requirement(body.as_str())?;
+    Ok(PrimaryResizeRequestOutcome { connected: true })
+}
+
+/// Notifies the runtime that the attached observer's local geometry changed.
+pub(super) async fn request_observer_resize_async<S>(
+    stream: &mut S,
+    observer_client_id: &ClientId,
+    client_size: Size,
+    iteration: u64,
+) -> Result<PrimaryResizeRequestOutcome>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let request = observer_resize_control_request(iteration, observer_client_id, client_size);
+    if !write_async_control_body_or_disconnected(stream, &request).await? {
+        return Ok(PrimaryResizeRequestOutcome::disconnected());
+    }
+    let Some(response) =
+        read_async_control_response_frames_or_disconnected(stream, 1024 * 1024, 1).await?
+    else {
+        return Ok(PrimaryResizeRequestOutcome::disconnected());
+    };
+    let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
+    if control_response_forbidden(body.as_str())? {
+        return Ok(PrimaryResizeRequestOutcome::disconnected());
+    }
+    ensure_control_response_success(body.as_str())?;
     Ok(PrimaryResizeRequestOutcome { connected: true })
 }
 

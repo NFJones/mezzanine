@@ -8,8 +8,8 @@ use super::primary::{
     run_control_socket_attached_primary_client, run_iroh_attached_primary_client,
 };
 use super::responses::{
-    ensure_control_response_success, event_binding_token_from_initialize_response,
-    primary_client_id_from_initialize_response,
+    attached_client_id_from_initialize_response, ensure_control_response_success,
+    event_binding_token_from_initialize_response,
 };
 use super::{
     Args, AsRawFd, CliEnv, CliOutputFormat, IsTerminal, MezError, Result, SessionRecord,
@@ -96,20 +96,23 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         let event_receiver = channel.take_event_receiver()?;
         let connection = channel.connection();
         let pushed_render_owner = channel.pushed_render_owner();
+        let attached_client_id = attached_client_id_from_initialize_response(&initialize_body)?;
         let run_result = if request.requested_role == "observer" {
             run_iroh_attached_observer_client(
                 channel.stream_mut(),
                 &connection,
+                attached_client_id,
                 terminal_size,
+                std::time::Duration::from_secs(30),
                 event_receiver,
+                pushed_render_owner,
             )
             .await
         } else {
-            let primary_client_id = primary_client_id_from_initialize_response(&initialize_body)?;
             run_iroh_attached_primary_client(
                 channel.stream_mut(),
                 &connection,
-                primary_client_id,
+                attached_client_id,
                 terminal_size,
                 std::time::Duration::from_secs(30),
                 event_receiver,
@@ -155,7 +158,7 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         stream.flush()?;
         let response = read_control_response_frames(&mut stream, 1024 * 1024, 1)?;
         let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
-        let primary_client_id = primary_client_id_from_initialize_response(body.as_str())?;
+        let primary_client_id = attached_client_id_from_initialize_response(body.as_str())?;
         let event_binding_token = event_binding_token_from_initialize_response(body.as_str())?;
         return run_control_socket_attached_primary_client(
             &mut stream,

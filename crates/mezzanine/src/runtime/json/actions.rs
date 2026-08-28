@@ -55,6 +55,7 @@ pub(crate) fn runtime_mutating_method(method: &str) -> bool {
             | "buffer/delete"
             | "client/detach"
             | "client/set_layout_owner"
+            | "terminal/resize"
             | "terminal/step"
             | "terminal/command"
             | "agent/shell/command"

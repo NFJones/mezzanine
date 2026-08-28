@@ -9,19 +9,20 @@
 use super::{
     AgentId, AttachedTerminalClientStepPlan, ClientRole, ClientState, ClientViewRole, EventKind,
     MezError, PaneCaptureSource, PaneId, Result, RuntimeLifecycleState, RuntimeSessionService,
-    SenderIdentity, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig,
-    destination_target_checked_resolved, dispatch_control_request_for_client_with_agent_state,
-    dispatch_control_request_with_captures, json_escape, layout_state_json,
-    pane_id_from_runtime_agent_id, pane_target_checked_resolved, rendered_client_view_json,
-    route_client_input_actions, runtime_json_bool_field, runtime_json_creation_command,
-    runtime_json_input_bytes, runtime_json_optional_client_size, runtime_json_optional_size_field,
-    runtime_json_optional_view_offset, runtime_json_rpc_error, runtime_json_size,
-    runtime_json_start_directory, runtime_json_string_field,
+    RuntimeSideEffect, SenderIdentity, SplitDirection, TerminalClientLoopAction,
+    TerminalClientLoopConfig, destination_target_checked_resolved,
+    dispatch_control_request_for_client_with_agent_state, dispatch_control_request_with_captures,
+    json_escape, layout_state_json, pane_id_from_runtime_agent_id, pane_target_checked_resolved,
+    rendered_client_view_json, route_client_input_actions, runtime_json_bool_field,
+    runtime_json_creation_command, runtime_json_input_bytes, runtime_json_optional_client_size,
+    runtime_json_optional_size_field, runtime_json_optional_view_offset, runtime_json_rpc_error,
+    runtime_json_size, runtime_json_start_directory, runtime_json_string_field,
     runtime_json_terminal_step_render_if_changed, runtime_mcp_retry_event_payload,
     runtime_mcp_retry_result_json, runtime_mutating_response_is_cacheable, runtime_pane_by_id,
     runtime_pane_readiness_state_name, runtime_split_direction, runtime_terminal_step_result_json,
     source_pane_target_checked_resolved, window_target_checked_resolved,
 };
+use crate::runtime::RenderInvalidationReason;
 
 impl RuntimeSessionService {
     /// Runs the dispatch runtime mutating request operation for this subsystem.
@@ -117,6 +118,7 @@ impl RuntimeSessionService {
             }
             "window/close" => self.dispatch_runtime_window_close(primary_client_id, params),
             "session/kill" => self.dispatch_runtime_session_kill(primary_client_id, params),
+            "terminal/resize" => self.dispatch_runtime_observer_resize(primary_client_id, params),
             "terminal/step" => self.dispatch_runtime_terminal_step(primary_client_id, params),
             "terminal/command" => self.dispatch_runtime_terminal_command(primary_client_id, params),
             "agent/shell/command" => {
@@ -131,6 +133,28 @@ impl RuntimeSessionService {
                 "runtime control method was filtered incorrectly",
             )),
         }
+    }
+
+    /// Updates only the authenticated observer's retained terminal geometry.
+    pub(super) fn dispatch_runtime_observer_resize(
+        &mut self,
+        observer_client_id: &mez_core::ids::ClientId,
+        params: &str,
+    ) -> Result<String> {
+        self.require_live()?;
+        let size = runtime_json_optional_client_size(params)?
+            .ok_or_else(|| MezError::invalid_args("terminal/resize requires client_size"))?;
+        self.session
+            .resize_observer_terminal(observer_client_id, size)?;
+        self.presentation
+            .defer_render_effects([RuntimeSideEffect::RenderClient {
+                client_id: observer_client_id.clone(),
+                reason: RenderInvalidationReason::Resize,
+            }]);
+        Ok(format!(
+            r#"{{"resized":true,"client_size":{{"columns":{},"rows":{}}}}}"#,
+            size.columns, size.rows
+        ))
     }
 
     /// Detaches one exact client through runtime lifecycle and presentation owners.

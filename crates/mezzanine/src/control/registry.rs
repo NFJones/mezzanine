@@ -90,6 +90,8 @@ pub(super) enum ControlDispatchKind {
     FrameRead,
     /// Render a terminal view.
     TerminalView,
+    /// Update one attached client's local terminal geometry.
+    TerminalResize,
     /// Step terminal input.
     TerminalStep,
     /// Execute a terminal command.
@@ -471,6 +473,11 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         method: "terminal/view",
         dispatch: ControlDispatchKind::TerminalView,
         params_schema: ControlParamsSchema::Allowed(&["client_size", "view_offset", "viewport"]),
+    },
+    ControlMethodSpec {
+        method: "terminal/resize",
+        dispatch: ControlDispatchKind::TerminalResize,
+        params_schema: ControlParamsSchema::Allowed(&["idempotency_key", "client_size"]),
     },
     ControlMethodSpec {
         method: "terminal/step",

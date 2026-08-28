@@ -536,6 +536,13 @@ pub(super) fn dispatch_parsed_request(
         ControlDispatchKind::TerminalView => {
             Err(MezError::invalid_state("terminal runtime is not attached"))
         }
+        ControlDispatchKind::TerminalResize => {
+            let params = request.params.as_deref().ok_or_else(|| {
+                MezError::invalid_args("terminal/resize requires a params object")
+            })?;
+            require_idempotency_key(params)?;
+            Err(MezError::invalid_state("terminal runtime is not attached"))
+        }
         ControlDispatchKind::TerminalStep => {
             let params = request
                 .params

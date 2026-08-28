@@ -251,12 +251,31 @@ pub(super) struct IrohPushedRenderSnapshot {
 }
 
 /// Complete client render base retained for atomic v3 delta application.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct IrohRetainedRenderState {
     /// Last completely validated stream-local render revision.
     revision: u64,
     /// Complete rendered-view JSON represented by `revision`.
     view: Option<serde_json::Value>,
+    /// Role this negotiated stream is authorized to render.
+    expected_role: String,
+}
+
+impl IrohRetainedRenderState {
+    /// Starts an empty retained base for one negotiated client role.
+    fn new(expected_role: impl Into<String>) -> Self {
+        Self {
+            revision: 0,
+            view: None,
+            expected_role: expected_role.into(),
+        }
+    }
+}
+
+impl Default for IrohRetainedRenderState {
+    fn default() -> Self {
+        Self::new("primary")
+    }
 }
 
 impl IrohAttachRenderWakeup {
@@ -519,6 +538,7 @@ pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
     setup_timeout: std::time::Duration,
     event_stream_version: u32,
     allow_pushed_render: bool,
+    pushed_render_role: Option<String>,
     clipboard: Option<crate::host::terminal::HostClipboard>,
 ) -> (
     tokio::sync::mpsc::Receiver<Result<IrohAttachRenderWakeup>>,
@@ -536,6 +556,7 @@ pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
             setup_timeout,
             event_stream_version,
             allow_pushed_render,
+            pushed_render_role,
             clipboard_sender.as_ref(),
             &sender,
         )
@@ -552,12 +573,17 @@ pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
     (receiver, task)
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "connection setup, negotiated framing, render ownership, clipboard routing, and delivery are independent event receiver inputs"
+)]
 async fn receive_iroh_runtime_events(
     connection: iroh::endpoint::Connection,
     compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
     event_stream_version: u32,
     allow_pushed_render: bool,
+    pushed_render_role: Option<String>,
     clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
     sender: &tokio::sync::mpsc::Sender<Result<IrohAttachRenderWakeup>>,
 ) -> Result<()> {
@@ -611,7 +637,8 @@ async fn receive_iroh_runtime_events(
     let mut clipboard_assembler = clipboard_sender
         .is_some()
         .then(IrohClipboardAssembler::default);
-    let mut render_state = IrohRetainedRenderState::default();
+    let mut render_state =
+        IrohRetainedRenderState::new(pushed_render_role.unwrap_or_else(|| "primary".to_string()));
     let mut buffer = [0u8; ATTACH_EVENT_STREAM_READ_BUFFER_BYTES];
     loop {
         let read = if let Some(deadline) = clipboard_assembler
@@ -816,9 +843,11 @@ fn parse_iroh_pushed_render_snapshot(
         .get("view")
         .filter(|view| view.is_object())
         .ok_or_else(|| MezError::invalid_state("Iroh render snapshot omitted its view"))?;
-    if view.get("role").and_then(serde_json::Value::as_str) != Some("primary") {
+    if view.get("role").and_then(serde_json::Value::as_str)
+        != Some(render_state.expected_role.as_str())
+    {
         return Err(MezError::invalid_state(
-            "Iroh render snapshot was not a primary view",
+            "Iroh render snapshot role did not match the negotiated client",
         ));
     }
     let line_count = view
@@ -935,9 +964,11 @@ fn parse_iroh_pushed_render_delta(
             "Iroh render delta metadata contains row state",
         ));
     }
-    if metadata.get("role").and_then(serde_json::Value::as_str) != Some("primary") {
+    if metadata.get("role").and_then(serde_json::Value::as_str)
+        != Some(render_state.expected_role.as_str())
+    {
         return Err(MezError::invalid_state(
-            "Iroh render delta was not a primary view",
+            "Iroh render delta role did not match the negotiated client",
         ));
     }
 
@@ -1340,6 +1371,7 @@ mod iroh_setup_tests {
             1,
             false,
             None,
+            None,
         );
 
         let error = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
@@ -1378,6 +1410,7 @@ mod iroh_setup_tests {
             std::time::Duration::from_secs(1),
             1,
             false,
+            None,
             None,
         );
         let mut stream = server_connection.open_uni().await.unwrap();
@@ -1425,6 +1458,7 @@ mod iroh_setup_tests {
             std::time::Duration::from_secs(1),
             3,
             false,
+            None,
             None,
         );
         let mut stream = server_connection.open_uni().await.unwrap();
@@ -1477,6 +1511,7 @@ mod iroh_setup_tests {
             std::time::Duration::from_secs(1),
             2,
             false,
+            None,
             Some(clipboard),
         );
         let mut stream = server_connection.open_uni().await.unwrap();

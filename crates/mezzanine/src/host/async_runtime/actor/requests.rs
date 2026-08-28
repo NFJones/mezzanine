@@ -340,7 +340,7 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
-            AsyncRuntimeRequest::RenderIrohPrimarySnapshot {
+            AsyncRuntimeRequest::RenderIrohClientSnapshot {
                 client_id,
                 invalidate_output,
                 reply,
@@ -351,10 +351,23 @@ impl AsyncRuntimeSessionActor {
                     let Some(client_size) = self.attached_client_size(&client_id)? else {
                         return Ok(None);
                     };
-                    self.service.prepare_client_render(
-                        &client_id,
-                        mez_mux::presentation::ClientViewRole::Primary,
-                    )?;
+                    let role = match self
+                        .service
+                        .session()
+                        .clients()
+                        .iter()
+                        .find(|client| client.id == client_id)
+                        .map(|client| client.role)
+                    {
+                        Some(mez_mux::session::ClientRole::Primary) => {
+                            mez_mux::presentation::ClientViewRole::Primary
+                        }
+                        Some(mez_mux::session::ClientRole::Observer) => {
+                            mez_mux::presentation::ClientViewRole::Observer
+                        }
+                        _ => return Ok(None),
+                    };
+                    self.service.prepare_client_render(&client_id, role)?;
                     let config = self
                         .service
                         .terminal_client_loop_config(Default::default())?;
@@ -362,7 +375,7 @@ impl AsyncRuntimeSessionActor {
                         .service
                         .render_client_view_for_client_with_resolved_config(
                             &client_id,
-                            mez_mux::presentation::ClientViewRole::Primary,
+                            role,
                             client_size,
                             &config,
                         )?

@@ -828,7 +828,7 @@ pub(super) fn server_identity_json(server: &ServerIdentity) -> String {
 /// on duplicated control-flow logic.
 pub(super) fn capabilities_json(capabilities: &Capabilities) -> String {
     format!(
-        r#"{{"protocol_version":{},"methods":{},"event_types":{},"roles":{},"transports":{},"limits":{{"max_frame_size":{},"max_request_size":{},"max_event_replay_retention":{},"max_capture_payload_size":{},"max_attached_primaries":{}}},"features":{{"tcp":{},"event_replay":{},"observers":{},"mcp":{},"snapshots":{},"audit":{},"approval_bypass":{},"multiple_primaries":{},"client_local_focus":{},"layout_owner":{},"client_bound_events":{},"client_clipboard_write":{}}}}}"#,
+        r#"{{"protocol_version":{},"methods":{},"event_types":{},"roles":{},"transports":{},"limits":{{"max_frame_size":{},"max_request_size":{},"max_event_replay_retention":{},"max_capture_payload_size":{},"max_attached_primaries":{}}},"features":{{"tcp":{},"event_replay":{},"observers":{},"mcp":{},"snapshots":{},"audit":{},"approval_bypass":{},"multiple_primaries":{},"client_local_focus":{},"layout_owner":{},"client_bound_events":{},"pushed_render_updates":{},"client_clipboard_write":{}}}}}"#,
         capabilities.protocol_version,
         static_str_array_json(&capabilities.methods),
         static_str_array_json(&capabilities.event_types),
@@ -850,6 +850,7 @@ pub(super) fn capabilities_json(capabilities: &Capabilities) -> String {
         capabilities.features.client_local_focus,
         capabilities.features.layout_owner,
         capabilities.features.client_bound_events,
+        capabilities.features.pushed_render_updates,
         capabilities.features.client_clipboard_write
     )
 }

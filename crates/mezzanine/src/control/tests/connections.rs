@@ -648,7 +648,7 @@ fn authenticated_iroh_observer_negotiates_event_stream_version_three_without_eff
         .unwrap();
     let mut cache = ControlIdempotencyCache::default();
     let input = encode_control_body(
-        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"remote-v3-observer","requested_version":2,"requested_role":"observer","event_stream_version":3,"client":{"name":"remote-v3-observer","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"remote-v3-observer","requested_version":2,"requested_role":"observer","event_stream_version":3,"client":{"name":"remote-v3-observer","interactive":true,"metadata":{"pushed_render_updates":true},"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
     );
 
     let (output, _) = handle_control_frames_for_connection(
@@ -664,6 +664,53 @@ fn authenticated_iroh_observer_negotiates_event_stream_version_three_without_eff
     let expected_client = connection.caller_client_id().unwrap().clone();
     assert!(body.contains(r#""granted_role":"observer""#), "{body}");
     assert!(body.contains(r#""client_clipboard_write":false"#), "{body}");
+    assert!(body.contains(r#""pushed_render_updates":true"#), "{body}");
+    assert_eq!(
+        connection.take_event_stream_start(),
+        Some((expected_client, 3, false, true))
+    );
+}
+
+/// Verifies an older observer-v3 client that does not opt in retains the
+/// notification-plus-fetch stream instead of receiving unexpected render frames.
+#[test]
+fn authenticated_iroh_observer_v3_requires_pushed_render_opt_in() {
+    use crate::security::remote::{RemoteHostRoutingAuthority, RemotePrincipal, RemoteRoleCeiling};
+
+    let (mut session, _primary) = test_session();
+    let mut connection = ControlConnectionState::new(false, false);
+    connection
+        .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint(
+            "endpoint-v3-legacy-observer",
+        ))
+        .unwrap();
+    connection
+        .bind_remote_principal(RemotePrincipal {
+            trust_record_id: "trust-v3-legacy-observer".to_string(),
+            endpoint_id: "endpoint-v3-legacy-observer".to_string(),
+            role_ceiling: RemoteRoleCeiling::Observer,
+            host_routing: RemoteHostRoutingAuthority::default(),
+            requested_role: RequestedRole::Observer,
+        })
+        .unwrap();
+    let mut cache = ControlIdempotencyCache::default();
+    let input = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"legacy-v3-observer","requested_version":2,"requested_role":"observer","event_stream_version":3,"client":{"name":"legacy-v3-observer","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+    );
+
+    let (output, _) = handle_control_frames_for_connection(
+        &input,
+        4096,
+        &mut session,
+        &mut connection,
+        &mut cache,
+    )
+    .unwrap();
+    let (body, _) = decode_control_frame(&output, 4096).unwrap();
+    let expected_client = connection.caller_client_id().unwrap().clone();
+
+    assert!(body.contains(r#""granted_role":"observer""#), "{body}");
+    assert!(body.contains(r#""pushed_render_updates":false"#), "{body}");
     assert_eq!(
         connection.take_event_stream_start(),
         Some((expected_client, 3, false, false))

@@ -509,6 +509,8 @@ pub struct CapabilityFeatures {
     pub layout_owner: bool,
     /// Whether event delivery is bound to one exact initialized client.
     pub client_bound_events: bool,
+    /// Whether negotiated event-stream v3 carries exact-client render updates.
+    pub pushed_render_updates: bool,
     /// Whether this initialized connection may receive client-local clipboard writes.
     pub client_clipboard_write: bool,
 }
@@ -522,6 +524,7 @@ pub(crate) const OBSERVER_CONTROL_METHODS: &[&str] = &[
     "control/shutdown",
     "control/cancel",
     "client/detach",
+    "terminal/resize",
     "terminal/view",
     "event/list",
 ];
@@ -837,6 +840,7 @@ impl Capabilities {
                 client_local_focus: true,
                 layout_owner: true,
                 client_bound_events: true,
+                pushed_render_updates: false,
                 client_clipboard_write: false,
             },
         }

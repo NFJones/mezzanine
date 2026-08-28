@@ -1392,7 +1392,7 @@ async fn async_actor_captures_authoritative_iroh_primary_snapshot() {
 
     let client = async {
         let snapshot = handle
-            .render_iroh_primary_snapshot(primary, true)
+            .render_iroh_client_snapshot(primary, true)
             .await
             .unwrap()
             .expect("attached primary should render");
@@ -1409,6 +1409,79 @@ async fn async_actor_captures_authoritative_iroh_primary_snapshot() {
 
     let ((), exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.metrics.render_client_frame_requests, 1);
+}
+
+/// Verifies observer v3 snapshots use exact-client geometry and an authorized
+/// observer resize cannot mutate primary-owned authoritative layout state.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_captures_resized_iroh_observer_snapshot_in_isolation() {
+    use crate::test_support::runtime::{RuntimeServiceFixture, SessionFixture};
+
+    let mut session = SessionFixture::new().build();
+    let _primary = session.attach_primary("primary", true).unwrap();
+    let observer = session
+        .attach_observer_with_terminal(
+            "observer",
+            Some(mez_mux::session::ClientTerminalDescriptor {
+                columns: 70,
+                rows: 20,
+                term: "xterm-256color".to_string(),
+                features: Vec::new(),
+            }),
+            1,
+        )
+        .unwrap();
+    let service = RuntimeServiceFixture::new().build_with_session(session);
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let resize = crate::control::encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"resize","method":"terminal/resize","params":{"idempotency_key":"observer-resize","client_size":{"columns":100,"rows":30}}}"#,
+        );
+        let result = handle
+            .handle_control_input_for_connection(
+                resize,
+                4096,
+                ControlConnectionState::trusted_existing_client(observer.clone()),
+            )
+            .await
+            .unwrap();
+        let (body, _) = crate::control::decode_control_frame(&result.output, 4096).unwrap();
+        assert!(body.contains(r#""resized":true"#), "{body}");
+
+        let effects = handle
+            .drain_render_side_effects_for_client(observer.clone(), 8)
+            .await
+            .unwrap();
+        assert_eq!(
+            effects,
+            vec![RuntimeSideEffect::RenderClient {
+                client_id: observer.clone(),
+                reason: RenderInvalidationReason::Resize,
+            }]
+        );
+        let snapshot = handle
+            .render_iroh_client_snapshot(observer, true)
+            .await
+            .unwrap()
+            .expect("attached observer should render");
+        assert_eq!(snapshot.view.role, ClientViewRole::Observer);
+        assert_eq!(snapshot.view.client_size, Size::new(100, 30).unwrap());
+        assert!(snapshot.invalidate_output);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(
+        exit.service.session().authoritative_size,
+        Size::new(80, 24).unwrap()
+    );
+    assert_eq!(exit.metrics.terminal_view_control_requests, 0);
 }
 
 /// Verifies actor latency metrics use fixed request families and reset without

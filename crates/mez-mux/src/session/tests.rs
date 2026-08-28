@@ -393,6 +393,42 @@ fn primary_membership_is_distinct_and_resize_is_owner_scoped() {
     assert_eq!(session.layout_revision(), layout_revision + 1);
 }
 
+/// Verifies observer terminal geometry is caller-local and never mutates the
+/// primary-owned authoritative layout.
+#[test]
+fn observer_terminal_resize_is_isolated_from_primary_layout() {
+    let mut session = test_session();
+    let _primary = session.attach_primary("primary", true).unwrap();
+    let authoritative_size = session.authoritative_size;
+    let layout_revision = session.layout_revision();
+    let observer = session
+        .attach_observer_with_terminal(
+            "observer",
+            Some(ClientTerminalDescriptor {
+                columns: 70,
+                rows: 20,
+                term: "xterm-256color".to_string(),
+                features: Vec::new(),
+            }),
+            1,
+        )
+        .unwrap();
+
+    session
+        .resize_observer_terminal(&observer, Size::new(100, 30).unwrap())
+        .unwrap();
+
+    let terminal = session
+        .clients()
+        .iter()
+        .find(|client| client.id == observer)
+        .and_then(|client| client.terminal.as_ref())
+        .unwrap();
+    assert_eq!((terminal.columns, terminal.rows), (100, 30));
+    assert_eq!(session.authoritative_size, authoritative_size);
+    assert_eq!(session.layout_revision(), layout_revision);
+}
+
 /// Verifies primary admission is bounded at sixteen attached clients.
 #[test]
 fn primary_membership_enforces_attached_client_limit() {

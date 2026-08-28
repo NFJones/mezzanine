@@ -269,20 +269,26 @@ authorization, malformed data, transport, and later stream failures remain
 visible. Client-local clipboard writes are enabled only when a primary on v2
 or v3 receives explicit `client_clipboard_write` capability confirmation;
 observer v3 does not receive that authority.
-Authorized events wake a fresh `terminal/view`; observers receive only
+Legacy authorized events wake a fresh `terminal/view`; observers receive only
 session-view events at or after their atomic attachment cutoff, and detach or
 event-stream failure ends the attach visibly.
-For a negotiated primary v3 stream, the event stream instead sends an initial
-authoritative rendered snapshot and then uses revisioned whole-row deltas when
-they are safe and smaller than a replacement snapshot. Stale or malformed
-deltas fail without partially changing the retained frame; reattachment starts
-from a fresh snapshot. Primary v3 control responses remain mutation
-acknowledgements, so steady-state rendering does not issue `terminal/view`.
+For a negotiated primary or observer v3 stream, the event stream instead sends
+an initial authoritative exact-client snapshot and then uses revisioned
+whole-row deltas when they are safe and smaller than a replacement snapshot.
+Stale, wrong-role, or malformed deltas fail without partially changing the
+retained frame; reattachment starts from a fresh snapshot. V3 control responses
+remain mutation acknowledgements, so steady-state rendering does not issue
+`terminal/view`.
+Observer push ownership additionally requires client opt-in and server
+`pushed_render_updates` capability confirmation; older observer-v3 peers retain
+notification-plus-fetch behavior.
 When an event-stream write is backpressured, the server keeps bounded redraw
 triggers rather than stale rendered frames, then sends one latest-state update
 from the last successfully flushed base. It does not add a debounce or batching
-timer. Observer v3 continues to use redraw wakeups and view fetches until
-observer-local pushed geometry is supported.
+timer. Each observer v3 stream retains its own terminal dimensions. A local
+observer resize updates only that observer and prompts an exact-client pushed
+snapshot; it does not resize the primary, another observer, or canonical pane
+layout.
 Acceptance and preface receipt share the configured Iroh setup timeout; expiry
 closes the connection and requires an explicit reattach.
 Terminal resize, input, and view requests remain ordered one at a time behind

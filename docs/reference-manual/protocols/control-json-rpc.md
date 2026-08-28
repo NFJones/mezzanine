@@ -49,13 +49,14 @@ malformed initialization, transport, or post-initialization failures. After
 the initialize response is flushed, the server may open one unidirectional
 stream with preface `mezzanine/events/1\n`, `mezzanine/events/2\n`, or
 `mezzanine/events/3\n`, matching the negotiated version. Version 3 is the
-boundary for pushed rendered-state updates. A primary v3 stream sends an
-authoritative `render/snapshot` immediately after its preface and sends another
-complete snapshot for later actionable presentation changes. Each snapshot
-contains a stream-local revision, `event_cutoff`, `invalidate_output`, and a
-complete primary `RenderedClientView`. The client validates the entire frame
-before replacing its retained logical view and then reuses the normal local
-ANSI differential renderer. Later non-invalidating updates may use
+boundary for pushed rendered-state updates. A primary or observer v3 stream
+sends an authoritative `render/snapshot` immediately after its preface and
+sends another complete snapshot for later actionable presentation changes.
+Each snapshot contains a stream-local revision, `event_cutoff`,
+`invalidate_output`, and a complete exact-client `RenderedClientView`. The
+client validates the entire frame, including its negotiated role, before
+replacing its retained logical view and then reuses the normal local ANSI
+differential renderer. Later non-invalidating updates may use
 `render/delta` with `base_revision`, a greater `revision`, complete non-row view
 metadata, and unique whole-row text/style replacements. The server retains the
 last successfully flushed complete view, suppresses identical views, and sends
@@ -64,6 +65,12 @@ be invalidated, or the uncompressed delta is not smaller. The client validates
 and reconstructs the complete candidate atomically; a stale or malformed delta
 fails the stream without partially changing retained state, and reattachment
 begins with a fresh snapshot.
+
+Observer push ownership is two-sided for compatibility. The observer client
+opts in with `client.metadata.pushed_render_updates: true`, and the server
+confirms support with `capabilities.features.pushed_render_updates: true`.
+When either signal is absent, observer v3 remains notification-plus-fetch.
+Primary v3 push ownership remains version-defined.
 
 The first render update is sent immediately. Only one encoded render update is
 written at a time; while that write is backpressured, the runtime retains
@@ -76,11 +83,15 @@ This is latest-state backpressure coalescing, not timer-based batching.
 Connection-local status exposes content-free coalesced-trigger, suppressed
 update, snapshot-fallback, maximum-ready-depth, and render-write-wait metrics.
 
-Version 2 is primary-only; primary versions 2 and 3 support negotiated
-client-local clipboard writes, while observer v3 does not. Setup, idle
-operation, writes, and teardown are bounded; wrong ALPNs, excess streams,
-malformed frames, stalled setup, and one failed connection are isolated from
-later clients and from the Unix listener.
+Each observer v3 stream renders with terminal dimensions retained for that
+exact authenticated observer. `terminal/resize` updates only the caller's
+observer geometry and triggers an exact-client pushed render; it cannot mutate
+primary geometry, another observer, or canonical pane layout. Version 2 is
+primary-only; primary versions 2 and 3 support negotiated client-local
+clipboard writes, while observer v3 does not. Setup, idle operation, writes,
+and teardown are bounded; wrong ALPNs, excess streams, malformed frames,
+stalled setup, and one failed connection are isolated from later clients and
+from the Unix listener.
 
 Schema v71 defines two compressed application-framing ALPNs:
 `mezzanine/transport/2/zstd` and
@@ -404,20 +415,20 @@ Primary clients can also stage bounded internal handoffs with `buffer/create`,
 unless create explicitly requests replacement; buffer APIs do not access the
 host clipboard.
 
-The recommended loop is initialize, fetch a view, render it, pass physical
-input and size updates via `terminal/step`, then apply the returned view or
-request a fresh `terminal/view`. Local clients use the Unix event socket. Iroh
-primary input requests a conditional inline view and falls back to one
-`terminal/view` when an older server returns no view. Asynchronous Iroh events
-remain redraw wakeups that refetch authoritative rendered state over control.
-Iroh primaries negotiate `3 → 2 → 1`; observers negotiate `3 → 1`, using only
-explicit unsupported-version initialization results to continue to the next
-candidate. A primary v3 client renders the initial and subsequent pushed
-snapshots without issuing steady-state `terminal/view` requests; its control
-responses acknowledge input and resize mutations only. Observer v3 remains on
-notification-plus-fetch rendering until observer-local pushed geometry is
-available. This is rendered-view/input-step control, not raw PTY export;
-specialized frontends should design around the supplied view model.
+The recommended legacy loop is initialize, fetch a view, render it, pass
+physical input and size updates via `terminal/step`, then apply the returned
+view or request a fresh `terminal/view`. Local clients use the Unix event
+socket. Iroh primary input requests a conditional inline view and falls back to
+one `terminal/view` when an older server returns no view. Iroh primaries
+negotiate `3 → 2 → 1`; observers negotiate `3 → 1`, using only explicit
+unsupported-version initialization results to continue to the next candidate.
+A primary or observer v3 client renders the initial and subsequent pushed
+snapshots or deltas without issuing steady-state `terminal/view` requests.
+Primary control responses acknowledge input and resize mutations; observer v3
+uses `terminal/resize` to acknowledge only its client-local geometry change.
+Legacy event streams retain notification-plus-fetch behavior. This is
+rendered-view/input-step control, not raw PTY export; specialized frontends
+should design around the supplied view model.
 
 ## Events and replay
 

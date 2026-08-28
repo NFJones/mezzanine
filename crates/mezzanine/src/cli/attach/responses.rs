@@ -38,12 +38,12 @@ pub(super) fn control_response_forbidden(body: &str) -> Result<bool> {
         == Some("forbidden"))
 }
 
-/// Runs the primary client id from initialize response operation for this subsystem.
+/// Returns the exact attached client id from a successful initialize response.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn primary_client_id_from_initialize_response(body: &str) -> Result<ClientId> {
+pub(super) fn attached_client_id_from_initialize_response(body: &str) -> Result<ClientId> {
     let parsed: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_args("control initialize response is not valid JSON"))?;
     let client_id = parsed
@@ -51,9 +51,7 @@ pub(super) fn primary_client_id_from_initialize_response(body: &str) -> Result<C
         .and_then(|result| result.get("client"))
         .and_then(|client| client.get("id"))
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            MezError::invalid_state("control initialize did not return a primary client id")
-        })?;
+        .ok_or_else(|| MezError::invalid_state("control initialize did not return a client id"))?;
     ClientId::parse('c', client_id.to_string())
         .ok_or_else(|| MezError::invalid_state("control initialize returned an invalid client id"))
 }
