@@ -705,8 +705,9 @@ fn transcript_store_bounds_and_compacts_pathological_prompt_history() {
     let oversized = "z".repeat(mez_mux::readline::MAX_READLINE_HISTORY_ENTRY_BYTES + 1);
 
     assert!(!store.append_prompt_history("conv1", &oversized).unwrap());
-    for index in 0..16 {
-        let prompt = format!("{index:02}-{}", "x".repeat(60 * 1024));
+    let prompt_bytes = mez_mux::readline::MAX_READLINE_HISTORY_ENTRY_BYTES - 3;
+    for index in 0..9 {
+        let prompt = format!("{index:02}-{}", "x".repeat(prompt_bytes));
         assert!(store.append_prompt_history("conv1", &prompt).unwrap());
     }
 
@@ -719,9 +720,9 @@ fn transcript_store_bounds_and_compacts_pathological_prompt_history() {
     assert!(
         history
             .first()
-            .is_some_and(|entry| entry.starts_with("12-"))
+            .is_some_and(|entry| entry.starts_with("05-"))
     );
-    assert!(history.last().is_some_and(|entry| entry.starts_with("15-")));
+    assert!(history.last().is_some_and(|entry| entry.starts_with("08-")));
     assert!(
         fs::metadata(root.join("prompt-history.tsv")).unwrap().len()
             <= PROMPT_HISTORY_COMPACTION_BYTES

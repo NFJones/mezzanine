@@ -19,8 +19,7 @@ use mez_mux::render::{
     PromptRegionRenderOptions, clipped_prompt_region, compose_prompt_region, write_line_segment,
 };
 use mez_mux::render::{
-    PromptShadowSpan, WrappedPromptLayout, char_count, fit_width, layout_wrapped_prompt,
-    offset_style_span,
+    PromptShadowSpan, WrappedPromptLayout, fit_width, layout_wrapped_prompt, offset_style_span,
 };
 use mez_mux::theme::{UiColorPair, UiTheme};
 use mez_terminal::{
@@ -504,38 +503,15 @@ fn render_wrapped_prompt_layout(
         } else {
             0
         };
-    let length_note = should_show_prompt_length_note(prompt, width, max_rows).then(|| {
-        format!(
-            "{MEZ_UI_PREFIX}mez> [{} chars pasted]",
-            prompt.buffer.line().chars().count()
-        )
-    });
-    let mut layout = layout_wrapped_prompt(
+    layout_wrapped_prompt(
         &raw_line,
         raw_cursor_index,
         raw_shadow_range,
         width,
         max_rows,
         continuation_indent,
-        length_note.as_deref(),
-    );
-    if length_note.is_some() {
-        layout.cursor_row = 0;
-        layout.cursor_column =
-            terminal_text_width(&format!("{MEZ_UI_PREFIX}mez> ")).min(width.saturating_sub(1));
-        layout.cursor_visible = !layout.lines.is_empty();
-    }
-    layout
-}
-
-/// Runs the should show prompt length note operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn should_show_prompt_length_note(prompt: &ReadlinePrompt, width: usize, max_rows: usize) -> bool {
-    prompt.kind == ReadlinePromptKind::Agent
-        && char_count(prompt.buffer.line()) > width.saturating_mul(max_rows).max(160)
+        None,
+    )
 }
 
 /// Carries Agent Prompt Block state for this subsystem.

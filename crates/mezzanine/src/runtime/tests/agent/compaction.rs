@@ -103,6 +103,83 @@ fn runtime_agent_prompt_displays_large_paste_as_compact_block() {
     );
 }
 
+/// Verifies a mixed prompt keeps its typed prefix and suffix around one large
+/// paste after durable history reload and Up-arrow recall.
+///
+/// Real terminals deliver typing and bracketed paste as separate input batches.
+/// Reloading that submission in a later agent session must reconstruct only the
+/// pasted payload as an opaque block; it must not hide or absorb adjacent text.
+#[test]
+fn runtime_agent_prompt_recalls_mixed_paste_display_after_reload() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-mixed-paste-recall"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
+    );
+
+    let payload = "z".repeat(70 * 1024);
+    let expected = format!("typed before {payload} typed after");
+    let pasted = format!("\x1b[200~{payload}\x1b[201~");
+    for input in [
+        b"typed before ".as_slice(),
+        pasted.as_bytes(),
+        b" typed after\r".as_slice(),
+    ] {
+        service
+            .apply_attached_terminal_step_plan(
+                &primary,
+                &AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(input.to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .unwrap();
+    }
+
+    service.reload_agent_prompt_history_for_pane("%1").unwrap();
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b[A".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    let prompt = &service
+        .agent_prompt_inputs_for_tests()
+        .get("%1")
+        .unwrap()
+        .prompt;
+    assert_eq!(prompt.buffer.expanded_line(), expected);
+    assert_eq!(
+        prompt.buffer.rendered_line(),
+        "typed before [Pasted 70.0 KiB] typed after"
+    );
+    assert_eq!(
+        prompt.render(),
+        "mez> typed before [Pasted 70.0 KiB] typed after"
+    );
+}
+
 /// Verifies compact pasted placeholders are used for bracketed paste payloads
 /// that exceed the visible agent prompt height even when the byte size is small.
 ///

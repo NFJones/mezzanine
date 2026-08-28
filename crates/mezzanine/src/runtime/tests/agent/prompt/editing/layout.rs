@@ -45,6 +45,43 @@ fn runtime_primary_attach_resizes_initial_window_for_agent_prompt() {
     );
 }
 
+/// Verifies long ordinary prompt text remains literal in terminal layout.
+///
+/// Prompt viewport clipping may show only the rows around the cursor, but it
+/// must never relabel provenance-free text as a whole-line pasted summary.
+#[test]
+fn runtime_long_literal_agent_prompt_is_not_relabelled_as_pasted() {
+    let mut service = test_runtime_service_with_size(Size::new(40, 8).unwrap());
+    service
+        .attach_primary("primary", true, Size::new(40, 8).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.reload_agent_prompt_history_for_pane("%1").unwrap();
+    let literal = format!("typed-before {} typed-after", "x".repeat(600));
+    service
+        .agent_prompt_inputs_mut_for_tests()
+        .get_mut("%1")
+        .unwrap()
+        .prompt
+        .buffer
+        .set_line(&literal);
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let view = service
+        .render_client_view(ClientViewRole::Primary, Size::new(40, 8).unwrap(), &config)
+        .unwrap()
+        .unwrap();
+    let rendered = view.lines.join("\n");
+
+    assert!(rendered.contains("typed-after"), "{rendered}");
+    assert!(!rendered.contains("chars pasted"), "{rendered}");
+}
+
 /// Verifies that shell prompt bytes arriving after a hidden Mezzanine-owned
 /// shell transaction is removed are still suppressed for a short retention
 /// window. This covers shells that repaint PS1 in a later PTY read after the

@@ -8,12 +8,18 @@ use std::sync::Arc;
 
 use unicode_width::UnicodeWidthChar;
 
+use super::decoder::READLINE_BRACKETED_PASTE_MAX_BYTES;
+
 /// Default number of submitted prompt entries retained by a readline buffer.
 pub const DEFAULT_READLINE_HISTORY_LIMIT: usize = 1000;
 /// Maximum bytes retained for one submitted prompt-history entry.
-pub const MAX_READLINE_HISTORY_ENTRY_BYTES: usize = 64 * 1024;
+///
+/// One accepted maximum-size bracketed paste must remain recallable together
+/// with ordinary text surrounding it, so history allows twice the decoder's
+/// per-paste bound while still rejecting pathological complete prompts.
+pub const MAX_READLINE_HISTORY_ENTRY_BYTES: usize = 2 * READLINE_BRACKETED_PASTE_MAX_BYTES;
 /// Maximum aggregate bytes retained by one readline history.
-pub const MAX_READLINE_HISTORY_BYTES: usize = 256 * 1024;
+pub const MAX_READLINE_HISTORY_BYTES: usize = 4 * MAX_READLINE_HISTORY_ENTRY_BYTES;
 /// Minimum pasted text byte count rendered as one collapsed prompt block.
 const READLINE_PASTE_BLOCK_THRESHOLD_BYTES: usize = 1024;
 

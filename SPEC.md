@@ -2595,7 +2595,11 @@ Agent and command prompt history MUST preserve which qualifying pasted spans
 were collapsed when each prompt was submitted. Up/Down recall, incremental
 reverse search, process restart, and resubmission MUST restore only those spans
 as placeholders; legacy raw-only history entries and all other text MUST be
-restored literally. The agent prompt MUST support Up/Down arrow navigation
+restored literally. The bounded per-entry history capacity MUST exceed the
+maximum accepted size of one bracketed-paste payload so that a legal paste plus
+surrounding ordinary prompt text remains recallable. Prompt rendering MUST NOT
+replace a long provenance-free entry with a whole-line paste summary. The agent
+prompt MUST support Up/Down arrow navigation
 through submitted prompt history and `Ctrl+R` incremental reverse search through that history using the
 same `(reverse-i-search'<substring>'): <item>` prompt format and
 case-insensitive substring matching as the primary command

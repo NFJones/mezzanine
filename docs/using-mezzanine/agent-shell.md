@@ -30,7 +30,9 @@ slash commands, `$` skills, `#` macros, and `@` MCP server names where enabled.
 Large bracketed pastes are shown as compact `[Pasted …]` blocks, but typed text
 and smaller pastes remain visible literally. History recall and `Ctrl+R` restore
 the same pasted blocks shown when the prompt was entered, and submission still
-sends the agent the complete original text.
+sends the agent the complete original text. The bounded history capacity can
+retain a maximum-size bracketed paste with surrounding typed text; exceptionally
+larger complete prompts are submitted normally but are not retained for recall.
 Press `Esc` to clear a draft without hiding the prompt. `Ctrl+D` on an empty
 prompt hides it. When no task is running, press `Ctrl+C` twice within three
 seconds to hide the prompt; when a task is running, `Ctrl+C` requests an
