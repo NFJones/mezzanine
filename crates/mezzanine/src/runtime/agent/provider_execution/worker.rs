@@ -198,7 +198,8 @@ impl RuntimeSessionService {
                 true
             }
         };
-        Ok(self.runtime_transition_with_render(
+        Ok(self.runtime_pane_transition_with_render(
+            &turn.pane_id,
             applied,
             Some(crate::runtime::RenderInvalidationReason::FullRedraw),
         ))
@@ -234,7 +235,8 @@ impl RuntimeSessionService {
             model_profile.as_ref(),
             &error,
         );
-        Ok(self.runtime_transition_with_render(
+        Ok(self.runtime_pane_transition_with_render(
+            &turn.pane_id,
             true,
             Some(crate::runtime::RenderInvalidationReason::FullRedraw),
         ))
