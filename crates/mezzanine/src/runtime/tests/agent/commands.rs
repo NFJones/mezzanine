@@ -215,6 +215,10 @@ fn runtime_show_iroh_status_reports_connection_quality_without_topology() {
         unavailable.contains("| Compression | unavailable |"),
         "{unavailable}"
     );
+    assert!(
+        unavailable.contains("| Render updates | unavailable |"),
+        "{unavailable}"
+    );
 
     let diagnostics = crate::runtime::RuntimeIrohDiagnostics::default();
     diagnostics.set_connection_quality_for_test(
@@ -239,6 +243,8 @@ fn runtime_show_iroh_status_reports_connection_quality_without_topology() {
         "| Codec | zstd | negotiated application-frame codec |",
         "| Compression | 2.00× · 512 B saved |",
         "frames compressed 2 · identity 1",
+        "| Render updates | coalesced 4 · suppressed 1 · snapshot fallbacks 1 |",
+        "max ready depth 5; write wait 250 µs total · 250 µs max",
         "| Loss | 0 packets |",
         "| Congestion | 0 events | cwnd 64.0 KiB; MTU 1200 |",
         "| Quality | good |",

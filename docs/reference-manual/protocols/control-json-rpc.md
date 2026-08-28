@@ -63,11 +63,24 @@ a snapshot when the base is unsafe, geometry or row count changes, output must
 be invalidated, or the uncompressed delta is not smaller. The client validates
 and reconstructs the complete candidate atomically; a stale or malformed delta
 fails the stream without partially changing retained state, and reattachment
-begins with a fresh snapshot. Version 2 is primary-only; primary versions 2
-and 3 support negotiated client-local clipboard writes, while observer v3 does
-not. Setup, idle operation, writes, and teardown are bounded; wrong ALPNs,
-excess streams, malformed frames, stalled setup, and one failed connection are
-isolated from later clients and from the Unix listener.
+begins with a fresh snapshot.
+
+The first render update is sent immediately. Only one encoded render update is
+written at a time; while that write is backpressured, the runtime retains
+bounded redraw triggers rather than rendered frames. After the write completes,
+it drains all currently ready event slices and exact-client render
+invalidations, renders latest state once, and computes from the last
+successfully flushed base. Unsafe or safety-bound trigger ranges force an
+invalidating snapshot, while failed writes do not advance revision/base state.
+This is latest-state backpressure coalescing, not timer-based batching.
+Connection-local status exposes content-free coalesced-trigger, suppressed
+update, snapshot-fallback, maximum-ready-depth, and render-write-wait metrics.
+
+Version 2 is primary-only; primary versions 2 and 3 support negotiated
+client-local clipboard writes, while observer v3 does not. Setup, idle
+operation, writes, and teardown are bounded; wrong ALPNs, excess streams,
+malformed frames, stalled setup, and one failed connection are isolated from
+later clients and from the Unix listener.
 
 Schema v71 defines two compressed application-framing ALPNs:
 `mezzanine/transport/2/zstd` and

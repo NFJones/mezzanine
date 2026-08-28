@@ -3222,12 +3222,25 @@ remain client-local.
 Primary v3 control responses are mutation acknowledgements and MUST NOT replace
 the event stream's render state. The server MUST send the first available
 snapshot immediately and MUST NOT add a debounce, compression batching window,
-or delayed flush. Observer v3 retains notification-plus-fetch behavior until
-observer-local pushed-render geometry is negotiated. Version 2 remains limited
-to an authenticated interactive Iroh primary. Primary versions 2 and 3 MUST
-receive explicit `client_clipboard_write` capability confirmation before
-treating client-local clipboard effects as negotiated; observer version 3 MUST
-NOT receive that authority. Version 1 uses the exact preface
+or delayed flush. At most one encoded render update MAY occupy the write path.
+After that write and flush complete, the server MUST drain all currently ready
+authorized event slices and exact-client render invalidations to a bounded
+trigger summary, render the latest authoritative state once, and derive the
+next update from the last successfully flushed complete view. It MUST NOT queue
+pre-rendered intermediate frames or replay a stale-frame tail. A ready range
+that reaches the classification safety bound or cannot be classified fully
+MUST force an invalidating snapshot. Failed or timed-out writes MUST NOT
+advance the stream revision or retained delta base. Privacy-safe metrics MAY
+report coalesced trigger counts, suppressed updates, snapshot fallbacks,
+maximum ready depth, and aggregate/max render-write wait without recording
+terminal contents.
+
+Observer v3 retains notification-plus-fetch behavior until observer-local
+pushed-render geometry is negotiated. Version 2 remains limited to an
+authenticated interactive Iroh primary. Primary versions 2 and 3 MUST receive
+explicit `client_clipboard_write` capability confirmation before treating
+client-local clipboard effects as negotiated; observer version 3 MUST NOT
+receive that authority. Version 1 uses the exact preface
 `mezzanine/events/1\n`; version 2 uses `mezzanine/events/2\n`; version 3 uses
 `mezzanine/events/3\n`. The server MUST NOT open an event stream before the
 successful initialize response is flushed, and then MUST open at most one

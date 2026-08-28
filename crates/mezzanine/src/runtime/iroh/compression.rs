@@ -88,6 +88,12 @@ struct IrohCompressionMetricsInner {
     decoded_bytes: AtomicU64,
     compressed_frames: AtomicU64,
     identity_frames: AtomicU64,
+    render_triggers_coalesced: AtomicU64,
+    render_updates_suppressed: AtomicU64,
+    render_snapshot_fallbacks: AtomicU64,
+    render_ready_depth_max: AtomicU64,
+    render_write_wait_micros: AtomicU64,
+    render_write_wait_max_micros: AtomicU64,
 }
 
 /// Copyable compression counter snapshot containing no payload or topology data.
@@ -98,6 +104,12 @@ pub(crate) struct IrohCompressionMetricsSnapshot {
     pub(crate) decoded_bytes: u64,
     pub(crate) compressed_frames: u64,
     pub(crate) identity_frames: u64,
+    pub(crate) render_triggers_coalesced: u64,
+    pub(crate) render_updates_suppressed: u64,
+    pub(crate) render_snapshot_fallbacks: u64,
+    pub(crate) render_ready_depth_max: u64,
+    pub(crate) render_write_wait_micros: u64,
+    pub(crate) render_write_wait_max_micros: u64,
 }
 
 impl IrohCompressionMetrics {
@@ -117,6 +129,15 @@ impl IrohCompressionMetrics {
             decoded_bytes: self.inner.decoded_bytes.load(Ordering::Relaxed),
             compressed_frames: self.inner.compressed_frames.load(Ordering::Relaxed),
             identity_frames: self.inner.identity_frames.load(Ordering::Relaxed),
+            render_triggers_coalesced: self.inner.render_triggers_coalesced.load(Ordering::Relaxed),
+            render_updates_suppressed: self.inner.render_updates_suppressed.load(Ordering::Relaxed),
+            render_snapshot_fallbacks: self.inner.render_snapshot_fallbacks.load(Ordering::Relaxed),
+            render_ready_depth_max: self.inner.render_ready_depth_max.load(Ordering::Relaxed),
+            render_write_wait_micros: self.inner.render_write_wait_micros.load(Ordering::Relaxed),
+            render_write_wait_max_micros: self
+                .inner
+                .render_write_wait_max_micros
+                .load(Ordering::Relaxed),
         }
     }
 
@@ -135,6 +156,43 @@ impl IrohCompressionMetrics {
         } else {
             self.inner.identity_frames.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Records bounded latest-state render coalescing without terminal content.
+    pub(crate) fn record_render_coalescing(
+        &self,
+        ready_depth: usize,
+        suppressed: bool,
+        snapshot_fallback: bool,
+    ) {
+        let ready_depth = u64::try_from(ready_depth).unwrap_or(u64::MAX);
+        self.inner
+            .render_triggers_coalesced
+            .fetch_add(ready_depth.saturating_sub(1), Ordering::Relaxed);
+        self.inner
+            .render_ready_depth_max
+            .fetch_max(ready_depth, Ordering::Relaxed);
+        if suppressed {
+            self.inner
+                .render_updates_suppressed
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        if snapshot_fallback {
+            self.inner
+                .render_snapshot_fallbacks
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Records time spent awaiting one complete render update write and flush.
+    pub(crate) fn record_render_write_wait(&self, elapsed: std::time::Duration) {
+        let micros = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
+        self.inner
+            .render_write_wait_micros
+            .fetch_add(micros, Ordering::Relaxed);
+        self.inner
+            .render_write_wait_max_micros
+            .fetch_max(micros, Ordering::Relaxed);
     }
 }
 
@@ -894,11 +952,19 @@ mod tests {
                 decoded_bytes: 0,
                 compressed_frames: 0,
                 identity_frames: 0,
+                render_triggers_coalesced: 0,
+                render_updates_suppressed: 0,
+                render_snapshot_fallbacks: 0,
+                render_ready_depth_max: 0,
+                render_write_wait_micros: 0,
+                render_write_wait_max_micros: 0,
             }
         );
 
         metrics.record_frame(128, 512, true);
         metrics.record_frame(48, 32, false);
+        metrics.record_render_coalescing(5, true, true);
+        metrics.record_render_write_wait(std::time::Duration::from_micros(250));
 
         assert_eq!(
             metrics.snapshot(),
@@ -908,6 +974,12 @@ mod tests {
                 decoded_bytes: 544,
                 compressed_frames: 1,
                 identity_frames: 1,
+                render_triggers_coalesced: 4,
+                render_updates_suppressed: 1,
+                render_snapshot_fallbacks: 1,
+                render_ready_depth_max: 5,
+                render_write_wait_micros: 250,
+                render_write_wait_max_micros: 250,
             }
         );
     }

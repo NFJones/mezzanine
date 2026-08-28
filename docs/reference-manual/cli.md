@@ -278,7 +278,10 @@ they are safe and smaller than a replacement snapshot. Stale or malformed
 deltas fail without partially changing the retained frame; reattachment starts
 from a fresh snapshot. Primary v3 control responses remain mutation
 acknowledgements, so steady-state rendering does not issue `terminal/view`.
-Observer v3 continues to use redraw wakeups and view fetches until
+When an event-stream write is backpressured, the server keeps bounded redraw
+triggers rather than stale rendered frames, then sends one latest-state update
+from the last successfully flushed base. It does not add a debounce or batching
+timer. Observer v3 continues to use redraw wakeups and view fetches until
 observer-local pushed geometry is supported.
 Acceptance and preface receipt share the configured Iroh setup timeout; expiry
 closes the connection and requires an explicit reattach.

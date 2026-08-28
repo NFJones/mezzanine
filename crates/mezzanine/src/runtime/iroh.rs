@@ -43,6 +43,110 @@ pub(crate) const MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE: &[u8] = b"mezzanine/eve
 const IROH_EVENT_BATCH_LIMIT: usize = 64;
 const IROH_CLIPBOARD_CHUNK_BYTES: usize = 256 * 1024;
 
+/// Bounded render triggers collected after the previous v3 update completes.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct IrohReadyRenderTriggers {
+    last_event_id: Option<u64>,
+    events: usize,
+    render_invalidations: usize,
+    render_required: bool,
+    invalidate_output: bool,
+    classification_uncertain: bool,
+}
+
+impl IrohReadyRenderTriggers {
+    /// Merges one authorized event slice without retaining rendered state.
+    fn absorb_event_wakeups(&mut self, wakeups: Vec<super::RuntimeEventWakeup>) -> usize {
+        let mut batch_events = 0usize;
+        for wakeup in wakeups {
+            for event in wakeup.events {
+                if let Some(invalidate) = iroh_event_render_invalidation(event.kind) {
+                    self.render_required = true;
+                    self.invalidate_output |= invalidate;
+                }
+                self.last_event_id = Some(
+                    self.last_event_id
+                        .map_or(event.id, |last_event_id| last_event_id.max(event.id)),
+                );
+                self.events = self.events.saturating_add(1);
+                batch_events = batch_events.saturating_add(1);
+            }
+        }
+        batch_events
+    }
+
+    /// Merges exact-client render invalidations into the strongest requirement.
+    fn absorb_render_side_effects(&mut self, effects: &[super::RuntimeSideEffect]) {
+        self.render_invalidations = self.render_invalidations.saturating_add(effects.len());
+        if let Some(invalidate_output) = iroh_side_effect_render_invalidation(effects) {
+            self.render_required = true;
+            self.invalidate_output |= invalidate_output;
+        }
+    }
+
+    /// Returns the bounded number of ready triggers represented by this update.
+    fn ready_depth(&self) -> usize {
+        self.events.saturating_add(self.render_invalidations)
+    }
+
+    /// Forces a conservative invalidating snapshot when a ready range is unsafe.
+    fn mark_classification_uncertain(&mut self) {
+        self.classification_uncertain = true;
+        self.render_required = true;
+        self.invalidate_output = true;
+    }
+}
+
+/// Drains all currently ready v3 triggers before rendering latest state once.
+async fn collect_ready_iroh_render_triggers(
+    handle: &AsyncRuntimeSessionHandle,
+    caller_client_id: &ClientId,
+    connection_id: &str,
+    last_delivered_event_id: u64,
+    initial: Vec<super::RuntimeEventWakeup>,
+) -> Result<IrohReadyRenderTriggers> {
+    let mut triggers = IrohReadyRenderTriggers::default();
+    let mut next = initial;
+    loop {
+        let batch_events = triggers.absorb_event_wakeups(next);
+        if batch_events == 0 || batch_events < IROH_EVENT_BATCH_LIMIT {
+            break;
+        }
+        if triggers.events >= crate::control::MAX_EVENT_REPLAY_RETENTION {
+            triggers.mark_classification_uncertain();
+            break;
+        }
+        next = handle
+            .event_wakeups_for_client(
+                caller_client_id.clone(),
+                connection_id.to_string(),
+                triggers.last_event_id.unwrap_or(last_delivered_event_id),
+                IROH_EVENT_BATCH_LIMIT,
+            )
+            .await?;
+    }
+
+    let mut drained_side_effects = 0usize;
+    loop {
+        let effects = handle
+            .drain_render_side_effects_for_client(caller_client_id.clone(), IROH_EVENT_BATCH_LIMIT)
+            .await?;
+        if effects.is_empty() {
+            break;
+        }
+        drained_side_effects = drained_side_effects.saturating_add(effects.len());
+        triggers.absorb_render_side_effects(&effects);
+        if effects.len() < IROH_EVENT_BATCH_LIMIT {
+            break;
+        }
+        if drained_side_effects >= crate::control::MAX_EVENT_REPLAY_RETENTION {
+            triggers.mark_classification_uncertain();
+            break;
+        }
+    }
+    Ok(triggers)
+}
+
 /// Serializes the complete logical view retained by one v3 render stream.
 fn iroh_render_view_value(
     snapshot: &crate::host::async_runtime::AsyncIrohRenderSnapshot,
@@ -287,6 +391,12 @@ pub(crate) struct RuntimeIrohConnectionQualitySnapshot {
     pub(crate) compression_decoded_bytes: u64,
     pub(crate) compression_compressed_frames: u64,
     pub(crate) compression_identity_frames: u64,
+    pub(crate) render_triggers_coalesced: u64,
+    pub(crate) render_updates_suppressed: u64,
+    pub(crate) render_snapshot_fallbacks: u64,
+    pub(crate) render_ready_depth_max: u64,
+    pub(crate) render_write_wait_micros: u64,
+    pub(crate) render_write_wait_max_micros: u64,
     path: u8,
 }
 
@@ -328,6 +438,12 @@ impl RuntimeIrohConnectionQualitySnapshot {
             compression_decoded_bytes: 1_024,
             compression_compressed_frames: 2,
             compression_identity_frames: 1,
+            render_triggers_coalesced: 4,
+            render_updates_suppressed: 1,
+            render_snapshot_fallbacks: 1,
+            render_ready_depth_max: 5,
+            render_write_wait_micros: 250,
+            render_write_wait_max_micros: 250,
             path: match path {
                 "direct" => 1,
                 "relay" => 2,
@@ -378,6 +494,10 @@ struct RuntimeIrohPathSample {
     compression_decoded_bytes: u64,
     compression_compressed_frames: u64,
     compression_identity_frames: u64,
+    render_triggers_coalesced: u64,
+    render_updates_suppressed: u64,
+    render_snapshot_fallbacks: u64,
+    render_write_wait_micros: u64,
 }
 
 /// Copyable status projection that contains no endpoint or peer identifiers.
@@ -699,6 +819,18 @@ impl RuntimeIrohPathSampler {
         let compression_identity_frames = delta(compression.identity_frames, |sample| {
             sample.compression_identity_frames
         });
+        let render_triggers_coalesced = delta(compression.render_triggers_coalesced, |sample| {
+            sample.render_triggers_coalesced
+        });
+        let render_updates_suppressed = delta(compression.render_updates_suppressed, |sample| {
+            sample.render_updates_suppressed
+        });
+        let render_snapshot_fallbacks = delta(compression.render_snapshot_fallbacks, |sample| {
+            sample.render_snapshot_fallbacks
+        });
+        let render_write_wait_micros = delta(compression.render_write_wait_micros, |sample| {
+            sample.render_write_wait_micros
+        });
         let snapshot = RuntimeIrohConnectionQualitySnapshot {
             connected_millis: u64::try_from(now.duration_since(self.connected_at).as_millis())
                 .unwrap_or(u64::MAX),
@@ -719,6 +851,12 @@ impl RuntimeIrohPathSampler {
             compression_decoded_bytes,
             compression_compressed_frames,
             compression_identity_frames,
+            render_triggers_coalesced,
+            render_updates_suppressed,
+            render_snapshot_fallbacks,
+            render_ready_depth_max: compression.render_ready_depth_max,
+            render_write_wait_micros,
+            render_write_wait_max_micros: compression.render_write_wait_max_micros,
             path: if path.is_ip() {
                 1
             } else if path.is_relay() {
@@ -744,6 +882,10 @@ impl RuntimeIrohPathSampler {
             compression_decoded_bytes: compression.decoded_bytes,
             compression_compressed_frames: compression.compressed_frames,
             compression_identity_frames: compression.identity_frames,
+            render_triggers_coalesced: compression.render_triggers_coalesced,
+            render_updates_suppressed: compression.render_updates_suppressed,
+            render_snapshot_fallbacks: compression.render_snapshot_fallbacks,
+            render_write_wait_micros: compression.render_write_wait_micros,
         });
     }
 }
@@ -1497,6 +1639,7 @@ async fn serve_registered_runtime_iroh_event_stream(
             frame.decoded_bytes(),
             frame.compressed(),
         );
+        let write_started = std::time::Instant::now();
         tokio::time::timeout(idle_timeout, send.write_all(frame.as_bytes()))
             .await
             .map_err(|_| MezError::invalid_state("Iroh render snapshot write timed out"))?
@@ -1505,6 +1648,7 @@ async fn serve_registered_runtime_iroh_event_stream(
             .await
             .map_err(|_| MezError::invalid_state("Iroh render snapshot flush timed out"))?
             .map_err(|_| MezError::invalid_state("Iroh render snapshot flush failed"))?;
+        compression_metrics.record_render_write_wait(write_started.elapsed());
         sent_render_view = Some(view);
         last_delivered_event_id = snapshot.event_cutoff;
         pending.clear();
@@ -1550,46 +1694,47 @@ async fn serve_registered_runtime_iroh_event_stream(
                 Err(_) => break,
             };
         }
-        let side_effect_invalidation = if push_render {
+        if push_render {
             let _ = side_effect_delivery.borrow_and_update();
-            let effects = handle
-                .drain_render_side_effects_for_client(
-                    caller_client_id.clone(),
-                    IROH_EVENT_BATCH_LIMIT,
-                )
-                .await?;
-            iroh_side_effect_render_invalidation(&effects)
-        } else {
-            None
-        };
-        if push_render && (!pending.is_empty() || side_effect_invalidation.is_some()) {
-            let mut batch_last = None;
-            let mut render_required = side_effect_invalidation.is_some();
-            let mut invalidate_output = side_effect_invalidation.unwrap_or(false);
-            for wakeup in pending.drain(..) {
-                for event in wakeup.events {
-                    if let Some(invalidate) = iroh_event_render_invalidation(event.kind) {
-                        render_required = true;
-                        invalidate_output |= invalidate;
-                    }
-                    batch_last = Some(event.id);
-                    delivered = delivered.saturating_add(1);
-                }
-            }
-            if render_required {
+            let triggers = collect_ready_iroh_render_triggers(
+                &handle,
+                &caller_client_id,
+                &connection_id,
+                last_delivered_event_id,
+                std::mem::take(&mut pending),
+            )
+            .await?;
+            delivered =
+                delivered.saturating_add(u64::try_from(triggers.events).unwrap_or(u64::MAX));
+            if triggers.render_required {
                 let snapshot = handle
-                    .render_iroh_primary_snapshot(caller_client_id.clone(), invalidate_output)
+                    .render_iroh_primary_snapshot(
+                        caller_client_id.clone(),
+                        triggers.invalidate_output,
+                    )
                     .await?
                     .ok_or_else(|| {
                         MezError::invalid_state("Iroh v3 primary stopped being renderable")
                     })?;
                 let next_revision = render_revision.saturating_add(1);
-                if let Some((frame, view)) = encode_iroh_render_update_frame(
+                let update = encode_iroh_render_update_frame(
                     &snapshot,
                     sent_render_view.as_ref(),
                     render_revision,
                     next_revision,
-                )? {
+                )?;
+                let suppressed = update.is_none();
+                let snapshot_fallback = update.as_ref().is_some_and(|(frame, _)| {
+                    frame
+                        .windows(b"\"method\":\"render/snapshot\"".len())
+                        .any(|window| window == b"\"method\":\"render/snapshot\"")
+                });
+                compression_metrics.record_render_coalescing(
+                    triggers.ready_depth(),
+                    suppressed,
+                    snapshot_fallback,
+                );
+                if let Some((frame, view)) = update {
                     let frame =
                         compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?;
                     compression_metrics.record_frame(
@@ -1597,6 +1742,7 @@ async fn serve_registered_runtime_iroh_event_stream(
                         frame.decoded_bytes(),
                         frame.compressed(),
                     );
+                    let write_started = std::time::Instant::now();
                     tokio::time::timeout(idle_timeout, send.write_all(frame.as_bytes()))
                         .await
                         .map_err(|_| MezError::invalid_state("Iroh render update write timed out"))?
@@ -1605,14 +1751,17 @@ async fn serve_registered_runtime_iroh_event_stream(
                         .await
                         .map_err(|_| MezError::invalid_state("Iroh render update flush timed out"))?
                         .map_err(|_| MezError::invalid_state("Iroh render update flush failed"))?;
+                    compression_metrics.record_render_write_wait(write_started.elapsed());
                     render_revision = next_revision;
                     sent_render_view = Some(view);
                 }
                 last_delivered_event_id = snapshot.event_cutoff;
-            } else if let Some(batch_last) = batch_last {
+            } else if let Some(batch_last) = triggers.last_event_id {
                 last_delivered_event_id = batch_last;
             }
-            continue;
+            if triggers.events > 0 || triggers.render_required {
+                continue;
+            }
         }
         let mut batch_last = None;
         for wakeup in pending.drain(..) {
@@ -1745,6 +1894,163 @@ fn relay_mode(policy: &RuntimeIrohRelayPolicy) -> Result<RelayMode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies ready render events spanning multiple actor batches are
+    /// classified together so one latest-state render retains the strongest
+    /// structural invalidation from the final slice.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_ready_render_triggers_collect_all_current_event_slices() {
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::protocol::event::EventVisibility;
+        use crate::test_support::runtime::SessionFixture;
+
+        let session = SessionFixture::new().build();
+        let mut service = crate::runtime::RuntimeSessionService::with_event_log(
+            session,
+            std::path::PathBuf::from("/tmp/mez-iroh-ready-trigger-test.sock"),
+            1,
+            128,
+            4096,
+        )
+        .unwrap();
+        let primary = service
+            .attach_primary(
+                "primary",
+                true,
+                mez_mux::layout::Size::new(80, 24).unwrap(),
+                120,
+            )
+            .unwrap();
+        let baseline = service.event_log().unwrap().latest_event_id();
+        let session_id = service.session().id.to_string();
+        for index in 0..69 {
+            service
+                .control
+                .event_log_mut()
+                .unwrap()
+                .append(
+                    EventKind::PaneChanged,
+                    Some(session_id.clone()),
+                    EventVisibility::SessionView,
+                    format!(r#"{{"index":{index}}}"#),
+                )
+                .unwrap();
+        }
+        let expected_last = service
+            .control
+            .event_log_mut()
+            .unwrap()
+            .append(
+                EventKind::WindowChanged,
+                Some(session_id),
+                EventVisibility::SessionView,
+                r#"{"structural":true}"#,
+            )
+            .unwrap();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+
+        let client = async {
+            let initial = handle
+                .event_wakeups_for_client(
+                    primary.clone(),
+                    "iroh-events-test".to_string(),
+                    baseline,
+                    IROH_EVENT_BATCH_LIMIT,
+                )
+                .await
+                .unwrap();
+            let triggers = collect_ready_iroh_render_triggers(
+                &handle,
+                &primary,
+                "iroh-events-test",
+                baseline,
+                initial,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(triggers.events, 70);
+            assert_eq!(triggers.last_event_id, Some(expected_last));
+            assert!(triggers.render_required);
+            assert!(triggers.invalidate_output);
+            assert!(!triggers.classification_uncertain);
+            handle.shutdown().await.unwrap();
+        };
+        let ((), _) = tokio::join!(client, actor.run());
+    }
+
+    /// Verifies a ready range reaching the collector safety bound forces an
+    /// invalidating snapshot instead of claiming an ordinary delta is safe.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_ready_render_triggers_force_snapshot_at_safety_bound() {
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::protocol::event::EventVisibility;
+        use crate::test_support::runtime::SessionFixture;
+
+        let session = SessionFixture::new().build();
+        let mut service = crate::runtime::RuntimeSessionService::with_event_log(
+            session,
+            std::path::PathBuf::from("/tmp/mez-iroh-ready-bound-test.sock"),
+            1,
+            1100,
+            4096,
+        )
+        .unwrap();
+        let primary = service
+            .attach_primary(
+                "primary",
+                true,
+                mez_mux::layout::Size::new(80, 24).unwrap(),
+                120,
+            )
+            .unwrap();
+        let baseline = service.event_log().unwrap().latest_event_id();
+        let session_id = service.session().id.to_string();
+        for index in 0..1024 {
+            service
+                .control
+                .event_log_mut()
+                .unwrap()
+                .append(
+                    EventKind::Diagnostic,
+                    Some(session_id.clone()),
+                    EventVisibility::SessionView,
+                    format!(r#"{{"index":{index}}}"#),
+                )
+                .unwrap();
+        }
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+
+        let client = async {
+            let initial = handle
+                .event_wakeups_for_client(
+                    primary.clone(),
+                    "iroh-events-bound".to_string(),
+                    baseline,
+                    IROH_EVENT_BATCH_LIMIT,
+                )
+                .await
+                .unwrap();
+            let triggers = collect_ready_iroh_render_triggers(
+                &handle,
+                &primary,
+                "iroh-events-bound",
+                baseline,
+                initial,
+            )
+            .await
+            .unwrap();
+
+            assert!(triggers.events >= crate::control::MAX_EVENT_REPLAY_RETENTION);
+            assert!(triggers.classification_uncertain);
+            assert!(triggers.render_required);
+            assert!(triggers.invalidate_output);
+            handle.shutdown().await.unwrap();
+        };
+        let ((), _) = tokio::join!(client, actor.run());
+    }
 
     /// Verifies one-row updates select a smaller revisioned delta, identical
     /// logical views are suppressed, and physical invalidation forces a full

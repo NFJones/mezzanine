@@ -686,6 +686,7 @@ pub(crate) fn runtime_show_iroh_status_display(
             "| State | unavailable | this client has no correlated live Iroh connection |",
             "| Codec | unavailable | no negotiated connection-local codec |",
             "| Compression | unavailable | no connection-local frame samples |",
+            "| Render updates | unavailable | no connection-local render samples |",
             "| Quality | unknown | insufficient transport samples |",
         ]
         .join("\n");
@@ -726,6 +727,15 @@ pub(crate) fn runtime_show_iroh_status_display(
             status.compression_codec.as_str()
         ),
         compression,
+        format!(
+            "| Render updates | coalesced {} · suppressed {} · snapshot fallbacks {} | max ready depth {}; write wait {} total · {} max |",
+            status.render_triggers_coalesced,
+            status.render_updates_suppressed,
+            status.render_snapshot_fallbacks,
+            status.render_ready_depth_max,
+            format_micros(status.render_write_wait_micros),
+            format_micros(status.render_write_wait_max_micros),
+        ),
         format!(
             "| Loss | {} packets | since the previous selected-path sample |",
             status.lost_packets
