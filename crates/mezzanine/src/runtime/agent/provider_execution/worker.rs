@@ -127,6 +127,12 @@ impl RuntimeSessionService {
         turn_id: &str,
         execution: AgentTurnExecution,
     ) -> Result<crate::runtime::RuntimeTransition> {
+        let pane_id = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.pane_id.clone());
         let application = self
             .apply_agent_provider_completed_event_with_render_intent(agent_id, turn_id, execution)
             .await?;
@@ -138,7 +144,16 @@ impl RuntimeSessionService {
                 } else {
                     crate::runtime::RenderInvalidationReason::FullRedraw
                 });
-        Ok(self.runtime_transition_with_render(application.applied, render_reason))
+        Ok(pane_id.map_or_else(
+            || self.runtime_transition_with_render(application.applied, render_reason),
+            |pane_id| {
+                self.runtime_pane_transition_with_render(
+                    &pane_id,
+                    application.applied,
+                    render_reason,
+                )
+            },
+        ))
     }
 
     /// Applies worker-settled provider persistence through actor-owned state.
