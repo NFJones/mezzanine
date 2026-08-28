@@ -554,6 +554,7 @@ pub(crate) use iroh::{
 };
 pub(crate) use iroh_compression::{
     IrohCompressionBridge, IrohCompressionMetrics, IrohCompressionPolicy, IrohFrameCompressionMode,
+    IrohStreamDecoder, IrohStreamEncoder,
 };
 pub(crate) use json::current_unix_millis;
 use json::{

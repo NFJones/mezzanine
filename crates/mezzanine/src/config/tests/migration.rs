@@ -2197,7 +2197,7 @@ fn migrates_schema_66_with_disabled_iroh_transport() {
 /// single bidirectional control stream enforced by the v1 Iroh protocol.
 #[test]
 fn migrates_schema_67_to_fixed_iroh_stream_limit() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 74);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 75);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2262,7 +2262,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
 /// changing the existing ephemeral behavior unless the owner configures it.
 #[test]
 fn migrates_schema_69_with_iroh_bind_port() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 74);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 75);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2293,7 +2293,7 @@ fn migrates_schema_69_with_iroh_bind_port() {
 /// supported primary configuration format without enabling the Iroh listener.
 #[test]
 fn migrates_schema_70_with_iroh_compression_defaults() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 74);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 75);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2457,8 +2457,8 @@ fn migrates_schema_73_without_enabling_seatbelt_or_changing_policy() {
         let values = extract_config_values(format, &plan.text);
 
         assert_eq!(plan.from_version, 73);
-        assert_eq!(plan.to_version, 74);
-        assert_eq!(values.get("version"), Some(&"74".to_string()));
+        assert_eq!(plan.to_version, 75);
+        assert_eq!(values.get("version"), Some(&"75".to_string()));
         assert_eq!(
             values.get("permissions.sandbox").map(String::as_str),
             expected_sandbox
@@ -2473,6 +2473,43 @@ fn migrates_schema_73_without_enabling_seatbelt_or_changing_policy() {
             !values
                 .keys()
                 .any(|path| path.starts_with("permissions.seatbelt"))
+        );
+    }
+}
+
+/// Schema v75 expands only the accepted Iroh codec vocabulary and preserves
+/// every existing transport preference in all supported configuration formats.
+///
+/// Streaming codecs remain opt-in during migration: old codec lists are not
+/// reordered, and an explicit v74 streaming list is retained byte-for-value.
+#[test]
+fn migrates_schema_74_without_enabling_streaming_compression() {
+    for (format, text, expected_codecs) in [
+        (
+            ConfigFormat::Toml,
+            "version = 74\n[transport.iroh]\ncompression_codecs = [\"zstd\", \"lz4\", \"none\"]\n",
+            serde_json::json!(["zstd", "lz4", "none"]),
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":74,"transport":{"iroh":{"compression_codecs":["lz4-stream","zstd-stream","none"]}}}"#,
+            serde_json::json!(["lz4-stream", "zstd-stream", "none"]),
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 74\ntransport:\n  iroh:\n    compression_codecs:\n      - none\n",
+            serde_json::json!(["none"]),
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &plan.text).unwrap();
+
+        assert_eq!(plan.from_version, 74);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 75);
+        assert_eq!(
+            root.pointer("/transport/iroh/compression_codecs"),
+            Some(&expected_codecs)
         );
     }
 }

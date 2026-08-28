@@ -10,7 +10,7 @@ use base64::Engine as _;
 use std::io::Write;
 use tokio::io::AsyncReadExt;
 
-use crate::runtime::{IrohCompressionPolicy, RuntimeIrohCompressionCodec};
+use crate::runtime::{IrohCompressionPolicy, IrohStreamDecoder, RuntimeIrohCompressionCodec};
 
 const IROH_CLIENT_CLIPBOARD_MAX_BYTES: usize = 8 * 1024 * 1024;
 const IROH_CLIENT_CLIPBOARD_MAX_CHUNK_BYTES: usize = 256 * 1024;
@@ -664,6 +664,10 @@ async fn receive_iroh_runtime_events(
     };
 
     let mut pending = Vec::new();
+    let mut stream_decoder = compression
+        .is_streaming()
+        .then(|| IrohStreamDecoder::new(compression))
+        .transpose()?;
     let mut clipboard_assembler = clipboard_sender
         .is_some()
         .then(IrohClipboardAssembler::default);
@@ -738,7 +742,12 @@ async fn receive_iroh_runtime_events(
             return Ok(());
         }
         pending.extend_from_slice(&buffer[..read]);
-        if pending.len() > ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024 {
+        let pending_limit = if compression.is_streaming() {
+            compression.stream_record_wire_limit()
+        } else {
+            ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024
+        };
+        if pending.len() > pending_limit {
             return Err(MezError::invalid_state(
                 "Iroh event stream frame exceeds limit",
             ));
@@ -746,6 +755,7 @@ async fn receive_iroh_runtime_events(
         let action = drain_negotiated_iroh_event_frames(
             &mut pending,
             compression,
+            stream_decoder.as_mut(),
             clipboard_assembler.as_mut(),
             clipboard_sender,
             allow_pushed_render,
@@ -761,6 +771,7 @@ async fn receive_iroh_runtime_events(
 fn drain_negotiated_iroh_event_frames(
     pending: &mut Vec<u8>,
     compression: IrohCompressionPolicy,
+    mut stream_decoder: Option<&mut IrohStreamDecoder>,
     mut clipboard_assembler: Option<&mut IrohClipboardAssembler>,
     clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
     allow_pushed_render: bool,
@@ -783,6 +794,14 @@ fn drain_negotiated_iroh_event_frames(
             )?);
             pending.drain(..consumed);
             continue;
+        } else if compression.is_streaming() {
+            let decoder = stream_decoder.as_deref_mut().ok_or_else(|| {
+                MezError::invalid_state("stateful Iroh event stream omitted its decoder")
+            })?;
+            let Some(record) = decoder.decode_record(pending)? else {
+                return Ok(wakeup);
+            };
+            (record.as_bytes().to_vec(), record.consumed())
         } else {
             if pending.len() < IrohCompressionPolicy::envelope_header_length() {
                 return Ok(wakeup);
@@ -2006,6 +2025,7 @@ mod iroh_tests {
                 compression,
                 None,
                 None,
+                None,
                 true,
                 &mut render_state,
             )
@@ -2050,6 +2070,7 @@ mod iroh_tests {
             let decoded = drain_negotiated_iroh_event_frames(
                 &mut pending,
                 compression,
+                None,
                 None,
                 None,
                 true,
@@ -2252,6 +2273,7 @@ mod iroh_tests {
                     compression,
                     None,
                     None,
+                    None,
                     false,
                     &mut render_state,
                 )
@@ -2264,6 +2286,89 @@ mod iroh_tests {
                 drain_negotiated_iroh_event_frames(
                     &mut pending,
                     compression,
+                    None,
+                    None,
+                    None,
+                    false,
+                    &mut render_state,
+                )
+                .unwrap()
+                .action,
+                AttachRenderAction::View,
+            );
+            assert!(pending.is_empty());
+        }
+    }
+
+    /// Verifies stateful Zstandard and LZ4 event records remain buffered until
+    /// complete and then decode through one persistent event-stream context.
+    ///
+    /// Two sequential records exercise history continuity in the receiver;
+    /// withholding the first record's final byte ensures no partial event is
+    /// applied and no decoder state is advanced before the record is complete.
+    #[test]
+    fn streaming_iroh_event_records_decode_incrementally_with_shared_history() {
+        let frame = encode_control_body(
+            r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed","padding":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
+        );
+        for codec in [
+            RuntimeIrohCompressionCodec::ZstdStream,
+            RuntimeIrohCompressionCodec::Lz4Stream,
+        ] {
+            let compression = IrohCompressionPolicy::new(
+                codec,
+                1,
+                3,
+                ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+            )
+            .unwrap();
+            let mut encoder = crate::runtime::IrohStreamEncoder::new(compression).unwrap();
+            let mut decoder = IrohStreamDecoder::new(compression).unwrap();
+            let first = encoder
+                .encode_frame(&frame, crate::runtime::IrohFrameCompressionMode::Eligible)
+                .unwrap();
+            let second = encoder
+                .encode_frame(&frame, crate::runtime::IrohFrameCompressionMode::Eligible)
+                .unwrap();
+            let split = first.as_bytes().len() - 1;
+            let mut pending = first.as_bytes()[..split].to_vec();
+            let mut render_state = IrohRetainedRenderState::default();
+
+            assert_eq!(
+                drain_negotiated_iroh_event_frames(
+                    &mut pending,
+                    compression,
+                    Some(&mut decoder),
+                    None,
+                    None,
+                    false,
+                    &mut render_state,
+                )
+                .unwrap()
+                .action,
+                AttachRenderAction::None,
+            );
+            pending.extend_from_slice(&first.as_bytes()[split..]);
+            assert_eq!(
+                drain_negotiated_iroh_event_frames(
+                    &mut pending,
+                    compression,
+                    Some(&mut decoder),
+                    None,
+                    None,
+                    false,
+                    &mut render_state,
+                )
+                .unwrap()
+                .action,
+                AttachRenderAction::View,
+            );
+            pending.extend_from_slice(second.as_bytes());
+            assert_eq!(
+                drain_negotiated_iroh_event_frames(
+                    &mut pending,
+                    compression,
+                    Some(&mut decoder),
                     None,
                     None,
                     false,

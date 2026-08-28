@@ -805,11 +805,16 @@ fn validate_iroh_transport_config(format: ConfigFormat, text: &str) -> Vec<Confi
     }
     if let Some(value) = iroh.get("compression_codecs") {
         match value.as_array() {
-            Some(codecs) if (1..=3).contains(&codecs.len()) => {
+            Some(codecs) if (1..=5).contains(&codecs.len()) => {
                 let mut names = std::collections::BTreeSet::new();
                 for codec in codecs {
                     match codec.as_str() {
-                        Some(name) if matches!(name, "zstd" | "lz4" | "none") => {
+                        Some(name)
+                            if matches!(
+                                name,
+                                "zstd-stream" | "lz4-stream" | "zstd" | "lz4" | "none"
+                            ) =>
+                        {
                             if !names.insert(name) {
                                 reject(
                                     "transport.iroh.compression_codecs",
@@ -819,7 +824,7 @@ fn validate_iroh_transport_config(format: ConfigFormat, text: &str) -> Vec<Confi
                         }
                         Some(_) => reject(
                             "transport.iroh.compression_codecs",
-                            "compression_codecs supports only zstd, lz4, and none",
+                            "compression_codecs supports only zstd-stream, lz4-stream, zstd, lz4, and none",
                         ),
                         None => reject(
                             "transport.iroh.compression_codecs",
@@ -830,7 +835,7 @@ fn validate_iroh_transport_config(format: ConfigFormat, text: &str) -> Vec<Confi
             }
             Some(_) => reject(
                 "transport.iroh.compression_codecs",
-                "compression_codecs must contain one through three codecs",
+                "compression_codecs must contain one through five codecs",
             ),
             None => reject(
                 "transport.iroh.compression_codecs",

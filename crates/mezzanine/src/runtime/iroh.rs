@@ -33,6 +33,7 @@ use super::config::{
 };
 use super::{
     IrohCompressionBridge, IrohCompressionMetrics, IrohCompressionPolicy, IrohFrameCompressionMode,
+    IrohStreamEncoder,
 };
 
 /// ALPN identity for the first Mezzanine Iroh transport contract.
@@ -1690,6 +1691,10 @@ async fn serve_registered_runtime_iroh_event_stream(
         .await
         .map_err(|_| MezError::invalid_state("Iroh event stream preface flush timed out"))?
         .map_err(|_| MezError::invalid_state("failed to flush Iroh event stream preface"))?;
+    let mut stream_encoder = compression
+        .is_streaming()
+        .then(|| IrohStreamEncoder::new(compression))
+        .transpose()?;
     let mut delivered = 0u64;
     let mut render_revision = 0u64;
     let mut sent_render_view: Option<serde_json::Value> = None;
@@ -1703,7 +1708,10 @@ async fn serve_registered_runtime_iroh_event_stream(
         render_revision = 1;
         let view = iroh_render_view_value(&snapshot)?;
         let frame = encode_iroh_render_snapshot_frame(&snapshot, render_revision, &view);
-        let frame = compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?;
+        let frame = match stream_encoder.as_mut() {
+            Some(encoder) => encoder.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?,
+            None => compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?,
+        };
         compression_metrics.record_frame(
             frame.as_bytes().len(),
             frame.decoded_bytes(),
@@ -1740,7 +1748,12 @@ async fn serve_registered_runtime_iroh_event_stream(
                 .await?
         {
             for frame in encode_iroh_clipboard_effect_frames(&write) {
-                let frame = compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?;
+                let frame = match stream_encoder.as_mut() {
+                    Some(encoder) => {
+                        encoder.encode_frame(&frame, IrohFrameCompressionMode::IdentityOnly)?
+                    }
+                    None => compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?,
+                };
                 compression_metrics.record_frame(
                     frame.as_bytes().len(),
                     frame.decoded_bytes(),
@@ -1750,11 +1763,23 @@ async fn serve_registered_runtime_iroh_event_stream(
                     .await
                     .map_err(|_| MezError::invalid_state("Iroh clipboard effect write timed out"))?
                     .map_err(|_| MezError::invalid_state("Iroh clipboard effect write failed"))?;
+                if compression.is_streaming() {
+                    tokio::time::timeout(idle_timeout, send.flush())
+                        .await
+                        .map_err(|_| {
+                            MezError::invalid_state("Iroh clipboard effect flush timed out")
+                        })?
+                        .map_err(|_| {
+                            MezError::invalid_state("Iroh clipboard effect flush failed")
+                        })?;
+                }
             }
-            tokio::time::timeout(idle_timeout, send.flush())
-                .await
-                .map_err(|_| MezError::invalid_state("Iroh clipboard effect flush timed out"))?
-                .map_err(|_| MezError::invalid_state("Iroh clipboard effect flush failed"))?;
+            if !compression.is_streaming() {
+                tokio::time::timeout(idle_timeout, send.flush())
+                    .await
+                    .map_err(|_| MezError::invalid_state("Iroh clipboard effect flush timed out"))?
+                    .map_err(|_| MezError::invalid_state("Iroh clipboard effect flush failed"))?;
+            }
         }
         if pending.is_empty() {
             let _ = event_delivery.borrow_and_update();
@@ -1810,8 +1835,12 @@ async fn serve_registered_runtime_iroh_event_stream(
                     snapshot_fallback,
                 );
                 if let Some(update) = update {
-                    let frame = compression
-                        .encode_frame(&update.frame, IrohFrameCompressionMode::Eligible)?;
+                    let frame = match stream_encoder.as_mut() {
+                        Some(encoder) => encoder
+                            .encode_frame(&update.frame, IrohFrameCompressionMode::Eligible)?,
+                        None => compression
+                            .encode_frame(&update.frame, IrohFrameCompressionMode::Eligible)?,
+                    };
                     compression_metrics.record_frame(
                         frame.as_bytes().len(),
                         frame.decoded_bytes(),
@@ -1849,7 +1878,12 @@ async fn serve_registered_runtime_iroh_event_stream(
         for wakeup in pending.drain(..) {
             for event in wakeup.events {
                 let frame = encode_control_body(&encode_event_notification(&event));
-                let frame = compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?;
+                let frame = match stream_encoder.as_mut() {
+                    Some(encoder) => {
+                        encoder.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?
+                    }
+                    None => compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?,
+                };
                 compression_metrics.record_frame(
                     frame.as_bytes().len(),
                     frame.decoded_bytes(),
@@ -1859,15 +1893,23 @@ async fn serve_registered_runtime_iroh_event_stream(
                     .await
                     .map_err(|_| MezError::invalid_state("Iroh event stream write timed out"))?
                     .map_err(|_| MezError::invalid_state("Iroh event stream write failed"))?;
+                if compression.is_streaming() {
+                    tokio::time::timeout(idle_timeout, send.flush())
+                        .await
+                        .map_err(|_| MezError::invalid_state("Iroh event stream flush timed out"))?
+                        .map_err(|_| MezError::invalid_state("Iroh event stream flush failed"))?;
+                }
                 batch_last = Some(event.id);
                 delivered = delivered.saturating_add(1);
             }
         }
         if let Some(batch_last) = batch_last {
-            tokio::time::timeout(idle_timeout, send.flush())
-                .await
-                .map_err(|_| MezError::invalid_state("Iroh event stream flush timed out"))?
-                .map_err(|_| MezError::invalid_state("Iroh event stream flush failed"))?;
+            if !compression.is_streaming() {
+                tokio::time::timeout(idle_timeout, send.flush())
+                    .await
+                    .map_err(|_| MezError::invalid_state("Iroh event stream flush timed out"))?
+                    .map_err(|_| MezError::invalid_state("Iroh event stream flush failed"))?;
+            }
             last_delivered_event_id = batch_last;
             continue;
         }

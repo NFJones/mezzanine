@@ -175,8 +175,9 @@ the user explicitly configured one; a successful endpoint-ID-pinned reconnect
 refreshes authenticated route hints in the protected profile.
 
 The primary `transport.iroh.compression_codecs` array defines ALPN preference
-order for explicit clients as well as listeners. `zstd` and `lz4` are
-application-frame codecs; `none` is the unchanged v1 compatibility route. A
+order for explicit clients as well as listeners. `zstd-stream` and
+`lz4-stream` are opt-in stateful v3 codecs, `zstd` and `lz4` are independent
+v2 application-frame codecs, and `none` is the unchanged v1 compatibility route. A
 client may try the next configured codec only before opening a stream. There is
 no hidden downgrade when `none` is absent, and
 `compression_codecs = ["none"]` is the restart-required rollback setting.

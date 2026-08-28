@@ -11,6 +11,10 @@ use super::{runtime_json_bool, runtime_json_object, runtime_json_string_array, r
 /// Compression algorithms supported by the versioned Iroh application framing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeIrohCompressionCodec {
+    /// Stateful Zstandard compression on the version 3 Iroh ALPN.
+    ZstdStream,
+    /// Stateful linked-history LZ4 compression on the version 3 Iroh ALPN.
+    Lz4Stream,
     /// Zstandard compression on the version 2 Iroh ALPN.
     Zstd,
     /// LZ4 block compression on the version 2 Iroh ALPN.
@@ -23,6 +27,8 @@ impl RuntimeIrohCompressionCodec {
     /// Returns the stable configuration name for this codec.
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::ZstdStream => "zstd-stream",
+            Self::Lz4Stream => "lz4-stream",
             Self::Zstd => "zstd",
             Self::Lz4 => "lz4",
             Self::None => "none",
@@ -241,20 +247,22 @@ pub(crate) fn runtime_iroh_transport_policy_from_config(
                 .map(|codec| codec.as_str().to_string())
                 .collect()
         });
-    if !(1..=3).contains(&compression_names.len()) {
+    if !(1..=5).contains(&compression_names.len()) {
         return Err(MezError::config(
-            "transport.iroh.compression_codecs must contain one through three codecs",
+            "transport.iroh.compression_codecs must contain one through five codecs",
         ));
     }
     let mut compression_codecs = Vec::with_capacity(compression_names.len());
     for name in compression_names {
         let codec = match name.as_str() {
+            "zstd-stream" => RuntimeIrohCompressionCodec::ZstdStream,
+            "lz4-stream" => RuntimeIrohCompressionCodec::Lz4Stream,
             "zstd" => RuntimeIrohCompressionCodec::Zstd,
             "lz4" => RuntimeIrohCompressionCodec::Lz4,
             "none" => RuntimeIrohCompressionCodec::None,
             _ => {
                 return Err(MezError::config(
-                    "transport.iroh.compression_codecs supports only zstd, lz4, and none",
+                    "transport.iroh.compression_codecs supports only zstd-stream, lz4-stream, zstd, lz4, and none",
                 ));
             }
         };
@@ -467,7 +475,7 @@ mod tests {
                 "max_streams_per_connection": 1,
                 "setup_timeout_ms": 5000,
                 "idle_timeout_ms": 60000,
-                "compression_codecs": ["lz4", "none"],
+                "compression_codecs": ["lz4-stream", "zstd-stream", "lz4", "none"],
                 "compression_min_bytes": 1024,
                 "compression_zstd_level": -2
             }}
@@ -499,6 +507,8 @@ mod tests {
         assert_eq!(
             policy.compression_codecs,
             vec![
+                RuntimeIrohCompressionCodec::Lz4Stream,
+                RuntimeIrohCompressionCodec::ZstdStream,
                 RuntimeIrohCompressionCodec::Lz4,
                 RuntimeIrohCompressionCodec::None,
             ]

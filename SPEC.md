@@ -3050,9 +3050,13 @@ peer.
 The v70 to v71 migration MUST materialize `compression_codecs = ["zstd",
 "lz4", "none"]`, `compression_min_bytes = 512`, and
 `compression_zstd_level = 3` in TOML, JSON, and YAML without enabling the
-inbound listener. The codec list MUST contain one through three unique values
-drawn from `zstd`, `lz4`, and `none`; the minimum size MUST be from 0 through
-1048576, and the Zstandard level MUST be from -5 through 22.
+inbound listener. The v74 to v75 migration MUST preserve that ordering and all
+explicit transport policy while adding `zstd-stream` and `lz4-stream` to the
+accepted codec vocabulary. The current codec list MUST contain one through five
+unique values drawn from `zstd-stream`, `lz4-stream`, `zstd`, `lz4`, and
+`none`; the minimum size MUST be from 0 through 1048576, and the Zstandard
+level MUST be from -5 through 22. Streaming codecs MUST remain opt-in by
+default.
 
 The version 2 Iroh application-frame foundation MUST map `zstd` to ALPN
 `mezzanine/transport/2/zstd`, `lz4` to
@@ -3072,6 +3076,22 @@ connection lifetime, and MUST fail closed when no configured codec is mutual.
 Control requests and responses in both directions and event or client-effect
 frames after the negotiated event-stream preface MUST use the selected
 connection-local framing.
+
+The version 3 streaming foundation MUST map `zstd-stream` to ALPN
+`mezzanine/transport/3/zstd-stream` and `lz4-stream` to ALPN
+`mezzanine/transport/3/lz4-stream`. Each stream direction MUST own a separate,
+bounded codec context: Zstandard uses a maximum 64 KiB window and LZ4 uses at
+most 64 KiB of linked history. The client initialization request and server
+initialization response MUST remain raw Content-Length frames. Stateful control
+records begin only after those raw frames are flushed, and an event context
+begins only after its raw event-stream preface is flushed. Every logical frame
+MUST be codec-flushed and Iroh-flushed without timer or size batching. Compact
+records MUST declare encoded and decoded lengths, reject malformed flags,
+lengths, truncation, decode failures, and trailing inner bytes, and contain
+exactly one complete bounded Content-Length frame. Credential-, token-, secret-,
+invitation-, password-, and clipboard-bearing frames MUST use identity reset
+records that clear history before and after the payload. Contexts MUST NOT be
+shared across direction, stream, connection, client, or reconnect.
 Connection-local observability MUST count only content-free aggregates: wire
 bytes, decoded frame bytes, compressed and identity frame counts, render
 snapshot and delta counts, changed-row counts, selected wire/decoded bytes,

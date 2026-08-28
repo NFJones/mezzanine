@@ -1,12 +1,12 @@
-//! Bounded application-layer compression for versioned Iroh frames.
+//! Bounded application-layer compression for versioned Iroh frames and streams.
 //!
 //! Iroh and QUIC do not transparently compress application payloads. This
 //! module therefore wraps one complete existing Mezzanine control or event
-//! frame in one independently decodable version 2 envelope. The unchanged
-//! version 1 ALPN remains raw, while compressed ALPNs use strict declared-size
-//! checks before allocation or decompression. Initialization and other
-//! credential-bearing traffic can be forced into identity envelopes so secrets
-//! are never compressed with attacker-influenced data.
+//! frame in one independently decodable version 2 envelope or one compact
+//! version 3 record backed by direction-local compression history. The
+//! unchanged version 1 ALPN remains raw. All compressed variants validate
+//! declared sizes before allocation or decompression, and version 3 reset
+//! records keep sensitive traffic outside reusable compression history.
 
 #![allow(
     dead_code,
@@ -18,6 +18,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncWriteExt, DuplexStream};
 use tokio_util::codec::FramedRead;
+use zstd::stream::raw::{
+    CParameter, DParameter, Decoder as ZstdStreamDecoder, Encoder as ZstdStreamEncoder, InBuffer,
+    Operation, OutBuffer,
+};
 
 use crate::error::{MezError, Result};
 use crate::protocol::framing::{ProtocolFrameCodec, decode_frame, encode_frame};
@@ -28,16 +32,28 @@ use super::RuntimeIrohCompressionCodec;
 pub(crate) const MEZZANINE_IROH_ZSTD_ALPN: &[u8] = b"mezzanine/transport/2/zstd";
 /// ALPN identity for version 2 Iroh frames using LZ4 block compression.
 pub(crate) const MEZZANINE_IROH_LZ4_ALPN: &[u8] = b"mezzanine/transport/2/lz4";
+/// ALPN identity for version 3 Iroh streams using stateful Zstandard compression.
+pub(crate) const MEZZANINE_IROH_ZSTD_STREAM_ALPN: &[u8] = b"mezzanine/transport/3/zstd-stream";
+/// ALPN identity for version 3 Iroh streams using stateful linked-history LZ4.
+pub(crate) const MEZZANINE_IROH_LZ4_STREAM_ALPN: &[u8] = b"mezzanine/transport/3/lz4-stream";
 
 const ENVELOPE_MAGIC: &[u8; 4] = b"MZC2";
 const ENVELOPE_HEADER_LENGTH: usize = 16;
 const FLAG_COMPRESSED: u8 = 0b0000_0001;
 const KNOWN_FLAGS: u8 = FLAG_COMPRESSED;
+const STREAM_FLAG_COMPRESSED: u8 = 0b0000_0001;
+const STREAM_FLAG_RESET: u8 = 0b0000_0010;
+const STREAM_KNOWN_FLAGS: u8 = STREAM_FLAG_COMPRESSED | STREAM_FLAG_RESET;
+const STREAM_HISTORY_BYTES: usize = 64 * 1024;
+const STREAM_ZSTD_WINDOW_LOG: u32 = 16;
+const STREAM_CODEC_SCRATCH_BYTES: usize = 16 * 1024;
 
 impl RuntimeIrohCompressionCodec {
     /// Returns the deterministic ALPN associated with this configured codec.
     pub(crate) const fn alpn(self) -> &'static [u8] {
         match self {
+            Self::ZstdStream => MEZZANINE_IROH_ZSTD_STREAM_ALPN,
+            Self::Lz4Stream => MEZZANINE_IROH_LZ4_STREAM_ALPN,
             Self::Zstd => MEZZANINE_IROH_ZSTD_ALPN,
             Self::Lz4 => MEZZANINE_IROH_LZ4_ALPN,
             Self::None => super::MEZZANINE_IROH_ALPN,
@@ -47,6 +63,8 @@ impl RuntimeIrohCompressionCodec {
     /// Maps a negotiated ALPN to its closed codec value.
     pub(crate) fn from_alpn(alpn: &[u8]) -> Result<Self> {
         match alpn {
+            MEZZANINE_IROH_ZSTD_STREAM_ALPN => Ok(Self::ZstdStream),
+            MEZZANINE_IROH_LZ4_STREAM_ALPN => Ok(Self::Lz4Stream),
             MEZZANINE_IROH_ZSTD_ALPN => Ok(Self::Zstd),
             MEZZANINE_IROH_LZ4_ALPN => Ok(Self::Lz4),
             super::MEZZANINE_IROH_ALPN => Ok(Self::None),
@@ -333,6 +351,31 @@ impl IrohCompressionPolicy {
         self.codec
     }
 
+    /// Reports whether this policy selected a stateful version 3 codec.
+    pub(crate) const fn is_streaming(self) -> bool {
+        matches!(
+            self.codec,
+            RuntimeIrohCompressionCodec::ZstdStream | RuntimeIrohCompressionCodec::Lz4Stream
+        )
+    }
+
+    /// Returns the maximum buffered wire bytes for one version 3 record.
+    pub(crate) fn stream_record_wire_limit(self) -> usize {
+        self.stream_record_payload_limit().saturating_add(11)
+    }
+
+    fn stream_record_payload_limit(self) -> usize {
+        match self.codec {
+            RuntimeIrohCompressionCodec::ZstdStream => {
+                zstd::zstd_safe::compress_bound(self.max_decoded_bytes).saturating_add(64)
+            }
+            RuntimeIrohCompressionCodec::Lz4Stream => {
+                lz4_flex::block::get_maximum_output_size(self.max_decoded_bytes)
+            }
+            _ => self.max_decoded_bytes,
+        }
+    }
+
     /// Encodes one complete existing frame according to the negotiated codec.
     ///
     /// Version 1 `none` framing remains byte-for-byte unchanged. Version 2
@@ -345,6 +388,11 @@ impl IrohCompressionPolicy {
         mode: IrohFrameCompressionMode,
     ) -> Result<IrohEncodedFrame> {
         self.validate_decoded_length(frame.len())?;
+        if self.is_streaming() {
+            return Err(MezError::invalid_state(
+                "stateful Iroh codecs require a direction-local stream encoder",
+            ));
+        }
         if self.codec == RuntimeIrohCompressionCodec::None {
             return Ok(IrohEncodedFrame {
                 bytes: frame.to_vec(),
@@ -356,6 +404,10 @@ impl IrohCompressionPolicy {
         let compressed =
             if mode == IrohFrameCompressionMode::Eligible && frame.len() >= self.min_bytes {
                 let candidate = match self.codec {
+                    RuntimeIrohCompressionCodec::ZstdStream
+                    | RuntimeIrohCompressionCodec::Lz4Stream => unreachable!(
+                        "stateful Iroh framing returns before version 2 envelope encoding"
+                    ),
                     RuntimeIrohCompressionCodec::Zstd => {
                         zstd::stream::encode_all(frame, self.zstd_level).map_err(|_| {
                             MezError::invalid_state("failed to encode bounded Iroh Zstandard frame")
@@ -433,6 +485,10 @@ impl IrohCompressionPolicy {
         let payload = &encoded[ENVELOPE_HEADER_LENGTH..];
         let decoded = if header.compressed {
             match self.codec {
+                RuntimeIrohCompressionCodec::ZstdStream
+                | RuntimeIrohCompressionCodec::Lz4Stream => {
+                    unreachable!("stateful Iroh framing uses a direction-local stream decoder")
+                }
                 RuntimeIrohCompressionCodec::Zstd => {
                     zstd::bulk::decompress(payload, header.decoded_length).map_err(|_| {
                         MezError::invalid_args("invalid bounded Iroh Zstandard frame")
@@ -573,10 +629,25 @@ impl IrohCompressionBridge {
         let (stream, bridge_stream) = tokio::io::duplex(64 * 1024);
         let (bridge_read, bridge_write) = tokio::io::split(bridge_stream);
         let task = tokio::spawn(async move {
-            let outbound =
-                pump_raw_frames_to_iroh(bridge_read, send, policy, metrics.clone(), codec);
-            let inbound =
-                pump_iroh_frames_to_raw(recv, bridge_write, policy, metrics, max_content_length);
+            let activation = policy
+                .is_streaming()
+                .then(|| Arc::new(tokio::sync::Barrier::new(2)));
+            let outbound = pump_raw_frames_to_iroh_with_activation(
+                bridge_read,
+                send,
+                policy,
+                metrics.clone(),
+                codec,
+                activation.clone(),
+            );
+            let inbound = pump_iroh_frames_to_raw_with_activation(
+                recv,
+                bridge_write,
+                policy,
+                metrics,
+                max_content_length,
+                activation,
+            );
             tokio::try_join!(outbound, inbound)?;
             Ok(())
         });
@@ -618,7 +689,7 @@ impl Drop for IrohCompressionBridge {
 
 async fn pump_raw_frames_to_iroh<R>(
     raw: R,
-    mut send: iroh::endpoint::SendStream,
+    send: iroh::endpoint::SendStream,
     policy: IrohCompressionPolicy,
     metrics: IrohCompressionMetrics,
     codec: ProtocolFrameCodec,
@@ -626,7 +697,55 @@ async fn pump_raw_frames_to_iroh<R>(
 where
     R: tokio::io::AsyncRead + Unpin,
 {
+    pump_raw_frames_to_iroh_with_activation(raw, send, policy, metrics, codec, None).await
+}
+
+async fn pump_raw_frames_to_iroh_with_activation<R>(
+    raw: R,
+    mut send: iroh::endpoint::SendStream,
+    policy: IrohCompressionPolicy,
+    metrics: IrohCompressionMetrics,
+    codec: ProtocolFrameCodec,
+    activation: Option<Arc<tokio::sync::Barrier>>,
+) -> Result<()>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
     let mut framed = FramedRead::new(raw, codec);
+    if policy.is_streaming() {
+        if let Some(frame) = framed.next().await {
+            let frame = encode_frame(&frame?);
+            policy.validate_decoded_length(frame.len())?;
+            metrics.record_frame(frame.len(), frame.len(), false);
+            send.write_all(&frame).await.map_err(|_| {
+                MezError::invalid_state("failed to write raw Iroh initialization frame")
+            })?;
+            send.flush().await.map_err(|_| {
+                MezError::invalid_state("failed to flush raw Iroh initialization frame")
+            })?;
+            if let Some(activation) = &activation {
+                activation.wait().await;
+            }
+        }
+        let mut encoder = IrohStreamEncoder::new(policy)?;
+        while let Some(frame) = framed.next().await {
+            let frame = encode_frame(&frame?);
+            let mode = control_stream_frame_mode(&frame, policy.max_decoded_bytes);
+            let encoded = encoder.encode_frame(&frame, mode)?;
+            metrics.record_frame(
+                encoded.as_bytes().len(),
+                encoded.decoded_bytes(),
+                encoded.compressed(),
+            );
+            send.write_all(encoded.as_bytes()).await.map_err(|_| {
+                MezError::invalid_state("failed to write stateful Iroh control frame")
+            })?;
+            send.flush().await.map_err(|_| {
+                MezError::invalid_state("failed to flush stateful Iroh control frame")
+            })?;
+        }
+        return finish_iroh_control_send(send).await;
+    }
     let mut first_frame = true;
     while let Some(frame) = framed.next().await {
         let frame = encode_frame(&frame?);
@@ -649,6 +768,10 @@ where
         })?;
         first_frame = false;
     }
+    finish_iroh_control_send(send).await
+}
+
+async fn finish_iroh_control_send(mut send: iroh::endpoint::SendStream) -> Result<()> {
     send.finish()
         .map_err(|_| MezError::invalid_state("failed to finish negotiated Iroh control stream"))?;
     match send.stopped().await {
@@ -662,9 +785,46 @@ where
     }
 }
 
+fn control_stream_frame_mode(frame: &[u8], max_content_length: usize) -> IrohFrameCompressionMode {
+    let Ok((decoded, consumed)) = decode_frame(frame, max_content_length) else {
+        return IrohFrameCompressionMode::IdentityOnly;
+    };
+    if consumed != frame.len() {
+        return IrohFrameCompressionMode::IdentityOnly;
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&decoded.body) else {
+        return IrohFrameCompressionMode::IdentityOnly;
+    };
+    if value
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|method| method.contains("clipboard"))
+        || json_contains_sensitive_transport_key(&value)
+    {
+        IrohFrameCompressionMode::IdentityOnly
+    } else {
+        IrohFrameCompressionMode::Eligible
+    }
+}
+
+fn json_contains_sensitive_transport_key(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
+            matches!(
+                key.as_str(),
+                "credential" | "device_credential" | "invitation" | "password" | "secret" | "token"
+            ) || json_contains_sensitive_transport_key(value)
+        }),
+        serde_json::Value::Array(values) => {
+            values.iter().any(json_contains_sensitive_transport_key)
+        }
+        _ => false,
+    }
+}
+
 async fn pump_iroh_frames_to_raw<W>(
     recv: iroh::endpoint::RecvStream,
-    mut raw: W,
+    raw: W,
     policy: IrohCompressionPolicy,
     metrics: IrohCompressionMetrics,
     max_content_length: usize,
@@ -672,6 +832,32 @@ async fn pump_iroh_frames_to_raw<W>(
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
+    pump_iroh_frames_to_raw_with_activation(recv, raw, policy, metrics, max_content_length, None)
+        .await
+}
+
+async fn pump_iroh_frames_to_raw_with_activation<W>(
+    recv: iroh::endpoint::RecvStream,
+    mut raw: W,
+    policy: IrohCompressionPolicy,
+    metrics: IrohCompressionMetrics,
+    max_content_length: usize,
+    activation: Option<Arc<tokio::sync::Barrier>>,
+) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    if policy.is_streaming() {
+        return pump_streaming_iroh_frames_to_raw(
+            recv,
+            raw,
+            policy,
+            metrics,
+            max_content_length,
+            activation,
+        )
+        .await;
+    }
     if policy.codec() == RuntimeIrohCompressionCodec::None {
         let codec = ProtocolFrameCodec::new(max_content_length)?;
         let mut framed = FramedRead::new(recv, codec);
@@ -738,11 +924,507 @@ where
     }
 }
 
+async fn pump_streaming_iroh_frames_to_raw<W>(
+    recv: iroh::endpoint::RecvStream,
+    mut raw: W,
+    policy: IrohCompressionPolicy,
+    metrics: IrohCompressionMetrics,
+    max_content_length: usize,
+    activation: Option<Arc<tokio::sync::Barrier>>,
+) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let codec = ProtocolFrameCodec::new(max_content_length)?;
+    let mut framed = FramedRead::new(recv, codec);
+    let Some(initialization) = framed.next().await else {
+        raw.shutdown().await?;
+        return Ok(());
+    };
+    let initialization = encode_frame(&initialization?);
+    policy.validate_decoded_length(initialization.len())?;
+    metrics.record_frame(initialization.len(), initialization.len(), false);
+    raw.write_all(&initialization).await?;
+    raw.flush().await?;
+    if let Some(activation) = activation {
+        activation.wait().await;
+    }
+
+    let parts = framed.into_parts();
+    let mut recv = parts.io;
+    let mut pending = parts.read_buf.to_vec();
+    let mut decoder = IrohStreamDecoder::new(policy)?;
+    let mut buffer = [0u8; STREAM_CODEC_SCRATCH_BYTES];
+    loop {
+        while let Some(record) = decoder.decode_record(&pending)? {
+            let (_, consumed) = decode_frame(record.as_bytes(), max_content_length)?;
+            if consumed != record.as_bytes().len() {
+                return Err(MezError::invalid_args(
+                    "stateful Iroh record must contain exactly one control frame",
+                ));
+            }
+            metrics.record_frame(
+                record.consumed(),
+                record.as_bytes().len(),
+                record.compressed(),
+            );
+            raw.write_all(record.as_bytes()).await?;
+            raw.flush().await?;
+            pending.drain(..record.consumed());
+        }
+        if pending.len() > policy.stream_record_wire_limit() {
+            return Err(MezError::invalid_args(
+                "stateful Iroh control record exceeds its configured limit",
+            ));
+        }
+        let read = tokio::io::AsyncReadExt::read(&mut recv, &mut buffer)
+            .await
+            .map_err(|_| MezError::invalid_state("failed to read stateful Iroh control stream"))?;
+        if read == 0 {
+            if !pending.is_empty() {
+                return Err(MezError::invalid_state(
+                    "stateful Iroh control stream ended with an incomplete record",
+                ));
+            }
+            raw.shutdown().await?;
+            return Ok(());
+        }
+        pending.extend_from_slice(&buffer[..read]);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ParsedEnvelopeHeader {
     compressed: bool,
     encoded_length: usize,
     decoded_length: usize,
+}
+
+/// Direction-local encoder for one version 3 Iroh application stream.
+pub(crate) struct IrohStreamEncoder {
+    policy: IrohCompressionPolicy,
+    state: IrohStreamEncoderState,
+}
+
+enum IrohStreamEncoderState {
+    Zstd(ZstdStreamEncoder<'static>),
+    Lz4 { history: Vec<u8> },
+}
+
+/// Direction-local decoder for one version 3 Iroh application stream.
+pub(crate) struct IrohStreamDecoder {
+    policy: IrohCompressionPolicy,
+    state: IrohStreamDecoderState,
+}
+
+enum IrohStreamDecoderState {
+    Zstd(ZstdStreamDecoder<'static>),
+    Lz4 { history: Vec<u8> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParsedStreamRecordHeader {
+    flags: u8,
+    header_length: usize,
+    encoded_length: usize,
+    decoded_length: usize,
+}
+
+impl ParsedStreamRecordHeader {
+    fn record_length(self) -> Result<usize> {
+        self.header_length
+            .checked_add(self.encoded_length)
+            .ok_or_else(|| MezError::invalid_args("Iroh stream record length overflow"))
+    }
+
+    const fn compressed(self) -> bool {
+        self.flags & STREAM_FLAG_COMPRESSED != 0
+    }
+
+    const fn reset(self) -> bool {
+        self.flags & STREAM_FLAG_RESET != 0
+    }
+}
+
+impl IrohStreamEncoder {
+    /// Creates an encoder with fresh history for exactly one stream direction.
+    pub(crate) fn new(policy: IrohCompressionPolicy) -> Result<Self> {
+        let state = match policy.codec() {
+            RuntimeIrohCompressionCodec::ZstdStream => {
+                let mut encoder = ZstdStreamEncoder::new(policy.zstd_level).map_err(|_| {
+                    MezError::invalid_state("failed to initialize Iroh Zstandard stream encoder")
+                })?;
+                encoder
+                    .set_parameter(CParameter::WindowLog(STREAM_ZSTD_WINDOW_LOG))
+                    .map_err(|_| {
+                        MezError::invalid_state("failed to bound Iroh Zstandard stream window")
+                    })?;
+                IrohStreamEncoderState::Zstd(encoder)
+            }
+            RuntimeIrohCompressionCodec::Lz4Stream => IrohStreamEncoderState::Lz4 {
+                history: Vec::with_capacity(STREAM_HISTORY_BYTES),
+            },
+            _ => {
+                return Err(MezError::invalid_state(
+                    "Iroh stream encoder requires a version 3 codec",
+                ));
+            }
+        };
+        Ok(Self { policy, state })
+    }
+
+    /// Encodes and codec-flushes one complete inner Content-Length frame.
+    ///
+    /// Identity-only records reset history before and after their payload so
+    /// sensitive bytes neither reference nor seed reusable compression state.
+    pub(crate) fn encode_frame(
+        &mut self,
+        frame: &[u8],
+        mode: IrohFrameCompressionMode,
+    ) -> Result<IrohEncodedFrame> {
+        self.policy.validate_decoded_length(frame.len())?;
+        let (flags, payload, compressed) = if mode == IrohFrameCompressionMode::IdentityOnly {
+            self.reset()?;
+            let payload = frame.to_vec();
+            self.reset()?;
+            (STREAM_FLAG_RESET, payload, false)
+        } else {
+            let payload = match &mut self.state {
+                IrohStreamEncoderState::Zstd(encoder) => encode_zstd_stream_record(encoder, frame)?,
+                IrohStreamEncoderState::Lz4 { history } => {
+                    let payload = lz4_flex::block::compress_with_dict(frame, history);
+                    update_stream_history(history, frame);
+                    payload
+                }
+            };
+            (STREAM_FLAG_COMPRESSED, payload, true)
+        };
+        if payload.len() > self.policy.stream_record_payload_limit() {
+            return Err(MezError::invalid_args(
+                "Iroh stream encoded record exceeds its configured limit",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(payload.len() + 11);
+        bytes.push(flags);
+        append_stream_varint(&mut bytes, payload.len())?;
+        append_stream_varint(&mut bytes, frame.len())?;
+        bytes.extend_from_slice(&payload);
+        Ok(IrohEncodedFrame {
+            bytes,
+            compressed,
+            decoded_bytes: frame.len(),
+        })
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        match &mut self.state {
+            IrohStreamEncoderState::Zstd(encoder) => encoder.reinit().map_err(|_| {
+                MezError::invalid_state("failed to reset Iroh Zstandard stream encoder")
+            }),
+            IrohStreamEncoderState::Lz4 { history } => {
+                history.clear();
+                Ok(())
+            }
+        }
+    }
+}
+
+fn encode_zstd_stream_record(
+    encoder: &mut ZstdStreamEncoder<'static>,
+    frame: &[u8],
+) -> Result<Vec<u8>> {
+    let mut payload = Vec::new();
+    let mut input = InBuffer::around(frame);
+    let mut scratch = [0u8; STREAM_CODEC_SCRATCH_BYTES];
+    while input.pos() < frame.len() {
+        let before = input.pos();
+        let written = {
+            let mut output = OutBuffer::around(&mut scratch[..]);
+            encoder.run(&mut input, &mut output).map_err(|_| {
+                MezError::invalid_state("failed to encode Iroh Zstandard stream record")
+            })?;
+            output.pos()
+        };
+        payload.extend_from_slice(&scratch[..written]);
+        if input.pos() == before && written == 0 {
+            return Err(MezError::invalid_state(
+                "Iroh Zstandard stream encoder made no progress",
+            ));
+        }
+    }
+    loop {
+        let (remaining, written) = {
+            let mut output = OutBuffer::around(&mut scratch[..]);
+            let remaining = encoder.flush(&mut output).map_err(|_| {
+                MezError::invalid_state("failed to flush Iroh Zstandard stream record")
+            })?;
+            (remaining, output.pos())
+        };
+        payload.extend_from_slice(&scratch[..written]);
+        if remaining == 0 {
+            return Ok(payload);
+        }
+        if written == 0 {
+            return Err(MezError::invalid_state(
+                "Iroh Zstandard stream flush made no progress",
+            ));
+        }
+    }
+}
+
+fn append_stream_varint(output: &mut Vec<u8>, value: usize) -> Result<()> {
+    let mut value = u32::try_from(value)
+        .map_err(|_| MezError::invalid_args("Iroh stream record length exceeds wire range"))?;
+    loop {
+        let byte = u8::try_from(value & 0x7f)
+            .map_err(|_| MezError::invalid_state("invalid Iroh stream varint byte"))?;
+        value >>= 7;
+        output.push(if value == 0 { byte } else { byte | 0x80 });
+        if value == 0 {
+            return Ok(());
+        }
+    }
+}
+
+fn update_stream_history(history: &mut Vec<u8>, decoded: &[u8]) {
+    if decoded.len() >= STREAM_HISTORY_BYTES {
+        history.clear();
+        history.extend_from_slice(&decoded[decoded.len() - STREAM_HISTORY_BYTES..]);
+        return;
+    }
+    let excess = history
+        .len()
+        .saturating_add(decoded.len())
+        .saturating_sub(STREAM_HISTORY_BYTES);
+    if excess > 0 {
+        history.drain(..excess);
+    }
+    history.extend_from_slice(decoded);
+}
+
+impl IrohStreamDecoder {
+    /// Creates a decoder with fresh history for exactly one stream direction.
+    pub(crate) fn new(policy: IrohCompressionPolicy) -> Result<Self> {
+        let state = match policy.codec() {
+            RuntimeIrohCompressionCodec::ZstdStream => {
+                let mut decoder = ZstdStreamDecoder::new().map_err(|_| {
+                    MezError::invalid_state("failed to initialize Iroh Zstandard stream decoder")
+                })?;
+                decoder
+                    .set_parameter(DParameter::WindowLogMax(STREAM_ZSTD_WINDOW_LOG))
+                    .map_err(|_| {
+                        MezError::invalid_state("failed to bound Iroh Zstandard decode window")
+                    })?;
+                IrohStreamDecoderState::Zstd(decoder)
+            }
+            RuntimeIrohCompressionCodec::Lz4Stream => IrohStreamDecoderState::Lz4 {
+                history: Vec::with_capacity(STREAM_HISTORY_BYTES),
+            },
+            _ => {
+                return Err(MezError::invalid_state(
+                    "Iroh stream decoder requires a version 3 codec",
+                ));
+            }
+        };
+        Ok(Self { policy, state })
+    }
+
+    /// Decodes one complete record when enough bytes are available.
+    pub(crate) fn decode_record(&mut self, input: &[u8]) -> Result<Option<IrohDecodedRecord>> {
+        let Some(header) = parse_stream_record_header(input, self.policy)? else {
+            return Ok(None);
+        };
+        let record_length = header.record_length()?;
+        if input.len() < record_length {
+            return Ok(None);
+        }
+        let payload = &input[header.header_length..record_length];
+        if header.reset() {
+            self.reset()?;
+        }
+        let decoded = if header.compressed() {
+            match &mut self.state {
+                IrohStreamDecoderState::Zstd(decoder) => {
+                    decode_zstd_stream_record(decoder, payload, header.decoded_length)?
+                }
+                IrohStreamDecoderState::Lz4 { history } => {
+                    let decoded = lz4_flex::block::decompress_with_dict(
+                        payload,
+                        header.decoded_length,
+                        history,
+                    )
+                    .map_err(|_| {
+                        MezError::invalid_args("invalid bounded Iroh LZ4 stream record")
+                    })?;
+                    update_stream_history(history, &decoded);
+                    decoded
+                }
+            }
+        } else {
+            payload.to_vec()
+        };
+        if decoded.len() != header.decoded_length {
+            return Err(MezError::invalid_args(
+                "decoded Iroh stream record length does not match its declaration",
+            ));
+        }
+        if header.reset() {
+            self.reset()?;
+        }
+        Ok(Some(IrohDecodedRecord {
+            bytes: decoded,
+            consumed: record_length,
+            compressed: header.compressed(),
+        }))
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        match &mut self.state {
+            IrohStreamDecoderState::Zstd(decoder) => decoder.reinit().map_err(|_| {
+                MezError::invalid_state("failed to reset Iroh Zstandard stream decoder")
+            }),
+            IrohStreamDecoderState::Lz4 { history } => {
+                history.clear();
+                Ok(())
+            }
+        }
+    }
+}
+
+/// One decoded v3 record plus wire accounting metadata.
+pub(crate) struct IrohDecodedRecord {
+    bytes: Vec<u8>,
+    consumed: usize,
+    compressed: bool,
+}
+
+impl IrohDecodedRecord {
+    /// Returns the complete decoded inner Content-Length frame.
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Returns the number of v3 wire bytes consumed by this record.
+    pub(crate) const fn consumed(&self) -> usize {
+        self.consumed
+    }
+
+    /// Reports whether the record payload used the negotiated codec.
+    pub(crate) const fn compressed(&self) -> bool {
+        self.compressed
+    }
+}
+
+fn parse_stream_record_header(
+    input: &[u8],
+    policy: IrohCompressionPolicy,
+) -> Result<Option<ParsedStreamRecordHeader>> {
+    let Some(&flags) = input.first() else {
+        return Ok(None);
+    };
+    if flags & !STREAM_KNOWN_FLAGS != 0 {
+        return Err(MezError::invalid_args(
+            "unsupported Iroh stream record flags",
+        ));
+    }
+    if flags & STREAM_FLAG_COMPRESSED == 0 && flags & STREAM_FLAG_RESET == 0 {
+        return Err(MezError::invalid_args(
+            "Iroh stream identity record must reset history",
+        ));
+    }
+    if flags & STREAM_FLAG_COMPRESSED != 0 && flags & STREAM_FLAG_RESET != 0 {
+        return Err(MezError::invalid_args(
+            "Iroh stream record cannot be compressed and reset history",
+        ));
+    }
+    let Some((encoded_length, encoded_bytes)) = parse_stream_varint(&input[1..])? else {
+        return Ok(None);
+    };
+    let decoded_offset = 1 + encoded_bytes;
+    let Some((decoded_length, decoded_bytes)) = parse_stream_varint(&input[decoded_offset..])?
+    else {
+        return Ok(None);
+    };
+    policy.validate_decoded_length(decoded_length)?;
+    if encoded_length == 0 {
+        return Err(MezError::invalid_args(
+            "Iroh stream encoded record length must be non-zero",
+        ));
+    }
+    if encoded_length > policy.stream_record_payload_limit() {
+        return Err(MezError::invalid_args(
+            "Iroh stream encoded record exceeds its configured limit",
+        ));
+    }
+    if flags & STREAM_FLAG_COMPRESSED == 0 && encoded_length != decoded_length {
+        return Err(MezError::invalid_args(
+            "Iroh stream identity record lengths do not match",
+        ));
+    }
+    Ok(Some(ParsedStreamRecordHeader {
+        flags,
+        header_length: decoded_offset + decoded_bytes,
+        encoded_length,
+        decoded_length,
+    }))
+}
+
+fn parse_stream_varint(input: &[u8]) -> Result<Option<(usize, usize)>> {
+    let mut value = 0u32;
+    for (index, byte) in input.iter().copied().take(5).enumerate() {
+        if index == 4 && byte & 0xf0 != 0 {
+            return Err(MezError::invalid_args(
+                "Iroh stream record varint exceeds wire range",
+            ));
+        }
+        value |= u32::from(byte & 0x7f) << (index * 7);
+        if byte & 0x80 == 0 {
+            return Ok(Some((value as usize, index + 1)));
+        }
+    }
+    if input.len() < 5 {
+        Ok(None)
+    } else {
+        Err(MezError::invalid_args(
+            "Iroh stream record varint is unterminated",
+        ))
+    }
+}
+
+fn decode_zstd_stream_record(
+    decoder: &mut ZstdStreamDecoder<'static>,
+    payload: &[u8],
+    decoded_length: usize,
+) -> Result<Vec<u8>> {
+    let mut decoded = vec![0u8; decoded_length];
+    let mut input = InBuffer::around(payload);
+    let produced = {
+        let mut output = OutBuffer::around(&mut decoded[..]);
+        while input.pos() < payload.len() {
+            let input_before = input.pos();
+            let output_before = output.pos();
+            decoder.run(&mut input, &mut output).map_err(|_| {
+                MezError::invalid_args("invalid bounded Iroh Zstandard stream record")
+            })?;
+            if input.pos() == input_before && output.pos() == output_before {
+                return Err(MezError::invalid_args(
+                    "Iroh Zstandard stream decoder made no progress",
+                ));
+            }
+            if output.pos() == decoded_length && input.pos() < payload.len() {
+                return Err(MezError::invalid_args(
+                    "Iroh Zstandard stream record exceeds its decoded declaration",
+                ));
+            }
+        }
+        output.pos()
+    };
+    if produced != decoded_length {
+        return Err(MezError::invalid_args(
+            "Iroh Zstandard stream record did not produce its decoded declaration",
+        ));
+    }
+    Ok(decoded)
 }
 
 #[cfg(test)]
@@ -754,6 +1436,7 @@ mod tests {
 
     use iroh::endpoint::{PortmapperConfig, presets};
     use iroh::{Endpoint, RelayMode};
+    use tokio::io::AsyncReadExt;
 
     struct CountingAllocator;
 
@@ -877,6 +1560,105 @@ mod tests {
             client_send,
             client_recv,
         )
+    }
+
+    /// Verifies a version 3 bridge leaves both initialization frames raw and
+    /// switches both directions to fresh stateful contexts only afterward.
+    ///
+    /// The follow-up request and response exercise the activation barrier and
+    /// prove that existing bridge consumers continue to see unchanged inner
+    /// Content-Length frames across the negotiated transition.
+    #[tokio::test(flavor = "current_thread")]
+    async fn streaming_bridge_preserves_raw_initialization_then_transitions_both_directions() {
+        let (
+            server,
+            client,
+            server_connection,
+            client_connection,
+            server_send,
+            server_recv,
+            mut client_send,
+            mut client_recv,
+        ) = test_iroh_stream_pair().await;
+        let policy = policy(RuntimeIrohCompressionCodec::Lz4Stream, 1);
+        let mut bridge =
+            IrohCompressionBridge::spawn(server_recv, server_send, policy, 4096).unwrap();
+        let initialize_request = crate::control::encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{}}"#,
+        );
+        let initialize_response = crate::control::encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"init","result":{"ok":true}}"#,
+        );
+        let follow_up_request = crate::control::encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"next","method":"pane/list","params":{}}"#,
+        );
+        let follow_up_response = crate::control::encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"next","result":{"panes":[]}}"#,
+        );
+
+        client_send.write_all(&initialize_request).await.unwrap();
+        client_send.flush().await.unwrap();
+        let mut received_initialize_request = vec![0u8; initialize_request.len()];
+        bridge
+            .stream_mut()
+            .read_exact(&mut received_initialize_request)
+            .await
+            .unwrap();
+        assert_eq!(received_initialize_request, initialize_request);
+
+        bridge
+            .stream_mut()
+            .write_all(&initialize_response)
+            .await
+            .unwrap();
+        bridge.stream_mut().flush().await.unwrap();
+        let mut received_initialize_response = vec![0u8; initialize_response.len()];
+        client_recv
+            .read_exact(&mut received_initialize_response)
+            .await
+            .unwrap();
+        assert_eq!(received_initialize_response, initialize_response);
+
+        let mut client_encoder = IrohStreamEncoder::new(policy).unwrap();
+        let encoded_request = client_encoder
+            .encode_frame(&follow_up_request, IrohFrameCompressionMode::Eligible)
+            .unwrap();
+        client_send
+            .write_all(encoded_request.as_bytes())
+            .await
+            .unwrap();
+        client_send.flush().await.unwrap();
+        let mut received_follow_up_request = vec![0u8; follow_up_request.len()];
+        bridge
+            .stream_mut()
+            .read_exact(&mut received_follow_up_request)
+            .await
+            .unwrap();
+        assert_eq!(received_follow_up_request, follow_up_request);
+
+        bridge
+            .stream_mut()
+            .write_all(&follow_up_response)
+            .await
+            .unwrap();
+        bridge.stream_mut().flush().await.unwrap();
+        let mut client_decoder = IrohStreamDecoder::new(policy).unwrap();
+        let mut pending = Vec::new();
+        let decoded_response = loop {
+            let mut byte = [0u8; 1];
+            client_recv.read_exact(&mut byte).await.unwrap();
+            pending.push(byte[0]);
+            if let Some(record) = client_decoder.decode_record(&pending).unwrap() {
+                break record.as_bytes().to_vec();
+            }
+        };
+        assert_eq!(decoded_response, follow_up_response);
+
+        drop(bridge);
+        server_connection.close(0u32.into(), b"test complete");
+        client_connection.close(0u32.into(), b"test complete");
+        server.close().await;
+        client.close().await;
     }
 
     /// Dropping bridge ownership on an early connection error must cancel its
@@ -1187,6 +1969,8 @@ mod tests {
     #[test]
     fn codec_alpns_are_closed_and_ordered() {
         let codecs = [
+            RuntimeIrohCompressionCodec::Lz4Stream,
+            RuntimeIrohCompressionCodec::ZstdStream,
             RuntimeIrohCompressionCodec::Lz4,
             RuntimeIrohCompressionCodec::Zstd,
             RuntimeIrohCompressionCodec::None,
@@ -1194,6 +1978,8 @@ mod tests {
         assert_eq!(
             IrohCompressionPolicy::ordered_alpns(&codecs),
             vec![
+                MEZZANINE_IROH_LZ4_STREAM_ALPN.to_vec(),
+                MEZZANINE_IROH_ZSTD_STREAM_ALPN.to_vec(),
                 MEZZANINE_IROH_LZ4_ALPN.to_vec(),
                 MEZZANINE_IROH_ZSTD_ALPN.to_vec(),
                 super::super::MEZZANINE_IROH_ALPN.to_vec(),
@@ -1206,6 +1992,116 @@ mod tests {
             );
         }
         assert!(RuntimeIrohCompressionCodec::from_alpn(b"unknown").is_err());
+    }
+
+    /// Verifies both version 3 codecs reuse direction-local history across
+    /// records, decode incrementally, and preserve exact inner frame bytes.
+    ///
+    /// The second repeated record should be smaller than the first because it
+    /// can reference established stream history. A truncated record must stay
+    /// buffered rather than advancing decoder state or exposing a partial
+    /// application frame.
+    #[test]
+    fn streaming_codecs_reuse_history_and_decode_incrementally() {
+        let frame = crate::control::encode_control_body(
+            r#"{"jsonrpc":"2.0","id":1,"method":"session/get","params":{"padding":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
+        );
+        for codec in [
+            RuntimeIrohCompressionCodec::ZstdStream,
+            RuntimeIrohCompressionCodec::Lz4Stream,
+        ] {
+            let policy = policy(codec, 1);
+            let mut encoder = IrohStreamEncoder::new(policy).unwrap();
+            let mut decoder = IrohStreamDecoder::new(policy).unwrap();
+            let first = encoder
+                .encode_frame(&frame, IrohFrameCompressionMode::Eligible)
+                .unwrap();
+            let second = encoder
+                .encode_frame(&frame, IrohFrameCompressionMode::Eligible)
+                .unwrap();
+
+            assert!(first.compressed(), "{codec:?}");
+            assert!(second.compressed(), "{codec:?}");
+            assert!(
+                second.as_bytes().len() < first.as_bytes().len(),
+                "{codec:?}: first={} second={}",
+                first.as_bytes().len(),
+                second.as_bytes().len()
+            );
+            assert!(
+                decoder
+                    .decode_record(&first.as_bytes()[..first.as_bytes().len() - 1])
+                    .unwrap()
+                    .is_none()
+            );
+            let decoded_first = decoder.decode_record(first.as_bytes()).unwrap().unwrap();
+            assert_eq!(decoded_first.as_bytes(), frame);
+            assert_eq!(decoded_first.consumed(), first.as_bytes().len());
+            let decoded_second = decoder.decode_record(second.as_bytes()).unwrap().unwrap();
+            assert_eq!(decoded_second.as_bytes(), frame);
+            assert_eq!(decoded_second.consumed(), second.as_bytes().len());
+        }
+    }
+
+    /// Verifies identity-only version 3 records reset codec history on both
+    /// sides so sensitive bytes neither use prior context nor seed later data.
+    ///
+    /// A normal record after the reset must still round-trip through a fresh
+    /// epoch, while malformed flag combinations fail before payload decoding.
+    #[test]
+    fn streaming_identity_records_reset_history_and_reject_invalid_flags() {
+        let ordinary = crate::control::encode_control_body(
+            r#"{"jsonrpc":"2.0","id":1,"method":"pane/list","params":{}}"#,
+        );
+        let sensitive = crate::control::encode_control_body(
+            r#"{"jsonrpc":"2.0","method":"client/clipboard.chunk","params":{"data_base64":"c2VjcmV0"}}"#,
+        );
+        for codec in [
+            RuntimeIrohCompressionCodec::ZstdStream,
+            RuntimeIrohCompressionCodec::Lz4Stream,
+        ] {
+            let policy = policy(codec, 1);
+            let mut encoder = IrohStreamEncoder::new(policy).unwrap();
+            let mut decoder = IrohStreamDecoder::new(policy).unwrap();
+            let before = encoder
+                .encode_frame(&ordinary, IrohFrameCompressionMode::Eligible)
+                .unwrap();
+            let reset = encoder
+                .encode_frame(&sensitive, IrohFrameCompressionMode::IdentityOnly)
+                .unwrap();
+            let after = encoder
+                .encode_frame(&ordinary, IrohFrameCompressionMode::Eligible)
+                .unwrap();
+
+            assert_eq!(
+                decoder
+                    .decode_record(before.as_bytes())
+                    .unwrap()
+                    .unwrap()
+                    .as_bytes(),
+                ordinary
+            );
+            let decoded_reset = decoder.decode_record(reset.as_bytes()).unwrap().unwrap();
+            assert_eq!(decoded_reset.as_bytes(), sensitive);
+            assert!(!decoded_reset.compressed());
+            assert_eq!(
+                decoder
+                    .decode_record(after.as_bytes())
+                    .unwrap()
+                    .unwrap()
+                    .as_bytes(),
+                ordinary
+            );
+
+            let mut malformed = reset.as_bytes().to_vec();
+            malformed[0] = STREAM_FLAG_COMPRESSED | STREAM_FLAG_RESET;
+            assert!(
+                IrohStreamDecoder::new(policy)
+                    .unwrap()
+                    .decode_record(&malformed)
+                    .is_err()
+            );
+        }
     }
 
     /// Verifies Zstandard and LZ4 independently round-trip one complete frame

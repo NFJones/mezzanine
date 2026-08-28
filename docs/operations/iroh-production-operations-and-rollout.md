@@ -106,6 +106,23 @@ The runtime advertises and attempts configured codecs in order before opening
 an application stream, then keeps the selected codec fixed for control and
 event traffic until that connection closes.
 
+Schema v75 additionally accepts `lz4-stream` and `zstd-stream` for opt-in
+low-latency trials. These v3 variants reuse bounded direction-local history and
+flush every logical frame; they do not use `compression_min_bytes` bypasses.
+Initialization and event prefaces remain raw, and sensitive frames reset codec
+history. A canary preference list may place a streaming codec first while
+retaining existing fallbacks, for example:
+
+```toml
+[transport.iroh]
+compression_codecs = ["lz4-stream", "zstd-stream", "zstd", "lz4", "none"]
+```
+
+Do not make a streaming variant the fleet default without direct and relayed
+input-to-visible p50/p95/p99 latency, CPU, memory, wire-byte, loss, cold-context,
+and maximum-concurrency measurements. Compare `lz4-stream` first for a
+latency-first profile and `zstd-stream` where relay bandwidth dominates.
+
 During staged rollout, retain `none` in canary preference lists for old-peer
 compatibility and verify negotiation before reviewing CPU or bandwidth
 effects. Immediate rollback is:

@@ -136,6 +136,20 @@ never downgrade or replay after application bytes have been sent. The selected
 codec is immutable for the connection and applies to later control frames in
 both directions and to event frames after the unchanged event-stream preface.
 
+Schema v75 adds two opt-in stateful ALPNs:
+`mezzanine/transport/3/zstd-stream` and
+`mezzanine/transport/3/lz4-stream`. Each control direction owns a fresh codec
+context after its raw initialization frame, and the event stream owns another
+fresh context after its raw preface. Zstandard is limited to a 64 KiB window;
+LZ4 retains at most 64 KiB of linked history. Every complete inner
+Content-Length frame is carried in one compact record with encoded and decoded
+lengths and is codec-flushed and Iroh-flushed immediately. Records containing
+credentials, tokens, invitations, passwords, secrets, or clipboard effects
+are sent as identity reset records, clearing history before and after the
+payload. Contexts are never shared across direction, stream, connection,
+client, or reconnect. `compression_min_bytes` does not bypass a stateful codec
+because doing so would desynchronize encoder and decoder history.
+
 Each connection maintains non-sensitive application-frame counters for wire
 bytes, decoded bytes, compressed frames, and identity frames. The status sampler
 publishes only interval deltas for the exact initialized client and resets its

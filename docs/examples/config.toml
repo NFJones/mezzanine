@@ -5,7 +5,7 @@
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 74
+version = 75
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -52,6 +52,7 @@ max_streams_per_connection = 1
 setup_timeout_ms = 10000
 idle_timeout_ms = 300000
 compression_codecs = ["zstd", "lz4", "none"]
+# Opt in to low-latency history reuse with "lz4-stream" or "zstd-stream".
 compression_min_bytes = 512
 compression_zstd_level = 3
 
