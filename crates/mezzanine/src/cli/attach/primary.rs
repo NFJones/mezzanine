@@ -332,6 +332,7 @@ where
                     "Iroh attach disconnected during terminal resize; reattach required",
                 ));
             }
+            iteration = iteration.saturating_add(1);
             render_requested = !pushed_render_owner;
         }
         let wake_deadline = connection
@@ -936,6 +937,111 @@ mod pushed_snapshot_tests {
         assert_eq!(terminal_io.invalidated_output_frames, 1);
     }
 
+    /// Verifies consecutive primary resize mutations use distinct idempotency
+    /// keys even when pushed rendering avoids an intervening view request.
+    ///
+    /// Reusing the resize sequence for different terminal geometries causes
+    /// the server to reject the second request as conflicting idempotency data,
+    /// after which the client closes the retained Iroh control stream.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn primary_v3_consecutive_resizes_use_distinct_idempotency_keys() {
+        let (mut client_stream, mut server_stream) = tokio::io::duplex(16 * 1024);
+        let mut terminal_io = crate::host::async_runtime::AsyncFakeAttachedTerminalIo::default();
+        terminal_io.push_terminal_size(Some(Size::new(100, 30).unwrap()));
+        terminal_io.push_terminal_size(Some(Size::new(120, 40).unwrap()));
+        terminal_io.push_pending_input_read();
+
+        let server = async {
+            let mut keys = Vec::new();
+            for expected_size in [(100, 30), (120, 40)] {
+                let request =
+                    read_async_control_response_frames(&mut server_stream, 1024 * 1024, 1)
+                        .await
+                        .unwrap();
+                let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+                let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(
+                    parsed.get("method").and_then(serde_json::Value::as_str),
+                    Some("terminal/step")
+                );
+                let params = parsed.get("params").unwrap();
+                assert_eq!(
+                    params
+                        .get("client_size")
+                        .and_then(|size| size.get("columns"))
+                        .and_then(serde_json::Value::as_u64),
+                    Some(expected_size.0)
+                );
+                assert_eq!(
+                    params
+                        .get("client_size")
+                        .and_then(|size| size.get("rows"))
+                        .and_then(serde_json::Value::as_u64),
+                    Some(expected_size.1)
+                );
+                keys.push(
+                    params
+                        .get("idempotency_key")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap()
+                        .to_string(),
+                );
+
+                let response = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": parsed.get("id").unwrap(),
+                    "result": {
+                        "input_bytes": 0,
+                        "application": {
+                            "forwarded_bytes": 0,
+                            "mux_actions_applied": 0,
+                            "mouse_actions_reported": 0,
+                            "agent_prompt_inputs_applied": 0,
+                            "view_refresh_required": false,
+                            "full_redraw_required": false,
+                            "unsupported_actions": []
+                        },
+                        "view": null,
+                        "ui_theme": null,
+                        "session_terminated": false
+                    }
+                })
+                .to_string();
+                tokio::io::AsyncWriteExt::write_all(
+                    &mut server_stream,
+                    &super::super::encode_control_body(&response),
+                )
+                .await
+                .unwrap();
+                tokio::io::AsyncWriteExt::flush(&mut server_stream)
+                    .await
+                    .unwrap();
+            }
+            keys
+        };
+        let client = run_iroh_attached_primary_client_loop_async_with_events(
+            &mut client_stream,
+            &mut terminal_io,
+            None,
+            ClientId::parse('c', "c1".to_string()).unwrap(),
+            Size::new(80, 24).unwrap(),
+            std::time::Duration::from_millis(50),
+            None,
+            true,
+        );
+        let (client, keys) = tokio::join!(client, server);
+        client.unwrap();
+
+        assert_eq!(
+            keys,
+            [
+                "cli-c1-terminal-resize-0".to_string(),
+                "cli-c1-terminal-resize-1".to_string(),
+            ]
+        );
+        assert_eq!(terminal_io.invalidated_output_frames, 2);
+    }
+
     /// Verifies an authoritative v3 update is presented while the matching
     /// terminal-step acknowledgement is still delayed by the control RTT.
     #[tokio::test(flavor = "current_thread")]
@@ -1132,6 +1238,7 @@ where
             {
                 break Ok(());
             }
+            iteration = iteration.saturating_add(1);
             render_requested = true;
         }
         let input = read_attached_client_input_or_deadline(
@@ -1245,6 +1352,7 @@ where
             {
                 break Ok(());
             }
+            iteration = iteration.saturating_add(1);
             render_requested = true;
         }
         let input = read_attached_client_input_or_runtime_event(

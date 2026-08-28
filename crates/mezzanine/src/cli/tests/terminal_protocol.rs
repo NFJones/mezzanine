@@ -729,7 +729,7 @@ async fn control_socket_primary_attach_loop_refreshes_idle_resize_without_input(
 
         {
             let (expected_id, expected_columns, expected_rows, response_lines) =
-                ("cli-terminal-view-1", 100, 30, "resized");
+                ("cli-terminal-view-2", 100, 30, "resized");
             let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
             let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
             let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
