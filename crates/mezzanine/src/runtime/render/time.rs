@@ -4,8 +4,10 @@
 //! context assembly. Keeping these helpers separate avoids mixing platform
 //! status reads into the render facade.
 
+#[cfg(any(test, target_os = "macos"))]
+use std::time::Duration;
 #[cfg(target_os = "macos")]
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Returns the current local time formatted for status bars.
 pub(super) fn runtime_local_datetime_seconds_string() -> String {
