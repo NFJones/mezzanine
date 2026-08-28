@@ -3672,6 +3672,55 @@ impl RuntimeSessionService {
             .collect()
     }
 
+    /// Builds render effects for attached clients projecting one of the supplied windows.
+    ///
+    /// Observers inherit their exact source primary's window projection, so
+    /// they are selected only when that source currently projects an affected
+    /// window.
+    pub(crate) fn render_effects_for_clients_projecting_windows(
+        &self,
+        window_ids: &[String],
+        reason: RenderInvalidationReason,
+    ) -> Vec<RuntimeSideEffect> {
+        let source_client_ids = self
+            .session
+            .clients()
+            .iter()
+            .filter(|client| {
+                client.role == mez_mux::session::ClientRole::Primary
+                    && client.state == mez_mux::session::ClientState::Attached
+            })
+            .filter_map(|client| {
+                self.session
+                    .active_window_for(&client.id)
+                    .ok()
+                    .filter(|window| {
+                        window_ids
+                            .iter()
+                            .any(|window_id| window.id.as_str() == window_id)
+                    })
+                    .map(|_| client.id.clone())
+            })
+            .collect::<Vec<_>>();
+
+        self.session
+            .clients()
+            .iter()
+            .filter(|client| client.state == mez_mux::session::ClientState::Attached)
+            .filter(|client| {
+                source_client_ids.contains(&client.id)
+                    || self.session.observer_attachments().iter().any(|observer| {
+                        observer.client_id == client.id
+                            && source_client_ids.contains(&observer.view_source_client_id)
+                    })
+            })
+            .map(|client| RuntimeSideEffect::RenderClient {
+                client_id: client.id.clone(),
+                reason,
+            })
+            .collect()
+    }
+
     /// Builds render effects for one primary projection and its attached observers.
     pub(crate) fn render_effects_for_primary_projection(
         &self,

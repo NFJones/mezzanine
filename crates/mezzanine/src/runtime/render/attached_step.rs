@@ -208,13 +208,47 @@ impl RuntimeSessionService {
         }
         self.presentation.activate_client_state(primary_client_id);
         self.session.activate_client_navigation(primary_client_id)?;
+        let pre_mutation_window_id = self
+            .session
+            .active_window_for(primary_client_id)
+            .ok()
+            .map(|window| window.id.to_string());
         let result =
             self.apply_attached_terminal_step_plan_inner(primary_client_id, step, true, true);
         self.presentation.capture_projected_client_state();
         let (application, mut side_effects) = result?;
         let render_reason = self.attached_terminal_step_render_reason(&application, step);
+        let structural_mutation = step.actions.iter().any(|action| {
+            matches!(
+                action,
+                TerminalClientLoopAction::ExecuteMux(
+                    MuxAction::NewWindow
+                        | MuxAction::NewGroup
+                        | MuxAction::SplitPaneVertical
+                        | MuxAction::SplitPaneHorizontal
+                        | MuxAction::TogglePaneZoom
+                        | MuxAction::CycleLayouts
+                        | MuxAction::KillPaneAfterConfirmation
+                        | MuxAction::BreakPaneToNewWindow
+                        | MuxAction::SwapPanePrevious
+                        | MuxAction::SwapPaneNext
+                )
+            )
+        });
         side_effects.extend(render_reason.map_or_else(Vec::new, |reason| {
-            self.render_effects_for_primary_projection(primary_client_id, reason)
+            if structural_mutation {
+                let mut window_ids = pre_mutation_window_id.into_iter().collect::<Vec<_>>();
+                if let Ok(window) = self.session.active_window_for(primary_client_id)
+                    && !window_ids
+                        .iter()
+                        .any(|window_id| window_id == window.id.as_str())
+                {
+                    window_ids.push(window.id.to_string());
+                }
+                self.render_effects_for_clients_projecting_windows(&window_ids, reason)
+            } else {
+                self.render_effects_for_primary_projection(primary_client_id, reason)
+            }
         }));
         let applied = application.forwarded_bytes > 0
             || application.mux_actions_applied > 0

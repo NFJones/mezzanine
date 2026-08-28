@@ -160,6 +160,56 @@ fn runtime_pane_output_targets_projecting_primary_and_observer_only() {
     assert_eq!(rendered_client_ids, vec![source, observer]);
 }
 
+/// Verifies a structural pane mutation wakes every projection of its affected
+/// window, including source-bound observers, while unrelated windows remain idle.
+#[test]
+fn runtime_structural_step_targets_affected_window_projections_only() {
+    let mut service = test_runtime_service();
+    let size = Size::new(80, 24).unwrap();
+    let source = service.attach_primary("source", true, size, 120).unwrap();
+    let observer = service
+        .session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    let same_window = service
+        .attach_primary("same-window", true, size, 121)
+        .unwrap();
+    let unrelated = service
+        .attach_primary("unrelated", true, size, 122)
+        .unwrap();
+    service
+        .session
+        .new_window(&unrelated, "background", true)
+        .unwrap();
+
+    let (_, transition) = service
+        .apply_attached_terminal_step_transition(
+            &source,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ExecuteMux(
+                    MuxAction::SplitPaneVertical,
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    let rendered_client_ids = transition
+        .side_effects
+        .iter()
+        .filter_map(|effect| match effect {
+            RuntimeSideEffect::RenderClient { client_id, .. } => Some(client_id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(transition.applied);
+    assert_eq!(rendered_client_ids, vec![source, observer, same_window]);
+}
+
 /// Verifies primary and observer frames render the visibility-selected screen
 /// without allowing hidden process application modes to affect agent input.
 #[test]
