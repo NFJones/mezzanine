@@ -58,8 +58,15 @@ client validates the entire frame, including its negotiated role, before
 replacing its retained logical view and then reuses the normal local ANSI
 differential renderer. Later non-invalidating updates may use
 `render/delta` with `base_revision`, a greater `revision`, complete non-row view
-metadata, and unique whole-row text/style replacements. The server retains the
-last successfully flushed complete view, suppresses identical views, and sends
+metadata, and unique whole-row text/style replacements. The framed
+`terminal/step` path publishes an exact-client render invalidation for
+presentation changes not represented by an inline view. In particular,
+pane-local agent-prompt edits have no PTY echo and therefore wake the pushed
+render stream directly instead of waiting for unrelated output or status
+activity.
+
+The server retains the last successfully flushed complete view, suppresses
+identical views, and sends
 a snapshot when the base is unsafe, geometry or row count changes, output must
 be invalidated, or the uncompressed delta is not smaller. The client validates
 and reconstructs the complete candidate atomically; a stale or malformed delta

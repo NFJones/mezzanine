@@ -47,6 +47,12 @@ server while output bytes are still pending. This proves acknowledgement and
 input fairness during incomplete output; it is not an end-to-end latency
 benchmark.
 
+Runtime control integration coverage also opens a real pane-local agent prompt,
+applies a framed `terminal/step` with `render = false`, and requires the edit to
+retain an exact-client `AgentPrompt` invalidation. This protects prompt echo on
+v3 pushed-render sessions, where no PTY output exists to trigger a repaint, and
+also verifies that unchanged steps do not create spurious render work.
+
 ## Live content-safe counters
 
 During a controlled session, `show-iroh-status` reports the invoking

@@ -212,28 +212,7 @@ impl RuntimeSessionService {
             self.apply_attached_terminal_step_plan_inner(primary_client_id, step, true, true);
         self.presentation.capture_projected_client_state();
         let (application, mut side_effects) = result?;
-        let active_resize_drag = application.full_redraw_required
-            && self.presentation.mouse_resize_drag_active()
-            && step.actions.iter().any(|action| {
-                matches!(
-                    action,
-                    TerminalClientLoopAction::HandleMouse(MouseAction::ResizePane { .. })
-                )
-            });
-        let render_reason = if active_resize_drag {
-            Some(RenderInvalidationReason::ResizeDrag)
-        } else if application.full_redraw_required {
-            Some(RenderInvalidationReason::FullRedraw)
-        } else if application.agent_prompt_inputs_applied > 0 {
-            Some(RenderInvalidationReason::AgentPrompt)
-        } else if application.view_refresh_required
-            || application.mux_actions_applied > 0
-            || application.mouse_actions_reported > 0
-        {
-            Some(RenderInvalidationReason::Overlay)
-        } else {
-            None
-        };
+        let render_reason = self.attached_terminal_step_render_reason(&application, step);
         side_effects.extend(render_reason.map(|reason| RuntimeSideEffect::RenderClient {
             client_id: primary_client_id.clone(),
             reason,
@@ -255,6 +234,40 @@ impl RuntimeSessionService {
                 side_effects,
             },
         ))
+    }
+
+    /// Classifies the strongest exact-client render invalidation for one step.
+    ///
+    /// Both actor-delivered steps and synchronous framed control steps use this
+    /// classifier so a mutation that is not represented by an inline view can
+    /// wake the authoritative pushed-render stream with identical semantics.
+    pub(crate) fn attached_terminal_step_render_reason(
+        &self,
+        application: &AttachedClientStepApplication,
+        step: &AttachedTerminalClientStepPlan,
+    ) -> Option<RenderInvalidationReason> {
+        let active_resize_drag = application.full_redraw_required
+            && self.presentation.mouse_resize_drag_active()
+            && step.actions.iter().any(|action| {
+                matches!(
+                    action,
+                    TerminalClientLoopAction::HandleMouse(MouseAction::ResizePane { .. })
+                )
+            });
+        if active_resize_drag {
+            Some(RenderInvalidationReason::ResizeDrag)
+        } else if application.full_redraw_required {
+            Some(RenderInvalidationReason::FullRedraw)
+        } else if application.agent_prompt_inputs_applied > 0 {
+            Some(RenderInvalidationReason::AgentPrompt)
+        } else if application.view_refresh_required
+            || application.mux_actions_applied > 0
+            || application.mouse_actions_reported > 0
+        {
+            Some(RenderInvalidationReason::Overlay)
+        } else {
+            None
+        }
     }
 
     /// Drains interactive provider refreshes queued by prompt submission.

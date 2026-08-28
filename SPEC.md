@@ -3209,6 +3209,11 @@ pushed render state rather than `terminal/view` responses for subsequent
 presentation changes. Each snapshot MUST contain a stream-local monotonic
 revision, the latest ordered event represented by the view, an
 output-invalidation flag, and one complete exact-client `RenderedClientView`.
+Any `terminal/step` mutation not represented by an inline view MUST publish an
+exact-client render invalidation when it changes presentation. This includes
+pane-local agent-prompt edits, which have no PTY echo to produce a pane-output
+event and therefore MUST become visible through the pushed-render stream
+without waiting for unrelated pane, status, or animation activity.
 The view, Iroh status slot, event cutoff, and invalidation requirement MUST be
 captured in one serialized actor turn. Clients MUST validate a complete
 snapshot atomically and MUST reject missing, malformed, wrong-role,

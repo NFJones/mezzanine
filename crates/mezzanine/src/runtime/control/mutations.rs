@@ -682,6 +682,7 @@ impl RuntimeSessionService {
             error_roles: Vec::new(),
         };
         let application = self.apply_attached_terminal_step_plan(primary_client_id, &step)?;
+        let render_reason = self.attached_terminal_step_render_reason(&application, &step);
         let view = if render
             || (render_if_changed
                 && (application.view_refresh_required || application.full_redraw_required))
@@ -694,6 +695,15 @@ impl RuntimeSessionService {
         } else {
             None
         };
+        if view.is_none()
+            && let Some(reason) = render_reason
+        {
+            self.presentation
+                .defer_render_effects([RuntimeSideEffect::RenderClient {
+                    client_id: primary_client_id.clone(),
+                    reason,
+                }]);
+        }
         let iroh_status_slot = view
             .as_ref()
             .and_then(|view| self.terminal_iroh_status_slot(view, &terminal_config));

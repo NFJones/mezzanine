@@ -211,6 +211,13 @@ fn runtime_terminal_step_renders_inline_only_if_changed() {
         changed["result"]["event_cutoff"],
         service.event_log().unwrap().latest_event_id()
     );
+    assert!(
+        service
+            .drain_deferred_effects_transition()
+            .side_effects
+            .into_iter()
+            .all(|effect| !matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+    );
 
     let unchanged = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"unchanged","method":"terminal/step","params":{"idempotency_key":"unchanged","client_size":{"columns":80,"rows":24},"render":false,"extensions":{"render_mode":"if_changed"},"input_bytes":[]}}"#,
@@ -229,4 +236,68 @@ fn runtime_terminal_step_renders_inline_only_if_changed() {
         "{invalid}"
     );
     service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a framed agent-prompt edit without an inline view wakes the exact
+/// primary client's pushed-render stream.
+///
+/// Iroh v3 deliberately sends `terminal/step` with `render = false` because
+/// pushed snapshots are authoritative. Agent prompt editing has no PTY echo to
+/// produce a pane-output invalidation, so the framed mutation must retain an
+/// `AgentPrompt` render effect after acknowledging the edit. Empty follow-on
+/// steps must not create spurious invalidations.
+#[test]
+fn runtime_terminal_step_without_inline_view_invalidates_agent_prompt() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    let _ = service.drain_deferred_effects_transition();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-edit","method":"terminal/step","params":{"idempotency_key":"agent-edit","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[97]}}"#,
+        &primary,
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(
+        response["result"]["application"]["agent_prompt_inputs_applied"],
+        1
+    );
+    assert!(response["result"]["view"].is_null());
+    assert_eq!(
+        service
+            .agent_prompt_inputs_for_tests()
+            .get("%1")
+            .unwrap()
+            .prompt
+            .buffer
+            .line(),
+        "a"
+    );
+    assert_eq!(
+        service.drain_deferred_effects_transition().side_effects,
+        vec![RuntimeSideEffect::RenderClient {
+            client_id: primary.clone(),
+            reason: crate::runtime::RenderInvalidationReason::AgentPrompt,
+        }]
+    );
+
+    let unchanged = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-empty","method":"terminal/step","params":{"idempotency_key":"agent-empty","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[]}}"#,
+        &primary,
+    );
+    let unchanged: serde_json::Value = serde_json::from_str(&unchanged).unwrap();
+    assert_eq!(
+        unchanged["result"]["application"]["agent_prompt_inputs_applied"],
+        0
+    );
+    assert!(
+        service
+            .drain_deferred_effects_transition()
+            .side_effects
+            .is_empty()
+    );
 }
