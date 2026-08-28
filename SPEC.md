@@ -2570,23 +2570,33 @@ prompt wrapping. In multiline prompt input, Up/Down arrow keys MUST move
 between prompt rows before falling back to history navigation at the top or
 bottom of the editable buffer.
 
-Readline-style prompt buffers MUST collapse large pasted text blocks to a
-human-readable byte-count placeholder such as `[Pasted 1.2 KiB]` instead of
-rendering the pasted payload inline. The placeholder MUST move as one logical
+Readline-style prompt buffers MUST collapse only text received as one
+bracketed-paste payload that exceeds the configured byte or visible-line limit
+to a human-readable byte-count placeholder such as `[Pasted 1.2 KiB]`.
+Ordinary typed or programmatically inserted text MUST remain literal regardless
+of its size, and a below-limit paste MUST remain literal even when surrounding
+text makes the aggregate prompt exceed a collapse limit. Each qualifying paste
+MUST remain a distinct placeholder; crossing a limit MUST NOT collapse earlier
+ordinary text or smaller pastes. The placeholder MUST move as one logical
 character for cursor navigation, Backspace, Delete, and related readline
 editing commands, and deleting the placeholder MUST remove the complete pasted
-payload from the editable buffer. Prompt submission MUST send the exact pasted
-payload to the command or agent backend while user-visible prompt echo MAY use
-the collapsed placeholder form. Bracketed-paste delimiters MUST be decoded by
-the prompt surface so embedded newlines in the pasted payload do not submit the
-prompt unless the user presses the normal submission key after the paste.
+payload from the editable buffer. Prompt submission MUST send the exact full
+text to the command or agent backend while user-visible prompt echo MUST retain
+the same per-paste representation shown during input. Bracketed-paste
+delimiters MUST be decoded by the prompt surface so embedded newlines in the
+pasted payload do not submit the prompt unless the user presses the normal
+submission key after the paste.
 Prompt surfaces MUST bound retained incomplete bracketed-paste payloads by byte
 count and age. An oversized or expired incomplete payload MUST be discarded,
 MUST NOT edit or submit the prompt, and MUST leave subsequent ordinary input
 decodable.
 
-The agent prompt MUST support Up/Down arrow navigation through submitted prompt
-history and `Ctrl+R` incremental reverse search through that history using the
+Agent and command prompt history MUST preserve which qualifying pasted spans
+were collapsed when each prompt was submitted. Up/Down recall, incremental
+reverse search, process restart, and resubmission MUST restore only those spans
+as placeholders; legacy raw-only history entries and all other text MUST be
+restored literally. The agent prompt MUST support Up/Down arrow navigation
+through submitted prompt history and `Ctrl+R` incremental reverse search through that history using the
 same `(reverse-i-search'<substring>'): <item>` prompt format and
 case-insensitive substring matching as the primary command
 prompt, including the same accept and cancel bindings.
@@ -10149,7 +10159,9 @@ prompt-history file shared by all agent sessions for readline navigation and one
 bounded command-prompt history file shared by the primary Mezzanine command
 prompt. These files MUST remain separate from each other and from
 conversation-scoped transcripts and presentation logs. Both files MUST omit
-consecutively repeated exact entries while preserving nonconsecutive repeats.
+consecutively repeated exact raw entries while preserving nonconsecutive
+repeats. When consecutive equal raw entries have different paste
+representations, the retained entry MUST use the newest representation.
 
 The user MUST be able to list, inspect, fork, resume, and delete saved agent
 conversations.

@@ -186,7 +186,7 @@ impl RuntimeSessionService {
                     metadata.pane_approval_policy_override.as_deref(),
                     metadata.approval_policy.as_deref(),
                 )?;
-            let prompt_history = match store.prompt_history(&conversation_id) {
+            let prompt_history = match store.structured_prompt_history(&conversation_id) {
                 Ok(history) => history,
                 Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
                 Err(error) => return Err(error),

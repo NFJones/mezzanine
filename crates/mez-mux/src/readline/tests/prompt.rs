@@ -2,7 +2,9 @@
 
 use std::ops::{Deref, DerefMut};
 
-use crate::readline::{ReadlineOutcome, ReadlinePromptState};
+use crate::readline::{
+    ReadlineHistoryEntry, ReadlineOutcome, ReadlinePasteRange, ReadlinePromptState,
+};
 
 /// Minimal prompt wrapper that composes lower reverse-search and baseline input.
 struct TestPrompt(ReadlinePromptState);
@@ -255,4 +257,42 @@ fn readline_reverse_i_search_navigation_cancels_to_draft() {
         assert_eq!(prompt.buffer.line(), "proj");
         assert!(!prompt.reverse_search_active());
     }
+}
+
+/// Verifies reverse search renders retained paste provenance compactly and
+/// cancellation restores the draft's exact opaque paste blocks rather than a
+/// flattened raw line.
+#[test]
+fn readline_reverse_i_search_preserves_structured_history_and_draft() {
+    let pasted = "z".repeat(1200);
+    let draft = format!("needle {pasted}");
+    let history = format!("before {draft} after");
+    let history_paste_start = "before needle ".len();
+    let mut prompt = TestPrompt::new();
+    prompt.buffer.set_structured_history([ReadlineHistoryEntry {
+        text: history,
+        collapsed_paste_ranges: vec![ReadlinePasteRange {
+            start: history_paste_start,
+            end: history_paste_start + pasted.len(),
+        }],
+    }]);
+    prompt.buffer.insert_text("needle ");
+    prompt.buffer.insert_pasted_text(&pasted);
+
+    assert_eq!(
+        prompt.apply_terminal_input(b"\x12").unwrap(),
+        ReadlineOutcome::Edited
+    );
+    assert!(
+        prompt
+            .render()
+            .ends_with("before needle [Pasted 1.2 KiB] after")
+    );
+    assert_eq!(
+        prompt.apply_terminal_input(b"\x1b").unwrap(),
+        ReadlineOutcome::Edited
+    );
+    assert_eq!(prompt.buffer.expanded_line(), draft);
+    assert_eq!(prompt.buffer.rendered_line(), "needle [Pasted 1.2 KiB]");
+    assert!(!prompt.reverse_search_active());
 }

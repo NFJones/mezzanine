@@ -4,7 +4,9 @@ use super::{
     ReadlineEdit, ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind,
 };
 use crate::ui::selector::{SelectorExtraCandidate, SelectorSurface};
-use mez_mux::readline::{ReadlineBracketedPasteRejection, ReadlineDecodedInput};
+use mez_mux::readline::{
+    ReadlineBracketedPasteRejection, ReadlineDecodedInput, ReadlinePasteRange,
+};
 use mez_mux::selector::{SelectorCandidate, SelectorCandidateKind};
 
 /// Verifies large pasted text renders as one compact editable block while
@@ -16,7 +18,7 @@ fn readline_large_paste_blocks_render_compactly_and_submit_raw_text() {
     let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Command);
 
     prompt.buffer.insert_text("before ");
-    prompt.buffer.insert_text(&large);
+    prompt.buffer.insert_pasted_text(&large);
     prompt.buffer.insert_text(" after");
 
     assert_eq!(prompt.render(), ":before [Pasted 1.2 KiB] after");
@@ -33,6 +35,10 @@ fn readline_large_paste_blocks_render_compactly_and_submit_raw_text() {
         ReadlineOutcome::SubmittedWithDisplay {
             text: format!("before {large} after"),
             display: String::from("before [Pasted 1.2 KiB] after"),
+            collapsed_paste_ranges: vec![ReadlinePasteRange {
+                start: "before ".len(),
+                end: "before ".len() + large.len(),
+            }],
         }
     );
 }
@@ -45,7 +51,7 @@ fn readline_large_paste_blocks_delete_as_single_character() {
     let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Agent);
 
     prompt.buffer.insert_text("a");
-    prompt.buffer.insert_text(&large);
+    prompt.buffer.insert_pasted_text(&large);
     prompt.buffer.insert_text("c");
     assert_eq!(prompt.render(), "mez> a[Pasted 1.2 KiB]c");
 
@@ -54,7 +60,7 @@ fn readline_large_paste_blocks_delete_as_single_character() {
     assert_eq!(prompt.render(), "mez> ac");
     assert_eq!(prompt.buffer.expanded_line(), "ac");
 
-    prompt.buffer.insert_text(&large);
+    prompt.buffer.insert_pasted_text(&large);
     assert_eq!(prompt.render(), "mez> a[Pasted 1.2 KiB]c");
     assert!(prompt.buffer.move_left());
     assert!(prompt.buffer.delete_forward());
@@ -736,6 +742,10 @@ fn readline_decoder_collapses_split_bracketed_paste_payloads() {
             ReadlineOutcome::SubmittedWithDisplay {
                 text: format!("pre {large} post"),
                 display: String::from("pre [Pasted 1.2 KiB] post"),
+                collapsed_paste_ranges: vec![ReadlinePasteRange {
+                    start: "pre ".len(),
+                    end: "pre ".len() + large.len(),
+                }],
             },
         ]
     );

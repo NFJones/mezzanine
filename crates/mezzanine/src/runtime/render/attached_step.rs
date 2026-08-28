@@ -357,7 +357,7 @@ impl RuntimeSessionService {
             prompt_input
                 .prompt
                 .buffer
-                .set_history(self.presentation.primary_command_prompt_history.clone());
+                .set_structured_history(self.presentation.primary_command_prompt_history.clone());
             prompt_input
                 .prompt
                 .set_selector_extra_candidates(self.runtime_command_selector_extra_candidates());

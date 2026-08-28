@@ -1723,11 +1723,11 @@ async fn persist_transcript_entries(
 async fn persist_prompt_history(
     store: AgentTranscriptStore,
     conversation_id: String,
-    prompt: String,
+    prompt: mez_mux::readline::ReadlineHistoryEntry,
 ) -> Result<usize> {
-    let byte_count = prompt.len();
+    let byte_count = prompt.text.len();
     store
-        .append_prompt_history_async(&conversation_id, &prompt)
+        .append_structured_prompt_history_async(&conversation_id, prompt)
         .await
         .map(|changed| if changed { byte_count } else { 0 })
 }
@@ -1736,11 +1736,11 @@ async fn persist_prompt_history(
 /// store.
 async fn persist_command_prompt_history(
     store: AgentTranscriptStore,
-    command: String,
+    command: mez_mux::readline::ReadlineHistoryEntry,
 ) -> Result<usize> {
-    let byte_count = command.len();
+    let byte_count = command.text.len();
     store
-        .append_command_prompt_history_async(&command)
+        .append_structured_command_prompt_history_async(command)
         .await
         .map(|changed| if changed { byte_count } else { 0 })
 }

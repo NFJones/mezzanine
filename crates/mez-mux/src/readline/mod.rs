@@ -10,7 +10,8 @@ mod prompt;
 
 pub use buffer::{
     DEFAULT_READLINE_HISTORY_LIMIT, MAX_READLINE_HISTORY_BYTES, MAX_READLINE_HISTORY_ENTRY_BYTES,
-    ReadlineBuffer, ReadlineEdit, ReadlineOutcome, readline_word_column_range,
+    ReadlineBuffer, ReadlineDraft, ReadlineEdit, ReadlineHistoryEntry, ReadlineOutcome,
+    ReadlinePasteRange, readline_word_column_range,
 };
 pub use decoder::{
     READLINE_BRACKETED_PASTE_MAX_BYTES, READLINE_BRACKETED_PASTE_STALE_AFTER,

@@ -21,6 +21,7 @@ use mez_agent::{
     agent_subshell_exit_marker_bytes, bash_private_handoff_source_input,
     parse_macro_prompt_invocation,
 };
+use mez_mux::readline::ReadlineHistoryEntry;
 
 /// Authenticated provenance carried with one live agent-shell command.
 ///
@@ -286,6 +287,7 @@ impl RuntimeSessionService {
             input,
             AgentShellCommandOrigin::AuthenticatedPrimaryInput,
             false,
+            ReadlineHistoryEntry::literal(input),
         )
     }
 
@@ -323,6 +325,7 @@ impl RuntimeSessionService {
             input,
             AgentShellCommandOrigin::AuthenticatedControlRequest,
             false,
+            ReadlineHistoryEntry::literal(input),
         )
     }
 
@@ -333,6 +336,7 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         input: &str,
         display_input: &str,
+        collapsed_paste_ranges: &[mez_mux::readline::ReadlinePasteRange],
     ) -> Result<String> {
         self.execute_agent_shell_command_with_origin(
             primary_client_id,
@@ -340,6 +344,10 @@ impl RuntimeSessionService {
             display_input,
             AgentShellCommandOrigin::AuthenticatedPrimaryInput,
             false,
+            ReadlineHistoryEntry {
+                text: input.to_string(),
+                collapsed_paste_ranges: collapsed_paste_ranges.to_vec(),
+            },
         )
     }
 
@@ -352,6 +360,7 @@ impl RuntimeSessionService {
         display_input: &str,
         origin: AgentShellCommandOrigin,
         queue_external_effects_for_adapter: bool,
+        history_entry: ReadlineHistoryEntry,
     ) -> Result<String> {
         self.require_live()?;
         if !self.session.is_attached_primary(primary_client_id) {
@@ -379,7 +388,7 @@ impl RuntimeSessionService {
         let is_prompt = !input.trim().is_empty() && !input.trim().starts_with('/');
         self.persist_agent_prompt_history_entry(
             &pane_id,
-            input,
+            &history_entry,
             queue_external_effects_for_adapter,
         )?;
         if is_prompt {
@@ -940,6 +949,7 @@ impl RuntimeSessionService {
                 input,
                 AgentShellCommandOrigin::AuthenticatedPrimaryInput,
                 true,
+                ReadlineHistoryEntry::literal(input),
             );
         };
 
@@ -964,7 +974,11 @@ impl RuntimeSessionService {
                 .await?;
         }
 
-        self.persist_agent_prompt_history_entry(&pane_id, input, true)?;
+        self.persist_agent_prompt_history_entry(
+            &pane_id,
+            &ReadlineHistoryEntry::literal(input),
+            true,
+        )?;
         let mcp_summary = self.mcp_registry().agent_shell_summary();
         let permission_summary = self
             .permission_policy_for_pane(&pane_id)
@@ -1124,7 +1138,11 @@ impl RuntimeSessionService {
                 "agent shell prompt requires a visible agent shell session",
             ));
         }
-        self.persist_agent_prompt_history_entry(&pane_id, input, true)?;
+        self.persist_agent_prompt_history_entry(
+            &pane_id,
+            &ReadlineHistoryEntry::literal(input),
+            true,
+        )?;
         let body = self.apply_provider_info_refresh(outcome)?;
         let command_outcome = AgentShellCommandOutcome::Display {
             command: "refresh-provider-info".to_string(),
@@ -1623,10 +1641,10 @@ impl RuntimeSessionService {
     fn persist_agent_prompt_history_entry(
         &mut self,
         pane_id: &str,
-        input: &str,
+        prompt: &ReadlineHistoryEntry,
         queue_for_adapter: bool,
     ) -> Result<()> {
-        if input.trim().is_empty() {
+        if prompt.text.trim().is_empty() {
             return Ok(());
         }
         let Some(store) = self.persistence.cloned_transcript_store() else {
@@ -1642,11 +1660,11 @@ impl RuntimeSessionService {
                     path,
                     store,
                     conversation_id: session.session_id.clone(),
-                    prompt: input.to_string(),
+                    prompt: prompt.clone(),
                 });
             return Ok(());
         }
-        let _ = store.append_prompt_history(&session.session_id, input)?;
+        let _ = store.append_structured_prompt_history(&session.session_id, prompt)?;
         Ok(())
     }
 }

@@ -401,7 +401,7 @@ pub(crate) struct RuntimePresentationComponent {
     /// Installed source-backed presentation projections keyed by pane id.
     agent_presentation_projection_cache: std::collections::BTreeMap<String, (String, Size)>,
     /// Submitted command-prompt history retained across prompt openings.
-    primary_command_prompt_history: Vec<String>,
+    primary_command_prompt_history: Vec<mez_mux::readline::ReadlineHistoryEntry>,
     /// Active primary-client readline prompt, when one is open.
     primary_prompt_input: Option<RuntimePrimaryPromptInput>,
     /// Whether the primary client's next key uses the prefix table.
@@ -1830,20 +1830,27 @@ impl RuntimeSessionService {
     }
 
     /// Returns retained primary command-prompt history for integration tests.
-    pub(crate) fn primary_command_prompt_history(&self) -> &[String] {
-        &self.presentation.primary_command_prompt_history
+    pub(crate) fn primary_command_prompt_history(&self) -> Vec<String> {
+        self.presentation
+            .primary_command_prompt_history
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect()
     }
 
     /// Replaces retained command-prompt history for an integration fixture.
     pub(crate) fn set_primary_command_prompt_history_for_tests(&mut self, history: Vec<String>) {
-        self.presentation.primary_command_prompt_history = history;
+        self.presentation.primary_command_prompt_history = history
+            .into_iter()
+            .map(mez_mux::readline::ReadlineHistoryEntry::literal)
+            .collect();
     }
 
     /// Adds one command-prompt history entry for an integration fixture.
     pub(crate) fn push_primary_command_prompt_history_for_tests(&mut self, command: String) {
         self.presentation
             .primary_command_prompt_history
-            .push(command);
+            .push(mez_mux::readline::ReadlineHistoryEntry::literal(command));
     }
 
     /// Returns the active primary prompt for product integration tests.

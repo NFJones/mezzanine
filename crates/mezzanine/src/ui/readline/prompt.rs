@@ -315,7 +315,9 @@ impl ReadlinePrompt {
             self.selector = None;
             return ReadlineOutcome::Noop;
         };
-        self.state.buffer.set_line_and_cursor(line, cursor);
+        self.state
+            .buffer
+            .set_line_and_cursor_preserving_paste_blocks(line, cursor);
         ReadlineOutcome::Edited
     }
 

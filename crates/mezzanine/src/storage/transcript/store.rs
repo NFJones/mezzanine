@@ -18,8 +18,8 @@ use rustix::fs::{FlockOperation, flock};
 use crate::error::{MezError, MezErrorKind, Result};
 
 use super::encoding::{
-    decode_agent_session_metadata, decode_prompt_history_entry, decode_transcript_entry,
-    encode_agent_session_metadata, encode_prompt_history_entry, encode_transcript_entry,
+    decode_agent_session_metadata, decode_structured_prompt_history_entry, decode_transcript_entry,
+    encode_agent_session_metadata, encode_structured_prompt_history_entry, encode_transcript_entry,
 };
 use super::fs::{
     set_private_dir_permissions, set_private_dir_permissions_async, set_private_file_permissions,
@@ -32,6 +32,7 @@ use mez_agent::transcript::{
     AgentSessionMetadata, ConversationSummary, TranscriptEntry, TranscriptRole,
     bounded_summary_text, summarize_conversation, validate_conversation_id,
 };
+use mez_mux::readline::ReadlineHistoryEntry;
 
 /// Defines the SESSION TRANSCRIPT FILE NAME const used by this subsystem.
 ///
@@ -959,21 +960,46 @@ impl AgentTranscriptStore {
     }
 
     /// Appends one submitted agent prompt to the bounded shared history file.
+    #[cfg(test)]
     pub fn append_prompt_history(&self, conversation_id: &str, prompt: &str) -> Result<bool> {
+        self.append_structured_prompt_history(
+            conversation_id,
+            &ReadlineHistoryEntry::literal(prompt),
+        )
+    }
+
+    /// Appends one submitted agent prompt together with collapsed-paste provenance.
+    pub fn append_structured_prompt_history(
+        &self,
+        conversation_id: &str,
+        prompt: &ReadlineHistoryEntry,
+    ) -> Result<bool> {
         validate_conversation_id(conversation_id)?;
-        if prompt.trim().is_empty()
-            || prompt.len() > mez_mux::readline::MAX_READLINE_HISTORY_ENTRY_BYTES
+        if prompt.text.trim().is_empty()
+            || prompt.text.len() > mez_mux::readline::MAX_READLINE_HISTORY_ENTRY_BYTES
+            || !prompt.is_valid()
         {
             return Ok(false);
         }
         let _lock = self.acquire_prompt_history_lock()?;
         self.migrate_prompt_history_locked()?;
         let path = self.prompt_history_path();
-        if Self::latest_prompt_history_entry(&path)?.as_deref() == Some(prompt) {
+        if Self::latest_structured_prompt_history_entry(&path)?.as_ref() == Some(prompt) {
             self.compact_prompt_history_if_needed()?;
             return Ok(false);
         }
-        let encoded = encode_prompt_history_entry(prompt)?;
+        if Self::latest_structured_prompt_history_entry(&path)?
+            .as_ref()
+            .is_some_and(|latest| latest.text == prompt.text)
+        {
+            let mut prompts = self.read_structured_prompt_history_file()?;
+            if let Some(latest) = prompts.last_mut() {
+                *latest = prompt.clone();
+            }
+            self.write_structured_prompt_history(prompts)?;
+            return Ok(true);
+        }
+        let encoded = encode_structured_prompt_history_entry(prompt)?;
         let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
         file.write_all(encoded.as_bytes())?;
         file.write_all(b"\n")?;
@@ -985,62 +1011,119 @@ impl AgentTranscriptStore {
 
     /// Appends one submitted primary command prompt to its bounded shared
     /// history file.
+    #[cfg(test)]
     pub fn append_command_prompt_history(&self, command: &str) -> Result<bool> {
-        if command.trim().is_empty() {
+        self.append_structured_command_prompt_history(&ReadlineHistoryEntry::literal(command))
+    }
+
+    /// Appends one command prompt together with collapsed-paste provenance.
+    pub fn append_structured_command_prompt_history(
+        &self,
+        command: &ReadlineHistoryEntry,
+    ) -> Result<bool> {
+        if command.text.trim().is_empty() || !command.is_valid() {
             return Ok(false);
         }
-        let mut commands = self.command_prompt_history()?;
-        if !append_history_entry(&mut commands, command.to_string()) {
+        let mut commands = self.structured_command_prompt_history()?;
+        if !append_structured_history_entry(&mut commands, command.clone()) {
             return Ok(false);
         }
-        self.write_command_prompt_history(commands)?;
+        self.write_structured_command_prompt_history(commands)?;
         Ok(true)
     }
 
     /// Appends one submitted agent prompt through Tokio filesystem I/O.
+    #[cfg(test)]
     pub async fn append_prompt_history_async(
         &self,
         conversation_id: &str,
         prompt: &str,
     ) -> Result<bool> {
+        self.append_structured_prompt_history_async(
+            conversation_id,
+            ReadlineHistoryEntry::literal(prompt),
+        )
+        .await
+    }
+
+    /// Appends one structured agent prompt through Tokio filesystem I/O.
+    pub async fn append_structured_prompt_history_async(
+        &self,
+        conversation_id: &str,
+        prompt: ReadlineHistoryEntry,
+    ) -> Result<bool> {
         validate_conversation_id(conversation_id)?;
-        if prompt.trim().is_empty() {
+        if prompt.text.trim().is_empty() {
             return Ok(false);
         }
         let store = self.clone();
         let conversation_id = conversation_id.to_string();
-        let prompt = prompt.to_string();
-        tokio::task::spawn_blocking(move || store.append_prompt_history(&conversation_id, &prompt))
-            .await
-            .map_err(|error| {
-                MezError::invalid_state(format!("prompt-history persistence task failed: {error}"))
-            })?
+        tokio::task::spawn_blocking(move || {
+            store.append_structured_prompt_history(&conversation_id, &prompt)
+        })
+        .await
+        .map_err(|error| {
+            MezError::invalid_state(format!("prompt-history persistence task failed: {error}"))
+        })?
     }
 
     /// Appends one submitted primary command prompt through Tokio filesystem
     /// I/O.
+    #[cfg(test)]
     pub async fn append_command_prompt_history_async(&self, command: &str) -> Result<bool> {
-        if command.trim().is_empty() {
+        self.append_structured_command_prompt_history_async(ReadlineHistoryEntry::literal(command))
+            .await
+    }
+
+    /// Appends one structured command prompt through Tokio filesystem I/O.
+    pub async fn append_structured_command_prompt_history_async(
+        &self,
+        command: ReadlineHistoryEntry,
+    ) -> Result<bool> {
+        if command.text.trim().is_empty() || !command.is_valid() {
             return Ok(false);
         }
-        let mut commands = self.command_prompt_history_async().await?;
-        if !append_history_entry(&mut commands, command.to_string()) {
+        let mut commands = self.structured_command_prompt_history_async().await?;
+        if !append_structured_history_entry(&mut commands, command) {
             return Ok(false);
         }
-        self.write_command_prompt_history_async(commands).await?;
+        self.write_structured_command_prompt_history_async(commands)
+            .await?;
         Ok(true)
     }
 
     /// Reads bounded submitted prompt history shared by all conversations.
     pub fn prompt_history(&self, conversation_id: &str) -> Result<Vec<String>> {
+        Ok(self
+            .structured_prompt_history(conversation_id)?
+            .into_iter()
+            .map(|entry| entry.text)
+            .collect())
+    }
+
+    /// Reads bounded prompt history with collapsed-paste provenance.
+    pub fn structured_prompt_history(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<ReadlineHistoryEntry>> {
         validate_conversation_id(conversation_id)?;
         let _lock = self.acquire_prompt_history_lock()?;
         self.migrate_prompt_history_locked()?;
-        self.read_prompt_history_file()
+        self.read_structured_prompt_history_file()
     }
 
     /// Reads bounded submitted primary command prompt history.
+    #[cfg(test)]
     pub fn command_prompt_history(&self) -> Result<Vec<String>> {
+        Ok(self
+            .structured_command_prompt_history()?
+            .into_iter()
+            .map(|entry| entry.text)
+            .collect())
+    }
+
+    /// Reads command prompt history with collapsed-paste provenance.
+    pub fn structured_command_prompt_history(&self) -> Result<Vec<ReadlineHistoryEntry>> {
         let path = self.command_prompt_history_path();
         if !path.exists() {
             return Ok(Vec::new());
@@ -1050,14 +1133,27 @@ impl AgentTranscriptStore {
         let commands = data
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .map(decode_prompt_history_entry)
+            .map(decode_structured_prompt_history_entry)
             .collect::<Result<Vec<_>>>()?;
-        Ok(canonicalize_history(commands))
+        Ok(canonicalize_structured_history(commands))
     }
 
     /// Reads bounded submitted primary command prompt history through Tokio
     /// filesystem I/O.
+    #[cfg(test)]
     pub async fn command_prompt_history_async(&self) -> Result<Vec<String>> {
+        Ok(self
+            .structured_command_prompt_history_async()
+            .await?
+            .into_iter()
+            .map(|entry| entry.text)
+            .collect())
+    }
+
+    /// Reads structured command prompt history through Tokio filesystem I/O.
+    pub async fn structured_command_prompt_history_async(
+        &self,
+    ) -> Result<Vec<ReadlineHistoryEntry>> {
         let path = self.command_prompt_history_path();
         let mut data = String::new();
         match tokio_fs::File::open(path).await {
@@ -1072,9 +1168,9 @@ impl AgentTranscriptStore {
         let commands = data
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .map(decode_prompt_history_entry)
+            .map(decode_structured_prompt_history_entry)
             .collect::<Result<Vec<_>>>()?;
-        Ok(canonicalize_history(commands))
+        Ok(canonicalize_structured_history(commands))
     }
 
     /// Returns the shared prompt-history file path after validating the caller.
@@ -1117,12 +1213,11 @@ impl AgentTranscriptStore {
         self.presentation_compressed_path_for(conversation_id)
     }
 
-    /// Runs the write prompt history operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn write_prompt_history(&self, prompts: impl IntoIterator<Item = String>) -> Result<()> {
+    /// Rewrites shared prompt history while preserving paste provenance.
+    fn write_structured_prompt_history(
+        &self,
+        prompts: impl IntoIterator<Item = ReadlineHistoryEntry>,
+    ) -> Result<()> {
         self.ensure_store_dir()?;
         let path = self.prompt_history_path();
         let mut file = OpenOptions::new()
@@ -1131,10 +1226,10 @@ impl AgentTranscriptStore {
             .truncate(true)
             .open(&path)?;
         for prompt in prompts {
-            if prompt.is_empty() {
+            if prompt.text.is_empty() {
                 continue;
             }
-            file.write_all(encode_prompt_history_entry(&prompt)?.as_bytes())?;
+            file.write_all(encode_structured_prompt_history_entry(&prompt)?.as_bytes())?;
             file.write_all(b"\n")?;
         }
         file.sync_all()?;
@@ -1142,14 +1237,10 @@ impl AgentTranscriptStore {
         Ok(())
     }
 
-    /// Runs the write command prompt history operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn write_command_prompt_history(
+    /// Rewrites command prompt history while preserving paste provenance.
+    fn write_structured_command_prompt_history(
         &self,
-        commands: impl IntoIterator<Item = String>,
+        commands: impl IntoIterator<Item = ReadlineHistoryEntry>,
     ) -> Result<()> {
         self.ensure_store_dir()?;
         let path = self.command_prompt_history_path();
@@ -1159,10 +1250,10 @@ impl AgentTranscriptStore {
             .truncate(true)
             .open(&path)?;
         for command in commands {
-            if command.is_empty() {
+            if command.text.is_empty() {
                 continue;
             }
-            file.write_all(encode_prompt_history_entry(&command)?.as_bytes())?;
+            file.write_all(encode_structured_prompt_history_entry(&command)?.as_bytes())?;
             file.write_all(b"\n")?;
         }
         file.sync_all()?;
@@ -1370,15 +1461,10 @@ impl AgentTranscriptStore {
         Ok(())
     }
 
-    /// Runs the write command prompt history async operation for this
-    /// subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    async fn write_command_prompt_history_async(
+    /// Rewrites structured command prompt history through Tokio filesystem I/O.
+    async fn write_structured_command_prompt_history_async(
         &self,
-        commands: impl IntoIterator<Item = String>,
+        commands: impl IntoIterator<Item = ReadlineHistoryEntry>,
     ) -> Result<()> {
         self.ensure_store_dir_async().await?;
         let path = self.command_prompt_history_path();
@@ -1389,10 +1475,10 @@ impl AgentTranscriptStore {
             .open(&path)
             .await?;
         for command in commands {
-            if command.is_empty() {
+            if command.text.is_empty() {
                 continue;
             }
-            file.write_all(encode_prompt_history_entry(&command)?.as_bytes())
+            file.write_all(encode_structured_prompt_history_entry(&command)?.as_bytes())
                 .await?;
             file.write_all(b"\n").await?;
         }
@@ -1550,7 +1636,7 @@ impl AgentTranscriptStore {
         if marker.exists() {
             return Ok(());
         }
-        let mut prompts = self.read_prompt_history_file()?;
+        let mut prompts = self.read_structured_prompt_history_file()?;
         let mut legacy_paths = std_fs::read_dir(&self.root)?
             .filter_map(|entry| entry.ok().map(|entry| entry.path()))
             .filter(|path| path.is_dir())
@@ -1559,11 +1645,11 @@ impl AgentTranscriptStore {
             .collect::<Vec<_>>();
         legacy_paths.sort();
         for path in legacy_paths {
-            prompts.extend(Self::read_prompt_history_path(&path)?);
+            prompts.extend(Self::read_structured_prompt_history_path(&path)?);
         }
-        prompts = canonicalize_history(prompts);
+        prompts = canonicalize_structured_history(prompts);
         if !prompts.is_empty() {
-            self.write_prompt_history(prompts)?;
+            self.write_structured_prompt_history(prompts)?;
         }
         let mut file = OpenOptions::new()
             .create(true)
@@ -1576,13 +1662,15 @@ impl AgentTranscriptStore {
         Ok(())
     }
 
-    /// Reads and decodes the shared prompt-history file.
-    fn read_prompt_history_file(&self) -> Result<Vec<String>> {
-        Self::read_prompt_history_path(&self.prompt_history_path())
+    /// Reads the shared history while retaining collapsed-paste provenance.
+    fn read_structured_prompt_history_file(&self) -> Result<Vec<ReadlineHistoryEntry>> {
+        Self::read_structured_prompt_history_path(&self.prompt_history_path())
     }
 
     /// Reads only the bounded tail needed for adjacent duplicate suppression.
-    fn latest_prompt_history_entry(path: &std::path::Path) -> Result<Option<String>> {
+    fn latest_structured_prompt_history_entry(
+        path: &std::path::Path,
+    ) -> Result<Option<ReadlineHistoryEntry>> {
         let mut file = match std_fs::File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1605,7 +1693,7 @@ impl AgentTranscriptStore {
         text.lines()
             .rev()
             .find(|line| !line.trim().is_empty())
-            .map(decode_prompt_history_entry)
+            .map(decode_structured_prompt_history_entry)
             .transpose()
     }
 
@@ -1615,11 +1703,13 @@ impl AgentTranscriptStore {
         if !path.exists() || path.metadata()?.len() <= PROMPT_HISTORY_COMPACTION_BYTES {
             return Ok(());
         }
-        self.write_prompt_history(self.read_prompt_history_file()?)
+        self.write_structured_prompt_history(self.read_structured_prompt_history_file()?)
     }
 
-    /// Reads and decodes one prompt-history path without acquiring a lock.
-    fn read_prompt_history_path(path: &std::path::Path) -> Result<Vec<String>> {
+    /// Reads one prompt-history path while retaining collapsed-paste provenance.
+    fn read_structured_prompt_history_path(
+        path: &std::path::Path,
+    ) -> Result<Vec<ReadlineHistoryEntry>> {
         if !path.exists() {
             return Ok(Vec::new());
         }
@@ -1628,9 +1718,9 @@ impl AgentTranscriptStore {
         let prompts = data
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .map(decode_prompt_history_entry)
+            .map(decode_structured_prompt_history_entry)
             .collect::<Result<Vec<_>>>()?;
-        Ok(canonicalize_history(prompts))
+        Ok(canonicalize_structured_history(prompts))
     }
 
     /// Runs the command prompt history path operation for this subsystem.
@@ -1761,33 +1851,55 @@ impl AgentTranscriptStore {
     }
 }
 
-/// Collapses adjacent equal history entries and retains the newest bounded set.
-fn canonicalize_history(history: Vec<String>) -> Vec<String> {
-    let mut canonical = Vec::with_capacity(history.len());
+/// Collapses adjacent equal raw prompts while retaining the newest paste
+/// representation and enforcing the shared history bounds.
+fn canonicalize_structured_history(
+    history: Vec<ReadlineHistoryEntry>,
+) -> Vec<ReadlineHistoryEntry> {
+    let mut canonical = Vec::<ReadlineHistoryEntry>::with_capacity(history.len());
     let mut retained_bytes = 0usize;
     for entry in history {
-        if entry.is_empty()
-            || entry.len() > mez_mux::readline::MAX_READLINE_HISTORY_ENTRY_BYTES
-            || canonical.last() == Some(&entry)
+        if entry.text.is_empty()
+            || entry.text.len() > mez_mux::readline::MAX_READLINE_HISTORY_ENTRY_BYTES
+            || !entry.is_valid()
         {
             continue;
         }
-        retained_bytes = retained_bytes.saturating_add(entry.len());
+        if canonical
+            .last()
+            .is_some_and(|previous| previous.text == entry.text)
+        {
+            if let Some(previous) = canonical.last_mut() {
+                *previous = entry;
+            }
+            continue;
+        }
+        retained_bytes = retained_bytes.saturating_add(entry.text.len());
         canonical.push(entry);
         while canonical.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT
             || retained_bytes > mez_mux::readline::MAX_READLINE_HISTORY_BYTES
         {
             let removed = canonical.remove(0);
-            retained_bytes = retained_bytes.saturating_sub(removed.len());
+            retained_bytes = retained_bytes.saturating_sub(removed.text.len());
         }
     }
     canonical
 }
 
-/// Appends an entry unless it exactly matches the current history tail.
-fn append_history_entry(history: &mut Vec<String>, entry: String) -> bool {
-    if history.last() == Some(&entry) {
-        return false;
+/// Appends a structured entry, replacing only the representation metadata
+/// when its raw prompt matches the current history tail.
+fn append_structured_history_entry(
+    history: &mut Vec<ReadlineHistoryEntry>,
+    entry: ReadlineHistoryEntry,
+) -> bool {
+    if let Some(previous) = history.last_mut()
+        && previous.text == entry.text
+    {
+        if previous == &entry {
+            return false;
+        }
+        *previous = entry;
+        return true;
     }
     history.push(entry);
     if history.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT {

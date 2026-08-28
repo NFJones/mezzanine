@@ -6,6 +6,7 @@
 
 use crate::error::{MezError, Result};
 use crate::host::terminal::{agent_log_wrap_width, wrap_agent_log_lines};
+use mez_mux::readline::{ReadlineHistoryEntry, ReadlinePasteRange};
 use mez_terminal::active_terminal_text_width;
 
 use super::types::AgentPresentationEntry;
@@ -24,7 +25,9 @@ const TRANSCRIPT_VERSION: &str = "mez-agent-transcript/1";
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const PROMPT_HISTORY_VERSION: &str = "mez-agent-prompt-history/1";
+const PROMPT_HISTORY_VERSION: &str = "mez-agent-prompt-history/2";
+/// Legacy raw-only prompt history accepted as provenance-free literal text.
+const LEGACY_PROMPT_HISTORY_VERSION: &str = "mez-agent-prompt-history/1";
 /// Defines the AGENT SESSION METADATA VERSION const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -237,32 +240,79 @@ fn validate_presentation_line_width(field: &str, line: &str, wrap_width: usize) 
     Ok(())
 }
 
-/// Runs the encode prompt history entry operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// Encodes one provenance-free prompt-history entry for storage tests and
+/// legacy-layout migration fixtures.
+#[cfg(test)]
 pub(super) fn encode_prompt_history_entry(prompt: &str) -> Result<String> {
-    validate_non_empty("prompt history entry", prompt)?;
-    Ok([PROMPT_HISTORY_VERSION, prompt]
-        .into_iter()
-        .map(escape_field)
-        .collect::<Vec<String>>()
-        .join("\t"))
+    encode_structured_prompt_history_entry(&ReadlineHistoryEntry::literal(prompt))
 }
 
-/// Runs the decode prompt history entry operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn decode_prompt_history_entry(line: &str) -> Result<String> {
+/// Encodes one prompt together with the ranges that remain collapsed on recall.
+pub(super) fn encode_structured_prompt_history_entry(
+    entry: &ReadlineHistoryEntry,
+) -> Result<String> {
+    validate_non_empty("prompt history entry", &entry.text)?;
+    if !entry.is_valid() {
+        return Err(MezError::invalid_args(
+            "prompt history paste ranges are invalid",
+        ));
+    }
+    let ranges = entry
+        .collapsed_paste_ranges
+        .iter()
+        .map(|range| format!("{}:{}", range.start, range.end))
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok(
+        [PROMPT_HISTORY_VERSION, entry.text.as_str(), ranges.as_str()]
+            .into_iter()
+            .map(escape_field)
+            .collect::<Vec<String>>()
+            .join("\t"),
+    )
+}
+
+/// Decodes v2 prompt provenance and treats legacy v1 rows as literal text.
+pub(super) fn decode_structured_prompt_history_entry(line: &str) -> Result<ReadlineHistoryEntry> {
     let fields = split_fields(line)?;
-    if fields.len() != 2 || fields[0] != PROMPT_HISTORY_VERSION {
+    if fields.len() == 2 && fields[0] == LEGACY_PROMPT_HISTORY_VERSION {
+        validate_non_empty("prompt history entry", &fields[1])?;
+        return Ok(ReadlineHistoryEntry::literal(fields[1].clone()));
+    }
+    if fields.len() != 3 || fields[0] != PROMPT_HISTORY_VERSION {
         return Err(MezError::invalid_args("invalid prompt history entry"));
     }
     validate_non_empty("prompt history entry", &fields[1])?;
-    Ok(fields[1].clone())
+    let collapsed_paste_ranges = if fields[2].is_empty() {
+        Vec::new()
+    } else {
+        fields[2]
+            .split(',')
+            .map(|encoded| {
+                let (start, end) = encoded
+                    .split_once(':')
+                    .ok_or_else(|| MezError::invalid_args("invalid prompt history paste range"))?;
+                Ok(ReadlinePasteRange {
+                    start: start.parse::<usize>().map_err(|_| {
+                        MezError::invalid_args("invalid prompt history paste range start")
+                    })?,
+                    end: end.parse::<usize>().map_err(|_| {
+                        MezError::invalid_args("invalid prompt history paste range end")
+                    })?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
+    let entry = ReadlineHistoryEntry {
+        text: fields[1].clone(),
+        collapsed_paste_ranges,
+    };
+    if !entry.is_valid() {
+        return Err(MezError::invalid_args(
+            "prompt history paste ranges are invalid",
+        ));
+    }
+    Ok(entry)
 }
 
 /// Encodes one agent-session metadata row into the store's TSV format.

@@ -31,7 +31,7 @@ impl ReadlineInputDecoder {
             ReadlineDecodedInput::Sequence(sequence) => prompt.apply_terminal_input(&sequence),
             ReadlineDecodedInput::BracketedPaste(text) => {
                 prompt.selector = None;
-                Ok(prompt.buffer.apply(ReadlineEdit::InsertText(text)))
+                Ok(prompt.buffer.apply(ReadlineEdit::InsertPaste(text)))
             }
             ReadlineDecodedInput::BracketedPasteRejected(_) => Ok(ReadlineOutcome::Noop),
         }

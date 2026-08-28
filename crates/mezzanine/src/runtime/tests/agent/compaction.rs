@@ -32,6 +32,8 @@ fn runtime_config_reload_applies_compaction_raw_retention() {
 #[test]
 fn runtime_agent_prompt_displays_large_paste_as_compact_block() {
     let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-paste-history"));
+    service.set_agent_transcript_store(transcript_store.clone());
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -69,6 +71,18 @@ fn runtime_agent_prompt_displays_large_paste_as_compact_block() {
     assert_eq!(
         prompt_state.prompt.buffer.history(),
         &[format!("prefix {payload} suffix")]
+    );
+    let persisted_history = transcript_store
+        .structured_prompt_history("conversation-1")
+        .unwrap();
+    assert_eq!(persisted_history.len(), 1);
+    assert_eq!(
+        persisted_history[0].text,
+        format!("prefix {payload} suffix")
+    );
+    assert_eq!(
+        persisted_history[0].rendered(),
+        "prefix [Pasted 1.2 KiB] suffix"
     );
     let pane_text = service
         .pane_screen("%1")

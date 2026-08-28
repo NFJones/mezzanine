@@ -2,7 +2,7 @@
 
 use crate::readline::{
     MAX_READLINE_HISTORY_BYTES, MAX_READLINE_HISTORY_ENTRY_BYTES, ReadlineBuffer, ReadlineEdit,
-    ReadlineOutcome,
+    ReadlineHistoryEntry, ReadlineOutcome, ReadlinePasteRange,
 };
 
 /// Verifies readline insert and cursor movement edit in place.
@@ -563,4 +563,100 @@ fn readline_oversized_submission_is_not_retained() {
     assert_eq!(buffer.submit(), oversized);
     assert_eq!(buffer.history(), &[String::from("retained")]);
     assert_eq!(buffer.history_bytes(), "retained".len());
+}
+
+/// Verifies ordinary text is never reclassified as pasted merely because one
+/// insertion or the aggregate multiline prompt crosses the collapse limits.
+#[test]
+fn readline_large_ordinary_text_remains_literal() {
+    let mut buffer = ReadlineBuffer::new();
+    let ordinary = format!("{}\n{}", "typed".repeat(300), "line\n".repeat(8));
+
+    buffer.insert_text(&ordinary);
+
+    assert_eq!(buffer.line(), ordinary);
+    assert_eq!(buffer.rendered_line(), ordinary);
+    assert_eq!(
+        buffer.apply(ReadlineEdit::Submit),
+        ReadlineOutcome::Submitted(ordinary)
+    );
+}
+
+/// Verifies collapse decisions are made for each bracketed paste independently:
+/// ordinary text and small pastes remain visible while every large paste keeps
+/// its own raw range through submission and history recall.
+#[test]
+fn readline_mixed_prompt_preserves_only_large_paste_ranges() {
+    let large_a = "a".repeat(1100);
+    let large_b = "界".repeat(400);
+    let mut buffer = ReadlineBuffer::new();
+    buffer.insert_text("typed ");
+    buffer.insert_pasted_text("small paste");
+    buffer.insert_text(" middle ");
+    buffer.insert_pasted_text(&large_a);
+    buffer.insert_text(" between ");
+    buffer.insert_pasted_text(&large_b);
+    buffer.insert_text(" end");
+
+    let raw = format!("typed small paste middle {large_a} between {large_b} end");
+    let first_start = "typed small paste middle ".len();
+    let second_start = first_start + large_a.len() + " between ".len();
+    let ranges = vec![
+        ReadlinePasteRange {
+            start: first_start,
+            end: first_start + large_a.len(),
+        },
+        ReadlinePasteRange {
+            start: second_start,
+            end: second_start + large_b.len(),
+        },
+    ];
+
+    assert_eq!(
+        buffer.apply(ReadlineEdit::Submit),
+        ReadlineOutcome::SubmittedWithDisplay {
+            text: raw.clone(),
+            display: String::from(
+                "typed small paste middle [Pasted 1.1 KiB] between [Pasted 1.2 KiB] end",
+            ),
+            collapsed_paste_ranges: ranges.clone(),
+        }
+    );
+    assert!(buffer.history_previous());
+    assert_eq!(buffer.expanded_line(), raw);
+    assert_eq!(
+        buffer.rendered_line(),
+        "typed small paste middle [Pasted 1.1 KiB] between [Pasted 1.2 KiB] end"
+    );
+    assert_eq!(
+        buffer.structured_history_entry(0),
+        Some(ReadlineHistoryEntry {
+            text: raw,
+            collapsed_paste_ranges: ranges,
+        })
+    );
+}
+
+/// Verifies consecutive raw duplicates retain one history row but replace its
+/// display provenance with the newest submission representation.
+#[test]
+fn readline_duplicate_history_keeps_newest_paste_representation() {
+    let raw = "x".repeat(1200);
+    let mut buffer = ReadlineBuffer::new();
+    buffer.insert_text(&raw);
+    assert_eq!(buffer.submit(), raw);
+    buffer.insert_pasted_text(&raw);
+    assert_eq!(buffer.submit(), raw);
+
+    assert_eq!(buffer.history_len(), 1);
+    assert_eq!(
+        buffer.structured_history_entry(0),
+        Some(ReadlineHistoryEntry {
+            text: raw,
+            collapsed_paste_ranges: vec![ReadlinePasteRange {
+                start: 0,
+                end: 1200,
+            }],
+        })
+    );
 }

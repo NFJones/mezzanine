@@ -16,7 +16,7 @@ use super::{
     runtime_agent_shell_visibility, runtime_command_display_overlay_content,
 };
 use crate::runtime::service_state::{RuntimeLiveOverlaySource, RuntimeRecordBrowserOverlayState};
-use mez_mux::readline::{ReadlineDecodedInput, readline_input_is_ctrl_v};
+use mez_mux::readline::{ReadlineDecodedInput, ReadlineHistoryEntry, readline_input_is_ctrl_v};
 use std::sync::mpsc::TryRecvError;
 
 impl RuntimeSessionService {
@@ -108,15 +108,54 @@ impl RuntimeSessionService {
         let mut changed = false;
         for outcome in outcomes {
             match outcome {
-                ReadlineOutcome::Submitted(command)
-                | ReadlineOutcome::SubmittedWithDisplay { text: command, .. } => {
+                ReadlineOutcome::Submitted(command) => {
                     let prompt_kind = prompt_input.prompt.kind;
                     self.presentation.primary_prompt_input = None;
                     changed = true;
                     if !command.trim().is_empty() {
                         if prompt_kind == ReadlinePromptKind::Command {
                             self.remember_primary_command_prompt_submission(
-                                &command,
+                                ReadlineHistoryEntry::literal(command.clone()),
+                                queue_for_adapter,
+                            )?;
+                        }
+                        match self
+                            .execute_terminal_command(primary_client_id, &command)
+                            .and_then(|body| {
+                                runtime_command_display_overlay_content(
+                                    &body,
+                                    &self.presentation.settings.ui_theme,
+                                    usize::from(self.session.authoritative_size.columns),
+                                    self.presentation.settings.terminal_agent_wrap_column_cap,
+                                )
+                            }) {
+                            Ok(content) => {
+                                self.present_runtime_command_display_content(content)?;
+                            }
+                            Err(error) => {
+                                self.show_primary_display_overlay(vec![format!(
+                                    "error: {error} - press Esc to return"
+                                )])?;
+                            }
+                        }
+                    }
+                    return Ok(changed);
+                }
+                ReadlineOutcome::SubmittedWithDisplay {
+                    text: command,
+                    collapsed_paste_ranges,
+                    ..
+                } => {
+                    let prompt_kind = prompt_input.prompt.kind;
+                    self.presentation.primary_prompt_input = None;
+                    changed = true;
+                    if !command.trim().is_empty() {
+                        if prompt_kind == ReadlinePromptKind::Command {
+                            self.remember_primary_command_prompt_submission(
+                                ReadlineHistoryEntry {
+                                    text: command.clone(),
+                                    collapsed_paste_ranges,
+                                },
                                 queue_for_adapter,
                             )?;
                         }
@@ -157,22 +196,20 @@ impl RuntimeSessionService {
     /// navigation and reverse search.
     fn remember_primary_command_prompt_submission(
         &mut self,
-        command: &str,
+        command: ReadlineHistoryEntry,
         queue_for_adapter: bool,
     ) -> Result<()> {
-        if command.trim().is_empty() {
+        if command.text.trim().is_empty() {
             return Ok(());
         }
-        if self
-            .presentation
-            .primary_command_prompt_history
-            .last()
-            .map(String::as_str)
-            != Some(command)
+        if let Some(previous) = self.presentation.primary_command_prompt_history.last_mut()
+            && previous.text == command.text
         {
+            *previous = command.clone();
+        } else {
             self.presentation
                 .primary_command_prompt_history
-                .push(command.to_string());
+                .push(command.clone());
             while self.presentation.primary_command_prompt_history.len()
                 > DEFAULT_READLINE_HISTORY_LIMIT
             {
@@ -187,11 +224,11 @@ impl RuntimeSessionService {
                 .queue_transcript(RuntimeSideEffect::PersistCommandPromptHistory {
                     path: store.command_prompt_history_file(),
                     store,
-                    command: command.to_string(),
+                    command,
                 });
             return Ok(());
         }
-        let _ = store.append_command_prompt_history(command)?;
+        let _ = store.append_structured_command_prompt_history(&command)?;
         Ok(())
     }
 
@@ -201,7 +238,8 @@ impl RuntimeSessionService {
         let Some(store) = self.persistence.transcript_store() else {
             return Ok(());
         };
-        self.presentation.primary_command_prompt_history = store.command_prompt_history()?;
+        self.presentation.primary_command_prompt_history =
+            store.structured_command_prompt_history()?;
         Ok(())
     }
 
@@ -368,7 +406,11 @@ impl RuntimeSessionService {
                         self.remove_agent_prompt_input(pane_id);
                     }
                 }
-                ReadlineOutcome::SubmittedWithDisplay { text, display } => {
+                ReadlineOutcome::SubmittedWithDisplay {
+                    text,
+                    display,
+                    collapsed_paste_ranges,
+                } => {
                     changed = true;
                     if text.trim().is_empty() {
                         continue;
@@ -377,6 +419,7 @@ impl RuntimeSessionService {
                         primary_client_id,
                         &text,
                         &display,
+                        &collapsed_paste_ranges,
                     ) {
                         Ok(body) => body,
                         Err(error) => {
@@ -921,7 +964,7 @@ impl RuntimeSessionService {
             return Ok(());
         };
         let history = match self.persistence.transcript_store() {
-            Some(store) => match store.prompt_history(&session_id) {
+            Some(store) => match store.structured_prompt_history(&session_id) {
                 Ok(history) => history,
                 Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
                 Err(error) => return Err(error),
@@ -934,7 +977,7 @@ impl RuntimeSessionService {
             .or_insert_with(default_runtime_agent_prompt_input)
             .prompt
             .buffer
-            .set_history(history);
+            .set_structured_history(history);
         Ok(())
     }
 
@@ -942,7 +985,7 @@ impl RuntimeSessionService {
     pub(crate) fn set_agent_prompt_history_for_pane(
         &mut self,
         pane_id: &str,
-        history: Vec<String>,
+        history: Vec<ReadlineHistoryEntry>,
     ) {
         self.presentation
             .agent_prompt_inputs
@@ -950,7 +993,7 @@ impl RuntimeSessionService {
             .or_insert_with(default_runtime_agent_prompt_input)
             .prompt
             .buffer
-            .set_history(history);
+            .set_structured_history(history);
     }
 
     /// Runs the set agent prompt display lines operation for this subsystem.

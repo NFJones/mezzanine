@@ -847,8 +847,8 @@ pub enum RuntimeSideEffect {
         path: PathBuf,
         /// Conversation identity used for validation.
         conversation_id: String,
-        /// Prompt text to append.
-        prompt: String,
+        /// Prompt text and collapsed-paste provenance to append.
+        prompt: mez_mux::readline::ReadlineHistoryEntry,
     },
     /// Append one submitted command prompt entry to the shared command
     /// prompt-history file.
@@ -857,8 +857,8 @@ pub enum RuntimeSideEffect {
         store: AgentTranscriptStore,
         /// Destination command prompt-history file used for diagnostics.
         path: PathBuf,
-        /// Command text to append.
-        command: String,
+        /// Command text and collapsed-paste provenance to append.
+        command: mez_mux::readline::ReadlineHistoryEntry,
     },
     /// Apply a session registry update through the persistence worker.
     PersistRegistry {

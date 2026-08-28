@@ -27,6 +27,10 @@ receive your full terminal screen, scrollback, or other panes.
 Type a request and press Enter. `Ctrl+V` pastes host clipboard text into the
 editable prompt while preserving multiline text. Prompt completion supports
 slash commands, `$` skills, `#` macros, and `@` MCP server names where enabled.
+Large bracketed pastes are shown as compact `[Pasted …]` blocks, but typed text
+and smaller pastes remain visible literally. History recall and `Ctrl+R` restore
+the same pasted blocks shown when the prompt was entered, and submission still
+sends the agent the complete original text.
 Press `Esc` to clear a draft without hiding the prompt. `Ctrl+D` on an empty
 prompt hides it. When no task is running, press `Ctrl+C` twice within three
 seconds to hide the prompt; when a task is running, `Ctrl+C` requests an

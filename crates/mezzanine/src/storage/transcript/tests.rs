@@ -12,11 +12,13 @@ use std::{
 };
 
 use super::encoding::{
-    decode_transcript_entry, encode_prompt_history_entry, encode_transcript_entry,
+    decode_structured_prompt_history_entry, decode_transcript_entry, encode_prompt_history_entry,
+    encode_structured_prompt_history_entry, encode_transcript_entry,
 };
 use super::store::{PRESENTATION_CLEAR_TAIL_COMPACT_BYTES, PROMPT_HISTORY_COMPACTION_BYTES};
 use super::{AgentPresentationEntry, AgentTranscriptStore};
 use mez_agent::transcript::{AgentSessionMetadata, TranscriptEntry, TranscriptRole};
+use mez_mux::readline::{ReadlineHistoryEntry, ReadlinePasteRange};
 
 /// Builds a per-test temporary root that is unique within the current process.
 fn temp_root(name: &str) -> PathBuf {
@@ -1004,4 +1006,86 @@ fn transcript_entry_round_trips_escaped_content() {
     let decoded = decode_transcript_entry(&encode_transcript_entry(&original).unwrap()).unwrap();
 
     assert_eq!(decoded, original);
+}
+
+/// Verifies v2 prompt-history rows preserve multiple UTF-8-aligned pasted
+/// ranges while legacy v1 rows load as literal text with no invented provenance.
+#[test]
+fn prompt_history_codec_preserves_v2_ranges_and_loads_v1_literally() {
+    let text = format!("typed {} middle {} end", "a".repeat(1100), "界".repeat(400));
+    let first_start = "typed ".len();
+    let second_start = first_start + 1100 + " middle ".len();
+    let entry = ReadlineHistoryEntry {
+        text: text.clone(),
+        collapsed_paste_ranges: vec![
+            ReadlinePasteRange {
+                start: first_start,
+                end: first_start + 1100,
+            },
+            ReadlinePasteRange {
+                start: second_start,
+                end: second_start + "界".len() * 400,
+            },
+        ],
+    };
+
+    let encoded = encode_structured_prompt_history_entry(&entry).unwrap();
+    assert_eq!(
+        decode_structured_prompt_history_entry(&encoded).unwrap(),
+        entry
+    );
+
+    let legacy = format!("mez-agent-prompt-history/1\t{}", "z".repeat(1200));
+    let decoded_legacy = decode_structured_prompt_history_entry(&legacy).unwrap();
+    assert_eq!(decoded_legacy.text, "z".repeat(1200));
+    assert!(decoded_legacy.collapsed_paste_ranges.is_empty());
+    assert_eq!(decoded_legacy.rendered(), decoded_legacy.text);
+}
+
+/// Verifies both durable readline histories retain collapsed-paste ranges
+/// across store reconstruction and replace duplicate raw-text metadata with
+/// the newest submitted representation.
+#[test]
+fn transcript_store_round_trips_structured_agent_and_command_history() {
+    let root = temp_root("structured-prompt-history");
+    let _ = fs::remove_dir_all(&root);
+    let raw = format!("before {} after", "p".repeat(1200));
+    let literal = ReadlineHistoryEntry::literal(raw.clone());
+    let structured = ReadlineHistoryEntry {
+        text: raw.clone(),
+        collapsed_paste_ranges: vec![ReadlinePasteRange {
+            start: "before ".len(),
+            end: "before ".len() + 1200,
+        }],
+    };
+    let store = AgentTranscriptStore::new(root.clone());
+
+    assert!(
+        store
+            .append_structured_prompt_history("conv", &literal)
+            .unwrap()
+    );
+    assert!(
+        store
+            .append_structured_prompt_history("conv", &structured)
+            .unwrap()
+    );
+    assert!(
+        store
+            .append_structured_command_prompt_history(&structured)
+            .unwrap()
+    );
+
+    let reopened = AgentTranscriptStore::new(root.clone());
+    assert_eq!(
+        reopened.structured_prompt_history("conv").unwrap(),
+        vec![structured.clone()]
+    );
+    assert_eq!(
+        reopened.structured_command_prompt_history().unwrap(),
+        vec![structured]
+    );
+    assert_eq!(reopened.prompt_history("conv").unwrap(), vec![raw]);
+
+    let _ = fs::remove_dir_all(root);
 }

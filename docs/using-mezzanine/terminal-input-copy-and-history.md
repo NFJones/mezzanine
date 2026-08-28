@@ -21,6 +21,13 @@ Use `help` in the prompt for its command guide. Use a Mezzanine command rather
 than shell text when changing panes, windows, layouts, key bindings, or Mez
 settings.
 
+The command prompt and pane-local agent prompt retain separate readline
+histories. Up/Down recalls entries and `Ctrl+R` searches them. Large bracketed
+pastes appear as compact labels such as `[Pasted 1.2 KiB]`; ordinary text and
+small pastes stay literal even when the whole prompt is large. Recall and
+reverse search preserve those original per-paste labels, while submission
+always sends the complete underlying text.
+
 ## Copy and paste
 
 Press `Ctrl+A [` to enter pane-local copy mode. You can scroll normal terminal

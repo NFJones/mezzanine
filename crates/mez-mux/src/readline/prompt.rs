@@ -7,7 +7,7 @@
 //! selector presentation.
 
 use super::{
-    ReadlineBuffer, ReadlineEdit, ReadlineOutcome, apply_readline_terminal_input,
+    ReadlineBuffer, ReadlineDraft, ReadlineEdit, ReadlineOutcome, apply_readline_terminal_input,
     readline_input_is_ctrl_r, readline_input_is_ctrl_shift_r,
 };
 use crate::{MuxError, Result};
@@ -34,8 +34,7 @@ pub struct ReadlinePromptState {
 /// Incremental reverse-history-search state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReadlineReverseSearch {
-    draft_line: String,
-    draft_cursor: usize,
+    draft: ReadlineDraft,
     query: String,
     matched_index: Option<usize>,
 }
@@ -71,8 +70,8 @@ impl ReadlinePromptState {
         let search = self.reverse_search.as_ref()?;
         let item = search
             .matched_index
-            .and_then(|index| self.buffer.history().get(index))
-            .map(String::as_str)
+            .and_then(|index| self.buffer.structured_history_entry(index))
+            .map(|entry| entry.rendered())
             .unwrap_or_default();
         Some(format!("(reverse-i-search'{}'): {item}", search.query))
     }
@@ -181,12 +180,11 @@ impl ReadlinePromptState {
         if self.reverse_search.is_some() {
             return;
         }
-        let draft_line = self.buffer.expanded_line();
-        let draft_cursor = self.buffer.cursor();
+        let draft = self.buffer.draft_snapshot();
+        let draft_line = ReadlineBuffer::expanded_draft(&draft);
         self.reverse_search = Some(ReadlineReverseSearch {
             query: draft_line.clone(),
-            draft_line,
-            draft_cursor,
+            draft,
             matched_index: None,
         });
     }
@@ -259,12 +257,9 @@ impl ReadlinePromptState {
         }
         search.matched_index = next;
         if let Some(index) = next {
-            let _ = self
-                .buffer
-                .load_history_search_match(index, &search.draft_line);
+            let _ = self.buffer.load_history_search_match(index, &search.draft);
         } else {
-            self.buffer
-                .restore_history_search_draft(&search.draft_line, search.draft_cursor);
+            self.buffer.restore_history_search_draft(&search.draft);
         }
         ReadlineOutcome::Edited
     }
@@ -273,8 +268,7 @@ impl ReadlinePromptState {
         let Some(search) = self.reverse_search.take() else {
             return;
         };
-        self.buffer
-            .restore_history_search_draft(&search.draft_line, search.draft_cursor);
+        self.buffer.restore_history_search_draft(&search.draft);
     }
 }
 

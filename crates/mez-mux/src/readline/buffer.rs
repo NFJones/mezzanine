@@ -27,6 +27,8 @@ pub enum ReadlineEdit {
     Insert(char),
     /// Insert a text fragment.
     InsertText(String),
+    /// Insert text decoded from a bracketed-paste sequence.
+    InsertPaste(String),
     /// Move one character left.
     MoveLeft,
     /// Move one character right.
@@ -82,6 +84,8 @@ pub enum ReadlineOutcome {
         text: String,
         /// Human-readable collapsed display text.
         display: String,
+        /// Byte ranges of pasted payloads collapsed in `display`.
+        collapsed_paste_ranges: Vec<ReadlinePasteRange>,
     },
     /// The prompt was cancelled.
     Cancelled,
@@ -96,6 +100,53 @@ impl From<bool> for ReadlineOutcome {
     fn from(changed: bool) -> Self {
         if changed { Self::Edited } else { Self::Noop }
     }
+}
+
+/// One byte range in raw prompt text that originated as a large bracketed paste.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadlinePasteRange {
+    /// Inclusive UTF-8 byte offset in the raw prompt.
+    pub start: usize,
+    /// Exclusive UTF-8 byte offset in the raw prompt.
+    pub end: usize,
+}
+
+/// One retained prompt together with its collapsed-paste provenance.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReadlineHistoryEntry {
+    /// Exact text submitted to the command or agent backend.
+    pub text: String,
+    /// Ordered raw-text ranges rendered as compact pasted blocks.
+    pub collapsed_paste_ranges: Vec<ReadlinePasteRange>,
+}
+
+impl ReadlineHistoryEntry {
+    /// Creates a provenance-free history entry from ordinary text.
+    pub fn literal(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            collapsed_paste_ranges: Vec::new(),
+        }
+    }
+
+    /// Reports whether every collapsed range is ordered and UTF-8 aligned.
+    pub fn is_valid(&self) -> bool {
+        valid_paste_ranges(&self.text, &self.collapsed_paste_ranges)
+    }
+
+    /// Renders only explicitly recorded pasted ranges as compact labels.
+    pub fn rendered(&self) -> String {
+        render_history_entry(self)
+    }
+}
+
+/// Opaque editable-state snapshot used to restore reverse-search drafts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadlineDraft {
+    line: String,
+    cursor: usize,
+    paste_blocks: Vec<ReadlinePasteBlock>,
+    next_paste_block_id: u32,
 }
 
 /// Editable line state with bounded submission history.
@@ -121,6 +172,8 @@ struct ReadlineHistory {
     entries: Vec<String>,
     /// Lowercased entries kept index-aligned for reverse search.
     normalized_entries: Vec<String>,
+    /// Collapsed-paste ranges kept index-aligned with raw entries.
+    collapsed_paste_ranges: Vec<Vec<ReadlinePasteRange>>,
     bytes: usize,
 }
 
@@ -250,6 +303,14 @@ impl ReadlineBuffer {
         self.history.entries.get(index).map(AsRef::as_ref)
     }
 
+    /// Returns one retained prompt with its collapsed-paste provenance.
+    pub fn structured_history_entry(&self, index: usize) -> Option<ReadlineHistoryEntry> {
+        Some(ReadlineHistoryEntry {
+            text: self.history.entries.get(index)?.clone(),
+            collapsed_paste_ranges: self.history.collapsed_paste_ranges.get(index)?.clone(),
+        })
+    }
+
     /// Aggregate bytes retained by prompt history.
     pub fn history_bytes(&self) -> usize {
         self.history.bytes
@@ -263,6 +324,22 @@ impl ReadlineBuffer {
 
     /// Replace retained submission history while preserving the active edit line.
     pub fn set_history(&mut self, history: impl IntoIterator<Item = String>) {
+        self.history = SharedReadlineHistory::default();
+        for entry in history {
+            self.remember_submission(ReadlineHistoryEntry::literal(entry));
+        }
+        self.history_cursor = None;
+        self.history_entry_cursor_navigation = false;
+        self.vertical_navigation_column = None;
+        self.draft_before_history.clear();
+        self.draft_before_history_paste_blocks.clear();
+    }
+
+    /// Replace retained history with raw text and explicit paste provenance.
+    pub fn set_structured_history(
+        &mut self,
+        history: impl IntoIterator<Item = ReadlineHistoryEntry>,
+    ) {
         self.history = SharedReadlineHistory::default();
         for entry in history {
             self.remember_submission(entry);
@@ -293,6 +370,26 @@ impl ReadlineBuffer {
         }
         self.history_cursor = None;
         self.history_entry_cursor_navigation = false;
+        self.draft_before_history.clear();
+        self.draft_before_history_paste_blocks.clear();
+    }
+
+    /// Replace the current editable text while retaining paste blocks whose
+    /// private markers remain in the replacement.
+    pub fn set_line_and_cursor_preserving_paste_blocks(
+        &mut self,
+        line: impl Into<String>,
+        cursor: usize,
+    ) {
+        self.line = line.into();
+        self.cursor = cursor.min(self.line.len());
+        while self.cursor > 0 && !self.line.is_char_boundary(self.cursor) {
+            self.cursor -= 1;
+        }
+        self.cleanup_unused_paste_blocks();
+        self.history_cursor = None;
+        self.history_entry_cursor_navigation = false;
+        self.vertical_navigation_column = None;
         self.draft_before_history.clear();
         self.draft_before_history_paste_blocks.clear();
     }
@@ -331,6 +428,14 @@ impl ReadlineBuffer {
                     ReadlineOutcome::Edited
                 }
             }
+            ReadlineEdit::InsertPaste(text) => {
+                if text.is_empty() {
+                    ReadlineOutcome::Noop
+                } else {
+                    self.insert_pasted_text(&text);
+                    ReadlineOutcome::Edited
+                }
+            }
             ReadlineEdit::MoveLeft => Self::bool_outcome(self.move_left()),
             ReadlineEdit::MoveRight => Self::bool_outcome(self.move_right()),
             ReadlineEdit::MoveWordLeft => Self::bool_outcome(self.move_word_left()),
@@ -357,11 +462,15 @@ impl ReadlineBuffer {
                 Self::bool_outcome(self.history_search_backward())
             }
             ReadlineEdit::Submit => {
-                let (text, display) = self.submit_with_display();
+                let (text, display, collapsed_paste_ranges) = self.submit_with_display();
                 if text == display {
                     ReadlineOutcome::Submitted(text)
                 } else {
-                    ReadlineOutcome::SubmittedWithDisplay { text, display }
+                    ReadlineOutcome::SubmittedWithDisplay {
+                        text,
+                        display,
+                        collapsed_paste_ranges,
+                    }
                 }
             }
         }
@@ -376,6 +485,13 @@ impl ReadlineBuffer {
 
     /// Insert text at the cursor.
     pub fn insert_text(&mut self, text: &str) {
+        self.leave_history_navigation_for_edit();
+        self.line.insert_str(self.cursor, text);
+        self.cursor += text.len();
+    }
+
+    /// Insert text known to originate from one bracketed-paste sequence.
+    pub fn insert_pasted_text(&mut self, text: &str) {
         self.leave_history_navigation_for_edit();
         if text.len() >= READLINE_PASTE_BLOCK_THRESHOLD_BYTES
             || Self::pasted_text_exceeds_visible_prompt_height(text)
@@ -833,24 +949,43 @@ impl ReadlineBuffer {
     /// - `index`: History entry index to load.
     /// - `draft_line`: Prompt text to restore when history navigation returns
     ///   beyond the newest match.
-    pub fn load_history_search_match(&mut self, index: usize, draft_line: &str) -> bool {
+    pub fn load_history_search_match(&mut self, index: usize, draft: &ReadlineDraft) -> bool {
         if self.history.entries.get(index).is_none() {
             return false;
         }
-        self.draft_before_history = draft_line.to_string();
-        self.draft_before_history_paste_blocks.clear();
-        self.draft_before_history_next_paste_block_id = self.next_paste_block_id;
+        self.draft_before_history = draft.line.clone();
+        self.draft_before_history_paste_blocks = draft.paste_blocks.clone();
+        self.draft_before_history_next_paste_block_id = draft.next_paste_block_id;
         self.load_history_index(index);
         true
     }
 
-    /// Restores the draft line that was active before incremental search.
-    ///
-    /// # Parameters
-    /// - `draft_line`: Prompt text to restore.
-    /// - `draft_cursor`: Cursor byte offset to restore.
-    pub fn restore_history_search_draft(&mut self, draft_line: &str, draft_cursor: usize) {
-        self.set_line_and_cursor(draft_line.to_string(), draft_cursor);
+    /// Captures the exact editable representation active before incremental search.
+    pub fn draft_snapshot(&self) -> ReadlineDraft {
+        ReadlineDraft {
+            line: self.line.clone(),
+            cursor: self.cursor,
+            paste_blocks: self.paste_blocks.clone(),
+            next_paste_block_id: self.next_paste_block_id,
+        }
+    }
+
+    /// Returns the expanded raw text represented by one draft snapshot.
+    pub fn expanded_draft(draft: &ReadlineDraft) -> String {
+        render_line_with_blocks(&draft.line, &draft.paste_blocks, RenderLineMode::Expanded)
+    }
+
+    /// Restores the exact draft that was active before incremental search.
+    pub fn restore_history_search_draft(&mut self, draft: &ReadlineDraft) {
+        self.line = draft.line.clone();
+        self.cursor = draft.cursor;
+        self.paste_blocks = draft.paste_blocks.clone();
+        self.next_paste_block_id = draft.next_paste_block_id;
+        self.history_cursor = None;
+        self.history_entry_cursor_navigation = false;
+        self.vertical_navigation_column = None;
+        self.draft_before_history.clear();
+        self.draft_before_history_paste_blocks.clear();
     }
 
     /// Submit the current line, reset editing state, and append to history.
@@ -858,10 +993,11 @@ impl ReadlineBuffer {
         self.submit_with_display().0
     }
 
-    /// Submit the current line while retaining both raw and display forms.
-    pub fn submit_with_display(&mut self) -> (String, String) {
+    /// Submit the current line while retaining raw, display, and paste-range forms.
+    pub fn submit_with_display(&mut self) -> (String, String, Vec<ReadlinePasteRange>) {
         let submitted = self.expanded_line();
         let display = self.rendered_line();
+        let collapsed_paste_ranges = self.collapsed_paste_ranges();
         self.line.clear();
         self.cursor = 0;
         self.history_cursor = None;
@@ -871,9 +1007,12 @@ impl ReadlineBuffer {
         self.paste_blocks.clear();
         self.draft_before_history_paste_blocks.clear();
 
-        self.remember_submission(submitted.clone());
+        self.remember_submission(ReadlineHistoryEntry {
+            text: submitted.clone(),
+            collapsed_paste_ranges: collapsed_paste_ranges.clone(),
+        });
 
-        (submitted, display)
+        (submitted, display, collapsed_paste_ranges)
     }
 
     /// Runs the remember submission operation for this subsystem.
@@ -881,26 +1020,39 @@ impl ReadlineBuffer {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn remember_submission(&mut self, submitted: String) {
+    fn remember_submission(&mut self, submitted: ReadlineHistoryEntry) {
         if self.history_limit == 0
-            || submitted.is_empty()
-            || submitted.len() > MAX_READLINE_HISTORY_ENTRY_BYTES
+            || submitted.text.is_empty()
+            || submitted.text.len() > MAX_READLINE_HISTORY_ENTRY_BYTES
+            || !valid_paste_ranges(&submitted.text, &submitted.collapsed_paste_ranges)
         {
             return;
         }
-        if self.history.entries.last() == Some(&submitted) {
+        if self.history.entries.last() == Some(&submitted.text) {
+            if let Some(ranges) = Arc::make_mut(&mut self.history.0)
+                .collapsed_paste_ranges
+                .last_mut()
+            {
+                *ranges = submitted.collapsed_paste_ranges;
+            }
             return;
         }
         let history = Arc::make_mut(&mut self.history.0);
-        history.bytes = history.bytes.saturating_add(submitted.len());
-        history.normalized_entries.push(submitted.to_lowercase());
-        history.entries.push(submitted);
+        history.bytes = history.bytes.saturating_add(submitted.text.len());
+        history
+            .normalized_entries
+            .push(submitted.text.to_lowercase());
+        history.entries.push(submitted.text);
+        history
+            .collapsed_paste_ranges
+            .push(submitted.collapsed_paste_ranges);
         while history.entries.len() > self.history_limit
             || history.bytes > MAX_READLINE_HISTORY_BYTES
         {
             let removed = history.entries.remove(0);
             history.bytes = history.bytes.saturating_sub(removed.len());
             history.normalized_entries.remove(0);
+            history.collapsed_paste_ranges.remove(0);
         }
     }
 
@@ -910,10 +1062,10 @@ impl ReadlineBuffer {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn load_history_index(&mut self, index: usize) {
-        let Some(entry) = self.history.entries.get(index) else {
+        let Some(entry) = self.structured_history_entry(index) else {
             return;
         };
-        self.replace_current_line_with_text(entry.clone());
+        self.replace_current_line_with_history_entry(&entry);
         self.cursor = self.line.len();
         self.history_cursor = Some(index);
         self.history_entry_cursor_navigation = false;
@@ -932,18 +1084,48 @@ impl ReadlineBuffer {
         self.draft_before_history_paste_blocks.clear();
     }
 
-    /// Replaces the active line, collapsing it if it is itself a large value.
+    /// Replaces the active line with literal programmatic text.
     fn replace_current_line_with_text(&mut self, text: String) {
+        self.line = text;
+        self.cursor = self.line.len();
+        self.vertical_navigation_column = None;
+        self.paste_blocks.clear();
+    }
+
+    /// Reconstructs one history entry from explicit raw-text paste ranges.
+    fn replace_current_line_with_history_entry(&mut self, entry: &ReadlineHistoryEntry) {
         self.line.clear();
         self.cursor = 0;
         self.vertical_navigation_column = None;
         self.paste_blocks.clear();
-        if text.len() >= READLINE_PASTE_BLOCK_THRESHOLD_BYTES {
-            self.insert_paste_block(text);
-        } else {
-            self.line = text;
+        let mut copied = 0;
+        for range in &entry.collapsed_paste_ranges {
+            self.line.push_str(&entry.text[copied..range.start]);
             self.cursor = self.line.len();
+            self.insert_paste_block(entry.text[range.start..range.end].to_string());
+            copied = range.end;
         }
+        self.line.push_str(&entry.text[copied..]);
+        self.cursor = self.line.len();
+    }
+
+    /// Maps internal paste markers to byte ranges in expanded raw text.
+    fn collapsed_paste_ranges(&self) -> Vec<ReadlinePasteRange> {
+        let mut ranges = Vec::new();
+        let mut raw_offset = 0usize;
+        for ch in self.line.chars() {
+            if let Some(block) = self.paste_block_for_marker(ch) {
+                let end = raw_offset.saturating_add(block.content.len());
+                ranges.push(ReadlinePasteRange {
+                    start: raw_offset,
+                    end,
+                });
+                raw_offset = end;
+            } else {
+                raw_offset = raw_offset.saturating_add(ch.len_utf8());
+            }
+        }
+        ranges
     }
 
     /// Returns whether one pasted payload would exceed the visible prompt height.
@@ -1017,6 +1199,36 @@ fn normalized_history_entry_contains_query_substring(
     normalized_query: &str,
 ) -> bool {
     normalized_entry.contains(normalized_query)
+}
+
+/// Validates persisted collapsed-paste ranges against one raw prompt.
+fn valid_paste_ranges(text: &str, ranges: &[ReadlinePasteRange]) -> bool {
+    let mut previous_end = 0usize;
+    ranges.iter().all(|range| {
+        let valid = range.start < range.end
+            && range.start >= previous_end
+            && range.end <= text.len()
+            && text.is_char_boundary(range.start)
+            && text.is_char_boundary(range.end);
+        previous_end = range.end;
+        valid
+    })
+}
+
+/// Renders a raw history entry from its explicit collapsed-paste ranges.
+fn render_history_entry(entry: &ReadlineHistoryEntry) -> String {
+    if !entry.is_valid() {
+        return entry.text.clone();
+    }
+    let mut rendered = String::new();
+    let mut copied = 0usize;
+    for range in &entry.collapsed_paste_ranges {
+        rendered.push_str(&entry.text[copied..range.start]);
+        rendered.push_str(&paste_block_label(range.end.saturating_sub(range.start)));
+        copied = range.end;
+    }
+    rendered.push_str(&entry.text[copied..]);
+    rendered
 }
 
 /// Selects whether pasted block markers render as labels or exact content.
