@@ -80,6 +80,10 @@ invalidations, renders latest state once, and computes from the last
 successfully flushed base. Unsafe or safety-bound trigger ranges force an
 invalidating snapshot, while failed writes do not advance revision/base state.
 This is latest-state backpressure coalescing, not timer-based batching.
+The client continues consuming and presenting authoritative v3 updates while a
+primary `terminal/step` acknowledgement is outstanding, so the independent
+render stream is not held behind the control RTT. The control response remains
+the ordered mutation acknowledgement and is still awaited exactly once.
 Connection-local status exposes content-free coalesced-trigger, suppressed
 update, snapshot-fallback, maximum-ready-depth, and render-write-wait metrics.
 

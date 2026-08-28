@@ -232,11 +232,11 @@ pub(in crate::cli) enum AttachRenderAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::cli) struct IrohAttachRenderWakeup {
     /// Strongest redraw action implied by the decoded event burst.
-    action: AttachRenderAction,
+    pub(super) action: AttachRenderAction,
     /// Latest ordered event represented by this wakeup, when supplied.
     event_id: Option<u64>,
     /// Latest authoritative pushed snapshot in this decoded burst.
-    pushed_snapshot: Option<IrohPushedRenderSnapshot>,
+    pub(super) pushed_snapshot: Option<IrohPushedRenderSnapshot>,
 }
 
 /// One validated authoritative render snapshot received on event-stream v3.
@@ -495,7 +495,7 @@ pub(super) async fn read_attached_client_input_or_iroh_event<I: AsyncAttachedTer
 }
 
 /// Collapses already-ready Iroh redraw wakeups before the next view fetch.
-fn coalesce_ready_iroh_render_actions(
+pub(super) fn coalesce_ready_iroh_render_actions(
     event_receiver: &mut tokio::sync::mpsc::Receiver<Result<IrohAttachRenderWakeup>>,
     initial: IrohAttachRenderWakeup,
     event_cutoff: Option<u64>,

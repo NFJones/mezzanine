@@ -1299,6 +1299,8 @@ pub struct AsyncFakeAttachedTerminalIo {
     terminal_size_batches: VecDeque<Option<Size>>,
     /// Frames written by code under test.
     pub written_frames: Vec<AsyncFakeTerminalFrame>,
+    /// Optional notification emitted after each captured terminal frame.
+    write_notification: Option<std::sync::Arc<tokio::sync::Notify>>,
     /// Number of output-frame invalidations.
     pub invalidated_output_frames: usize,
     /// Number of presentation entries.
@@ -1321,6 +1323,11 @@ impl AsyncFakeAttachedTerminalIo {
     /// Adds one input read that remains pending until the caller times out.
     pub fn push_pending_input_read(&mut self) {
         self.pending_input_reads = self.pending_input_reads.saturating_add(1);
+    }
+
+    /// Installs a notification emitted after the fake captures a frame.
+    pub fn notify_on_write(&mut self, notification: std::sync::Arc<tokio::sync::Notify>) {
+        self.write_notification = Some(notification);
     }
 
     /// Adds a terminal size response to be returned by the next size query.
@@ -1377,6 +1384,9 @@ impl AsyncAttachedTerminalIo for AsyncFakeAttachedTerminalIo {
                 line_style_spans: line_style_spans.to_vec(),
                 modes,
             });
+            if let Some(notification) = self.write_notification.as_ref() {
+                notification.notify_one();
+            }
             Ok(lines.iter().map(String::len).sum())
         })
     }

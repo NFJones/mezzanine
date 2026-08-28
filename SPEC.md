@@ -3246,6 +3246,10 @@ that mutation MUST NOT change primary geometry, another observer's geometry,
 or canonical pane layout. The server MUST send the first available
 snapshot immediately and MUST NOT add a debounce, compression batching window,
 or delayed flush. At most one encoded render update MAY occupy the write path.
+While a primary mutation acknowledgement is outstanding, the client MUST
+continue consuming and presenting authoritative v3 render updates instead of
+holding them behind the control round trip. Receiving a pushed update MUST NOT
+cancel, duplicate, or reorder the outstanding mutation acknowledgement.
 After that write and flush complete, the server MUST drain all currently ready
 authorized event slices and exact-client render invalidations to a bounded
 trigger summary, render the latest authoritative state once, and derive the

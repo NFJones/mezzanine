@@ -35,6 +35,12 @@ the avoidable v2 `terminal/view` round trip explicit and deliberately excludes
 server rendering, codec work, scheduling, relay behavior, and client apply
 time. Do not report its values as measured end-to-end latency.
 
+Focused attach-loop coverage also withholds a primary `terminal/step`
+acknowledgement, injects an authoritative v3 update after the request is in
+flight, and requires local presentation before releasing the acknowledgement.
+This deterministic gate prevents client-side control-RTT head-of-line blocking;
+it is not a substitute for the controlled end-to-end WAN measurements below.
+
 ## Live content-safe counters
 
 During a controlled session, `show-iroh-status` reports the invoking
