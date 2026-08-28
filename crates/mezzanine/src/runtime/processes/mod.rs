@@ -2520,6 +2520,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the exact sandbox backend retained for one live transaction.
+    #[cfg(target_os = "macos")]
     pub(crate) fn shell_transaction_sandbox_backend_for_tests(
         &self,
         marker: &str,
@@ -2532,6 +2533,7 @@ impl RuntimeSessionService {
 
     /// Returns the private Seatbelt action directory retained by one live
     /// transaction so cleanup can be verified after settlement.
+    #[cfg(target_os = "macos")]
     pub(crate) fn seatbelt_workload_directory_for_tests(&self, marker: &str) -> Option<PathBuf> {
         self.process
             .seatbelt_workload_leases

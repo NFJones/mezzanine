@@ -8,13 +8,16 @@
 
 use mezzanine::control_client::{decode_control_frame, encode_control_body};
 use portable_pty::{Child as PtyChild, CommandBuilder, MasterPty, PtySize, native_pty_system};
+#[cfg(target_os = "macos")]
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::ops::{Deref, DerefMut};
+#[cfg(target_os = "macos")]
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
+#[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child as ProcessChild, Command, Stdio};

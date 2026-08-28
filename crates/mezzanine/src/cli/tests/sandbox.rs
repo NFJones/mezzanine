@@ -43,7 +43,14 @@ fn sandbox_status_is_structured_and_strictly_read_only() {
     assert_eq!(output["version"], 2);
     assert_eq!(output["effective"]["sandbox"], "bubblewrap");
     assert_eq!(output["effective"]["scope_provenance"], "explicit");
-    assert_eq!(output["effective"]["sandbox_executable_state"], "available");
+    assert_eq!(
+        output["effective"]["sandbox_executable_state"],
+        if crate::security::sandbox::sandbox_executable_available(Path::new("/bin/sh")) {
+            "available"
+        } else {
+            "unavailable"
+        }
+    );
     assert_eq!(output["effective"]["capability_state"], "not-probed");
     assert_eq!(
         output["effective"]["runtime_profile_version"],
@@ -104,7 +111,16 @@ fn sandbox_status_reports_seatbelt_operation_confinement() {
     assert_eq!(output["version"], 2);
     assert_eq!(output["configured"]["sandbox"], "seatbelt");
     assert_eq!(output["effective"]["sandbox"], "seatbelt");
-    assert_eq!(output["effective"]["sandbox_executable_state"], "available");
+    assert_eq!(
+        output["effective"]["sandbox_executable_state"],
+        if crate::security::sandbox::sandbox_executable_available(Path::new(
+            "/usr/bin/sandbox-exec",
+        )) {
+            "available"
+        } else {
+            "unavailable"
+        }
+    );
     assert_eq!(output["effective"]["capability_state"], "not-probed");
     assert_eq!(
         output["effective"]["runtime_profile_version"],
