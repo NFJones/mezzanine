@@ -606,13 +606,14 @@ impl PersistentIrohControlChannel {
             endpoint,
             connection,
             bridge,
-            event_receiver: _,
+            event_receiver,
             mut event_task,
             pushed_render_owner: _,
             setup_timeout,
         } = self;
-        let _ = bridge.shutdown(setup_timeout).await;
+        drop(event_receiver);
         connection.close(iroh::endpoint::VarInt::from_u32(0), b"attach complete");
+        let _ = bridge.shutdown(setup_timeout).await;
         if tokio::time::timeout(setup_timeout, &mut event_task)
             .await
             .is_err()

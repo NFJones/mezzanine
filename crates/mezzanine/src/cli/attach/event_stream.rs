@@ -16,6 +16,9 @@ const IROH_CLIENT_CLIPBOARD_MAX_BYTES: usize = 8 * 1024 * 1024;
 const IROH_CLIENT_CLIPBOARD_MAX_CHUNK_BYTES: usize = 256 * 1024;
 const IROH_CLIENT_CLIPBOARD_MAX_CHUNKS: usize =
     IROH_CLIENT_CLIPBOARD_MAX_BYTES / IROH_CLIENT_CLIPBOARD_MAX_CHUNK_BYTES;
+/// One consumer-visible wakeup plus one decoder-local latest wakeup bounds
+/// presentation work without blocking ordered render-revision reconstruction.
+const IROH_RENDER_WAKEUP_CHANNEL_CAPACITY: usize = 1;
 
 /// One bounded in-progress client clipboard transfer.
 struct IrohClipboardTransfer {
@@ -299,18 +302,30 @@ impl IrohAttachRenderWakeup {
 
     /// Combines a burst while retaining the strongest action and newest event.
     fn combine(self, other: Self) -> Self {
+        let invalidate_output = self
+            .pushed_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.invalidate_output)
+            || other
+                .pushed_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.invalidate_output);
+        let mut pushed_snapshot = match (self.pushed_snapshot, other.pushed_snapshot) {
+            (Some(left), Some(right)) if left.revision >= right.revision => Some(left),
+            (_, Some(right)) => Some(right),
+            (Some(left), None) => Some(left),
+            (None, None) => None,
+        };
+        if let Some(snapshot) = pushed_snapshot.as_mut() {
+            snapshot.invalidate_output |= invalidate_output;
+        }
         Self {
             action: self.action.combine(other.action),
             event_id: match (self.event_id, other.event_id) {
                 (Some(left), Some(right)) => Some(left.max(right)),
                 (Some(_), None) | (None, Some(_)) | (None, None) => None,
             },
-            pushed_snapshot: match (self.pushed_snapshot, other.pushed_snapshot) {
-                (Some(left), Some(right)) if left.revision >= right.revision => Some(left),
-                (_, Some(right)) => Some(right),
-                (Some(left), None) => Some(left),
-                (None, None) => None,
-            },
+            pushed_snapshot,
         }
     }
 
@@ -544,7 +559,7 @@ pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
     tokio::sync::mpsc::Receiver<Result<IrohAttachRenderWakeup>>,
     tokio::task::JoinHandle<()>,
 ) {
-    let (sender, receiver) = tokio::sync::mpsc::channel(8);
+    let (sender, receiver) = tokio::sync::mpsc::channel(IROH_RENDER_WAKEUP_CHANNEL_CAPACITY);
     let task = tokio::spawn(async move {
         let clipboard_worker = clipboard.map(spawn_iroh_client_clipboard_worker);
         let clipboard_sender = clipboard_worker
@@ -571,6 +586,21 @@ pub(in crate::cli) fn spawn_iroh_runtime_event_receiver(
         }
     });
     (receiver, task)
+}
+
+/// Retains only the latest complete decoded render wakeup awaiting delivery.
+///
+/// Every revision is still decoded into connection-local retained state before
+/// this helper runs. Coalescing here only prevents presentation from replaying
+/// superseded frames, and `combine` carries any skipped invalidation forward.
+fn retain_latest_iroh_render_wakeup(
+    pending: &mut Option<IrohAttachRenderWakeup>,
+    wakeup: IrohAttachRenderWakeup,
+) {
+    *pending = Some(match pending.take() {
+        Some(pending) => pending.combine(wakeup),
+        None => wakeup,
+    });
 }
 
 #[allow(
@@ -640,32 +670,57 @@ async fn receive_iroh_runtime_events(
     let mut render_state =
         IrohRetainedRenderState::new(pushed_render_role.unwrap_or_else(|| "primary".to_string()));
     let mut buffer = [0u8; ATTACH_EVENT_STREAM_READ_BUFFER_BYTES];
+    let mut pending_delivery: Option<IrohAttachRenderWakeup> = None;
     loop {
-        let read = if let Some(deadline) = clipboard_assembler
-            .as_ref()
-            .and_then(IrohClipboardAssembler::expiration_deadline)
-        {
-            tokio::select! {
-                read = stream.read(&mut buffer) => read.map_err(|_| {
-                    MezError::invalid_state("Iroh event stream read failed")
-                })?,
-                _ = connection.closed() => None,
-                _ = tokio::time::sleep_until(deadline) => {
-                    if let Some(assembler) = clipboard_assembler.as_mut() {
-                        assembler.discard_expired();
+        let read = {
+            let read = async {
+                let read = if let Some(deadline) = clipboard_assembler
+                    .as_ref()
+                    .and_then(IrohClipboardAssembler::expiration_deadline)
+                {
+                    tokio::select! {
+                        read = stream.read(&mut buffer) => read.map_err(|_| {
+                            MezError::invalid_state("Iroh event stream read failed")
+                        })?,
+                        _ = connection.closed() => None,
+                        _ = tokio::time::sleep_until(deadline) => {
+                            if let Some(assembler) = clipboard_assembler.as_mut() {
+                                assembler.discard_expired();
+                            }
+                            return Ok::<Option<usize>, MezError>(None);
+                        }
                     }
-                    continue;
+                } else {
+                    tokio::select! {
+                        read = stream.read(&mut buffer) => read.map_err(|_| {
+                            MezError::invalid_state("Iroh event stream read failed")
+                        })?,
+                        _ = connection.closed() => None,
+                    }
+                };
+                Ok::<Option<usize>, MezError>(read)
+            };
+            tokio::pin!(read);
+            if pending_delivery.is_some() {
+                tokio::select! {
+                    biased;
+                    permit = sender.reserve() => {
+                        let Ok(permit) = permit else {
+                            return Ok(());
+                        };
+                        if let Some(wakeup) = pending_delivery.take() {
+                            permit.send(Ok(wakeup));
+                        }
+                        continue;
+                    }
+                    read = &mut read => read?,
                 }
+            } else {
+                read.await?
             }
-            .unwrap_or(0)
-        } else {
-            tokio::select! {
-                read = stream.read(&mut buffer) => read.map_err(|_| {
-                    MezError::invalid_state("Iroh event stream read failed")
-                })?,
-                _ = connection.closed() => None,
-            }
-            .unwrap_or(0)
+        };
+        let Some(read) = read else {
+            continue;
         };
         if read == 0 {
             if !pending.is_empty() {
@@ -673,12 +728,13 @@ async fn receive_iroh_runtime_events(
                     "Iroh event stream closed with an incomplete frame",
                 ));
             }
-            let _ = sender
-                .send(Ok(IrohAttachRenderWakeup::new(
-                    AttachRenderAction::Disconnect,
-                    None,
-                )))
-                .await;
+            retain_latest_iroh_render_wakeup(
+                &mut pending_delivery,
+                IrohAttachRenderWakeup::new(AttachRenderAction::Disconnect, None),
+            );
+            if let Some(wakeup) = pending_delivery.take() {
+                let _ = sender.send(Ok(wakeup)).await;
+            }
             return Ok(());
         }
         pending.extend_from_slice(&buffer[..read]);
@@ -695,10 +751,8 @@ async fn receive_iroh_runtime_events(
             allow_pushed_render,
             &mut render_state,
         )?;
-        if (action.action != AttachRenderAction::None || action.pushed_snapshot.is_some())
-            && sender.send(Ok(action)).await.is_err()
-        {
-            return Ok(());
+        if action.action != AttachRenderAction::None || action.pushed_snapshot.is_some() {
+            retain_latest_iroh_render_wakeup(&mut pending_delivery, action);
         }
     }
 }
@@ -1289,12 +1343,20 @@ mod iroh_setup_tests {
     use super::*;
 
     static IROH_CLIENT_CLIPBOARD_WRITES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static IROH_LATEST_RENDER_DECODED: Mutex<bool> = Mutex::new(false);
 
     fn record_iroh_client_clipboard_write(content: &str) -> bool {
         IROH_CLIENT_CLIPBOARD_WRITES
             .lock()
             .unwrap()
             .push(content.to_string());
+        true
+    }
+
+    fn record_iroh_latest_render_decoded(content: &str) -> bool {
+        if content == "decoded" {
+            *IROH_LATEST_RENDER_DECODED.lock().unwrap() = true;
+        }
         true
     }
 
@@ -1480,6 +1542,133 @@ mod iroh_setup_tests {
             .unwrap()
             .unwrap();
         assert_eq!(action.action, AttachRenderAction::View);
+
+        client_connection.close(VarInt::from_u32(0), b"test complete");
+        task.await.unwrap();
+        client.close().await;
+        server.close().await;
+    }
+
+    /// Verifies a blocked v3 presentation consumer does not make the decoder
+    /// queue every intermediate viewport. Ordered revisions must continue to
+    /// decode, skipped invalidation must remain sticky, and only the newest
+    /// complete frame may follow the already-visible channel entry.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_v3_event_receiver_retains_latest_render_while_consumer_is_blocked() {
+        *IROH_LATEST_RENDER_DECODED.lock().unwrap() = false;
+        let (server, client, server_connection, client_connection) =
+            connected_iroh_event_pair().await;
+        let clipboard = crate::host::terminal::HostClipboard::new(
+            record_iroh_latest_render_decoded,
+            empty_iroh_client_clipboard_read,
+        );
+        let (mut receiver, task) = spawn_iroh_runtime_event_receiver(
+            client_connection.clone(),
+            IrohCompressionPolicy::new(
+                RuntimeIrohCompressionCodec::None,
+                1,
+                3,
+                ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024,
+            )
+            .unwrap(),
+            std::time::Duration::from_secs(1),
+            3,
+            true,
+            Some("primary".to_string()),
+            Some(clipboard),
+        );
+        let mut stream = server_connection.open_uni().await.unwrap();
+        stream
+            .write_all(crate::runtime::MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE)
+            .await
+            .unwrap();
+
+        let snapshot = |revision: u64, invalidate_output: bool| {
+            let viewport = format!(
+                "viewport {revision} {}",
+                "x".repeat(ATTACH_EVENT_STREAM_READ_BUFFER_BYTES)
+            );
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "render/snapshot",
+                "params": {
+                    "kind": "snapshot",
+                    "revision": revision,
+                    "event_cutoff": revision,
+                    "invalidate_output": invalidate_output,
+                    "view": {
+                        "role": "primary",
+                        "lines": [viewport],
+                        "line_style_spans": [[]],
+                        "cursor": {"row": 0, "column": 0, "visible": false},
+                        "output_modes": {}
+                    }
+                }
+            })
+            .to_string()
+        };
+        stream
+            .write_all(&crate::control::encode_control_body(&snapshot(1, false)))
+            .await
+            .unwrap();
+        stream.flush().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while receiver.len() != IROH_RENDER_WAKEUP_CHANNEL_CAPACITY {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first render must occupy the presentation slot");
+
+        for revision in 2..=12 {
+            stream
+                .write_all(&crate::control::encode_control_body(&snapshot(
+                    revision,
+                    revision == 5,
+                )))
+                .await
+                .unwrap();
+        }
+        for body in [
+            r#"{"jsonrpc":"2.0","method":"client/clipboard.begin","params":{"sequence":1,"total_bytes":7,"chunks":1}}"#,
+            r#"{"jsonrpc":"2.0","method":"client/clipboard.chunk","params":{"sequence":1,"index":0,"data_base64":"ZGVjb2RlZA=="}}"#,
+            r#"{"jsonrpc":"2.0","method":"client/clipboard.commit","params":{"sequence":1}}"#,
+        ] {
+            stream
+                .write_all(&crate::control::encode_control_body(body))
+                .await
+                .unwrap();
+        }
+        stream.flush().await.unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if *IROH_LATEST_RENDER_DECODED.lock().unwrap() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("ordered decoding must continue while presentation is blocked");
+        let first = receiver.recv().await.unwrap().unwrap();
+        assert_eq!(first.pushed_snapshot.unwrap().revision, 1);
+        let latest = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .pushed_snapshot
+            .expect("latest decoded render must be delivered");
+        assert_eq!(latest.revision, 12);
+        assert!(latest.frame.lines[0].starts_with("viewport 12 "));
+        assert!(latest.frame.lines[0].len() > ATTACH_EVENT_STREAM_READ_BUFFER_BYTES);
+        assert!(latest.invalidate_output);
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(*IROH_LATEST_RENDER_DECODED.lock().unwrap());
 
         client_connection.close(VarInt::from_u32(0), b"test complete");
         task.await.unwrap();

@@ -47,6 +47,14 @@ server while output bytes are still pending. This proves acknowledgement and
 input fairness during incomplete output; it is not an end-to-end latency
 benchmark.
 
+A blocked-consumer regression fills the v3 presentation handoff, sends a burst
+of ordered viewport revisions, and gates on a later client effect before
+reading the occupied slot. The decoder must advance through every revision,
+then expose only the final complete viewport after the occupied entry while
+preserving an invalidation carried by a skipped update. This protects
+pane-buffer and pager scrolling from stale-frame FIFO replay without weakening
+delta-base validation or ANSI-frame atomicity.
+
 Runtime control integration coverage also opens a real pane-local agent prompt,
 applies a framed `terminal/step` with `render = false`, and requires the edit to
 retain an exact-client `AgentPrompt` invalidation. This protects prompt echo on

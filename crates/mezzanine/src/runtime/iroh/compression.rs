@@ -590,11 +590,15 @@ impl IrohCompressionBridge {
 
     /// Stops the local stream and waits boundedly for the bridge task.
     pub(crate) async fn shutdown(mut self, timeout: std::time::Duration) -> Result<()> {
-        self.stream.shutdown().await?;
-        match tokio::time::timeout(timeout, &mut self.task).await {
-            Ok(joined) => joined.map_err(|error| {
+        let shutdown = tokio::time::timeout(timeout, async {
+            self.stream.shutdown().await?;
+            (&mut self.task).await.map_err(|error| {
                 MezError::invalid_state(format!("Iroh compression bridge task failed: {error}"))
-            })?,
+            })?
+        })
+        .await;
+        match shutdown {
+            Ok(result) => result,
             Err(_) => {
                 self.task.abort();
                 let _ = (&mut self.task).await;

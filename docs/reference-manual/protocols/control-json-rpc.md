@@ -96,6 +96,13 @@ terminal frame cannot prevent acknowledgement polling or capture of follow-on
 stdin. Captured input remains buffered until the preceding acknowledgement is
 decoded, preserving stop-and-wait mutation ordering without leaving keystrokes
 stuck behind physical-terminal output.
+The event decoder continues applying revisioned snapshots and deltas in order
+while presentation is busy, but its handoff is latest-state rather than an
+eight-frame FIFO. It keeps one consumer-visible wakeup and one decoder-local
+coalesced wakeup, carries any skipped output invalidation onto the newest
+complete frame, and lets the terminal adapter finish an already-started ANSI
+frame before presenting only that newest deferred view. Sustained pane-buffer
+or pager scrolling therefore does not replay every reconstructed viewport.
 Connection-local status exposes content-free coalesced-trigger, suppressed
 update, snapshot-fallback, maximum-ready-depth, and render-write-wait metrics.
 

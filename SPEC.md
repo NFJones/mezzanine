@@ -3260,6 +3260,13 @@ acknowledgement and terminal-input polling between incomplete passes. It MAY
 buffer follow-on terminal input while one mutation is outstanding, but MUST
 send that input only after the preceding acknowledgement has been decoded so
 primary mutations remain ordered and exactly once.
+The client MUST decode revisioned updates in stream order even while local
+presentation is busy, but MUST retain only bounded latest-state presentation
+work rather than a FIFO of reconstructed intermediate frames. Superseded
+updates MUST collapse to the newest complete view, and any skipped
+`invalidate_output` requirement MUST remain sticky on that view. A physical
+ANSI frame whose bytes have already been emitted MUST still finish atomically;
+only the newest retained view may follow it.
 After that write and flush complete, the server MUST drain all currently ready
 authorized event slices and exact-client render invalidations to a bounded
 trigger summary, render the latest authoritative state once, and derive the
