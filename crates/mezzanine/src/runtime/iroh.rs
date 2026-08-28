@@ -43,16 +43,122 @@ pub(crate) const MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE: &[u8] = b"mezzanine/eve
 const IROH_EVENT_BATCH_LIMIT: usize = 64;
 const IROH_CLIPBOARD_CHUNK_BYTES: usize = 256 * 1024;
 
+/// Serializes the complete logical view retained by one v3 render stream.
+fn iroh_render_view_value(
+    snapshot: &crate::host::async_runtime::AsyncIrohRenderSnapshot,
+) -> Result<serde_json::Value> {
+    serde_json::from_str(&super::rendered_client_view_json(
+        &snapshot.view,
+        snapshot.iroh_status_slot.as_ref(),
+    ))
+    .map_err(|error| MezError::invalid_state(format!("failed to encode Iroh render view: {error}")))
+}
+
 /// Encodes one authoritative primary render snapshot for event-stream v3.
 fn encode_iroh_render_snapshot_frame(
     snapshot: &crate::host::async_runtime::AsyncIrohRenderSnapshot,
     revision: u64,
+    view: &serde_json::Value,
 ) -> Vec<u8> {
-    let view = super::rendered_client_view_json(&snapshot.view, snapshot.iroh_status_slot.as_ref());
-    encode_control_body(&format!(
-        r#"{{"jsonrpc":"2.0","method":"render/snapshot","params":{{"kind":"snapshot","revision":{revision},"event_cutoff":{},"invalidate_output":{},"view":{view}}}}}"#,
-        snapshot.event_cutoff, snapshot.invalidate_output,
-    ))
+    encode_control_body(
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "render/snapshot",
+            "params": {
+                "kind": "snapshot",
+                "revision": revision,
+                "event_cutoff": snapshot.event_cutoff,
+                "invalidate_output": snapshot.invalidate_output,
+                "view": view,
+            }
+        })
+        .to_string(),
+    )
+}
+
+/// Encodes a whole-row delta when it is safe and smaller than a snapshot.
+///
+/// The returned complete view becomes the next server base only after the
+/// caller successfully writes and flushes the selected frame.
+fn encode_iroh_render_update_frame(
+    snapshot: &crate::host::async_runtime::AsyncIrohRenderSnapshot,
+    base_view: Option<&serde_json::Value>,
+    base_revision: u64,
+    revision: u64,
+) -> Result<Option<(Vec<u8>, serde_json::Value)>> {
+    let view = iroh_render_view_value(snapshot)?;
+    if base_view == Some(&view) && !snapshot.invalidate_output {
+        return Ok(None);
+    }
+    let snapshot_frame = encode_iroh_render_snapshot_frame(snapshot, revision, &view);
+    let Some(base_view) = base_view else {
+        return Ok(Some((snapshot_frame, view)));
+    };
+    if snapshot.invalidate_output {
+        return Ok(Some((snapshot_frame, view)));
+    }
+    let (Some(base), Some(current)) = (base_view.as_object(), view.as_object()) else {
+        return Ok(Some((snapshot_frame, view)));
+    };
+    let (Some(base_lines), Some(base_styles), Some(lines), Some(styles)) = (
+        base.get("lines").and_then(serde_json::Value::as_array),
+        base.get("line_style_spans")
+            .and_then(serde_json::Value::as_array),
+        current.get("lines").and_then(serde_json::Value::as_array),
+        current
+            .get("line_style_spans")
+            .and_then(serde_json::Value::as_array),
+    ) else {
+        return Ok(Some((snapshot_frame, view)));
+    };
+    if lines.len() != styles.len()
+        || base_lines.len() != base_styles.len()
+        || lines.len() != base_lines.len()
+    {
+        return Ok(Some((snapshot_frame, view)));
+    }
+
+    let rows = lines
+        .iter()
+        .zip(styles)
+        .enumerate()
+        .filter(|(index, (line, style_spans))| {
+            base_lines[*index] != **line || base_styles[*index] != **style_spans
+        })
+        .map(|(index, (line, style_spans))| {
+            serde_json::json!({
+                "index": index,
+                "line": line,
+                "style_spans": style_spans,
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut metadata = current.clone();
+    metadata.remove("lines");
+    metadata.remove("line_style_spans");
+    let delta_frame = encode_control_body(
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "render/delta",
+            "params": {
+                "kind": "delta",
+                "base_revision": base_revision,
+                "revision": revision,
+                "event_cutoff": snapshot.event_cutoff,
+                "invalidate_output": false,
+                "line_count": lines.len(),
+                "view": metadata,
+                "rows": rows,
+            }
+        })
+        .to_string(),
+    );
+    let selected = if delta_frame.len() < snapshot_frame.len() {
+        delta_frame
+    } else {
+        snapshot_frame
+    };
+    Ok(Some((selected, view)))
 }
 
 /// Classifies one retained event for primary v3 render ownership.
@@ -1374,6 +1480,7 @@ async fn serve_registered_runtime_iroh_event_stream(
         .map_err(|_| MezError::invalid_state("failed to flush Iroh event stream preface"))?;
     let mut delivered = 0u64;
     let mut render_revision = 0u64;
+    let mut sent_render_view: Option<serde_json::Value> = None;
     if push_render {
         let snapshot = handle
             .render_iroh_primary_snapshot(caller_client_id.clone(), true)
@@ -1382,7 +1489,8 @@ async fn serve_registered_runtime_iroh_event_stream(
                 MezError::invalid_state("Iroh v3 primary was not renderable after initialization")
             })?;
         render_revision = 1;
-        let frame = encode_iroh_render_snapshot_frame(&snapshot, render_revision);
+        let view = iroh_render_view_value(&snapshot)?;
+        let frame = encode_iroh_render_snapshot_frame(&snapshot, render_revision, &view);
         let frame = compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?;
         compression_metrics.record_frame(
             frame.as_bytes().len(),
@@ -1397,6 +1505,7 @@ async fn serve_registered_runtime_iroh_event_stream(
             .await
             .map_err(|_| MezError::invalid_state("Iroh render snapshot flush timed out"))?
             .map_err(|_| MezError::invalid_state("Iroh render snapshot flush failed"))?;
+        sent_render_view = Some(view);
         last_delivered_event_id = snapshot.event_cutoff;
         pending.clear();
     }
@@ -1474,22 +1583,31 @@ async fn serve_registered_runtime_iroh_event_stream(
                     .ok_or_else(|| {
                         MezError::invalid_state("Iroh v3 primary stopped being renderable")
                     })?;
-                render_revision = render_revision.saturating_add(1);
-                let frame = encode_iroh_render_snapshot_frame(&snapshot, render_revision);
-                let frame = compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?;
-                compression_metrics.record_frame(
-                    frame.as_bytes().len(),
-                    frame.decoded_bytes(),
-                    frame.compressed(),
-                );
-                tokio::time::timeout(idle_timeout, send.write_all(frame.as_bytes()))
-                    .await
-                    .map_err(|_| MezError::invalid_state("Iroh render snapshot write timed out"))?
-                    .map_err(|_| MezError::invalid_state("Iroh render snapshot write failed"))?;
-                tokio::time::timeout(idle_timeout, send.flush())
-                    .await
-                    .map_err(|_| MezError::invalid_state("Iroh render snapshot flush timed out"))?
-                    .map_err(|_| MezError::invalid_state("Iroh render snapshot flush failed"))?;
+                let next_revision = render_revision.saturating_add(1);
+                if let Some((frame, view)) = encode_iroh_render_update_frame(
+                    &snapshot,
+                    sent_render_view.as_ref(),
+                    render_revision,
+                    next_revision,
+                )? {
+                    let frame =
+                        compression.encode_frame(&frame, IrohFrameCompressionMode::Eligible)?;
+                    compression_metrics.record_frame(
+                        frame.as_bytes().len(),
+                        frame.decoded_bytes(),
+                        frame.compressed(),
+                    );
+                    tokio::time::timeout(idle_timeout, send.write_all(frame.as_bytes()))
+                        .await
+                        .map_err(|_| MezError::invalid_state("Iroh render update write timed out"))?
+                        .map_err(|_| MezError::invalid_state("Iroh render update write failed"))?;
+                    tokio::time::timeout(idle_timeout, send.flush())
+                        .await
+                        .map_err(|_| MezError::invalid_state("Iroh render update flush timed out"))?
+                        .map_err(|_| MezError::invalid_state("Iroh render update flush failed"))?;
+                    render_revision = next_revision;
+                    sent_render_view = Some(view);
+                }
                 last_delivered_event_id = snapshot.event_cutoff;
             } else if let Some(batch_last) = batch_last {
                 last_delivered_event_id = batch_last;
@@ -1627,6 +1745,100 @@ fn relay_mode(policy: &RuntimeIrohRelayPolicy) -> Result<RelayMode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies one-row updates select a smaller revisioned delta, identical
+    /// logical views are suppressed, and physical invalidation forces a full
+    /// snapshot even when the logical view is otherwise unchanged.
+    #[tokio::test(flavor = "current_thread")]
+    async fn iroh_render_updates_select_row_deltas_and_safe_snapshot_fallbacks() {
+        use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionActor};
+        use crate::test_support::runtime::RuntimeServiceFixture;
+
+        let mut service = RuntimeServiceFixture::new().build();
+        let primary = service
+            .attach_primary(
+                "primary",
+                true,
+                mez_mux::layout::Size::new(80, 24).unwrap(),
+                120,
+            )
+            .unwrap();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+
+        let client = async {
+            let base = handle
+                .render_iroh_primary_snapshot(primary, true)
+                .await
+                .unwrap()
+                .expect("attached primary should render");
+            let base_view = iroh_render_view_value(&base).unwrap();
+
+            let mut changed = base.clone();
+            changed.invalidate_output = false;
+            let row = changed
+                .view
+                .lines
+                .first_mut()
+                .expect("primary view should contain at least one row");
+            *row = "changed visible row".to_string();
+            let (delta_frame, changed_view) =
+                encode_iroh_render_update_frame(&changed, Some(&base_view), 1, 2)
+                    .unwrap()
+                    .expect("changed view should produce an update");
+            let (delta_body, _) =
+                crate::control::decode_control_frame(&delta_frame, 1024 * 1024).unwrap();
+            assert!(
+                delta_body.contains(r#""method":"render/delta""#),
+                "{delta_body}"
+            );
+            assert!(delta_body.contains(r#""base_revision":1"#), "{delta_body}");
+            assert!(delta_body.contains(r#""revision":2"#), "{delta_body}");
+            let snapshot_frame = encode_iroh_render_snapshot_frame(&changed, 2, &changed_view);
+            assert!(
+                delta_frame.len().saturating_mul(2) <= snapshot_frame.len(),
+                "representative one-row delta must reduce decoded bytes by at least 50%: delta={} snapshot={}",
+                delta_frame.len(),
+                snapshot_frame.len(),
+            );
+            assert!(
+                encode_iroh_render_update_frame(&changed, Some(&changed_view), 2, 3,)
+                    .unwrap()
+                    .is_none()
+            );
+
+            let mut broad_change = changed.clone();
+            for (index, line) in broad_change.view.lines.iter_mut().enumerate() {
+                *line = format!("replacement row {index} with enough changed content");
+            }
+            let (broad_frame, _) =
+                encode_iroh_render_update_frame(&broad_change, Some(&changed_view), 2, 3)
+                    .unwrap()
+                    .expect("broad change should produce an update");
+            let (broad_body, _) =
+                crate::control::decode_control_frame(&broad_frame, 1024 * 1024).unwrap();
+            assert!(
+                broad_body.contains(r#""method":"render/snapshot""#),
+                "{broad_body}"
+            );
+
+            let mut invalidating = changed;
+            invalidating.invalidate_output = true;
+            let (snapshot_frame, _) =
+                encode_iroh_render_update_frame(&invalidating, Some(&changed_view), 2, 3)
+                    .unwrap()
+                    .expect("invalidation must force an update");
+            let (snapshot_body, _) =
+                crate::control::decode_control_frame(&snapshot_frame, 1024 * 1024).unwrap();
+            assert!(
+                snapshot_body.contains(r#""method":"render/snapshot""#),
+                "{snapshot_body}"
+            );
+
+            let _ = handle.shutdown().await.unwrap();
+        };
+        let ((), _) = tokio::join!(client, actor.run());
+    }
 
     #[derive(Debug, Clone)]
     struct StallFirstHandshake {
@@ -2188,6 +2400,9 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
 
         let mut service = RuntimeServiceFixture::new().build();
+        service
+            .start_initial_pane_process(Some("cat >/dev/null"))
+            .unwrap();
         service.set_config_root(root.clone());
         let session_id = service.session().id.to_string();
         let (server_secret, server_endpoint_id) = {
@@ -2225,7 +2440,7 @@ mod tests {
         let server_addr = server_endpoint.endpoint().addr();
         let (handle, actor) =
             AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
-        let render_handle = handle.clone();
+        let output_handle = handle.clone();
 
         let client_endpoint = Endpoint::builder(presets::Minimal)
             .secret_key(SecretKey::generate())
@@ -2303,12 +2518,6 @@ mod tests {
             let initialize_body = read_test_control_body(&mut recv).await;
             assert!(initialize_body.contains(r#""granted_role":"primary""#));
             assert!(initialize_body.contains(r#""device_credential""#));
-            let primary_client_id = serde_json::from_str::<serde_json::Value>(&initialize_body)
-                .unwrap()["result"]["client"]["id"]
-                .as_str()
-                .and_then(|id| ClientId::parse('c', id.to_string()))
-                .unwrap();
-
             let mut events =
                 tokio::time::timeout(std::time::Duration::from_secs(3), connection.accept_uni())
                     .await
@@ -2330,16 +2539,27 @@ mod tests {
                 "{event_body}"
             );
 
-            render_handle
-                .queue_runtime_side_effects(vec![crate::runtime::RuntimeSideEffect::RenderClient {
-                    client_id: primary_client_id,
-                    reason: crate::runtime::RenderInvalidationReason::CursorBlink,
-                }])
-                .await
-                .unwrap();
-            let repaint_body = read_test_control_body(&mut events).await;
+            let mut output = crate::runtime::RuntimeEventBatch::new();
+            output.push(crate::runtime::RuntimeEvent::Pane(
+                crate::runtime::PaneEvent::Output {
+                    pane_id: "%1".to_string(),
+                    bytes: b"delta transport row\n".to_vec(),
+                },
+            ));
+            let report = output_handle.submit_runtime_events(output).await.unwrap();
+            assert_eq!(report.applied, 1);
+            let repaint_body = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("pane output should push a render delta");
             assert!(
-                repaint_body.contains(r#""method":"render/snapshot""#),
+                repaint_body.contains(r#""method":"render/delta""#),
+                "{repaint_body}"
+            );
+            assert!(
+                repaint_body.contains(r#""base_revision":1"#),
                 "{repaint_body}"
             );
             assert!(repaint_body.contains(r#""revision":2"#), "{repaint_body}");

@@ -55,8 +55,16 @@ complete snapshot for later actionable presentation changes. Each snapshot
 contains a stream-local revision, `event_cutoff`, `invalidate_output`, and a
 complete primary `RenderedClientView`. The client validates the entire frame
 before replacing its retained logical view and then reuses the normal local
-ANSI differential renderer. Version 2 is primary-only; primary versions 2 and
-3 support negotiated client-local clipboard writes, while observer v3 does
+ANSI differential renderer. Later non-invalidating updates may use
+`render/delta` with `base_revision`, a greater `revision`, complete non-row view
+metadata, and unique whole-row text/style replacements. The server retains the
+last successfully flushed complete view, suppresses identical views, and sends
+a snapshot when the base is unsafe, geometry or row count changes, output must
+be invalidated, or the uncompressed delta is not smaller. The client validates
+and reconstructs the complete candidate atomically; a stale or malformed delta
+fails the stream without partially changing retained state, and reattachment
+begins with a fresh snapshot. Version 2 is primary-only; primary versions 2
+and 3 support negotiated client-local clipboard writes, while observer v3 does
 not. Setup, idle operation, writes, and teardown are bounded; wrong ALPNs,
 excess streams, malformed frames, stalled setup, and one failed connection are
 isolated from later clients and from the Unix listener.

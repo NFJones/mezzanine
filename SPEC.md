@@ -3201,6 +3201,24 @@ cutoff, and invalidation requirement MUST be captured in one serialized actor
 turn. Clients MUST validate a complete snapshot atomically and MUST reject
 missing, malformed, non-primary, misaligned, or non-monotonic snapshots.
 
+After the initial snapshot, a primary v3 stream MAY send `render/delta` when
+the update is non-invalidating, has the same row count, and its framed
+uncompressed JSON is smaller than the corresponding snapshot. A delta MUST
+identify the exact retained `base_revision`, advance to a strictly greater
+stream-local `revision`, carry the complete current non-row view metadata, and
+replace changed rows as unique in-range indexes with complete text and style
+spans. The server MUST compute against the last successfully flushed complete
+view, advance its revision and retained base only after a successful flush,
+suppress identical non-invalidating views, and use a snapshot for missing
+bases, geometry or row-count changes, physical-output invalidation, or a delta
+that is not smaller. The client MUST validate the entire delta without
+mutation, require its base to match the retained revision, reconstruct one
+complete candidate view, and commit the candidate and revision atomically.
+Malformed, duplicate, out-of-range, or stale deltas MUST fail the stream
+visibly without partially changing retained state; reattachment starts with a
+fresh authoritative snapshot. ANSI encoding and physical-terminal diffing
+remain client-local.
+
 Primary v3 control responses are mutation acknowledgements and MUST NOT replace
 the event stream's render state. The server MUST send the first available
 snapshot immediately and MUST NOT add a debounce, compression batching window,

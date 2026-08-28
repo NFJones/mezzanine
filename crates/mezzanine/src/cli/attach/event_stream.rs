@@ -250,6 +250,15 @@ pub(super) struct IrohPushedRenderSnapshot {
     pub(super) invalidate_output: bool,
 }
 
+/// Complete client render base retained for atomic v3 delta application.
+#[derive(Debug, Clone, Default)]
+struct IrohRetainedRenderState {
+    /// Last completely validated stream-local render revision.
+    revision: u64,
+    /// Complete rendered-view JSON represented by `revision`.
+    view: Option<serde_json::Value>,
+}
+
 impl IrohAttachRenderWakeup {
     /// Builds a wakeup from one decoded event notification.
     const fn new(action: AttachRenderAction, event_id: Option<u64>) -> Self {
@@ -602,7 +611,7 @@ async fn receive_iroh_runtime_events(
     let mut clipboard_assembler = clipboard_sender
         .is_some()
         .then(IrohClipboardAssembler::default);
-    let mut last_render_revision = 0u64;
+    let mut render_state = IrohRetainedRenderState::default();
     let mut buffer = [0u8; ATTACH_EVENT_STREAM_READ_BUFFER_BYTES];
     loop {
         let read = if let Some(deadline) = clipboard_assembler
@@ -657,7 +666,7 @@ async fn receive_iroh_runtime_events(
             clipboard_assembler.as_mut(),
             clipboard_sender,
             allow_pushed_render,
-            &mut last_render_revision,
+            &mut render_state,
         )?;
         if (action.action != AttachRenderAction::None || action.pushed_snapshot.is_some())
             && sender.send(Ok(action)).await.is_err()
@@ -674,7 +683,7 @@ fn drain_negotiated_iroh_event_frames(
     mut clipboard_assembler: Option<&mut IrohClipboardAssembler>,
     clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
     allow_pushed_render: bool,
-    last_render_revision: &mut u64,
+    render_state: &mut IrohRetainedRenderState,
 ) -> Result<IrohAttachRenderWakeup> {
     let mut wakeup = IrohAttachRenderWakeup::new(AttachRenderAction::None, None);
     loop {
@@ -689,7 +698,7 @@ fn drain_negotiated_iroh_event_frames(
                 clipboard_assembler.as_deref_mut(),
                 clipboard_sender,
                 allow_pushed_render,
-                last_render_revision,
+                render_state,
             )?);
             pending.drain(..consumed);
             continue;
@@ -718,7 +727,7 @@ fn drain_negotiated_iroh_event_frames(
             clipboard_assembler.as_deref_mut(),
             clipboard_sender,
             allow_pushed_render,
-            last_render_revision,
+            render_state,
         )?);
         pending.drain(..consumed);
     }
@@ -730,7 +739,7 @@ fn apply_negotiated_iroh_attach_frame(
     clipboard_assembler: Option<&mut IrohClipboardAssembler>,
     clipboard_sender: Option<&tokio::sync::watch::Sender<Option<String>>>,
     allow_pushed_render: bool,
-    last_render_revision: &mut u64,
+    render_state: &mut IrohRetainedRenderState,
 ) -> Result<IrohAttachRenderWakeup> {
     let value: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_state("Iroh event stream contained invalid JSON"))?;
@@ -741,7 +750,15 @@ fn apply_negotiated_iroh_attach_frame(
                 "legacy Iroh event stream contained a pushed render snapshot",
             ));
         }
-        return parse_iroh_pushed_render_snapshot(&value, last_render_revision);
+        return parse_iroh_pushed_render_snapshot(&value, render_state);
+    }
+    if method == Some("render/delta") {
+        if !allow_pushed_render {
+            return Err(MezError::invalid_state(
+                "legacy Iroh event stream contained a pushed render delta",
+            ));
+        }
+        return parse_iroh_pushed_render_delta(&value, render_state);
     }
     if method.is_some_and(|method| method.starts_with("client/clipboard.")) {
         let Some(assembler) = clipboard_assembler else {
@@ -764,7 +781,7 @@ fn apply_negotiated_iroh_attach_frame(
 /// Validates one complete authoritative v3 render snapshot atomically.
 fn parse_iroh_pushed_render_snapshot(
     value: &serde_json::Value,
-    last_render_revision: &mut u64,
+    render_state: &mut IrohRetainedRenderState,
 ) -> Result<IrohAttachRenderWakeup> {
     if value.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0") {
         return Err(MezError::invalid_state(
@@ -783,7 +800,7 @@ fn parse_iroh_pushed_render_snapshot(
     let revision = params
         .get("revision")
         .and_then(serde_json::Value::as_u64)
-        .filter(|revision| *revision > *last_render_revision)
+        .filter(|revision| *revision > render_state.revision)
         .ok_or_else(|| MezError::invalid_state("Iroh render snapshot revision is not monotonic"))?;
     let event_cutoff = params
         .get("event_cutoff")
@@ -828,12 +845,163 @@ fn parse_iroh_pushed_render_snapshot(
     .to_string();
     let frame = super::responses::terminal_step_response_client_frame(&response)?
         .ok_or_else(|| MezError::invalid_state("Iroh render snapshot decoded no frame"))?;
-    *last_render_revision = revision;
+    let retained_view = view.clone();
+    render_state.revision = revision;
+    render_state.view = Some(retained_view);
     Ok(IrohAttachRenderWakeup::pushed_snapshot(
         IrohPushedRenderSnapshot {
             revision,
             frame,
             invalidate_output,
+        },
+    ))
+}
+
+/// Validates and atomically reconstructs one whole-row v3 render delta.
+fn parse_iroh_pushed_render_delta(
+    value: &serde_json::Value,
+    render_state: &mut IrohRetainedRenderState,
+) -> Result<IrohAttachRenderWakeup> {
+    if value.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0") {
+        return Err(MezError::invalid_state(
+            "Iroh render delta omitted JSON-RPC 2.0",
+        ));
+    }
+    let params = value
+        .get("params")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| MezError::invalid_state("Iroh render delta omitted params"))?;
+    if params.get("kind").and_then(serde_json::Value::as_str) != Some("delta") {
+        return Err(MezError::invalid_state(
+            "Iroh render delta used an unsupported kind",
+        ));
+    }
+    let base_revision = params
+        .get("base_revision")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| MezError::invalid_state("Iroh render delta omitted its base revision"))?;
+    if base_revision != render_state.revision {
+        return Err(MezError::invalid_state(
+            "Iroh render delta base revision does not match retained state",
+        ));
+    }
+    let revision = params
+        .get("revision")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|revision| *revision > base_revision)
+        .ok_or_else(|| MezError::invalid_state("Iroh render delta revision is not monotonic"))?;
+    let event_cutoff = params
+        .get("event_cutoff")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| MezError::invalid_state("Iroh render delta omitted event cutoff"))?;
+    if params
+        .get("invalidate_output")
+        .and_then(serde_json::Value::as_bool)
+        != Some(false)
+    {
+        return Err(MezError::invalid_state(
+            "Iroh render delta cannot invalidate retained output",
+        ));
+    }
+    let line_count = params
+        .get("line_count")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|count| usize::try_from(count).ok())
+        .ok_or_else(|| MezError::invalid_state("Iroh render delta line count is invalid"))?;
+    let base_view = render_state
+        .view
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| MezError::invalid_state("Iroh render delta has no retained base view"))?;
+    let base_lines = base_view
+        .get("lines")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| MezError::invalid_state("Iroh retained render lines are missing"))?;
+    let base_styles = base_view
+        .get("line_style_spans")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| MezError::invalid_state("Iroh retained render styles are missing"))?;
+    if base_lines.len() != line_count || base_styles.len() != line_count {
+        return Err(MezError::invalid_state(
+            "Iroh render delta line count does not match retained state",
+        ));
+    }
+    let metadata = params
+        .get("view")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| MezError::invalid_state("Iroh render delta omitted view metadata"))?;
+    if metadata.contains_key("lines") || metadata.contains_key("line_style_spans") {
+        return Err(MezError::invalid_state(
+            "Iroh render delta metadata contains row state",
+        ));
+    }
+    if metadata.get("role").and_then(serde_json::Value::as_str) != Some("primary") {
+        return Err(MezError::invalid_state(
+            "Iroh render delta was not a primary view",
+        ));
+    }
+
+    let mut lines = base_lines.clone();
+    let mut styles = base_styles.clone();
+    let rows = params
+        .get("rows")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| MezError::invalid_state("Iroh render delta omitted changed rows"))?;
+    let mut seen = std::collections::BTreeSet::new();
+    for row in rows {
+        let row = row
+            .as_object()
+            .ok_or_else(|| MezError::invalid_state("Iroh render delta row is not an object"))?;
+        let index = row
+            .get("index")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|index| usize::try_from(index).ok())
+            .filter(|index| *index < line_count)
+            .ok_or_else(|| {
+                MezError::invalid_state("Iroh render delta row index is out of range")
+            })?;
+        if !seen.insert(index) {
+            return Err(MezError::invalid_state(
+                "Iroh render delta contains a duplicate row index",
+            ));
+        }
+        let line = row
+            .get("line")
+            .filter(|line| line.is_string())
+            .ok_or_else(|| MezError::invalid_state("Iroh render delta row text is invalid"))?;
+        let style_spans = row
+            .get("style_spans")
+            .filter(|spans| spans.is_array())
+            .ok_or_else(|| MezError::invalid_state("Iroh render delta row styles are invalid"))?;
+        super::responses::parse_terminal_style_span_row(style_spans)?;
+        lines[index] = line.clone();
+        styles[index] = style_spans.clone();
+    }
+
+    let mut candidate = metadata.clone();
+    candidate.insert("lines".to_string(), serde_json::Value::Array(lines));
+    candidate.insert(
+        "line_style_spans".to_string(),
+        serde_json::Value::Array(styles),
+    );
+    let candidate = serde_json::Value::Object(candidate);
+    let response = serde_json::json!({
+        "result": {
+            "view": &candidate,
+            "event_cutoff": event_cutoff,
+        }
+    })
+    .to_string();
+    let frame = super::responses::terminal_step_response_client_frame(&response)?
+        .ok_or_else(|| MezError::invalid_state("Iroh render delta decoded no frame"))?;
+
+    render_state.revision = revision;
+    render_state.view = Some(candidate);
+    Ok(IrohAttachRenderWakeup::pushed_snapshot(
+        IrohPushedRenderSnapshot {
+            revision,
+            frame,
+            invalidate_output: false,
         },
     ))
 }
@@ -1445,20 +1613,121 @@ mod iroh_tests {
                 }
             }
         });
-        let mut revision = 0;
-        let decoded = parse_iroh_pushed_render_snapshot(&snapshot, &mut revision).unwrap();
+        let mut render_state = IrohRetainedRenderState::default();
+        let decoded = parse_iroh_pushed_render_snapshot(&snapshot, &mut render_state).unwrap();
         let pushed = decoded.pushed_snapshot.expect("snapshot should decode");
 
-        assert_eq!(revision, 1);
+        assert_eq!(render_state.revision, 1);
         assert_eq!(pushed.revision, 1);
         assert_eq!(pushed.frame.lines, ["pushed"]);
         assert_eq!(pushed.frame.event_cutoff, Some(9));
         assert!(pushed.invalidate_output);
 
-        let error = parse_iroh_pushed_render_snapshot(&snapshot, &mut revision)
+        let error = parse_iroh_pushed_render_snapshot(&snapshot, &mut render_state)
             .expect_err("duplicate revisions must be rejected atomically");
         assert!(error.message().contains("not monotonic"), "{error:?}");
-        assert_eq!(revision, 1);
+        assert_eq!(render_state.revision, 1);
+    }
+
+    /// Verifies a whole-row delta reconstructs the authoritative complete
+    /// frame and malformed rows leave the retained base entirely unchanged.
+    #[test]
+    fn pushed_render_row_delta_reconstructs_atomically() {
+        let snapshot = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "render/snapshot",
+            "params": {
+                "kind": "snapshot",
+                "revision": 1,
+                "event_cutoff": 4,
+                "invalidate_output": true,
+                "view": {
+                    "role": "primary",
+                    "authoritative_size": {"columns": 80, "rows": 24},
+                    "client_size": {"columns": 80, "rows": 24},
+                    "lines": ["stable", "before", "tail"],
+                    "line_style_spans": [[], [], []],
+                    "cursor": {"row": 1, "column": 6, "visible": true},
+                    "output_modes": {"application_keypad": false}
+                }
+            }
+        });
+        let mut render_state = IrohRetainedRenderState::default();
+        parse_iroh_pushed_render_snapshot(&snapshot, &mut render_state).unwrap();
+
+        let delta = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "render/delta",
+            "params": {
+                "kind": "delta",
+                "base_revision": 1,
+                "revision": 2,
+                "event_cutoff": 7,
+                "invalidate_output": false,
+                "line_count": 3,
+                "view": {
+                    "role": "primary",
+                    "authoritative_size": {"columns": 80, "rows": 24},
+                    "client_size": {"columns": 80, "rows": 24},
+                    "cursor": {"row": 1, "column": 5, "visible": true},
+                    "output_modes": {"application_keypad": false}
+                },
+                "rows": [
+                    {"index": 1, "line": "after", "style_spans": []}
+                ]
+            }
+        });
+        let retained_before_mismatch = render_state.clone();
+        let mut mismatched = delta.clone();
+        mismatched["params"]["base_revision"] = serde_json::Value::from(0);
+        let mismatch = parse_iroh_pushed_render_delta(&mismatched, &mut render_state)
+            .expect_err("a stale delta base must be rejected");
+        assert!(mismatch.message().contains("base revision"), "{mismatch:?}");
+        assert_eq!(render_state.revision, retained_before_mismatch.revision);
+        assert_eq!(render_state.view, retained_before_mismatch.view);
+
+        let decoded = parse_iroh_pushed_render_delta(&delta, &mut render_state).unwrap();
+        let pushed = decoded.pushed_snapshot.expect("delta should reconstruct");
+
+        assert_eq!(pushed.revision, 2);
+        assert_eq!(pushed.frame.lines, ["stable", "after", "tail"]);
+        assert_eq!(pushed.frame.event_cutoff, Some(7));
+        assert_eq!(render_state.revision, 2);
+
+        let retained_before_error = render_state.clone();
+        let invalid = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "render/delta",
+            "params": {
+                "kind": "delta",
+                "base_revision": 2,
+                "revision": 3,
+                "event_cutoff": 8,
+                "invalidate_output": false,
+                "line_count": 3,
+                "view": {"role": "primary"},
+                "rows": [
+                    {"index": 0, "line": "first", "style_spans": []},
+                    {"index": 0, "line": "duplicate", "style_spans": []}
+                ]
+            }
+        });
+        let error = parse_iroh_pushed_render_delta(&invalid, &mut render_state)
+            .expect_err("duplicate row indexes must be rejected atomically");
+
+        assert!(error.message().contains("duplicate row index"), "{error:?}");
+        assert_eq!(render_state.revision, retained_before_error.revision);
+        assert_eq!(render_state.view, retained_before_error.view);
+
+        let mut out_of_range = invalid;
+        out_of_range["params"]["rows"] = serde_json::json!([
+            {"index": 3, "line": "outside", "style_spans": []}
+        ]);
+        let error = parse_iroh_pushed_render_delta(&out_of_range, &mut render_state)
+            .expect_err("out-of-range rows must be rejected atomically");
+        assert!(error.message().contains("out of range"), "{error:?}");
+        assert_eq!(render_state.revision, retained_before_error.revision);
+        assert_eq!(render_state.view, retained_before_error.view);
     }
 
     /// Verifies identity, Zstandard, and LZ4 envelopes each carry one
@@ -1507,37 +1776,83 @@ mod iroh_tests {
                     .as_bytes()
                     .to_vec()
             };
-            let mut revision = 0;
+            let mut render_state = IrohRetainedRenderState::default();
             let decoded = drain_negotiated_iroh_event_frames(
                 &mut pending,
                 compression,
                 None,
                 None,
                 true,
-                &mut revision,
+                &mut render_state,
             )
             .unwrap();
             let snapshot = decoded.pushed_snapshot.expect("snapshot should decode");
             assert_eq!(snapshot.frame.lines, ["compressed pushed snapshot"]);
-            assert_eq!(revision, 1);
+            assert_eq!(render_state.revision, 1);
+            assert!(pending.is_empty());
+
+            let delta = encode_control_body(
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "render/delta",
+                    "params": {
+                        "kind": "delta",
+                        "base_revision": 1,
+                        "revision": 2,
+                        "event_cutoff": 5,
+                        "invalidate_output": false,
+                        "line_count": 1,
+                        "view": {
+                            "role": "primary",
+                            "cursor": {"row": 0, "column": 7, "visible": true},
+                            "output_modes": {}
+                        },
+                        "rows": [
+                            {"index": 0, "line": "delta through codec", "style_spans": []}
+                        ]
+                    }
+                })
+                .to_string(),
+            );
+            let mut pending = if codec == RuntimeIrohCompressionCodec::None {
+                delta
+            } else {
+                compression
+                    .encode_frame(&delta, crate::runtime::IrohFrameCompressionMode::Eligible)
+                    .unwrap()
+                    .as_bytes()
+                    .to_vec()
+            };
+            let decoded = drain_negotiated_iroh_event_frames(
+                &mut pending,
+                compression,
+                None,
+                None,
+                true,
+                &mut render_state,
+            )
+            .unwrap();
+            let delta = decoded.pushed_snapshot.expect("delta should decode");
+            assert_eq!(delta.frame.lines, ["delta through codec"]);
+            assert_eq!(render_state.revision, 2);
             assert!(pending.is_empty());
         }
 
         let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let mut revision = 0;
+        let mut render_state = IrohRetainedRenderState::default();
         let error = apply_negotiated_iroh_attach_frame(
             &value.to_string(),
             None,
             None,
             false,
-            &mut revision,
+            &mut render_state,
         )
         .expect_err("legacy render ownership must reject pushed snapshots");
         assert!(
             error.message().contains("legacy Iroh event stream"),
             "{error:?}"
         );
-        assert_eq!(revision, 0);
+        assert_eq!(render_state.revision, 0);
     }
 
     /// Verifies ready repeated-key input retains a simultaneously queued Iroh
@@ -1694,7 +2009,7 @@ mod iroh_tests {
             RuntimeIrohCompressionCodec::Zstd,
             RuntimeIrohCompressionCodec::Lz4,
         ] {
-            let mut last_render_revision = 0;
+            let mut render_state = IrohRetainedRenderState::default();
             let compression = IrohCompressionPolicy::new(
                 codec,
                 1,
@@ -1714,7 +2029,7 @@ mod iroh_tests {
                     None,
                     None,
                     false,
-                    &mut last_render_revision,
+                    &mut render_state,
                 )
                 .unwrap()
                 .action,
@@ -1728,7 +2043,7 @@ mod iroh_tests {
                     None,
                     None,
                     false,
-                    &mut last_render_revision,
+                    &mut render_state,
                 )
                 .unwrap()
                 .action,
