@@ -3528,7 +3528,7 @@ impl RuntimeSessionService {
         &mut self,
         event: ProcessEvent,
     ) -> Result<RuntimeTransition> {
-        let (applied, render_reason) = match event {
+        let (pane_id, applied, render_reason) = match event {
             ProcessEvent::Exited {
                 pane_id,
                 primary_pid,
@@ -3547,21 +3547,25 @@ impl RuntimeSessionService {
                     success: exit_code == Some(0) && signal.is_none(),
                 };
                 (
+                    pane_id.clone(),
                     self.apply_pane_process_exit_event(pane_id, primary_pid, status)?
                         .is_some(),
                     Some(RenderInvalidationReason::Layout),
                 )
             }
             ProcessEvent::Failed { pane_id, error } => (
+                pane_id.clone(),
                 self.apply_pane_process_failure_event(pane_id, error)?,
                 Some(RenderInvalidationReason::FullRedraw),
             ),
             ProcessEvent::Spawned { pane_id, pid } => (
+                pane_id.clone(),
                 self.apply_pane_process_spawn_event(pane_id, pid)?,
                 Some(RenderInvalidationReason::FullRedraw),
             ),
         };
-        let mut transition = self.runtime_transition_with_render(applied, render_reason);
+        let mut transition =
+            self.runtime_pane_transition_with_render(&pane_id, applied, render_reason);
         if applied {
             transition
                 .side_effects
