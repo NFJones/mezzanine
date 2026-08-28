@@ -313,7 +313,7 @@ fn iroh_event_render_invalidation(kind: EventKind) -> Option<bool> {
         EventKind::ClientAttached
         | EventKind::ClientDetached
         | EventKind::ConfigChanged
-        | EventKind::WindowChanged => Some(true),
+        | EventKind::WindowChanged => Some(false),
         EventKind::PaneChanged
         | EventKind::AgentStatus
         | EventKind::Message
@@ -324,6 +324,10 @@ fn iroh_event_render_invalidation(kind: EventKind) -> Option<bool> {
 }
 
 /// Classifies exact-client render side effects for primary v3 snapshot push.
+///
+/// Logical recomposition preserves the attached terminal's retained output
+/// frame. Only an exact-client geometry change makes that physical frame
+/// unsafe to use as the differential-rendering base.
 fn iroh_side_effect_render_invalidation(effects: &[super::RuntimeSideEffect]) -> Option<bool> {
     let mut render_required = false;
     let mut invalidate_output = false;
@@ -334,10 +338,7 @@ fn iroh_side_effect_render_invalidation(effects: &[super::RuntimeSideEffect]) ->
         render_required = true;
         invalidate_output |= matches!(
             reason,
-            super::RenderInvalidationReason::ResizeDrag
-                | super::RenderInvalidationReason::Resize
-                | super::RenderInvalidationReason::Layout
-                | super::RenderInvalidationReason::FullRedraw
+            super::RenderInvalidationReason::ResizeDrag | super::RenderInvalidationReason::Resize
         );
     }
     render_required.then_some(invalidate_output)
@@ -2018,6 +2019,35 @@ fn relay_mode(policy: &RuntimeIrohRelayPolicy) -> Result<RelayMode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::{RenderInvalidationReason, RuntimeSideEffect};
+
+    /// Verifies logical render triggers retain the terminal output frame while
+    /// exact-client resize effects still invalidate its unsafe geometry base.
+    #[test]
+    fn iroh_render_trigger_classification_preserves_output_except_for_resize() {
+        assert_eq!(
+            iroh_event_render_invalidation(EventKind::ClientAttached),
+            Some(false)
+        );
+        assert_eq!(
+            iroh_event_render_invalidation(EventKind::WindowChanged),
+            Some(false)
+        );
+        assert_eq!(
+            iroh_side_effect_render_invalidation(&[RuntimeSideEffect::RenderClient {
+                client_id: mez_core::ids::ClientId::new('c', 1),
+                reason: RenderInvalidationReason::Layout,
+            }]),
+            Some(false)
+        );
+        assert_eq!(
+            iroh_side_effect_render_invalidation(&[RuntimeSideEffect::RenderClient {
+                client_id: mez_core::ids::ClientId::new('c', 1),
+                reason: RenderInvalidationReason::Resize,
+            }]),
+            Some(true)
+        );
+    }
 
     /// Verifies ready render events spanning multiple actor batches are
     /// classified together so one latest-state render retains the strongest
@@ -2097,7 +2127,7 @@ mod tests {
             assert_eq!(triggers.events, 70);
             assert_eq!(triggers.last_event_id, Some(expected_last));
             assert!(triggers.render_required);
-            assert!(triggers.invalidate_output);
+            assert!(!triggers.invalidate_output);
             assert!(!triggers.classification_uncertain);
             handle.shutdown().await.unwrap();
         };

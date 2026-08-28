@@ -3316,6 +3316,15 @@ snapshot-candidate bytes, coalesced trigger counts, suppressed updates,
 snapshot fallbacks, maximum ready depth, and aggregate/max render-write wait
 without recording terminal contents.
 
+Logical render damage and physical terminal-output-cache validity are
+independent. A complete wire snapshot selected because a delta is larger, and
+ordinary pane, window, configuration, overlay, layout, or presentation changes
+MUST preserve the client’s retained terminal output frame. The client MUST
+continue to apply the normal ANSI differential renderer to that frame.
+`invalidate_output` is reserved for physical uncertainty, including initial
+presentation, the exact client’s geometry change, decoder recovery, or an
+uncertain partially committed terminal write.
+
 Each observer v3 stream MUST render with terminal geometry retained for that
 exact authenticated observer. Observer resize and disconnect state MUST be
 isolated from the primary and other observers, and reattachment MUST begin

@@ -73,6 +73,14 @@ and reconstructs the complete candidate atomically; a stale or malformed delta
 fails the stream without partially changing retained state, and reattachment
 begins with a fresh snapshot.
 
+Logical recomposition and physical terminal-output-cache validity are separate.
+An ordinary pane, window, configuration, overlay, layout, or presentation
+change—and a snapshot selected only because it is more efficient than a
+delta—preserves the attached client’s retained output frame. The client uses
+that frame as the normal ANSI differential-rendering base. `invalidate_output`
+is reserved for physical uncertainty such as first presentation, the exact
+client’s resize, decoder recovery, or uncertain partially committed output.
+
 Observer push ownership is two-sided for compatibility. The observer client
 opts in with `client.metadata.pushed_render_updates: true`, and the server
 confirms support with `capabilities.features.pushed_render_updates: true`.
