@@ -186,7 +186,13 @@ impl RuntimeSessionService {
         };
         let conversation_id = match conversation_arg {
             Some("--latest" | "latest") => {
-                let sessions = store.saved_sessions()?;
+                let sessions = store
+                    .saved_sessions()?
+                    .into_iter()
+                    .filter(|session| {
+                        session.conversation_kind == mez_agent::AgentConversationKind::Root
+                    })
+                    .collect::<Vec<_>>();
                 let Some(conversation_id) = Self::runtime_latest_agent_saved_session_id(&sessions)
                 else {
                     return Ok(AgentShellCommandOutcome::Display {
@@ -411,6 +417,7 @@ impl RuntimeSessionService {
             Some(RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory: directory.clone(),
                 default_directory: directory,
+                include_subagents: false,
             }),
         );
         Ok(AgentShellCommandOutcome::Display {
@@ -430,6 +437,15 @@ impl RuntimeSessionService {
         &self,
         directory: Option<&str>,
     ) -> Result<RecordBrowser> {
+        self.saved_sessions_record_browser_for_options(directory, false)
+    }
+
+    /// Builds the saved-session browser with independent directory and kind filters.
+    pub(crate) fn saved_sessions_record_browser_for_options(
+        &self,
+        directory: Option<&str>,
+        include_subagents: bool,
+    ) -> Result<RecordBrowser> {
         let store = self
             .persistence
             .transcript_store()
@@ -438,6 +454,10 @@ impl RuntimeSessionService {
             .saved_sessions()?
             .into_iter()
             .filter(|session| session.summary.latest_user_prompt.is_some())
+            .filter(|session| {
+                include_subagents
+                    || session.conversation_kind == mez_agent::AgentConversationKind::Root
+            })
             .filter(|session| {
                 directory
                     .is_none_or(|directory| session.summary.directory.as_deref() == Some(directory))
@@ -463,10 +483,10 @@ impl RuntimeSessionService {
         ]);
         browser.set_help(
             Some(
-                "**Keys:** `↑`/`↓` focus conversation UUID · `Enter` resume · `i` details · `a` all/current directory · `c` clear name · `d` delete · `/` search"
+                "**Keys:** `↑`/`↓` focus conversation UUID · `Enter` resume · `i` details · `a` all/current directory · `u` show/hide subagents · `c` clear name · `d` delete · `/` search"
                     .to_string(),
             ),
-            Some("**Keys:** `Esc` back · `a` all/current directory · `d` delete · `/` search".to_string()),
+            Some("**Keys:** `Esc` back · `a` all/current directory · `u` show/hide subagents · `d` delete · `/` search".to_string()),
         );
         if directory.is_some() {
             browser.enable_scope_toggle();

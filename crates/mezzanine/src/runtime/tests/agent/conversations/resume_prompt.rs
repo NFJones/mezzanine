@@ -61,6 +61,71 @@ fn runtime_agent_prompt_resume_autocompletes_saved_session_uuid() {
     );
 }
 
+/// Verifies resume completion excludes delegated child UUIDs even though
+/// direct `/resume <uuid>` remains supported by command execution.
+///
+/// Completion is a discovery surface and must follow the same root-only
+/// default as the picker and `--latest`.
+#[test]
+fn runtime_agent_prompt_resume_completion_excludes_subagent_uuid() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-resume-child"));
+    let child_id = "018f6b3a-1b2c-7000-9000-delegated001";
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: child_id.to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-child".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "delegated prompt".to_string(),
+        })
+        .unwrap();
+    transcript_store
+        .save_conversation_kind(child_id, mez_agent::AgentConversationKind::Subagent)
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.request_agent_prompt_selector_extra_candidates_refresh("%1");
+    service.complete_agent_prompt_selector_refresh_for_tests("%1");
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![
+                    TerminalClientLoopAction::ForwardToPane(b"/resume 018f".to_vec()),
+                    TerminalClientLoopAction::ForwardToPane(b"\t".to_vec()),
+                ],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .agent_prompt_inputs_for_tests()
+            .get("%1")
+            .unwrap()
+            .prompt
+            .buffer
+            .line(),
+        "/resume 018f"
+    );
+}
+
 /// Verifies later prompt input retains selector candidates loaded by the first
 /// keystroke instead of rereading saved transcripts on every input batch.
 #[test]

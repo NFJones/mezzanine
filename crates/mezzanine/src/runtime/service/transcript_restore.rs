@@ -222,6 +222,7 @@ impl RuntimeSessionService {
             let mut target_session = AgentShellSession {
                 session_id: conversation_id.clone(),
                 pane_id: pane_id.clone(),
+                conversation_kind: mez_agent::AgentConversationKind::Root,
                 prompt_cache_lineage_id: metadata.prompt_cache_lineage_id.clone(),
                 visibility,
                 running_turn_id: None,
@@ -456,6 +457,7 @@ impl RuntimeSessionService {
             .agent_shell_store()
             .sessions()
             .filter(|session| runtime_pane_by_id(&self.session, &session.pane_id).is_ok())
+            .filter(|session| session.conversation_kind == mez_agent::AgentConversationKind::Root)
             .filter(|session| {
                 session
                     .running_turn_id

@@ -574,9 +574,15 @@ impl RuntimeSessionService {
     ) -> Result<RecordBrowser> {
         match source {
             RuntimeRecordBrowserOverlaySource::Approvals => self.approval_record_browser(),
-            RuntimeRecordBrowserOverlaySource::SavedSessions { directory, .. } => {
-                let mut browser =
-                    self.saved_sessions_record_browser_for_directory(directory.as_deref())?;
+            RuntimeRecordBrowserOverlaySource::SavedSessions {
+                directory,
+                include_subagents,
+                ..
+            } => {
+                let mut browser = self.saved_sessions_record_browser_for_options(
+                    directory.as_deref(),
+                    *include_subagents,
+                )?;
                 browser.enable_scope_toggle();
                 Ok(browser)
             }
@@ -688,6 +694,7 @@ impl RuntimeSessionService {
             RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory,
                 default_directory,
+                include_subagents,
             } => RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory: if directory.is_some() {
                     None
@@ -695,6 +702,7 @@ impl RuntimeSessionService {
                     default_directory.clone()
                 },
                 default_directory: default_directory.clone(),
+                include_subagents: *include_subagents,
             },
             RuntimeRecordBrowserOverlaySource::Personalities { .. } => source.clone(),
             RuntimeRecordBrowserOverlaySource::Context { .. } => source.clone(),
@@ -738,6 +746,25 @@ impl RuntimeSessionService {
                 text: text.clone(),
                 limit: *limit,
             },
+        }
+    }
+
+    /// Toggles delegated child conversations in the saved-session browser.
+    pub(crate) fn record_browser_source_toggled_subagents(
+        &self,
+        source: &RuntimeRecordBrowserOverlaySource,
+    ) -> RuntimeRecordBrowserOverlaySource {
+        match source {
+            RuntimeRecordBrowserOverlaySource::SavedSessions {
+                directory,
+                default_directory,
+                include_subagents,
+            } => RuntimeRecordBrowserOverlaySource::SavedSessions {
+                directory: directory.clone(),
+                default_directory: default_directory.clone(),
+                include_subagents: !include_subagents,
+            },
+            _ => source.clone(),
         }
     }
 

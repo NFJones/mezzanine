@@ -7009,6 +7009,18 @@ user explicitly approves a scope change.
 
 Spawned agents MUST be discoverable through the local message passing protocol.
 
+Spawned subagent conversations MUST be durable saved conversations with a
+canonical subagent classification distinct from root conversations. Their
+transcripts, interrupted turns, and presentation history MUST persist under the
+same retention rules as other unnamed conversations. Each saved conversation
+directory MUST store a versioned classification sidecar; readers MUST treat a
+missing sidecar as a legacy root conversation and MUST reject malformed or
+unsupported metadata rather than silently exposing it as root. Subagent
+conversations MUST NOT be restored as historical child panes or parent/child
+orchestration authority through active-session checkpoints. An explicit
+`/resume <subagent-uuid>` MUST instead load the durable conversation into the
+requesting pane as an ordinary resumed conversation.
+
 The parent agent MUST receive status and final output from spawned agents
 through the local message passing protocol. The controlling pane MAY receive
 visible status lines so the user can monitor subagent work without switching
@@ -10200,8 +10212,11 @@ metadata checkpoint. This checkpoint MUST be metadata-only: it MAY contain the
 Mezzanine session id, pane id, active conversation id, visibility state, active
 turn id, known transcript-entry count, log level, model-profile selection, plan
 mode, and response style. It MUST NOT duplicate model request context, terminal
-screens, passive pane output, provider credentials, action feedback, or
-transcript excerpts. If a checkpoint records an active turn that cannot be
+screens, passive pane output, presentation history, provider credentials,
+action feedback, transcript excerpts, or durable subagent pane bindings.
+Durable subagent conversations MUST remain resumable by explicit UUID without
+restoring child pane placement, lineage authority, or parent/child orchestration
+state. If a checkpoint records an active turn that cannot be
 reconnected after restart, Mezzanine MUST restore the conversation binding but
 MUST mark the turn as interrupted and require a fresh user action to retry.
 
@@ -10230,13 +10245,19 @@ MUST NOT copy the source name.
 The `/resume` command MUST provide an interactive picker for saved
 conversations or snapshots. Its default conversation view MUST be scoped to the
 active pane directory when known, and `a` MUST toggle to or from all directories.
+Durable subagent conversations MUST be excluded from the default picker, and
+`u` MUST independently toggle whether subagent conversations are included
+without changing the active directory scope. Picker refreshes after either
+toggle MUST preserve the selected conversation UUID when that conversation
+remains visible.
 Agent prompt completion for `/resume` MUST include
-saved conversation UUIDs from the active transcript store, including named
-conversations with no transcript entries. The picker MUST place named
-conversations before UUID-only conversations and MUST order each partition by
-most recent activity. Named rows MUST render as `<uuid> - <name>` while keeping
+root-conversation UUIDs from the active transcript store, including named root
+conversations with no transcript entries, and MUST exclude subagent UUIDs. The
+picker MUST place named conversations before UUID-only conversations and MUST
+order each partition by most recent activity. Named rows MUST render as
+`<uuid> - <name>` while keeping
 the name outside the UUID command link. `/resume --latest` MUST select by most
-recent activity across all saved conversations without applying the
+recent activity across saved root conversations without applying the
 named-first picker partition.
 The active transcript store MUST retain at most the configured most recent
 unnamed saved agent conversations for `/resume`; older unnamed conversations

@@ -489,12 +489,18 @@ impl RuntimeSessionService {
             .session_id
             .clone();
         self.agent_shell_store_mut()
-            .bind_ephemeral_conversation_with_lineage(
+            .bind_subagent_conversation_with_lineage(
                 &started.pane_id,
-                child_conversation_id,
+                child_conversation_id.clone(),
                 0,
                 None,
             )?;
+        if let Some(store) = self.persistence.cloned_transcript_store() {
+            store.save_conversation_kind(
+                &child_conversation_id,
+                mez_agent::AgentConversationKind::Subagent,
+            )?;
+        }
         if let Err(error) = self.enter_runtime_owned_agent_mode_for_pane(&started.pane_id) {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error);

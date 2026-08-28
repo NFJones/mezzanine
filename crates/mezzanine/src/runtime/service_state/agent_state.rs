@@ -99,6 +99,8 @@ pub(crate) enum RuntimeRecordBrowserOverlaySource {
         directory: Option<String>,
         /// Active pane directory restored when the all-sessions view is toggled off.
         default_directory: Option<String>,
+        /// Whether delegated child conversations are included in discovery.
+        include_subagents: bool,
     },
     /// Configured personality profiles selectable for one pane.
     Personalities {

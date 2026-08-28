@@ -340,6 +340,39 @@ impl RuntimeSessionService {
                 )));
             }
         }
+        if input == b"u"
+            && matches!(
+                record_browser.source,
+                Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
+            )
+        {
+            let source = record_browser.source.clone();
+            if let Some(source) = source {
+                let active_record_id = record_browser
+                    .browser
+                    .active_record_id()
+                    .map(str::to_string);
+                let source = self.record_browser_source_toggled_subagents(&source);
+                let mut browser = self.refresh_record_browser_overlay_source(&source)?;
+                if let Some(record_id) = active_record_id.as_deref() {
+                    browser.set_active_record_id(record_id);
+                }
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                    return Ok(Some(false));
+                };
+                let Some(record_browser) = overlay.record_browser.as_mut() else {
+                    return Ok(None);
+                };
+                record_browser.source = Some(source);
+                record_browser.browser = browser;
+                return Ok(Some(render_record_browser_overlay(
+                    overlay,
+                    &self.presentation.settings.ui_theme,
+                    terminal_width,
+                    prose_width,
+                )));
+            }
+        }
         if input == b"r"
             && matches!(
                 record_browser.source,

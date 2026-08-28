@@ -382,6 +382,106 @@ fn runtime_resume_browser_filters_current_directory_and_toggles_all_sessions() {
     assert_eq!(scoped_record_ids, vec!["current-directory"]);
 }
 
+/// Verifies delegated conversations are hidden from discovery by default,
+/// independently toggleable with `u`, excluded from `--latest`, and still
+/// directly resumable by conversation UUID.
+///
+/// Persisting child work must not make it look like a root conversation, while
+/// explicit recovery remains available when the caller already knows its id.
+#[test]
+fn runtime_resume_hides_subagents_but_allows_toggle_and_direct_resume() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-subagents"));
+    for (conversation_id, created_at, content) in [
+        ("root-session", 10, "continue root work"),
+        ("child-session", 20, "continue delegated work"),
+    ] {
+        transcript_store
+            .append(&TranscriptEntry {
+                conversation_id: conversation_id.to_string(),
+                sequence: 1,
+                created_at_unix_seconds: created_at,
+                role: TranscriptRole::User,
+                turn_id: format!("turn-{conversation_id}"),
+                agent_id: "agent-%9".to_string(),
+                pane_id: "%9".to_string(),
+                content: content.to_string(),
+            })
+            .unwrap();
+    }
+    transcript_store
+        .save_conversation_kind("child-session", mez_agent::AgentConversationKind::Subagent)
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/resume")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests("%1", &response)
+        .unwrap();
+    let browser = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .expect("resume picker should open");
+    assert_eq!(browser.browser.active_record_id(), Some("root-session"));
+    assert_eq!(browser.browser.records().len(), 1);
+
+    service
+        .apply_primary_display_overlay_input(&primary, b"u")
+        .unwrap();
+    let browser = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .expect("subagent-inclusive picker should remain open");
+    assert_eq!(browser.browser.active_record_id(), Some("root-session"));
+    assert_eq!(
+        browser
+            .browser
+            .records()
+            .iter()
+            .map(|record| record.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["child-session", "root-session"]
+    );
+
+    service
+        .apply_primary_display_overlay_input(&primary, b"u")
+        .unwrap();
+    let browser = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .expect("root-only picker should remain open");
+    assert_eq!(browser.browser.active_record_id(), Some("root-session"));
+    assert_eq!(browser.browser.records().len(), 1);
+
+    let latest = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"latest-root","method":"agent/shell/command","params":{"idempotency_key":"latest-root","input":"/resume --latest"}}"#,
+        &primary,
+    );
+    assert!(latest.contains("conversation_id=root-session"), "{latest}");
+
+    let direct = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"direct-child","method":"agent/shell/command","params":{"idempotency_key":"direct-child","input":"/resume child-session"}}"#,
+        &primary,
+    );
+    assert!(direct.contains("conversation_id=child-session"), "{direct}");
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .map(|session| session.session_id.as_str()),
+        Some("child-session")
+    );
+}
+
 /// Verifies `/resume` lists only conversations that retain a user prompt.
 ///
 /// Routed workers and presentation-only records can leave durable directories
@@ -713,6 +813,7 @@ fn runtime_resume_browser_rejects_deleting_active_sessions() {
             &crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory: None,
                 default_directory: None,
+                include_subagents: false,
             },
             "active-saved",
             0,

@@ -497,14 +497,14 @@ fn runtime_subagent_default_preferences_do_not_create_overrides() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies spawned subagent conversations remain runtime-only and are excluded
-/// from `/resume` saved-session results.
+/// Verifies spawned subagent conversations are durable, classified separately,
+/// and excluded from default `/resume` saved-session results.
 ///
-/// Subagents carry out delegated work for a parent conversation, not separate
-/// user-resumable threads. Persisting their pane binding made the resume picker
-/// offer child sessions that lack the parent interaction context.
+/// Subagents retain delegated work for direct UUID recovery, but default resume
+/// discovery must not offer child sessions that lack the parent interaction
+/// context.
 #[test]
-fn runtime_subagent_sessions_are_not_saved_for_resume() {
+fn runtime_subagent_sessions_are_durable_but_hidden_from_resume() {
     let mut service = test_runtime_service();
     let transcript_store = AgentTranscriptStore::new(temp_root("subagent-not-resumable"));
     service.set_agent_transcript_store(transcript_store.clone());
@@ -551,13 +551,43 @@ fn runtime_subagent_sessions_are_not_saved_for_resume() {
         .to_string();
     let child_session = service.agent_shell_store().get(&child_pane_id).unwrap();
 
-    assert!(child_session.ephemeral);
+    assert!(!child_session.ephemeral);
+    assert_eq!(
+        child_session.conversation_kind,
+        mez_agent::AgentConversationKind::Subagent
+    );
+    assert_eq!(
+        transcript_store
+            .conversation_kind(&child_session.session_id)
+            .unwrap(),
+        mez_agent::AgentConversationKind::Subagent
+    );
+    let child_conversation_id = child_session.session_id.clone();
+    let saved_child = transcript_store
+        .saved_sessions()
+        .unwrap()
+        .into_iter()
+        .find(|session| session.summary.conversation_id == child_conversation_id)
+        .expect("durable subagent session should be retained in storage");
+    assert_eq!(
+        saved_child.conversation_kind,
+        mez_agent::AgentConversationKind::Subagent
+    );
+    assert!(
+        service
+            .saved_sessions_record_browser()
+            .unwrap()
+            .records()
+            .iter()
+            .all(|record| record.id != child_conversation_id)
+    );
+    service.checkpoint_agent_session_metadata().unwrap();
     assert!(
         transcript_store
-            .saved_sessions()
+            .load_agent_session_metadata(service.session().id.as_str())
             .unwrap()
             .iter()
-            .all(|session| session.summary.conversation_id != child_session.session_id)
+            .all(|metadata| metadata.conversation_id != child_conversation_id)
     );
     service.terminate_all_pane_processes().unwrap();
 }

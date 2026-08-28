@@ -28,6 +28,7 @@ use super::fs::{
 use super::types::{
     AgentPresentationEntry, AgentTranscriptStore, NamedAgentSession, SavedAgentSession,
 };
+use mez_agent::AgentConversationKind;
 use mez_agent::transcript::{
     AgentSessionMetadata, ConversationSummary, TranscriptEntry, TranscriptRole,
     bounded_summary_text, summarize_conversation, validate_conversation_id,
@@ -44,6 +45,10 @@ const SESSION_TRANSCRIPT_FILE_NAME: &str = "history.tsv";
 /// The file stores one JSON object with list/resume metadata so saved-session
 /// pickers do not need to decode full transcript histories.
 const SESSION_SUMMARY_FILE_NAME: &str = "summary.json";
+/// Defines the versioned durable conversation classification sidecar.
+const SESSION_METADATA_FILE_NAME: &str = "metadata.json";
+/// Current per-conversation metadata schema version.
+const SESSION_METADATA_VERSION: u64 = 1;
 /// Defines the SESSION PRESENTATION FILE NAME const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -203,6 +208,70 @@ impl AgentTranscriptStore {
             bytes = bytes.saturating_add(self.append_one(entry)?);
         }
         Ok(bytes)
+    }
+
+    /// Persists the durable origin classification for one conversation.
+    pub fn save_conversation_kind(
+        &self,
+        conversation_id: &str,
+        kind: AgentConversationKind,
+    ) -> Result<()> {
+        let session_dir = self.ensure_session_dir(conversation_id)?;
+        let path = session_dir.join(SESSION_METADATA_FILE_NAME);
+        let temp_path = session_dir.join(".metadata.json.tmp");
+        let kind = match kind {
+            AgentConversationKind::Root => "root",
+            AgentConversationKind::Subagent => "subagent",
+        };
+        let encoded = serde_json::to_vec(&serde_json::json!({
+            "version": SESSION_METADATA_VERSION,
+            "conversation_kind": kind,
+        }))
+        .map_err(|error| {
+            MezError::invalid_args(format!("conversation metadata encode failed: {error}"))
+        })?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&temp_path)?;
+        file.write_all(&encoded)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        set_private_file_permissions(&temp_path)?;
+        std_fs::rename(&temp_path, &path)?;
+        set_private_file_permissions(&path)?;
+        Ok(())
+    }
+
+    /// Loads one conversation's durable origin, defaulting legacy sessions to root.
+    pub fn conversation_kind(&self, conversation_id: &str) -> Result<AgentConversationKind> {
+        let path = self.conversation_metadata_path_for(conversation_id)?;
+        if !path.exists() {
+            return Ok(AgentConversationKind::Root);
+        }
+        let data = std_fs::read(&path)?;
+        let value = serde_json::from_slice::<serde_json::Value>(&data).map_err(|error| {
+            MezError::invalid_args(format!("conversation metadata decode failed: {error}"))
+        })?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| MezError::invalid_args("conversation metadata must be a JSON object"))?;
+        if object.get("version").and_then(serde_json::Value::as_u64)
+            != Some(SESSION_METADATA_VERSION)
+        {
+            return Err(MezError::invalid_args(
+                "unsupported conversation metadata version",
+            ));
+        }
+        match object
+            .get("conversation_kind")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("root") => Ok(AgentConversationKind::Root),
+            Some("subagent") => Ok(AgentConversationKind::Subagent),
+            _ => Err(MezError::invalid_args("invalid conversation metadata kind")),
+        }
     }
 
     /// Appends multiple validated transcript entries through Tokio filesystem
@@ -654,13 +723,17 @@ impl AgentTranscriptStore {
         let mut saved = self
             .list()?
             .into_iter()
-            .map(|summary| SavedAgentSession {
-                name: names
-                    .get(&summary.conversation_id)
-                    .map(|session| session.name.clone()),
-                summary,
+            .map(|summary| {
+                let conversation_kind = self.conversation_kind(&summary.conversation_id)?;
+                Ok(SavedAgentSession {
+                    name: names
+                        .get(&summary.conversation_id)
+                        .map(|session| session.name.clone()),
+                    summary,
+                    conversation_kind,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let transcript_ids = saved
             .iter()
             .map(|session| session.summary.conversation_id.clone())
@@ -708,6 +781,7 @@ impl AgentTranscriptStore {
                     name: names
                         .get(&conversation_id)
                         .map(|session| session.name.clone()),
+                    conversation_kind: self.conversation_kind(&conversation_id)?,
                 });
             }
         }
@@ -732,6 +806,7 @@ impl AgentTranscriptStore {
                     latest_user_prompt: None,
                 },
                 name: Some(named.name.clone()),
+                conversation_kind: self.conversation_kind(&named.conversation_id)?,
             });
         }
         saved.sort_by(|left, right| {
@@ -1582,6 +1657,13 @@ impl AgentTranscriptStore {
         Ok(self
             .session_dir_for(conversation_id)?
             .join(SESSION_TRANSCRIPT_FILE_NAME))
+    }
+
+    /// Returns the durable conversation metadata sidecar path.
+    fn conversation_metadata_path_for(&self, conversation_id: &str) -> Result<PathBuf> {
+        Ok(self
+            .session_dir_for(conversation_id)?
+            .join(SESSION_METADATA_FILE_NAME))
     }
 
     /// Runs the presentation path for operation for this subsystem.

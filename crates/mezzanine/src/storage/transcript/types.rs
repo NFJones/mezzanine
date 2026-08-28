@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use mez_agent::AgentConversationKind;
 use mez_agent::transcript::ConversationSummary;
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +34,8 @@ pub struct SavedAgentSession {
     pub summary: ConversationSummary,
     /// User-assigned display name, when present.
     pub name: Option<String>,
+    /// Durable origin classification used by resume discovery filters.
+    pub conversation_kind: AgentConversationKind,
 }
 
 /// One durable user-visible agent transcript presentation entry.

@@ -144,6 +144,20 @@ impl AgentLogLevel {
     }
 }
 
+/// Classifies the durable origin of an agent conversation.
+///
+/// Conversation kind is independent of ephemeral runtime attempts: both root
+/// and subagent conversations may be durable, while loop-owned attempts remain
+/// excluded from persistence through the separate `ephemeral` flag.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AgentConversationKind {
+    /// User-owned root conversation shown by default in resume discovery.
+    #[default]
+    Root,
+    /// Durable delegated child conversation hidden from default discovery.
+    Subagent,
+}
+
 /// Carries Agent Shell Session state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -160,6 +174,8 @@ pub struct AgentShellSession {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub pane_id: String,
+    /// Durable origin classification for this conversation.
+    pub conversation_kind: AgentConversationKind,
     /// Stores the prompt-cache lineage id value for this data structure.
     ///
     /// The lineage remains stable across resume or inherited fork flows so
@@ -208,6 +224,8 @@ pub struct AgentShellSession {
 struct AgentShellConversationPersistence {
     /// Whether this binding is runtime-only.
     ephemeral: bool,
+    /// Durable origin classification retained independently of persistence.
+    conversation_kind: AgentConversationKind,
     /// Durable conversation id used to seed ephemeral transcript context.
     transcript_source_conversation_id: Option<String>,
     /// Number of durable transcript entries available from the source.
@@ -216,9 +234,10 @@ struct AgentShellConversationPersistence {
 
 impl AgentShellConversationPersistence {
     /// Builds the policy for a durable, resumable pane conversation binding.
-    fn durable() -> Self {
+    fn durable(conversation_kind: AgentConversationKind) -> Self {
         Self {
             ephemeral: false,
+            conversation_kind,
             transcript_source_conversation_id: None,
             transcript_source_entries: 0,
         }
@@ -231,6 +250,7 @@ impl AgentShellConversationPersistence {
     ) -> Self {
         Self {
             ephemeral: true,
+            conversation_kind: AgentConversationKind::Root,
             transcript_source_conversation_id,
             transcript_source_entries,
         }
@@ -268,6 +288,7 @@ impl AgentShellStore {
                 AgentShellSession {
                     session_id: new_agent_session_uuid(),
                     pane_id: pane_id.clone(),
+                    conversation_kind: AgentConversationKind::Root,
                     prompt_cache_lineage_id: new_agent_session_uuid(),
                     visibility: AgentShellVisibility::Hidden,
                     running_turn_id: None,
@@ -460,7 +481,7 @@ impl AgentShellStore {
             conversation_id,
             transcript_entries,
             prompt_cache_lineage_id,
-            AgentShellConversationPersistence::durable(),
+            AgentShellConversationPersistence::durable(AgentConversationKind::Root),
         )
     }
 
@@ -508,11 +529,33 @@ impl AgentShellStore {
             session.prompt_cache_lineage_id = lineage_id;
         }
         session.transcript_entries = transcript_entries;
+        session.conversation_kind = AgentConversationKind::Root;
         session.ephemeral = false;
         session.ephemeral_transcript_source_conversation_id = None;
         session.ephemeral_transcript_source_entries = 0;
         session.visibility = AgentShellVisibility::Visible;
         Ok(session)
+    }
+
+    /// Binds a pane to one durable delegated child conversation.
+    ///
+    /// Subagent conversations persist transcripts and presentation history but
+    /// retain a distinct origin so default resume discovery and active-pane
+    /// checkpoint restoration can exclude them independently.
+    pub fn bind_subagent_conversation_with_lineage(
+        &mut self,
+        pane_id: &str,
+        conversation_id: impl Into<String>,
+        transcript_entries: u64,
+        prompt_cache_lineage_id: Option<String>,
+    ) -> AgentShellSessionResult<&AgentShellSession> {
+        self.bind_conversation_with_lineage_and_persistence(
+            pane_id,
+            conversation_id,
+            transcript_entries,
+            prompt_cache_lineage_id,
+            AgentShellConversationPersistence::durable(AgentConversationKind::Subagent),
+        )
     }
 
     /// Binds a pane to one runtime-only conversation while optionally
@@ -593,6 +636,7 @@ impl AgentShellStore {
             session.prompt_cache_lineage_id = lineage_id;
         }
         session.transcript_entries = transcript_entries;
+        session.conversation_kind = persistence.conversation_kind;
         session.ephemeral = persistence.ephemeral;
         session.ephemeral_transcript_source_conversation_id = if persistence.ephemeral {
             persistence.transcript_source_conversation_id
@@ -669,6 +713,7 @@ impl AgentShellStore {
             AgentShellSession {
                 session_id: new_agent_session_uuid(),
                 pane_id: pane_id.to_string(),
+                conversation_kind: AgentConversationKind::Root,
                 prompt_cache_lineage_id: new_agent_session_uuid(),
                 visibility: AgentShellVisibility::Visible,
                 running_turn_id: None,
@@ -1182,6 +1227,30 @@ mod tests {
             store.get("%1").unwrap().running_turn_id.as_deref(),
             Some("turn-current")
         );
+    }
+
+    /// Verifies durable child binding preserves persistence while recording a
+    /// subagent origin distinct from ordinary root conversations.
+    #[test]
+    fn agent_shell_binds_durable_subagent_conversation_kind() {
+        let mut store = AgentShellStore::default();
+        store.enter_or_resume("%1").unwrap();
+
+        let child = store
+            .bind_subagent_conversation_with_lineage(
+                "%1",
+                "conversation-child",
+                3,
+                Some("lineage-child".to_string()),
+            )
+            .unwrap();
+
+        assert_eq!(child.session_id, "conversation-child");
+        assert_eq!(child.conversation_kind, AgentConversationKind::Subagent);
+        assert_eq!(child.transcript_entries, 3);
+        assert_eq!(child.prompt_cache_lineage_id, "lineage-child");
+        assert!(!child.ephemeral);
+        assert!(child.ephemeral_transcript_source_conversation_id.is_none());
     }
 
     /// Verifies that hiding an agent shell immediately returns pane input focus

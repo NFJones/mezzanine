@@ -113,6 +113,63 @@ fn transcript_store_appends_lists_inspects_and_deletes_conversations() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies conversation-kind metadata round trips, legacy sessions default to
+/// root, malformed sidecars fail closed, and deletion removes the sidecar.
+///
+/// Resume discovery depends on this classification, so corrupt metadata must
+/// never silently expose a delegated child as an ordinary root conversation.
+#[test]
+fn transcript_store_persists_validates_and_deletes_conversation_kind() {
+    let root = temp_root("conversation-kind");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("legacy-root", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .append(&entry("durable-child", 1, TranscriptRole::User))
+        .unwrap();
+
+    assert_eq!(
+        store.conversation_kind("legacy-root").unwrap(),
+        mez_agent::AgentConversationKind::Root
+    );
+    store
+        .save_conversation_kind("durable-child", mez_agent::AgentConversationKind::Subagent)
+        .unwrap();
+    assert_eq!(
+        store.conversation_kind("durable-child").unwrap(),
+        mez_agent::AgentConversationKind::Subagent
+    );
+    assert_eq!(
+        store
+            .saved_sessions()
+            .unwrap()
+            .into_iter()
+            .find(|session| session.summary.conversation_id == "durable-child")
+            .unwrap()
+            .conversation_kind,
+        mez_agent::AgentConversationKind::Subagent
+    );
+
+    fs::write(
+        root.join("durable-child").join("metadata.json"),
+        b"{\"version\":1,\"conversation_kind\":\"unknown\"}\n",
+    )
+    .unwrap();
+    let error = store.conversation_kind("durable-child").unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(
+        error
+            .message()
+            .contains("invalid conversation metadata kind")
+    );
+
+    assert!(store.delete("durable-child").unwrap());
+    assert!(!root.join("durable-child").join("metadata.json").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies oversized presentation tails are moved into concatenated zstd
 /// frames while later cleartext appends remain replayable after them.
 #[test]
