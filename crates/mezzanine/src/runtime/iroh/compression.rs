@@ -336,9 +336,37 @@ impl IrohCompressionPolicy {
         })
     }
 
-    /// Returns ALPNs for configured codecs in exact preference order.
+    /// Returns configured codecs with stateful variants before frame codecs.
+    ///
+    /// This preserves configured order within each class while ensuring a
+    /// mutually supported version 3 codec is attempted before version 2.
+    pub(crate) fn negotiation_codecs(
+        codecs: &[RuntimeIrohCompressionCodec],
+    ) -> impl Iterator<Item = RuntimeIrohCompressionCodec> + '_ {
+        codecs
+            .iter()
+            .copied()
+            .filter(|codec| {
+                matches!(
+                    codec,
+                    RuntimeIrohCompressionCodec::ZstdStream
+                        | RuntimeIrohCompressionCodec::Lz4Stream
+                )
+            })
+            .chain(codecs.iter().copied().filter(|codec| {
+                !matches!(
+                    codec,
+                    RuntimeIrohCompressionCodec::ZstdStream
+                        | RuntimeIrohCompressionCodec::Lz4Stream
+                )
+            }))
+    }
+
+    /// Returns ALPNs in deterministic streaming-first negotiation order.
     pub(crate) fn ordered_alpns(codecs: &[RuntimeIrohCompressionCodec]) -> Vec<Vec<u8>> {
-        codecs.iter().map(|codec| codec.alpn().to_vec()).collect()
+        Self::negotiation_codecs(codecs)
+            .map(|codec| codec.alpn().to_vec())
+            .collect()
     }
 
     /// Returns the fixed number of bytes required to inspect one v2 header.
@@ -1964,15 +1992,15 @@ mod tests {
         println!("{report}");
     }
 
-    /// Verifies codec preference maps directly to deterministic ALPN order and
-    /// unknown negotiated values are rejected rather than guessed.
+    /// Verifies streaming codecs precede their frame-based alternatives during
+    /// negotiation and unknown negotiated values are rejected rather than guessed.
     #[test]
     fn codec_alpns_are_closed_and_ordered() {
         let codecs = [
+            RuntimeIrohCompressionCodec::Zstd,
+            RuntimeIrohCompressionCodec::Lz4,
             RuntimeIrohCompressionCodec::Lz4Stream,
             RuntimeIrohCompressionCodec::ZstdStream,
-            RuntimeIrohCompressionCodec::Lz4,
-            RuntimeIrohCompressionCodec::Zstd,
             RuntimeIrohCompressionCodec::None,
         ];
         assert_eq!(
@@ -1980,8 +2008,8 @@ mod tests {
             vec![
                 MEZZANINE_IROH_LZ4_STREAM_ALPN.to_vec(),
                 MEZZANINE_IROH_ZSTD_STREAM_ALPN.to_vec(),
-                MEZZANINE_IROH_LZ4_ALPN.to_vec(),
                 MEZZANINE_IROH_ZSTD_ALPN.to_vec(),
+                MEZZANINE_IROH_LZ4_ALPN.to_vec(),
                 super::super::MEZZANINE_IROH_ALPN.to_vec(),
             ]
         );

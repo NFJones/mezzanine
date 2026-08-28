@@ -1994,7 +1994,7 @@ async fn connect_iroh_with_compression(
         .ok_or_else(|| MezError::invalid_state("Iroh control frame limit overflow"))?;
     let mut last_error = None;
     let mut timed_out = false;
-    for codec in &policy.compression_codecs {
+    for codec in IrohCompressionPolicy::negotiation_codecs(&policy.compression_codecs) {
         match tokio::time::timeout(
             policy.setup_timeout,
             endpoint.connect(target.server_addr().clone(), codec.alpn()),
@@ -2003,7 +2003,7 @@ async fn connect_iroh_with_compression(
         {
             Ok(Ok(connection)) => {
                 let compression = IrohCompressionPolicy::new(
-                    *codec,
+                    codec,
                     policy.compression_min_bytes,
                     policy.compression_zstd_level,
                     max_decoded_bytes,

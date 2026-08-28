@@ -3070,9 +3070,11 @@ would expand, and credential-bearing initialization requests or responses MUST
 use identity envelopes. Codec retry is permitted only before a stream is
 opened or initialization data is written; application bytes MUST NOT be
 replayed after an ambiguous failure. Servers MUST advertise the configured
-codec ALPNs in deterministic order. Clients MUST attempt that order before
-opening an application stream, MUST retain the selected codec for the complete
-connection lifetime, and MUST fail closed when no configured codec is mutual.
+codec ALPNs in deterministic order, with streaming codecs before their
+non-streaming alternatives while preserving configured order within each
+class. Clients MUST attempt that order before opening an application stream,
+MUST retain the selected codec for the complete connection lifetime, and MUST
+fail closed when no configured codec is mutual.
 Control requests and responses in both directions and event or client-effect
 frames after the negotiated event-stream preface MUST use the selected
 connection-local framing.
