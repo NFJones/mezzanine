@@ -117,7 +117,7 @@ impl RuntimeSessionService {
             .is_ok();
         let render_reason = (!matches!(event, mez_agent::StreamingSayEvent::TextComplete { .. }))
             .then_some(crate::runtime::RenderInvalidationReason::PaneOutput);
-        self.runtime_transition_with_render(applied, render_reason)
+        self.runtime_pane_transition_with_render(pane_id, applied, render_reason)
     }
 
     /// Applies provider completion through the transport-neutral transition contract.
