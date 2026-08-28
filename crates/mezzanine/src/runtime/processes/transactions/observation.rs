@@ -1140,7 +1140,8 @@ impl RuntimeSessionService {
                         json_escape(&observation.observation_id)
                     ),
                 )?;
-                return Ok(self.runtime_transition_with_render(
+                return Ok(self.runtime_pane_transition_with_render(
+                    &instance.pane_id,
                     true,
                     Some(RenderInvalidationReason::PaneOutput),
                 ));
@@ -1206,8 +1207,11 @@ impl RuntimeSessionService {
                     json_escape(&observation.observation_id)
                 ),
             )?;
-            return Ok(self
-                .runtime_transition_with_render(true, Some(RenderInvalidationReason::FullRedraw)));
+            return Ok(self.runtime_pane_transition_with_render(
+                &instance.pane_id,
+                true,
+                Some(RenderInvalidationReason::FullRedraw),
+            ));
         }
         if let Some(pending) = self
             .process
@@ -1248,7 +1252,8 @@ impl RuntimeSessionService {
                         pending.action_id
                     ),
                 )?;
-                return Ok(self.runtime_transition_with_render(
+                return Ok(self.runtime_pane_transition_with_render(
+                    &instance.pane_id,
                     true,
                     Some(RenderInvalidationReason::PaneOutput),
                 ));
@@ -1272,7 +1277,8 @@ impl RuntimeSessionService {
                         pending.action_id
                     ),
                 )?;
-                return Ok(self.runtime_transition_with_render(
+                return Ok(self.runtime_pane_transition_with_render(
+                    &instance.pane_id,
                     true,
                     Some(RenderInvalidationReason::PaneOutput),
                 ));
@@ -1300,8 +1306,11 @@ impl RuntimeSessionService {
                     pending.action_id, confirmations, deadline_exhausted, process_group_id
                 ),
             )?;
-            return Ok(self
-                .runtime_transition_with_render(true, Some(RenderInvalidationReason::PaneOutput)));
+            return Ok(self.runtime_pane_transition_with_render(
+                &instance.pane_id,
+                true,
+                Some(RenderInvalidationReason::PaneOutput),
+            ));
         }
         if let Some(pending) = self
             .process
@@ -1331,8 +1340,11 @@ impl RuntimeSessionService {
                 &pending.marker,
                 &instance.pane_id,
             )?;
-            return Ok(self
-                .runtime_transition_with_render(true, Some(RenderInvalidationReason::PaneOutput)));
+            return Ok(self.runtime_pane_transition_with_render(
+                &instance.pane_id,
+                true,
+                Some(RenderInvalidationReason::PaneOutput),
+            ));
         }
         let Some(pending) = self
             .process
@@ -1418,7 +1430,11 @@ impl RuntimeSessionService {
             | RuntimeAgentSubshellCertificationOutcome::Pending => {}
         }
         self.resume_after_bootstrap_settlement(&instance.pane_id)?;
-        Ok(self.runtime_transition_with_render(true, Some(RenderInvalidationReason::FullRedraw)))
+        Ok(self.runtime_pane_transition_with_render(
+            &instance.pane_id,
+            true,
+            Some(RenderInvalidationReason::FullRedraw),
+        ))
     }
 
     /// Requests one fresh, instance-correlated foreground observation for a
