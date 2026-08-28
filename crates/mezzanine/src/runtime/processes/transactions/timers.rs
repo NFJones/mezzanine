@@ -6,7 +6,7 @@ use super::{
     RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, json_escape,
     runtime_shell_transaction_effective_timeout_ms, runtime_shell_transaction_timer_kind,
 };
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 impl RuntimeSessionService {
     /// Applies a runtime timer firing for live Mezzanine-owned shell work,
@@ -163,11 +163,81 @@ impl RuntimeSessionService {
         &mut self,
         now_unix_ms: u64,
     ) -> Result<RuntimeTransition> {
+        let pane_ids = self.expiring_shell_transaction_pane_ids(now_unix_ms);
         let expired = self.apply_shell_transaction_timer_event(now_unix_ms)?;
-        Ok(self.runtime_transition_with_render(
-            expired > 0,
-            Some(RenderInvalidationReason::FullRedraw),
-        ))
+        if expired == 0 {
+            return Ok(RuntimeTransition::default());
+        }
+        let side_effects = if pane_ids.is_empty() {
+            self.runtime_transition_with_render(true, Some(RenderInvalidationReason::FullRedraw))
+                .side_effects
+        } else {
+            self.render_effects_for_clients_projecting_panes(
+                &pane_ids,
+                RenderInvalidationReason::FullRedraw,
+            )
+        };
+        Ok(RuntimeTransition {
+            applied: true,
+            side_effects,
+        })
+    }
+
+    /// Returns the panes whose currently retained timer-owned state is due.
+    ///
+    /// The snapshot is taken before expiry mutates the owner maps so targeted
+    /// publication can still wake clients that projected the changed pane.
+    fn expiring_shell_transaction_pane_ids(&self, now_unix_ms: u64) -> Vec<String> {
+        let mut pane_ids = BTreeSet::new();
+        pane_ids.extend(self.process.running_shell_transactions.values().filter_map(
+            |transaction| {
+                let timeout_ms = runtime_shell_transaction_effective_timeout_ms(transaction)?;
+                (now_unix_ms.saturating_sub(transaction.started_at_unix_ms) >= timeout_ms)
+                    .then(|| transaction.pane_id.clone())
+            },
+        ));
+        pane_ids.extend(
+            self.process
+                .pending_agent_subshell_certifications
+                .iter()
+                .filter(|(_, pending)| {
+                    now_unix_ms.saturating_sub(pending.started_at_unix_ms) >= pending.timeout_ms
+                })
+                .map(|(pane_id, _)| pane_id.clone()),
+        );
+        pane_ids.extend(
+            self.process
+                .pending_shell_dispatch_recovery_observations
+                .iter()
+                .filter(|(_, pending)| {
+                    now_unix_ms.saturating_sub(pending.started_at_unix_ms)
+                        >= super::RUNTIME_SHELL_DISPATCH_RECOVERY_OBSERVATION_TIMEOUT_MS
+                })
+                .map(|(pane_id, _)| pane_id.clone()),
+        );
+        pane_ids.extend(
+            self.process
+                .pane_foreign_shell_boundaries
+                .iter()
+                .filter(|(_, boundary)| {
+                    boundary.phase.has_bounded_owner()
+                        && (now_unix_ms.saturating_sub(boundary.phase_started_at_unix_ms)
+                            >= super::super::RUNTIME_FOREIGN_SHELL_BOOTSTRAP_PHASE_TIMEOUT_MS
+                            || now_unix_ms.saturating_sub(boundary.lifecycle_started_at_unix_ms)
+                                >= super::super::RUNTIME_FOREIGN_SHELL_BOOTSTRAP_ABSOLUTE_TIMEOUT_MS)
+                })
+                .map(|(pane_id, _)| pane_id.clone()),
+        );
+        pane_ids.extend(
+            self.integration
+                .focused_shell_hook_transactions()
+                .values()
+                .filter(|pending| {
+                    now_unix_ms.saturating_sub(pending.started_at_unix_ms) >= pending.timeout_ms
+                })
+                .map(|pending| pending.pane_id.clone()),
+        );
+        pane_ids.into_iter().collect()
     }
 
     /// Returns timer-visible snapshots for live shell work with configured
