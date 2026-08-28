@@ -445,20 +445,23 @@ impl RuntimeSessionService {
         &mut self,
         event: AgentRememberEvent,
     ) -> Result<RuntimeTransition> {
-        let applied = match event {
-            AgentRememberEvent::Completed { pane_id, response } => {
-                self.apply_agent_remember_completed_event(&pane_id, *response)?
-            }
+        let (pane_id, applied) = match event {
+            AgentRememberEvent::Completed { pane_id, response } => (
+                pane_id.clone(),
+                self.apply_agent_remember_completed_event(&pane_id, *response)?,
+            ),
             AgentRememberEvent::Failed {
                 pane_id, message, ..
-            } => self.apply_agent_remember_failed_event(&pane_id, &message)?,
-        };
-        Ok(
-            self.runtime_transition_with_render(
-                applied,
-                Some(RenderInvalidationReason::FullRedraw),
+            } => (
+                pane_id.clone(),
+                self.apply_agent_remember_failed_event(&pane_id, &message)?,
             ),
-        )
+        };
+        Ok(self.runtime_pane_transition_with_render(
+            &pane_id,
+            applied,
+            Some(RenderInvalidationReason::FullRedraw),
+        ))
     }
 
     /// Applies one completed `/remember` model response through actor-owned state.

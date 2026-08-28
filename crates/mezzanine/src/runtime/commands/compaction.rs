@@ -525,29 +525,32 @@ impl RuntimeSessionService {
         &mut self,
         event: AgentCompactionEvent,
     ) -> Result<RuntimeTransition> {
-        let applied = match event {
-            AgentCompactionEvent::Completed { pane_id, response } => {
-                self.apply_agent_compaction_completed_event(&pane_id, *response)?
-            }
+        let (pane_id, applied) = match event {
+            AgentCompactionEvent::Completed { pane_id, response } => (
+                pane_id.clone(),
+                self.apply_agent_compaction_completed_event(&pane_id, *response)?,
+            ),
             AgentCompactionEvent::Failed {
                 pane_id,
                 kind,
                 message,
                 provider_failure_json,
                 ..
-            } => self.apply_agent_compaction_failed_event(
-                &pane_id,
-                &kind,
-                &message,
-                provider_failure_json.as_deref(),
-            )?,
-        };
-        Ok(
-            self.runtime_transition_with_render(
-                applied,
-                Some(RenderInvalidationReason::FullRedraw),
+            } => (
+                pane_id.clone(),
+                self.apply_agent_compaction_failed_event(
+                    &pane_id,
+                    &kind,
+                    &message,
+                    provider_failure_json.as_deref(),
+                )?,
             ),
-        )
+        };
+        Ok(self.runtime_pane_transition_with_render(
+            &pane_id,
+            applied,
+            Some(RenderInvalidationReason::FullRedraw),
+        ))
     }
 
     /// Applies a completed model-backed compaction response.
