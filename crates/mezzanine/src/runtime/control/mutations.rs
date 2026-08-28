@@ -505,6 +505,10 @@ impl RuntimeSessionService {
             })?,
             None => self.active_window_pane_descriptor(None)?,
         };
+        let render_effects = self.render_effects_for_clients_projecting_windows(
+            &[descriptor.window_id.to_string()],
+            RenderInvalidationReason::Layout,
+        );
         let (_, pane) = runtime_pane_by_id(&self.session, descriptor.pane_id.as_str())?;
         if force || !pane.live {
             self.fail_agent_turns_for_pane_shutdown(
@@ -525,6 +529,7 @@ impl RuntimeSessionService {
             0
         };
         self.sync_pane_resize_effects(&transition.effects)?;
+        self.presentation.defer_render_effects(render_effects);
         self.session
             .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
                 self.session.state,

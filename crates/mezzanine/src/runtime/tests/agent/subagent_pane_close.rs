@@ -2,12 +2,14 @@
 
 use super::*;
 
-/// Verifies automatic subagent pane closure resizes the surviving adapter-owned
-/// pane process to the geometry produced by layout reflow.
+/// Verifies automatic subagent pane closure resizes and repaints the surviving
+/// adapter-owned pane at the geometry produced by layout reflow.
 ///
 /// Adapter-owned workers do not observe in-memory session geometry directly.
 /// The close path must preserve the mux resize effects and emit one generation-
 /// scoped resize request for the sibling that expands into the removed pane.
+/// It must also invalidate clients by affected window rather than by the
+/// removed pane id so the expanded sibling is rendered immediately.
 #[test]
 fn runtime_automatic_subagent_close_resizes_surviving_adapter_owned_pane() {
     let mut service = test_runtime_service();
@@ -26,6 +28,10 @@ fn runtime_automatic_subagent_close_resizes_surviving_adapter_owned_pane() {
     let surviving_instance = handed_off
         .iter()
         .find_map(|(instance, _)| (instance.pane_id == "%1").then_some(instance.clone()))
+        .unwrap();
+    let original_surviving_size = service
+        .find_pane_descriptor("%1")
+        .map(|descriptor| descriptor.size)
         .unwrap();
     assert!(service.drain_pane_io_transition().side_effects.is_empty());
 
@@ -54,7 +60,9 @@ fn runtime_automatic_subagent_close_resizes_surviving_adapter_owned_pane() {
         .find_pane_descriptor("%1")
         .map(|descriptor| descriptor.size)
         .unwrap();
-    let effects = service.drain_pane_io_transition().side_effects;
+    assert!(surviving_size.columns > original_surviving_size.columns);
+    assert_eq!(surviving_size.rows, original_surviving_size.rows);
+    let effects = service.drain_deferred_effects_transition().side_effects;
     assert!(
         effects.iter().any(|effect| matches!(
             effect,
@@ -62,6 +70,16 @@ fn runtime_automatic_subagent_close_resizes_surviving_adapter_owned_pane() {
                 instance,
                 effect: crate::runtime::PaneProcessIoEffect::Resize { size },
             } if instance == &surviving_instance && size == &surviving_size
+        )),
+        "{effects:#?}"
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            RuntimeSideEffect::RenderClient {
+                client_id,
+                reason: crate::runtime::RenderInvalidationReason::Layout,
+            } if client_id == &primary
         )),
         "{effects:#?}"
     );
