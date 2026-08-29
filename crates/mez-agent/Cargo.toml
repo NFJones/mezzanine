@@ -8,7 +8,7 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
-mez-core = { path = "../mez-core" }
+mez-core = { path = "../mez-core", version = "0.1.0" }
 base64 = "0.22"
 httpdate = "1"
 rand = "0.10"
