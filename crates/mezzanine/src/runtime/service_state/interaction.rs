@@ -388,6 +388,8 @@ pub struct RuntimeAgentTurnStop {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub interrupted_shell_transactions: usize,
+    /// Whether this stopped child remains available for a follow-up prompt.
+    pub awaiting_redirection: bool,
     /// Stores the visibility value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

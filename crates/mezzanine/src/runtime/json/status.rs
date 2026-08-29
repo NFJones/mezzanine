@@ -234,11 +234,17 @@ pub(crate) fn runtime_agent_shell_stop_response_json(
     stopped: &RuntimeAgentTurnStop,
 ) -> String {
     format!(
-        r#"{{"pane_id":"{}","input":"{}","kind":"mutated","command":"stop","visibility":"{}","body":"turn_id={} state=cancelled scheduler_cancelled={} interrupted_shell_transactions={}"}}"#,
+        r#"{{"pane_id":"{}","input":"{}","kind":"mutated","command":"stop","visibility":"{}","body":"turn_id={} state={} awaiting_redirection={} scheduler_cancelled={} interrupted_shell_transactions={}"}}"#,
         json_escape(pane_id),
         json_escape(input),
         agent_shell_visibility_json_name(stopped.visibility),
         json_escape(&stopped.turn_id),
+        if stopped.awaiting_redirection {
+            "interrupted"
+        } else {
+            "cancelled"
+        },
+        stopped.awaiting_redirection,
         stopped.scheduler_cancelled,
         stopped.interrupted_shell_transactions
     )

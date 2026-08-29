@@ -2812,6 +2812,197 @@ fn block_turn_on_joined_child(
         .unwrap();
 }
 
+/// Verifies user interruption retains a joined child for a later redirected turn.
+///
+/// Interrupting active work must not settle the parent spawn action or discard
+/// the child identity. A later pane-local prompt reuses the child conversation
+/// and transfers the pending join so normal completion reaches the parent once.
+#[test]
+fn runtime_interrupted_subagent_redirects_without_premature_parent_handoff() {
+    let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(2)
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    let child_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    for pane in ["%1", child_pane.as_str()] {
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume(pane)
+            .unwrap();
+        let mut screen = TerminalScreen::new(Size::new(24, 5).unwrap(), 10).unwrap();
+        screen.feed(b"ready\n");
+        service.set_pane_screen(pane.to_string(), screen);
+    }
+
+    let parent = service
+        .start_agent_prompt_turn("%1", "parent task")
+        .unwrap();
+    let child = service
+        .start_agent_prompt_turn(child_pane.as_str(), "initial child task")
+        .unwrap();
+    let parent_record = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == parent.turn_id)
+        .cloned()
+        .unwrap();
+    let child_record = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == child.turn_id)
+        .cloned()
+        .unwrap();
+    service.set_subagent_lineage(
+        child.agent_id.clone(),
+        RuntimeSubagentLineage {
+            parent_agent_id: parent.agent_id.clone(),
+            root_agent_id: parent.agent_id.clone(),
+            depth: 1,
+            display_name: "redirectable child".to_string(),
+        },
+    );
+    block_turn_on_joined_child(
+        &mut service,
+        &parent_record,
+        &child_record,
+        "spawn-redirectable-child",
+        "redirectable child",
+    );
+    let child_conversation = service
+        .agent_shell_store()
+        .get(child_pane.as_str())
+        .unwrap()
+        .session_id
+        .clone();
+
+    service
+        .stop_agent_turn_for_pane(child_pane.as_str())
+        .unwrap();
+
+    assert!(service.find_pane_descriptor(child_pane.as_str()).is_some());
+    assert!(service.has_subagent_authority_state(&child.agent_id));
+    assert!(service.has_joined_subagent_dependency(&child.turn_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == child.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Interrupted)
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Blocked)
+    );
+
+    let redirected = service
+        .start_agent_prompt_turn(child_pane.as_str(), "redirected child task")
+        .unwrap();
+    assert_eq!(redirected.agent_id, child.agent_id);
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get(child_pane.as_str())
+            .unwrap()
+            .session_id,
+        child_conversation
+    );
+    assert!(service.subagent_task_parent(&child.turn_id).is_none());
+    assert_eq!(
+        service.subagent_task_parent(&redirected.turn_id),
+        Some(parent.agent_id.clone())
+    );
+    assert!(!service.has_joined_subagent_dependency(&child.turn_id));
+    assert!(service.has_joined_subagent_dependency(&redirected.turn_id));
+
+    service
+        .stop_agent_turn_for_pane(child_pane.as_str())
+        .unwrap();
+
+    assert!(service.find_pane_descriptor(child_pane.as_str()).is_some());
+    assert!(service.has_subagent_authority_state(&redirected.agent_id));
+    assert!(service.has_joined_subagent_dependency(&redirected.turn_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Blocked)
+    );
+
+    let redirected_again = service
+        .start_agent_prompt_turn(child_pane.as_str(), "redirected child task again")
+        .unwrap();
+    assert_eq!(redirected_again.agent_id, child.agent_id);
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get(child_pane.as_str())
+            .unwrap()
+            .session_id,
+        child_conversation
+    );
+    assert!(service.subagent_task_parent(&redirected.turn_id).is_none());
+    assert_eq!(
+        service.subagent_task_parent(&redirected_again.turn_id),
+        Some(parent.agent_id.clone())
+    );
+    assert!(!service.has_joined_subagent_dependency(&redirected.turn_id));
+    assert!(service.has_joined_subagent_dependency(&redirected_again.turn_id));
+
+    let provider = RuntimeBatchProvider {
+        response: runtime_say_response_for_agent(
+            &redirected_again.turn_id,
+            &redirected_again.agent_id,
+            "redirected child completed",
+            true,
+        ),
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &redirected_again.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert!(service.find_pane_descriptor(child_pane.as_str()).is_none());
+    assert!(!service.has_subagent_authority_state(&redirected_again.agent_id));
+    let parent_context = service.agent_turn_contexts().get(&parent.turn_id).unwrap();
+    assert_eq!(
+        parent_context
+            .blocks()
+            .iter()
+            .filter(|block| {
+                block.label == "action result spawn-redirectable-child"
+                    && block.content.contains("redirected child completed")
+            })
+            .count(),
+        1
+    );
+    assert!(parent_context.blocks().iter().all(|block| {
+        !block.content.contains("subagent task cancelled")
+            && !block.content.contains("interrupted by snapshot resume")
+    }));
+}
+
 /// Verifies successful nested joined children close from the leaves upward.
 ///
 /// A grandchild result must resume its immediate child parent and close only

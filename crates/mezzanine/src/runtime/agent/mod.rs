@@ -106,6 +106,19 @@ pub(crate) enum TerminalResultDisposition {
     PresentationDelivered,
 }
 
+/// Parent handoff retained while an interrupted child awaits user redirection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeInterruptedSubagentRedirection {
+    /// Terminal turn that was interrupted without settling its parent route.
+    interrupted_turn_id: String,
+    /// Conversation that the redirected prompt must continue.
+    conversation_id: String,
+    /// Parent agent that receives the eventual completed result.
+    parent_agent_id: Option<String>,
+    /// Joined parent action transferred to the redirected turn, when any.
+    joined_dependency: Option<JoinedSubagentDependency>,
+}
+
 mod approvals;
 mod audit;
 mod bookkeeping;
@@ -365,6 +378,9 @@ pub(crate) struct RuntimeAgentComponent {
     subagent_wait_policy: SubagentWaitPolicy,
     /// Parent agent route keyed by spawned child turn id.
     subagent_task_routes: BTreeMap<String, String>,
+    /// Interrupted ordinary children awaiting a follow-up prompt, keyed by agent id.
+    pending_interrupted_subagent_redirections:
+        BTreeMap<String, RuntimeInterruptedSubagentRedirection>,
     /// Windows reserved for spawned subagent panes.
     subagent_window_ids: BTreeSet<String>,
     /// Subagent panes awaiting close after terminal turn cleanup.
@@ -637,6 +653,9 @@ impl RuntimeSessionService {
 
     /// Removes lineage, declarations, and active scopes for one agent.
     pub(crate) fn remove_subagent_authority_state(&mut self, agent_id: &str) {
+        self.agent
+            .pending_interrupted_subagent_redirections
+            .remove(agent_id);
         self.agent.subagent_lineage.remove(agent_id);
         self.agent.subagent_scope_declarations.remove(agent_id);
         self.agent.subagent_scopes.unregister(agent_id);
@@ -654,6 +673,7 @@ impl RuntimeSessionService {
 
     /// Clears all runtime subagent authority state on session replacement.
     pub(crate) fn clear_all_subagent_authority_state(&mut self) {
+        self.agent.pending_interrupted_subagent_redirections.clear();
         self.agent.subagent_lineage.clear();
         self.agent.subagent_scope_declarations.clear();
         self.agent.subagent_scopes = mez_agent::ScopeRegistry::default();
@@ -953,6 +973,97 @@ impl RuntimeSessionService {
     /// Returns the parent-agent route for one spawned child turn.
     pub(crate) fn subagent_task_parent(&self, turn_id: &str) -> Option<String> {
         self.agent.subagent_task_routes.get(turn_id).cloned()
+    }
+
+    /// Retains an ordinary child route across a user interruption boundary.
+    pub(crate) fn retain_subagent_interruption_for_redirection(
+        &mut self,
+        turn: &AgentTurnRecord,
+    ) -> bool {
+        if !self.has_subagent_authority_state(&turn.agent_id)
+            || self
+                .routed_parent_turn_id_for_child(&turn.turn_id)
+                .is_some()
+            || self
+                .agent
+                .macro_managed_subagent_agents
+                .contains_key(&turn.agent_id)
+            || self.agent.agent_loop_turns.contains_key(&turn.turn_id)
+        {
+            return false;
+        }
+        let parent_agent_id = self.subagent_task_parent(&turn.turn_id).or_else(|| {
+            self.agent
+                .subagent_lineage
+                .get(&turn.agent_id)
+                .map(|lineage| lineage.parent_agent_id.clone())
+                .filter(|parent_agent_id| !parent_agent_id.is_empty())
+        });
+        let joined_dependency = self
+            .agent
+            .joined_subagent_dependencies
+            .get(&turn.turn_id)
+            .cloned();
+        if parent_agent_id.is_none() && joined_dependency.is_none() {
+            return false;
+        }
+        self.agent.pending_interrupted_subagent_redirections.insert(
+            turn.agent_id.clone(),
+            RuntimeInterruptedSubagentRedirection {
+                interrupted_turn_id: turn.turn_id.clone(),
+                conversation_id: turn.conversation_id.clone(),
+                parent_agent_id,
+                joined_dependency,
+            },
+        );
+        true
+    }
+
+    /// Reports whether one interrupted turn is waiting for a redirected prompt.
+    pub(crate) fn interrupted_subagent_awaits_redirection(&self, turn_id: &str) -> bool {
+        self.agent
+            .pending_interrupted_subagent_redirections
+            .values()
+            .any(|redirection| redirection.interrupted_turn_id == turn_id)
+    }
+
+    /// Transfers one interrupted child route to its next pane-local user turn.
+    pub(crate) fn transfer_interrupted_subagent_redirection(
+        &mut self,
+        agent_id: &str,
+        conversation_id: &str,
+        redirected_turn_id: &str,
+    ) -> bool {
+        let Some(redirection) = self
+            .agent
+            .pending_interrupted_subagent_redirections
+            .get(agent_id)
+            .filter(|redirection| redirection.conversation_id == conversation_id)
+            .cloned()
+        else {
+            return false;
+        };
+        self.agent
+            .pending_interrupted_subagent_redirections
+            .remove(agent_id);
+        self.agent
+            .subagent_task_routes
+            .remove(&redirection.interrupted_turn_id);
+        if let Some(parent_agent_id) = redirection.parent_agent_id {
+            self.agent
+                .subagent_task_routes
+                .insert(redirected_turn_id.to_string(), parent_agent_id);
+        }
+        if let Some(mut dependency) = redirection.joined_dependency {
+            self.agent
+                .joined_subagent_dependencies
+                .remove(&redirection.interrupted_turn_id);
+            dependency.child_turn_id = redirected_turn_id.to_string();
+            self.agent
+                .joined_subagent_dependencies
+                .insert(redirected_turn_id.to_string(), dependency);
+        }
+        true
     }
 
     /// Records the parent-agent route for one spawned child turn.

@@ -663,6 +663,8 @@ impl RuntimeSessionService {
             turn.state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
         );
+        let awaiting_redirection =
+            !turn_was_already_terminal && self.retain_subagent_interruption_for_redirection(&turn);
         let routed_cleanup_error = self.cancel_routed_workflow_for_parent(&turn_id).err();
         let session = if turn_was_already_terminal {
             let running_in_shell = self
@@ -697,7 +699,9 @@ impl RuntimeSessionService {
             self.checkpoint_agent_session_metadata()?;
             session
         } else {
-            self.emit_cancelled_subagent_task_result(&turn)?;
+            if !awaiting_redirection {
+                self.emit_cancelled_subagent_task_result(&turn)?;
+            }
             if self
                 .agent_shell_store()
                 .get(pane_id)
@@ -722,9 +726,15 @@ impl RuntimeSessionService {
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
-                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"cancelled","interrupted_shell_transactions":{}}}"#,
+                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"{}","awaiting_redirection":{},"interrupted_shell_transactions":{}}}"#,
                 json_escape(pane_id),
                 json_escape(&turn_id),
+                if awaiting_redirection {
+                    "interrupted"
+                } else {
+                    "cancelled"
+                },
+                awaiting_redirection,
                 interrupted_shell_transactions
             ),
         )?;
@@ -732,6 +742,7 @@ impl RuntimeSessionService {
             turn_id,
             scheduler_cancelled,
             interrupted_shell_transactions,
+            awaiting_redirection,
             visibility: session.visibility,
         };
         if let Some(error) = routed_cleanup_error {
@@ -1301,11 +1312,18 @@ impl RuntimeSessionService {
         self.set_agent_turn_model_profile(turn_id.clone(), model_profile);
         self.enqueue_agent_work(ScheduledWork {
             turn_id: turn_id.clone(),
-            conversation_id,
+            conversation_id: conversation_id.clone(),
             agent_id: agent_id.clone(),
             pane_id: Some(pane_id.to_string()),
             kind: ScheduledWorkKind::ShellCapable,
         })?;
+        if self.transfer_interrupted_subagent_redirection(&agent_id, &conversation_id, &turn_id) {
+            self.append_agent_trace_turn_event(
+                pane_id,
+                &turn_id,
+                "interrupted subagent redirection transferred to follow-up turn",
+            )?;
+        }
         self.append_agent_trace_turn_event(
             pane_id,
             &turn_id,

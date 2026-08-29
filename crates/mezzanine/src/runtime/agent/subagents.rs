@@ -129,6 +129,19 @@ impl RuntimeSessionService {
         if exact_turn_is_live {
             return true;
         }
+        if self
+            .agent
+            .pending_interrupted_subagent_redirections
+            .values()
+            .any(|redirection| {
+                redirection
+                    .joined_dependency
+                    .as_ref()
+                    .is_some_and(|pending| pending == dependency)
+            })
+        {
+            return true;
+        }
         self.agent.agent_loops_by_id.values().any(|state| {
             state.completion.as_ref().is_some_and(|completion| {
                 completion.parent_turn_id == dependency.parent_turn_id

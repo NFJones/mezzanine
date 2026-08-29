@@ -130,10 +130,13 @@ impl RuntimeSessionService {
                 pane_id, &execution, &reason,
             )?;
         }
+        let awaiting_redirection = state == AgentTurnState::Interrupted
+            && self.interrupted_subagent_awaits_redirection(turn_id);
         if matches!(
             state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
-        ) && !self.terminal_result_claimed_by_execution(turn_id)
+        ) && !awaiting_redirection
+            && !self.terminal_result_claimed_by_execution(turn_id)
         {
             self.emit_subagent_task_result_for_state(&turn, state)?;
         }
@@ -148,7 +151,8 @@ impl RuntimeSessionService {
             .record_agent_turn_finished(state);
         self.agent_turn_ledger_mut().finish_turn(turn_id, state)?;
         self.reconcile_active_turn_sleep_inhibition();
-        if turn.parent_turn_id.is_none()
+        if !awaiting_redirection
+            && turn.parent_turn_id.is_none()
             && matches!(
                 state,
                 AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
@@ -207,7 +211,9 @@ impl RuntimeSessionService {
         self.agent
             .agent_turn_config_change_successes
             .remove(turn_id);
-        self.clear_joined_subagent_dependencies_for_turn(turn_id);
+        if !self.interrupted_subagent_awaits_redirection(turn_id) {
+            self.clear_joined_subagent_dependencies_for_turn(turn_id);
+        }
         self.clear_agent_pre_shell_hook_completions_for_turn(turn_id);
         self.integration
             .pending_program_hook_continuations_mut()
@@ -283,11 +289,14 @@ impl RuntimeSessionService {
                 &reason,
             )?;
         }
+        let awaiting_redirection = state == AgentTurnState::Interrupted
+            && self.interrupted_subagent_awaits_redirection(&turn.turn_id);
         if !conversation_was_replaced
             && matches!(
                 state,
                 AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
             )
+            && !awaiting_redirection
             && !self.terminal_result_claimed_by_execution(&turn.turn_id)
         {
             self.emit_subagent_task_result_for_state(turn, state)?;
@@ -306,6 +315,7 @@ impl RuntimeSessionService {
         self.reconcile_active_turn_sleep_inhibition();
         if pane_present
             && conversation_still_owned
+            && !awaiting_redirection
             && turn.parent_turn_id.is_none()
             && matches!(
                 state,
