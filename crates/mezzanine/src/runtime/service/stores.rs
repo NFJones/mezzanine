@@ -155,11 +155,7 @@ impl RuntimeSessionService {
                 let resume = self
                     .persistence
                     .take_session_archive_resume(&conversation_id);
-                self.refresh_saved_session_overlay_after_archive(
-                    &conversation_id,
-                    Some(operation),
-                    None,
-                )?;
+                self.refresh_saved_session_overlay_after_archive(&conversation_id, None)?;
                 if matches!(operation, crate::runtime::SessionArchiveOperation::Restore)
                     && let Some((client_id, pane_id)) = resume
                 {
@@ -176,7 +172,6 @@ impl RuntimeSessionService {
                     if let Some(error) = resume_error {
                         self.refresh_saved_session_overlay_after_archive(
                             &conversation_id,
-                            Some(operation),
                             Some(&error),
                         )?;
                     } else {
@@ -204,7 +199,6 @@ impl RuntimeSessionService {
                     .take_session_archive_resume(&conversation_id);
                 self.refresh_saved_session_overlay_after_archive(
                     &conversation_id,
-                    Some(operation),
                     Some(error.as_str()),
                 )?;
                 serde_json::json!({
@@ -291,7 +285,6 @@ impl RuntimeSessionService {
     fn refresh_saved_session_overlay_after_archive(
         &mut self,
         conversation_id: &str,
-        operation: Option<crate::runtime::SessionArchiveOperation>,
         error: Option<&str>,
     ) -> Result<()> {
         let source = self.active_saved_session_browser_source();
@@ -302,10 +295,7 @@ impl RuntimeSessionService {
             &source,
             error.is_some().then_some(conversation_id),
         )?;
-        browser.set_error(error.map(str::to_string).or_else(|| {
-            operation
-                .map(|operation| format!("{} completed for {conversation_id}", operation.as_str()))
-        }));
+        browser.set_error(error.map(str::to_string));
         self.replace_active_saved_session_browser(source, browser);
         Ok(())
     }

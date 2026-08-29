@@ -254,6 +254,17 @@ fn runtime_resume_browser_archives_browses_details_and_deletes_sessions() {
             .records()
             .is_empty()
     );
+    let settled_page = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .unwrap()
+        .browser
+        .render_page()
+        .raw_markdown;
+    assert!(
+        !settled_page.contains("archive completed for browser-archive"),
+        "{settled_page}"
+    );
 
     service
         .apply_primary_display_overlay_input(&primary, b"r")
