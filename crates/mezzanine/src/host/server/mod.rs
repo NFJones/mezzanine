@@ -1610,8 +1610,8 @@ mod tests {
         fs::create_dir_all(&caller_directory).unwrap();
         fs::create_dir_all(&config_root).unwrap();
         fs::set_permissions(&config_root, fs::Permissions::from_mode(0o700)).unwrap();
-        fs::write(&host_overlay, "version = 75\n[history]\nlines = 111\n").unwrap();
-        fs::write(&caller_overlay, "version = 75\n[history]\nlines = 222\n").unwrap();
+        fs::write(&host_overlay, "version = 76\n[history]\nlines = 111\n").unwrap();
+        fs::write(&caller_overlay, "version = 76\n[history]\nlines = 222\n").unwrap();
         let mut trust = ProjectTrustStore::default();
         trust
             .decide_at(

@@ -259,19 +259,21 @@ pub(in crate::host::terminal::render) fn pane_frame_row_layout(
     fill: char,
 ) -> PaneFrameRowLayout<&'static str> {
     let mut text = render_pane_frame_template(window, pane, frame_context, template);
-    let title_width = fitted_text_width(&text, usize::MAX);
+    let title_width = fitted_text_width(&text, usize::MAX).saturating_add(2);
     let progress_segment = if template == DEFAULT_PANE_FRAME_TEMPLATE {
         frame_context
             .panes
             .get(pane.id.as_str())
             .and_then(|context| context.terminal_progress_percent)
             .map(|percent| {
+                let display = format!("{percent}%");
+                let padded_display = mez_mux::render::render_frame_pill_text(&display);
                 let start = title_width.saturating_add(1);
-                let display = format!("  {percent}% ");
+                text.push_str("   ");
                 text.push_str(&display);
                 FrameStatusSegment {
                     start,
-                    width: fitted_text_width(&display, usize::MAX).saturating_sub(1),
+                    width: fitted_text_width(&padded_display, usize::MAX),
                     key: "pane.progress",
                     value: percent.to_string(),
                 }
@@ -428,29 +430,10 @@ pub(in crate::host::terminal::render) fn pane_agent_prompt_transparent(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(in crate::host::terminal::render) fn pane_frame_right_aligned_display_value(
-    field: &str,
+    _field: &str,
     value: String,
 ) -> String {
-    if matches!(
-        field,
-        "pane.pwd"
-            | "pane.status"
-            | "agent.model"
-            | "agent.reasoning"
-            | "agent.thinking"
-            | "agent.planning"
-            | "agent.routing"
-            | "agent.latency"
-            | "agent.preset"
-            | "agent.name"
-            | "agent.context_usage"
-            | "agent.status"
-            | "policy.mode"
-    ) {
-        format!(" {value} ")
-    } else {
-        value
-    }
+    value
 }
 
 /// Returns right-status display text while retaining raw values for style

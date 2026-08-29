@@ -508,13 +508,25 @@ pub fn pane_frame_text_with_fill(text: &str, width: usize, fill: char) -> (Strin
     (collect_text_cells(row), written_width)
 }
 
-/// Extends a pane-title pill over its separator before right-aligned status.
-pub fn pane_frame_left_pill_style_width(text_width: usize, available_width: usize) -> usize {
-    if text_width > 0 && text_width < available_width {
-        text_width.saturating_add(1)
+/// Adds one renderer-owned padding cell to each side of non-empty pill text.
+pub fn render_frame_pill_text(text: &str) -> String {
+    if text.is_empty() {
+        String::new()
     } else {
-        text_width
+        format!(" {text} ")
     }
+}
+
+/// Fits non-empty pill text while preserving one padding cell on each side.
+pub fn render_frame_pill_text_fitted(text: &str, max_width: usize) -> String {
+    if text.is_empty() || max_width == 0 {
+        return String::new();
+    }
+    if max_width == 1 {
+        return " ".to_string();
+    }
+    let content_width = fitted_text_width(text, max_width.saturating_sub(2));
+    format!(" {} ", fit_width(text, content_width))
 }
 
 /// Removes terminal control characters from frame and status text.
@@ -590,7 +602,7 @@ pub struct FramePillboxSegment<K> {
 pub fn render_frame_pillbox_text<K>(entries: &[FramePillboxEntry<K>]) -> String {
     entries
         .iter()
-        .map(|entry| entry.text.as_str())
+        .map(|entry| render_frame_pill_text(&entry.text))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -605,7 +617,7 @@ pub fn render_frame_pillbox_segments<K: Clone>(
         if entry_index > 0 {
             start = start.saturating_add(1);
         }
-        let width = char_count(&entry.text);
+        let width = char_count(&render_frame_pill_text(&entry.text));
         segments.push(FramePillboxSegment {
             start,
             width,
@@ -820,21 +832,23 @@ pub fn render_frame_status_template<K>(
 pub fn render_frame_status<K: Clone>(values: &[FrameStatusValue<K>]) -> RenderedFrameStatus<K> {
     let mut text = String::new();
     let mut segments = Vec::new();
-    for (index, value) in values.iter().enumerate() {
-        if index > 0 {
+    for value in values {
+        let display = render_frame_pill_text(&value.display);
+        if display.is_empty() {
+            continue;
+        }
+        if !text.is_empty() {
             text.push(' ');
         }
         let start = fitted_text_width(&text, usize::MAX);
-        text.push_str(&value.display);
-        let width = fitted_text_width(&value.display, usize::MAX);
-        if width > 0 {
-            segments.push(FrameStatusSegment {
-                start,
-                width,
-                key: value.key.clone(),
-                value: value.value.clone(),
-            });
-        }
+        text.push_str(&display);
+        let width = fitted_text_width(&display, usize::MAX);
+        segments.push(FrameStatusSegment {
+            start,
+            width,
+            key: value.key.clone(),
+            value: value.value.clone(),
+        });
     }
     RenderedFrameStatus {
         text: sanitize_frame_text(&text),
@@ -909,8 +923,7 @@ pub fn compose_frame_text_row<K>(
         };
     };
     let left_width = status_start.saturating_sub(1);
-    let written_left_text_width = write_text_cells_with_width(&mut row, 0, left_width, left_text);
-    let left_text_width = pane_frame_left_pill_style_width(written_left_text_width, left_width);
+    let left_text_width = write_text_cells_with_width(&mut row, 0, left_width, left_text);
     write_text_cells_with_width(&mut row, status_start, status_width, &right_status.text);
     let right_status_segments = right_status
         .segments
@@ -989,7 +1002,17 @@ pub fn compose_pane_frame_row<K>(
     width: usize,
     fill: char,
 ) -> PaneFrameRowLayout<K> {
-    compose_frame_text_row(left_text, right_status, width, fill)
+    let left_width = right_status
+        .as_ref()
+        .and_then(|status| right_aligned_status_bounds(&status.text, width))
+        .map(|(status_start, _)| status_start.saturating_sub(1))
+        .unwrap_or(width);
+    compose_frame_text_row(
+        &render_frame_pill_text_fitted(left_text, left_width),
+        right_status,
+        width,
+        fill,
+    )
 }
 
 fn right_aligned_status_bounds(text: &str, width: usize) -> Option<(usize, usize)> {
@@ -1352,8 +1375,8 @@ mod tests {
         compose_frame_pillbox_row, compose_pane_frame_row, display_overlay_targets,
         fit_styled_width, frame_pillbox_hit_cells, frame_pillbox_segment_columns,
         frame_status_hit_cells, frame_style_rendition, line_slice, overlay_display_lines,
-        overlay_fixed_column_style_spans, pane_frame_left_pill_style_width,
-        pane_frame_text_with_fill, position_frame_status, render_frame_pillbox_segments,
+        overlay_fixed_column_style_spans, pane_frame_text_with_fill, position_frame_status,
+        render_frame_pill_text, render_frame_pill_text_fitted, render_frame_pillbox_segments,
         render_frame_pillbox_text, render_frame_status, render_frame_status_template,
         render_frame_template, sanitize_frame_text, styled_frame_line_with_rendition,
         write_single_width_cell, write_text_cells, write_text_cells_with_width,
@@ -1378,7 +1401,7 @@ mod tests {
     fn frame_hit_cells_clip_and_preserve_semantic_targets() {
         let entries = vec![FramePillboxEntry {
             target: "window",
-            text: " window ".to_string(),
+            text: "window".to_string(),
             active: true,
             subagent: false,
             completion_attention: false,
@@ -1389,7 +1412,7 @@ mod tests {
             render_frame_status(&[FrameStatusValue {
                 key: "action",
                 value: "open".to_string(),
-                display: " open ".to_string(),
+                display: "open".to_string(),
             }]),
             5,
         )
@@ -1520,8 +1543,8 @@ mod tests {
         assert_eq!(rendered.segments[1].key, "second");
     }
 
-    /// Verifies pane-title composition preserves wide-cell accounting and
-    /// extends a non-empty title pill over its separator before right status.
+    /// Verifies pane-title composition preserves wide-cell accounting while
+    /// renderer-owned pill padding contributes exactly one cell per side.
     #[test]
     fn pane_frame_text_composition_tracks_display_width() {
         let (text, written) = pane_frame_text_with_fill("界", 4, '─');
@@ -1531,7 +1554,9 @@ mod tests {
         assert_eq!(text, "界──");
         assert_eq!(written, 2);
         assert_eq!(direct, 3);
-        assert_eq!(pane_frame_left_pill_style_width(written, 4), 3);
+        assert_eq!(render_frame_pill_text("界"), " 界 ");
+        assert_eq!(render_frame_pill_text_fitted("wide", 5), " wid ");
+        assert_eq!(render_frame_pill_text_fitted("界x", 4), " 界 ");
     }
 
     /// Verifies neutral frame-status composition right-aligns bounded values
@@ -1542,15 +1567,15 @@ mod tests {
             FrameStatusValue {
                 key: "model",
                 value: "gpt-5".to_string(),
-                display: " gpt-5 ".to_string(),
+                display: "gpt-5".to_string(),
             },
             FrameStatusValue {
                 key: "state",
                 value: "running".to_string(),
-                display: " run ".to_string(),
+                display: "run".to_string(),
             },
         ]);
-        let layout = compose_pane_frame_row(" 1 shell ", Some(status), 24, '─');
+        let layout = compose_pane_frame_row("1 shell", Some(status), 24, '─');
 
         assert_eq!(layout.text.chars().count(), 24);
         assert_eq!(layout.right_status_segments.len(), 2);
@@ -1568,7 +1593,7 @@ mod tests {
         let status = render_frame_status(&[FrameStatusValue {
             key: "action",
             value: "open".to_string(),
-            display: " open ".to_string(),
+            display: "open".to_string(),
         }]);
         let positioned = position_frame_status(status, 5)
             .expect("non-empty status should fit within the frame row");
@@ -1588,7 +1613,7 @@ mod tests {
         let entries = vec![
             FramePillboxEntry {
                 target: "first",
-                text: " 1 shell ".to_string(),
+                text: "1 shell".to_string(),
                 active: true,
                 subagent: false,
                 completion_attention: false,
@@ -1596,7 +1621,7 @@ mod tests {
             },
             FramePillboxEntry {
                 target: "second",
-                text: " 界 ".to_string(),
+                text: "界".to_string(),
                 active: false,
                 subagent: true,
                 completion_attention: false,
@@ -1623,7 +1648,7 @@ mod tests {
     fn frame_pillbox_rows_preserve_clipped_semantic_segments() {
         let entries = vec![FramePillboxEntry {
             target: "window",
-            text: " 1 shell ".to_string(),
+            text: "1 shell".to_string(),
             active: true,
             subagent: false,
             completion_attention: false,
@@ -1632,7 +1657,7 @@ mod tests {
         let status = render_frame_status(&[FrameStatusValue {
             key: "status",
             value: "ready".to_string(),
-            display: " ready ".to_string(),
+            display: "ready".to_string(),
         }]);
         let row = compose_frame_pillbox_row(&entries, Some(status), 12, ' ');
 

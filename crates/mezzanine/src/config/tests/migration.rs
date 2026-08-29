@@ -2197,7 +2197,7 @@ fn migrates_schema_66_with_disabled_iroh_transport() {
 /// single bidirectional control stream enforced by the v1 Iroh protocol.
 #[test]
 fn migrates_schema_67_to_fixed_iroh_stream_limit() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 75);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 76);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2262,7 +2262,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
 /// changing the existing ephemeral behavior unless the owner configures it.
 #[test]
 fn migrates_schema_69_with_iroh_bind_port() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 75);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 76);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2293,7 +2293,7 @@ fn migrates_schema_69_with_iroh_bind_port() {
 /// supported primary configuration format without enabling the Iroh listener.
 #[test]
 fn migrates_schema_70_with_iroh_compression_defaults() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 75);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 76);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2457,8 +2457,8 @@ fn migrates_schema_73_without_enabling_seatbelt_or_changing_policy() {
         let values = extract_config_values(format, &plan.text);
 
         assert_eq!(plan.from_version, 73);
-        assert_eq!(plan.to_version, 75);
-        assert_eq!(values.get("version"), Some(&"75".to_string()));
+        assert_eq!(plan.to_version, 76);
+        assert_eq!(values.get("version"), Some(&"76".to_string()));
         assert_eq!(
             values.get("permissions.sandbox").map(String::as_str),
             expected_sandbox
@@ -2506,11 +2506,60 @@ fn migrates_schema_74_without_enabling_streaming_compression() {
 
         assert_eq!(plan.from_version, 74);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 75);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 76);
         assert_eq!(
             root.pointer("/transport/iroh/compression_codecs"),
             Some(&expected_codecs)
         );
+    }
+}
+
+/// Schema v76 removes padding only from the exact historical pane-title
+/// default while preserving custom and missing templates in every format.
+#[test]
+fn migrates_schema_75_pane_title_template_to_renderer_owned_padding() {
+    for (format, exact_default, custom, missing) in [
+        (
+            ConfigFormat::Toml,
+            "version = 75\n[frames.pane]\ntemplate = \" #{pane.index} #{pane.title} \"\n",
+            "version = 75\n[frames.pane]\ntemplate = \" [#{pane.title}] \"\n",
+            "version = 75\n[frames.pane]\nstyle = \"default\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":75,"frames":{"pane":{"template":" #{pane.index} #{pane.title} "}}}"#,
+            r#"{"version":75,"frames":{"pane":{"template":" [#{pane.title}] "}}}"#,
+            r#"{"version":75,"frames":{"pane":{"style":"default"}}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 75\nframes:\n  pane:\n    template: ' #{pane.index} #{pane.title} '\n",
+            "version: 75\nframes:\n  pane:\n    template: ' [#{pane.title}] '\n",
+            "version: 75\nframes:\n  pane:\n    style: default\n",
+        ),
+    ] {
+        let exact = parse_config_json_value(
+            format,
+            &migrate_config_text(format, exact_default).unwrap().text,
+        )
+        .unwrap();
+        let custom =
+            parse_config_json_value(format, &migrate_config_text(format, custom).unwrap().text)
+                .unwrap();
+        let missing =
+            parse_config_json_value(format, &migrate_config_text(format, missing).unwrap().text)
+                .unwrap();
+
+        assert_eq!(exact.pointer("/version"), Some(&serde_json::json!(76)));
+        assert_eq!(
+            exact.pointer("/frames/pane/template"),
+            Some(&serde_json::json!("#{pane.index} #{pane.title}"))
+        );
+        assert_eq!(
+            custom.pointer("/frames/pane/template"),
+            Some(&serde_json::json!(" [#{pane.title}] "))
+        );
+        assert_eq!(missing.pointer("/frames/pane/template"), None);
     }
 }
 

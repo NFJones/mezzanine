@@ -106,7 +106,7 @@ pub(crate) use text::{
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-pub const DEFAULT_PANE_FRAME_TEMPLATE: &str = " #{pane.index} #{pane.title} ";
+pub const DEFAULT_PANE_FRAME_TEMPLATE: &str = "#{pane.index} #{pane.title}";
 /// Defines the DEFAULT PANE FRAME VISIBLE FIELDS const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module

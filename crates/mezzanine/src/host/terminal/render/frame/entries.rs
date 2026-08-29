@@ -78,7 +78,7 @@ pub(in crate::host::terminal::render) fn window_frame_action_entry(
     action: WindowFrameAction,
     frame_context: &TerminalFrameContext,
 ) -> WindowFramePillboxEntry {
-    let text = format!(" {} ", action.icon());
+    let text = action.icon().to_string();
     let active = frame_context.pressed_window_action.as_ref() == Some(&action);
     WindowFramePillboxEntry {
         target: WindowFramePillboxTarget::Action(action),
@@ -93,7 +93,7 @@ pub(in crate::host::terminal::render) fn window_frame_action_entry(
 fn window_frame_entry(window: &TerminalWindowFrameContext) -> WindowFramePillboxEntry {
     WindowFramePillboxEntry {
         target: WindowFramePillboxTarget::Window(window.index),
-        text: format!(" {} {} ", window.index, sanitize_frame_text(&window.title)),
+        text: format!("{} {}", window.index, sanitize_frame_text(&window.title)),
         active: window.active,
         subagent: window.subagent,
         completion_attention: window.completion_attention,
@@ -104,7 +104,7 @@ fn window_frame_entry(window: &TerminalWindowFrameContext) -> WindowFramePillbox
 fn window_group_frame_entry(group: &TerminalWindowGroupFrameContext) -> WindowFramePillboxEntry {
     WindowFramePillboxEntry {
         target: WindowFramePillboxTarget::Group(group.index),
-        text: format!(" {} {} ", group.index, sanitize_frame_text(&group.title)),
+        text: format!("{} {}", group.index, sanitize_frame_text(&group.title)),
         active: group.active,
         subagent: false,
         completion_attention: group.completion_attention,
@@ -124,11 +124,7 @@ pub(in crate::host::terminal::render) fn window_frame_pillbox_entries(
     if frame_context.windows.is_empty() {
         return vec![WindowFramePillboxEntry {
             target: WindowFramePillboxTarget::Window(window.index),
-            text: format!(
-                " {} {} ",
-                window.index,
-                sanitize_frame_text(&window.title())
-            ),
+            text: format!("{} {}", window.index, sanitize_frame_text(&window.title())),
             active: true,
             subagent: false,
             completion_attention: false,

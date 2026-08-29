@@ -263,7 +263,7 @@ fn render_default_pane_frame_agent_status_uses_separate_themed_pills_without_nam
     );
     assert!(view.line_style_spans[0].iter().any(|span| {
         span.start == 0
-            && span.length == " 0 shell  ".len()
+            && span.length == " 0 shell ".len()
             && span.rendition.background == Some(TerminalColor::Rgb(0x7f, 0xbf, 0x3f))
     }));
     assert!(view.line_style_spans[0].iter().any(|span| {
@@ -751,7 +751,7 @@ fn render_default_pane_frame_scroll_position_replaces_agent_info() {
     )
     .unwrap();
 
-    assert_eq!(rendered[0], " 0 shell                   4/20 ");
+    assert_eq!(rendered[0], " 0 shell                  4/20  ");
     assert!(!rendered[0].contains('─'), "{}", rendered[0]);
     assert_eq!(rendered[1], "body                            ");
     assert!(!rendered[0].contains("running"), "{}", rendered[0]);
@@ -791,11 +791,11 @@ fn render_default_pane_frame_scroll_position_has_background_without_box_drawing_
     .unwrap()
     .unwrap();
 
-    assert_eq!(view.lines[0], " 0 shell                   4/20 ");
+    assert_eq!(view.lines[0], " 0 shell                  4/20  ");
     assert!(!view.lines[0].contains('─'), "{}", view.lines[0]);
     assert!(view.line_style_spans[0].iter().any(|span| {
-        span.start == 27
-            && span.length == 4
+        span.start == 25
+            && span.length == 6
             && span.rendition.background == Some(TerminalColor::Rgb(0xd7, 0xff, 0x5f))
     }));
 }

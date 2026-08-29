@@ -26,16 +26,14 @@ fn creates_default_config_file() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies that generated defaults use the same padded pane-title pill
-/// template as the renderer's built-in fallback.
+/// Verifies generated defaults leave pane-title pill padding to the renderer.
 ///
-/// This guards the first-run config path, where an unpadded persisted template
-/// would override the renderer default and make pane title spaces uncolored in
-/// normal configured runs.
+/// This guards the first-run config path from embedding visual chrome in a
+/// semantic template and thereby receiving duplicate renderer-owned padding.
 #[test]
-fn default_config_pane_frame_template_uses_padded_title_pill() {
+fn default_config_pane_frame_template_uses_raw_title_content() {
     assert!(
-        DEFAULT_CONFIG_TOML.contains("template = \" #{pane.index} #{pane.title} \""),
+        DEFAULT_CONFIG_TOML.contains("template = \"#{pane.index} #{pane.title}\""),
         "{DEFAULT_CONFIG_TOML}"
     );
 }

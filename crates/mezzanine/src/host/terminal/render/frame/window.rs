@@ -170,8 +170,8 @@ pub(in crate::host::terminal::render) fn window_status_field_component(
         return window_action_status_component(frame_context, action);
     }
     let (value, kind) = window_status_field_value(status, field);
-    let text = if kind.is_some() && !value.is_empty() {
-        format!(" {value} ")
+    let text = if kind.is_some() {
+        mez_mux::render::render_frame_pill_text(&value)
     } else {
         value
     };

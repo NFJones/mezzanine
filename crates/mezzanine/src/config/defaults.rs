@@ -159,7 +159,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 75
+version = 76
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -343,7 +343,7 @@ visible_fields = ["window.list", "window.index", "window.name", "window.id", "pa
 # Toggle pane frames and choose their placement, content, and style.
 enabled = true
 position = "border"
-template = " #{pane.index} #{pane.title} "
+template = "#{pane.index} #{pane.title}"
 style = "default"
 visible_fields = ["pane.index", "pane.title", "pane.id", "pane.status", "history.position", "agent.model", "agent.reasoning", "agent.thinking", "agent.planning", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
 

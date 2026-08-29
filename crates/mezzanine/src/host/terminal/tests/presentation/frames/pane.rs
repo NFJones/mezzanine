@@ -44,7 +44,7 @@ fn render_pane_frame_uses_named_template_fields() {
     )
     .unwrap();
 
-    assert_eq!(rendered[0].trim_end(), format!("0|shell[31m|{pane_id}|"));
+    assert_eq!(rendered[0].trim_end(), format!(" 0|shell[31m|{pane_id}|"));
     assert_eq!(rendered[1], "body              ");
 }
 
@@ -75,7 +75,7 @@ fn render_pane_frame_template_fits_narrow_panes() {
     )
     .unwrap();
 
-    assert_eq!(rendered[0], "0:shell:");
+    assert_eq!(rendered[0], " 0:shel ");
 }
 
 /// Verifies that runtime-supplied frame context values are available through
@@ -138,7 +138,7 @@ fn render_frame_templates_use_runtime_context_fields() {
     assert_eq!(
         rendered[1].trim_end(),
         format!(
-            "$1|4242|bash[31m|~/repo[31m|copy|agent-{pane_id}|manager|running|default|full-access|scroll:4"
+            " $1|4242|bash[31m|~/repo[31m|copy|agent-{pane_id}|manager|running|default|full-access|scroll:4"
         )
     );
 }
@@ -264,7 +264,7 @@ fn render_custom_pane_frame_can_show_terminal_progress() {
         ),
     )
     .unwrap();
-    assert_eq!(rendered[0].trim_end(), "shell 7%");
+    assert_eq!(rendered[0].trim_end(), " shell 7%");
 }
 
 /// Verifies render explicit pane frame template can show agent info.
@@ -304,7 +304,7 @@ fn render_explicit_pane_frame_template_can_show_agent_info() {
     )
     .unwrap();
 
-    assert_eq!(rendered[0].trim_end(), "0: shell running default");
+    assert_eq!(rendered[0].trim_end(), " 0: shell running default");
 }
 
 /// Verifies that the built-in pane frame leaves working-directory display to
@@ -656,7 +656,7 @@ fn render_frame_positions_can_place_frames_at_bottom() {
 
     assert_eq!(
         rendered,
-        vec!["body        ", "pane        ", "window      "]
+        vec!["body        ", " pane       ", "window      "]
     );
 }
 
@@ -695,6 +695,6 @@ fn render_frame_styles_apply_to_styled_frame_lines() {
     assert!(
         view.line_style_spans[1]
             .iter()
-            .any(|span| { span.length == 4 && span.rendition.bold })
+            .any(|span| { span.length == 6 && span.rendition.bold })
     );
 }

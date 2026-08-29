@@ -1207,7 +1207,7 @@ fn render_pane_pwd_fields_compact_deep_paths_to_three_segments() {
     )
     .unwrap();
 
-    assert_eq!(rendered[0].trim_end(), "…/b/c/d");
+    assert_eq!(rendered[0].trim_end(), " …/b/c/d");
     assert!(rendered[2].contains(" …/b/c/d "), "{}", rendered[2]);
     assert!(!rendered[2].contains("~/Documents/a"), "{}", rendered[2]);
 }

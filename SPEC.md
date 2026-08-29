@@ -902,7 +902,7 @@ command through the pane-local `/` agent command path. Command pillboxes MUST
 NOT use text labels, MUST visually change while pressed, and MUST revert to
 their normal style when released. Releasing the mouse over the same pressed
 command pillbox MUST run the command; releasing elsewhere MUST cancel it.
-The generated default window right-status template MUST include padded button
+The generated default window right-status template MUST include button
 pillboxes for new-pane, new-window, new-group, and agent-shell commands. The
 default icons for those buttons MUST be `+`, `□`, `⊕`, and `λ`, respectively.
 Pane-local agent status controls own routing display and toggling.
@@ -1029,10 +1029,12 @@ of the right-status region and MUST include literal spaces between adjacent
 status pills and command-button pills.
 
 The default pane frame template, when pane framing is enabled, MUST display at
-least `pane.index` plus `pane.title` or `pane.id`; the built-in default SHOULD
-render pane text in a padded pill in the form ` <index> <title> ` without an
-idle agent marker. The leading and trailing padding cells SHOULD visually frame
-pane titles in the same family as window title pills.
+least `pane.index` plus `pane.title` or `pane.id`; the built-in default MUST
+contain raw semantic text in the form `<index> <title>` without an idle agent
+marker. The renderer MUST add exactly one styled padding cell to each side of
+every non-empty pane-title, window-title, group-title, action, and textual
+status pill. Literal spaces in status templates MUST remain structural
+separators between pills rather than serving as pill padding.
 When a pane is viewing scrollback rather than the live bottom, the default pane
 frame MUST surface the current pane working directory as a right-aligned
 `pane.pwd` pill, displayed relative to the user's home directory when possible,
@@ -1052,7 +1054,7 @@ The default window frame MUST support a configurable right-aligned status line.
 When terminal width permits, the window right-status region MUST leave at least
 one trailing frame-fill cell visible so the status area does not occupy the
 terminal edge cell and become vulnerable to host-terminal edge clipping.
-The generated default configuration MUST display padded window command buttons
+The generated default configuration MUST display window command buttons
 for `split-window -h`, `split-window`, `new-window`, `new-group`, and
 `agent-shell`, followed by `system.uptime` and `datetime.local`, in that status
 line with distinguishable themed color spans.
@@ -2977,10 +2979,16 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 74 is the current implemented configuration schema version for this
+schema version 76 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
+
+The `75 -> 76` migration MUST rewrite the exact historical default
+`frames.pane.template` value ` #{pane.index} #{pane.title} ` to the raw semantic
+value `#{pane.index} #{pane.title}`. It MUST preserve custom templates and a
+missing template unchanged because renderer-owned padding applies independently
+of template content.
 
 The `73 -> 74` migration MUST advance only the schema version while preserving
 every configured or omitted `permissions.sandbox` and

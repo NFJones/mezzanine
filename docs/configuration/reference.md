@@ -396,7 +396,7 @@ max_output_chars = 32
 | --- | --- | --- | --- |
 | `frames.pane.enabled` | boolean | `true` | Render pane frame or border metadata. |
 | `frames.pane.position` | string | `"border"` | `top`, `bottom`, or `border`. |
-| `frames.pane.template` | string | `" #{pane.index} #{pane.title} "` | Pane frame template. |
+| `frames.pane.template` | string | `"#{pane.index} #{pane.title}"` | Pane frame template. Pill padding is added by the renderer. |
 | `frames.pane.style` | string | `"default"` | Frame text style. |
 | `frames.pane.visible_fields` | string array | `[...]` | Allowed template fields for pane frames. |
 
