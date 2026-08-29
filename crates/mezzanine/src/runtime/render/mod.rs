@@ -315,9 +315,8 @@ struct RuntimeAgentShellPreview {
 /// Pane-local projection of independently owned live shell previews.
 ///
 /// `baseline_screen` contains durable presentation without these previews.
-/// `installed_screen` is the exact composite generation currently owned by
-/// this projection. A replacement or cleanup may mutate the pane only while
-/// the live screen still equals that installed generation.
+/// Runtime-owned lineage identifies the exact composite generation currently
+/// installed without retaining another complete screen snapshot.
 #[derive(Debug, Clone)]
 struct RuntimeAgentShellPreviewPresentation {
     /// Conversation that owns both retained screen generations.
@@ -326,8 +325,6 @@ struct RuntimeAgentShellPreviewPresentation {
     installed_lineage: u64,
     /// Durable pane generation onto which previews are projected.
     baseline_screen: std::sync::Arc<TerminalScreen>,
-    /// Exact composite generation installed by the latest projection.
-    installed_screen: std::sync::Arc<TerminalScreen>,
     /// Next pane-local first-seen order.
     next_order: u64,
     /// Independently mutable previews keyed by exact shell owner.
@@ -498,8 +495,6 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     baseline_screen: std::sync::Arc<TerminalScreen>,
     /// Latest provider-only screen before shell previews are composited.
     provider_screen: std::sync::Arc<TerminalScreen>,
-    /// Exact composite screen most recently installed by provisional streaming.
-    installed_screen: std::sync::Arc<TerminalScreen>,
     /// Direct batch rationale accumulated from the provider stream.
     rationale: Option<RuntimeStreamingTextSource>,
     /// Established streamed actions keyed by their MAAP array index.
@@ -604,8 +599,6 @@ pub(crate) enum RuntimeStreamingSayProjectedActionKind {
 pub(crate) struct RuntimeStreamingSayCompletionReconciliation {
     /// Action indices whose installed rows now own durable presentation.
     pub(crate) promoted_action_indices: std::collections::BTreeSet<usize>,
-    /// Whether reconciliation retained the exact installed terminal screen.
-    pub(crate) preserved_installed_screen: bool,
 }
 
 /// Immutable input for one cumulative streaming-say projection worker.
@@ -994,8 +987,7 @@ impl RuntimePresentationComponent {
             RuntimeAgentShellPreviewPresentation {
                 conversation_id: conversation_id.to_string(),
                 installed_lineage: 0,
-                baseline_screen: std::sync::Arc::new(baseline_screen.clone()),
-                installed_screen: std::sync::Arc::new(baseline_screen),
+                baseline_screen: std::sync::Arc::new(baseline_screen),
                 next_order: 0,
                 previews: std::collections::BTreeMap::new(),
                 settled_owners: std::collections::BTreeSet::new(),
