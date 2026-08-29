@@ -542,7 +542,22 @@ fn issue_store_persists_dependencies_and_rejects_cycles() {
         },
         30,
     );
-    assert!(missing.is_err());
+    let missing = missing.unwrap_err();
+    assert!(
+        missing
+            .message()
+            .contains("issue dependency `missing` does not exist"),
+        "{missing}"
+    );
+    let after_missing = store
+        .query_issues(&IssueQuery::new("/repo".to_string(), None, None, Some(10)).unwrap())
+        .unwrap();
+    assert_eq!(after_missing.len(), 2);
+    assert!(
+        after_missing
+            .iter()
+            .all(|record| record.title != "Blocked by missing issue")
+    );
 
     let cycle = store.update_issue(
         "/repo".to_string(),
@@ -553,7 +568,16 @@ fn issue_store_persists_dependencies_and_rejects_cycles() {
         },
         40,
     );
-    assert!(cycle.is_err());
+    let cycle = cycle.unwrap_err();
+    assert!(cycle.message().contains(&prerequisite.id), "{cycle}");
+    assert!(
+        store
+            .query_issues(&IssueQuery::new("/repo".to_string(), None, None, Some(10)).unwrap())
+            .unwrap()
+            .iter()
+            .find(|record| record.id == prerequisite.id)
+            .is_some_and(|record| record.depends_on.is_empty())
+    );
 }
 
 /// Verifies an open dependent protects its prerequisite from deletion while a

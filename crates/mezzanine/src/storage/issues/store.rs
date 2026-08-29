@@ -705,7 +705,9 @@ fn ensure_no_issue_dependency_cycle(
 ) -> Result<()> {
     let mut visited = BTreeSet::new();
     if issue_dependency_path_reaches(connection, project, issue_id, issue_id, &mut visited)? {
-        return Err(MezError::invalid_args("issue dependency cycle detected"));
+        return Err(MezError::invalid_args(format!(
+            "issue dependency cycle detected for `{issue_id}`"
+        )));
     }
     Ok(())
 }

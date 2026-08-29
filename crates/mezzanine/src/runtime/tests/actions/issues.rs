@@ -27,6 +27,19 @@ fn runtime_issue_query_batch(action_id: &str, refresh: bool) -> mez_agent::MaapB
 
 /// Builds one non-final issue-add batch that invalidates query freshness.
 fn runtime_issue_add_batch(action_id: &str) -> mez_agent::MaapBatch {
+    runtime_issue_add_batch_with_dependencies(
+        action_id,
+        "Exercise query freshness invalidation",
+        Vec::new(),
+    )
+}
+
+/// Builds one non-final issue-add batch with caller-supplied dependencies.
+fn runtime_issue_add_batch_with_dependencies(
+    action_id: &str,
+    title: &str,
+    depends_on: Vec<String>,
+) -> mez_agent::MaapBatch {
     mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "Record a newly discovered issue before refreshing the backlog".to_string(),
@@ -40,10 +53,10 @@ fn runtime_issue_add_batch(action_id: &str) -> mez_agent::MaapBatch {
                 kind: "task".to_string(),
                 state: None,
                 priority: None,
-                title: "Exercise query freshness invalidation".to_string(),
+                title: title.to_string(),
                 body: None,
                 notes: None,
-                depends_on: Vec::new(),
+                depends_on,
             },
         }],
         final_turn: false,
@@ -423,6 +436,90 @@ fn runtime_issue_query_freshness_skips_duplicates_and_resets_after_mutation() {
         .unwrap();
     assert!(explicit_refresh_json.contains("snapshot_sha256"));
     assert!(!explicit_refresh_json.contains("skipped_runtime_issue_query_freshness_guard"));
+}
+
+/// Verifies a rejected dependency produces bounded correction feedback and a
+/// later corrected `issue_add` creates exactly one issue.
+#[test]
+fn runtime_issue_add_dependency_failure_retries_without_duplicates() {
+    let mut service = test_runtime_service();
+    let config_root = temp_root("runtime-issue-add-dependency-retry");
+    service.set_config_root(config_root.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-issue-dependency-retry","input":"record dependent work"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+
+    let title = "Retry dependency validation once";
+    let failed = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &RuntimeBatchProvider {
+                response: runtime_issue_response(runtime_issue_add_batch_with_dependencies(
+                    "issue-add-missing",
+                    title,
+                    vec!["missing-dependency".to_string()],
+                )),
+            },
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(failed.terminal_state, AgentTurnState::Running);
+    let failure = &failed.action_results[0];
+    assert_eq!(failure.status, ActionStatus::Failed);
+    let failure_json = failure.structured_content_json.as_deref().unwrap();
+    assert!(failure_json.contains("issue_dependency_validation_failed"));
+    assert!(failure_json.contains("missing-dependency"));
+    assert!(failure_json.contains(r#""mutation_applied":false"#));
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == "turn-1")
+    );
+
+    let project = crate::storage::issues::project_key_for_working_directory(
+        service
+            .pane_current_working_directory("%1")
+            .unwrap_or_else(|| config_root.clone()),
+    );
+    let store = crate::storage::issues::IssueStore::from_database_path(
+        crate::storage::issues::issue_database_location(&config_root, None),
+    );
+    let query =
+        mez_agent::issues::IssueQuery::new(project, None, Some(title.to_string()), Some(10))
+            .unwrap();
+    assert!(store.query_issues(&query).unwrap().is_empty());
+
+    let corrected = service
+        .poll_agent_provider_tasks_with_provider(
+            &RuntimeBatchProvider {
+                response: runtime_issue_response(runtime_issue_add_batch_with_dependencies(
+                    "issue-add-corrected",
+                    title,
+                    Vec::new(),
+                )),
+            },
+            1,
+        )
+        .unwrap()
+        .remove(0);
+    assert_eq!(corrected.action_results[0].status, ActionStatus::Succeeded);
+    let records = store.query_issues(&query).unwrap();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0].title, title);
+    assert!(records[0].depends_on.is_empty());
 }
 
 /// Verifies `/loop` does not reset issue-query freshness inside one iteration.

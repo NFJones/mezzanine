@@ -188,13 +188,7 @@ pub(crate) fn execute_issue_action_with_context(
                     ))
                 }
                 Err(error) => Ok((
-                    ActionResult::failed(
-                        turn,
-                        action,
-                        ActionStatus::Failed,
-                        runtime_mezzanine_error_code(error.kind()),
-                        error.message().to_string(),
-                    )?,
+                    issue_action_failure_result(turn, action, "add", None, depends_on, &error)?,
                     false,
                 )),
             }
@@ -244,12 +238,13 @@ pub(crate) fn execute_issue_action_with_context(
                     Ok((issue_update_action_result(turn, action, &result), updated))
                 }
                 Err(error) => Ok((
-                    ActionResult::failed(
+                    issue_action_failure_result(
                         turn,
                         action,
-                        ActionStatus::Failed,
-                        runtime_mezzanine_error_code(error.kind()),
-                        error.message().to_string(),
+                        "update",
+                        Some(id),
+                        depends_on.as_deref().unwrap_or_default(),
+                        &error,
                     )?,
                     false,
                 )),
@@ -333,6 +328,61 @@ pub(crate) fn execute_issue_action_with_context(
             "issue execution requires an issue action",
         )),
     }
+}
+
+/// Builds one issue failure, attaching actionable dependency correction data when applicable.
+fn issue_action_failure_result(
+    turn: &AgentTurnRecord,
+    action: &AgentAction,
+    operation: &str,
+    issue_id: Option<&String>,
+    dependency_ids: &[String],
+    error: &MezError,
+) -> Result<ActionResult> {
+    let message = error.message();
+    let dependency_failure = error.kind() == crate::error::MezErrorKind::InvalidArgs
+        && (message.starts_with("issue dependency ")
+            || message.starts_with("issue dependencies ")
+            || message == "issue cannot depend on itself");
+    let mut result = ActionResult::failed(
+        turn,
+        action,
+        ActionStatus::Failed,
+        runtime_mezzanine_error_code(error.kind()),
+        message.to_string(),
+    )?;
+    if dependency_failure {
+        let missing_dependency_id = message
+            .strip_prefix("issue dependency `")
+            .and_then(|message| message.split_once('`').map(|(id, _)| id));
+        let reason = if missing_dependency_id.is_some() {
+            "missing_dependency"
+        } else if message.contains("cycle") {
+            "dependency_cycle"
+        } else if message.contains("itself") {
+            "self_dependency"
+        } else if message.contains("duplicates") {
+            "duplicate_dependency"
+        } else {
+            "invalid_dependency"
+        };
+        let details = serde_json::json!({
+            "state": "issue_dependency_validation_failed",
+            "operation": operation,
+            "issue_id": issue_id,
+            "dependency_ids": dependency_ids,
+            "missing_dependency_id": missing_dependency_id,
+            "reason": reason,
+            "mutation_applied": false,
+            "retry_guidance": "query or validate the referenced issue ids, correct depends_on, and retry; if the prior result was ambiguous, query for the same title before retrying",
+        })
+        .to_string();
+        result.structured_content_json = Some(details.clone());
+        if let Some(action_error) = result.error.as_mut() {
+            action_error.data_json = Some(details);
+        }
+    }
+    Ok(result)
 }
 
 pub(super) fn runtime_issues_enabled(service: &RuntimeSessionService) -> bool {

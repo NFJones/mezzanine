@@ -511,6 +511,17 @@ pub fn runtime_action_result_is_feedback_candidate(result: &ActionResult) -> boo
     if result.status != ActionStatus::Failed {
         return false;
     }
+    if matches!(result.action_type, "issue_add" | "issue_update") {
+        return error.code == "invalid_params"
+            && error
+                .data_json
+                .as_deref()
+                .and_then(|data| serde_json::from_str::<serde_json::Value>(data).ok())
+                .is_some_and(|data| {
+                    data.get("state").and_then(serde_json::Value::as_str)
+                        == Some("issue_dependency_validation_failed")
+                });
+    }
     if runtime_action_type_is_model_correctable(result.action_type)
         && !runtime_error_code_is_non_correctable(error.code.as_str())
     {
@@ -1487,6 +1498,57 @@ mod tests {
         )
         .unwrap();
         assert!(runtime_action_result_is_feedback_candidate(&result));
+    }
+
+    /// Verifies only structured issue dependency validation failures enter
+    /// bounded model correction; issue infrastructure failures remain terminal.
+    #[test]
+    fn issue_dependency_failures_are_model_correctable() {
+        let action = AgentAction {
+            id: "issue-add".to_string(),
+            rationale: "record dependent work".to_string(),
+            payload: AgentActionPayload::IssueAdd {
+                kind: "task".to_string(),
+                state: None,
+                priority: None,
+                title: "Dependent work".to_string(),
+                body: None,
+                notes: None,
+                depends_on: vec!["missing".to_string()],
+            },
+        };
+        let mut dependency_failure = ActionResult::failed(
+            &turn(),
+            &action,
+            ActionStatus::Failed,
+            "invalid_params",
+            "issue dependency `missing` does not exist in this project",
+        )
+        .unwrap();
+        dependency_failure.error.as_mut().unwrap().data_json = Some(
+            serde_json::json!({
+                "state": "issue_dependency_validation_failed",
+                "reason": "missing_dependency",
+                "missing_dependency_id": "missing",
+                "mutation_applied": false,
+            })
+            .to_string(),
+        );
+        assert!(runtime_action_result_is_feedback_candidate(
+            &dependency_failure
+        ));
+
+        let infrastructure_failure = ActionResult::failed(
+            &turn(),
+            &action,
+            ActionStatus::Failed,
+            "issue_store_unavailable",
+            "issue actions require a configured config root",
+        )
+        .unwrap();
+        assert!(!runtime_action_result_is_feedback_candidate(
+            &infrastructure_failure
+        ));
     }
 
     /// Verifies loop policy can classify patch-bearing provider batches before

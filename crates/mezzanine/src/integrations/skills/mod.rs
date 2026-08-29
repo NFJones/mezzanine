@@ -883,6 +883,16 @@ mod tests {
         assert!(add_issues_document.text.contains(
             "only then add the dependent issue in a later action batch using that returned id"
         ));
+        assert!(
+            add_issues_document
+                .text
+                .contains("correct the dependency list, and retry `issue_add`")
+        );
+        assert!(
+            add_issues_document
+                .text
+                .contains("query for a matching issue if the prior result was ambiguous")
+        );
 
         let add_research_document =
             load_skill_document(catalog.get(BUILTIN_ADD_RESEARCH_SKILL_NAME).unwrap()).unwrap();
