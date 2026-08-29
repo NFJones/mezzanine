@@ -159,7 +159,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 76
+version = 77
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -593,16 +593,34 @@ auth_profile = "default"
 # Compatible local APIs may omit stored auth; Mezzanine then sends no
 # Authorization header instead of requiring a placeholder key.
 base_url = ""
-# OpenAI model IDs supported by the default coding-agent harness profile.
-models = [
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-]
 default_model = "gpt-5.6-terra"
+
+# Reusable provider-scoped model facts. Model profiles may override these
+# values for one usage policy without duplicating the base model identity.
+[providers.openai.models.gpt-5-6-sol]
+id = "gpt-5.6-sol"
+context_window_tokens = 1050000
+
+[providers.openai.models.gpt-5-6-terra]
+id = "gpt-5.6-terra"
+context_window_tokens = 1050000
+max_input_tokens = 922000
+
+[providers.openai.models.gpt-5-6-luna]
+id = "gpt-5.6-luna"
+context_window_tokens = 400000
+
+[providers.openai.models.gpt-5-5]
+id = "gpt-5.5"
+context_window_tokens = 1050000
+
+[providers.openai.models.gpt-5-4]
+id = "gpt-5.4"
+context_window_tokens = 400000
+
+[providers.openai.models.gpt-5-4-mini]
+id = "gpt-5.4-mini"
+context_window_tokens = 400000
 
 [providers.openai.options]
 # Optional documented OpenAI routing headers for multi-organization/project API keys.
@@ -616,14 +634,21 @@ auth_profile = "default"
 # Optional API base URL, such as "https://api.anthropic.com/v1".
 # Mezzanine derives the Anthropic Messages endpoint from this base.
 base_url = ""
-# Anthropic model IDs supported by the built-in Claude provider defaults.
-models = [
-    "claude-fable-5",
-    "claude-opus-5",
-    "claude-sonnet-5",
-    "claude-haiku-4-5-20251001",
-]
 default_model = "claude-sonnet-5"
+
+[providers.anthropic.models.claude-fable-5]
+id = "claude-fable-5"
+
+[providers.anthropic.models.claude-opus-5]
+id = "claude-opus-5"
+
+[providers.anthropic.models.claude-sonnet-5]
+id = "claude-sonnet-5"
+context_window_tokens = 1000000
+
+[providers.anthropic.models.claude-haiku-4-5-20251001]
+id = "claude-haiku-4-5-20251001"
+context_window_tokens = 200000
 
 [providers.anthropic.options]
 # anthropic_version = "2023-06-01"
@@ -638,8 +663,12 @@ default_model = "claude-sonnet-5"
 # api = "openai-chat-completions"
 # auth_profile = "default"
 # base_url = "http://localhost:1234/v1"
-# models = ["local-model"]
 # default_model = "local-model"
+#
+# [providers.lmstudio.models.local-model]
+# id = "local-model"
+# display_name = "Local model"
+# context_window_tokens = 32768
 #
 # [providers.lmstudio.options]
 # maap_output = "structured_json"
@@ -670,12 +699,15 @@ auth_profile = "default"
 # Optional API base URL, such as "https://api.deepseek.com".
 # Mezzanine derives /chat/completions and /models endpoints from this base.
 base_url = ""
-# DeepSeek model IDs supported by the default coding-agent harness profile.
-models = [
-    "deepseek-v4-pro",
-    "deepseek-v4-flash",
-]
 default_model = "deepseek-v4-pro"
+
+[providers.deepseek.models.deepseek-v4-pro]
+id = "deepseek-v4-pro"
+context_window_tokens = 1000000
+
+[providers.deepseek.models.deepseek-v4-flash]
+id = "deepseek-v4-flash"
+context_window_tokens = 1000000
 
 [model_profiles.anthropic-default]
 provider = "anthropic"

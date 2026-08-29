@@ -511,19 +511,19 @@ fn default_config_includes_anthropic_provider_defaults() {
 
     let models = anthropic
         .get("models")
-        .and_then(toml::Value::as_array)
+        .and_then(toml::Value::as_table)
         .unwrap()
-        .iter()
-        .map(|value| value.as_str().unwrap())
+        .values()
+        .map(|value| value.get("id").and_then(toml::Value::as_str).unwrap())
         .collect::<Vec<_>>();
 
     assert_eq!(
         models,
         vec![
             "claude-fable-5",
+            "claude-haiku-4-5-20251001",
             "claude-opus-5",
             "claude-sonnet-5",
-            "claude-haiku-4-5-20251001",
         ]
     );
 

@@ -14,6 +14,10 @@ active pane agent shell.
 
 Mezzanine uses named model profiles that combine provider, model, reasoning and
 latency preferences, capability requirements, and non-secret provider options.
+Provider-scoped base records under `providers.<name>.models.<entry>` define
+reusable model identity, aliases, context and input/output limits, supported
+reasoning levels, capabilities, and non-secret model options. Profiles may
+override those values for one usage policy without duplicating the base facts.
 Use `/model list` to see the active provider's available catalog and `/model`
 to select a model or supported reasoning level for the pane. When live provider
 metadata is unavailable, the list can fall back to configured models and labels

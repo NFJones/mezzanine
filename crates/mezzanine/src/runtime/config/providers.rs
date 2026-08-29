@@ -414,11 +414,7 @@ fn runtime_provider_config_from_config(
     let kind = runtime_json_string(object.get("kind")).unwrap_or(provider_id);
     let api = runtime_json_string(object.get("api")).map(ToOwned::to_owned);
     resolve_provider_api(kind, api.as_deref())?;
-    let models = runtime_json_string_array(object.get("models"))?
-        .unwrap_or_default()
-        .into_iter()
-        .map(RuntimeProviderModelConfig::named)
-        .collect();
+    let models = runtime_provider_models_from_config(provider_id, object.get("models"))?;
     let default_model = runtime_json_string(object.get("default_model"))
         .filter(|model| !model.is_empty())
         .map(ToOwned::to_owned);
@@ -433,7 +429,7 @@ fn runtime_provider_config_from_config(
             options.insert(key.clone(), value.to_string());
         }
     }
-    Ok(RuntimeProviderConfig {
+    let config = RuntimeProviderConfig {
         provider_id: provider_id.to_string(),
         kind: kind.to_string(),
         api,
@@ -444,7 +440,112 @@ fn runtime_provider_config_from_config(
         models,
         default_model,
         options,
+    };
+    config
+        .validate_models()
+        .map_err(|error| MezError::config(error.to_string()))?;
+    Ok(config)
+}
+
+/// Parses structured provider-model records while retaining compatibility with
+/// already-normalized legacy arrays used by older in-memory test fixtures.
+fn runtime_provider_models_from_config(
+    provider_id: &str,
+    value: Option<&Value>,
+) -> Result<Vec<RuntimeProviderModelConfig>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    if value.is_array() {
+        return runtime_json_string_array(Some(value)).map(|models| {
+            models
+                .unwrap_or_default()
+                .into_iter()
+                .map(RuntimeProviderModelConfig::named)
+                .collect()
+        });
+    }
+    let models = value.as_object().ok_or_else(|| {
+        MezError::config(format!(
+            "providers.{provider_id}.models must be an object of model records"
+        ))
+    })?;
+    let mut parsed = Vec::with_capacity(models.len());
+    for (entry_id, value) in models {
+        parsed.push(runtime_provider_model_from_config(
+            provider_id,
+            entry_id,
+            value,
+        )?);
+    }
+    Ok(parsed)
+}
+
+/// Parses one reusable provider-scoped model metadata record.
+fn runtime_provider_model_from_config(
+    provider_id: &str,
+    entry_id: &str,
+    value: &Value,
+) -> Result<RuntimeProviderModelConfig> {
+    let path = format!("providers.{provider_id}.models.{entry_id}");
+    let model = value
+        .as_object()
+        .ok_or_else(|| MezError::config(format!("{path} must be an object")))?;
+    let id = runtime_json_string(model.get("id"))
+        .ok_or_else(|| MezError::config(format!("{path}.id is required")))?;
+    let display_name = model
+        .get("display_name")
+        .map(|value| {
+            runtime_json_string(Some(value))
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| MezError::config(format!("{path}.display_name must be a string")))
+        })
+        .transpose()?;
+    let aliases = runtime_json_string_array(model.get("aliases"))?.unwrap_or_default();
+    let reasoning_levels = model
+        .get("reasoning_levels")
+        .map(|value| runtime_json_string_array(Some(value)).map(Option::unwrap_or_default))
+        .transpose()?;
+    let capabilities = model
+        .get("capabilities")
+        .map(|value| runtime_json_string_array(Some(value)).map(Option::unwrap_or_default))
+        .transpose()?;
+    let provider_options =
+        runtime_json_string_map(model.get("provider_options"))?.unwrap_or_default();
+
+    Ok(RuntimeProviderModelConfig {
+        id: id.to_string(),
+        display_name,
+        aliases,
+        context_window_tokens: runtime_provider_model_token_limit(
+            model.get("context_window_tokens"),
+            &format!("{path}.context_window_tokens"),
+        )?,
+        max_input_tokens: runtime_provider_model_token_limit(
+            model.get("max_input_tokens"),
+            &format!("{path}.max_input_tokens"),
+        )?,
+        max_output_tokens: runtime_provider_model_token_limit(
+            model.get("max_output_tokens"),
+            &format!("{path}.max_output_tokens"),
+        )?,
+        reasoning_levels,
+        capabilities,
+        provider_options,
     })
+}
+
+/// Parses one optional positive provider-model token limit.
+fn runtime_provider_model_token_limit(value: Option<&Value>, path: &str) -> Result<Option<usize>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let tokens = value
+        .as_u64()
+        .and_then(|tokens| usize::try_from(tokens).ok())
+        .filter(|tokens| *tokens > 0)
+        .ok_or_else(|| MezError::config(format!("{path} must be a positive integer")))?;
+    Ok(Some(tokens))
 }
 
 /// Returns the built-in model catalog for a provider kind.
@@ -530,6 +631,73 @@ mod tests {
             error
                 .to_string()
                 .contains("providers.lmstudio.options.streaming must be a string")
+        );
+    }
+
+    /// Verifies structured provider-model records materialize every reusable
+    /// metadata field into the lower-crate configuration contract.
+    #[test]
+    fn runtime_provider_config_parses_structured_model_metadata() {
+        let config = runtime_provider_config_from_config(
+            "custom",
+            &serde_json::json!({
+                "kind": "openai-compatible",
+                "models": {
+                    "primary": {
+                        "id": "model.a",
+                        "display_name": "Model A",
+                        "aliases": ["fast"],
+                        "context_window_tokens": 200000,
+                        "max_input_tokens": 180000,
+                        "max_output_tokens": 16000,
+                        "reasoning_levels": ["low", "high"],
+                        "capabilities": ["vision", "tool_use"],
+                        "provider_options": { "service_tier": "priority" }
+                    }
+                }
+            }),
+        )
+        .unwrap();
+
+        let model = &config.models[0];
+        assert_eq!(model.id, "model.a");
+        assert_eq!(model.display_name.as_deref(), Some("Model A"));
+        assert_eq!(model.aliases, ["fast"]);
+        assert_eq!(model.context_window_tokens, Some(200_000));
+        assert_eq!(model.max_input_tokens, Some(180_000));
+        assert_eq!(model.max_output_tokens, Some(16_000));
+        assert_eq!(
+            model.reasoning_levels,
+            Some(vec!["low".to_string(), "high".to_string()])
+        );
+        assert_eq!(
+            model.capabilities,
+            Some(vec!["vision".to_string(), "tool_use".to_string()])
+        );
+        assert_eq!(model.provider_options["service_tier"], "priority");
+    }
+
+    /// Verifies direct runtime parsing rejects ambiguous model identities even
+    /// when a caller bypasses the higher-level configuration validator.
+    #[test]
+    fn runtime_provider_config_rejects_model_identity_collisions() {
+        let error = runtime_provider_config_from_config(
+            "custom",
+            &serde_json::json!({
+                "kind": "openai-compatible",
+                "models": {
+                    "first": { "id": "model-a", "aliases": ["shared"] },
+                    "second": { "id": "shared" }
+                }
+            }),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("provider model alias `shared` collides"),
+            "{error}"
         );
     }
 }

@@ -2979,10 +2979,17 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 76 is the current implemented configuration schema version for this
+schema version 77 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
+
+The `76 -> 77` migration MUST replace each `providers.<name>.models` string
+array with a table of model records. Every migrated record MUST preserve its
+provider-facing model id in `id`, and migration MUST generate deterministic
+path-safe entry keys with numeric suffixes when normalized keys collide. It
+MUST preserve `default_model` and all model-profile fields without promoting
+profile-local policy into provider-model metadata.
 
 The `75 -> 76` migration MUST rewrite the exact historical default
 `frames.pane.template` value ` #{pane.index} #{pane.title} ` to the raw semantic
@@ -4540,13 +4547,26 @@ after unsupported local profile options are omitted. Local
 `provider_options.prompt_cache_retention` values MUST NOT affect the emitted
 OpenAI Responses body or the provider request-shape diagnostics.
 
+The `providers.<name>.models` table MUST be a map keyed by a path-safe local
+entry identity. Each record MUST define its canonical provider-facing `id` and
+MAY define `display_name`, `aliases`, `context_window_tokens`,
+`max_input_tokens`, `max_output_tokens`, `reasoning_levels`, `capabilities`,
+and non-secret string-valued `provider_options`. Canonical ids and aliases MUST
+be non-empty and collision-free within one provider. Token limits MUST be
+positive, and an effective `max_input_tokens` inherited or overridden by a
+model profile MUST NOT exceed the effective context window when both are
+known. Explicit configured lists replace lower-precedence list metadata,
+including when explicitly empty. Provider-model records define reusable model
+facts; `model_profiles` define usage policy and MAY override those facts for a
+specific profile. Provider-model option defaults MUST NOT contain credentials.
+
 The built-in OpenAI provider default model MUST be `gpt-5.6-terra` unless the user
 overrides it through provider or model-profile configuration. The built-in
-OpenAI provider model list SHOULD include only coding-agent harness models:
+OpenAI provider model table SHOULD include only coding-agent harness models:
 `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, and
-`gpt-5.4-mini`. When a provider configuration leaves
-`models` empty, Mezzanine MUST load the provider's built-in code-defined model
-list instead of treating the provider as having no selectable models.
+`gpt-5.4-mini`. When a provider configuration leaves `models` empty, Mezzanine
+MUST load the provider's built-in code-defined model list instead of treating
+the provider as having no selectable models.
 The built-in Anthropic provider default model MUST be `claude-sonnet-5` unless
 the user overrides it through provider or model-profile configuration. The
 built-in Anthropic provider model list SHOULD include `claude-fable-5`,

@@ -14,10 +14,12 @@ Read [Configuration overview](overview.md) and complete provider sign-in with
 
 The `agents` table controls the default provider and model profile, routing,
 compaction retention, concurrency, loop limits, and subagent limits. Provider
-definitions belong under `providers.<name>`; named `model_profiles.<name>`
-combine a provider, model, reasoning, latency, capability, and non-secret
-provider options. Use `/model`, `/routing`, and `/thinking` for pane-scoped
-runtime choices where supported.
+definitions belong under `providers.<name>`. Reusable model facts belong under
+`providers.<name>.models.<entry>`, whose required `id` is the canonical
+provider-facing model id. Named `model_profiles.<name>` combine that base model
+with reasoning, latency, capability, policy, and non-secret option overrides.
+Use `/model`, `/routing`, and `/thinking` for pane-scoped runtime choices where
+supported.
 
 Provider configuration describes connections and model catalogs; it does not
 store authentication secrets. Use `mez auth login`, `mez auth status`, and

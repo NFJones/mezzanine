@@ -11,9 +11,10 @@ use super::{
     HOST_LEASE_KEYS, INSTRUCTION_KEYS, IROH_TRANSPORT_KEYS, ISSUE_KEYS, JsonPathParser,
     JsonValueParser, KEY_BINDING_KEYS, KEY_PRESET_KEYS, LAYOUT_KEYS, MCP_SERVER_KEYS, MEMORY_KEYS,
     MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS, PANE_FRAME_KEYS, PERMISSION_KEYS,
-    PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, RUNTIME_KEYS, SEATBELT_PERMISSION_KEYS, SESSION_KEYS,
-    SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
-    exact_command_sha256, normalize_exact_command_text, parse_config_json_value_best_effort,
+    PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, PROVIDER_MODEL_KEYS, RUNTIME_KEYS,
+    SEATBELT_PERMISSION_KEYS, SESSION_KEYS, SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS,
+    TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS, exact_command_sha256,
+    normalize_exact_command_text, parse_config_json_value_best_effort,
 };
 use mez_mux::theme::{UI_COLOR_SLOT_NAMES, valid_color_alias_name};
 
@@ -633,6 +634,25 @@ pub(super) fn validate_provider_path(segments: &[&str]) -> Option<String> {
         return Some("unknown provider configuration key".to_string());
     }
     if key == "options" {
+        return None;
+    }
+    if key == "models" {
+        if segments.len() <= 4 {
+            return None;
+        }
+        let model_key = segments[4];
+        if !PROVIDER_MODEL_KEYS.contains(&model_key) {
+            return Some("unknown provider model configuration key".to_string());
+        }
+        if model_key == "provider_options" {
+            if segments.len() > 6 {
+                return Some("provider model option must not contain nested keys".to_string());
+            }
+            return None;
+        }
+        if segments.len() > 5 {
+            return Some("scalar provider model setting must not contain nested keys".to_string());
+        }
         return None;
     }
     if segments.len() > 3 {

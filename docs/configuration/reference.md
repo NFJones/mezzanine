@@ -55,7 +55,7 @@ configuration error; remove or relocate all but the intended file. See
 [Configuration overview](overview.md) for mutation examples and the layer
 selection workflow.
 
-The current config schema version is `73`. On launch, Mezzanine migrates an
+The current config schema version is `77`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -114,7 +114,7 @@ shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `73` | Config schema version. Do not change this. |
+| `version` | integer | `77` | Config schema version. Do not change this. |
 | `host` | table | see below | Disabled-by-default persistent host, recovery, and durable-lease policy. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
@@ -657,7 +657,7 @@ rewrite YAML or JSON primary configurations.
 | `providers.<name>.api` | string | `providers.openai.api = "openai-responses"` | Wire API compatibility: `openai-responses`, `openai-chat-completions`, `anthropic-messages`, or `deepseek-chat-completions`. |
 | `providers.<name>.auth_profile` | string | `providers.openai.auth_profile = "default"` | Auth profile id. |
 | `providers.<name>.base_url` | string | `providers.openai.base_url = ""` | Optional API base URL. Empty uses provider default. |
-| `providers.<name>.models` | string array | see below | Selectable model ids. Empty may use provider built-ins. |
+| `providers.<name>.models` | table | see below | Reusable provider-scoped model records. Empty may use provider built-ins. |
 | `providers.<name>.default_model` | string | `providers.openai.default_model = "gpt-5.6-terra"` | Default model for the provider. |
 | `providers.<name>.options` | table | `{}` | Provider-specific non-secret options. |
 | `providers.anthropic.options.anthropic_version` | string | omitted | Optional Anthropic Messages API version header; defaults to `2023-06-01`. |
@@ -665,22 +665,28 @@ rewrite YAML or JSON primary configurations.
 | `providers.openai.options.organization_id` | string | omitted | Optional OpenAI organization header for API-key requests. |
 | `providers.openai.options.project_id` | string | omitted | Optional OpenAI project header for API-key requests. |
 
-Default `providers.openai.models`:
+Each `providers.<name>.models.<entry>` record requires `id` and may define
+`display_name`, `aliases`, `context_window_tokens`, `max_input_tokens`,
+`max_output_tokens`, `reasoning_levels`, `capabilities`, and a non-secret
+string-valued `provider_options` table. The entry key is a path-safe local
+identity; `id` is the canonical provider-facing model id. Ids and aliases must
+be unique within a provider. Positive token limits and `max_input_tokens <=
+context_window_tokens` are enforced when both effective values are known.
+
+Example configured base metadata:
 
 ```toml
-["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]
-```
+[providers.openai.models.gpt-5-6-terra]
+id = "gpt-5.6-terra"
+display_name = "GPT 5.6 Terra"
+aliases = ["terra"]
+context_window_tokens = 1050000
+max_input_tokens = 922000
+reasoning_levels = ["low", "medium", "high", "xhigh"]
+capabilities = ["tool_use", "vision"]
 
-Default `providers.anthropic.models`:
-
-```toml
-["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"]
-```
-
-Default `providers.deepseek.models`:
-
-```toml
-["deepseek-v4-pro", "deepseek-v4-flash"]
+[providers.openai.models.gpt-5-6-terra.provider_options]
+service_tier = "priority"
 ```
 
 Provider `api` selects the reusable wire adapter independently from provider
@@ -734,8 +740,12 @@ kind = "openai-compatible"
 api = "openai-chat-completions"
 auth_profile = "default"
 base_url = "http://localhost:1234/v1"
-models = ["local-model"]
 default_model = "local-model"
+
+[providers.lmstudio.models.local-model]
+id = "local-model"
+display_name = "Local model"
+context_window_tokens = 32768
 
 [providers.lmstudio.options]
 maap_output = "structured_json"

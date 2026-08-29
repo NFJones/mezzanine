@@ -116,6 +116,106 @@ fn validates_named_model_profile_schema() {
     }
 }
 
+/// Verifies structured provider-model records accept reusable metadata and
+/// reject legacy arrays, malformed fields, invalid limits, and identity
+/// collisions under the current schema.
+///
+/// Provider-local validation must run before runtime profile or picker
+/// materialization so every consumer receives one unambiguous model identity.
+#[test]
+fn validates_structured_provider_model_schema() {
+    let valid = validate_config_text(
+        ConfigFormat::Toml,
+        "version = 77\n[providers.custom]\nkind = \"openai-compatible\"\ndefault_model = \"model.a\"\n[providers.custom.models.primary]\nid = \"model.a\"\ndisplay_name = \"Model A\"\naliases = [\"fast\"]\ncontext_window_tokens = 200000\nmax_input_tokens = 180000\nmax_output_tokens = 16000\nreasoning_levels = [\"low\", \"high\"]\ncapabilities = [\"vision\", \"tool_use\"]\n[providers.custom.models.primary.provider_options]\nservice_tier = \"priority\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(valid.valid, "{:?}", valid.diagnostics);
+
+    for (body, expected_path) in [
+        (
+            "[providers.custom]\nmodels = [\"legacy\"]\n",
+            "providers.custom.models",
+        ),
+        (
+            "[providers.custom.models.primary]\nid = \"\"\n",
+            "providers.custom.models.primary.id",
+        ),
+        (
+            "[providers.custom.models.primary]\nid = \"model-a\"\ncontext_window_tokens = 0\n",
+            "providers.custom.models.primary.context_window_tokens",
+        ),
+        (
+            "[providers.custom.models.primary]\nid = \"model-a\"\ncontext_window_tokens = 100\nmax_input_tokens = 101\n",
+            "providers.custom.models.primary.max_input_tokens",
+        ),
+        (
+            "[providers.custom.models.primary]\nid = \"model-a\"\naliases = [\"\"]\n",
+            "providers.custom.models.primary.aliases",
+        ),
+        (
+            "[providers.custom.models.primary]\nid = \"model-a\"\nreasoning_levels = [\"high\", \"\"]\n",
+            "providers.custom.models.primary.reasoning_levels",
+        ),
+        (
+            "[providers.custom.models.primary]\nid = \"model-a\"\nunknown = true\n",
+            "providers.custom.models.primary.unknown",
+        ),
+        (
+            "[providers.custom.models.first]\nid = \"model-a\"\naliases = [\"shared\"]\n[providers.custom.models.second]\nid = \"shared\"\n",
+            "providers.custom.models.second.id",
+        ),
+    ] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("version = 77\n{body}"),
+            ConfigScope::Primary,
+        );
+        assert!(!validation.valid, "{body}");
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.path == expected_path),
+            "{body}: {:?}",
+            validation.diagnostics
+        );
+    }
+}
+
+/// Verifies profile token overrides are checked against the effective
+/// provider-model base and model options cannot contain credential material.
+///
+/// Schema validation must reject an impossible inherited request budget and
+/// secret-like option keys before runtime materialization merges either value.
+#[test]
+fn validates_provider_model_inheritance_and_non_secret_options() {
+    for (body, expected_path) in [
+        (
+            "[providers.custom.models.primary]\nid = \"model-a\"\ncontext_window_tokens = 100\n[model_profiles.work]\nprovider = \"custom\"\nmodel = \"model-a\"\nmax_input_tokens = 101\n",
+            "model_profiles.work.max_input_tokens",
+        ),
+        (
+            "[providers.custom.models.primary]\nid = \"model-a\"\n[providers.custom.models.primary.provider_options]\napi_key = \"not-allowed\"\n",
+            "providers.custom.models.primary.provider_options.api_key",
+        ),
+    ] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("version = 77\n{body}"),
+            ConfigScope::Primary,
+        );
+        assert!(!validation.valid, "{body}");
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.path == expected_path),
+            "{body}: {:?}",
+            validation.diagnostics
+        );
+    }
+}
+
 /// Verifies that implementation-exposed audit config keys remain listed in the
 /// normative Section 8.2 configuration table.
 #[test]

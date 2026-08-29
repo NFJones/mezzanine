@@ -311,6 +311,7 @@ pub fn validate_config_text(
     diagnostics.extend(validate_agent_turn_timeout_config(format, text));
     diagnostics.extend(validate_host_config(format, text));
     diagnostics.extend(validate_iroh_transport_config(format, text));
+    diagnostics.extend(validate_provider_models_config(format, text));
     diagnostics.extend(validate_group_whitelist_config(format, text));
     diagnostics.extend(validate_env_whitelist_config(format, text));
 
@@ -545,6 +546,324 @@ pub fn validate_config_text(
     diagnostics.sort_by(|left, right| left.path.cmp(&right.path));
     diagnostics.dedup();
     ConfigValidation::from_diagnostics(diagnostics)
+}
+
+/// Validates schema-v77 reusable provider-model metadata with value types and
+/// provider-local identity relationships intact.
+fn validate_provider_models_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
+    let Ok(root) = parse_config_json_value(format, text) else {
+        return Vec::new();
+    };
+    let schema_version = root
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(1);
+    let Some(providers) = root.get("providers").and_then(serde_json::Value::as_object) else {
+        return Vec::new();
+    };
+    let mut diagnostics = Vec::new();
+    for (provider_id, provider) in providers {
+        let Some(provider) = provider.as_object() else {
+            continue;
+        };
+        let Some(models_value) = provider.get("models") else {
+            continue;
+        };
+        let models_path = format!("providers.{provider_id}.models");
+        if models_value.is_array() {
+            if schema_version >= 77 {
+                diagnostics.push(ConfigDiagnostic {
+                    path: models_path,
+                    message: "provider models must be a table of model records".to_string(),
+                });
+            }
+            continue;
+        }
+        let Some(models) = models_value.as_object() else {
+            diagnostics.push(ConfigDiagnostic {
+                path: models_path,
+                message: "provider models must be a table of model records".to_string(),
+            });
+            continue;
+        };
+
+        let mut identities = std::collections::BTreeMap::<String, String>::new();
+        for (entry_id, model_value) in models {
+            let entry_path = format!("providers.{provider_id}.models.{entry_id}");
+            let Some(model) = model_value.as_object() else {
+                diagnostics.push(ConfigDiagnostic {
+                    path: entry_path,
+                    message: "provider model record must be a table".to_string(),
+                });
+                continue;
+            };
+            let id_path = format!("{entry_path}.id");
+            let model_id = model.get("id").and_then(serde_json::Value::as_str);
+            match model_id {
+                Some(model_id) if valid_provider_model_text(model_id) => {
+                    if identities
+                        .insert(model_id.trim().to_string(), id_path.clone())
+                        .is_some()
+                    {
+                        diagnostics.push(ConfigDiagnostic {
+                            path: id_path.clone(),
+                            message: "provider model id collides with another id or alias"
+                                .to_string(),
+                        });
+                    }
+                }
+                _ => diagnostics.push(ConfigDiagnostic {
+                    path: id_path.clone(),
+                    message: "provider model id must be non-empty printable text".to_string(),
+                }),
+            }
+
+            if model.get("display_name").is_some_and(|value| {
+                value
+                    .as_str()
+                    .is_none_or(|name| !valid_provider_model_text(name))
+            }) {
+                diagnostics.push(ConfigDiagnostic {
+                    path: format!("{entry_path}.display_name"),
+                    message: "provider model display_name must be non-empty printable text"
+                        .to_string(),
+                });
+            }
+
+            for key in ["aliases", "reasoning_levels", "capabilities"] {
+                if let Some(values) = model.get(key) {
+                    validate_provider_model_string_list(
+                        values,
+                        &format!("{entry_path}.{key}"),
+                        &mut diagnostics,
+                    );
+                }
+            }
+
+            if let Some(aliases) = model.get("aliases").and_then(serde_json::Value::as_array) {
+                for alias in aliases.iter().filter_map(serde_json::Value::as_str) {
+                    if !valid_provider_model_text(alias) {
+                        continue;
+                    }
+                    let alias = alias.trim().to_string();
+                    if identities
+                        .insert(alias, format!("{entry_path}.aliases"))
+                        .is_some()
+                    {
+                        diagnostics.push(ConfigDiagnostic {
+                            path: format!("{entry_path}.aliases"),
+                            message: "provider model alias collides with another id or alias"
+                                .to_string(),
+                        });
+                    }
+                }
+            }
+
+            let mut limits = std::collections::BTreeMap::new();
+            for key in [
+                "context_window_tokens",
+                "max_input_tokens",
+                "max_output_tokens",
+            ] {
+                if let Some(value) = model.get(key) {
+                    let path = format!("{entry_path}.{key}");
+                    match value
+                        .as_u64()
+                        .filter(|value| *value > 0)
+                        .and_then(|value| usize::try_from(value).ok())
+                    {
+                        Some(value) => {
+                            limits.insert(key, value);
+                        }
+                        None => diagnostics.push(ConfigDiagnostic {
+                            path,
+                            message: "provider model token limit must be a positive integer"
+                                .to_string(),
+                        }),
+                    }
+                }
+            }
+            if let (Some(context), Some(input)) = (
+                limits.get("context_window_tokens"),
+                limits.get("max_input_tokens"),
+            ) && input > context
+            {
+                diagnostics.push(ConfigDiagnostic {
+                    path: format!("{entry_path}.max_input_tokens"),
+                    message:
+                        "provider model max_input_tokens must not exceed context_window_tokens"
+                            .to_string(),
+                });
+            }
+
+            if let Some(options) = model.get("provider_options") {
+                let options_path = format!("{entry_path}.provider_options");
+                match options.as_object() {
+                    Some(options) => {
+                        for (key, value) in options {
+                            if provider_model_option_key_is_secret(key) {
+                                diagnostics.push(ConfigDiagnostic {
+                                    path: format!("{options_path}.{key}"),
+                                    message: "provider model options must not contain credential material"
+                                        .to_string(),
+                                });
+                            } else if !value.is_string() {
+                                diagnostics.push(ConfigDiagnostic {
+                                    path: format!("{options_path}.{key}"),
+                                    message: "provider model options must be strings".to_string(),
+                                });
+                            }
+                        }
+                    }
+                    None => diagnostics.push(ConfigDiagnostic {
+                        path: options_path,
+                        message: "provider model provider_options must be a table".to_string(),
+                    }),
+                }
+            }
+        }
+    }
+    validate_provider_model_profile_limits(&root, &mut diagnostics);
+    diagnostics
+}
+
+/// Validates effective profile limits after provider-model base inheritance.
+fn validate_provider_model_profile_limits(
+    root: &serde_json::Value,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) {
+    let Some(providers) = root.get("providers").and_then(serde_json::Value::as_object) else {
+        return;
+    };
+    let Some(profiles) = root
+        .get("model_profiles")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return;
+    };
+    for (profile_name, profile) in profiles {
+        let Some(profile) = profile.as_object() else {
+            continue;
+        };
+        let (Some(provider_id), Some(requested_model)) = (
+            profile.get("provider").and_then(serde_json::Value::as_str),
+            profile.get("model").and_then(serde_json::Value::as_str),
+        ) else {
+            continue;
+        };
+        let base_model = providers
+            .get(provider_id)
+            .and_then(serde_json::Value::as_object)
+            .and_then(|provider| provider.get("models"))
+            .and_then(serde_json::Value::as_object)
+            .and_then(|models| {
+                models.values().find_map(|model| {
+                    let model = model.as_object()?;
+                    let id_matches = model.get("id").and_then(serde_json::Value::as_str)
+                        == Some(requested_model);
+                    let alias_matches = model
+                        .get("aliases")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|aliases| {
+                            aliases
+                                .iter()
+                                .any(|alias| alias.as_str() == Some(requested_model))
+                        });
+                    (id_matches || alias_matches).then_some(model)
+                })
+            });
+        let context_window_tokens = profile
+            .get("context_window_tokens")
+            .or_else(|| profile.get("context_limit_tokens"))
+            .and_then(configured_positive_u64)
+            .or_else(|| {
+                base_model
+                    .and_then(|model| model.get("context_window_tokens"))
+                    .and_then(configured_positive_u64)
+            });
+        let profile_max_input = profile
+            .get("max_input_tokens")
+            .and_then(configured_positive_u64);
+        let max_input_tokens = profile_max_input.or_else(|| {
+            base_model
+                .and_then(|model| model.get("max_input_tokens"))
+                .and_then(configured_positive_u64)
+        });
+        if let (Some(context_window_tokens), Some(max_input_tokens)) =
+            (context_window_tokens, max_input_tokens)
+            && max_input_tokens > context_window_tokens
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path: if profile_max_input.is_some() {
+                    format!("model_profiles.{profile_name}.max_input_tokens")
+                } else {
+                    format!("model_profiles.{profile_name}.context_window_tokens")
+                },
+                message: "effective max_input_tokens must not exceed context_window_tokens"
+                    .to_string(),
+            });
+        }
+    }
+}
+
+/// Parses a configured positive token count without producing diagnostics.
+fn configured_positive_u64(value: &serde_json::Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str()?.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+}
+
+/// Reports whether a model-level option key appears to contain a credential.
+fn provider_model_option_key_is_secret(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    matches!(
+        key.as_str(),
+        "token" | "api_key" | "secret" | "password" | "access_token" | "refresh_token"
+    ) || key.contains("authorization")
+        || key.contains("credential")
+        || key.ends_with("_token")
+        || key.ends_with("_secret")
+        || key.ends_with("_password")
+}
+
+/// Reports whether one configured model identity/list value is safe text.
+fn valid_provider_model_text(value: &str) -> bool {
+    !value.trim().is_empty() && !value.chars().any(char::is_control)
+}
+
+/// Validates one optional replacement list while preserving explicit emptiness.
+fn validate_provider_model_string_list(
+    value: &serde_json::Value,
+    path: &str,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) {
+    let Some(values) = value.as_array() else {
+        diagnostics.push(ConfigDiagnostic {
+            path: path.to_string(),
+            message: "provider model metadata must be a string array".to_string(),
+        });
+        return;
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for value in values {
+        let Some(value) = value
+            .as_str()
+            .filter(|value| valid_provider_model_text(value))
+        else {
+            diagnostics.push(ConfigDiagnostic {
+                path: path.to_string(),
+                message: "provider model metadata must contain non-empty strings".to_string(),
+            });
+            continue;
+        };
+        if !seen.insert(value.trim()) {
+            diagnostics.push(ConfigDiagnostic {
+                path: path.to_string(),
+                message: "provider model metadata must not contain duplicates".to_string(),
+            });
+        }
+    }
 }
 
 /// Validates schema-v73 persistent-host policy with structured value types.

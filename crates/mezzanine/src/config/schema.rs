@@ -124,7 +124,7 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
             pattern: "providers.<name>.<key>",
             purpose: "Create or adjust a named provider connection profile.",
             value_type: "string, boolean, or string array",
-            format: "`<name>` is the provider identifier; supported keys exclude provider options and secrets.",
+            format: "`<name>` is the provider identifier; supported keys exclude provider options, structured model records, and secrets.",
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {
@@ -275,7 +275,7 @@ pub fn config_change_setting_path_description() -> String {
         AGENT_KEYS.join(", "),
         AGENT_AUTO_SIZING_KEYS.join(", "),
         config_keys_except(MODEL_PROFILE_KEYS, &["provider_options"]),
-        config_keys_except(PROVIDER_KEYS, &["options"]),
+        config_keys_except(PROVIDER_KEYS, &["options", "models"]),
         config_keys_except(SUBAGENT_PROFILE_KEYS, &["shell_env"]),
         PERSONALITY_PROFILE_KEYS.join(", "),
         config_keys_except(
@@ -698,6 +698,19 @@ pub(super) const PROVIDER_KEYS: &[&str] = &[
     "models",
     "default_model",
     "options",
+];
+
+/// Supported fields in one reusable provider-scoped model metadata record.
+pub(super) const PROVIDER_MODEL_KEYS: &[&str] = &[
+    "id",
+    "display_name",
+    "aliases",
+    "context_window_tokens",
+    "max_input_tokens",
+    "max_output_tokens",
+    "reasoning_levels",
+    "capabilities",
+    "provider_options",
 ];
 
 /// Defines the MODEL PROFILE KEYS const used by this subsystem.

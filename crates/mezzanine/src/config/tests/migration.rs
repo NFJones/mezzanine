@@ -2197,7 +2197,7 @@ fn migrates_schema_66_with_disabled_iroh_transport() {
 /// single bidirectional control stream enforced by the v1 Iroh protocol.
 #[test]
 fn migrates_schema_67_to_fixed_iroh_stream_limit() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 76);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 77);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2262,7 +2262,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
 /// changing the existing ephemeral behavior unless the owner configures it.
 #[test]
 fn migrates_schema_69_with_iroh_bind_port() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 76);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 77);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2293,7 +2293,7 @@ fn migrates_schema_69_with_iroh_bind_port() {
 /// supported primary configuration format without enabling the Iroh listener.
 #[test]
 fn migrates_schema_70_with_iroh_compression_defaults() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 76);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 77);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2457,8 +2457,8 @@ fn migrates_schema_73_without_enabling_seatbelt_or_changing_policy() {
         let values = extract_config_values(format, &plan.text);
 
         assert_eq!(plan.from_version, 73);
-        assert_eq!(plan.to_version, 76);
-        assert_eq!(values.get("version"), Some(&"76".to_string()));
+        assert_eq!(plan.to_version, 77);
+        assert_eq!(values.get("version"), Some(&"77".to_string()));
         assert_eq!(
             values.get("permissions.sandbox").map(String::as_str),
             expected_sandbox
@@ -2506,7 +2506,7 @@ fn migrates_schema_74_without_enabling_streaming_compression() {
 
         assert_eq!(plan.from_version, 74);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 76);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 77);
         assert_eq!(
             root.pointer("/transport/iroh/compression_codecs"),
             Some(&expected_codecs)
@@ -2550,7 +2550,7 @@ fn migrates_schema_75_pane_title_template_to_renderer_owned_padding() {
             parse_config_json_value(format, &migrate_config_text(format, missing).unwrap().text)
                 .unwrap();
 
-        assert_eq!(exact.pointer("/version"), Some(&serde_json::json!(76)));
+        assert_eq!(exact.pointer("/version"), Some(&serde_json::json!(77)));
         assert_eq!(
             exact.pointer("/frames/pane/template"),
             Some(&serde_json::json!("#{pane.index} #{pane.title}"))
@@ -2613,4 +2613,54 @@ fn rejects_missing_or_old_project_overlay_schema_version() {
         diagnostic.path == "version" && diagnostic.message.contains("project overlay")
     }));
     assert!(current.valid, "{:?}", current.diagnostics);
+}
+
+/// Schema v77 converts provider model-id arrays into keyed metadata records in
+/// every supported format while preserving profile-local policy unchanged.
+///
+/// Generated keys are path-safe and receive deterministic numeric suffixes
+/// when different model ids normalize to the same key.
+#[test]
+fn migrates_schema_76_provider_models_to_structured_records() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 76\n[providers.custom]\nmodels = [\"alpha/model\", \"alpha.model\", \"plain\"]\ndefault_model = \"alpha/model\"\n[model_profiles.work]\nprovider = \"custom\"\nmodel = \"alpha/model\"\ncontext_window_tokens = 123456\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":76,"providers":{"custom":{"models":["alpha/model","alpha.model","plain"],"default_model":"alpha/model"}},"model_profiles":{"work":{"provider":"custom","model":"alpha/model","context_window_tokens":123456}}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 76\nproviders:\n  custom:\n    models:\n      - alpha/model\n      - alpha.model\n      - plain\n    default_model: alpha/model\nmodel_profiles:\n  work:\n    provider: custom\n    model: alpha/model\n    context_window_tokens: 123456\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &plan.text).unwrap();
+
+        assert_eq!(plan.from_version, 76);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 77);
+        assert_eq!(
+            root.pointer("/providers/custom/models/alpha-model/id"),
+            Some(&serde_json::json!("alpha/model"))
+        );
+        assert_eq!(
+            root.pointer("/providers/custom/models/alpha-model-2/id"),
+            Some(&serde_json::json!("alpha.model"))
+        );
+        assert_eq!(
+            root.pointer("/providers/custom/models/plain/id"),
+            Some(&serde_json::json!("plain"))
+        );
+        assert_eq!(
+            root.pointer("/providers/custom/default_model"),
+            Some(&serde_json::json!("alpha/model"))
+        );
+        assert_eq!(
+            root.pointer("/model_profiles/work/context_window_tokens"),
+            Some(&serde_json::json!(123456))
+        );
+    }
 }

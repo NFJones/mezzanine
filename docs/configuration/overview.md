@@ -98,7 +98,7 @@ the decision.
 
 ## Schema versions and examples
 
-The current schema is version `74`. Older primary user configurations migrate
+The current schema is version `77`. Older primary user configurations migrate
 on launch; a configuration declaring a newer schema is rejected. Existing
 project overlays must declare the current schema version and are not migrated
 automatically. When `mez config set --scope project` creates or updates an
