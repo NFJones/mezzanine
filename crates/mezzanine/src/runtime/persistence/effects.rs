@@ -307,6 +307,11 @@ impl RuntimePersistenceComponent {
             .collect()
     }
 
+    /// Queues one presentation append in transcript/archive ordering.
+    pub(crate) fn queue_presentation(&mut self, effect: RuntimeSideEffect) {
+        self.queued_transcript_effects.push(effect);
+    }
+
     /// Drains queued transcript and prompt-history effects.
     pub(crate) fn take_transcript_effects(&mut self) -> Vec<RuntimeSideEffect> {
         std::mem::take(&mut self.queued_transcript_effects)

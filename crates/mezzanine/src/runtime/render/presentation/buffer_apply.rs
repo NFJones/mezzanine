@@ -365,18 +365,15 @@ impl RuntimeSessionService {
         if session.ephemeral {
             return;
         }
-        let Some(store) = self.persistence.transcript_store() else {
+        let Some(store) = self.persistence.cloned_transcript_store() else {
             return;
         };
         let Some(terminal_width) = self.agent_presentation_terminal_width(pane_id) else {
             return;
         };
-        let Ok(sequence) = store.next_presentation_sequence(&session.session_id) else {
-            return;
-        };
-        let entry = AgentPresentationEntry {
+        let mut entry = AgentPresentationEntry {
             conversation_id: session.session_id.clone(),
-            sequence,
+            sequence: 0,
             created_at_unix_seconds: current_unix_seconds().max(1),
             pane_id: pane_id.to_string(),
             turn_id: session.running_turn_id.clone(),
@@ -388,7 +385,21 @@ impl RuntimeSessionService {
             source_text: source.map(|(text, _content_type)| text.to_string()),
             source_content_type: source.map(|(_text, content_type)| content_type.to_string()),
         };
-        let _ = store.append_presentation(&entry);
+        if self.persistence.transcript_uses_adapter() {
+            let Ok(path) = store.presentation_path(&entry.conversation_id) else {
+                return;
+            };
+            self.persistence.queue_presentation(
+                crate::runtime::RuntimeSideEffect::PersistPresentationEntries {
+                    store,
+                    path,
+                    entries: vec![entry],
+                },
+            );
+        } else if let Ok(sequence) = store.next_presentation_sequence(&entry.conversation_id) {
+            entry.sequence = sequence;
+            let _ = store.append_presentation(&entry);
+        }
     }
 
     /// Replays persisted presentation entries into the pane terminal buffer.

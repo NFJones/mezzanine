@@ -902,6 +902,15 @@ pub enum RuntimeSideEffect {
         /// Entries to append in sequence order.
         entries: Vec<TranscriptEntry>,
     },
+    /// Append agent presentation entries through the ordered persistence worker.
+    PersistPresentationEntries {
+        /// Transcript store that owns validation, paths, and permissions.
+        store: AgentTranscriptStore,
+        /// Destination presentation file used for diagnostics.
+        path: PathBuf,
+        /// Unsequenced entries to append in actor enqueue order.
+        entries: Vec<crate::storage::transcript::AgentPresentationEntry>,
+    },
     /// Execute one saved-session archive lifecycle operation on a blocking worker.
     #[allow(
         dead_code,

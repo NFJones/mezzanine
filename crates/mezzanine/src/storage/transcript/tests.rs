@@ -244,6 +244,68 @@ fn transcript_store_compacts_presentation_tail_into_zstd_history() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies one presentation batch allocates contiguous sequences under the
+/// conversation lock instead of requiring actor-side index reads.
+///
+/// Entries crossing the worker boundary are intentionally unsequenced. The
+/// store must append them in enqueue order after the existing durable tail and
+/// update the sequence index once for the complete batch.
+#[test]
+fn transcript_store_appends_unsequenced_presentation_batch_contiguously() {
+    let root = temp_root("presentation-batch");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append_presentation(&presentation("conv1", 1))
+        .unwrap();
+    let mut second = presentation("conv1", 0);
+    second.created_at_unix_seconds = 22;
+    second.turn_id = Some("turn-batch-2".to_string());
+    let mut third = presentation("conv1", 0);
+    third.created_at_unix_seconds = 23;
+    third.turn_id = Some("turn-batch-3".to_string());
+
+    let bytes = store.append_presentation_many(&[second, third]).unwrap();
+    let inspected = store.inspect_presentation("conv1").unwrap();
+
+    assert!(bytes > 0);
+    assert_eq!(
+        inspected
+            .iter()
+            .map(|entry| entry.sequence)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(inspected[1].turn_id.as_deref(), Some("turn-batch-2"));
+    assert_eq!(inspected[2].turn_id.as_deref(), Some("turn-batch-3"));
+    assert_eq!(store.next_presentation_sequence("conv1").unwrap(), 4);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a presentation batch rejects mixed conversation ownership.
+///
+/// The persistence worker may coalesce only adjacent entries for one durable
+/// conversation; rejecting a mixed batch prevents ordering fences from being
+/// crossed accidentally by future queue changes.
+#[test]
+fn transcript_store_rejects_mixed_conversation_presentation_batch() {
+    let root = temp_root("presentation-mixed-batch");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let error = store
+        .append_presentation_many(&[presentation("conv1", 0), presentation("conv2", 0)])
+        .unwrap_err();
+
+    assert!(
+        error
+            .message()
+            .contains("presentation batch entries must share one conversation")
+    );
+    assert!(!root.join("conv1").exists());
+    assert!(!root.join("conv2").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies durable presentation appends normalize display and copy rows to the
 /// recorded pane width so replay does not depend on terminal soft wrapping.
 #[test]

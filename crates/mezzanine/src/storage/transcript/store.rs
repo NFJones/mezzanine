@@ -543,6 +543,70 @@ impl AgentTranscriptStore {
         Ok(())
     }
 
+    /// Assigns contiguous sequences and appends one immutable presentation batch.
+    ///
+    /// The existing per-conversation lock covers sequence discovery, one file
+    /// append and sync, one index update, at most one compaction, and one catalog
+    /// update. This keeps actor-enqueued presentation effects ordered with
+    /// transcript and archive effects while removing filesystem work from the
+    /// serialized runtime owner.
+    pub fn append_presentation_many(&self, entries: &[AgentPresentationEntry]) -> Result<usize> {
+        let Some(first) = entries.first() else {
+            return Ok(0);
+        };
+        validate_conversation_id(&first.conversation_id)?;
+        if entries
+            .iter()
+            .any(|entry| entry.conversation_id != first.conversation_id)
+        {
+            return Err(MezError::invalid_args(
+                "presentation batch entries must share one conversation",
+            ));
+        }
+        let _conversation_lock = self.acquire_conversation_lock(&first.conversation_id)?;
+        let mut sequence = self.next_presentation_sequence(&first.conversation_id)?;
+        let mut normalized = Vec::with_capacity(entries.len());
+        let mut encoded = String::new();
+        for entry in entries {
+            let mut entry = entry.normalized_for_agent_log_wrap();
+            entry.sequence = sequence;
+            entry.validate()?;
+            encoded.push_str(&entry.encode()?);
+            encoded.push('\n');
+            normalized.push(entry);
+            sequence = sequence.saturating_add(1);
+        }
+        self.ensure_session_dir(&first.conversation_id)?;
+        let path = self.presentation_path_for(&first.conversation_id)?;
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        file.write_all(encoded.as_bytes())?;
+        file.sync_all()?;
+        set_private_file_permissions(&path)?;
+        let latest = normalized
+            .last()
+            .ok_or_else(|| MezError::invalid_state("presentation batch disappeared"))?;
+        self.write_presentation_index(latest)?;
+        self.compact_presentation_tail_if_needed(&first.conversation_id)?;
+        self.upsert_catalog_after_presentation(latest)?;
+        Ok(encoded.len())
+    }
+
+    /// Appends a presentation batch on Tokio's blocking pool.
+    pub async fn append_presentation_many_async(
+        &self,
+        entries: &[AgentPresentationEntry],
+    ) -> Result<usize> {
+        let store = self.clone();
+        let entries = entries.to_vec();
+        tokio::task::spawn_blocking(move || store.append_presentation_many(&entries))
+            .await
+            .map_err(|error| {
+                MezError::invalid_state(format!(
+                    "presentation persistence worker join failed: {error}"
+                ))
+            })?
+    }
+
     /// Updates one catalog row after a presentation append without replaying history.
     fn upsert_catalog_after_presentation(&self, entry: &AgentPresentationEntry) -> Result<()> {
         let existing = catalog::record(self, &entry.conversation_id)?;
@@ -1593,7 +1657,6 @@ impl AgentTranscriptStore {
     }
 
     /// Returns the presentation path for one persisted agent session.
-    #[cfg(test)]
     pub fn presentation_path(&self, conversation_id: &str) -> Result<PathBuf> {
         self.presentation_path_for(conversation_id)
     }

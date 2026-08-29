@@ -393,6 +393,7 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::Persist { .. } => "persist",
         RuntimeSideEffect::PersistAuditLog { .. } => "persist-audit-log",
         RuntimeSideEffect::PersistTranscriptEntries { .. } => "persist-transcript",
+        RuntimeSideEffect::PersistPresentationEntries { .. } => "persist-presentation",
         RuntimeSideEffect::PersistSessionArchive { .. } => "persist-session-archive",
         RuntimeSideEffect::PersistSavedSessionRetention { .. } => "persist-saved-session-retention",
         RuntimeSideEffect::PersistTokenUsage { .. } => "persist-token-usage",

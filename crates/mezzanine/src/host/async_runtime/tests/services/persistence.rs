@@ -1,6 +1,7 @@
 //! Async-runtime tests owned by persistence behavior.
 
 use super::super::*;
+use crate::storage::transcript::AgentPresentationEntry;
 
 /// Verifies that persistence side effects are owned by a concrete Tokio worker
 /// instead of the actor. The worker writes the bytes and reports completion back
@@ -618,6 +619,89 @@ async fn async_persistence_side_effect_service_rejects_config_symlink_destinatio
             && event.payload.contains(r#""target":"config""#)
             && event.payload.contains(r#""state":"failed""#)
     }));
+    assert!(exit.commands_processed >= 4);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies adjacent presentation effects for one conversation are sequenced
+/// and persisted as one ordered worker batch.
+///
+/// The actor supplies immutable unsequenced entries. Coalescing must stop at a
+/// conversation boundary while preserving entry order and emitting one
+/// persistence completion for the combined append.
+#[tokio::test(flavor = "current_thread")]
+async fn async_persistence_side_effect_service_batches_adjacent_presentations() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-presentation-batch-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let presentation = |turn_id: &str, created_at_unix_seconds| AgentPresentationEntry {
+        conversation_id: "worker-presentation".to_string(),
+        sequence: 0,
+        created_at_unix_seconds,
+        pane_id: "%9".to_string(),
+        turn_id: Some(turn_id.to_string()),
+        terminal_width: 80,
+        style_names: vec!["assistant".to_string()],
+        display_lines: vec![format!("mez> {turn_id}")],
+        copy_lines: Vec::new(),
+        ansi_text: None,
+        source_text: None,
+        source_content_type: None,
+    };
+    let path = store.presentation_path("worker-presentation").unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+
+    let client = async {
+        assert_eq!(
+            handle
+                .queue_runtime_side_effects(vec![
+                    RuntimeSideEffect::PersistPresentationEntries {
+                        store: store.clone(),
+                        path: path.clone(),
+                        entries: vec![presentation("turn-1", 10)],
+                    },
+                    RuntimeSideEffect::PersistPresentationEntries {
+                        store: store.clone(),
+                        path: path.clone(),
+                        entries: vec![presentation("turn-2", 11)],
+                    },
+                ])
+                .await
+                .unwrap(),
+            2
+        );
+        let report = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 2,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+            },
+            |polls, _| polls >= 2,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.drained, 2);
+        assert_eq!(report.completed, 1);
+        assert_eq!(report.failed, 0);
+        assert!(report.bytes_written > 0);
+        let entries = store.inspect_presentation("worker-presentation").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].sequence, 1);
+        assert_eq!(entries[0].turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(entries[1].sequence, 2);
+        assert_eq!(entries[1].turn_id.as_deref(), Some("turn-2"));
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
     assert!(exit.commands_processed >= 4);
     let _ = std::fs::remove_dir_all(root);
 }
