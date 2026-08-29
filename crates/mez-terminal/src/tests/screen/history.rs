@@ -69,6 +69,69 @@ fn history_buffer_rotates_oldest_lines_in_configured_batches() {
     assert!(HistoryBuffer::new_with_rotation(2, 0).is_err());
 }
 
+/// Verifies history snapshots share sealed records and copy only a bounded tail.
+///
+/// Agent streaming and shell previews clone terminal screens before projecting
+/// transient rows. Snapshot cost must not grow with retained scrollback.
+#[test]
+fn history_buffer_clone_copies_only_the_bounded_mutable_tail() {
+    let mut history = HistoryBuffer::new(20_000).unwrap();
+    for index in 0..10_000 {
+        history.push_styled_line(TerminalStyledLine::plain(format!("line-{index}")));
+    }
+
+    HistoryBuffer::reset_copied_record_count();
+    let mut snapshot = history.clone();
+
+    assert!(HistoryBuffer::copied_record_count() <= 128);
+    snapshot.push_styled_line(TerminalStyledLine::plain("snapshot-only"));
+    assert_eq!(history.len(), 10_000);
+    assert_eq!(snapshot.len(), 10_001);
+    assert_eq!(history.lines().last(), Some("line-9999"));
+    assert_eq!(snapshot.lines().last(), Some("snapshot-only"));
+}
+
+/// Verifies copy metadata mutation clones only its owning immutable chunk.
+///
+/// Copy-mode metadata must remain isolated between screen generations without
+/// flattening or duplicating unrelated retained rows.
+#[test]
+fn history_buffer_copy_metadata_mutation_preserves_clone_isolation() {
+    let mut history = HistoryBuffer::new(1_000).unwrap();
+    for index in 0..300 {
+        history.push_styled_line(TerminalStyledLine::plain(format!("line-{index}")));
+    }
+    let mut snapshot = history.clone();
+
+    HistoryBuffer::reset_copied_record_count();
+    snapshot.set_copy_text(20, Some("raw source".to_string()));
+
+    assert_eq!(history.copy_text_at(20), None);
+    assert_eq!(snapshot.copy_text_at(20), Some("raw source"));
+    assert!(HistoryBuffer::copied_record_count() <= 128);
+}
+
+/// Verifies popping through a partially evicted sole chunk never restores old rows.
+///
+/// Batched rotation may leave the logical front inside the first immutable
+/// chunk. Moving that final chunk back into the mutable tail must honor the
+/// offset while preserving newest-first pop behavior.
+#[test]
+fn history_buffer_pop_does_not_restore_evicted_chunk_prefix() {
+    let mut history = HistoryBuffer::new_with_rotation(129, 32).unwrap();
+    for index in 0..130 {
+        history.push_styled_line(TerminalStyledLine::plain(format!("line-{index}")));
+    }
+
+    assert_eq!(history.lines().next(), Some("line-32"));
+    for expected in (32..130).rev() {
+        let (line, wraps) = history.pop_styled_line().unwrap();
+        assert_eq!(line.text, format!("line-{expected}"));
+        assert!(!wraps);
+    }
+    assert!(history.pop_styled_line().is_none());
+}
+
 /// Verifies terminal screen relimits history buffer.
 ///
 /// This regression scenario documents the behavior being protected so a

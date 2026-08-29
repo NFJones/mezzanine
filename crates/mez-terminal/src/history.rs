@@ -4,17 +4,42 @@
 //! wrapping as one aligned record. Overflow removes oldest records in bounded
 //! batches while preserving that metadata alignment.
 
-use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
-use crate::{TerminalStyleSpan, TerminalStyledLine};
+use crate::TerminalStyledLine;
 
 /// Default maximum number of terminal history lines.
 pub const DEFAULT_HISTORY_LIMIT: usize = 10_000;
 
 /// Default number of oldest lines removed when history overflows.
 pub const DEFAULT_HISTORY_ROTATE_LINES: usize = 1_000;
+
+/// Maximum number of mutable history records copied by a screen snapshot.
+const HISTORY_CHUNK_RECORDS: usize = 128;
+
+/// One aligned retained terminal row.
+#[derive(Debug, PartialEq, Eq)]
+struct HistoryRecord {
+    line: TerminalStyledLine,
+    wraps: bool,
+}
+
+impl Clone for HistoryRecord {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        HISTORY_RECORD_CLONES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self {
+            line: self.line.clone(),
+            wraps: self.wraps,
+        }
+    }
+}
+
+#[cfg(test)]
+static HISTORY_RECORD_CLONES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 /// Reports an invalid bounded-history configuration value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,16 +62,30 @@ impl fmt::Display for HistoryConfigError {
 
 impl Error for HistoryConfigError {}
 
-/// Stores bounded terminal scrollback and aligned presentation metadata.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Stores bounded terminal scrollback as shared immutable chunks and a mutable tail.
+///
+/// Cloning a buffer shares sealed chunks and copies at most one bounded tail.
+/// Mutations therefore preserve value isolation without making pane snapshots
+/// copy all retained scrollback.
+#[derive(Debug, Clone)]
 pub struct HistoryBuffer {
     limit: usize,
     rotate_lines: usize,
-    lines: VecDeque<String>,
-    line_style_spans: VecDeque<Vec<TerminalStyleSpan>>,
-    line_copy_texts: VecDeque<Option<String>>,
-    line_wraps: VecDeque<bool>,
+    chunks: Arc<Vec<Arc<[HistoryRecord]>>>,
+    front_offset: usize,
+    tail: Vec<HistoryRecord>,
+    len: usize,
 }
+
+impl PartialEq for HistoryBuffer {
+    fn eq(&self, other: &Self) -> bool {
+        self.limit == other.limit
+            && self.rotate_lines == other.rotate_lines
+            && self.records().eq(other.records())
+    }
+}
+
+impl Eq for HistoryBuffer {}
 
 impl HistoryBuffer {
     /// Builds an empty buffer with the same retention and rotation policy.
@@ -59,10 +98,10 @@ impl HistoryBuffer {
         Self {
             limit: self.limit,
             rotate_lines: self.rotate_lines,
-            lines: VecDeque::new(),
-            line_style_spans: VecDeque::new(),
-            line_copy_texts: VecDeque::new(),
-            line_wraps: VecDeque::new(),
+            chunks: Arc::new(Vec::new()),
+            front_offset: 0,
+            tail: Vec::new(),
+            len: 0,
         }
     }
 
@@ -89,10 +128,10 @@ impl HistoryBuffer {
         Ok(Self {
             limit,
             rotate_lines,
-            lines: VecDeque::new(),
-            line_style_spans: VecDeque::new(),
-            line_copy_texts: VecDeque::new(),
-            line_wraps: VecDeque::new(),
+            chunks: Arc::new(Vec::new()),
+            front_offset: 0,
+            tail: Vec::new(),
+            len: 0,
         })
     }
 
@@ -109,28 +148,28 @@ impl HistoryBuffer {
     /// Appends a presented line and its physical-line wrapping state.
     #[doc(hidden)]
     pub fn push_styled_line_with_wrap(&mut self, line: TerminalStyledLine, wraps: bool) {
-        self.lines.push_back(line.text);
-        self.line_style_spans.push_back(line.style_spans);
-        self.line_copy_texts.push_back(line.copy_text);
-        self.line_wraps.push_back(wraps);
+        self.seal_full_tail();
+        self.tail.push(HistoryRecord { line, wraps });
+        self.len = self.len.saturating_add(1);
         self.enforce_limit();
     }
 
     /// Removes the newest presented line and its wrapping state.
     #[doc(hidden)]
     pub fn pop_styled_line(&mut self) -> Option<(TerminalStyledLine, bool)> {
-        let text = self.lines.pop_back()?;
-        let style_spans = self.line_style_spans.pop_back().unwrap_or_default();
-        let copy_text = self.line_copy_texts.pop_back().flatten();
-        let wraps = self.line_wraps.pop_back().unwrap_or(false);
-        Some((
-            TerminalStyledLine {
-                text,
-                style_spans,
-                copy_text,
-            },
-            wraps,
-        ))
+        if self.tail.is_empty() {
+            let chunks = Arc::make_mut(&mut self.chunks);
+            let chunk = chunks.pop()?;
+            let skipped = if chunks.is_empty() {
+                std::mem::take(&mut self.front_offset)
+            } else {
+                0
+            };
+            self.tail = chunk.iter().skip(skipped).cloned().collect();
+        }
+        let record = self.tail.pop()?;
+        self.len = self.len.saturating_sub(1);
+        Some((record.line, record.wraps))
     }
 
     /// Changes the positive history limit and immediately enforces it.
@@ -167,123 +206,164 @@ impl HistoryBuffer {
         self.rotate_lines
     }
 
-    /// Restores the configured bound and parallel metadata alignment.
+    /// Restores the configured bound.
     #[doc(hidden)]
     pub fn enforce_limit(&mut self) {
-        if self.lines.len() > self.limit {
-            let overflow = self.lines.len().saturating_sub(self.limit);
+        if self.len > self.limit {
+            let overflow = self.len.saturating_sub(self.limit);
             let rotation = self.rotate_lines.min(self.limit.saturating_sub(1)).max(1);
-            let evict_count = overflow.max(rotation).min(self.lines.len());
+            let evict_count = overflow.max(rotation).min(self.len);
             self.discard_front_lines(evict_count);
         }
-        while self.lines.len() > self.limit {
+        while self.len > self.limit {
             self.discard_front_lines(1);
-        }
-        while self.line_style_spans.len() > self.lines.len() {
-            self.line_style_spans.pop_front();
-        }
-        while self.line_copy_texts.len() > self.lines.len() {
-            self.line_copy_texts.pop_front();
-        }
-        while self.line_wraps.len() > self.lines.len() {
-            self.line_wraps.pop_front();
-        }
-        while self.line_copy_texts.len() < self.lines.len() {
-            self.line_copy_texts.push_front(None);
-        }
-        while self.line_wraps.len() < self.lines.len() {
-            self.line_wraps.push_front(false);
         }
     }
 
-    fn discard_front_lines(&mut self, count: usize) {
-        if count == 0 {
+    /// Moves a full mutable tail into immutable shared storage.
+    fn seal_full_tail(&mut self) {
+        if self.tail.len() < HISTORY_CHUNK_RECORDS {
             return;
         }
-        let _ = self.lines.drain(..count.min(self.lines.len()));
-        let _ = self
-            .line_style_spans
-            .drain(..count.min(self.line_style_spans.len()));
-        let _ = self
-            .line_copy_texts
-            .drain(..count.min(self.line_copy_texts.len()));
-        let _ = self.line_wraps.drain(..count.min(self.line_wraps.len()));
+        let sealed = Arc::<[HistoryRecord]>::from(std::mem::take(&mut self.tail));
+        Arc::make_mut(&mut self.chunks).push(sealed);
+    }
+
+    /// Removes oldest records while retaining untouched immutable chunks.
+    fn discard_front_lines(&mut self, count: usize) {
+        let mut remaining = count.min(self.len);
+        if remaining == 0 {
+            return;
+        }
+        let chunks = Arc::make_mut(&mut self.chunks);
+        while remaining > 0 && !chunks.is_empty() {
+            let available = chunks[0].len().saturating_sub(self.front_offset);
+            if remaining < available {
+                self.front_offset = self.front_offset.saturating_add(remaining);
+                self.len = self.len.saturating_sub(remaining);
+                return;
+            }
+            remaining = remaining.saturating_sub(available);
+            self.len = self.len.saturating_sub(available);
+            chunks.remove(0);
+            self.front_offset = 0;
+        }
+        if remaining > 0 {
+            let drained = remaining.min(self.tail.len());
+            self.tail.drain(..drained);
+            self.len = self.len.saturating_sub(drained);
+        }
     }
 
     /// Removes every history record.
     pub fn clear(&mut self) {
-        self.lines.clear();
-        self.line_style_spans.clear();
-        self.line_copy_texts.clear();
-        self.line_wraps.clear();
+        self.chunks = Arc::new(Vec::new());
+        self.front_offset = 0;
+        self.tail.clear();
+        self.len = 0;
     }
 
     /// Returns the number of retained history records.
     pub fn len(&self) -> usize {
-        self.lines.len()
+        self.len
     }
 
     /// Returns whether no history records are retained.
     pub fn is_empty(&self) -> bool {
-        self.lines.is_empty()
+        self.len == 0
     }
 
     /// Iterates over retained presented text from oldest to newest.
     pub fn lines(&self) -> impl Iterator<Item = &str> {
-        self.lines.iter().map(String::as_str)
+        self.records().map(|record| record.line.text.as_str())
     }
 
     /// Returns one retained presented row without cloning its text.
     pub(crate) fn line_at(&self, index: usize) -> Option<&str> {
-        self.lines.get(index).map(String::as_str)
+        self.record_at(index)
+            .map(|record| record.line.text.as_str())
     }
 
     /// Reports whether one retained physical row wraps into its successor.
     pub(crate) fn line_wraps_to_next(&self, index: usize) -> bool {
-        self.line_wraps.get(index).copied().unwrap_or(false)
+        self.record_at(index).is_some_and(|record| record.wraps)
     }
 
     /// Returns one retained copy-source override for focused tests.
     #[cfg(test)]
     pub(crate) fn copy_text_at(&self, index: usize) -> Option<&str> {
-        self.line_copy_texts.get(index).and_then(Option::as_deref)
+        self.record_at(index)
+            .and_then(|record| record.line.copy_text.as_deref())
     }
 
     /// Iterates over retained presented lines and style metadata.
     pub fn styled_lines(&self) -> impl Iterator<Item = TerminalStyledLine> + '_ {
-        self.lines
-            .iter()
-            .zip(self.line_style_spans.iter())
-            .zip(
-                self.line_copy_texts
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::repeat(None)),
-            )
-            .map(|((text, style_spans), copy_text)| TerminalStyledLine {
-                text: text.clone(),
-                style_spans: style_spans.clone(),
-                copy_text,
-            })
+        self.records().map(|record| record.line.clone())
     }
 
     /// Replaces the copy-source text for one retained history record.
     #[doc(hidden)]
     pub fn set_copy_text(&mut self, index: usize, copy_text: Option<String>) {
-        if let Some(slot) = self.line_copy_texts.get_mut(index) {
-            *slot = copy_text;
+        if index >= self.len {
+            return;
+        }
+        let mut logical_start = 0usize;
+        let chunks = Arc::make_mut(&mut self.chunks);
+        for (chunk_index, chunk) in chunks.iter_mut().enumerate() {
+            let skipped = if chunk_index == 0 {
+                self.front_offset
+            } else {
+                0
+            };
+            let available = chunk.len().saturating_sub(skipped);
+            if index < logical_start.saturating_add(available) {
+                let record_index = skipped.saturating_add(index.saturating_sub(logical_start));
+                let mut records = chunk.iter().cloned().collect::<Vec<_>>();
+                records[record_index].line.copy_text = copy_text;
+                *chunk = Arc::from(records);
+                return;
+            }
+            logical_start = logical_start.saturating_add(available);
+        }
+        if let Some(record) = self.tail.get_mut(index.saturating_sub(logical_start)) {
+            record.line.copy_text = copy_text;
         }
     }
 
     /// Iterates over retained presented lines and physical wrapping state.
     #[doc(hidden)]
     pub fn styled_lines_with_wraps(&self) -> impl Iterator<Item = (TerminalStyledLine, bool)> + '_ {
-        self.styled_lines().zip(
-            self.line_wraps
-                .iter()
-                .copied()
-                .chain(std::iter::repeat(false)),
-        )
+        self.records()
+            .map(|record| (record.line.clone(), record.wraps))
+    }
+
+    /// Iterates over aligned records without flattening shared chunks.
+    fn records(&self) -> impl Iterator<Item = &HistoryRecord> {
+        self.chunks
+            .iter()
+            .enumerate()
+            .flat_map(move |(index, chunk)| {
+                let skipped = if index == 0 { self.front_offset } else { 0 };
+                chunk.iter().skip(skipped)
+            })
+            .chain(self.tail.iter())
+    }
+
+    /// Returns one logical retained record.
+    fn record_at(&self, index: usize) -> Option<&HistoryRecord> {
+        self.records().nth(index)
+    }
+
+    /// Resets the test-only count of copied history records.
+    #[cfg(test)]
+    pub(crate) fn reset_copied_record_count() {
+        HISTORY_RECORD_CLONES.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Returns the test-only count of copied history records.
+    #[cfg(test)]
+    pub(crate) fn copied_record_count() -> usize {
+        HISTORY_RECORD_CLONES.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
