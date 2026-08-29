@@ -261,6 +261,11 @@ pub fn agent_prompt_reserved_line_count(
     render_agent_prompt_block(width, body_rows, pane_context).reserved_line_count()
 }
 
+/// Returns the maximum pane rows available to wrapped agent prompt input.
+fn agent_prompt_max_rows(body_rows: usize) -> usize {
+    body_rows.saturating_div(2).max(1)
+}
+
 /// Runs the prompt region rendition operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -709,12 +714,13 @@ pub(super) fn render_agent_prompt_block(
         .map(|context| context.agent_display_lines.as_slice())
         .unwrap_or(&[]);
     let (display_source, live_footer) = split_agent_live_footer_display_source(display_source);
+    let prompt_max_rows = agent_prompt_max_rows(body_rows);
     let prompt_layout = if prompt_can_show_agent_live_footer(&prompt) {
         live_footer
             .map(|footer| render_agent_live_footer_prompt_layout(&prompt, footer, width))
-            .unwrap_or_else(|| render_wrapped_prompt_layout(&prompt, width, body_rows.clamp(1, 6)))
+            .unwrap_or_else(|| render_wrapped_prompt_layout(&prompt, width, prompt_max_rows))
     } else {
-        render_wrapped_prompt_layout(&prompt, width, body_rows.clamp(1, 6))
+        render_wrapped_prompt_layout(&prompt, width, prompt_max_rows)
     };
     let prompt_live_footer_suffixes = if prompt_can_show_agent_live_footer(&prompt) {
         live_footer

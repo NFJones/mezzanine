@@ -313,9 +313,10 @@ fn runtime_agent_prompt_navigation_uses_split_pane_render_width() {
 /// Verifies wrapped agent prompt navigation scrolls the visible prompt window
 /// to keep the editing cursor on-screen.
 ///
-/// Agent prompt rendering caps visible input rows at six. Moving upward through
-/// a taller multiline draft must shift the rendered prompt window instead of
-/// leaving the cursor on an off-screen row that cannot be edited in place.
+/// Agent prompt rendering caps visible input rows at half the pane body. Moving
+/// upward through a taller multiline draft must shift the rendered prompt
+/// window instead of leaving the cursor on an off-screen row that cannot be
+/// edited in place.
 #[test]
 fn runtime_agent_prompt_navigation_scrolls_visible_rows_with_cursor() {
     let mut service = test_runtime_service_with_size(Size::new(24, 8).unwrap());

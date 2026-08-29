@@ -45,6 +45,35 @@ fn runtime_primary_attach_resizes_initial_window_for_agent_prompt() {
     );
 }
 
+/// Verifies wrapped agent input grows beyond the former six-row limit, remains
+/// capped at half the pane body, and recomputes that cap after a pane resize.
+#[test]
+fn runtime_agent_prompt_height_tracks_half_pane_body() {
+    let mut service = test_runtime_service_with_size(Size::new(24, 24).unwrap());
+    service
+        .attach_primary("primary", true, Size::new(24, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.reload_agent_prompt_history_for_pane("%1").unwrap();
+    service
+        .agent_prompt_inputs_mut_for_tests()
+        .get_mut("%1")
+        .unwrap()
+        .prompt
+        .buffer
+        .set_line("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve");
+
+    assert_eq!(
+        service.agent_prompt_reserved_rows_for_pane("%1", 24, 20),
+        10
+    );
+    assert_eq!(service.agent_prompt_reserved_rows_for_pane("%1", 24, 8), 4);
+    assert_eq!(service.agent_prompt_reserved_rows_for_pane("%1", 24, 3), 1);
+}
+
 /// Verifies long ordinary prompt text remains literal in terminal layout.
 ///
 /// Prompt viewport clipping may show only the rows around the cursor, but it
