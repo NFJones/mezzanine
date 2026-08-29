@@ -524,6 +524,53 @@ pub enum PersistenceEvent {
         /// Human-readable write failure.
         error: String,
     },
+    /// One saved-session archive lifecycle operation completed.
+    SessionArchiveCompleted {
+        /// Durable conversation identity.
+        conversation_id: String,
+        /// Lifecycle operation executed by the worker.
+        operation: SessionArchiveOperation,
+        /// Compressed bytes installed by archive operations, otherwise zero.
+        bytes: usize,
+    },
+    /// One saved-session archive lifecycle operation failed.
+    SessionArchiveFailed {
+        /// Durable conversation identity.
+        conversation_id: String,
+        /// Lifecycle operation attempted by the worker.
+        operation: SessionArchiveOperation,
+        /// Human-readable failure.
+        error: String,
+    },
+}
+
+/// Saved-session archive lifecycle work executed by the persistence worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "archive operations are constructed by the dependent resume browser work"
+)]
+pub enum SessionArchiveOperation {
+    /// Compress and archive one active saved conversation.
+    Archive {
+        /// Time at which the archive becomes durable.
+        archived_at_unix_seconds: u64,
+    },
+    /// Verify and restore one archived conversation to active storage.
+    Restore,
+    /// Permanently delete one archived payload and its metadata.
+    Delete,
+}
+
+impl SessionArchiveOperation {
+    /// Returns the stable diagnostic operation name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Archive { .. } => "archive",
+            Self::Restore => "restore",
+            Self::Delete => "delete",
+        }
+    }
 }
 
 /// Actor-owned destination retained while host clipboard acquisition runs.
@@ -838,6 +885,19 @@ pub enum RuntimeSideEffect {
         path: PathBuf,
         /// Entries to append in sequence order.
         entries: Vec<TranscriptEntry>,
+    },
+    /// Execute one saved-session archive lifecycle operation on a blocking worker.
+    #[allow(
+        dead_code,
+        reason = "archive effects are constructed by the dependent resume browser work"
+    )]
+    PersistSessionArchive {
+        /// Transcript store owning the active and archived payloads.
+        store: AgentTranscriptStore,
+        /// Durable conversation identity.
+        conversation_id: String,
+        /// Archive, restore, or delete operation to execute.
+        operation: SessionArchiveOperation,
     },
     /// Append one submitted prompt to the shared prompt-history file.
     PersistPromptHistory {

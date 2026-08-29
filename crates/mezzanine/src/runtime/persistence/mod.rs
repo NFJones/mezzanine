@@ -6,7 +6,7 @@
 //! configuration, authorization policy, or control connection state.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::security::audit::AuditLog;
 use crate::storage::registry::SessionRegistry;
@@ -37,6 +37,7 @@ pub(crate) struct RuntimePersistenceComponent {
     queued_pane_pipe_effects: Vec<(String, RuntimeSideEffect)>,
     queued_audit_effects: Vec<RuntimeSideEffect>,
     queued_transcript_effects: Vec<RuntimeSideEffect>,
+    pending_session_archive_conversation_ids: BTreeSet<String>,
     queued_token_usage_effects: Vec<RuntimeSideEffect>,
     queued_provider_settlement_effects: Vec<RuntimeSideEffect>,
     queued_config_effects: Vec<RuntimeSideEffect>,

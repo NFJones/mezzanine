@@ -30,7 +30,8 @@ use crate::integrations::hooks::{
     execute_program_hook_async_with_cancellation,
 };
 use crate::runtime::{
-    apply_registry_update_async, execute_runtime_status_pill_refresh_plan_with_cancellation,
+    SessionArchiveOperation, apply_registry_update_async,
+    execute_runtime_status_pill_refresh_plan_with_cancellation,
 };
 use crate::security::audit::AuditRetentionPolicy;
 use crate::storage::transcript::AgentTranscriptStore;
@@ -945,6 +946,39 @@ where
                         }));
                     }
                 },
+                RuntimeSideEffect::PersistSessionArchive {
+                    store,
+                    conversation_id,
+                    operation,
+                } => match persist_session_archive_operation(
+                    store,
+                    conversation_id.clone(),
+                    operation,
+                )
+                .await
+                {
+                    Ok(bytes) => {
+                        report.completed = report.completed.saturating_add(1);
+                        report.bytes_written = report.bytes_written.saturating_add(bytes);
+                        batch.push(RuntimeEvent::Persistence(
+                            PersistenceEvent::SessionArchiveCompleted {
+                                conversation_id,
+                                operation,
+                                bytes,
+                            },
+                        ));
+                    }
+                    Err(error) => {
+                        report.failed = report.failed.saturating_add(1);
+                        batch.push(RuntimeEvent::Persistence(
+                            PersistenceEvent::SessionArchiveFailed {
+                                conversation_id,
+                                operation,
+                                error: error.message().to_string(),
+                            },
+                        ));
+                    }
+                },
                 RuntimeSideEffect::PersistTokenUsage { store, event } => {
                     let path = store.path().to_path_buf();
                     match persist_token_usage_event(store, event).await {
@@ -1717,6 +1751,35 @@ async fn persist_transcript_entries(
     entries: Vec<TranscriptEntry>,
 ) -> Result<usize> {
     store.append_many_async(&entries).await
+}
+
+/// Executes compression, verification, extraction, and archive deletion on the blocking pool.
+async fn persist_session_archive_operation(
+    store: AgentTranscriptStore,
+    conversation_id: String,
+    operation: SessionArchiveOperation,
+) -> Result<usize> {
+    tokio::task::spawn_blocking(move || match operation {
+        SessionArchiveOperation::Archive {
+            archived_at_unix_seconds,
+        } => store
+            .archive_session(&conversation_id, archived_at_unix_seconds)
+            .and_then(|info| {
+                usize::try_from(info.compressed_bytes).map_err(|_| {
+                    MezError::invalid_state("session archive size exceeds this platform")
+                })
+            }),
+        SessionArchiveOperation::Restore => {
+            store.restore_archived_session(&conversation_id).map(|_| 0)
+        }
+        SessionArchiveOperation::Delete => {
+            store.delete_archived_session(&conversation_id).map(|_| 0)
+        }
+    })
+    .await
+    .map_err(|error| {
+        MezError::invalid_state(format!("session archive worker join failed: {error}"))
+    })?
 }
 
 /// Appends one shared prompt-history item through the async transcript store.

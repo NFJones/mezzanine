@@ -15,6 +15,9 @@ use rustix::fs::{FlockOperation, flock};
 
 use crate::error::{MezError, MezErrorKind, Result};
 
+use super::archive::{
+    archived_catalog_candidate, archived_catalog_candidates, archived_payloads_exist,
+};
 use super::catalog::{self, CatalogCandidate, CatalogPayloadLayout};
 use super::encoding::{
     decode_agent_session_metadata, decode_structured_prompt_history_entry, decode_transcript_entry,
@@ -221,12 +224,14 @@ impl AgentTranscriptStore {
     /// The first initialization imports existing filesystem metadata while
     /// retaining every transcript, presentation file, and sidecar in place.
     pub fn initialize(&self, now_unix_seconds: u64) -> Result<()> {
-        catalog::initialize(self, now_unix_seconds)
+        catalog::initialize(self, now_unix_seconds)?;
+        self.recover_archive_transactions()
     }
 
     /// Reconstructs the saved-conversation catalog from retained session files.
     pub fn rebuild_catalog(&self, now_unix_seconds: u64) -> Result<()> {
-        catalog::rebuild(self, now_unix_seconds)
+        catalog::rebuild(self, now_unix_seconds)?;
+        self.recover_archive_transactions()
     }
 
     /// Returns bounded, read-only saved-session catalog health information.
@@ -297,7 +302,7 @@ impl AgentTranscriptStore {
         record: &super::catalog::CatalogRecord,
     ) -> Result<bool> {
         if record.session.archived_at_unix_seconds.is_some() {
-            return Ok(true);
+            return archived_payloads_exist(self, conversation_id);
         }
         let transcript_exists = if !record.has_transcript {
             true
@@ -324,7 +329,7 @@ impl AgentTranscriptStore {
     /// This is the payload-first synchronization boundary used after ordinary
     /// session mutations and for lazy exact-lookup repair. It never enumerates
     /// the session root.
-    fn upsert_catalog_from_files(
+    pub(super) fn upsert_catalog_from_files(
         &self,
         conversation_id: &str,
         kind_override: Option<AgentConversationKind>,
@@ -365,6 +370,9 @@ impl AgentTranscriptStore {
                 .join(SESSION_PRESENTATION_COMPRESSED_FILE_NAME)
                 .is_file();
         if !has_transcript && !has_presentation {
+            if let Some(candidate) = archived_catalog_candidate(self, conversation_id)? {
+                return Ok(Some(candidate));
+            }
             return named
                 .as_ref()
                 .map(|named| self.named_only_catalog_candidate(named))
@@ -401,6 +409,9 @@ impl AgentTranscriptStore {
             } else {
                 CatalogPayloadLayout::LegacyTsv
             },
+            archived_at_unix_seconds: None,
+            archive_compressed_bytes: None,
+            archive_sha256: None,
         }))
     }
 
@@ -409,7 +420,9 @@ impl AgentTranscriptStore {
     /// Creates the store root when needed, updates private permissions, and
     /// syncs the file before returning.
     pub fn append(&self, entry: &TranscriptEntry) -> Result<()> {
-        self.append_one(entry)?;
+        entry.validate()?;
+        let _conversation_lock = self.acquire_conversation_lock(&entry.conversation_id)?;
+        self.append_one_locked(entry)?;
         Ok(())
     }
 
@@ -419,9 +432,20 @@ impl AgentTranscriptStore {
     /// giving async persistence workers a single call that can report a useful
     /// byte count after executing off the runtime actor.
     pub fn append_many(&self, entries: &[TranscriptEntry]) -> Result<usize> {
-        let mut bytes = 0usize;
+        let mut grouped = BTreeMap::<String, Vec<&TranscriptEntry>>::new();
         for entry in entries {
-            bytes = bytes.saturating_add(self.append_one(entry)?);
+            entry.validate()?;
+            grouped
+                .entry(entry.conversation_id.clone())
+                .or_default()
+                .push(entry);
+        }
+        let mut bytes = 0usize;
+        for (conversation_id, entries) in grouped {
+            let _conversation_lock = self.acquire_conversation_lock(&conversation_id)?;
+            for entry in entries {
+                bytes = bytes.saturating_add(self.append_one_locked(entry)?);
+            }
         }
         Ok(bytes)
     }
@@ -432,6 +456,7 @@ impl AgentTranscriptStore {
         conversation_id: &str,
         kind: AgentConversationKind,
     ) -> Result<()> {
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
         let session_dir = self.ensure_session_dir(conversation_id)?;
         let path = session_dir.join(SESSION_METADATA_FILE_NAME);
         let temp_path = session_dir.join(".metadata.json.tmp");
@@ -497,11 +522,15 @@ impl AgentTranscriptStore {
     /// This is used by the async runtime persistence worker so transcript
     /// durability does not require a blocking worker task.
     pub async fn append_many_async(&self, entries: &[TranscriptEntry]) -> Result<usize> {
-        let mut bytes = 0usize;
-        for entry in entries {
-            bytes = bytes.saturating_add(self.append_one_async(entry).await?);
-        }
-        Ok(bytes)
+        let store = self.clone();
+        let entries = entries.to_vec();
+        tokio::task::spawn_blocking(move || store.append_many(&entries))
+            .await
+            .map_err(|error| {
+                MezError::invalid_state(format!(
+                    "transcript persistence worker join failed: {error}"
+                ))
+            })?
     }
 
     /// Appends one validated presentation entry to its conversation file.
@@ -511,6 +540,7 @@ impl AgentTranscriptStore {
     pub fn append_presentation(&self, entry: &AgentPresentationEntry) -> Result<()> {
         let entry = entry.normalized_for_agent_log_wrap();
         entry.validate()?;
+        let _conversation_lock = self.acquire_conversation_lock(&entry.conversation_id)?;
         self.ensure_session_dir(&entry.conversation_id)?;
         let path = self.presentation_path_for(&entry.conversation_id)?;
         let encoded = entry.encode()?;
@@ -577,6 +607,9 @@ impl AgentTranscriptStore {
                     .is_file(),
             has_presentation: true,
             payload_layout: CatalogPayloadLayout::Directory,
+            archived_at_unix_seconds: None,
+            archive_compressed_bytes: None,
+            archive_sha256: None,
         };
         catalog::upsert(self, &candidate, entry.created_at_unix_seconds)
     }
@@ -633,9 +666,8 @@ impl AgentTranscriptStore {
             .unwrap_or(1))
     }
 
-    /// Appends one transcript entry and returns the encoded byte count.
-    fn append_one(&self, entry: &TranscriptEntry) -> Result<usize> {
-        entry.validate()?;
+    /// Appends one validated transcript entry while its conversation lock is held.
+    fn append_one_locked(&self, entry: &TranscriptEntry) -> Result<usize> {
         let new_conversation = !self.conversation_exists(&entry.conversation_id)?;
         self.ensure_session_dir(&entry.conversation_id)?;
         let path = self.transcript_path_for(&entry.conversation_id)?;
@@ -748,31 +780,6 @@ impl AgentTranscriptStore {
         Ok(())
     }
 
-    /// Appends one transcript entry through Tokio filesystem I/O.
-    async fn append_one_async(&self, entry: &TranscriptEntry) -> Result<usize> {
-        entry.validate()?;
-        let new_conversation = !self.conversation_exists(&entry.conversation_id)?;
-        self.ensure_session_dir_async(&entry.conversation_id)
-            .await?;
-        let path = self.transcript_path_for(&entry.conversation_id)?;
-        let encoded = encode_transcript_entry(entry)?;
-        let mut file = TokioOpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .await?;
-        file.write_all(encoded.as_bytes()).await?;
-        file.write_all(b"\n").await?;
-        file.sync_all().await?;
-        set_private_file_permissions_async(&path).await?;
-        self.update_summary_after_append(entry)?;
-        self.upsert_catalog_from_files(&entry.conversation_id, None)?;
-        if new_conversation {
-            self.prune_saved_sessions_over_limit()?;
-        }
-        Ok(encoded.len().saturating_add(1))
-    }
-
     /// Reads and decodes all entries for one conversation.
     ///
     /// Returns a not-found error when the conversation file does not exist.
@@ -805,6 +812,7 @@ impl AgentTranscriptStore {
                 "transcript entry sequence must be non-zero",
             ));
         }
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
         let existing_path = self.existing_transcript_path_for(conversation_id)?;
         let mut entries = self.inspect(conversation_id)?;
         let Some(index) = entries.iter().position(|entry| entry.sequence == sequence) else {
@@ -1030,6 +1038,12 @@ impl AgentTranscriptStore {
             }
         }
 
+        for candidate in archived_catalog_candidates(self)? {
+            candidates
+                .entry(candidate.summary.conversation_id.clone())
+                .or_insert(candidate);
+        }
+
         for named in names.values() {
             if let Some(candidate) = candidates.get_mut(&named.conversation_id) {
                 candidate.name = Some(named.name.clone());
@@ -1077,6 +1091,9 @@ impl AgentTranscriptStore {
             has_transcript,
             has_presentation,
             payload_layout,
+            archived_at_unix_seconds: None,
+            archive_compressed_bytes: None,
+            archive_sha256: None,
         }))
     }
 
@@ -1101,6 +1118,9 @@ impl AgentTranscriptStore {
             has_transcript: false,
             has_presentation: false,
             payload_layout: CatalogPayloadLayout::Directory,
+            archived_at_unix_seconds: None,
+            archive_compressed_bytes: None,
+            archive_sha256: None,
         })
     }
 
@@ -1113,6 +1133,7 @@ impl AgentTranscriptStore {
         directory: Option<String>,
     ) -> Result<NamedAgentSession> {
         validate_conversation_id(conversation_id)?;
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
         let name = validate_agent_session_name(name)?;
         let directory = directory
             .map(|value| value.trim().to_string())
@@ -1127,6 +1148,10 @@ impl AgentTranscriptStore {
         let mut sessions = self.read_named_sessions_index()?;
         sessions.insert(conversation_id.to_string(), session.clone());
         self.write_named_sessions_index(&sessions)?;
+        self.update_archived_session_name(
+            conversation_id,
+            Some((&session.name, named_at_unix_seconds)),
+        )?;
         self.upsert_catalog_from_files(conversation_id, None)?;
         catalog::set_name(self, conversation_id, &session.name, named_at_unix_seconds)?;
         Ok(session)
@@ -1138,7 +1163,11 @@ impl AgentTranscriptStore {
     /// already unnamed.
     pub fn clear_session_name(&self, conversation_id: &str) -> Result<bool> {
         validate_conversation_id(conversation_id)?;
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
         let removed = self.remove_named_session(conversation_id)?;
+        if removed {
+            self.update_archived_session_name(conversation_id, None)?;
+        }
         if removed && self.upsert_catalog_from_files(conversation_id, None)? {
             catalog::clear_name(self, conversation_id)?;
         }
@@ -1262,6 +1291,7 @@ impl AgentTranscriptStore {
     /// already absent.
     pub fn delete(&self, conversation_id: &str) -> Result<bool> {
         validate_conversation_id(conversation_id)?;
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
         let session_dir = self.session_dir_for(conversation_id)?;
         let removed_payload = if session_dir.exists() {
             std_fs::remove_dir_all(session_dir)?;
@@ -1944,19 +1974,6 @@ impl AgentTranscriptStore {
         Ok(session_dir)
     }
 
-    /// Runs the ensure session dir async operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    async fn ensure_session_dir_async(&self, conversation_id: &str) -> Result<PathBuf> {
-        self.ensure_store_dir_async().await?;
-        let session_dir = self.session_dir_for(conversation_id)?;
-        tokio_fs::create_dir_all(&session_dir).await?;
-        set_private_dir_permissions_async(&session_dir).await?;
-        Ok(session_dir)
-    }
-
     /// Runs the conversation exists operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -2256,7 +2273,7 @@ impl AgentTranscriptStore {
     }
 
     /// Removes one durable name record while preserving all other names.
-    fn remove_named_session(&self, conversation_id: &str) -> Result<bool> {
+    pub(super) fn remove_named_session(&self, conversation_id: &str) -> Result<bool> {
         let _lock = self.acquire_named_sessions_lock()?;
         let mut sessions = self.read_named_sessions_index()?;
         let removed = sessions.remove(conversation_id).is_some();
@@ -2266,12 +2283,25 @@ impl AgentTranscriptStore {
         Ok(removed)
     }
 
+    /// Returns the durable naming timestamp retained for archive rebuild metadata.
+    pub(super) fn archive_named_at_unix_seconds(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<u64>> {
+        validate_conversation_id(conversation_id)?;
+        let _lock = self.acquire_named_sessions_lock()?;
+        Ok(self
+            .read_named_sessions_index()?
+            .remove(conversation_id)
+            .map(|session| session.named_at_unix_seconds))
+    }
+
     /// Runs the legacy transcript path for operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn legacy_transcript_path_for(&self, conversation_id: &str) -> Result<PathBuf> {
+    pub(super) fn legacy_transcript_path_for(&self, conversation_id: &str) -> Result<PathBuf> {
         validate_conversation_id(conversation_id)?;
         if is_root_control_conversation_id(conversation_id) {
             return self.transcript_path_for(conversation_id);

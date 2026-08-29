@@ -13,6 +13,45 @@ use mez_agent::permissions::{
 };
 
 impl RuntimeSessionService {
+    /// Plans one saved-session archive lifecycle operation for the persistence worker.
+    #[allow(
+        dead_code,
+        reason = "archive operation planning is consumed by the dependent resume browser work"
+    )]
+    pub(crate) fn queue_session_archive_operation(
+        &mut self,
+        conversation_id: &str,
+        operation: crate::runtime::SessionArchiveOperation,
+    ) -> Result<crate::runtime::RuntimeTransition> {
+        mez_agent::transcript::validate_conversation_id(conversation_id)?;
+        if matches!(
+            operation,
+            crate::runtime::SessionArchiveOperation::Archive { .. }
+        ) && self
+            .agent_shell_store()
+            .sessions()
+            .any(|session| !session.ephemeral && session.session_id == conversation_id)
+        {
+            return Err(MezError::conflict(
+                "cannot archive a conversation bound to a live durable pane",
+            ));
+        }
+        let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
+            MezError::invalid_state("session archival requires transcript storage")
+        })?;
+        let queued = self.persistence.queue_session_archive(
+            crate::runtime::RuntimeSideEffect::PersistSessionArchive {
+                store,
+                conversation_id: conversation_id.to_string(),
+                operation,
+            },
+        )?;
+        Ok(crate::runtime::RuntimeTransition {
+            applied: queued,
+            side_effects: Vec::new(),
+        })
+    }
+
     /// Runs the control idempotency operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -70,6 +109,38 @@ impl RuntimeSessionService {
                     "worker": "async-persistence",
                     "target": target.as_str(),
                     "path": path.to_string_lossy(),
+                    "state": "failed",
+                    "error": error,
+                })
+                .to_string()
+            }
+            crate::runtime::PersistenceEvent::SessionArchiveCompleted {
+                conversation_id,
+                operation,
+                bytes,
+            } => {
+                self.persistence.finish_session_archive(&conversation_id);
+                serde_json::json!({
+                    "worker": "async-persistence",
+                    "target": "session_archive",
+                    "conversation_id": conversation_id,
+                    "operation": operation.as_str(),
+                    "state": "completed",
+                    "bytes": bytes,
+                })
+                .to_string()
+            }
+            crate::runtime::PersistenceEvent::SessionArchiveFailed {
+                conversation_id,
+                operation,
+                error,
+            } => {
+                self.persistence.finish_session_archive(&conversation_id);
+                serde_json::json!({
+                    "worker": "async-persistence",
+                    "target": "session_archive",
+                    "conversation_id": conversation_id,
+                    "operation": operation.as_str(),
                     "state": "failed",
                     "error": error,
                 })

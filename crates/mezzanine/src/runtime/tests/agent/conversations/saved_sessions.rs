@@ -1,6 +1,91 @@
 //! Agent conversation saved sessions tests.
 
 use super::*;
+use crate::runtime::{PersistenceEvent, SessionArchiveOperation};
+
+/// Verifies archive planning rejects live durable bindings and suppresses
+/// duplicate lifecycle work until the persistence worker settles it.
+#[test]
+fn runtime_session_archive_planning_rejects_live_and_suppresses_duplicates() {
+    let root = temp_root("runtime-session-archive-planning");
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let live_conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let error = service
+        .queue_session_archive_operation(
+            &live_conversation_id,
+            SessionArchiveOperation::Archive {
+                archived_at_unix_seconds: 20,
+            },
+        )
+        .unwrap_err();
+    assert!(error.message().contains("live durable pane"));
+
+    store
+        .append(&TranscriptEntry {
+            conversation_id: "detached-archive".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-detached".to_string(),
+            agent_id: "agent-detached".to_string(),
+            pane_id: "%9".to_string(),
+            content: "detached archive candidate".to_string(),
+        })
+        .unwrap();
+    let first = service
+        .queue_session_archive_operation(
+            "detached-archive",
+            SessionArchiveOperation::Archive {
+                archived_at_unix_seconds: 20,
+            },
+        )
+        .unwrap();
+    let duplicate = service
+        .queue_session_archive_operation("detached-archive", SessionArchiveOperation::Restore)
+        .unwrap();
+    assert!(first.applied);
+    assert!(!duplicate.applied);
+    let effects = service
+        .drain_transcript_persistence_transition()
+        .side_effects;
+    assert_eq!(effects.len(), 1);
+    assert!(matches!(
+        effects.as_slice(),
+        [RuntimeSideEffect::PersistSessionArchive {
+            conversation_id,
+            operation: SessionArchiveOperation::Archive { .. },
+            ..
+        }] if conversation_id == "detached-archive"
+    ));
+
+    service
+        .apply_persistence_transition(PersistenceEvent::SessionArchiveFailed {
+            conversation_id: "detached-archive".to_string(),
+            operation: SessionArchiveOperation::Archive {
+                archived_at_unix_seconds: 20,
+            },
+            error: "test failure".to_string(),
+        })
+        .unwrap();
+    assert!(
+        service
+            .queue_session_archive_operation("detached-archive", SessionArchiveOperation::Delete,)
+            .unwrap()
+            .applied
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
 
 /// Verifies `/name-session` assigns durable metadata to the current
 /// zero-entry conversation without making it visible in `/resume` until it

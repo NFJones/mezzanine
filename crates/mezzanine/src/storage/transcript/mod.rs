@@ -13,6 +13,9 @@
 /// presentation payloads remain filesystem-backed and authoritative.
 mod catalog;
 
+/// Crash-safe tar+zstd lifecycle storage for saved conversations.
+mod archive;
+
 /// Exposes the encoding module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -39,7 +42,6 @@ pub use types::{
     SavedSessionLifecycleFilter, SavedSessionPageAnchor, SavedSessionQuery,
     SavedSessionRetentionPolicy,
 };
-
 /// Exposes the tests module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

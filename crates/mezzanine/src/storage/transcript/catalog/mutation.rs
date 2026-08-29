@@ -46,9 +46,9 @@ pub(super) fn upsert(
              has_transcript = excluded.has_transcript,
              has_presentation = excluded.has_presentation,
              payload_layout = excluded.payload_layout,
-             archived_at = NULL,
-             archive_compressed_bytes = NULL,
-             archive_sha256 = NULL,
+             archived_at = excluded.archived_at,
+             archive_compressed_bytes = excluded.archive_compressed_bytes,
+             archive_sha256 = excluded.archive_sha256,
              catalog_updated_at = excluded.catalog_updated_at",
         params![
             candidate.summary.conversation_id,
@@ -79,6 +79,43 @@ pub(super) fn upsert(
             sqlite_i64(now_unix_seconds, "catalog update timestamp")?,
         ],
     )?;
+    if candidate.archived_at_unix_seconds.is_some() {
+        mark_archived(
+            connection,
+            &candidate.summary.conversation_id,
+            candidate.archived_at_unix_seconds.unwrap_or_default(),
+            candidate.archive_compressed_bytes.unwrap_or_default(),
+            candidate.archive_sha256.as_deref().unwrap_or_default(),
+        )?;
+    }
+    Ok(())
+}
+
+/// Marks one existing row archived with complete lifecycle metadata.
+pub(super) fn mark_archived(
+    connection: &Connection,
+    conversation_id: &str,
+    archived_at_unix_seconds: u64,
+    archive_compressed_bytes: u64,
+    archive_sha256: &str,
+) -> Result<()> {
+    let changed = connection.execute(
+        "UPDATE saved_conversations
+         SET archived_at = ?2, archive_compressed_bytes = ?3, archive_sha256 = ?4,
+             catalog_updated_at = ?2
+         WHERE conversation_id = ?1",
+        params![
+            conversation_id,
+            sqlite_i64(archived_at_unix_seconds, "archive timestamp")?,
+            sqlite_i64(archive_compressed_bytes, "archive compressed size")?,
+            archive_sha256,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(MezError::invalid_state(
+            "saved-conversation catalog row missing during archive update",
+        ));
+    }
     Ok(())
 }
 
@@ -180,6 +217,15 @@ pub(super) fn replace_all(
                 candidate.payload_layout.as_str(),
                 sqlite_i64(now_unix_seconds, "catalog update timestamp")?,
             ])?;
+            if candidate.archived_at_unix_seconds.is_some() {
+                mark_archived(
+                    &transaction,
+                    &candidate.summary.conversation_id,
+                    candidate.archived_at_unix_seconds.unwrap_or_default(),
+                    candidate.archive_compressed_bytes.unwrap_or_default(),
+                    candidate.archive_sha256.as_deref().unwrap_or_default(),
+                )?;
+            }
         }
     }
     verify_snapshot(&transaction, candidates)?;

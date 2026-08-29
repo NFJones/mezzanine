@@ -38,6 +38,11 @@ keyset pages rather than loading the full catalog. Directory and subagent
 toggles plus picker search are applied by SQLite, while transcript detail is
 loaded only for the row you explicitly open.
 
+Archived payloads are private tar+zstd files with bounded metadata sidecars.
+Ordinary catalog listing reads the sidecars rather than decompressing archives;
+restore verifies the compressed digest, manifest, entry types, and paths before
+installing an active session directory.
+
 For catalog diagnostics and explicit recovery, use `mez session-catalog
 status` and `mez session-catalog rebuild`. Normal status and discovery remain
 bounded; rebuild is the deliberate full scan of retained session files.

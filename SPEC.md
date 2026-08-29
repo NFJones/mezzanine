@@ -10401,6 +10401,19 @@ Default `/resume` browsing, completion, and `--latest` selection MUST include
 active sessions only. Exact UUID lookup, deletion, repair, and explicit archived
 browsing MUST remain lifecycle-aware.
 
+An archived conversation MUST be stored beneath the private
+`agent-sessions/archived` directory as one tar stream compressed with zstd and
+one bounded metadata sidecar. The tar stream MUST contain exactly one
+conversation-id top-level directory and a versioned `archive-manifest.json`.
+Archive creation and restore MUST use per-conversation serialization, private
+same-filesystem staging, digest and manifest verification, strict path and entry
+type validation, and bounded entry-count and uncompressed-size limits. Symlinks,
+hard links, devices, absolute paths, traversal, and multiple top-level roots
+MUST be rejected. Healthy startup MUST inspect only bounded recovery journals;
+catalog rebuild MAY enumerate archive sidecars but MUST NOT decompress every
+healthy archive. If active and archived copies coexist, the active copy MUST win
+discovery and the archive MUST remain available for diagnosis.
+
 When `/resume <session-uuid>` is invoked, Mezzanine MUST load the saved
 conversation transcript into subsequent model context, MUST bind the pane's
 agent screen to that conversation before replaying saved presentation log

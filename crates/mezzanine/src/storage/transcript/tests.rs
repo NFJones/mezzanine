@@ -1944,17 +1944,7 @@ fn transcript_store_catalog_filters_active_and_archived_lifecycles() {
     archived_entry.created_at_unix_seconds = 30;
     store.append(&active_entry).unwrap();
     store.append(&archived_entry).unwrap();
-    let connection = Connection::open(store.catalog_path()).unwrap();
-    connection
-        .execute(
-            "UPDATE saved_conversations
-             SET archived_at = 40, archive_compressed_bytes = 512,
-                 archive_sha256 = ?2
-             WHERE conversation_id = ?1",
-            rusqlite::params!["archived-session", "a".repeat(64)],
-        )
-        .unwrap();
-    drop(connection);
+    let archived_info = store.archive_session("archived-session", 40).unwrap();
 
     assert_eq!(
         store
@@ -1973,7 +1963,10 @@ fn transcript_store_catalog_filters_active_and_archived_lifecycles() {
     );
     let archived = store.saved_session("archived-session").unwrap().unwrap();
     assert_eq!(archived.archived_at_unix_seconds, Some(40));
-    assert_eq!(archived.archive_compressed_bytes, Some(512));
+    assert_eq!(
+        archived.archive_compressed_bytes,
+        Some(archived_info.compressed_bytes)
+    );
 
     let query = SavedSessionQuery {
         lifecycle: SavedSessionLifecycleFilter::Archived,
@@ -2001,6 +1994,280 @@ fn transcript_store_catalog_filters_active_and_archived_lifecycles() {
         vec!["active-session"]
     );
     let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies archive and restore preserve transcript, presentation, naming,
+/// classification, catalog lifecycle metadata, and standard tar+zstd layout.
+#[test]
+fn transcript_store_archives_and_restores_session_round_trip() {
+    let root = temp_root("archive-round-trip");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("archive-round-trip", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .append(&entry("archive-round-trip", 2, TranscriptRole::Assistant))
+        .unwrap();
+    store
+        .append_presentation(&presentation("archive-round-trip", 1))
+        .unwrap();
+    store
+        .save_conversation_kind(
+            "archive-round-trip",
+            mez_agent::AgentConversationKind::Subagent,
+        )
+        .unwrap();
+    store
+        .name_session(
+            "archive-round-trip",
+            "Archived work",
+            30,
+            Some("/repo".into()),
+        )
+        .unwrap();
+
+    let archived = store.archive_session("archive-round-trip", 100).unwrap();
+
+    assert_eq!(archived.archived_at_unix_seconds, 100);
+    assert_eq!(archived.summary.entries, 2);
+    assert_eq!(archived.name.as_deref(), Some("Archived work"));
+    assert_eq!(
+        archived.conversation_kind,
+        mez_agent::AgentConversationKind::Subagent
+    );
+    assert!(!root.join("archive-round-trip").exists());
+    let archive_path = root.join("archived/archive-round-trip.tar.zst");
+    assert!(archive_path.is_file());
+    assert!(root.join("archived/archive-round-trip.json").is_file());
+
+    let decoder = zstd::stream::read::Decoder::new(fs::File::open(&archive_path).unwrap()).unwrap();
+    let mut archive = tar::Archive::new(decoder);
+    let paths = archive
+        .entries()
+        .unwrap()
+        .map(|entry| entry.unwrap().path().unwrap().into_owned())
+        .collect::<Vec<_>>();
+    assert!(paths.contains(&PathBuf::from("archive-round-trip/history.tsv")));
+    assert!(paths.contains(&PathBuf::from("archive-round-trip/archive-manifest.json")));
+
+    let archived_record = store.saved_session("archive-round-trip").unwrap().unwrap();
+    assert_eq!(archived_record.archived_at_unix_seconds, Some(100));
+    assert_eq!(
+        archived_record.archive_compressed_bytes,
+        Some(archived.compressed_bytes)
+    );
+    assert_eq!(
+        archived_record.archive_sha256.as_deref(),
+        Some(archived.sha256.as_str())
+    );
+
+    let restored = store
+        .restore_archived_session("archive-round-trip")
+        .unwrap();
+
+    assert_eq!(restored, archived);
+    assert!(!archive_path.exists());
+    assert!(!root.join("archived/archive-round-trip.json").exists());
+    assert_eq!(store.inspect("archive-round-trip").unwrap().len(), 2);
+    assert_eq!(
+        store
+            .inspect_presentation("archive-round-trip")
+            .unwrap()
+            .len(),
+        1
+    );
+    let active_record = store.saved_session("archive-round-trip").unwrap().unwrap();
+    assert_eq!(active_record.archived_at_unix_seconds, None);
+    assert_eq!(active_record.name.as_deref(), Some("Archived work"));
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies restore rejects a tampered compressed payload without removing the
+/// archive sidecar or installing a partial active conversation.
+#[test]
+fn transcript_store_restore_rejects_archive_digest_mismatch() {
+    let root = temp_root("archive-digest-mismatch");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("archive-digest", 1, TranscriptRole::User))
+        .unwrap();
+    store.archive_session("archive-digest", 100).unwrap();
+    let archive_path = root.join("archived/archive-digest.tar.zst");
+    let mut bytes = fs::read(&archive_path).unwrap();
+    bytes[0] ^= 0xff;
+    fs::write(&archive_path, bytes).unwrap();
+
+    let error = store
+        .restore_archived_session("archive-digest")
+        .unwrap_err();
+
+    assert!(error.message().contains("digest verification failed"));
+    assert!(archive_path.is_file());
+    assert!(root.join("archived/archive-digest.json").is_file());
+    assert!(!root.join("archive-digest").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies explicit catalog reconstruction imports archive sidecars without
+/// decompressing the archived payload or making it active by default.
+#[test]
+fn transcript_store_catalog_rebuild_imports_archived_sidecars() {
+    let root = temp_root("archive-catalog-rebuild");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("archive-rebuild", 1, TranscriptRole::User))
+        .unwrap();
+    let archived = store.archive_session("archive-rebuild", 100).unwrap();
+    fs::remove_file(store.catalog_path()).unwrap();
+
+    store.initialize(101).unwrap();
+
+    let rebuilt = store.saved_session("archive-rebuild").unwrap().unwrap();
+    assert_eq!(rebuilt.archived_at_unix_seconds, Some(100));
+    assert_eq!(
+        rebuilt.archive_sha256.as_deref(),
+        Some(archived.sha256.as_str())
+    );
+    assert!(store.latest_root_session().unwrap().is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies mutable naming metadata remains consistent across the compatibility
+/// index, archive sidecar, catalog row, and a later verified restore.
+#[test]
+fn transcript_store_updates_archived_session_names() {
+    let root = temp_root("archive-name-update");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("archive-name", 1, TranscriptRole::User))
+        .unwrap();
+    store.archive_session("archive-name", 100).unwrap();
+
+    store
+        .name_session("archive-name", "Retained archive", 110, None)
+        .unwrap();
+    assert_eq!(
+        store
+            .saved_session("archive-name")
+            .unwrap()
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("Retained archive")
+    );
+    assert!(store.clear_session_name("archive-name").unwrap());
+    assert_eq!(
+        store.saved_session("archive-name").unwrap().unwrap().name,
+        None
+    );
+
+    store.restore_archived_session("archive-name").unwrap();
+    assert_eq!(
+        store.saved_session("archive-name").unwrap().unwrap().name,
+        None
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies startup repairs only the conversation named by an interrupted
+/// archive journal and restores its staged active payload when no archive was installed.
+#[test]
+fn transcript_store_recovers_interrupted_archive_from_journal() {
+    let root = temp_root("archive-journal-recovery");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("journal-recovery", 1, TranscriptRole::User))
+        .unwrap();
+    fs::rename(
+        root.join("journal-recovery"),
+        root.join(".archive-stage-journal-recovery"),
+    )
+    .unwrap();
+    fs::create_dir_all(root.join(".archive-recovery")).unwrap();
+    fs::write(
+        root.join(".archive-recovery/journal-recovery.json"),
+        br#"{"version":1,"conversation_id":"journal-recovery","operation":"archive","payload_layout":"directory"}"#,
+    )
+    .unwrap();
+
+    store.initialize(101).unwrap();
+
+    assert!(root.join("journal-recovery/history.tsv").is_file());
+    assert!(!root.join(".archive-stage-journal-recovery").exists());
+    assert!(
+        !root
+            .join(".archive-recovery/journal-recovery.json")
+            .exists()
+    );
+    assert_eq!(store.inspect("journal-recovery").unwrap().len(), 1);
+    assert_eq!(
+        store
+            .saved_session("journal-recovery")
+            .unwrap()
+            .unwrap()
+            .archived_at_unix_seconds,
+        None
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an active payload wins catalog reconstruction when a retained
+/// archive with the same UUID remains available for diagnosis.
+#[test]
+fn transcript_store_catalog_rebuild_prefers_active_over_archived_duplicate() {
+    let root = temp_root("archive-active-precedence");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("duplicate-session", 1, TranscriptRole::User))
+        .unwrap();
+    store.archive_session("duplicate-session", 100).unwrap();
+    fs::create_dir_all(root.join("duplicate-session")).unwrap();
+    fs::write(
+        root.join("duplicate-session/history.tsv"),
+        format!(
+            "{}\n",
+            encode_transcript_entry(&entry("duplicate-session", 1, TranscriptRole::User)).unwrap()
+        ),
+    )
+    .unwrap();
+    fs::remove_file(store.catalog_path()).unwrap();
+
+    store.initialize(101).unwrap();
+
+    let rebuilt = store.saved_session("duplicate-session").unwrap().unwrap();
+    assert_eq!(rebuilt.archived_at_unix_seconds, None);
+    assert!(root.join("archived/duplicate-session.tar.zst").is_file());
+    assert!(root.join("archived/duplicate-session.json").is_file());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies archive extraction path validation rejects absolute paths,
+/// traversal, and unexpected top-level roots before touching the filesystem.
+#[test]
+fn transcript_store_archive_rejects_unsafe_entry_paths() {
+    for path in [
+        PathBuf::from("/archive-session/history.tsv"),
+        PathBuf::from("archive-session/../escape"),
+        PathBuf::from("other-session/history.tsv"),
+    ] {
+        assert!(
+            super::archive::validate_archive_path(&path, "archive-session").is_err(),
+            "unsafe archive path was accepted: {path:?}"
+        );
+    }
+    assert!(
+        super::archive::validate_archive_path(
+            &PathBuf::from("archive-session/history.tsv"),
+            "archive-session",
+        )
+        .is_ok()
+    );
 }
 
 /// Exercises bounded catalog discovery against a realistically large metadata

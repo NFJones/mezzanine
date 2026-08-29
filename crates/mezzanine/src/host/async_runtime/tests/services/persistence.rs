@@ -621,3 +621,78 @@ async fn async_persistence_side_effect_service_rejects_config_symlink_destinatio
     assert!(exit.commands_processed >= 4);
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// Verifies saved-session archival executes on the blocking persistence worker
+/// and returns a typed lifecycle completion through the actor event boundary.
+#[tokio::test(flavor = "current_thread")]
+async fn async_persistence_side_effect_service_archives_saved_sessions() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-session-archive-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "worker-archive".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-worker-archive".to_string(),
+            agent_id: "agent-worker".to_string(),
+            pane_id: "%9".to_string(),
+            content: "archive on the persistence worker".to_string(),
+        })
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+
+    let client = async {
+        assert_eq!(
+            handle
+                .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistSessionArchive {
+                    store: store.clone(),
+                    conversation_id: "worker-archive".to_string(),
+                    operation: SessionArchiveOperation::Archive {
+                        archived_at_unix_seconds: 20,
+                    },
+                }])
+                .await
+                .unwrap(),
+            1
+        );
+        let report = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 2,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+            },
+            |polls, _| polls >= 2,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.drained, 1);
+        assert_eq!(report.completed, 1);
+        assert_eq!(report.failed, 0);
+        assert!(report.bytes_written > 0);
+        assert!(root.join("archived/worker-archive.tar.zst").is_file());
+        assert!(!root.join("worker-archive").exists());
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    let events = exit
+        .service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::AllPrimaries);
+    assert!(events.iter().any(|event| {
+        event.payload.contains(r#""target":"session_archive""#)
+            && event.payload.contains(r#""operation":"archive""#)
+            && event.payload.contains(r#""state":"completed""#)
+    }));
+    let _ = std::fs::remove_dir_all(root);
+}

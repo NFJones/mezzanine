@@ -47,8 +47,8 @@ use crate::host::terminal::AttachedTerminalClientStepPlan;
 use crate::integrations::hooks::{HookEvent, HookExecutionPlan, HookOnFailure};
 use crate::protocol::event::EventAudience;
 use crate::runtime::{
-    RuntimeLifecycleState, RuntimeSessionService, RuntimeSubagentPlacement, current_effective_uid,
-    pane_environment,
+    RuntimeLifecycleState, RuntimeSessionService, RuntimeSubagentPlacement,
+    SessionArchiveOperation, current_effective_uid, pane_environment,
 };
 use crate::storage::registry::SessionRegistry;
 use mez_agent::messaging::MessageConnection;

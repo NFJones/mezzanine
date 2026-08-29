@@ -301,6 +301,7 @@ impl AsyncRuntimeSessionActor {
                     RuntimeSideEffect::Persist { .. }
                         | RuntimeSideEffect::PersistAuditLog { .. }
                         | RuntimeSideEffect::PersistTranscriptEntries { .. }
+                        | RuntimeSideEffect::PersistSessionArchive { .. }
                         | RuntimeSideEffect::PersistPromptHistory { .. }
                         | RuntimeSideEffect::PersistCommandPromptHistory { .. }
                         | RuntimeSideEffect::PersistTokenUsage { .. }

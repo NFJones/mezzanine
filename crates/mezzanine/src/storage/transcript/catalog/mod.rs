@@ -93,6 +93,12 @@ pub(super) struct CatalogCandidate {
     pub(super) has_presentation: bool,
     /// Layout used by the authoritative transcript payload.
     pub(super) payload_layout: CatalogPayloadLayout,
+    /// Time at which this payload entered the archived lifecycle.
+    pub(super) archived_at_unix_seconds: Option<u64>,
+    /// Installed compressed archive size, when archived.
+    pub(super) archive_compressed_bytes: Option<u64>,
+    /// Lowercase SHA-256 digest of the installed archive, when archived.
+    pub(super) archive_sha256: Option<String>,
 }
 
 /// One catalog row with the payload flags needed for stale-row validation.
@@ -294,6 +300,26 @@ pub(super) fn upsert(
     let _lock = acquire_shared_lock(store)?;
     let connection = schema::open(&catalog_path(store))?;
     mutation::upsert(&connection, candidate, now_unix_seconds)?;
+    set_catalog_permissions(store)
+}
+
+/// Marks one existing catalog row archived after the archive and sidecar are installed.
+pub(super) fn mark_archived(
+    store: &AgentTranscriptStore,
+    conversation_id: &str,
+    archived_at_unix_seconds: u64,
+    archive_compressed_bytes: u64,
+    archive_sha256: &str,
+) -> Result<()> {
+    let _lock = acquire_shared_lock(store)?;
+    let connection = schema::open(&catalog_path(store))?;
+    mutation::mark_archived(
+        &connection,
+        conversation_id,
+        archived_at_unix_seconds,
+        archive_compressed_bytes,
+        archive_sha256,
+    )?;
     set_catalog_permissions(store)
 }
 

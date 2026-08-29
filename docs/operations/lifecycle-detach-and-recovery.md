@@ -146,9 +146,12 @@ to replace a readable future schema. Keep `named-sessions.json`, `summary.json`,
 and `metadata.json`; they remain rollback and rebuild inputs for this catalog
 version, and compatibility name writes remain enabled.
 
-Named sessions remain exempt from automatic pruning and can grow without
-bound. Archival, storage accounting, and named-session retention limits are a
-separate product-policy decision; this catalog does not change that behavior.
+Named active sessions participate in the configured age and count retention
+policy. Archive a session to preserve it outside active retention. Archives are
+stored beneath `agent-sessions/archived` as private tar+zstd payloads with
+bounded metadata sidecars; healthy startup reads only interrupted-operation
+recovery journals, while explicit catalog rebuild may enumerate sidecars
+without decompressing every archive.
 
 ## Related pages
 

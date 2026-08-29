@@ -205,6 +205,39 @@ impl RuntimePersistenceComponent {
         self.queued_transcript_effects.push(effect);
     }
 
+    /// Queues one archive lifecycle operation unless that conversation already has work pending.
+    #[allow(
+        dead_code,
+        reason = "archive operation planning is consumed by the dependent resume browser work"
+    )]
+    pub(crate) fn queue_session_archive(
+        &mut self,
+        effect: RuntimeSideEffect,
+    ) -> crate::error::Result<bool> {
+        let RuntimeSideEffect::PersistSessionArchive {
+            conversation_id, ..
+        } = &effect
+        else {
+            return Err(crate::error::MezError::invalid_args(
+                "session archive queue requires a session archive side effect",
+            ));
+        };
+        if !self
+            .pending_session_archive_conversation_ids
+            .insert(conversation_id.clone())
+        {
+            return Ok(false);
+        }
+        self.queued_transcript_effects.push(effect);
+        Ok(true)
+    }
+
+    /// Clears actor-owned duplicate suppression after archive work settles.
+    pub(crate) fn finish_session_archive(&mut self, conversation_id: &str) {
+        self.pending_session_archive_conversation_ids
+            .remove(conversation_id);
+    }
+
     /// Returns queued transcript entries for one conversation without draining
     /// the external persistence worker's ordered effect queue.
     pub(crate) fn pending_transcript_entries(
