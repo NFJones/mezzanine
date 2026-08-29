@@ -264,6 +264,27 @@ fn runtime_terminal_step_exit_returns_terminated_response() {
     assert_eq!(service.lifecycle_state(), RuntimeLifecycleState::Killed);
 }
 
+/// Verifies a complete `Ctrl+A :exit Enter` sequence delivered in one terminal
+/// step opens the command prompt, submits `exit`, and acknowledges termination.
+/// Host terminal reads are not key-event boundaries, so fast input must behave
+/// identically to the split-step path covered above.
+#[test]
+fn runtime_terminal_step_coalesced_exit_returns_terminated_response() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"exit-coalesced","method":"terminal/step","params":{"idempotency_key":"exit-coalesced","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[1,58,101,120,105,116,13]}}"#,
+        &primary,
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert!(response.get("error").is_none(), "{response}");
+    assert_eq!(response["result"]["session_terminated"], true);
+    assert_eq!(service.lifecycle_state(), RuntimeLifecycleState::Killed);
+}
+
 /// Verifies a framed agent-prompt edit without an inline view wakes the exact
 /// primary client's pushed-render stream.
 ///

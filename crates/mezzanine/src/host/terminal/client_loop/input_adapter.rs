@@ -397,6 +397,9 @@ pub(crate) fn route_client_input_actions_with_host_paste_state(
             config.prefix_key_pending = false;
             remaining = &remaining[consumed..];
             if enters_prompt {
+                if !remaining.is_empty() {
+                    actions.push(TerminalClientLoopAction::ForwardToPane(remaining.to_vec()));
+                }
                 break;
             }
             continue;
@@ -435,6 +438,9 @@ pub(crate) fn route_client_input_actions_with_host_paste_state(
             }
             remaining = &remaining[consumed..];
             if enters_prompt {
+                if !remaining.is_empty() {
+                    actions.push(TerminalClientLoopAction::ForwardToPane(remaining.to_vec()));
+                }
                 break;
             }
             continue;

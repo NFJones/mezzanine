@@ -404,6 +404,41 @@ fn foreground_attach_exits_cleanly_without_broken_pipe_error() {
     assert!(!text.contains("mez: Io"), "{text}");
 }
 
+/// Launches a detached foreground service and exits it through Mezzanine's
+/// command prompt. This covers the `:exit` path where session shutdown begins
+/// while the foreground attach client is still awaiting the terminal-step
+/// acknowledgement needed to leave raw presentation mode cleanly.
+#[test]
+fn foreground_attach_mux_exit_acknowledges_and_exits_cleanly() {
+    let root = test_root("foreground-attach-mux-exit");
+    let home = root.join("home");
+    let runtime = root.join("runtime");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = runtime.join("attach.sock");
+
+    let mut daemon = spawn_detached_serve(&home, &runtime, &socket);
+    wait_for_path(&socket, Duration::from_secs(10)).unwrap();
+    let mut process = spawn_foreground_attach(&root, &home, &runtime, &socket);
+    let mut output = Vec::new();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            contains_default_shell_pane_frame(text) && text.contains("$")
+        })
+        .unwrap();
+
+    process.write_input(b"\x01:exit\r").unwrap();
+    process
+        .read_until_exit(&mut output, Duration::from_secs(5))
+        .unwrap();
+    wait_for_process_exit(&mut daemon, Duration::from_secs(5)).unwrap();
+
+    let text = String::from_utf8_lossy(&output);
+    assert!(!text.contains("Broken pipe"), "{text}");
+    assert!(!text.contains("mez: Io"), "{text}");
+}
+
 /// Launches a deterministic less-like full-screen pager through the foreground
 /// attach path and drives it with real key input.
 ///

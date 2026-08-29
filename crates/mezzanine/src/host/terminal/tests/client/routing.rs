@@ -281,6 +281,23 @@ fn client_loop_consumes_pending_prefix_before_forwarding_remainder() {
     );
 }
 
+/// Verifies command-prompt entry preserves bytes delivered later in the same
+/// host read so prompt submission does not depend on terminal read boundaries.
+/// Fast local input can coalesce `Ctrl+A`, `:`, the command, and Enter into one
+/// buffer; dropping the suffix leaves `:exit` visibly open without executing it.
+#[test]
+fn client_loop_preserves_coalesced_command_prompt_input() {
+    let config = TerminalClientLoopConfig::default();
+
+    assert_eq!(
+        route_client_input_actions(b"\x01:exit\r", &config).unwrap(),
+        vec![
+            TerminalClientLoopAction::ExecuteMux(MuxAction::EnterCommandPrompt),
+            TerminalClientLoopAction::ForwardToPane(b"exit\r".to_vec()),
+        ]
+    );
+}
+
 /// Verifies that pane applications receive mouse input only inside their own
 /// rendered content region. A mouse-aware program in one pane must not suppress
 /// Mezzanine history scrolling or selection in neighboring panes.
@@ -768,10 +785,9 @@ fn attached_terminal_client_step_forwards_raw_input_when_primary_prompt_is_activ
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-/// Verifies that batched prefix-command bytes still open the command prompt.
-/// Detached control-socket attach can read `Ctrl+A : Enter` in one buffer, and
-/// the prefix command trigger must not be reported as an unbound prefix just
-/// because a following byte arrived before the prompt loop starts.
+/// Verifies that batched prefix-command bytes open the command prompt and
+/// preserve the following Enter for prompt handling. Host reads are byte-stream
+/// chunks rather than key-event boundaries, so the suffix must not disappear.
 fn attached_terminal_client_step_routes_batched_prefix_command_prompt() {
     let config = TerminalClientLoopConfig::default();
     let readiness = vec![AttachedTerminalFdReadiness {
@@ -790,9 +806,10 @@ fn attached_terminal_client_step_routes_batched_prefix_command_prompt() {
 
     assert_eq!(
         plan.actions,
-        vec![TerminalClientLoopAction::ExecuteMux(
-            MuxAction::EnterCommandPrompt
-        )]
+        vec![
+            TerminalClientLoopAction::ExecuteMux(MuxAction::EnterCommandPrompt),
+            TerminalClientLoopAction::ForwardToPane(b"\r".to_vec()),
+        ]
     );
 }
 
