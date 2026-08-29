@@ -585,21 +585,9 @@ impl RuntimeSessionService {
         let agent_id = format!("agent-{pane_id}");
         let (_active_name, _active_profile) =
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
-        let new_profile = self
-            .provider_registry()
+        self.provider_registry()
             .resolve_profile(&preset.default_model_profile)?;
-        let provider_id = new_profile.provider.clone();
-        let model_name = new_profile.model.clone();
-        let new_reasoning = new_profile.reasoning_profile.clone();
-        let new_latency = new_profile.latency_preference.clone();
-        let catalog = self.runtime_model_catalog_for_provider(&provider_id)?;
-        let profile_name = self.runtime_generated_profile_for_provider_model(
-            &provider_id,
-            &model_name,
-            new_reasoning.as_deref(),
-            new_latency.as_deref(),
-            &catalog,
-        )?;
+        let profile_name = preset.default_model_profile.clone();
         let router = preset.auto_sizing_router_model_profile.clone();
         let scope = RuntimeModelProfileOverrideScope::Pane(pane_id.to_string());
         self.set_model_profile_override(scope.clone(), &profile_name)?;
@@ -798,6 +786,9 @@ fn runtime_model_profile_matches_preset_profile(
         && active.reasoning_profile == preset.reasoning_profile
         && active.latency_preference.as_deref().unwrap_or("default")
             == preset.latency_preference.as_deref().unwrap_or("default")
+        && active.multimodal_required == preset.multimodal_required
+        && active.provider_options == preset.provider_options
+        && active.safety_tier == preset.safety_tier
 }
 
 /// Reports whether one auto-sizing configuration matches a preset.
@@ -1134,6 +1125,8 @@ fn runtime_profile_name_available_or_matching(
             && existing.model == profile.model
             && existing.reasoning_profile == profile.reasoning_profile
             && existing.provider_options == profile.provider_options
+            && existing.multimodal_required == profile.multimodal_required
+            && existing.safety_tier == profile.safety_tier
             && existing.latency_preference.as_deref().unwrap_or("default")
                 == profile.latency_preference.as_deref().unwrap_or("default")
     })

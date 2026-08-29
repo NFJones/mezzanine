@@ -157,12 +157,12 @@ async fn runtime_agent_shell_model_list_uses_code_defaults_when_config_models_em
     assert!(model_list.contains("| config |"), "{model_list}");
 }
 
-/// Verifies that live provider model catalogs take precedence over configured
-/// fallback models. The configured `providers.openai.models` list should keep
-/// the command useful when the provider cannot be reached, but it must not
-/// override a successfully populated provider catalog.
+/// Verifies live provider observations merge with configured provider models.
+///
+/// Discovery must add provider-only models without hiding configured-only
+/// entries, because local base metadata remains authoritative and selectable.
 #[tokio::test]
-async fn runtime_agent_shell_model_list_uses_provider_catalog_over_configured_models() {
+async fn runtime_agent_shell_model_list_merges_provider_and_configured_models() {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -205,8 +205,9 @@ async fn runtime_agent_shell_model_list_uses_provider_catalog_over_configured_mo
         model_list.contains("| openai | provider-only |"),
         "{model_list}"
     );
-    assert!(!model_list.contains("configured-only"), "{model_list}");
-    assert!(model_list.contains("| provider |"), "{model_list}");
+    assert!(model_list.contains("configured-only"), "{model_list}");
+    assert!(model_list.contains("| discovered |"), "{model_list}");
+    assert!(model_list.contains("| configured |"), "{model_list}");
 }
 
 /// Verifies caching a provider catalog rematerializes named profiles from

@@ -94,7 +94,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
             trusted: true,
-            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\", \"gpt-5.4\"]\ndefault_model = \"gpt-5.5\"\n\n[providers.openai.options]\nreasoning_effort = \"medium\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"low\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"low\"\n"
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\ndefault_model = \"gpt-5.5\"\n\n[providers.openai.models.default]\nid = \"gpt-5.5\"\n\n[providers.openai.models.provider-only]\nid = \"gpt-provider-only\"\nmax_output_tokens = 16000\ncapabilities = [\"vision\"]\n\n[providers.openai.models.provider-only.provider_options]\nservice_tier = \"configured\"\n\n[providers.openai.options]\nreasoning_effort = \"medium\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"low\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"low\"\n"
                 .to_string(),
         }])
         .unwrap();
@@ -113,11 +113,20 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
             reasoning_levels: vec!["low".to_string(), "high".to_string()],
             context_window_tokens: Some(777_777),
             max_input_tokens: Some(666_666),
-            max_output_tokens: None,
-            capabilities: Vec::new(),
+            max_output_tokens: Some(8_000),
+            capabilities: vec!["tool_use".to_string()],
         }],
         vec!["low".to_string(), "high".to_string()],
     );
+
+    let direct = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"direct-model","method":"agent/shell/command","params":{"idempotency_key":"direct-model","input":"/model gpt-provider-only low"}}"#,
+        &primary,
+    );
+    assert!(direct.contains(r#""kind":"mutated""#), "{direct}");
+    let (_direct_name, direct_profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
 
     let open_model = AttachedTerminalClientStepPlan {
         actions: vec![TerminalClientLoopAction::HandleMouse(
@@ -174,6 +183,16 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
         model_profile.provider_options.get("max_input_tokens"),
         Some(&"666666".to_string())
     );
+    assert_eq!(model_profile.max_output_tokens(), Some(16_000));
+    assert_eq!(
+        model_profile.provider_options.get("model_capabilities"),
+        Some(&"vision".to_string())
+    );
+    assert_eq!(
+        model_profile.provider_options.get("service_tier"),
+        Some(&"configured".to_string())
+    );
+    assert_eq!(model_profile, direct_profile);
 
     let open_reasoning = AttachedTerminalClientStepPlan {
         actions: vec![TerminalClientLoopAction::HandleMouse(

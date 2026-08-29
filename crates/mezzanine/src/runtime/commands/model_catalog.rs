@@ -105,9 +105,6 @@ impl RuntimeSessionService {
         &mut self,
         provider_id: &str,
     ) -> Result<RuntimeModelCatalog> {
-        if let Some(catalog) = self.cached_provider_model_catalog(provider_id) {
-            return Ok(catalog);
-        }
         let provider_config = self
             .provider_registry()
             .provider(provider_id)
@@ -115,12 +112,13 @@ impl RuntimeSessionService {
             .ok_or_else(|| {
                 MezError::config(format!("provider `{provider_id}` is not configured"))
             })?;
-        let fallback = runtime_configured_model_catalog(
+        let observed = self.cached_provider_model_catalog(provider_id);
+        Ok(runtime_effective_model_catalog(
             provider_id,
             &provider_config,
             self.provider_registry(),
-        );
-        Ok(fallback)
+            observed.as_ref(),
+        ))
     }
 
     /// Runs the runtime model catalog for provider async operation for this subsystem.
@@ -136,9 +134,6 @@ impl RuntimeSessionService {
         &mut self,
         provider_id: &str,
     ) -> Result<RuntimeModelCatalog> {
-        if let Some(catalog) = self.cached_provider_model_catalog(provider_id) {
-            return Ok(catalog);
-        }
         let provider_config = self
             .provider_registry()
             .provider(provider_id)
@@ -151,6 +146,14 @@ impl RuntimeSessionService {
             &provider_config,
             self.provider_registry(),
         );
+        if let Some(catalog) = self.cached_provider_model_catalog(provider_id) {
+            return Ok(runtime_effective_model_catalog(
+                provider_id,
+                &provider_config,
+                self.provider_registry(),
+                Some(&catalog),
+            ));
+        }
         match resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())? {
             ProviderApiCompatibility::OpenAiResponses
             | ProviderApiCompatibility::OpenAiChatCompletions
@@ -161,7 +164,12 @@ impl RuntimeSessionService {
                 Ok(catalog) => {
                     let catalog = RuntimeModelCatalog::from_provider(catalog);
                     self.cache_provider_model_catalog(provider_id, catalog.clone())?;
-                    Ok(catalog)
+                    Ok(runtime_effective_model_catalog(
+                        provider_id,
+                        &provider_config,
+                        self.provider_registry(),
+                        Some(&catalog),
+                    ))
                 }
                 Err(_error) => Ok(fallback),
             },
@@ -609,6 +617,50 @@ impl RuntimeModelCatalog {
     }
 }
 
+/// Builds one effective catalog from configured, built-in, profile, and
+/// provider-discovered model observations.
+fn runtime_effective_model_catalog(
+    provider_id: &str,
+    provider_config: &crate::runtime::RuntimeProviderConfig,
+    registry: &crate::runtime::RuntimeProviderRegistry,
+    observed: Option<&RuntimeModelCatalog>,
+) -> RuntimeModelCatalog {
+    let mut candidates =
+        runtime_configured_model_catalog_candidates(provider_id, provider_config, registry);
+    if let Some(observed) = observed {
+        candidates.extend(
+            observed
+                .catalog
+                .entries()
+                .iter()
+                .map(ModelCatalogEntry::to_candidate),
+        );
+    }
+    let reasoning_levels = normalize_model_catalog_values(
+        observed
+            .into_iter()
+            .flat_map(|catalog| catalog.catalog.reasoning_levels().iter().cloned())
+            .collect(),
+    );
+    let recommended_model = runtime_provider_recommended_model(provider_config);
+    RuntimeModelCatalog {
+        provider: provider_id.to_string(),
+        source: observed
+            .map(|catalog| catalog.source.clone())
+            .unwrap_or_else(|| "config".to_string()),
+        provider_error: observed.and_then(|catalog| catalog.provider_error.clone()),
+        catalog: ModelCatalog::from_input(ModelCatalogInput {
+            candidates,
+            default_model: provider_config.default_model.clone(),
+            recommended_model: recommended_model.map(str::to_string),
+            reasoning_levels,
+        }),
+        quota_usage: observed
+            .map(|catalog| catalog.quota_usage.clone())
+            .unwrap_or_default(),
+    }
+}
+
 /// Runs the runtime configured model catalog operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -619,9 +671,23 @@ pub(super) fn runtime_configured_model_catalog(
     provider_config: &crate::runtime::RuntimeProviderConfig,
     registry: &crate::runtime::RuntimeProviderRegistry,
 ) -> RuntimeModelCatalog {
+    runtime_effective_model_catalog(provider_id, provider_config, registry, None)
+}
+
+/// Collects raw local catalog candidates without collapsing field provenance.
+fn runtime_configured_model_catalog_candidates(
+    provider_id: &str,
+    provider_config: &crate::runtime::RuntimeProviderConfig,
+    registry: &crate::runtime::RuntimeProviderRegistry,
+) -> Vec<ModelCatalogCandidate> {
     let mut candidates = Vec::new();
     if let Some(default_model) = provider_config.default_model.as_deref()
         && !default_model.is_empty()
+        && provider_config
+            .model(default_model)
+            .ok()
+            .flatten()
+            .is_none()
     {
         candidates.push(runtime_catalog_candidate(
             default_model,
@@ -629,34 +695,24 @@ pub(super) fn runtime_configured_model_catalog(
             ModelCatalogSource::Configured,
         ));
     }
-    let configured_models = provider_config
-        .models
-        .iter()
-        .map(|model| model.id.as_str())
-        .filter(|model| !model.is_empty())
-        .collect::<Vec<_>>();
-    let default_models = if configured_models.is_empty() {
+    for model in &provider_config.models {
+        candidates.push(runtime_catalog_candidate(
+            &model.id,
+            runtime_configured_reasoning_levels_for_model(provider_config, &model.id),
+            ModelCatalogSource::Default,
+        ));
+        candidates.push(ModelCatalogCandidate::configured(model));
+    }
+    let default_models = if provider_config.models.is_empty() {
         runtime_provider_default_models(provider_config)
     } else {
         Vec::new()
     };
-    let provider_models = if configured_models.is_empty() {
-        default_models
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-    } else {
-        configured_models
-    };
-    for model in provider_models {
+    for model in &default_models {
         candidates.push(runtime_catalog_candidate(
             model,
             runtime_configured_reasoning_levels_for_model(provider_config, model),
-            if provider_config.models.is_empty() {
-                ModelCatalogSource::Default
-            } else {
-                ModelCatalogSource::Configured
-            },
+            ModelCatalogSource::Default,
         ));
     }
     for profile in registry
@@ -664,6 +720,14 @@ pub(super) fn runtime_configured_model_catalog(
         .values()
         .filter(|profile| profile.provider == provider_id)
     {
+        if provider_config
+            .model(&profile.model)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            continue;
+        }
         let mut reasoning_levels =
             runtime_configured_reasoning_levels_for_model(provider_config, &profile.model);
         if let Some(reasoning) = profile.reasoning_profile.as_deref() {
@@ -675,11 +739,10 @@ pub(super) fn runtime_configured_model_catalog(
             ModelCatalogSource::Configured,
         ));
     }
-    let recommended_model = runtime_provider_recommended_model(provider_config);
     if !candidates
         .iter()
         .any(|candidate: &ModelCatalogCandidate| !candidate.model.id.trim().is_empty())
-        && let Some(recommended_model) = recommended_model
+        && let Some(recommended_model) = runtime_provider_recommended_model(provider_config)
     {
         candidates.push(runtime_catalog_candidate(
             recommended_model,
@@ -687,18 +750,7 @@ pub(super) fn runtime_configured_model_catalog(
             ModelCatalogSource::Recommended,
         ));
     }
-    RuntimeModelCatalog {
-        provider: provider_id.to_string(),
-        source: "config".to_string(),
-        provider_error: None,
-        catalog: ModelCatalog::from_input(ModelCatalogInput {
-            candidates,
-            default_model: provider_config.default_model.clone(),
-            recommended_model: recommended_model.map(str::to_string),
-            reasoning_levels: Vec::new(),
-        }),
-        quota_usage: Vec::new(),
-    }
+    candidates
 }
 
 /// Converts one resolved product model into a provider-neutral catalog candidate.
@@ -887,7 +939,11 @@ pub(super) fn runtime_model_catalog_display(
                     active_model.then_some(active_profile.reasoning_profile.as_deref()),
                 ),
                 context_limit.clone(),
-                catalog.source.clone(),
+                if catalog.source == "config" {
+                    "config".to_string()
+                } else {
+                    model.source.as_str().to_string()
+                },
                 if active_model {
                     active_name.to_string()
                 } else {
