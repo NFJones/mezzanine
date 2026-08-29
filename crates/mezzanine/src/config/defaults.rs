@@ -159,7 +159,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 78
+version = 79
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -270,10 +270,19 @@ cursor_blink = false
 # Cursor blink period when blinking is enabled.
 cursor_blink_interval_ms = 500
 
+# Blocking terminal editor used only when an explicit external-edit action is
+# invoked. Commands are argv arrays and are never interpreted by a shell.
+[external_editor]
+command = ["editor", "{file}"]
+fallback = [["vim", "{file}"], ["nano", "{file}"], ["vi", "{file}"]]
+
 # `escape` is the prefix key. Optional direct key settings below cover actions
 # without generated default prefix equivalents.
 [keys]
 escape = "C-a"
+# Prefix suffix for external prompt editing (`Ctrl+A e` by default). Set to
+# another chord to remap it or `null` to disable it.
+# edit_prompt = "e"
 # Direct bindings are disabled by default; uncomment any desired chord.
 # split_vertical = "A-\\"
 # split_horizontal = "A--"
@@ -300,6 +309,7 @@ active = "default"
 # Optional custom presets inherit omitted bindings from the default preset.
 # [key_presets.custom]
 # escape = "C-a"
+# edit_prompt = "e"
 # split_vertical = "A-\\"
 # split_horizontal = "A--"
 # new_window = "A-="

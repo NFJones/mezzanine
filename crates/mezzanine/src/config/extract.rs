@@ -7,8 +7,8 @@
 use super::{
     AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, BTreeMap,
     BUBBLEWRAP_PERMISSION_KEYS, COMMAND_RULE_EFFECT_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS,
-    ConfigDiagnostic, ConfigFormat, ConfigScope, HISTORY_KEYS, HOOK_KEYS, HOST_KEYS,
-    HOST_LEASE_KEYS, INSTRUCTION_KEYS, IROH_TRANSPORT_KEYS, ISSUE_KEYS, JsonPathParser,
+    ConfigDiagnostic, ConfigFormat, ConfigScope, EXTERNAL_EDITOR_KEYS, HISTORY_KEYS, HOOK_KEYS,
+    HOST_KEYS, HOST_LEASE_KEYS, INSTRUCTION_KEYS, IROH_TRANSPORT_KEYS, ISSUE_KEYS, JsonPathParser,
     JsonValueParser, KEY_BINDING_KEYS, KEY_PRESET_KEYS, LAYOUT_KEYS, MCP_SERVER_KEYS, MEMORY_KEYS,
     MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS, PANE_FRAME_KEYS, PERMISSION_KEYS,
     PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, PROVIDER_MODEL_KEYS, RUNTIME_KEYS,
@@ -294,6 +294,9 @@ pub(super) fn validate_known_schema_path(path: &str) -> Option<String> {
         "transport" => validate_transport_path(&segments),
         "session" => validate_static_table_path(&segments, "session", SESSION_KEYS, &[]),
         "terminal" => validate_static_table_path(&segments, "terminal", TERMINAL_KEYS, &[]),
+        "external_editor" => {
+            validate_static_table_path(&segments, "external_editor", EXTERNAL_EDITOR_KEYS, &[])
+        }
         "shell" => validate_static_table_path(&segments, "shell", SHELL_KEYS, &["env"]),
         "keys" => {
             validate_static_table_path(&segments, "keys", KEY_BINDING_KEYS, &["command_bindings"])

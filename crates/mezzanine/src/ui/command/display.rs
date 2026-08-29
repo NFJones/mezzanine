@@ -589,6 +589,7 @@ pub(super) fn list_default_key_bindings() -> String {
             ("=", "choose-buffer"),
             ("-", "delete-buffer"),
             ("~", "show-messages"),
+            ("e", "edit-agent-prompt"),
         ]
         .into_iter()
         .map(|(key, command)| KeyBindingDisplayRow {

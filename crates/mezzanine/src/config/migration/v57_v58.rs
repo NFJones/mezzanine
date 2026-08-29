@@ -104,6 +104,7 @@ fn legacy_bindings(root: &serde_json::Value) -> Result<KeyBindings> {
         new_window: optional_chord(keys, "new_window", defaults.new_window)?,
         new_group: optional_chord(keys, "new_group", defaults.new_group)?,
         agent_shell: optional_chord(keys, "agent_shell", defaults.agent_shell)?,
+        edit_prompt: defaults.edit_prompt,
         focus_up: optional_chord(keys, "focus_up", defaults.focus_up)?,
         focus_down: optional_chord(keys, "focus_down", defaults.focus_down)?,
         focus_left: optional_chord(keys, "focus_left", defaults.focus_left)?,

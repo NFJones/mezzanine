@@ -6,7 +6,7 @@
 //! permission, and hook config domains.
 
 use mez_mux::command::parse_command_sequence;
-use mez_mux::input::{KeyBindings, KeyChord};
+use mez_mux::input::{KeyBindings, KeyChord, classify_prefix_binding};
 use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -342,6 +342,7 @@ pub(crate) fn runtime_key_bindings_from_config(root: &Value) -> Result<KeyBindin
         new_window: runtime_optional_key_binding_value(keys, "new_window", defaults.new_window)?,
         new_group: runtime_optional_key_binding_value(keys, "new_group", defaults.new_group)?,
         agent_shell: runtime_optional_key_binding_value(keys, "agent_shell", defaults.agent_shell)?,
+        edit_prompt: runtime_optional_key_binding_value(keys, "edit_prompt", defaults.edit_prompt)?,
         focus_up: runtime_optional_key_binding_value(keys, "focus_up", defaults.focus_up)?,
         focus_down: runtime_optional_key_binding_value(keys, "focus_down", defaults.focus_down)?,
         focus_left: runtime_optional_key_binding_value(keys, "focus_left", defaults.focus_left)?,
@@ -466,6 +467,30 @@ pub(crate) fn runtime_command_bindings_from_effective(
         );
     }
     Ok(bindings)
+}
+
+/// Rejects a configured prompt-edit suffix that would shadow another prefix
+/// action or a user-defined prefix command binding.
+pub(crate) fn runtime_validate_key_binding_collisions(
+    bindings: &KeyBindings,
+    command_bindings: &BTreeMap<KeyChord, RuntimeCommandBinding>,
+) -> Result<()> {
+    let Some(edit_prompt) = bindings.edit_prompt else {
+        return Ok(());
+    };
+    let mut bindings_without_edit_prompt = bindings.clone();
+    bindings_without_edit_prompt.edit_prompt = None;
+    if classify_prefix_binding(edit_prompt, &bindings_without_edit_prompt).is_some() {
+        return Err(MezError::config(
+            "keys.edit_prompt conflicts with a built-in prefix binding",
+        ));
+    }
+    if command_bindings.contains_key(&edit_prompt) {
+        return Err(MezError::config(
+            "keys.edit_prompt conflicts with a configured prefix command binding",
+        ));
+    }
+    Ok(())
 }
 
 /// Runs the runtime chord from binding config key operation for this subsystem.

@@ -421,6 +421,7 @@ fn initial_config_is_complete_annotated_and_provider_free() {
     for section in [
         "[runtime]",
         "[terminal]",
+        "[external_editor]",
         "[keys]",
         "[keys.command_bindings]",
         "[key_preset]",
@@ -459,6 +460,8 @@ fn initial_config_is_complete_annotated_and_provider_free() {
     }
 
     for setting in [
+        "command = [\"editor\", \"{file}\"]",
+        "# edit_prompt =",
         "# split_vertical =",
         "# focus_next_group =",
         "# clipboard_copy_command =",

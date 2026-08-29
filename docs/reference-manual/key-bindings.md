@@ -35,6 +35,7 @@ configuration can replace bindings.
 | `Ctrl+A ]`, `Ctrl+A #`, `Ctrl+A =`, `Ctrl+A -` | Paste, list, choose, or delete paste buffers. |
 | `Ctrl+A ~` | Show Mez messages. |
 | `Ctrl+A a` | Toggle the focused pane's agent shell. |
+| `Ctrl+A e` | Open the visible agent-prompt draft in the configured external editor. |
 
 ## Prompt and browser controls
 
@@ -42,7 +43,9 @@ In the Mezzanine command prompt and agent prompt, Tab and Shift+Tab select
 enumerable completions; shadow hints do not alter the editable input. The agent
 prompt recognizes `/` slash commands, `$` skills, `#` macros, and `@` MCP
 servers. `Ctrl+V` pastes host clipboard text into the visible agent prompt
-without submitting it.
+without submitting it. External editing is also non-submitting: after a
+successful editor close, the edited text returns to the in-pane prompt for
+review and normal submission.
 
 Command-output pagers use `/` to search, and an empty search repeats the last
 query. Record browsers use arrow keys to select stable identifiers, Enter to

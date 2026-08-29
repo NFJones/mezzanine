@@ -55,7 +55,7 @@ configuration error; remove or relocate all but the intended file. See
 [Configuration overview](overview.md) for mutation examples and the layer
 selection workflow.
 
-The current config schema version is `77`. On launch, Mezzanine migrates an
+The current config schema version is `79`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -114,10 +114,11 @@ shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `77` | Config schema version. Do not change this. |
+| `version` | integer | `79` | Config schema version. Do not change this. |
 | `host` | table | see below | Disabled-by-default persistent host, recovery, and durable-lease policy. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
+| `external_editor` | table | see below | Primary-user blocking terminal-editor command candidates. |
 | `keys` | table | see below | Prefix and direct key bindings. |
 | `key_preset` | table | see below | Active key-assignment preset. |
 | `key_presets` | map | `{}` | User-defined key-assignment presets. |
@@ -306,6 +307,22 @@ The historical `terminal.nested_muxxer` spelling is accepted as a version 1
 migration alias and is rewritten to `terminal.nested_multiplexer` before layer
 composition.
 
+### `external_editor`
+
+External editing is opt-in: ordinary agent prompts remain in Mez's in-pane
+entry area until the effective `edit_prompt` prefix binding is invoked. Editor
+commands are structured argv arrays and are never parsed by a shell.
+
+| Field | Type | Default declaration | Description |
+| --- | --- | --- | --- |
+| `external_editor.command` | string array | `["editor", "{file}"]` | Preferred blocking terminal editor. `{file}` may appear zero or one time; when omitted, Mez appends the private draft path. |
+| `external_editor.fallback` | array of string arrays | `[["vim", "{file}"], ["nano", "{file}"], ["vi", "{file}"]]` | Ordered candidates tried only when lookup or spawn of an earlier candidate fails. |
+
+Candidates must contain a non-empty executable and string arguments, with no
+NUL bytes or unsupported brace interpolation. A started editor that exits
+nonzero fails that edit session; Mez does not silently launch a fallback.
+Project overlays cannot change this host execution setting.
+
 ### `keys`
 
 The prefix key table remains available even when direct bindings are omitted.
@@ -313,6 +330,7 @@ The prefix key table remains available even when direct bindings are omitted.
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
 | `keys.escape` | string | `"C-a"` | Prefix key. |
+| `keys.edit_prompt` | string or null | `"e"` | Prefix suffix for external agent-prompt editing. `null` disables it; it must not collide with another prefix action or command binding. |
 | `keys.split_vertical` | string | omitted | Optional direct vertical split key. Prefix default is `Ctrl+A %`. |
 | `keys.split_horizontal` | string | omitted | Optional direct horizontal split key. Prefix default is `Ctrl+A "`. |
 | `keys.new_window` | string | omitted | Optional direct new-window key. Prefix default is `Ctrl+A c`. |
@@ -337,7 +355,8 @@ bindings documented by `list-key-presets`.
 
 Configured presets live under `key_presets.<name>` and accept the same fields
 as `keys`. Omitted fields inherit the `default` preset; `null` explicitly
-disables an optional direct binding. `set-key-preset <name>` materializes the
+disables an optional binding, including the `edit_prompt` prefix suffix.
+`set-key-preset <name>` materializes the
 selected preset into `keys`, reconciles `keys.command_bindings`, applies it to
 the live session, and persists it to the primary config. Later `bind-key`,
 `unbind-key`, or `keys.*` changes remain explicit low-level overrides.

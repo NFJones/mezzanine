@@ -30,6 +30,8 @@ pub struct KeyPresetDefinition {
     pub new_group: Option<Option<KeyChord>>,
     /// Optional direct agent-shell declaration.
     pub agent_shell: Option<Option<KeyChord>>,
+    /// Optional prompt-edit prefix-suffix declaration.
+    pub edit_prompt: Option<Option<KeyChord>>,
     /// Optional direct upward pane-focus declaration.
     pub focus_up: Option<Option<KeyChord>>,
     /// Optional direct downward pane-focus declaration.
@@ -61,6 +63,7 @@ impl KeyPresetDefinition {
         apply_optional(&mut bindings.new_window, self.new_window);
         apply_optional(&mut bindings.new_group, self.new_group);
         apply_optional(&mut bindings.agent_shell, self.agent_shell);
+        apply_optional(&mut bindings.edit_prompt, self.edit_prompt);
         apply_optional(&mut bindings.focus_up, self.focus_up);
         apply_optional(&mut bindings.focus_down, self.focus_down);
         apply_optional(&mut bindings.focus_left, self.focus_left);
@@ -161,6 +164,7 @@ fn simple_key_preset_definition() -> KeyPresetDefinition {
         new_window: Some(Some(KeyChord::alt(KeyCode::Char('=')))),
         new_group: Some(Some(KeyChord::alt(KeyCode::Char('+')))),
         agent_shell: Some(Some(KeyChord::alt(KeyCode::Char(']')))),
+        edit_prompt: None,
         focus_up: Some(Some(KeyChord::ctrl_alt(KeyCode::Up))),
         focus_down: Some(Some(KeyChord::ctrl_alt(KeyCode::Down))),
         focus_left: Some(Some(KeyChord::ctrl_alt(KeyCode::Left))),
@@ -281,6 +285,28 @@ mod tests {
         let bindings = definition.materialize(base);
         assert_eq!(bindings.new_window, None);
         assert_eq!(bindings.new_group, Some(KeyChord::alt(KeyCode::Char('g'))));
+    }
+
+    /// Verifies prompt editing is a preset-owned prefix action whose suffix can
+    /// be remapped or disabled without creating an ordinary direct binding.
+    #[test]
+    fn prompt_edit_prefix_binding_supports_remap_and_disable() {
+        let remapped = KeyPresetDefinition {
+            edit_prompt: Some(Some(KeyChord::new(KeyCode::Char('v')))),
+            ..KeyPresetDefinition::default()
+        }
+        .materialize(KeyBindings::default());
+        assert_eq!(
+            remapped.edit_prompt,
+            Some(KeyChord::new(KeyCode::Char('v')))
+        );
+
+        let disabled = KeyPresetDefinition {
+            edit_prompt: Some(None),
+            ..KeyPresetDefinition::default()
+        }
+        .materialize(KeyBindings::default());
+        assert_eq!(disabled.edit_prompt, None);
     }
 
     /// Verifies key-preset rows expose selectable internal command links using

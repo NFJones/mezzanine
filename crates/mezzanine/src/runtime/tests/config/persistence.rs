@@ -796,3 +796,39 @@ fn runtime_key_preset_switching_updates_live_input_bindings() {
         KeyChord::ctrl(KeyCode::Char('a'))
     );
 }
+
+/// Verifies prompt editing remains a prefix action in effective key listings
+/// and rejects suffixes that would shadow built-in or configured commands.
+#[test]
+fn runtime_prompt_edit_binding_is_listed_and_collision_checked() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+
+    let keys = service
+        .execute_terminal_command(&primary, "list-keys")
+        .unwrap();
+    assert!(keys.contains("C-a e"), "{keys}");
+    assert!(keys.contains("edit-agent-prompt"), "{keys}");
+
+    for text in [
+        "[keys]\nedit_prompt = \"c\"\n",
+        "[keys.command_bindings]\ne = \"new-window\"\n",
+    ] {
+        let error = service
+            .replace_config_layers(vec![ConfigLayer {
+                name: "primary".to_string(),
+                path: None,
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: text.to_string(),
+            }])
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("keys.edit_prompt conflicts"),
+            "{error}"
+        );
+    }
+}

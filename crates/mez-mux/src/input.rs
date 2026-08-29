@@ -739,6 +739,8 @@ pub enum MuxAction {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     ToggleAgentShell,
+    /// Opens the active agent prompt in the configured external editor.
+    EditAgentPrompt,
 }
 
 /// Host and pane state used to classify one mouse event at the mux boundary.
@@ -850,6 +852,8 @@ pub struct KeyBindings {
     pub new_group: Option<KeyChord>,
     /// Optional direct agent-shell adapter binding.
     pub agent_shell: Option<KeyChord>,
+    /// Optional prefix suffix that opens the active agent prompt externally.
+    pub edit_prompt: Option<KeyChord>,
     /// Optional direct upward pane-focus binding.
     pub focus_up: Option<KeyChord>,
     /// Optional direct downward pane-focus binding.
@@ -877,6 +881,7 @@ impl Default for KeyBindings {
             new_window: None,
             new_group: None,
             agent_shell: None,
+            edit_prompt: Some(KeyChord::new(KeyCode::Char('e'))),
             focus_up: None,
             focus_down: None,
             focus_left: None,
@@ -934,6 +939,9 @@ pub fn classify_direct_binding(chord: KeyChord, bindings: &KeyBindings) -> Optio
 pub fn classify_prefix_binding(chord: KeyChord, bindings: &KeyBindings) -> Option<MuxAction> {
     if chord == bindings.escape {
         return Some(MuxAction::SendPrefixToPane);
+    }
+    if bindings.edit_prompt == Some(chord) {
+        return Some(MuxAction::EditAgentPrompt);
     }
     if chord.modifiers != KeyModifiers::default() {
         return None;

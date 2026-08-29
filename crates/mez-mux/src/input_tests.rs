@@ -35,6 +35,10 @@ fn parses_key_binding_notation_for_default_surface() {
     );
     assert_eq!(KeyBindings::default().new_group, None);
     assert_eq!(KeyBindings::default().agent_shell, None);
+    assert_eq!(
+        KeyBindings::default().edit_prompt,
+        Some(KeyChord::new(KeyCode::Char('e')))
+    );
     assert_eq!(KeyBindings::default().focus_previous_group, None);
     assert_eq!(KeyBindings::default().focus_next_group, None);
     assert_eq!(
@@ -263,10 +267,7 @@ fn classifies_default_prefix_key_bindings() {
     );
     assert_prefix(b"\x01-", MuxAction::DeleteMostRecentPasteBuffer);
     assert_prefix(b"\x01~", MuxAction::ShowMessages);
-    assert_eq!(
-        classify_terminal_input(b"\x01e", &bindings).unwrap(),
-        TerminalInputClassification::UnboundPrefix(KeyChord::new(KeyCode::Char('e')))
-    );
+    assert_prefix(b"\x01e", MuxAction::EditAgentPrompt);
 }
 
 /// Verifies SGR mouse sequences are classified as terminal input with

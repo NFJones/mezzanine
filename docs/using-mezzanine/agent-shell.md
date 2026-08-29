@@ -27,6 +27,10 @@ receive your full terminal screen, scrollback, or other panes.
 Type a request and press Enter. `Ctrl+V` pastes host clipboard text into the
 editable prompt while preserving multiline text. Prompt completion supports
 slash commands, `$` skills, `#` macros, and `@` MCP server names where enabled.
+The prompt remains in this in-pane entry area by default. Press `Ctrl+A e` (or
+the active key preset's `edit_prompt` binding) to request external editing;
+closing a successful editor returns the text to the same prompt and never
+submits it automatically.
 Large bracketed pastes are shown as compact `[Pasted …]` blocks, but typed text
 and smaller pastes remain visible literally. History recall and `Ctrl+R` restore
 the same pasted blocks shown when the prompt was entered, and submission still

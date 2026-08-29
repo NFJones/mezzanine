@@ -85,3 +85,68 @@ fn rejects_unknown_key_preset_schema_paths() {
             && diagnostic.message == "unknown key preset configuration key"
     }));
 }
+
+/// Verifies external editors use structured argv candidates and prompt editing
+/// is configurable through both the materialized and preset key surfaces.
+#[test]
+fn accepts_external_editor_and_edit_prompt_schema_paths() {
+    let validation = validate_config_text(
+        ConfigFormat::Toml,
+        &format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[external_editor]\ncommand = [\"editor\", \"{{file}}\"]\nfallback = [[\"vim\", \"{{file}}\"], [\"vi\"]]\n[keys]\nedit_prompt = \"v\"\n[key_presets.custom]\nedit_prompt = \"e\"\n"
+        ),
+        ConfigScope::Primary,
+    );
+
+    assert!(validation.valid, "{:?}", validation.diagnostics);
+}
+
+/// Verifies editor candidates reject shell strings, empty executables,
+/// duplicate file placeholders, unsupported interpolation, and NUL bytes.
+#[test]
+fn rejects_invalid_external_editor_argv() {
+    for (body, expected) in [
+        (
+            "command = \"vim {file}\"",
+            "external_editor.command must be a non-empty argv string array",
+        ),
+        (
+            "command = [\"\", \"{file}\"]",
+            "external_editor.command executable must not be empty",
+        ),
+        (
+            "command = [\"vim\", \"{file}\", \"{file}\"]",
+            "external_editor.command must contain at most one {file} placeholder",
+        ),
+        (
+            "command = [\"vim\", \"{draft}\"]",
+            "external_editor.command contains unsupported interpolation",
+        ),
+        (
+            "command = [\"vim\\u0000\", \"{file}\"]",
+            "external_editor.command arguments must not contain NUL bytes",
+        ),
+        (
+            "command = [\"vim\", \"{file}\"]\nfallback = [[\"nano\"], []]",
+            "external_editor.fallback[1] must be a non-empty argv string array",
+        ),
+    ] {
+        let validation = validate_config_text(
+            ConfigFormat::Json,
+            &format!(
+                "{{\"version\":{CURRENT_CONFIG_SCHEMA_VERSION},\"external_editor\":{{{}}}}}",
+                body.replace("command = ", "\"command\":")
+                    .replace("\nfallback = ", ",\"fallback\":")
+            ),
+            ConfigScope::Primary,
+        );
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message == expected),
+            "missing {expected:?} for {body:?}: {:?}",
+            validation.diagnostics
+        );
+    }
+}

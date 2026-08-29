@@ -311,6 +311,7 @@ pub fn validate_config_text(
     diagnostics.extend(validate_agent_turn_timeout_config(format, text));
     diagnostics.extend(validate_host_config(format, text));
     diagnostics.extend(validate_iroh_transport_config(format, text));
+    diagnostics.extend(validate_external_editor_config(format, text));
     diagnostics.extend(validate_provider_models_config(format, text));
     diagnostics.extend(validate_group_whitelist_config(format, text));
     diagnostics.extend(validate_env_whitelist_config(format, text));
@@ -547,6 +548,100 @@ pub fn validate_config_text(
     diagnostics.sort_by(|left, right| left.path.cmp(&right.path));
     diagnostics.dedup();
     ConfigValidation::from_diagnostics(diagnostics)
+}
+
+/// Validates structured external-editor argv candidates without interpreting
+/// any value as shell syntax.
+fn validate_external_editor_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
+    let Ok(root) = parse_config_json_value(format, text) else {
+        return Vec::new();
+    };
+    let Some(editor) = root
+        .get("external_editor")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let mut diagnostics = Vec::new();
+    if let Some(command) = editor.get("command") {
+        validate_external_editor_argv(command, "external_editor.command", &mut diagnostics);
+    }
+    if let Some(fallback) = editor.get("fallback") {
+        let Some(candidates) = fallback.as_array() else {
+            diagnostics.push(ConfigDiagnostic {
+                path: "external_editor.fallback".to_string(),
+                message: "external_editor.fallback must be an array of argv string arrays"
+                    .to_string(),
+            });
+            return diagnostics;
+        };
+        for (index, candidate) in candidates.iter().enumerate() {
+            validate_external_editor_argv(
+                candidate,
+                &format!("external_editor.fallback[{index}]"),
+                &mut diagnostics,
+            );
+        }
+    }
+    diagnostics
+}
+
+/// Validates one editor candidate as a non-empty argv array with at most one
+/// supported draft placeholder.
+fn validate_external_editor_argv(
+    value: &serde_json::Value,
+    path: &str,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) {
+    let Some(argv) = value.as_array().filter(|argv| !argv.is_empty()) else {
+        diagnostics.push(ConfigDiagnostic {
+            path: path.to_string(),
+            message: format!("{path} must be a non-empty argv string array"),
+        });
+        return;
+    };
+    let Some(arguments) = argv
+        .iter()
+        .map(serde_json::Value::as_str)
+        .collect::<Option<Vec<_>>>()
+    else {
+        diagnostics.push(ConfigDiagnostic {
+            path: path.to_string(),
+            message: format!("{path} must be a non-empty argv string array"),
+        });
+        return;
+    };
+    if arguments[0].trim().is_empty() {
+        diagnostics.push(ConfigDiagnostic {
+            path: path.to_string(),
+            message: format!("{path} executable must not be empty"),
+        });
+    }
+    if arguments.iter().any(|argument| argument.contains('\0')) {
+        diagnostics.push(ConfigDiagnostic {
+            path: path.to_string(),
+            message: format!("{path} arguments must not contain NUL bytes"),
+        });
+    }
+    let placeholder_count = arguments
+        .iter()
+        .map(|argument| argument.matches("{file}").count())
+        .sum::<usize>();
+    if placeholder_count > 1 {
+        diagnostics.push(ConfigDiagnostic {
+            path: path.to_string(),
+            message: format!("{path} must contain at most one {{file}} placeholder"),
+        });
+    }
+    if arguments.iter().any(|argument| {
+        let without_file = argument.replace("{file}", "");
+        without_file.contains('{') || without_file.contains('}')
+    }) {
+        diagnostics.push(ConfigDiagnostic {
+            path: path.to_string(),
+            message: format!("{path} contains unsupported interpolation"),
+        });
+    }
 }
 
 /// Validates schema-v77 reusable provider-model metadata with value types and
@@ -1279,6 +1374,8 @@ fn project_overlay_path_changes_execution_authority(path: &str) -> bool {
         || path.starts_with("host.")
         || path == "transport"
         || path.starts_with("transport.")
+        || path == "external_editor"
+        || path.starts_with("external_editor.")
         || is_model_profile_approval_policy_path(path)
 }
 

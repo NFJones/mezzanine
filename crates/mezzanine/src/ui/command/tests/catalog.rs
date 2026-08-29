@@ -111,8 +111,8 @@ fn help_command_describes_mezzanine_command_set() {
     let mut trailing_lines = help.lines().rev();
     assert_eq!(trailing_lines.next(), Some("```"), "{help}");
     let last_binding = trailing_lines.next().unwrap_or_default();
-    assert!(last_binding.contains("C-a ~"), "{help}");
-    assert!(last_binding.contains("show-messages"), "{help}");
+    assert!(last_binding.contains("C-a e"), "{help}");
+    assert!(last_binding.contains("edit-agent-prompt"), "{help}");
 }
 
 /// Verifies that help rendering can substitute a caller-provided key binding

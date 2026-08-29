@@ -75,6 +75,10 @@ pub(crate) fn runtime_key_preset_definition_from_value(
             object.get("agent_shell"),
             &format!("{path}.agent_shell"),
         )?,
+        edit_prompt: preset_optional_chord(
+            object.get("edit_prompt"),
+            &format!("{path}.edit_prompt"),
+        )?,
         focus_up: preset_optional_chord(object.get("focus_up"), &format!("{path}.focus_up"))?,
         focus_down: preset_optional_chord(object.get("focus_down"), &format!("{path}.focus_down"))?,
         focus_left: preset_optional_chord(object.get("focus_left"), &format!("{path}.focus_left"))?,
@@ -167,6 +171,7 @@ mod tests {
             "key_presets": {"custom": {
                 "new_window": "A-n",
                 "new_group": null,
+                "edit_prompt": "v",
                 "command_bindings": {"x": "new-window"}
             }}
         });
@@ -175,6 +180,10 @@ mod tests {
         assert_eq!(bindings.escape, KeyChord::ctrl(KeyCode::Char('a')));
         assert_eq!(bindings.new_window, Some(KeyChord::alt(KeyCode::Char('n'))));
         assert_eq!(bindings.new_group, None);
+        assert_eq!(
+            bindings.edit_prompt,
+            Some(KeyChord::new(KeyCode::Char('v')))
+        );
         assert_eq!(
             definition.command_bindings.get("x"),
             Some(&"new-window".to_string())

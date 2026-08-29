@@ -23,6 +23,7 @@ pub const BASELINE_TOP_LEVEL_KEYS: &[&str] = &[
     "runtime",
     "transport",
     "terminal",
+    "external_editor",
     "keys",
     "key_preset",
     "key_presets",
@@ -76,6 +77,13 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
             purpose: "Set the primary Mezzanine config schema version.",
             value_type: "integer",
             format: "Positive TOML/JSON integer; normally leave unchanged unless migrating config.",
+            operations: CONFIG_CHANGE_OPERATION_NAMES,
+        },
+        ConfigChangePathAnnotation {
+            pattern: "external_editor.command",
+            purpose: "Set the preferred blocking terminal editor command.",
+            value_type: "string array",
+            format: "Structured argv only; include {file} at most once or Mez appends the draft path.",
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {
@@ -558,12 +566,16 @@ pub(super) const TERMINAL_KEYS: &[&str] = &[
 /// boundary and avoids relying on call-site inference.
 pub(super) const SHELL_KEYS: &[&str] = &["path", "executable", "command"];
 
+/// Defines the structured external-editor configuration keys.
+pub(super) const EXTERNAL_EDITOR_KEYS: &[&str] = &["command", "fallback"];
+
 /// Defines the KEY BINDING KEYS const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub(super) const KEY_BINDING_KEYS: &[&str] = &[
     "escape",
+    "edit_prompt",
     "split_vertical",
     "split_horizontal",
     "new_window",

@@ -2197,7 +2197,7 @@ fn migrates_schema_66_with_disabled_iroh_transport() {
 /// single bidirectional control stream enforced by the v1 Iroh protocol.
 #[test]
 fn migrates_schema_67_to_fixed_iroh_stream_limit() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 78);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 79);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2262,7 +2262,7 @@ fn migrates_schema_68_with_separate_outbound_iroh_permission() {
 /// changing the existing ephemeral behavior unless the owner configures it.
 #[test]
 fn migrates_schema_69_with_iroh_bind_port() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 78);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 79);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2293,7 +2293,7 @@ fn migrates_schema_69_with_iroh_bind_port() {
 /// supported primary configuration format without enabling the Iroh listener.
 #[test]
 fn migrates_schema_70_with_iroh_compression_defaults() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 78);
+    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 79);
     for (format, text) in [
         (
             ConfigFormat::Toml,
@@ -2458,7 +2458,7 @@ fn migrates_schema_73_without_enabling_seatbelt_or_changing_policy() {
 
         assert_eq!(plan.from_version, 73);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"78".to_string()));
+        assert_eq!(values.get("version"), Some(&"79".to_string()));
         assert_eq!(
             values.get("permissions.sandbox").map(String::as_str),
             expected_sandbox
@@ -2506,7 +2506,7 @@ fn migrates_schema_74_without_enabling_streaming_compression() {
 
         assert_eq!(plan.from_version, 74);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 78);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 79);
         assert_eq!(
             root.pointer("/transport/iroh/compression_codecs"),
             Some(&expected_codecs)
@@ -2550,7 +2550,7 @@ fn migrates_schema_75_pane_title_template_to_renderer_owned_padding() {
             parse_config_json_value(format, &migrate_config_text(format, missing).unwrap().text)
                 .unwrap();
 
-        assert_eq!(exact.pointer("/version"), Some(&serde_json::json!(78)));
+        assert_eq!(exact.pointer("/version"), Some(&serde_json::json!(79)));
         assert_eq!(
             exact.pointer("/frames/pane/template"),
             Some(&serde_json::json!("#{pane.index} #{pane.title}"))
@@ -2641,7 +2641,7 @@ fn migrates_schema_76_provider_models_to_structured_records() {
 
         assert_eq!(plan.from_version, 76);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 78);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 79);
         assert_eq!(
             root.pointer("/providers/custom/models/alpha-model/id"),
             Some(&serde_json::json!("alpha/model"))
@@ -2705,7 +2705,7 @@ fn migrates_schema_77_saved_session_retention_defaults() {
 
         assert_eq!(
             migrated_missing.pointer("/version"),
-            Some(&serde_json::json!(78))
+            Some(&serde_json::json!(79))
         );
         assert_eq!(
             migrated_missing.pointer("/history/saved_sessions_limit"),
@@ -2717,7 +2717,7 @@ fn migrates_schema_77_saved_session_retention_defaults() {
         );
         assert_eq!(
             migrated_default.pointer("/version"),
-            Some(&serde_json::json!(78))
+            Some(&serde_json::json!(79))
         );
         assert_eq!(
             migrated_default.pointer("/history/saved_sessions_limit"),
@@ -2734,6 +2734,36 @@ fn migrates_schema_77_saved_session_retention_defaults() {
         assert_eq!(
             migrated_custom.pointer("/history/saved_sessions_retention_days"),
             Some(&serde_json::json!(90))
+        );
+    }
+}
+
+/// Schema v79 adds the portable structured external-editor candidates without
+/// changing existing key-preset selection or prompt behavior.
+#[test]
+fn migrates_schema_78_external_editor_defaults() {
+    for (format, text) in [
+        (ConfigFormat::Toml, "version = 78\n"),
+        (ConfigFormat::Json, r#"{"version":78}"#),
+        (ConfigFormat::Yaml, "version: 78\n"),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let root = parse_config_json_value(format, &plan.text).unwrap();
+
+        assert_eq!(plan.from_version, 78);
+        assert_eq!(plan.to_version, 79);
+        assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 79);
+        assert_eq!(
+            root.pointer("/external_editor/command"),
+            Some(&serde_json::json!(["editor", "{file}"]))
+        );
+        assert_eq!(
+            root.pointer("/external_editor/fallback"),
+            Some(&serde_json::json!([
+                ["vim", "{file}"],
+                ["nano", "{file}"],
+                ["vi", "{file}"]
+            ]))
         );
     }
 }

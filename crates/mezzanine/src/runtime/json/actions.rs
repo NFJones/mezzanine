@@ -368,6 +368,7 @@ pub(crate) fn mux_action_name(action: MuxAction) -> &'static str {
         MuxAction::DeleteMostRecentPasteBuffer => "delete-buffer",
         MuxAction::ShowMessages => "show-messages",
         MuxAction::ToggleAgentShell => "agent-shell",
+        MuxAction::EditAgentPrompt => "edit-agent-prompt",
     }
 }
 

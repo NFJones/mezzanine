@@ -524,9 +524,10 @@ use config::{
     runtime_window_frames_enabled_from_config,
 };
 pub(crate) use config::{
-    RuntimeIrohAddressLookupPolicy, RuntimeIrohCompressionCodec, RuntimeIrohIdentityPolicy,
-    RuntimeIrohRelayPolicy, RuntimeIrohTransportPolicy, runtime_audit_log_from_config,
-    runtime_iroh_transport_policy_from_config,
+    RuntimeExternalEditorConfig, RuntimeIrohAddressLookupPolicy, RuntimeIrohCompressionCodec,
+    RuntimeIrohIdentityPolicy, RuntimeIrohRelayPolicy, RuntimeIrohTransportPolicy,
+    runtime_audit_log_from_config, runtime_external_editor_config_from_config,
+    runtime_iroh_transport_policy_from_config, runtime_validate_key_binding_collisions,
 };
 pub use config::{runtime_effective_config_value, runtime_ui_theme_from_config};
 

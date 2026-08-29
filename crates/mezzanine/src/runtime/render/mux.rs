@@ -169,6 +169,9 @@ impl RuntimeSessionService {
             MuxAction::ToggleAgentShell => {
                 self.toggle_active_agent_shell()?;
             }
+            MuxAction::EditAgentPrompt => {
+                return Ok(false);
+            }
             MuxAction::ShowMessages => {
                 self.execute_attached_display_command(primary_client_id, "show-messages")?;
             }

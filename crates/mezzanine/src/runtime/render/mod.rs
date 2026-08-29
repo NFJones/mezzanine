@@ -108,6 +108,8 @@ pub(crate) struct RuntimePresentationSettings {
     terminal_completion_attention_flashing: bool,
     /// Resolved color and rendition policy for product UI surfaces.
     ui_theme: UiTheme,
+    /// Structured blocking-editor candidates used by explicit edit actions.
+    external_editor: crate::runtime::RuntimeExternalEditorConfig,
     /// Configured mux key chords.
     key_bindings: KeyBindings,
     /// Configured prefix-table command bindings keyed by chord.
@@ -149,6 +151,7 @@ impl Default for RuntimePresentationSettings {
             terminal_enhanced_keyboard_reporting: false,
             terminal_completion_attention_flashing: true,
             ui_theme: UiTheme::default(),
+            external_editor: crate::runtime::RuntimeExternalEditorConfig::default(),
             key_bindings: KeyBindings::default(),
             command_bindings: std::collections::BTreeMap::new(),
             terminal_clipboard: ClipboardPolicy::External,
@@ -204,6 +207,10 @@ impl RuntimePresentationSettings {
         root: &serde_json::Value,
         effective: &EffectiveConfig,
     ) -> Result<Self> {
+        let key_bindings = crate::runtime::runtime_key_bindings_from_config(root)?;
+        let command_bindings =
+            crate::runtime::runtime_command_bindings_from_effective(root, effective)?;
+        crate::runtime::runtime_validate_key_binding_collisions(&key_bindings, &command_bindings)?;
         Ok(Self {
             window_frames_enabled: crate::runtime::runtime_window_frames_enabled_from_config(root)?,
             window_frame_template: crate::runtime::runtime_window_frame_template_from_config(root)?,
@@ -241,10 +248,9 @@ impl RuntimePresentationSettings {
             terminal_completion_attention_flashing:
                 crate::runtime::runtime_terminal_completion_attention_flashing_from_config(root)?,
             ui_theme: crate::runtime::runtime_ui_theme_from_config(root)?,
-            key_bindings: crate::runtime::runtime_key_bindings_from_config(root)?,
-            command_bindings: crate::runtime::runtime_command_bindings_from_effective(
-                root, effective,
-            )?,
+            external_editor: crate::runtime::runtime_external_editor_config_from_config(root)?,
+            key_bindings,
+            command_bindings,
             terminal_clipboard: crate::runtime::runtime_terminal_clipboard_from_config(root)?,
         })
     }

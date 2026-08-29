@@ -157,6 +157,7 @@ fn runtime_key_preset_config_mutations(
     push_optional_key_mutation(&mut mutations, "new_window", bindings.new_window);
     push_optional_key_mutation(&mut mutations, "new_group", bindings.new_group);
     push_optional_key_mutation(&mut mutations, "agent_shell", bindings.agent_shell);
+    push_optional_key_mutation(&mut mutations, "edit_prompt", bindings.edit_prompt);
     push_optional_key_mutation(&mut mutations, "focus_up", bindings.focus_up);
     push_optional_key_mutation(&mut mutations, "focus_down", bindings.focus_down);
     push_optional_key_mutation(&mut mutations, "focus_left", bindings.focus_left);

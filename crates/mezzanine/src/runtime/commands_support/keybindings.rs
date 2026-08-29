@@ -29,6 +29,13 @@ pub(crate) fn runtime_list_key_bindings_display(service: &RuntimeSessionService)
     let effective = compose_effective_config(service.integration.config_layers())?;
     let prefix = key_chord_notation(service.key_bindings().escape);
     let mut rows = Vec::new();
+    if let Some(chord) = service.key_bindings().edit_prompt {
+        rows.push(RuntimeKeyBindingDisplayRow {
+            key: format!("{prefix} {}", key_chord_notation(chord)),
+            source: runtime_key_source(&effective, "keys.edit_prompt").to_string(),
+            command: "edit-agent-prompt".to_string(),
+        });
+    }
     runtime_push_optional_key_binding_row(
         &mut rows,
         service.key_bindings().split_vertical,

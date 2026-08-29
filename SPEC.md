@@ -2986,10 +2986,19 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 77 is the current implemented configuration schema version for this
+schema version 79 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
+
+The `78 -> 79` migration MUST add `external_editor.command` and
+`external_editor.fallback` as structured argv candidates while preserving the
+active key preset and prompt state. Editor candidates MUST NOT be shell command
+strings. Each candidate MUST contain a non-empty executable, MUST contain only
+strings without NUL bytes, and MAY contain `{file}` at most once. Unsupported
+brace interpolation MUST be rejected. If `{file}` is absent, the runtime MUST
+append the private draft path. Fallbacks MUST be attempted only after lookup or
+spawn failure; a started editor's nonzero exit MUST end that edit session.
 
 The `76 -> 77` migration MUST replace each `providers.<name>.models` string
 array with a table of model records. Every migrated record MUST preserve its
@@ -3549,11 +3558,14 @@ and then select the most recent non-empty internal paste buffer. The schema v60
 to v61 migration MUST materialize both defaults in all supported primary-config
 formats.
 
-The `keys` table MUST support `escape`, `split_vertical`, `split_horizontal`,
+The `keys` table MUST support `escape`, `edit_prompt`, `split_vertical`, `split_horizontal`,
 `new_window`, `new_group`, `agent_shell`, `focus_up`, `focus_down`, `focus_left`,
 `focus_right`, `focus_previous_window`, `focus_next_window`,
 `focus_previous_group`, `focus_next_group`, and a user-defined command binding
-map. The `escape` setting defines the prefix table entry point. Direct key
+map. The `escape` setting defines the prefix table entry point. `edit_prompt`
+MUST default to the prefix suffix `e`, MAY be remapped or disabled with `null`,
+and MUST be rejected when it collides with another prefix action or configured
+prefix command. Direct key
 settings in this table are convenience accelerators and MUST NOT replace the
 default prefix table.
 
@@ -3564,7 +3576,7 @@ keep `C-a` as the prefix and provide the documented direct split, window,
 group, agent-shell, pane-focus, window-focus, and group-focus bindings.
 `key_presets` MUST be a map of configured presets accepting the same fixed key
 fields and command-binding map as `keys`; omitted fields MUST inherit from
-`default`, while `null` MUST explicitly disable an optional direct binding.
+`default`, while `null` MUST explicitly disable an optional binding.
 Selecting a preset MUST reconcile and materialize its complete binding surface
 into `keys`, apply it immediately, and persist the active name and materialized
 bindings. Subsequent low-level key mutations MAY override that materialized
