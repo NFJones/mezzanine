@@ -7,3 +7,15 @@ members = [
     "crates/mez-terminal",
 ]
 resolver = "3"
+
+[workspace.package]
+authors = ["Neil F Jones"]
+categories = ["command-line-utilities", "development-tools"]
+documentation = "https://github.com/NFJones/mezzanine#readme"
+edition = "2024"
+homepage = "https://github.com/NFJones/mezzanine"
+license = "Apache-2.0"
+license-file = "COPYING"
+repository = "https://github.com/NFJones/mezzanine"
+rust-version = "1.91"
+version = "0.1.0"
