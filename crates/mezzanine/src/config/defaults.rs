@@ -599,20 +599,26 @@ default_model = "gpt-5.6-terra"
 
 # Reusable provider-scoped model facts. Model profiles may override these
 # values for one usage policy without duplicating the base model identity.
-# Resolution is profile, configured model, discovery, built-in, then fallback;
-# configured lists replace lower lists and option maps merge per key.
+# Resolution is profile, configured model, then authenticated discovery;
+# configured lists replace lower lists and option maps merge per key. Token
+# limits are user-editable configuration and are never inferred at runtime.
 [providers.openai.models.gpt-5-6-sol]
 id = "gpt-5.6-sol"
-context_window_tokens = 1050000
+context_window_tokens = 1000000
+max_input_tokens = 800000
+max_output_tokens = 60000
 
 [providers.openai.models.gpt-5-6-terra]
 id = "gpt-5.6-terra"
-context_window_tokens = 1050000
-max_input_tokens = 922000
+context_window_tokens = 500000
+max_input_tokens = 400000
+max_output_tokens = 30000
 
 [providers.openai.models.gpt-5-6-luna]
 id = "gpt-5.6-luna"
-context_window_tokens = 400000
+context_window_tokens = 250000
+max_input_tokens = 200000
+max_output_tokens = 15000
 
 [providers.openai.models.gpt-5-5]
 id = "gpt-5.5"
@@ -752,12 +758,6 @@ model = "gpt-5.6-terra"
 reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false
-context_window_tokens = 1050000
-# Responses input must leave provider-reserved output, reasoning, and framing capacity.
-max_input_tokens = 922000
-# Provider-aware recommended output-token cap for the default OpenAI agent profile.
-# Mezzanine may temporarily raise this for one output-limit recovery retry.
-max_output_tokens = 16384
 safety_tier = "high"
 privacy_tier = "standard"
 residency = "global"
@@ -776,8 +776,6 @@ model = "gpt-5.6-luna"
 reasoning_profile = "low"
 latency_preference = "fast"
 multimodal_required = false
-context_window_tokens = 400000
-max_output_tokens = 8192
 safety_tier = "high"
 privacy_tier = "standard"
 residency = "global"
@@ -790,8 +788,6 @@ model = "gpt-5.6-luna"
 reasoning_profile = "medium"
 latency_preference = "fast"
 multimodal_required = false
-context_window_tokens = 400000
-max_output_tokens = 16384
 safety_tier = "high"
 privacy_tier = "standard"
 residency = "global"
@@ -804,8 +800,6 @@ model = "gpt-5.6-terra"
 reasoning_profile = "medium"
 latency_preference = "default"
 multimodal_required = false
-context_window_tokens = 1050000
-max_output_tokens = 16384
 safety_tier = "high"
 privacy_tier = "standard"
 residency = "global"
@@ -818,8 +812,6 @@ model = "gpt-5.6-sol"
 reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false
-context_window_tokens = 1050000
-max_output_tokens = 32768
 safety_tier = "high"
 privacy_tier = "standard"
 residency = "global"

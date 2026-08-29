@@ -146,7 +146,14 @@ pub fn auto_sizing_minimum_context_profile(
             &auto_sizing.medium.profile,
             &auto_sizing.large.profile,
         ] {
-            if candidate.context_window_tokens() < selected.context_window_tokens() {
+            if candidate
+                .context_window_tokens()
+                .is_some_and(|candidate_window| {
+                    selected
+                        .context_window_tokens()
+                        .is_none_or(|selected_window| candidate_window < selected_window)
+                })
+            {
                 selected = candidate;
             }
         }
@@ -534,7 +541,11 @@ fn auto_sizing_target_line(target: &AutoSizingTargetProfile) -> String {
         target.profile_name,
         target.profile.provider,
         target.profile.model,
-        target.profile.context_window_tokens(),
+        target
+            .profile
+            .context_window_tokens()
+            .map(|tokens| tokens.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
         if target.supported_reasoning_efforts.is_empty() {
             "unknown".to_string()
         } else {

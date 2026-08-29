@@ -759,7 +759,7 @@ mod tests {
 
         let profile = registry.resolve_profile("work").unwrap();
         assert_eq!(profile.model, "model-a");
-        assert_eq!(profile.context_window_tokens(), 200_000);
+        assert_eq!(profile.context_window_tokens(), Some(200_000));
         assert_eq!(profile.max_input_tokens(), Some(180_000));
         assert_eq!(profile.max_output_tokens(), Some(16_000));
         assert_eq!(profile.provider_options["root-only"], "root");

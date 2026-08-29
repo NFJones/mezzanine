@@ -218,9 +218,10 @@ impl ConfigPaths {
     /// Materializes defaults for an authenticated built-in provider.
     ///
     /// Existing provider configuration is user-authored and therefore remains
-    /// untouched. Generated defaults are currently TOML-only because primary
-    /// JSON and YAML files are explicit user configurations rather than files
-    /// created by Mez's default-config path.
+    /// authoritative. Missing provider model records and fields are filled
+    /// without replacing explicit values. Generated defaults are TOML-only
+    /// because primary JSON and YAML files are explicit user configurations
+    /// rather than files created by Mez's default-config path.
     pub fn materialize_authenticated_provider_defaults(&self, provider: &str) -> Result<()> {
         let Some(defaults) = provider_default_config_toml(provider)? else {
             return Ok(());
@@ -230,7 +231,7 @@ impl ConfigPaths {
             return Ok(());
         }
         let text = fs::read_to_string(&path)?;
-        let document = text
+        let mut document = text
             .parse::<toml_edit::DocumentMut>()
             .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
         let has_configured_providers = document
@@ -238,15 +239,6 @@ impl ConfigPaths {
             .get("providers")
             .and_then(toml_edit::Item::as_table)
             .is_some_and(|providers| !providers.is_empty());
-        if document
-            .as_table()
-            .get("providers")
-            .and_then(toml_edit::Item::as_table)
-            .is_some_and(|providers| providers.contains_key(provider))
-        {
-            return Ok(());
-        }
-
         let (default_profile, auto_sizing_profiles) = match provider {
             "openai" => (
                 "default",
@@ -303,8 +295,94 @@ impl ConfigPaths {
         };
         let plan =
             plan_config_mutations(ConfigFormat::Toml, &text, ConfigScope::Primary, mutations)?;
-        let materialized = format!("{}\n{}", plan.text.trim_end(), defaults);
-        persist_config_text(&path, ConfigScope::Primary, &materialized)
+        document = plan
+            .text
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
+        let defaults = defaults
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|error| MezError::config(format!("invalid built-in TOML config: {error}")))?;
+        merge_authenticated_provider_defaults(&mut document, &defaults, provider)?;
+        persist_config_text(&path, ConfigScope::Primary, &document.to_string())
+    }
+}
+
+/// Merges one authenticated provider catalog without replacing user-authored values.
+fn merge_authenticated_provider_defaults(
+    target: &mut toml_edit::DocumentMut,
+    defaults: &toml_edit::DocumentMut,
+    provider: &str,
+) -> Result<()> {
+    merge_missing_named_table(target, defaults, "providers", provider, true)?;
+    for section in ["model_profiles", "model_presets"] {
+        let Some(default_table) = defaults
+            .as_table()
+            .get(section)
+            .and_then(toml_edit::Item::as_table)
+        else {
+            continue;
+        };
+        for (name, _) in default_table {
+            merge_missing_named_table(target, defaults, section, name, false)?;
+        }
+    }
+    Ok(())
+}
+
+/// Copies one named table, recursively filling missing provider fields when requested.
+fn merge_missing_named_table(
+    target: &mut toml_edit::DocumentMut,
+    defaults: &toml_edit::DocumentMut,
+    section: &str,
+    name: &str,
+    recursive: bool,
+) -> Result<()> {
+    let Some(default_item) = defaults
+        .as_table()
+        .get(section)
+        .and_then(toml_edit::Item::as_table)
+        .and_then(|table| table.get(name))
+        .cloned()
+    else {
+        return Ok(());
+    };
+    let section_table = target
+        .as_table_mut()
+        .entry(section)
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| MezError::config(format!("{section} must be a table")))?;
+    let Some(existing) = section_table.get_mut(name) else {
+        section_table.insert(name, default_item);
+        return Ok(());
+    };
+    if recursive {
+        let existing = existing
+            .as_table_mut()
+            .ok_or_else(|| MezError::config(format!("{section}.{name} must be a table")))?;
+        let defaults = default_item.as_table().ok_or_else(|| {
+            MezError::config(format!("built-in {section}.{name} must be a table"))
+        })?;
+        merge_missing_toml_items(existing, defaults);
+    }
+    Ok(())
+}
+
+/// Recursively copies missing TOML items while preserving every existing scalar.
+fn merge_missing_toml_items(target: &mut toml_edit::Table, defaults: &toml_edit::Table) {
+    for (key, default_item) in defaults {
+        match target.get_mut(key) {
+            Some(existing) => {
+                if let (Some(existing), Some(defaults)) =
+                    (existing.as_table_mut(), default_item.as_table())
+                {
+                    merge_missing_toml_items(existing, defaults);
+                }
+            }
+            None => {
+                target.insert(key, default_item.clone());
+            }
+        }
     }
 }
 

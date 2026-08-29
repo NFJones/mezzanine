@@ -671,16 +671,17 @@ Each `providers.<name>.models.<entry>` record requires `id` and may define
 `max_output_tokens`, `reasoning_levels`, `capabilities`, and a non-secret
 string-valued `provider_options` table. The entry key is a path-safe local
 identity; `id` is the canonical provider-facing model id. Ids and aliases must
-be unique within a provider. Positive token limits and `max_input_tokens <=
-context_window_tokens` are enforced when both effective values are known.
+be unique within a provider. Token limits must be positive integers, but Mez
+does not constrain their relationship; the provider remains authoritative for
+whether a user-selected combination is supported.
 
 Each metadata field resolves independently in this order: explicit
 `model_profiles.<name>` override, configured provider-model record, discovered
-provider catalog, built-in metadata, then the conservative fallback. Omitted
-fields inherit; configured `reasoning_levels` and `capabilities` replace lower
-lists even when explicitly empty. Provider option maps merge per key in this
-order: provider root, discovered model, configured model, profile. The last
-value for a key wins.
+provider catalog. Omitted token limits remain unknown rather than being inferred
+from the model name or a generic runtime fallback. Configured `reasoning_levels`
+and `capabilities` replace lower lists even when explicitly empty. Provider
+option maps merge per key in this order: provider root, discovered model,
+configured model, profile. The last value for a key wins.
 
 A profile may use a configured alias; Mez stores and displays the canonical
 model `id`. Profiles may also name unlisted custom models. A provider catalog
@@ -698,8 +699,9 @@ Example configured base metadata:
 id = "gpt-5.6-terra"
 display_name = "GPT 5.6 Terra"
 aliases = ["terra"]
-context_window_tokens = 1050000
-max_input_tokens = 922000
+context_window_tokens = 500000
+max_input_tokens = 400000
+max_output_tokens = 30000
 reasoning_levels = ["low", "medium", "high", "xhigh"]
 capabilities = ["tool_use", "vision"]
 
@@ -787,7 +789,7 @@ streaming = "enabled" # optional; backend must implement standard OpenAI SSE
 | `model_profiles.<name>.context_window_tokens` | integer | profile-specific | Display and compaction context denominator. |
 | `model_profiles.<name>.context_limit_tokens` | integer | omitted | Alternative explicit context limit. |
 | `model_profiles.<name>.max_input_tokens` | integer | profile-specific | Optional hard estimated cap for the complete provider request. Mez compacts eligible context before dispatch when the estimate exceeds this positive limit. |
-| `model_profiles.<name>.max_output_tokens` | integer | profile/provider-specific | Optional provider output-token cap. Generated OpenAI and DeepSeek agent profiles include provider-aware recommended caps; local OpenAI-compatible examples omit the field so the provider default applies. |
+| `model_profiles.<name>.max_output_tokens` | integer | profile/provider-specific | Optional provider output-token cap. Generated built-in provider-model records carry editable defaults where available; a profile override remains authoritative. |
 | `model_profiles.<name>.provider_options` | table | see below | Provider-specific non-secret model options. |
 | `model_profiles.<name>.safety_tier` | string | `"high"` in generated profiles | Safety posture label. |
 | `model_profiles.<name>.privacy_tier` | string | `"standard"` in generated profiles | Privacy posture label. |
@@ -804,9 +806,6 @@ Built-in model-profile catalog:
 | `default` | `reasoning_profile` | `"high"` |
 | `default` | `latency_preference` | `"default"` |
 | `default` | `multimodal_required` | `false` |
-| `default` | `context_window_tokens` | `1050000` |
-| `default` | `max_input_tokens` | `922000` |
-| `default` | `max_output_tokens` | `16384` |
 | `default` | `safety_tier` | `"high"` |
 | `default` | `privacy_tier` | `"standard"` |
 | `default` | `residency` | `"global"` |
@@ -817,8 +816,6 @@ Built-in model-profile catalog:
 | `auto-size-router` | `reasoning_profile` | `"low"` |
 | `auto-size-router` | `latency_preference` | `"fast"` |
 | `auto-size-router` | `multimodal_required` | `false` |
-| `auto-size-router` | `context_window_tokens` | `400000` |
-| `auto-size-router` | `max_output_tokens` | `8192` |
 | `auto-size-router` | `safety_tier` | `"high"` |
 | `auto-size-router` | `privacy_tier` | `"standard"` |
 | `auto-size-router` | `residency` | `"global"` |
@@ -829,8 +826,6 @@ Built-in model-profile catalog:
 | `auto-size-small` | `reasoning_profile` | `"medium"` |
 | `auto-size-small` | `latency_preference` | `"fast"` |
 | `auto-size-small` | `multimodal_required` | `false` |
-| `auto-size-small` | `context_window_tokens` | `400000` |
-| `auto-size-small` | `max_output_tokens` | `16384` |
 | `auto-size-small` | `safety_tier` | `"high"` |
 | `auto-size-small` | `privacy_tier` | `"standard"` |
 | `auto-size-small` | `residency` | `"global"` |
@@ -841,8 +836,6 @@ Built-in model-profile catalog:
 | `auto-size-medium` | `reasoning_profile` | `"medium"` |
 | `auto-size-medium` | `latency_preference` | `"default"` |
 | `auto-size-medium` | `multimodal_required` | `false` |
-| `auto-size-medium` | `context_window_tokens` | `1050000` |
-| `auto-size-medium` | `max_output_tokens` | `16384` |
 | `auto-size-medium` | `safety_tier` | `"high"` |
 | `auto-size-medium` | `privacy_tier` | `"standard"` |
 | `auto-size-medium` | `residency` | `"global"` |
@@ -853,8 +846,6 @@ Built-in model-profile catalog:
 | `auto-size-large` | `reasoning_profile` | `"high"` |
 | `auto-size-large` | `latency_preference` | `"default"` |
 | `auto-size-large` | `multimodal_required` | `false` |
-| `auto-size-large` | `context_window_tokens` | `1050000` |
-| `auto-size-large` | `max_output_tokens` | `32768` |
 | `auto-size-large` | `safety_tier` | `"high"` |
 | `auto-size-large` | `privacy_tier` | `"standard"` |
 | `auto-size-large` | `residency` | `"global"` |

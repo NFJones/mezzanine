@@ -23,7 +23,7 @@ fn model_profile_context_window_preserves_explicit_override() {
         safety_tier: None,
     };
 
-    assert_eq!(profile.context_window_tokens(), 1024);
+    assert_eq!(profile.context_window_tokens(), Some(1024));
 }
 
 #[test]
@@ -45,17 +45,14 @@ fn model_profile_max_input_limit_constrains_context_budget() {
         safety_tier: None,
     };
 
-    assert_eq!(profile.context_window_tokens(), 400_000);
+    assert_eq!(profile.context_window_tokens(), Some(400_000));
     assert_eq!(profile.max_input_tokens(), Some(272_000));
-    assert_eq!(profile.context_window_budget_words(), 204_000);
+    assert_eq!(profile.context_window_budget_words(), Some(204_000));
 }
 
 #[test]
-/// Verifies that known DeepSeek V4 models use their documented 1M-token
-/// context windows when a profile omits an explicit context override. This
-/// protects custom DeepSeek profiles from falling back to the conservative
-/// generic 128Ki-token display denominator.
-fn model_profile_context_window_uses_known_deepseek_metadata_when_unconfigured() {
+/// Verifies known DeepSeek model names do not inject runtime token limits.
+fn model_profile_context_window_requires_deepseek_configuration() {
     for model in ["deepseek-v4-pro", "deepseek-v4-flash"] {
         let profile = ModelProfile {
             provider: "deepseek".to_string(),
@@ -69,28 +66,25 @@ fn model_profile_context_window_uses_known_deepseek_metadata_when_unconfigured()
 
         assert_eq!(
             profile.context_window_tokens(),
-            1_000_000,
-            "{model} should use documented DeepSeek metadata"
+            None,
+            "{model} must not receive a hard-coded context window"
         );
     }
 }
 
 #[test]
-/// Verifies known OpenAI model metadata supplies context-window budgets when a
-/// profile omits explicit token counts. This keeps generated profiles, ad-hoc
-/// model selection, and frame usage percentages from falling back to the much
-/// smaller local safety budget for documented high-context model families.
-fn model_profile_context_window_uses_known_openai_metadata_when_unconfigured() {
-    for (model, expected_tokens) in [
-        ("gpt-5.5", 1_050_000),
-        ("gpt-5.5-2026-05-19", 1_050_000),
-        ("gpt-5.4", 1_050_000),
-        ("gpt-5.4-mini", 400_000),
-        ("gpt-5.3-codex", 400_000),
-        ("gpt-5.3-codex-spark", 128_000),
-        ("gpt-5.3-codex-spark-2026-02-12", 128_000),
-        ("gpt-5.2", 400_000),
-        ("gpt-5-codex", 400_000),
+/// Verifies known OpenAI model names do not inject runtime token limits.
+fn model_profile_context_window_requires_openai_configuration() {
+    for model in [
+        "gpt-5.5",
+        "gpt-5.5-2026-05-19",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex",
+        "gpt-5.3-codex-spark",
+        "gpt-5.3-codex-spark-2026-02-12",
+        "gpt-5.2",
+        "gpt-5-codex",
     ] {
         let profile = ModelProfile {
             provider: "openai".to_string(),
@@ -104,8 +98,8 @@ fn model_profile_context_window_uses_known_openai_metadata_when_unconfigured() {
 
         assert_eq!(
             profile.context_window_tokens(),
-            expected_tokens,
-            "{model} should use documented OpenAI metadata"
+            None,
+            "{model} must not receive a hard-coded context window"
         );
     }
 }

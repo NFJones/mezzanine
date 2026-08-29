@@ -399,13 +399,6 @@ impl ProviderRegistry {
             .max_output_tokens
             .or_else(|| configured_model.and_then(|model| model.max_output_tokens))
             .or_else(|| catalog_model.and_then(|model| model.max_output_tokens));
-        if let (Some(context), Some(input)) = (context_window_tokens, max_input_tokens)
-            && input > context
-        {
-            return Err(ProviderRoutingError::materialization(format!(
-                "model profile max_input_tokens {input} exceeds context_window_tokens {context}"
-            )));
-        }
         insert_profile_limit(
             &mut provider_options,
             "context_window_tokens",
@@ -677,7 +670,7 @@ mod tests {
 
         let profile = registry.resolve_profile("work").unwrap();
         assert_eq!(profile.model, "model-a");
-        assert_eq!(profile.context_window_tokens(), 200_000);
+        assert_eq!(profile.context_window_tokens(), Some(200_000));
         assert_eq!(profile.max_input_tokens(), Some(180_000));
         assert_eq!(profile.max_output_tokens(), Some(16_000));
         assert_eq!(profile.provider_options["root-only"], "root");
@@ -752,9 +745,9 @@ mod tests {
     }
 
     /// Verifies unlisted custom models remain materializable and impossible
-    /// effective input/window combinations fail with a typed routing error.
+    /// user-selected token limits remain authoritative for unlisted models.
     #[test]
-    fn provider_registry_allows_unlisted_models_and_rejects_invalid_effective_limits() {
+    fn provider_registry_allows_unlisted_models_and_user_selected_limits() {
         let provider = ProviderConfig {
             provider_id: "custom".to_string(),
             ..ProviderConfig::default()
@@ -779,9 +772,9 @@ mod tests {
             "external-model"
         );
 
-        let error = registry
+        registry
             .insert_profile_definition(
-                "invalid",
+                "user-limits",
                 ModelProfileDefinition {
                     provider: "custom".to_string(),
                     model: "external-model".to_string(),
@@ -791,8 +784,10 @@ mod tests {
                 },
                 None,
             )
-            .unwrap_err();
-        assert!(error.message().contains("max_input_tokens"), "{error}");
+            .unwrap();
+        let profile = registry.resolve_profile("user-limits").unwrap();
+        assert_eq!(profile.context_window_tokens(), Some(100));
+        assert_eq!(profile.max_input_tokens(), Some(101));
     }
 
     /// Verifies preset lookup preserves configured profile identities.

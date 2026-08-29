@@ -768,7 +768,7 @@ fn runtime_catalog_candidate(
             id: model.to_string(),
             display_name: None,
             reasoning_levels,
-            context_window_tokens: mez_agent::known_model_context_window_tokens(model),
+            context_window_tokens: None,
             max_input_tokens: None,
             max_output_tokens: None,
             capabilities: Vec::new(),
@@ -902,7 +902,10 @@ pub(super) fn runtime_model_catalog_display(
     active_profile: &ModelProfile,
     catalog: &RuntimeModelCatalog,
 ) -> String {
-    let context_limit = format!("{} tokens", active_profile.context_window_tokens());
+    let context_limit = active_profile
+        .context_window_tokens()
+        .map(|tokens| format!("{tokens} tokens"))
+        .unwrap_or_else(|| "unknown".to_string());
     let mut lines = vec!["## Model Catalog".to_string(), String::new()];
     if let Some(error) = catalog.provider_error.as_deref() {
         lines.push(format!(

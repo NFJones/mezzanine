@@ -1423,7 +1423,7 @@ fn runtime_agent_compaction_request_with_output_limit_retry(
     mut request: ModelRequest,
     model_profile: &ModelProfile,
 ) -> ModelRequest {
-    request.max_output_tokens = Some(model_profile.output_limit_retry_tokens());
+    request.max_output_tokens = model_profile.output_limit_retry_tokens();
     request
 }
 

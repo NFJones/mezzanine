@@ -249,12 +249,30 @@ impl RuntimeSessionService {
             .get(turn_id)
             .map(|claim| claim.context_event_high_water_mark)
             .unwrap_or_else(|| context.event_sequence_high_water_mark());
-        let profile_budget_words = model_profile.context_window_budget_words();
+        let configured_profile_budget_words = model_profile.context_window_budget_words();
+        let observed_context_words = context
+            .blocks()
+            .iter()
+            .map(|block| {
+                mez_agent::model_context_text_word_count(&mez_agent::model_context_block_header(
+                    block,
+                ))
+                .saturating_add(mez_agent::model_context_text_word_count(&block.content))
+            })
+            .fold(0usize, usize::saturating_add)
+            .max(1);
+        let profile_budget_words =
+            configured_profile_budget_words.unwrap_or(observed_context_words);
         let recovery_attempt = attempt.max(1);
-        let recovery_budget_words = match recovery_attempt {
-            1 => profile_budget_words,
-            2 => profile_budget_words.saturating_mul(3).saturating_div(4),
-            3 => profile_budget_words.saturating_div(2),
+        let reduction_step = if configured_profile_budget_words.is_some() {
+            recovery_attempt.saturating_sub(1)
+        } else {
+            recovery_attempt
+        };
+        let recovery_budget_words = match reduction_step {
+            0 => profile_budget_words,
+            1 => profile_budget_words.saturating_mul(3).saturating_div(4),
+            2 => profile_budget_words.saturating_div(2),
             _ => profile_budget_words.saturating_div(4),
         }
         .max(1);

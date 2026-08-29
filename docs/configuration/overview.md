@@ -37,6 +37,13 @@ automatic first launch create a provider-free configuration, and `mez auth
 login` adds only the successfully authenticated provider's connection,
 profiles, and preset defaults.
 
+Provider model `context_window_tokens`, `max_input_tokens`, and
+`max_output_tokens` are configuration, not runtime model-name assumptions.
+Authentication fills missing built-in model records and fields in generated
+TOML without replacing explicit user values. Users may change these limits;
+Mezzanine uses configured `max_input_tokens` for proactive request compaction,
+while the provider remains authoritative and may reject unsupported values.
+
 `mez config set` and `mez config unset` persist supported scalar changes to the
 user configuration by default; use their `--scope project` option only for a
 trusted, eligible project overlay. These offline commands change the selected

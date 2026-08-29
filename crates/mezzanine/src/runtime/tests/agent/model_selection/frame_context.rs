@@ -112,12 +112,10 @@ fn runtime_frame_context_reports_running_agent_provider_model_name() {
     assert!(pane_text.contains("Worked for "), "{pane_text}");
 }
 
-/// Verifies that the agent frame context percentage uses the effective model
-/// context-window denominator when a profile omits an explicit token count. This
-/// protects the status area from reporting OpenAI GPT-5.5 usage against the
-/// small local fallback window instead of the provider model's documented window.
+/// Verifies that the agent frame context percentage uses the configured
+/// provider-model context-window denominator when the profile omits an override.
 #[test]
-fn runtime_frame_context_uses_known_openai_model_context_window() {
+fn runtime_frame_context_uses_configured_openai_model_context_window() {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -126,7 +124,7 @@ fn runtime_frame_context_uses_known_openai_model_context_window() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
             trusted: true,
-            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"work\"\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\"]\ndefault_model = \"gpt-5.5\"\n[model_profiles.work]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\n"
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"work\"\n[providers.openai]\nkind = \"openai\"\ndefault_model = \"gpt-5.5\"\n[providers.openai.models.gpt-5-5]\nid = \"gpt-5.5\"\ncontext_window_tokens = 1050000\n[model_profiles.work]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\n"
                 .to_string(),
         }])
         .unwrap();

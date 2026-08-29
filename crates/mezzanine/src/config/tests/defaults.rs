@@ -580,37 +580,91 @@ fn default_config_includes_anthropic_provider_defaults() {
     );
 }
 
-/// Verifies generated defaults use provider-aware output token caps for known agent profiles.
-///
-/// A single universal output cap is not correct for all providers, but the
-/// built-in OpenAI and DeepSeek profiles have known agent workload targets.
-/// Keeping those caps explicit protects the generated default config from
-/// drifting back to provider-default output budgets.
+/// Verifies authenticated OpenAI model defaults carry the exact editable token limits.
 #[test]
-fn default_config_uses_provider_aware_output_token_caps() {
+fn default_config_uses_configured_openai_model_token_limits() {
     let parsed: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
-    let profiles = parsed
-        .get("model_profiles")
+    let models = parsed
+        .get("providers")
+        .and_then(|providers| providers.get("openai"))
+        .and_then(|provider| provider.get("models"))
         .and_then(toml::Value::as_table)
         .unwrap();
 
-    for (profile, expected) in [
-        ("default", 16_384),
-        ("auto-size-router", 8_192),
-        ("auto-size-small", 16_384),
-        ("auto-size-medium", 16_384),
-        ("auto-size-large", 32_768),
-        ("anthropic-default", 128_000),
-        ("anthropic-fast", 64_000),
-        ("deepseek-default", 32_768),
-        ("deepseek-fast", 32_768),
+    for (entry, expected) in [
+        ("gpt-5-6-sol", (1_000_000, 800_000, 60_000)),
+        ("gpt-5-6-terra", (500_000, 400_000, 30_000)),
+        ("gpt-5-6-luna", (250_000, 200_000, 15_000)),
     ] {
-        let tokens = profiles
-            .get(profile)
-            .and_then(|profile| profile.get("max_output_tokens"))
-            .and_then(toml::Value::as_integer);
-        assert_eq!(tokens, Some(expected));
+        let model = models.get(entry).and_then(toml::Value::as_table).unwrap();
+        let actual = (
+            model
+                .get("context_window_tokens")
+                .and_then(toml::Value::as_integer),
+            model
+                .get("max_input_tokens")
+                .and_then(toml::Value::as_integer),
+            model
+                .get("max_output_tokens")
+                .and_then(toml::Value::as_integer),
+        );
+        assert_eq!(
+            actual,
+            (Some(expected.0), Some(expected.1), Some(expected.2)),
+            "{entry}"
+        );
     }
+}
+
+/// Verifies authentication fills missing model limits without replacing explicit values.
+#[test]
+fn authenticated_provider_defaults_preserve_openai_model_overrides() {
+    let root = temp_root("authenticated-openai-limit-merge");
+    let paths = ConfigPaths::from_root(root.clone());
+    let path = paths.ensure_default_config().unwrap();
+    fs::write(
+        &path,
+        "version = 78\n[providers.openai]\nkind = \"openai\"\ndefault_model = \"gpt-5.6-terra\"\n[providers.openai.models.gpt-5-6-terra]\nid = \"gpt-5.6-terra\"\nmax_input_tokens = 123456\n",
+    )
+    .unwrap();
+
+    paths
+        .materialize_authenticated_provider_defaults("openai")
+        .unwrap();
+
+    let parsed: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let models = parsed
+        .get("providers")
+        .and_then(|providers| providers.get("openai"))
+        .and_then(|provider| provider.get("models"))
+        .and_then(toml::Value::as_table)
+        .unwrap();
+    let terra = models
+        .get("gpt-5-6-terra")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+    assert_eq!(
+        terra
+            .get("max_input_tokens")
+            .and_then(toml::Value::as_integer),
+        Some(123_456)
+    );
+    assert_eq!(
+        terra
+            .get("context_window_tokens")
+            .and_then(toml::Value::as_integer),
+        Some(500_000)
+    );
+    assert_eq!(
+        terra
+            .get("max_output_tokens")
+            .and_then(toml::Value::as_integer),
+        Some(30_000)
+    );
+    assert!(models.contains_key("gpt-5-6-sol"));
+    assert!(models.contains_key("gpt-5-6-luna"));
+
+    let _ = fs::remove_dir_all(root);
 }
 
 /// Verifies the built-in DeepSeek preset uses canonical auto-sizing effort

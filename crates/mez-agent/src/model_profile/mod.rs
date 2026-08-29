@@ -5,17 +5,7 @@
 //! failover safety comparison, and override precedence. Product configuration
 //! loading and runtime override mutation remain in the root package.
 
-use crate::{
-    AgentContextResult, known_provider_model_context_window_tokens, validate_context_required,
-};
-
-/// Fallback context window when the model profile does not carry one.
-const MODEL_CONTEXT_FALLBACK_WINDOW_TOKENS: usize = 128 * 1024;
-/// Output-token cap used for the first output-limit retry when no profile cap
-/// was configured.
-const MODEL_OUTPUT_LIMIT_RETRY_TOKENS: usize = 16_384;
-/// Upper bound for automatic output-limit retry cap escalation.
-const MODEL_OUTPUT_LIMIT_RETRY_CEILING_TOKENS: usize = 32_768;
+use crate::{AgentContextResult, validate_context_required};
 /// Conservative numerator for converting token context windows into word budgets.
 const MODEL_CONTEXT_BUDGET_WORDS_PER_TOKEN_NUMERATOR: usize = 3;
 /// Conservative denominator for converting token context windows into word budgets.
@@ -63,24 +53,19 @@ pub struct ModelProfile {
 }
 
 impl ModelProfile {
-    /// Returns the approximate provider context window in model tokens.
+    /// Returns the configured provider context window in model tokens.
     ///
     /// Profile-specific values may be supplied through `provider_options` as
-    /// `context_window_tokens` or `context_limit_tokens`. When omitted,
-    /// Mezzanine first uses built-in provider model metadata for known default
-    /// models, then falls back to a conservative built-in default so automatic
-    /// compaction has a stable budget before provider metadata is available.
-    pub fn context_window_tokens(&self) -> usize {
+    /// `context_window_tokens` or `context_limit_tokens`. Missing values remain
+    /// unknown so provider errors, rather than baked-in model assumptions,
+    /// govern unconfigured models.
+    pub fn context_window_tokens(&self) -> Option<usize> {
         self.configured_context_window_tokens()
-            .or_else(|| known_provider_model_context_window_tokens(&self.provider, &self.model))
-            .unwrap_or(MODEL_CONTEXT_FALLBACK_WINDOW_TOKENS)
     }
 
-    /// Returns the exact model context-window denominator known for status and
-    /// diagnostics without falling back to the conservative local default.
+    /// Returns the configured model context-window denominator for status and diagnostics.
     pub fn known_context_window_tokens(&self) -> Option<usize> {
         self.configured_context_window_tokens()
-            .or_else(|| known_provider_model_context_window_tokens(&self.provider, &self.model))
     }
 
     /// Returns the configured maximum number of provider-visible input tokens.
@@ -145,14 +130,10 @@ impl ModelProfile {
             .and_then(|v| v.parse::<f64>().ok())
     }
 
-    /// Returns the output-token cap to use after a provider output-limit
-    /// failure.
-    pub fn output_limit_retry_tokens(&self) -> usize {
-        let configured = self.max_output_tokens().unwrap_or(0);
-        configured.saturating_mul(2).clamp(
-            MODEL_OUTPUT_LIMIT_RETRY_TOKENS,
-            MODEL_OUTPUT_LIMIT_RETRY_CEILING_TOKENS,
-        )
+    /// Returns the configured output-token cap to use after an output-limit failure.
+    pub fn output_limit_retry_tokens(&self) -> Option<usize> {
+        self.max_output_tokens()
+            .map(|configured| configured.saturating_mul(2))
     }
 
     /// Returns the profile-configured context window, if the profile carries one.
@@ -166,13 +147,17 @@ impl ModelProfile {
 
     /// Returns the word budget used when explicit context compaction needs a
     /// model-window-sized target.
-    pub fn context_window_budget_words(&self) -> usize {
-        self.max_input_tokens()
-            .unwrap_or_else(|| self.context_window_tokens())
-            .min(self.context_window_tokens())
-            .saturating_mul(MODEL_CONTEXT_BUDGET_WORDS_PER_TOKEN_NUMERATOR)
-            .saturating_div(MODEL_CONTEXT_BUDGET_WORDS_PER_TOKEN_DENOMINATOR)
-            .max(1)
+    pub fn context_window_budget_words(&self) -> Option<usize> {
+        let context_window_tokens = self.context_window_tokens();
+        let input_budget_tokens = self.max_input_tokens().or(context_window_tokens)?;
+        Some(
+            context_window_tokens
+                .map(|context| input_budget_tokens.min(context))
+                .unwrap_or(input_budget_tokens)
+                .saturating_mul(MODEL_CONTEXT_BUDGET_WORDS_PER_TOKEN_NUMERATOR)
+                .saturating_div(MODEL_CONTEXT_BUDGET_WORDS_PER_TOKEN_DENOMINATOR)
+                .max(1),
+        )
     }
 
     /// Ordinal for comparison: higher number = stronger safety.

@@ -128,18 +128,23 @@ impl RuntimeSessionService {
         let (model_profile_name, model_profile) =
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
         let retained_tail_percent = self.agent_compaction_raw_retention_percent();
+        let context_budget_words = model_profile.context_window_budget_words().ok_or_else(|| {
+            MezError::invalid_state(
+                "model context compaction requires configured context_window_tokens or max_input_tokens",
+            )
+        })?;
         let retained_transcript_entries = if source == "manual" || resume_turn_id.is_some() {
             runtime_compact_forced_retained_transcript_entries(
                 transcript_entries,
                 &transcript_records,
-                model_profile.context_window_budget_words(),
+                context_budget_words,
                 retained_tail_percent,
             )
         } else {
             runtime_compact_retained_transcript_entries(
                 transcript_entries,
                 &transcript_records,
-                model_profile.context_window_budget_words(),
+                context_budget_words,
                 retained_tail_percent,
             )
         };

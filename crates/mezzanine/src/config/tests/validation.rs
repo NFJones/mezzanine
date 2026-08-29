@@ -145,10 +145,6 @@ fn validates_structured_provider_model_schema() {
             "providers.custom.models.primary.context_window_tokens",
         ),
         (
-            "[providers.custom.models.primary]\nid = \"model-a\"\ncontext_window_tokens = 100\nmax_input_tokens = 101\n",
-            "providers.custom.models.primary.max_input_tokens",
-        ),
-        (
             "[providers.custom.models.primary]\nid = \"model-a\"\naliases = [\"\"]\n",
             "providers.custom.models.primary.aliases",
         ),
@@ -182,38 +178,29 @@ fn validates_structured_provider_model_schema() {
     }
 }
 
-/// Verifies profile token overrides are checked against the effective
-/// provider-model base and model options cannot contain credential material.
+/// Verifies user-selected token limits are accepted while model options cannot
+/// contain credential material.
 ///
-/// Schema validation must reject an impossible inherited request budget and
-/// secret-like option keys before runtime materialization merges either value.
+/// Providers remain authoritative for whether configured token combinations
+/// are accepted; local validation only requires positive integer values.
 #[test]
 fn validates_provider_model_inheritance_and_non_secret_options() {
-    for (body, expected_path) in [
-        (
-            "[providers.custom.models.primary]\nid = \"model-a\"\ncontext_window_tokens = 100\n[model_profiles.work]\nprovider = \"custom\"\nmodel = \"model-a\"\nmax_input_tokens = 101\n",
-            "model_profiles.work.max_input_tokens",
-        ),
-        (
-            "[providers.custom.models.primary]\nid = \"model-a\"\n[providers.custom.models.primary.provider_options]\napi_key = \"not-allowed\"\n",
-            "providers.custom.models.primary.provider_options.api_key",
-        ),
-    ] {
-        let validation = validate_config_text(
-            ConfigFormat::Toml,
-            &format!("version = 78\n{body}"),
-            ConfigScope::Primary,
-        );
-        assert!(!validation.valid, "{body}");
-        assert!(
-            validation
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.path == expected_path),
-            "{body}: {:?}",
-            validation.diagnostics
-        );
-    }
+    let user_limits = validate_config_text(
+        ConfigFormat::Toml,
+        "version = 78\n[providers.custom.models.primary]\nid = \"model-a\"\ncontext_window_tokens = 100\nmax_input_tokens = 101\n[model_profiles.work]\nprovider = \"custom\"\nmodel = \"model-a\"\nmax_input_tokens = 102\n",
+        ConfigScope::Primary,
+    );
+    assert!(user_limits.valid, "{:?}", user_limits.diagnostics);
+
+    let secret_option = validate_config_text(
+        ConfigFormat::Toml,
+        "version = 78\n[providers.custom.models.primary]\nid = \"model-a\"\n[providers.custom.models.primary.provider_options]\napi_key = \"not-allowed\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(!secret_option.valid);
+    assert!(secret_option.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "providers.custom.models.primary.provider_options.api_key"
+    }));
 }
 
 /// Verifies that implementation-exposed audit config keys remain listed in the

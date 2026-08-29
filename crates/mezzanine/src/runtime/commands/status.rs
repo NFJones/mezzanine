@@ -296,7 +296,10 @@ impl RuntimeSessionService {
                 "Context".to_string(),
                 format!(
                     "{context_blocks} blocks, {request_messages} request messages, window={} tokens, compaction={}",
-                    model_profile.context_window_tokens(),
+                    model_profile
+                        .context_window_tokens()
+                        .map(|tokens| tokens.to_string())
+                        .unwrap_or_else(|| "unknown".to_string()),
                     if model_profile.max_input_tokens().is_some() {
                         "configured-input-limit/provider-rejection/manual"
                     } else {

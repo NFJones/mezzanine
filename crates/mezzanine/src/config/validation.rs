@@ -660,7 +660,6 @@ fn validate_provider_models_config(format: ConfigFormat, text: &str) -> Vec<Conf
                 }
             }
 
-            let mut limits = std::collections::BTreeMap::new();
             for key in [
                 "context_window_tokens",
                 "max_input_tokens",
@@ -673,9 +672,7 @@ fn validate_provider_models_config(format: ConfigFormat, text: &str) -> Vec<Conf
                         .filter(|value| *value > 0)
                         .and_then(|value| usize::try_from(value).ok())
                     {
-                        Some(value) => {
-                            limits.insert(key, value);
-                        }
+                        Some(_) => {}
                         None => diagnostics.push(ConfigDiagnostic {
                             path,
                             message: "provider model token limit must be a positive integer"
@@ -684,19 +681,6 @@ fn validate_provider_models_config(format: ConfigFormat, text: &str) -> Vec<Conf
                     }
                 }
             }
-            if let (Some(context), Some(input)) = (
-                limits.get("context_window_tokens"),
-                limits.get("max_input_tokens"),
-            ) && input > context
-            {
-                diagnostics.push(ConfigDiagnostic {
-                    path: format!("{entry_path}.max_input_tokens"),
-                    message:
-                        "provider model max_input_tokens must not exceed context_window_tokens"
-                            .to_string(),
-                });
-            }
-
             if let Some(options) = model.get("provider_options") {
                 let options_path = format!("{entry_path}.provider_options");
                 match options.as_object() {
@@ -724,95 +708,7 @@ fn validate_provider_models_config(format: ConfigFormat, text: &str) -> Vec<Conf
             }
         }
     }
-    validate_provider_model_profile_limits(&root, &mut diagnostics);
     diagnostics
-}
-
-/// Validates effective profile limits after provider-model base inheritance.
-fn validate_provider_model_profile_limits(
-    root: &serde_json::Value,
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-) {
-    let Some(providers) = root.get("providers").and_then(serde_json::Value::as_object) else {
-        return;
-    };
-    let Some(profiles) = root
-        .get("model_profiles")
-        .and_then(serde_json::Value::as_object)
-    else {
-        return;
-    };
-    for (profile_name, profile) in profiles {
-        let Some(profile) = profile.as_object() else {
-            continue;
-        };
-        let (Some(provider_id), Some(requested_model)) = (
-            profile.get("provider").and_then(serde_json::Value::as_str),
-            profile.get("model").and_then(serde_json::Value::as_str),
-        ) else {
-            continue;
-        };
-        let base_model = providers
-            .get(provider_id)
-            .and_then(serde_json::Value::as_object)
-            .and_then(|provider| provider.get("models"))
-            .and_then(serde_json::Value::as_object)
-            .and_then(|models| {
-                models.values().find_map(|model| {
-                    let model = model.as_object()?;
-                    let id_matches = model.get("id").and_then(serde_json::Value::as_str)
-                        == Some(requested_model);
-                    let alias_matches = model
-                        .get("aliases")
-                        .and_then(serde_json::Value::as_array)
-                        .is_some_and(|aliases| {
-                            aliases
-                                .iter()
-                                .any(|alias| alias.as_str() == Some(requested_model))
-                        });
-                    (id_matches || alias_matches).then_some(model)
-                })
-            });
-        let context_window_tokens = profile
-            .get("context_window_tokens")
-            .or_else(|| profile.get("context_limit_tokens"))
-            .and_then(configured_positive_u64)
-            .or_else(|| {
-                base_model
-                    .and_then(|model| model.get("context_window_tokens"))
-                    .and_then(configured_positive_u64)
-            });
-        let profile_max_input = profile
-            .get("max_input_tokens")
-            .and_then(configured_positive_u64);
-        let max_input_tokens = profile_max_input.or_else(|| {
-            base_model
-                .and_then(|model| model.get("max_input_tokens"))
-                .and_then(configured_positive_u64)
-        });
-        if let (Some(context_window_tokens), Some(max_input_tokens)) =
-            (context_window_tokens, max_input_tokens)
-            && max_input_tokens > context_window_tokens
-        {
-            diagnostics.push(ConfigDiagnostic {
-                path: if profile_max_input.is_some() {
-                    format!("model_profiles.{profile_name}.max_input_tokens")
-                } else {
-                    format!("model_profiles.{profile_name}.context_window_tokens")
-                },
-                message: "effective max_input_tokens must not exceed context_window_tokens"
-                    .to_string(),
-            });
-        }
-    }
-}
-
-/// Parses a configured positive token count without producing diagnostics.
-fn configured_positive_u64(value: &serde_json::Value) -> Option<u64> {
-    value
-        .as_u64()
-        .or_else(|| value.as_str()?.parse::<u64>().ok())
-        .filter(|value| *value > 0)
 }
 
 /// Reports whether a model-level option key appears to contain a credential.

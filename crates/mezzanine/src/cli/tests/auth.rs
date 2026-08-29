@@ -367,6 +367,20 @@ fn auth_login_api_key_file_persists_metadata_without_printing_secret() {
     assert!(config.contains("[providers.openai]"), "{config}");
     assert!(!config.contains("[providers.anthropic]"), "{config}");
     assert!(!config.contains("[providers.deepseek]"), "{config}");
+    let parsed: toml::Value = toml::from_str(&config).unwrap();
+    let models = parsed
+        .get("providers")
+        .and_then(|providers| providers.get("openai"))
+        .and_then(|provider| provider.get("models"))
+        .and_then(toml::Value::as_table)
+        .unwrap();
+    assert_eq!(
+        models
+            .get("gpt-5-6-terra")
+            .and_then(|model| model.get("max_input_tokens"))
+            .and_then(toml::Value::as_integer),
+        Some(400_000)
+    );
 
     let mut status_stdout = Vec::new();
     run_with(
