@@ -153,6 +153,11 @@ bounded metadata sidecars; healthy startup reads only interrupted-operation
 recovery journals, while explicit catalog rebuild may enumerate sidecars
 without decompressing every archive.
 
+The `/resume` pager is active-only by default. Use `r` for the archived-only
+view, `A` to archive or restore the selected row, and Enter to restore and then
+resume an archived row. Archive and restore run on the persistence worker, so
+the pager remains responsive and reports completion or failure in place.
+
 ## Related pages
 
 - [Sessions and panes](../using-mezzanine/sessions-and-panes.md)

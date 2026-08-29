@@ -10401,6 +10401,17 @@ Default `/resume` browsing, completion, and `--latest` selection MUST include
 active sessions only. Exact UUID lookup, deletion, repair, and explicit archived
 browsing MUST remain lifecycle-aware.
 
+The `/resume` picker MUST use `r` to toggle independently between active and
+archived-only lifecycle views without changing directory, subagent, or search
+scope. Archived rows MUST include an `Archived at` column. `A` MUST archive the
+selected active row or restore the selected archived row through nonblocking
+persistence work, and duplicate lifecycle requests for one conversation MUST be
+suppressed until settlement. Enter on an archived row MUST restore it before
+resuming it in the requesting pane. Completion or failure MUST refresh an open
+picker, preserve a still-visible selection where possible, and retain an
+actionable visible error after failure. Direct `/resume <session-uuid>` MUST
+reject an archived conversation until it has been restored.
+
 An archived conversation MUST be stored beneath the private
 `agent-sessions/archived` directory as one tar stream compressed with zstd and
 one bounded metadata sidecar. The tar stream MUST contain exactly one

@@ -13,6 +13,7 @@ use crate::storage::registry::SessionRegistry;
 use crate::storage::snapshot::SnapshotRepository;
 use crate::storage::token_usage::TokenUsageStore;
 use crate::storage::transcript::AgentTranscriptStore;
+use mez_core::ids::ClientId;
 use mez_terminal::TerminalSize;
 
 use super::RuntimeSideEffect;
@@ -38,6 +39,7 @@ pub(crate) struct RuntimePersistenceComponent {
     queued_audit_effects: Vec<RuntimeSideEffect>,
     queued_transcript_effects: Vec<RuntimeSideEffect>,
     pending_session_archive_conversation_ids: BTreeSet<String>,
+    pending_session_archive_resumes: BTreeMap<String, (ClientId, String)>,
     queued_token_usage_effects: Vec<RuntimeSideEffect>,
     queued_provider_settlement_effects: Vec<RuntimeSideEffect>,
     queued_config_effects: Vec<RuntimeSideEffect>,

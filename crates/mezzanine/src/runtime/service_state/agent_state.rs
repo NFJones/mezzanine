@@ -99,6 +99,8 @@ pub(crate) enum RuntimeRecordBrowserOverlaySource {
         directory: Option<String>,
         /// Active pane directory restored when the all-sessions view is toggled off.
         default_directory: Option<String>,
+        /// Active or archived lifecycle partition displayed by the browser.
+        lifecycle: crate::storage::transcript::SavedSessionLifecycleFilter,
         /// Whether delegated child conversations are included in discovery.
         include_subagents: bool,
         /// Optional backend search over UUID and bounded session metadata.

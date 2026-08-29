@@ -120,6 +120,38 @@ impl RuntimeSessionService {
                 bytes,
             } => {
                 self.persistence.finish_session_archive(&conversation_id);
+                let resume = self
+                    .persistence
+                    .take_session_archive_resume(&conversation_id);
+                self.refresh_saved_session_overlay_after_archive(
+                    &conversation_id,
+                    Some(operation),
+                    None,
+                )?;
+                if matches!(operation, crate::runtime::SessionArchiveOperation::Restore)
+                    && let Some((client_id, pane_id)) = resume
+                {
+                    let resume_error = if !self.session.is_attached_primary(&client_id) {
+                        Some("restore completed, but the requesting primary client detached before resume".to_string())
+                    } else {
+                        self.execute_agent_shell_resume_command(
+                            &pane_id,
+                            &format!("/resume {conversation_id}"),
+                        )
+                        .err()
+                        .map(|error| error.message().to_string())
+                    };
+                    if let Some(error) = resume_error {
+                        self.refresh_saved_session_overlay_after_archive(
+                            &conversation_id,
+                            Some(operation),
+                            Some(&error),
+                        )?;
+                    } else {
+                        self.dismiss_primary_display_overlay();
+                    }
+                }
+                self.invalidate_agent_prompt_selector_extra_candidates();
                 serde_json::json!({
                     "worker": "async-persistence",
                     "target": "session_archive",
@@ -136,6 +168,13 @@ impl RuntimeSessionService {
                 error,
             } => {
                 self.persistence.finish_session_archive(&conversation_id);
+                self.persistence
+                    .take_session_archive_resume(&conversation_id);
+                self.refresh_saved_session_overlay_after_archive(
+                    &conversation_id,
+                    Some(operation),
+                    Some(error.as_str()),
+                )?;
                 serde_json::json!({
                     "worker": "async-persistence",
                     "target": "session_archive",
@@ -148,10 +187,33 @@ impl RuntimeSessionService {
             }
         };
         self.append_runtime_diagnostic_event(payload)?;
-        Ok(crate::runtime::RuntimeTransition {
-            applied: true,
-            side_effects: Vec::new(),
-        })
+        Ok(self.runtime_transition_with_render(
+            true,
+            Some(crate::runtime::RenderInvalidationReason::Overlay),
+        ))
+    }
+
+    /// Refreshes an open saved-session browser after one archive lifecycle settlement.
+    fn refresh_saved_session_overlay_after_archive(
+        &mut self,
+        conversation_id: &str,
+        operation: Option<crate::runtime::SessionArchiveOperation>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let source = self.active_saved_session_browser_source();
+        let Some(source @ crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::SavedSessions { .. }) = source else {
+            return Ok(());
+        };
+        let (source, mut browser) = self.refresh_saved_session_browser_preserving(
+            &source,
+            error.is_some().then_some(conversation_id),
+        )?;
+        browser.set_error(error.map(str::to_string).or_else(|| {
+            operation
+                .map(|operation| format!("{} completed for {conversation_id}", operation.as_str()))
+        }));
+        self.replace_active_saved_session_browser(source, browser);
+        Ok(())
     }
 
     /// Runs the message service operation for this subsystem.

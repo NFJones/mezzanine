@@ -238,6 +238,25 @@ impl RuntimePersistenceComponent {
             .remove(conversation_id);
     }
 
+    /// Retains the primary client and pane that should resume after one restore.
+    pub(crate) fn set_session_archive_resume(
+        &mut self,
+        conversation_id: String,
+        client_id: mez_core::ids::ClientId,
+        pane_id: String,
+    ) {
+        self.pending_session_archive_resumes
+            .insert(conversation_id, (client_id, pane_id));
+    }
+
+    /// Takes the deferred resume continuation for one settled archive operation.
+    pub(crate) fn take_session_archive_resume(
+        &mut self,
+        conversation_id: &str,
+    ) -> Option<(mez_core::ids::ClientId, String)> {
+        self.pending_session_archive_resumes.remove(conversation_id)
+    }
+
     /// Returns queued transcript entries for one conversation without draining
     /// the external persistence worker's ordered effect queue.
     pub(crate) fn pending_transcript_entries(

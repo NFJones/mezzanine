@@ -489,6 +489,86 @@ impl RuntimeSessionService {
         if input == b"r"
             && matches!(
                 record_browser.source,
+                Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
+            )
+        {
+            let Some(source) = record_browser.source.clone() else {
+                return Ok(Some(false));
+            };
+            let source = self.record_browser_source_toggled_session_lifecycle(&source);
+            let (source, browser) = self.refresh_saved_session_browser_preserving(&source, None)?;
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(Some(false));
+            };
+            let Some(record_browser) = overlay.record_browser.as_mut() else {
+                return Ok(None);
+            };
+            record_browser.source = Some(source);
+            record_browser.browser = browser;
+            return Ok(Some(render_record_browser_overlay(
+                overlay,
+                &self.presentation.settings.ui_theme,
+                terminal_width,
+                prose_width,
+            )));
+        }
+        if input == b"A"
+            && matches!(
+                record_browser.source,
+                Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
+            )
+        {
+            let active_index =
+                record_browser_active_index(overlay, record_browser.browser.active_index());
+            let mut selected = record_browser.browser.clone();
+            selected.set_active_index(active_index);
+            let Some(conversation_id) = selected.active_record_id().map(str::to_string) else {
+                return Ok(Some(false));
+            };
+            let lifecycle = match record_browser.source.as_ref() {
+                Some(RuntimeRecordBrowserOverlaySource::SavedSessions { lifecycle, .. }) => {
+                    *lifecycle
+                }
+                _ => unreachable!("saved-session source was validated above"),
+            };
+            let operation = match lifecycle {
+                crate::storage::transcript::SavedSessionLifecycleFilter::Active => {
+                    crate::runtime::SessionArchiveOperation::Archive {
+                        archived_at_unix_seconds: current_unix_seconds(),
+                    }
+                }
+                crate::storage::transcript::SavedSessionLifecycleFilter::Archived => {
+                    crate::runtime::SessionArchiveOperation::Restore
+                }
+            };
+            let status = match self.queue_session_archive_operation(&conversation_id, operation) {
+                Ok(transition) if transition.applied => {
+                    format!("{} pending for {conversation_id}", operation.as_str())
+                }
+                Ok(_) => format!(
+                    "{} already pending for {conversation_id}",
+                    operation.as_str()
+                ),
+                Err(error) => error.message().to_string(),
+            };
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(Some(false));
+            };
+            let Some(record_browser) = overlay.record_browser.as_mut() else {
+                return Ok(None);
+            };
+            record_browser.browser.set_active_index(active_index);
+            record_browser.browser.set_error(Some(status));
+            return Ok(Some(render_record_browser_overlay(
+                overlay,
+                &self.presentation.settings.ui_theme,
+                terminal_width,
+                prose_width,
+            )));
+        }
+        if input == b"r"
+            && matches!(
+                record_browser.source,
                 Some(RuntimeRecordBrowserOverlaySource::Issues { state: None, .. })
             )
         {
@@ -721,6 +801,42 @@ impl RuntimeSessionService {
             else {
                 return Ok(None);
             };
+            let lifecycle = match record_browser.source.as_ref() {
+                Some(RuntimeRecordBrowserOverlaySource::SavedSessions { lifecycle, .. }) => {
+                    *lifecycle
+                }
+                _ => unreachable!("saved-session source was validated above"),
+            };
+            if lifecycle == crate::storage::transcript::SavedSessionLifecycleFilter::Archived {
+                let pane_id = record_browser.pane_id.clone();
+                let operation = crate::runtime::SessionArchiveOperation::Restore;
+                let status = match self.queue_session_archive_operation(&id, operation) {
+                    Ok(transition) if transition.applied => {
+                        self.persistence.set_session_archive_resume(
+                            id.clone(),
+                            primary_client_id.clone(),
+                            pane_id,
+                        );
+                        format!("restore pending for {id}")
+                    }
+                    Ok(_) => format!("restore already pending for {id}"),
+                    Err(error) => error.message().to_string(),
+                };
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                    return Ok(Some(false));
+                };
+                let Some(record_browser) = overlay.record_browser.as_mut() else {
+                    return Ok(None);
+                };
+                record_browser.browser.set_active_index(active_index);
+                record_browser.browser.set_error(Some(status));
+                return Ok(Some(render_record_browser_overlay(
+                    overlay,
+                    &self.presentation.settings.ui_theme,
+                    terminal_width,
+                    prose_width,
+                )));
+            }
             return self
                 .execute_primary_display_overlay_selection_command(
                     primary_client_id,
@@ -784,7 +900,13 @@ impl RuntimeSessionService {
             let Some(record_id) = selected.active_record_id().map(str::to_string) else {
                 return Ok(Some(false));
             };
-            let markdown = self.saved_session_detail_markdown(&record_id)?;
+            let lifecycle = match record_browser.source.as_ref() {
+                Some(RuntimeRecordBrowserOverlaySource::SavedSessions { lifecycle, .. }) => {
+                    *lifecycle
+                }
+                _ => unreachable!("saved-session source was validated above"),
+            };
+            let markdown = self.saved_session_detail_markdown(&record_id, lifecycle)?;
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                 return Ok(Some(false));
             };
@@ -1351,6 +1473,55 @@ pub(crate) fn runtime_pane_agent_selector_rendition(
 }
 
 impl RuntimeSessionService {
+    /// Returns the backend source for the active saved-session browser.
+    pub(crate) fn active_saved_session_browser_source(
+        &self,
+    ) -> Option<RuntimeRecordBrowserOverlaySource> {
+        self.presentation
+            .primary_display_overlay
+            .as_ref()?
+            .record_browser
+            .as_ref()?
+            .source
+            .as_ref()
+            .filter(|source| {
+                matches!(
+                    source,
+                    RuntimeRecordBrowserOverlaySource::SavedSessions { .. }
+                )
+            })
+            .cloned()
+    }
+
+    /// Replaces the active saved-session browser after backend settlement.
+    pub(crate) fn replace_active_saved_session_browser(
+        &mut self,
+        source: RuntimeRecordBrowserOverlaySource,
+        browser: mez_mux::record_browser::RecordBrowser,
+    ) -> bool {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+            return false;
+        };
+        let Some(record_browser) = overlay.record_browser.as_mut() else {
+            return false;
+        };
+        if !matches!(
+            record_browser.source,
+            Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
+        ) {
+            return false;
+        }
+        record_browser.source = Some(source);
+        record_browser.browser = browser;
+        self.reflow_primary_record_browser_overlay();
+        true
+    }
+
+    /// Dismisses the primary display overlay after deferred resume succeeds.
+    pub(crate) fn dismiss_primary_display_overlay(&mut self) -> bool {
+        self.presentation.primary_display_overlay.take().is_some()
+    }
+
     /// Shows or clears the primary-client command display overlay.
     ///
     /// Non-empty line sets are rendered as a modal full-window view on the next

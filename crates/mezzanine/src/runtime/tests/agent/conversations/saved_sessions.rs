@@ -87,6 +87,227 @@ fn runtime_session_archive_planning_rejects_live_and_suppresses_duplicates() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies the resume pager toggles independently between active and archived
+/// sessions, queues archive work, refreshes after settlement, and exposes
+/// bounded archive metadata and lifecycle-aware deletion.
+#[test]
+fn runtime_resume_browser_archives_browses_details_and_deletes_sessions() {
+    let root = temp_root("runtime-resume-archive-browser");
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&TranscriptEntry {
+            conversation_id: "browser-archive".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-browser-archive".to_string(),
+            agent_id: "agent-browser".to_string(),
+            pane_id: "%9".to_string(),
+            content: "archive browser prompt".to_string(),
+        })
+        .unwrap();
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let response = service
+        .execute_agent_shell_command(&primary, "/resume")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests("%1", &response)
+        .unwrap();
+
+    service
+        .apply_primary_display_overlay_input(&primary, b"r")
+        .unwrap();
+    let archived_empty = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .unwrap()
+        .browser
+        .render_page()
+        .raw_markdown;
+    assert!(
+        archived_empty.contains("Archived Agent Sessions"),
+        "{archived_empty}"
+    );
+    assert!(
+        archived_empty.contains("No archived agent sessions are available."),
+        "{archived_empty}"
+    );
+
+    service
+        .apply_primary_display_overlay_input(&primary, b"r")
+        .unwrap();
+    service
+        .apply_primary_display_overlay_input(&primary, b"A")
+        .unwrap();
+    let effects = service
+        .drain_transcript_persistence_transition()
+        .side_effects;
+    let [
+        RuntimeSideEffect::PersistSessionArchive {
+            conversation_id,
+            operation:
+                SessionArchiveOperation::Archive {
+                    archived_at_unix_seconds,
+                },
+            ..
+        },
+    ] = effects.as_slice()
+    else {
+        panic!("expected one archive persistence effect: {effects:?}");
+    };
+    assert_eq!(conversation_id, "browser-archive");
+    let archived = store
+        .archive_session(conversation_id, *archived_at_unix_seconds)
+        .unwrap();
+    service
+        .apply_persistence_transition(PersistenceEvent::SessionArchiveCompleted {
+            conversation_id: conversation_id.clone(),
+            operation: SessionArchiveOperation::Archive {
+                archived_at_unix_seconds: *archived_at_unix_seconds,
+            },
+            bytes: archived.compressed_bytes as usize,
+        })
+        .unwrap();
+    assert!(
+        service
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .unwrap()
+            .browser
+            .records()
+            .is_empty()
+    );
+
+    service
+        .apply_primary_display_overlay_input(&primary, b"r")
+        .unwrap();
+    let archived_page = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .unwrap()
+        .browser
+        .render_page()
+        .raw_markdown;
+    assert!(archived_page.contains("| Archived at |"), "{archived_page}");
+    assert!(archived_page.contains("browser-archive"), "{archived_page}");
+    service
+        .apply_primary_display_overlay_input(&primary, b"i")
+        .unwrap();
+    let detail = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .unwrap()
+        .browser
+        .render_page()
+        .raw_markdown;
+    assert!(detail.contains("## Archived session"), "{detail}");
+    assert!(detail.contains("Compressed bytes"), "{detail}");
+    assert!(detail.contains("SHA-256"), "{detail}");
+    service
+        .apply_primary_display_overlay_input(&primary, b"\x1b")
+        .unwrap();
+    service
+        .apply_primary_display_overlay_input(&primary, b"d")
+        .unwrap();
+    assert!(
+        store
+            .inspect_archived_session("browser-archive")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        service
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .unwrap()
+            .browser
+            .records()
+            .is_empty()
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies Enter on an archived resume row queues restore work and resumes
+/// the original pane only after the persistence worker reports success.
+#[test]
+fn runtime_resume_browser_restores_then_resumes_archived_session() {
+    let root = temp_root("runtime-resume-restore-enter");
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&TranscriptEntry {
+            conversation_id: "restore-enter".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-restore-enter".to_string(),
+            agent_id: "agent-restore".to_string(),
+            pane_id: "%9".to_string(),
+            content: "restore then resume".to_string(),
+        })
+        .unwrap();
+    store.archive_session("restore-enter", 20).unwrap();
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let response = service
+        .execute_agent_shell_command(&primary, "/resume")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests("%1", &response)
+        .unwrap();
+    service
+        .apply_primary_display_overlay_input(&primary, b"r")
+        .unwrap();
+    service
+        .apply_primary_display_overlay_input(&primary, b"\r")
+        .unwrap();
+
+    let effects = service
+        .drain_transcript_persistence_transition()
+        .side_effects;
+    assert!(matches!(
+        effects.as_slice(),
+        [RuntimeSideEffect::PersistSessionArchive {
+            conversation_id,
+            operation: SessionArchiveOperation::Restore,
+            ..
+        }] if conversation_id == "restore-enter"
+    ));
+    store.restore_archived_session("restore-enter").unwrap();
+    service
+        .apply_persistence_transition(PersistenceEvent::SessionArchiveCompleted {
+            conversation_id: "restore-enter".to_string(),
+            operation: SessionArchiveOperation::Restore,
+            bytes: 0,
+        })
+        .unwrap();
+
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .map(|session| session.session_id.as_str()),
+        Some("restore-enter")
+    );
+    assert!(service.primary_display_overlay().is_none());
+    assert_eq!(store.inspect("restore-enter").unwrap().len(), 1);
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies `/name-session` assigns durable metadata to the current
 /// zero-entry conversation without making it visible in `/resume` until it
 /// has prompt history, while direct resume still restores the named session.
@@ -1002,6 +1223,7 @@ fn runtime_resume_browser_rejects_deleting_active_sessions() {
             &crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory: None,
                 default_directory: None,
+                lifecycle: crate::storage::transcript::SavedSessionLifecycleFilter::Active,
                 include_subagents: false,
                 search: None,
                 anchor: None,

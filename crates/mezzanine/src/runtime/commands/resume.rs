@@ -169,7 +169,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn execute_agent_shell_resume_command(
+    pub(crate) fn execute_agent_shell_resume_command(
         &mut self,
         pane_id: &str,
         input: &str,
@@ -209,6 +209,11 @@ impl RuntimeSessionService {
                 "conversation transcript not found",
             )
         })?;
+        if saved.archived_at_unix_seconds.is_some() {
+            return Err(MezError::invalid_state(
+                "archived conversation must be restored before it can be resumed",
+            ));
+        }
         let summary = saved.summary;
         let entries = if summary.entries == 0 {
             Vec::new()
@@ -381,6 +386,7 @@ impl RuntimeSessionService {
             Some(RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory: directory.clone(),
                 default_directory: directory,
+                lifecycle: SavedSessionLifecycleFilter::Active,
                 include_subagents: false,
                 search: None,
                 anchor: None,
@@ -415,6 +421,7 @@ impl RuntimeSessionService {
     ) -> Result<RecordBrowser> {
         self.saved_sessions_record_browser_for_query(
             directory,
+            SavedSessionLifecycleFilter::Active,
             include_subagents,
             None,
             None,
@@ -426,6 +433,7 @@ impl RuntimeSessionService {
     pub(crate) fn saved_sessions_record_browser_for_query(
         &self,
         directory: Option<&str>,
+        lifecycle: SavedSessionLifecycleFilter,
         include_subagents: bool,
         search: Option<&str>,
         anchor: Option<SavedSessionPageAnchor>,
@@ -437,7 +445,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
         let sessions = store
             .query_saved_sessions(&SavedSessionQuery {
-                lifecycle: SavedSessionLifecycleFilter::Active,
+                lifecycle,
                 directory: directory.map(ToOwned::to_owned),
                 include_subagents,
                 require_latest_user_prompt: true,
@@ -453,7 +461,16 @@ impl RuntimeSessionService {
             .into_iter()
             .map(|session| Self::saved_session_browser_record(session, prompt_width))
             .collect::<Result<Vec<_>>>()?;
-        let mut browser = RecordBrowser::new("Agent Sessions", records, Vec::new())?;
+        let archived = lifecycle == SavedSessionLifecycleFilter::Archived;
+        let mut browser = RecordBrowser::new(
+            if archived {
+                "Archived Agent Sessions"
+            } else {
+                "Agent Sessions"
+            },
+            records,
+            Vec::new(),
+        )?;
         browser.enable_deletion();
         browser.set_table_id_column("Conversation");
         browser.set_table_columns_with_labels(vec![
@@ -463,12 +480,28 @@ impl RuntimeSessionService {
             ("Directory".to_string(), "directory".to_string()),
             ("Entries".to_string(), "entries".to_string()),
         ]);
+        if archived {
+            browser.set_table_columns_with_labels(vec![
+                ("Name".to_string(), "name".to_string()),
+                ("Latest prompt".to_string(), "latest_prompt".to_string()),
+                ("Last active".to_string(), "last_active".to_string()),
+                ("Archived at".to_string(), "archived_at".to_string()),
+                ("Directory".to_string(), "directory".to_string()),
+                ("Entries".to_string(), "entries".to_string()),
+            ]);
+        }
+        let lifecycle_action = if archived {
+            "`A` restore"
+        } else {
+            "`A` archive"
+        };
         browser.set_help(
-            Some(
-                "**Keys:** `↑`/`↓` focus conversation UUID · `Enter` resume · `i` details · `a` all/current directory · `u` show/hide subagents · `c` clear name · `d` delete · `/` search"
-                    .to_string(),
-            ),
-            Some("**Keys:** `Esc` back · `a` all/current directory · `u` show/hide subagents · `d` delete · `/` search".to_string()),
+            Some(format!(
+                "**Keys:** `↑`/`↓` focus conversation UUID · `Enter` resume · `i` details · `a` all/current directory · `u` show/hide subagents · `r` active/archived · {lifecycle_action} · `c` clear name · `d` delete · `/` search"
+            )),
+            Some(format!(
+                "**Keys:** `Esc` back · `a` all/current directory · `u` show/hide subagents · `r` active/archived · {lifecycle_action} · `d` delete · `/` search"
+            )),
         );
         if directory.is_some() {
             browser.enable_scope_toggle();
@@ -476,7 +509,14 @@ impl RuntimeSessionService {
         } else {
             browser.set_scope_indicator(Some("all directories".to_string()));
         }
-        browser.set_empty_message(Some("No saved agent sessions are available.".to_string()));
+        browser.set_empty_message(Some(
+            if archived {
+                "No archived agent sessions are available."
+            } else {
+                "No saved agent sessions are available."
+            }
+            .to_string(),
+        ));
         Ok(browser)
     }
 
@@ -551,6 +591,7 @@ impl RuntimeSessionService {
         session: SavedAgentSession,
         prompt_width: usize,
     ) -> Result<RecordBrowserRecord> {
+        let archived = session.archived_at_unix_seconds.is_some();
         let summary = session.summary;
         let transcript_markdown = if summary.entries == 0 {
             "No saved transcript entries were found for this session.".to_string()
@@ -567,13 +608,20 @@ impl RuntimeSessionService {
             .unwrap_or_else(|| summary.conversation_id.clone());
         Ok(RecordBrowserRecord {
             id: summary.conversation_id.clone(),
-            open_command: Some(format!("/resume {}", summary.conversation_id)),
+            open_command: (!archived).then(|| format!("/resume {}", summary.conversation_id)),
             title,
             metadata: vec![
                 ("name".to_string(), session.name.unwrap_or_default()),
                 (
                     "last_active".to_string(),
                     unix_seconds_to_rfc3339(summary.last_created_at_unix_seconds),
+                ),
+                (
+                    "archived_at".to_string(),
+                    session
+                        .archived_at_unix_seconds
+                        .map(unix_seconds_to_rfc3339)
+                        .unwrap_or_else(|| "-".to_string()),
                 ),
                 (
                     "directory".to_string(),
@@ -593,11 +641,35 @@ impl RuntimeSessionService {
     }
 
     /// Loads bounded transcript detail only for the saved-session row being opened.
-    pub(crate) fn saved_session_detail_markdown(&self, conversation_id: &str) -> Result<String> {
+    pub(crate) fn saved_session_detail_markdown(
+        &self,
+        conversation_id: &str,
+        lifecycle: SavedSessionLifecycleFilter,
+    ) -> Result<String> {
         let store = self
             .persistence
             .transcript_store()
             .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
+        if lifecycle == SavedSessionLifecycleFilter::Archived {
+            let archive = store
+                .inspect_archived_session(conversation_id)?
+                .ok_or_else(|| {
+                    MezError::new(
+                        crate::error::MezErrorKind::NotFound,
+                        "archived session metadata was not found",
+                    )
+                })?;
+            return Ok(format!(
+                "## Archived session\n\n- **Conversation:** `{}`\n- **Archived at:** {}\n- **Last active:** {}\n- **Entries:** {}\n- **Compressed bytes:** {}\n- **SHA-256:** `{}`\n- **Directory:** {}",
+                archive.conversation_id,
+                unix_seconds_to_rfc3339(archive.archived_at_unix_seconds),
+                unix_seconds_to_rfc3339(archive.summary.last_created_at_unix_seconds),
+                archive.summary.entries,
+                archive.compressed_bytes,
+                archive.sha256,
+                archive.summary.directory.as_deref().unwrap_or("-"),
+            ));
+        }
         Ok(Self::saved_session_transcript_markdown(
             &store.inspect_recent(
                 conversation_id,

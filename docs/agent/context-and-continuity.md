@@ -43,6 +43,12 @@ Ordinary catalog listing reads the sidecars rather than decompressing archives;
 restore verifies the compressed digest, manifest, entry types, and paths before
 installing an active session directory.
 
+In the `/resume` picker, press `r` to switch between active and archived-only
+sessions. Press `A` to archive the selected active session or restore the
+selected archive. Enter on an archived row restores it asynchronously and then
+resumes it in the pane that opened the picker. Default `/resume`, completion,
+and `--latest` continue to consider active sessions only.
+
 For catalog diagnostics and explicit recovery, use `mez session-catalog
 status` and `mez session-catalog rebuild`. Normal status and discovery remain
 bounded; rebuild is the deliberate full scan of retained session files.

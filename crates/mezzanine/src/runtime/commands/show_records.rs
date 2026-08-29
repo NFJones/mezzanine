@@ -187,7 +187,7 @@ impl RuntimeSessionService {
                     "approval browser records cannot be deleted",
                 ));
             }
-            RuntimeRecordBrowserOverlaySource::SavedSessions { .. } => {
+            RuntimeRecordBrowserOverlaySource::SavedSessions { lifecycle, .. } => {
                 if self
                     .agent_shell_store()
                     .sessions()
@@ -201,7 +201,15 @@ impl RuntimeSessionService {
                     .persistence
                     .cloned_transcript_store()
                     .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
-                if !store.delete(record_id)? {
+                let deleted = match lifecycle {
+                    crate::storage::transcript::SavedSessionLifecycleFilter::Active => {
+                        store.delete(record_id)?
+                    }
+                    crate::storage::transcript::SavedSessionLifecycleFilter::Archived => {
+                        store.delete_archived_session(record_id)?
+                    }
+                };
+                if !deleted {
                     return Err(MezError::new(
                         crate::error::MezErrorKind::NotFound,
                         "saved session was already deleted",
@@ -574,6 +582,7 @@ impl RuntimeSessionService {
             RuntimeRecordBrowserOverlaySource::Approvals => self.approval_record_browser(),
             RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory,
+                lifecycle,
                 include_subagents,
                 search,
                 anchor,
@@ -582,6 +591,7 @@ impl RuntimeSessionService {
             } => {
                 let mut browser = self.saved_sessions_record_browser_for_query(
                     directory.as_deref(),
+                    *lifecycle,
                     *include_subagents,
                     search.as_deref(),
                     anchor.clone(),
@@ -747,6 +757,7 @@ impl RuntimeSessionService {
             RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory,
                 default_directory,
+                lifecycle,
                 include_subagents,
                 search,
                 limit,
@@ -758,6 +769,7 @@ impl RuntimeSessionService {
                     default_directory.clone()
                 },
                 default_directory: default_directory.clone(),
+                lifecycle: *lifecycle,
                 include_subagents: *include_subagents,
                 search: search.clone(),
                 anchor: None,
@@ -817,6 +829,7 @@ impl RuntimeSessionService {
             RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory,
                 default_directory,
+                lifecycle,
                 include_subagents,
                 search,
                 limit,
@@ -824,7 +837,42 @@ impl RuntimeSessionService {
             } => RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory: directory.clone(),
                 default_directory: default_directory.clone(),
+                lifecycle: *lifecycle,
                 include_subagents: !include_subagents,
+                search: search.clone(),
+                anchor: None,
+                limit: *limit,
+            },
+            _ => source.clone(),
+        }
+    }
+
+    /// Toggles saved conversations between active and archived lifecycle partitions.
+    pub(crate) fn record_browser_source_toggled_session_lifecycle(
+        &self,
+        source: &RuntimeRecordBrowserOverlaySource,
+    ) -> RuntimeRecordBrowserOverlaySource {
+        match source {
+            RuntimeRecordBrowserOverlaySource::SavedSessions {
+                directory,
+                default_directory,
+                lifecycle,
+                include_subagents,
+                search,
+                limit,
+                ..
+            } => RuntimeRecordBrowserOverlaySource::SavedSessions {
+                directory: directory.clone(),
+                default_directory: default_directory.clone(),
+                lifecycle: match lifecycle {
+                    crate::storage::transcript::SavedSessionLifecycleFilter::Active => {
+                        crate::storage::transcript::SavedSessionLifecycleFilter::Archived
+                    }
+                    crate::storage::transcript::SavedSessionLifecycleFilter::Archived => {
+                        crate::storage::transcript::SavedSessionLifecycleFilter::Active
+                    }
+                },
+                include_subagents: *include_subagents,
                 search: search.clone(),
                 anchor: None,
                 limit: *limit,
@@ -873,6 +921,7 @@ impl RuntimeSessionService {
             RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory,
                 default_directory,
+                lifecycle,
                 include_subagents,
                 search,
                 limit,
@@ -880,6 +929,7 @@ impl RuntimeSessionService {
             } => Ok(RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory: directory.clone(),
                 default_directory: default_directory.clone(),
+                lifecycle: *lifecycle,
                 include_subagents: *include_subagents,
                 search: if field == RecordBrowserFilterField::Text {
                     (!value.is_empty()).then(|| value.to_string())
