@@ -763,11 +763,7 @@ impl RuntimeSessionService {
             .get(pane_id)?
             .running_turn_id
             .as_deref()?;
-        let turn = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == running_turn_id)?;
+        let turn = self.agent_turn_ledger().turn(running_turn_id)?;
         let elapsed = current_unix_seconds().saturating_sub(turn.started_at_unix_seconds);
         Some(format!(
             "{} ({} • esc to interrupt)",
@@ -1129,10 +1125,7 @@ impl RuntimeSessionService {
         else {
             return false;
         };
-        self.agent_turn_ledger()
-            .turns()
-            .iter()
-            .any(|turn| turn.turn_id == running_turn_id)
+        self.agent_turn_ledger().turn_is_running(running_turn_id)
     }
 
     /// Reports whether a pane has an active-work status in its frame context.
@@ -1141,10 +1134,7 @@ impl RuntimeSessionService {
             return true;
         }
         self.agent_turn_ledger()
-            .turns()
-            .iter()
-            .rev()
-            .find(|turn| turn.pane_id == pane_id)
+            .latest_turn_for_pane(pane_id)
             .is_some_and(|turn| {
                 matches!(
                     self.runtime_agent_frame_status(turn),
@@ -1422,13 +1412,7 @@ impl RuntimeSessionService {
                 .collect::<Vec<_>>();
             let active_count = self
                 .agent_turn_ledger()
-                .turns()
-                .iter()
-                .filter(|turn| {
-                    turn.state == AgentTurnState::Running
-                        && pane_ids.iter().any(|pane_id| pane_id == &turn.pane_id)
-                })
-                .count()
+                .running_turn_count_for_panes(pane_ids.iter().map(String::as_str))
                 .saturating_add(self.active_agent_background_work_count(&pane_ids));
             context
                 .window_agent_active_counts
@@ -1442,12 +1426,7 @@ impl RuntimeSessionService {
 
             for pane in window.panes() {
                 let pane_id = pane.id.to_string();
-                let latest_turn = self
-                    .agent_turn_ledger()
-                    .turns()
-                    .iter()
-                    .rev()
-                    .find(|turn| turn.pane_id == pane_id);
+                let latest_turn = self.agent_turn_ledger().latest_turn_for_pane(&pane_id);
                 let agent_session = self.agent_shell_store().get(&pane_id);
                 let mode = if self
                     .active_copy_mode_for_presented_surface(pane_id.as_str())

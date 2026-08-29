@@ -88,6 +88,55 @@ fn turn_ledger_bounds_terminal_turn_retention() {
     assert_eq!(ledger.turns().len(), 4096);
     assert_eq!(ledger.turns()[0].turn_id, "turn-4");
     assert_eq!(ledger.turns()[4095].turn_id, "turn-4099");
+    assert!(ledger.turn("turn-3").is_none());
+    assert_eq!(
+        ledger.turn("turn-4").map(|turn| turn.turn_id.as_str()),
+        Some("turn-4")
+    );
+    assert_eq!(
+        ledger
+            .latest_turn_for_pane("%1")
+            .map(|turn| turn.turn_id.as_str()),
+        Some("turn-4099")
+    );
+}
+
+#[test]
+/// Verifies indexed turn, pane, and running-count queries follow every state
+/// transition without scanning the retained terminal history.
+fn turn_ledger_indexes_track_lifecycle_transitions() {
+    let mut ledger = AgentTurnLedger::new(true);
+    let initial_generation = ledger.semantic_generation();
+    ledger.queue_turn(turn()).unwrap();
+    let mut second = turn();
+    second.turn_id = "turn-2".to_string();
+    second.pane_id = "%2".to_string();
+    ledger.start_turn(second).unwrap();
+
+    assert!(ledger.turn("turn-1").is_some());
+    assert!(!ledger.turn_is_running("turn-1"));
+    assert!(ledger.turn_is_running("turn-2"));
+    assert_eq!(ledger.running_turn_count_for_panes(["%1", "%2"]), 1);
+    assert!(ledger.semantic_generation() > initial_generation);
+
+    ledger.mark_turn_running("turn-1").unwrap();
+    assert_eq!(ledger.running_turn_count_for_panes(["%1", "%2"]), 2);
+    ledger
+        .finish_turn("turn-1", AgentTurnState::Blocked)
+        .unwrap();
+    assert!(!ledger.turn_is_running("turn-1"));
+    assert_eq!(ledger.running_turn_count_for_panes(["%1", "%2"]), 1);
+    ledger.resume_blocked_turn("turn-1").unwrap();
+    assert!(ledger.turn_is_running("turn-1"));
+    ledger
+        .finish_turn("turn-2", AgentTurnState::Completed)
+        .unwrap();
+
+    assert_eq!(ledger.running_turn_count_for_panes(["%1", "%2"]), 1);
+    assert_eq!(
+        ledger.latest_turn_for_pane("%2").map(|turn| turn.state),
+        Some(AgentTurnState::Completed)
+    );
 }
 
 #[test]
