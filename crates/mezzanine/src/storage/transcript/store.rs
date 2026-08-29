@@ -6,9 +6,7 @@
 use std::collections::BTreeMap;
 use std::fs::{self as std_fs, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
-#[cfg(test)]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tokio::fs::{self as tokio_fs, OpenOptions as TokioOpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -85,6 +83,15 @@ const SHARED_COMMAND_PROMPT_HISTORY_FILE_NAME: &str = "command-prompt-history.ts
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const ACTIVE_AGENT_SESSION_METADATA_FILE_NAME: &str = "active-agent-sessions.tsv";
+/// Root-owned TSV files that are not legacy conversation transcripts.
+///
+/// Their stems satisfy the conversation-id grammar, so migration and exact
+/// lookup must reserve them explicitly instead of classifying by extension.
+const ROOT_CONTROL_TSV_FILE_NAMES: [&str; 3] = [
+    SHARED_PROMPT_HISTORY_FILE_NAME,
+    SHARED_COMMAND_PROMPT_HISTORY_FILE_NAME,
+    ACTIVE_AGENT_SESSION_METADATA_FILE_NAME,
+];
 /// Versioned root-level index containing durable user-assigned session names.
 const NAMED_AGENT_SESSIONS_FILE_NAME: &str = "named-sessions.json";
 /// Advisory lock serializing named-session index updates.
@@ -93,11 +100,6 @@ const NAMED_AGENT_SESSIONS_LOCK_FILE_NAME: &str = ".named-sessions.json.lock";
 const NAMED_AGENT_SESSIONS_VERSION: u64 = 1;
 /// Maximum accepted session-name length in Unicode scalar values.
 const MAX_AGENT_SESSION_NAME_CHARS: usize = 80;
-/// Defines the SHARED PROMPT HISTORY CONVERSATION ID const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-const SHARED_PROMPT_HISTORY_CONVERSATION_ID: &str = "prompt-history";
 /// Defines the DEFAULT AGENT PROMPT HISTORY LIMIT const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -977,6 +979,7 @@ impl AgentTranscriptStore {
 
         for path in &paths {
             if !path.is_file()
+                || is_root_control_tsv_path(path)
                 || path.extension().and_then(|extension| extension.to_str()) != Some("tsv")
             {
                 continue;
@@ -2240,11 +2243,27 @@ impl AgentTranscriptStore {
     /// on duplicated control-flow logic.
     fn legacy_transcript_path_for(&self, conversation_id: &str) -> Result<PathBuf> {
         validate_conversation_id(conversation_id)?;
-        if conversation_id == SHARED_PROMPT_HISTORY_CONVERSATION_ID {
-            return Ok(self.root.join(SHARED_PROMPT_HISTORY_CONVERSATION_ID));
+        if is_root_control_conversation_id(conversation_id) {
+            return self.transcript_path_for(conversation_id);
         }
         Ok(self.root.join(format!("{conversation_id}.tsv")))
     }
+}
+
+/// Returns whether one root entry belongs to a shared non-transcript TSV store.
+fn is_root_control_tsv_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| ROOT_CONTROL_TSV_FILE_NAMES.contains(&name))
+}
+
+/// Returns whether an identifier is reserved by a root-owned control TSV.
+fn is_root_control_conversation_id(conversation_id: &str) -> bool {
+    ROOT_CONTROL_TSV_FILE_NAMES.iter().any(|file_name| {
+        file_name
+            .strip_suffix(".tsv")
+            .is_some_and(|stem| stem == conversation_id)
+    })
 }
 
 /// Collapses adjacent equal raw prompts while retaining the newest paste

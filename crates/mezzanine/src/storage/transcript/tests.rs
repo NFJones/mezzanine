@@ -53,6 +53,40 @@ fn entry(conversation_id: &str, sequence: u64, role: TranscriptRole) -> Transcri
     }
 }
 
+/// Builds minimal valid active-session metadata for persistence and migration tests.
+fn agent_session_metadata(
+    mezzanine_session_id: &str,
+    conversation_id: &str,
+) -> AgentSessionMetadata {
+    AgentSessionMetadata {
+        mezzanine_session_id: mezzanine_session_id.to_string(),
+        pane_id: "%1".to_string(),
+        conversation_id: conversation_id.to_string(),
+        prompt_cache_lineage_id: format!("lineage-{conversation_id}"),
+        visibility: "visible".to_string(),
+        running_turn_id: None,
+        running_turn_kind: None,
+        transcript_entries: 0,
+        log_level: "normal".to_string(),
+        pane_model_profile: None,
+        planning_enabled: false,
+        response_style: None,
+        directive: None,
+        routing_enabled: None,
+        root_routing_policy: None,
+        approval_policy: None,
+        pane_permission_preset_override: None,
+        pane_approval_policy_override: None,
+        working_directory: None,
+        project_root: None,
+        token_usage: Default::default(),
+        token_usage_by_model: BTreeMap::new(),
+        context_usage: None,
+        context_usage_snapshot: None,
+        latest_request_usage: None,
+    }
+}
+
 /// Builds one presentation fixture with multiline display and copy payloads.
 fn presentation(conversation_id: &str, sequence: u64) -> AgentPresentationEntry {
     AgentPresentationEntry {
@@ -960,13 +994,7 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
         cache_write_input_tokens: Some(12),
     };
     let owned = AgentSessionMetadata {
-        mezzanine_session_id: "$live".to_string(),
-        pane_id: "%1".to_string(),
-        conversation_id: "conv1".to_string(),
-        prompt_cache_lineage_id: "lineage-live".to_string(),
-        visibility: "visible".to_string(),
         running_turn_id: Some("turn-1".to_string()),
-        running_turn_kind: None,
         transcript_entries: 2,
         log_level: "trace".to_string(),
         pane_model_profile: Some("work".to_string()),
@@ -980,6 +1008,8 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
         pane_approval_policy_override: Some("full-access".to_string()),
         working_directory: Some("/workspace/live".to_string()),
         project_root: Some("/workspace".to_string()),
+        token_usage: owned_token_usage,
+        token_usage_by_model: BTreeMap::from([(owned_token_usage_key, owned_token_usage)]),
         context_usage: Some("10%".to_string()),
         context_usage_snapshot: Some(mez_agent::AgentContextUsageSnapshot {
             input_tokens: 100,
@@ -990,35 +1020,12 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
             model: mez_agent::ModelTokenUsageKey::new("openai", "gpt-fast"),
             usage: owned_token_usage,
         }),
-        token_usage: owned_token_usage,
-        token_usage_by_model: BTreeMap::from([(owned_token_usage_key, owned_token_usage)]),
+        ..agent_session_metadata("$live", "conv1")
     };
     let foreign = AgentSessionMetadata {
-        mezzanine_session_id: "$other".to_string(),
-        pane_id: "%1".to_string(),
-        conversation_id: "foreign".to_string(),
-        prompt_cache_lineage_id: "lineage-other".to_string(),
         visibility: "hidden".to_string(),
-        running_turn_id: None,
-        running_turn_kind: None,
         transcript_entries: 1,
-        log_level: "normal".to_string(),
-        pane_model_profile: None,
-        planning_enabled: false,
-        response_style: None,
-        directive: None,
-        routing_enabled: None,
-        root_routing_policy: None,
-        approval_policy: None,
-        pane_permission_preset_override: None,
-        pane_approval_policy_override: None,
-        working_directory: None,
-        project_root: None,
-        context_usage: None,
-        context_usage_snapshot: None,
-        latest_request_usage: None,
-        token_usage: Default::default(),
-        token_usage_by_model: Default::default(),
+        ..agent_session_metadata("$other", "foreign")
     };
 
     assert_eq!(
@@ -1053,6 +1060,62 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
     assert_eq!(other, vec![foreign]);
     assert!(store.list().unwrap().is_empty());
     assert!(store.agent_session_metadata_file().exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies catalog migration ignores root-owned control TSVs while importing
+/// a genuine legacy transcript and preserving each control store unchanged.
+///
+/// Existing installations normally contain active-session metadata plus shared
+/// agent and command prompt histories beside legacy `<conversation-id>.tsv`
+/// transcripts. Startup and later exact-row repair must classify those reserved
+/// files by ownership rather than attempting to decode them as transcripts.
+#[test]
+fn transcript_store_catalog_migration_ignores_root_control_tsv_files() {
+    let root = temp_root("catalog-root-control-tsv");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let active_metadata = agent_session_metadata("$live", "active-conversation");
+    store
+        .save_agent_session_metadata("$live", std::slice::from_ref(&active_metadata))
+        .unwrap();
+    assert!(
+        store
+            .append_prompt_history("active-conversation", "inspect the migration")
+            .unwrap()
+    );
+    assert!(store.append_command_prompt_history("list-buffers").unwrap());
+    let legacy = entry("legacy", 1, TranscriptRole::User);
+    fs::write(
+        root.join("legacy.tsv"),
+        format!("{}\n", encode_transcript_entry(&legacy).unwrap()),
+    )
+    .unwrap();
+
+    store.initialize(100).unwrap();
+
+    assert!(store.catalog_saved_session("legacy").unwrap().is_some());
+    for reserved_id in [
+        "active-agent-sessions",
+        "command-prompt-history",
+        "prompt-history",
+    ] {
+        assert!(store.catalog_saved_session(reserved_id).unwrap().is_none());
+        assert!(store.saved_session(reserved_id).unwrap().is_none());
+    }
+    assert_eq!(
+        store.load_agent_session_metadata("$live").unwrap(),
+        vec![active_metadata]
+    );
+    assert_eq!(
+        store.prompt_history("active-conversation").unwrap(),
+        vec![String::from("inspect the migration")]
+    );
+    assert_eq!(
+        store.command_prompt_history().unwrap(),
+        vec![String::from("list-buffers")]
+    );
+    assert!(root.join(".catalog-migrated-v1").is_file());
     let _ = fs::remove_dir_all(root);
 }
 
