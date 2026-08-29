@@ -535,7 +535,10 @@ impl RuntimeSessionService {
                                 api: None,
                                 auth_profile: "default".to_string(),
                                 base_url: None,
-                                models: default_models.iter().map(|m| (*m).to_string()).collect(),
+                                models: default_models
+                                    .iter()
+                                    .map(|model| mez_agent::ProviderModelConfig::named(*model))
+                                    .collect(),
                                 default_model: Some(
                                     default_models
                                         .first()

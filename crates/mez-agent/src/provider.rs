@@ -1180,6 +1180,8 @@ pub struct ProviderModelInfo {
     pub context_window_tokens: Option<usize>,
     /// Provider-reported maximum request-input size in tokens.
     pub max_input_tokens: Option<usize>,
+    /// Provider-reported maximum response-output size in tokens.
+    pub max_output_tokens: Option<usize>,
     /// Provider-reported capability tags such as `tool_use`.
     pub capabilities: Vec<String>,
 }
@@ -1601,7 +1603,7 @@ mod model_catalog_parse_tests {
     /// known model reasoning and context-window defaults.
     fn openai_models_catalog_parser_extracts_models_and_reasoning_levels() {
         let models = parse_openai_models_http_body(
-            r#"{"object":"list","data":[{"id":"gpt-5.5"},{"id":"gpt-custom","display_name":"Custom","reasoning":{"efforts":["tiny","large"]},"context_length":400000,"max_input_tokens":272000},{"id":"lmstudio-local","capabilities":["tool_use"],"structured_output":true}]}"#,
+            r#"{"object":"list","data":[{"id":"gpt-5.5"},{"id":"gpt-custom","display_name":"Custom","reasoning":{"efforts":["tiny","large"]},"context_length":400000,"max_input_tokens":272000,"max_output_tokens":16000},{"id":"lmstudio-local","capabilities":["tool_use"],"structured_output":true}]}"#,
         )
         .unwrap();
 
@@ -1614,6 +1616,7 @@ mod model_catalog_parse_tests {
         assert_eq!(custom.reasoning_levels, vec!["tiny", "large"]);
         assert_eq!(custom.context_window_tokens, Some(400_000));
         assert_eq!(custom.max_input_tokens, Some(272_000));
+        assert_eq!(custom.max_output_tokens, Some(16_000));
         let local = models
             .iter()
             .find(|model| model.id == "lmstudio-local")
@@ -1706,6 +1709,7 @@ where
         context_window_tokens: provider_context_window_tokens_from_value(value)
             .or_else(|| known_context_window_tokens(&id)),
         max_input_tokens: provider_max_input_tokens_from_value(value),
+        max_output_tokens: provider_max_output_tokens_from_value(value),
         capabilities: provider_capabilities_from_value(value),
     })
 }
@@ -1811,6 +1815,44 @@ fn provider_max_input_tokens_from_value(value: &serde_json::Value) -> Option<usi
         "/limits/max_input_tokens",
         "/capabilities/input_token_limit",
         "/capabilities/max_input_tokens",
+    ] {
+        if let Some(tokens) = value
+            .pointer(pointer)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|tokens| usize::try_from(tokens).ok())
+            .filter(|tokens| *tokens > 0)
+        {
+            return Some(tokens);
+        }
+    }
+    None
+}
+
+/// Returns a provider-advertised maximum output limit without treating the
+/// larger context or input windows as response capacity.
+fn provider_max_output_tokens_from_value(value: &serde_json::Value) -> Option<usize> {
+    let object = value.as_object()?;
+    for field in [
+        "output_token_limit",
+        "max_output_tokens",
+        "max_completion_tokens",
+    ] {
+        if let Some(tokens) = object
+            .get(field)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|tokens| usize::try_from(tokens).ok())
+            .filter(|tokens| *tokens > 0)
+        {
+            return Some(tokens);
+        }
+    }
+    for pointer in [
+        "/limits/output_token_limit",
+        "/limits/max_output_tokens",
+        "/limits/max_completion_tokens",
+        "/capabilities/output_token_limit",
+        "/capabilities/max_output_tokens",
+        "/capabilities/max_completion_tokens",
     ] {
         if let Some(tokens) = value
             .pointer(pointer)
@@ -2048,6 +2090,7 @@ mod tests {
                 reasoning_levels: vec!["high".to_string()],
                 context_window_tokens: Some(128_000),
                 max_input_tokens: Some(120_000),
+                max_output_tokens: Some(8_000),
                 capabilities: vec!["tool_use".to_string()],
             }],
             reasoning_levels: vec!["high".to_string()],

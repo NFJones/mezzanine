@@ -183,6 +183,7 @@ async fn runtime_agent_shell_model_list_uses_provider_catalog_over_configured_mo
             reasoning_levels: vec!["low".to_string(), "high".to_string()],
             context_window_tokens: None,
             max_input_tokens: None,
+            max_output_tokens: None,
             capabilities: Vec::new(),
         }],
         vec!["low".to_string(), "high".to_string()],

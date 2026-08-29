@@ -433,6 +433,7 @@ fn runtime_generated_profile_identity_differs_by_latency_preference() {
             reasoning_levels: vec!["high".to_string()],
             context_window_tokens: Some(1_050_000),
             max_input_tokens: None,
+            max_output_tokens: None,
             capabilities: Vec::new(),
         }],
         vec!["high".to_string()],

@@ -113,7 +113,7 @@ fn runtime_mcp_context_uses_resolved_api_for_aliased_openai_provider() {
                 api: Some(mez_agent::OPENAI_RESPONSES_API.to_string()),
                 auth_profile: "default".to_string(),
                 base_url: None,
-                models: vec!["test".to_string()],
+                models: vec![mez_agent::ProviderModelConfig::named("test")],
                 default_model: Some("test".to_string()),
                 options: std::collections::BTreeMap::new(),
             },

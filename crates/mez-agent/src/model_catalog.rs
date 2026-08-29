@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::ProviderModelInfo;
+use crate::{ProviderModelConfig, ProviderModelInfo};
 
 /// Origin of one provider-neutral model catalog candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -21,6 +21,8 @@ pub enum ModelCatalogSource {
     Discovered,
     /// Explicit model or profile supplied by resolved user configuration.
     Configured,
+    /// Explicit model-profile override applied to configured base metadata.
+    Profile,
 }
 
 impl ModelCatalogSource {
@@ -31,6 +33,7 @@ impl ModelCatalogSource {
             Self::Default => "default",
             Self::Discovered => "discovered",
             Self::Configured => "configured",
+            Self::Profile => "profile",
         }
     }
 }
@@ -54,6 +57,12 @@ pub struct ModelCatalogCandidate {
     pub source: ModelCatalogSource,
     /// Alternate identifiers that may resolve to the canonical model id.
     pub aliases: Vec<String>,
+    /// Optional replacement reasoning list; `Some(empty)` clears lower values.
+    pub reasoning_levels: Option<Vec<String>>,
+    /// Optional replacement capability list; `Some(empty)` clears lower values.
+    pub capabilities: Option<Vec<String>>,
+    /// Secret-free model provider options merged per key by source precedence.
+    pub provider_options: BTreeMap<String, String>,
     /// Whether the observed model may be selected.
     pub availability: ModelAvailability,
 }
@@ -61,10 +70,37 @@ pub struct ModelCatalogCandidate {
 impl ModelCatalogCandidate {
     /// Creates one available candidate without aliases.
     pub fn available(source: ModelCatalogSource, model: ProviderModelInfo) -> Self {
+        let reasoning_levels =
+            (!model.reasoning_levels.is_empty()).then(|| model.reasoning_levels.clone());
+        let capabilities = (!model.capabilities.is_empty()).then(|| model.capabilities.clone());
         Self {
             model,
             source,
             aliases: Vec::new(),
+            reasoning_levels,
+            capabilities,
+            provider_options: BTreeMap::new(),
+            availability: ModelAvailability::Available,
+        }
+    }
+
+    /// Projects reusable configured model metadata into a merge candidate.
+    pub fn configured(model: &ProviderModelConfig) -> Self {
+        Self {
+            model: ProviderModelInfo {
+                id: model.id.clone(),
+                display_name: model.display_name.clone(),
+                reasoning_levels: model.reasoning_levels.clone().unwrap_or_default(),
+                context_window_tokens: model.context_window_tokens,
+                max_input_tokens: model.max_input_tokens,
+                max_output_tokens: model.max_output_tokens,
+                capabilities: model.capabilities.clone().unwrap_or_default(),
+            },
+            source: ModelCatalogSource::Configured,
+            aliases: model.aliases.clone(),
+            reasoning_levels: model.reasoning_levels.clone(),
+            capabilities: model.capabilities.clone(),
+            provider_options: model.provider_options.clone(),
             availability: ModelAvailability::Available,
         }
     }
@@ -96,14 +132,20 @@ pub struct ModelCatalogEntry {
     pub context_window_tokens: Option<usize>,
     /// Known positive maximum request-input size in tokens.
     pub max_input_tokens: Option<usize>,
+    /// Known positive maximum response-output size in tokens.
+    pub max_output_tokens: Option<usize>,
     /// Ordered provider-neutral capability tags.
     pub capabilities: Vec<String>,
+    /// Secret-free model provider options after per-key precedence merging.
+    pub provider_options: BTreeMap<String, String>,
     /// Ordered alternate identifiers for selection.
     pub aliases: Vec<String>,
     /// Highest-precedence source that supplied this entry.
     pub source: ModelCatalogSource,
     /// Whether this entry may be selected.
     pub availability: ModelAvailability,
+    reasoning_levels_explicit: bool,
+    capabilities_explicit: bool,
 }
 
 impl ModelCatalogEntry {
@@ -119,10 +161,18 @@ impl ModelCatalogEntry {
                 reasoning_levels: self.reasoning_levels.clone(),
                 context_window_tokens: self.context_window_tokens,
                 max_input_tokens: self.max_input_tokens,
+                max_output_tokens: self.max_output_tokens,
                 capabilities: self.capabilities.clone(),
             },
             source: self.source,
             aliases: self.aliases.clone(),
+            reasoning_levels: self
+                .reasoning_levels_explicit
+                .then(|| self.reasoning_levels.clone()),
+            capabilities: self
+                .capabilities_explicit
+                .then(|| self.capabilities.clone()),
+            provider_options: self.provider_options.clone(),
             availability: self.availability,
         }
     }
@@ -144,11 +194,14 @@ impl ModelCatalog {
     /// without duplicates. Missing optional metadata is filled from lower
     /// precedence candidates instead of erasing useful observations.
     pub fn from_input(input: ModelCatalogInput) -> Self {
+        let mut candidates = input
+            .candidates
+            .into_iter()
+            .filter_map(normalized_candidate)
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|candidate| candidate.source);
         let mut entries = BTreeMap::<String, ModelCatalogEntry>::new();
-        for candidate in input.candidates {
-            let Some(incoming) = normalized_candidate(candidate) else {
-                continue;
-            };
+        for incoming in candidates {
             match entries.entry(incoming.id.clone()) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
                     entry.insert(incoming);
@@ -365,96 +418,80 @@ pub fn normalize_model_catalog_values(values: Vec<String>) -> Vec<String> {
 
 /// Converts one candidate into canonical entry metadata, rejecting empty ids.
 fn normalized_candidate(candidate: ModelCatalogCandidate) -> Option<ModelCatalogEntry> {
-    let id = candidate.model.id.trim();
+    let ModelCatalogCandidate {
+        model,
+        source,
+        aliases,
+        reasoning_levels,
+        capabilities,
+        provider_options,
+        availability,
+    } = candidate;
+    let id = model.id.trim();
     if id.is_empty() {
         return None;
     }
-    let aliases = normalize_model_catalog_values(candidate.aliases)
+    let aliases = normalize_model_catalog_values(aliases)
         .into_iter()
         .filter(|alias| alias != id)
         .collect();
+    let reasoning_levels_explicit = reasoning_levels.is_some();
+    let capabilities_explicit = capabilities.is_some();
     Some(ModelCatalogEntry {
         id: id.to_string(),
-        display_name: candidate
-            .model
+        display_name: model
             .display_name
             .map(|name| name.trim().to_string())
             .filter(|name| !name.is_empty()),
-        reasoning_levels: normalize_model_catalog_values(candidate.model.reasoning_levels),
-        context_window_tokens: candidate
-            .model
-            .context_window_tokens
-            .filter(|limit| *limit > 0),
-        max_input_tokens: candidate.model.max_input_tokens.filter(|limit| *limit > 0),
-        capabilities: normalize_model_catalog_values(candidate.model.capabilities),
+        reasoning_levels: normalize_model_catalog_values(
+            reasoning_levels.unwrap_or(model.reasoning_levels),
+        ),
+        context_window_tokens: model.context_window_tokens.filter(|limit| *limit > 0),
+        max_input_tokens: model.max_input_tokens.filter(|limit| *limit > 0),
+        max_output_tokens: model.max_output_tokens.filter(|limit| *limit > 0),
+        capabilities: normalize_model_catalog_values(capabilities.unwrap_or(model.capabilities)),
+        provider_options,
         aliases,
-        source: candidate.source,
-        availability: candidate.availability,
+        source,
+        availability,
+        reasoning_levels_explicit,
+        capabilities_explicit,
     })
 }
 
 /// Merges one duplicate entry according to source precedence.
 fn merge_catalog_entry(existing: &mut ModelCatalogEntry, incoming: ModelCatalogEntry) {
-    if incoming.source > existing.source {
-        existing.display_name = incoming
-            .display_name
-            .or_else(|| existing.display_name.take());
-        existing.context_window_tokens = incoming
-            .context_window_tokens
-            .or(existing.context_window_tokens);
-        existing.max_input_tokens = incoming.max_input_tokens.or(existing.max_input_tokens);
-        existing.reasoning_levels = normalize_model_catalog_values(
-            incoming
-                .reasoning_levels
-                .into_iter()
-                .chain(std::mem::take(&mut existing.reasoning_levels))
-                .collect(),
-        );
-        existing.capabilities = normalize_model_catalog_values(
-            incoming
-                .capabilities
-                .into_iter()
-                .chain(std::mem::take(&mut existing.capabilities))
-                .collect(),
-        );
-        existing.aliases = normalize_model_catalog_values(
-            incoming
-                .aliases
-                .into_iter()
-                .chain(std::mem::take(&mut existing.aliases))
-                .collect(),
-        );
-        existing.source = incoming.source;
-        existing.availability = incoming.availability;
-    } else {
-        if existing.display_name.is_none() {
-            existing.display_name = incoming.display_name;
-        }
-        if existing.context_window_tokens.is_none() {
-            existing.context_window_tokens = incoming.context_window_tokens;
-        }
-        if existing.max_input_tokens.is_none() {
-            existing.max_input_tokens = incoming.max_input_tokens;
-        }
-        existing.reasoning_levels = normalize_model_catalog_values(
-            std::mem::take(&mut existing.reasoning_levels)
-                .into_iter()
-                .chain(incoming.reasoning_levels)
-                .collect(),
-        );
-        existing.capabilities = normalize_model_catalog_values(
-            std::mem::take(&mut existing.capabilities)
-                .into_iter()
-                .chain(incoming.capabilities)
-                .collect(),
-        );
-        existing.aliases = normalize_model_catalog_values(
-            std::mem::take(&mut existing.aliases)
-                .into_iter()
-                .chain(incoming.aliases)
-                .collect(),
-        );
+    debug_assert!(incoming.source >= existing.source);
+    if incoming.display_name.is_some() {
+        existing.display_name = incoming.display_name;
     }
+    if incoming.context_window_tokens.is_some() {
+        existing.context_window_tokens = incoming.context_window_tokens;
+    }
+    if incoming.max_input_tokens.is_some() {
+        existing.max_input_tokens = incoming.max_input_tokens;
+    }
+    if incoming.max_output_tokens.is_some() {
+        existing.max_output_tokens = incoming.max_output_tokens;
+    }
+    if incoming.reasoning_levels_explicit {
+        existing.reasoning_levels = incoming.reasoning_levels;
+        existing.reasoning_levels_explicit = true;
+    }
+    if incoming.capabilities_explicit {
+        existing.capabilities = incoming.capabilities;
+        existing.capabilities_explicit = true;
+    }
+    existing.provider_options.extend(incoming.provider_options);
+    existing.aliases = normalize_model_catalog_values(
+        incoming
+            .aliases
+            .into_iter()
+            .chain(std::mem::take(&mut existing.aliases))
+            .collect(),
+    );
+    existing.source = incoming.source;
+    existing.availability = incoming.availability;
 }
 
 /// Returns a normalized optional identifier.
@@ -516,6 +553,7 @@ mod tests {
                     .collect(),
                 context_window_tokens,
                 max_input_tokens: None,
+                max_output_tokens: None,
                 capabilities: Vec::new(),
             },
         )
@@ -738,5 +776,86 @@ mod tests {
             catalog.reasoning_levels_for("fallback").unwrap(),
             &["high".to_string(), "low".to_string(), "medium".to_string()]
         );
+    }
+
+    /// Verifies configured metadata replaces lower-precedence list values,
+    /// overrides individual option keys, and inherits omitted scalar fields.
+    ///
+    /// Explicitly empty configured lists are meaningful replacements rather
+    /// than missing observations, while catalog values continue to fill gaps.
+    #[test]
+    fn model_catalog_resolves_field_precedence_and_explicit_list_replacement() {
+        let mut discovered = candidate(
+            ModelCatalogSource::Discovered,
+            "model-a",
+            Some("Discovered label"),
+            &["low", "high"],
+            Some(200_000),
+        );
+        discovered.model.max_input_tokens = Some(180_000);
+        discovered.model.max_output_tokens = Some(8_000);
+        discovered.model.capabilities = vec!["vision".to_string(), "tools".to_string()];
+        discovered.provider_options = std::collections::BTreeMap::from([
+            ("shared".to_string(), "catalog".to_string()),
+            ("catalog-only".to_string(), "retained".to_string()),
+        ]);
+
+        let mut configured = candidate(ModelCatalogSource::Configured, "model-a", None, &[], None);
+        configured.reasoning_levels = Some(Vec::new());
+        configured.capabilities = Some(vec!["tools".to_string()]);
+        configured.model.max_output_tokens = Some(16_000);
+        configured.provider_options = std::collections::BTreeMap::from([
+            ("shared".to_string(), "configured".to_string()),
+            ("configured-only".to_string(), "present".to_string()),
+        ]);
+
+        let mut profile = candidate(ModelCatalogSource::Profile, "model-a", None, &[], None);
+        profile.model.max_input_tokens = Some(170_000);
+        profile.provider_options =
+            std::collections::BTreeMap::from([("shared".to_string(), "profile".to_string())]);
+
+        let catalog = ModelCatalog::from_input(ModelCatalogInput {
+            candidates: vec![profile, configured, discovered],
+            ..ModelCatalogInput::default()
+        });
+        let entry = &catalog.entries()[0];
+
+        assert_eq!(entry.display_name.as_deref(), Some("Discovered label"));
+        assert_eq!(entry.context_window_tokens, Some(200_000));
+        assert_eq!(entry.max_input_tokens, Some(170_000));
+        assert_eq!(entry.max_output_tokens, Some(16_000));
+        assert!(entry.reasoning_levels.is_empty());
+        assert_eq!(entry.capabilities, ["tools"]);
+        assert_eq!(entry.provider_options["shared"], "profile");
+        assert_eq!(entry.provider_options["catalog-only"], "retained");
+        assert_eq!(entry.provider_options["configured-only"], "present");
+    }
+
+    /// Verifies a configured provider-model record projects its omitted and
+    /// explicitly empty fields into a catalog candidate without losing either.
+    ///
+    /// This conversion is the bridge used by later schema and profile work to
+    /// feed configured base metadata into the provider-neutral resolver.
+    #[test]
+    fn configured_provider_model_preserves_optional_catalog_metadata() {
+        let configured = crate::ProviderModelConfig {
+            id: "model-a".to_string(),
+            aliases: vec!["alias-a".to_string()],
+            reasoning_levels: Some(Vec::new()),
+            capabilities: None,
+            max_output_tokens: Some(32_000),
+            provider_options: std::collections::BTreeMap::from([(
+                "service_tier".to_string(),
+                "priority".to_string(),
+            )]),
+            ..crate::ProviderModelConfig::default()
+        };
+
+        let candidate = ModelCatalogCandidate::configured(&configured);
+        assert_eq!(candidate.reasoning_levels, Some(Vec::new()));
+        assert_eq!(candidate.capabilities, None);
+        assert_eq!(candidate.model.max_output_tokens, Some(32_000));
+        assert_eq!(candidate.aliases, ["alias-a"]);
+        assert_eq!(candidate.provider_options["service_tier"], "priority");
     }
 }

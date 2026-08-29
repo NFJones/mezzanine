@@ -1051,7 +1051,7 @@ mod tests {
             api: None,
             auth_profile: "default".to_string(),
             base_url: None,
-            models: vec!["deepseek-v4-pro".to_string()],
+            models: vec![crate::ProviderModelConfig::named("deepseek-v4-pro")],
             default_model: Some("deepseek-v4-pro".to_string()),
             options,
         };

@@ -113,6 +113,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
             reasoning_levels: vec!["low".to_string(), "high".to_string()],
             context_window_tokens: Some(777_777),
             max_input_tokens: Some(666_666),
+            max_output_tokens: None,
             capabilities: Vec::new(),
         }],
         vec!["low".to_string(), "high".to_string()],

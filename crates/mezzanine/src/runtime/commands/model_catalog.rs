@@ -626,7 +626,7 @@ pub(super) fn runtime_configured_model_catalog(
     let configured_models = provider_config
         .models
         .iter()
-        .map(String::as_str)
+        .map(|model| model.id.as_str())
         .filter(|model| !model.is_empty())
         .collect::<Vec<_>>();
     let default_models = if configured_models.is_empty() {
@@ -712,6 +712,7 @@ fn runtime_catalog_candidate(
             reasoning_levels,
             context_window_tokens: mez_agent::known_model_context_window_tokens(model),
             max_input_tokens: None,
+            max_output_tokens: None,
             capabilities: Vec::new(),
         },
     )
@@ -1020,7 +1021,7 @@ mod tests {
             api: Some("anthropic-messages".to_string()),
             auth_profile: "default".to_string(),
             base_url: None,
-            models: vec!["claude-fable-5".to_string()],
+            models: vec![mez_agent::ProviderModelConfig::named("claude-fable-5")],
             default_model: Some("claude-fable-5".to_string()),
             options: BTreeMap::from([("reasoning_effort".to_string(), "high".to_string())]),
         };

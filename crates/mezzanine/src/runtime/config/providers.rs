@@ -10,7 +10,8 @@ use std::collections::BTreeMap;
 use mez_agent::resolve_provider_api;
 use mez_agent::{
     ModelPreset as RuntimeModelPreset, ModelProfile, PresetRegistry as RuntimePresetRegistry,
-    ProviderConfig as RuntimeProviderConfig, ProviderRegistry as RuntimeProviderRegistry,
+    ProviderConfig as RuntimeProviderConfig, ProviderModelConfig as RuntimeProviderModelConfig,
+    ProviderRegistry as RuntimeProviderRegistry,
 };
 use serde_json::Value;
 
@@ -55,7 +56,7 @@ pub(crate) fn runtime_provider_registry_from_config(
                 base_url: None,
                 models: runtime_default_models_for_provider("openai")?
                     .iter()
-                    .map(|model| (*model).to_string())
+                    .map(|model| RuntimeProviderModelConfig::named(*model))
                     .collect(),
                 default_model: Some(runtime_recommended_model_for_provider("openai")?.to_string()),
                 options: BTreeMap::new(),
@@ -68,10 +69,13 @@ pub(crate) fn runtime_provider_registry_from_config(
             "agents.default_provider `{default_provider}` is not configured in providers"
         ))
     })?;
-    let default_model = default_config
-        .default_model
-        .clone()
-        .unwrap_or_else(|| default_config.models.first().cloned().unwrap_or_default());
+    let default_model = default_config.default_model.clone().unwrap_or_else(|| {
+        default_config
+            .models
+            .first()
+            .map(|model| model.id.clone())
+            .unwrap_or_default()
+    });
     let default_model = if default_model.is_empty() {
         runtime_recommended_model_for_provider(&default_config.kind)?.to_string()
     } else {
@@ -92,15 +96,15 @@ pub(crate) fn runtime_provider_registry_from_config(
 
     for (provider_id, config) in &registry.providers {
         for model in &config.models {
-            if model.is_empty() {
+            if model.id.is_empty() {
                 continue;
             }
             registry
                 .profiles
-                .entry(model.clone())
+                .entry(model.id.clone())
                 .or_insert(ModelProfile {
                     provider: provider_id.clone(),
-                    model: model.clone(),
+                    model: model.id.clone(),
                     reasoning_profile: config.options.get("reasoning_effort").cloned(),
                     latency_preference: Some("default".to_string()),
                     multimodal_required: false,
@@ -410,7 +414,11 @@ fn runtime_provider_config_from_config(
     let kind = runtime_json_string(object.get("kind")).unwrap_or(provider_id);
     let api = runtime_json_string(object.get("api")).map(ToOwned::to_owned);
     resolve_provider_api(kind, api.as_deref())?;
-    let models = runtime_json_string_array(object.get("models"))?.unwrap_or_default();
+    let models = runtime_json_string_array(object.get("models"))?
+        .unwrap_or_default()
+        .into_iter()
+        .map(RuntimeProviderModelConfig::named)
+        .collect();
     let default_model = runtime_json_string(object.get("default_model"))
         .filter(|model| !model.is_empty())
         .map(ToOwned::to_owned);

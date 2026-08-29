@@ -11,6 +11,90 @@ use std::fmt;
 
 use crate::ModelProfile;
 
+/// Reusable provider-scoped base metadata for one canonical model.
+///
+/// Optional fields preserve the distinction between omitted metadata and an
+/// explicitly configured empty list. Product configuration adapters validate
+/// richer format-specific constraints before constructing this record.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderModelConfig {
+    /// Canonical provider-facing model identifier.
+    pub id: String,
+    /// Optional user-facing display label.
+    pub display_name: Option<String>,
+    /// Alternate provider-local identifiers for model selection.
+    pub aliases: Vec<String>,
+    /// Optional positive context-window size in tokens.
+    pub context_window_tokens: Option<usize>,
+    /// Optional positive maximum request-input size in tokens.
+    pub max_input_tokens: Option<usize>,
+    /// Optional positive maximum response-output size in tokens.
+    pub max_output_tokens: Option<usize>,
+    /// Optional replacement list of supported reasoning levels.
+    pub reasoning_levels: Option<Vec<String>>,
+    /// Optional replacement list of provider-neutral capability tags.
+    pub capabilities: Option<Vec<String>>,
+    /// Secret-free model-level provider option defaults.
+    pub provider_options: BTreeMap<String, String>,
+}
+
+impl ProviderModelConfig {
+    /// Creates a minimal configured model with one canonical identifier.
+    pub fn named(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            ..Self::default()
+        }
+    }
+}
+
+/// Stable category for invalid provider-local model identity metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderModelConfigErrorKind {
+    /// A canonical model identifier was empty.
+    EmptyId,
+    /// Two model records declared the same canonical identifier.
+    DuplicateId,
+    /// An alias was empty.
+    EmptyAlias,
+    /// An alias overlapped another canonical identifier or alias.
+    AliasCollision,
+}
+
+/// Failure returned when provider-local model identities are ambiguous.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderModelConfigError {
+    kind: ProviderModelConfigErrorKind,
+    message: String,
+}
+
+impl ProviderModelConfigError {
+    /// Returns the stable validation failure category.
+    pub fn kind(&self) -> ProviderModelConfigErrorKind {
+        self.kind
+    }
+
+    /// Returns the diagnostic message for product error projection.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    fn new(kind: ProviderModelConfigErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for ProviderModelConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl Error for ProviderModelConfigError {}
+
 /// Failure returned by provider-profile routing policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderRoutingError {
@@ -42,7 +126,7 @@ impl Error for ProviderRoutingError {}
 pub type ProviderRoutingResult<T> = Result<T, ProviderRoutingError>;
 
 /// Secret-free provider configuration used by routing and profile selection.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderConfig {
     /// Stable provider identity.
     pub provider_id: String,
@@ -54,12 +138,72 @@ pub struct ProviderConfig {
     pub auth_profile: String,
     /// Optional configured provider endpoint.
     pub base_url: Option<String>,
-    /// Configured model names.
-    pub models: Vec<String>,
+    /// Configured provider-scoped model metadata.
+    pub models: Vec<ProviderModelConfig>,
     /// Optional default model name.
     pub default_model: Option<String>,
     /// Secret-free provider options used by request policy.
     pub options: BTreeMap<String, String>,
+}
+
+impl ProviderConfig {
+    /// Validates canonical model identifiers and aliases within this provider.
+    pub fn validate_models(&self) -> Result<(), ProviderModelConfigError> {
+        let mut identities = BTreeMap::<String, &'static str>::new();
+        for model in &self.models {
+            let id = model.id.trim();
+            if id.is_empty() {
+                return Err(ProviderModelConfigError::new(
+                    ProviderModelConfigErrorKind::EmptyId,
+                    "provider model id must not be empty",
+                ));
+            }
+            if identities.insert(id.to_string(), "id").is_some() {
+                return Err(ProviderModelConfigError::new(
+                    ProviderModelConfigErrorKind::DuplicateId,
+                    format!("provider model id `{id}` is configured more than once"),
+                ));
+            }
+        }
+        for model in &self.models {
+            for alias in &model.aliases {
+                let alias = alias.trim();
+                if alias.is_empty() {
+                    return Err(ProviderModelConfigError::new(
+                        ProviderModelConfigErrorKind::EmptyAlias,
+                        format!("provider model `{}` has an empty alias", model.id.trim()),
+                    ));
+                }
+                if identities.insert(alias.to_string(), "alias").is_some() {
+                    return Err(ProviderModelConfigError::new(
+                        ProviderModelConfigErrorKind::AliasCollision,
+                        format!("provider model alias `{alias}` collides with another identity"),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolves a canonical model identifier or alias to its model record.
+    ///
+    /// Identity metadata is validated before lookup so ambiguous records never
+    /// produce order-dependent selection. An unknown or empty request returns
+    /// `Ok(None)`.
+    pub fn model(
+        &self,
+        requested: &str,
+    ) -> Result<Option<&ProviderModelConfig>, ProviderModelConfigError> {
+        self.validate_models()?;
+        let requested = requested.trim();
+        if requested.is_empty() {
+            return Ok(None);
+        }
+        Ok(self.models.iter().find(|model| {
+            model.id.trim() == requested
+                || model.aliases.iter().any(|alias| alias.trim() == requested)
+        }))
+    }
 }
 
 /// Provider and model-profile registry used by routing policy.
@@ -202,6 +346,73 @@ mod tests {
             .resolve_profile("missing")
             .unwrap_err();
         assert_eq!(error.message(), "model profile `missing` is not configured");
+    }
+
+    /// Verifies provider-model lookup accepts canonical identifiers and aliases
+    /// while always returning the canonical configured model record.
+    ///
+    /// Later schema and picker layers depend on one provider-local identity
+    /// contract instead of independently canonicalizing model names.
+    #[test]
+    fn provider_config_resolves_canonical_model_ids_and_aliases() {
+        let provider = ProviderConfig {
+            models: vec![ProviderModelConfig {
+                id: "model-primary".to_string(),
+                aliases: vec!["primary".to_string(), "fast".to_string()],
+                context_window_tokens: Some(200_000),
+                ..ProviderModelConfig::default()
+            }],
+            ..ProviderConfig::default()
+        };
+
+        assert_eq!(
+            provider.model("model-primary").unwrap().unwrap().id,
+            "model-primary"
+        );
+        let resolved = provider.model(" fast ").unwrap().unwrap();
+        assert_eq!(resolved.id, "model-primary");
+        assert_eq!(resolved.context_window_tokens, Some(200_000));
+        assert!(provider.model("missing").unwrap().is_none());
+    }
+
+    /// Verifies duplicate canonical ids and aliases that overlap any provider
+    /// model identity are rejected with stable typed error categories.
+    ///
+    /// Ambiguous aliases must be diagnosed before profiles, catalogs, or UI
+    /// selection can resolve different effective models for the same input.
+    #[test]
+    fn provider_config_rejects_model_id_and_alias_collisions() {
+        let duplicate_ids = ProviderConfig {
+            models: vec![
+                ProviderModelConfig::named("duplicate"),
+                ProviderModelConfig::named(" duplicate "),
+            ],
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            duplicate_ids.validate_models().unwrap_err().kind(),
+            ProviderModelConfigErrorKind::DuplicateId
+        );
+
+        let alias_collision = ProviderConfig {
+            models: vec![
+                ProviderModelConfig {
+                    id: "model-a".to_string(),
+                    aliases: vec!["shared".to_string()],
+                    ..ProviderModelConfig::default()
+                },
+                ProviderModelConfig {
+                    id: "shared".to_string(),
+                    aliases: vec!["other".to_string()],
+                    ..ProviderModelConfig::default()
+                },
+            ],
+            ..ProviderConfig::default()
+        };
+        assert_eq!(
+            alias_collision.validate_models().unwrap_err().kind(),
+            ProviderModelConfigErrorKind::AliasCollision
+        );
     }
 
     /// Verifies preset lookup preserves configured profile identities.

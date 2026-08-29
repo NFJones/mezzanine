@@ -203,6 +203,7 @@ fn runtime_pane_agent_status_reasoning_preserves_latency_preference() {
             reasoning_levels: vec!["low".to_string(), "high".to_string()],
             context_window_tokens: Some(1_050_000),
             max_input_tokens: None,
+            max_output_tokens: None,
             capabilities: Vec::new(),
         }],
         vec!["low".to_string(), "high".to_string()],
