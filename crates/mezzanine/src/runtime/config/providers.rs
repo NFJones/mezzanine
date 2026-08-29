@@ -561,7 +561,7 @@ pub(crate) fn runtime_default_models_for_provider(kind: &str) -> Result<&'static
             "claude-sonnet-5",
             "claude-opus-5",
             "claude-fable-5",
-            "claude-haiku-4-5-20251001",
+            "claude-haiku-4-5",
         ]),
         "deepseek" => Ok(&["deepseek-v4-pro", "deepseek-v4-flash"]),
         _ => Err(MezError::config(format!(

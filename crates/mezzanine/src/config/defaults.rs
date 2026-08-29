@@ -648,17 +648,27 @@ default_model = "claude-sonnet-5"
 
 [providers.anthropic.models.claude-fable-5]
 id = "claude-fable-5"
+context_window_tokens = 1000000
+max_input_tokens = 800000
+max_output_tokens = 128000
 
 [providers.anthropic.models.claude-opus-5]
 id = "claude-opus-5"
+context_window_tokens = 500000
+max_input_tokens = 400000
+max_output_tokens = 64000
 
 [providers.anthropic.models.claude-sonnet-5]
 id = "claude-sonnet-5"
-context_window_tokens = 1000000
+context_window_tokens = 250000
+max_input_tokens = 200000
+max_output_tokens = 32000
 
-[providers.anthropic.models.claude-haiku-4-5-20251001]
-id = "claude-haiku-4-5-20251001"
-context_window_tokens = 200000
+[providers.anthropic.models.claude-haiku-4-5]
+id = "claude-haiku-4-5"
+context_window_tokens = 125000
+max_input_tokens = 100000
+max_output_tokens = 16000
 
 [providers.anthropic.options]
 # anthropic_version = "2023-06-01"
@@ -729,8 +739,6 @@ model = "claude-sonnet-5"
 reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false
-context_window_tokens = 1000000
-max_output_tokens = 128000
 safety_tier = "high"
 privacy_tier = "standard"
 residency = "global"
@@ -742,11 +750,9 @@ prompt_caching = "enabled"
 
 [model_profiles.anthropic-fast]
 provider = "anthropic"
-model = "claude-haiku-4-5-20251001"
+model = "claude-haiku-4-5"
 latency_preference = "fast"
 multimodal_required = false
-context_window_tokens = 200000
-max_output_tokens = 64000
 safety_tier = "high"
 privacy_tier = "standard"
 residency = "global"

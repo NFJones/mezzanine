@@ -545,7 +545,7 @@ fn default_config_includes_anthropic_provider_defaults() {
         models,
         vec![
             "claude-fable-5",
-            "claude-haiku-4-5-20251001",
+            "claude-haiku-4-5",
             "claude-opus-5",
             "claude-sonnet-5",
         ]
@@ -578,6 +578,96 @@ fn default_config_includes_anthropic_provider_defaults() {
         anthropic_default.get("model").and_then(toml::Value::as_str),
         Some("claude-sonnet-5")
     );
+}
+
+/// Verifies authenticated Anthropic defaults carry the requested halving token limits.
+#[test]
+fn default_config_uses_configured_anthropic_model_token_limits() {
+    let parsed: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let models = parsed
+        .get("providers")
+        .and_then(|providers| providers.get("anthropic"))
+        .and_then(|provider| provider.get("models"))
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    for (entry, expected) in [
+        ("claude-fable-5", (1_000_000, 800_000, 128_000)),
+        ("claude-opus-5", (500_000, 400_000, 64_000)),
+        ("claude-sonnet-5", (250_000, 200_000, 32_000)),
+        ("claude-haiku-4-5", (125_000, 100_000, 16_000)),
+    ] {
+        let model = models.get(entry).and_then(toml::Value::as_table).unwrap();
+        let actual = (
+            model
+                .get("context_window_tokens")
+                .and_then(toml::Value::as_integer),
+            model
+                .get("max_input_tokens")
+                .and_then(toml::Value::as_integer),
+            model
+                .get("max_output_tokens")
+                .and_then(toml::Value::as_integer),
+        );
+        assert_eq!(
+            actual,
+            (Some(expected.0), Some(expected.1), Some(expected.2)),
+            "{entry}"
+        );
+        assert_eq!(model.get("id").and_then(toml::Value::as_str), Some(entry));
+    }
+}
+
+/// Verifies Anthropic authentication fills missing limits without replacing overrides.
+#[test]
+fn authenticated_provider_defaults_preserve_anthropic_model_overrides() {
+    let root = temp_root("authenticated-anthropic-limit-merge");
+    let paths = ConfigPaths::from_root(root.clone());
+    let path = paths.ensure_default_config().unwrap();
+    fs::write(
+        &path,
+        "version = 78\n[providers.anthropic]\nkind = \"anthropic\"\ndefault_model = \"claude-sonnet-5\"\n[providers.anthropic.models.claude-sonnet-5]\nid = \"claude-sonnet-5\"\nmax_input_tokens = 123456\n",
+    )
+    .unwrap();
+
+    paths
+        .materialize_authenticated_provider_defaults("anthropic")
+        .unwrap();
+
+    let parsed: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let models = parsed
+        .get("providers")
+        .and_then(|providers| providers.get("anthropic"))
+        .and_then(|provider| provider.get("models"))
+        .and_then(toml::Value::as_table)
+        .unwrap();
+    let sonnet = models
+        .get("claude-sonnet-5")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+    assert_eq!(
+        sonnet
+            .get("max_input_tokens")
+            .and_then(toml::Value::as_integer),
+        Some(123_456)
+    );
+    assert_eq!(
+        sonnet
+            .get("context_window_tokens")
+            .and_then(toml::Value::as_integer),
+        Some(250_000)
+    );
+    assert_eq!(
+        sonnet
+            .get("max_output_tokens")
+            .and_then(toml::Value::as_integer),
+        Some(32_000)
+    );
+    assert!(models.contains_key("claude-fable-5"));
+    assert!(models.contains_key("claude-opus-5"));
+    assert!(models.contains_key("claude-haiku-4-5"));
+
+    let _ = fs::remove_dir_all(root);
 }
 
 /// Verifies authenticated OpenAI model defaults carry the exact editable token limits.
