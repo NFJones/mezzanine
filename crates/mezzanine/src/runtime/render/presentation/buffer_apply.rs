@@ -126,18 +126,15 @@ impl RuntimeSessionService {
     }
 
     /// Ensures the agent destination is bound to the pane's active conversation.
-    fn ensure_current_agent_presentation_screen(
-        &mut self,
-        pane_id: &str,
-    ) -> Result<&mut TerminalScreen> {
+    fn ensure_current_agent_presentation_screen(&mut self, pane_id: &str) -> Result<()> {
         if self.agent_shell_store().get(pane_id).is_none() {
             self.agent_shell_store_mut().ensure_session(pane_id)?;
         }
         let (conversation_id, size) = self.agent_presentation_target(pane_id)?;
-        let binding_changed = self
+        let replace = self
             .agent_pane_screen_state(pane_id)
-            .is_some_and(|screen| screen.conversation_id() != conversation_id);
-        if binding_changed {
+            .is_none_or(|screen| screen.conversation_id() != conversation_id);
+        if replace {
             self.presentation
                 .agent_shell_output_previews
                 .remove(pane_id);
@@ -147,8 +144,16 @@ impl RuntimeSessionService {
             self.presentation
                 .agent_presentation_projection_cache
                 .remove(pane_id);
+            let screen = TerminalScreen::new_with_history_config(
+                size,
+                self.terminal_history_limit(),
+                self.terminal_history_rotate_lines(),
+            )?;
+            self.set_agent_pane_screen(pane_id.to_string(), conversation_id, screen);
         }
-        self.ensure_agent_pane_screen(pane_id, &conversation_id, size)
+        self.agent_pane_screen(pane_id)
+            .map(|_| ())
+            .ok_or_else(|| MezError::invalid_state("agent pane screen was not initialized"))
     }
 
     /// Validates that replay records belong to the pane's active conversation.
@@ -603,6 +608,7 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         let previous_screen = self.agent_pane_screen(pane_id).cloned();
+        let previous_lineage = self.agent_pane_screen_lineage(pane_id, &session_id);
         let previous_preview = self
             .presentation
             .agent_shell_output_previews
@@ -613,11 +619,11 @@ impl RuntimeSessionService {
             .remove(pane_id);
         let preview_to_restore = previous_preview.clone().filter(|preview| {
             preview.conversation_id == session_id
-                && previous_screen.as_ref() == Some(preview.installed_screen.as_ref())
+                && previous_lineage == Some(preview.installed_lineage)
         });
         let streaming_to_restore = previous_streaming.clone().filter(|streaming| {
             streaming.conversation_id == session_id
-                && previous_screen.as_ref() == Some(streaming.installed_screen.as_ref())
+                && previous_lineage == Some(streaming.installed_lineage)
         });
         let rebuild_result = (|| -> Result<()> {
             let rebuilt = TerminalScreen::new_with_history_config(
@@ -630,6 +636,11 @@ impl RuntimeSessionService {
             let durable_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
                 MezError::invalid_state("resized agent presentation screen disappeared")
             })?;
+            let durable_lineage = self
+                .agent_pane_screen_lineage(pane_id, &session_id)
+                .ok_or_else(|| {
+                    MezError::invalid_state("resized agent presentation lineage disappeared")
+                })?;
             if let Some(mut preview) = preview_to_restore {
                 let content_columns = usize::from(size.columns)
                     .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
@@ -641,6 +652,7 @@ impl RuntimeSessionService {
                         .map(|line| fit_agent_terminal_text_width(line, content_columns))
                         .collect();
                 }
+                preview.installed_lineage = durable_lineage;
                 preview.baseline_screen = std::sync::Arc::new(durable_screen.clone());
                 preview.installed_screen = std::sync::Arc::new(durable_screen.clone());
                 self.presentation
@@ -648,6 +660,7 @@ impl RuntimeSessionService {
                     .insert(pane_id.to_string(), preview);
             }
             if let Some(mut streaming) = streaming_to_restore {
+                streaming.installed_lineage = durable_lineage;
                 streaming.baseline_screen = std::sync::Arc::new(durable_screen.clone());
                 streaming.provider_screen = std::sync::Arc::new(durable_screen.clone());
                 streaming.installed_screen = std::sync::Arc::new(durable_screen.clone());
@@ -655,7 +668,7 @@ impl RuntimeSessionService {
                 streaming.projected_context = None;
                 streaming.projected_actions = None;
                 streaming.projected_rationale = None;
-                streaming.projected_screen = None;
+                streaming.projected_lineage = None;
                 self.presentation
                     .agent_streaming_say_presentations
                     .insert(pane_id.to_string(), streaming);
@@ -1344,7 +1357,14 @@ impl RuntimeSessionService {
                     RuntimeStreamingSayPresentation {
                         turn_id: turn_id.to_string(),
                         response_index: *response_index,
-                        conversation_id,
+                        conversation_id: conversation_id.clone(),
+                        installed_lineage: self
+                            .agent_pane_screen_lineage(pane_id, &conversation_id)
+                            .ok_or_else(|| {
+                                MezError::invalid_state(
+                                    "streaming presentation lineage was unavailable",
+                                )
+                            })?,
                         baseline_screen: std::sync::Arc::new(baseline_screen.clone()),
                         provider_screen: std::sync::Arc::new(baseline_screen),
                         installed_screen: std::sync::Arc::new(installed_screen),
@@ -1356,7 +1376,7 @@ impl RuntimeSessionService {
                         projected_context: None,
                         projected_actions: None,
                         projected_rationale: None,
-                        projected_screen: None,
+                        projected_lineage: None,
                     },
                 );
             }
@@ -1401,7 +1421,14 @@ impl RuntimeSessionService {
                         RuntimeStreamingSayPresentation {
                             turn_id: turn_id.to_string(),
                             response_index: 0,
-                            conversation_id,
+                            conversation_id: conversation_id.clone(),
+                            installed_lineage: self
+                                .agent_pane_screen_lineage(pane_id, &conversation_id)
+                                .ok_or_else(|| {
+                                    MezError::invalid_state(
+                                        "streaming presentation lineage was unavailable",
+                                    )
+                                })?,
                             baseline_screen: std::sync::Arc::new(baseline_screen.clone()),
                             provider_screen: std::sync::Arc::new(baseline_screen),
                             installed_screen: std::sync::Arc::new(installed_screen),
@@ -1413,7 +1440,7 @@ impl RuntimeSessionService {
                             projected_context: None,
                             projected_actions: None,
                             projected_rationale: None,
-                            projected_screen: None,
+                            projected_lineage: None,
                         },
                     );
                 }
@@ -1651,7 +1678,14 @@ impl RuntimeSessionService {
                 RuntimeStreamingSayPresentation {
                     turn_id: turn_id.to_string(),
                     response_index: 0,
-                    conversation_id,
+                    conversation_id: conversation_id.clone(),
+                    installed_lineage: self
+                        .agent_pane_screen_lineage(pane_id, &conversation_id)
+                        .ok_or_else(|| {
+                            MezError::invalid_state(
+                                "streaming presentation lineage was unavailable",
+                            )
+                        })?,
                     baseline_screen: std::sync::Arc::new(baseline_screen.clone()),
                     provider_screen: std::sync::Arc::new(baseline_screen),
                     installed_screen: std::sync::Arc::new(installed_screen),
@@ -1663,7 +1697,7 @@ impl RuntimeSessionService {
                     projected_context: None,
                     projected_actions: None,
                     projected_rationale: None,
-                    projected_screen: None,
+                    projected_lineage: None,
                 },
             );
         }
@@ -1682,6 +1716,11 @@ impl RuntimeSessionService {
         let current_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
             MezError::invalid_state("streaming presentation screen was not initialized")
         })?;
+        let current_lineage = self
+            .agent_pane_screen_lineage(pane_id, conversation_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("streaming presentation lineage was not initialized")
+            })?;
         let preview = self
             .presentation
             .agent_shell_output_previews
@@ -1689,7 +1728,7 @@ impl RuntimeSessionService {
             .cloned();
         if let Some(preview) = preview.as_ref()
             && preview.conversation_id == conversation_id
-            && preview.installed_screen.as_ref() == &current_screen
+            && preview.installed_lineage == current_lineage
         {
             return Ok((preview.baseline_screen.as_ref().clone(), current_screen));
         }
@@ -1710,10 +1749,12 @@ impl RuntimeSessionService {
         pane_id: &str,
         conversation_id: &str,
         provider_screen: TerminalScreen,
-    ) -> Result<()> {
-        let current_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
-            MezError::invalid_state("streaming presentation screen was not initialized")
-        })?;
+    ) -> Result<u64> {
+        let current_lineage = self
+            .agent_pane_screen_lineage(pane_id, conversation_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("streaming presentation lineage was not initialized")
+            })?;
         let mut preview_presentation = self
             .presentation
             .agent_shell_output_previews
@@ -1721,7 +1762,7 @@ impl RuntimeSessionService {
             .cloned()
             .filter(|preview| {
                 preview.conversation_id == conversation_id
-                    && preview.installed_screen.as_ref() == &current_screen
+                    && preview.installed_lineage == current_lineage
             });
         if let Some(preview) = preview_presentation.as_mut() {
             Self::retire_settled_agent_shell_previews(preview);
@@ -1738,19 +1779,20 @@ impl RuntimeSessionService {
                 &ui_theme,
             )?;
         }
-        if !self.update_agent_pane_screen_preserving_interaction(
-            pane_id,
-            conversation_id,
-            installed_screen.clone(),
-        ) {
-            return Err(MezError::invalid_state(
-                "streaming presentation screen conversation changed",
-            ));
-        }
+        let installed_lineage = self
+            .update_agent_pane_screen_preserving_interaction(
+                pane_id,
+                conversation_id,
+                installed_screen.clone(),
+            )
+            .ok_or_else(|| {
+                MezError::invalid_state("streaming presentation screen conversation changed")
+            })?;
         self.presentation
             .agent_shell_output_previews
             .remove(pane_id);
         if let Some(mut preview) = preview_presentation {
+            preview.installed_lineage = installed_lineage;
             preview.baseline_screen = std::sync::Arc::new(provider_screen.clone());
             preview.installed_screen = std::sync::Arc::new(installed_screen.clone());
             self.presentation
@@ -1765,8 +1807,12 @@ impl RuntimeSessionService {
         {
             presentation.provider_screen = std::sync::Arc::new(provider_screen);
             presentation.installed_screen = std::sync::Arc::new(installed_screen);
+            presentation.installed_lineage = installed_lineage;
+            if presentation.projected_lineage.is_some() {
+                presentation.projected_lineage = Some(installed_lineage);
+            }
         }
-        Ok(())
+        Ok(installed_lineage)
     }
 
     /// Appends one existing styled prefix for a provisional plain-text source.
@@ -1802,6 +1848,7 @@ impl RuntimeSessionService {
         );
         Self::feed_agent_terminal_screen(&mut candidate, bytes.as_bytes(), context)?;
         self.update_agent_streaming_screen(pane_id, &conversation_id, candidate)
+            .map(|_| ())
     }
 
     /// Atomically appends the literal assistant label for a newly started action.
@@ -1835,6 +1882,7 @@ impl RuntimeSessionService {
             "starting streaming say literal source",
         )?;
         self.update_agent_streaming_screen(pane_id, &conversation_id, candidate)
+            .map(|_| ())
     }
 
     /// Captures one immutable dirty generation for an external renderer.
@@ -1857,7 +1905,9 @@ impl RuntimeSessionService {
         if !has_source {
             return Ok(None);
         }
-        if self.agent_pane_screen(pane_id) != Some(presentation.installed_screen.as_ref()) {
+        if self.agent_pane_screen_lineage(pane_id, &presentation.conversation_id)
+            != Some(presentation.installed_lineage)
+        {
             return Ok(None);
         }
         let projected_context = self.agent_streaming_say_projection_context(pane_id)?;
@@ -1872,6 +1922,7 @@ impl RuntimeSessionService {
             response_index: presentation.response_index,
             conversation_id: presentation.conversation_id.clone(),
             revision: presentation.revision,
+            installed_lineage: presentation.installed_lineage,
             baseline_screen: presentation.baseline_screen.clone(),
             rationale: presentation.rationale.clone(),
             actions: presentation.actions.clone(),
@@ -2123,6 +2174,7 @@ impl RuntimeSessionService {
             response_index: work.response_index,
             conversation_id: work.conversation_id,
             revision: work.revision,
+            installed_lineage: work.installed_lineage,
             thinking_enabled: work.thinking_enabled,
             shell_classification: work.shell_classification,
             presentation_columns: work.presentation_columns,
@@ -2152,13 +2204,8 @@ impl RuntimeSessionService {
                     && presentation.revision == result.revision
             });
         let screen_lineage_current = self
-            .presentation
-            .agent_streaming_say_presentations
-            .get(&result.pane_id)
-            .is_some_and(|presentation| {
-                self.agent_pane_screen(&result.pane_id)
-                    == Some(presentation.installed_screen.as_ref())
-            });
+            .agent_pane_screen_lineage(&result.pane_id, &result.conversation_id)
+            == Some(result.installed_lineage);
         let conversation_current = self
             .agent_shell_store()
             .get(&result.pane_id)
@@ -2177,10 +2224,12 @@ impl RuntimeSessionService {
             || self.agent_terminal_markdown_terminal_width(&result.pane_id)? != result.table_width
             || self.presentation.settings.ui_theme != result.ui_theme
         {
+            self.integration
+                .runtime_metrics_mut()
+                .record_agent_streaming_projection_result(false, !screen_lineage_current);
             return Ok(false);
         }
-        let projected_screen = std::sync::Arc::new(result.screen.clone());
-        self.update_agent_streaming_screen(
+        let installed_lineage = self.update_agent_streaming_screen(
             &result.pane_id,
             &result.conversation_id,
             result.screen,
@@ -2202,7 +2251,10 @@ impl RuntimeSessionService {
         });
         presentation.projected_actions = Some(result.projected_actions);
         presentation.projected_rationale = result.projected_rationale;
-        presentation.projected_screen = Some(projected_screen);
+        presentation.projected_lineage = Some(installed_lineage);
+        self.integration
+            .runtime_metrics_mut()
+            .record_agent_streaming_projection_result(true, false);
         Ok(true)
     }
 
@@ -2321,7 +2373,8 @@ impl RuntimeSessionService {
             .agent_shell_store()
             .get(pane_id)
             .is_some_and(|session| session.session_id == presentation.conversation_id)
-            && self.agent_pane_screen(pane_id) == Some(presentation.installed_screen.as_ref())
+            && self.agent_pane_screen_lineage(pane_id, &presentation.conversation_id)
+                == Some(presentation.installed_lineage)
         {
             self.update_agent_streaming_screen(
                 pane_id,
@@ -2456,8 +2509,9 @@ impl RuntimeSessionService {
             .agent_shell_store()
             .get(pane_id)
             .is_some_and(|session| session.session_id == presentation.conversation_id);
-        let screen_is_owned =
-            self.agent_pane_screen(pane_id) == Some(presentation.installed_screen.as_ref());
+        let screen_is_owned = self
+            .agent_pane_screen_lineage(pane_id, &presentation.conversation_id)
+            == Some(presentation.installed_lineage);
         let batch = execution.response.action_batch.as_ref();
         let matches =
             presentation.turn_id == turn_id
@@ -2520,8 +2574,7 @@ impl RuntimeSessionService {
         let current_projected_actions = presentation.projected_actions.as_ref().filter(|_| {
             presentation.projected_revision == Some(presentation.revision)
                 && projection_context_is_current
-                && presentation.projected_screen.as_deref()
-                    == Some(presentation.provider_screen.as_ref())
+                && presentation.projected_lineage == Some(presentation.installed_lineage)
         });
         let command_can_promote = batch.is_some_and(|batch| {
             presentation.rationale.as_ref().is_some_and(|rationale| {
@@ -2743,6 +2796,11 @@ impl RuntimeSessionService {
         let current_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
             MezError::invalid_state("agent terminal presentation screen was not initialized")
         })?;
+        let current_lineage = self
+            .agent_pane_screen_lineage(pane_id, &conversation_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("agent terminal presentation lineage was not initialized")
+            })?;
         let presentation = self
             .presentation
             .agent_shell_output_previews
@@ -2750,7 +2808,7 @@ impl RuntimeSessionService {
             .cloned();
         let owns_live_screen = presentation.as_ref().is_some_and(|presentation| {
             presentation.conversation_id == conversation_id
-                && presentation.installed_screen.as_ref() == &current_screen
+                && presentation.installed_lineage == current_lineage
         });
         if owns_live_screen {
             let mut presentation = presentation.ok_or_else(|| {
@@ -2789,19 +2847,20 @@ impl RuntimeSessionService {
                 &ui_theme,
             )?;
         }
-        if !self.update_agent_pane_screen_preserving_interaction(
-            pane_id,
-            conversation_id,
-            installed_screen.clone(),
-        ) {
-            return Err(MezError::invalid_state(
-                "agent durable presentation conversation changed",
-            ));
-        }
+        let installed_lineage = self
+            .update_agent_pane_screen_preserving_interaction(
+                pane_id,
+                conversation_id,
+                installed_screen.clone(),
+            )
+            .ok_or_else(|| {
+                MezError::invalid_state("agent durable presentation conversation changed")
+            })?;
         self.presentation
             .agent_shell_output_previews
             .remove(pane_id);
         if let Some(mut presentation) = presentation.take() {
+            presentation.installed_lineage = installed_lineage;
             presentation.baseline_screen = std::sync::Arc::new(baseline_screen);
             presentation.installed_screen = std::sync::Arc::new(installed_screen);
             self.presentation
@@ -2854,13 +2913,18 @@ impl RuntimeSessionService {
         let current_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
             MezError::invalid_state("agent terminal presentation screen was not initialized")
         })?;
+        let current_lineage = self
+            .agent_pane_screen_lineage(pane_id, &conversation_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("agent terminal presentation lineage was not initialized")
+            })?;
         let stale_projection = self
             .presentation
             .agent_shell_output_previews
             .get(pane_id)
             .is_some_and(|presentation| {
                 presentation.conversation_id != conversation_id
-                    || presentation.installed_screen.as_ref() != &current_screen
+                    || presentation.installed_lineage != current_lineage
             });
         if stale_projection {
             self.presentation
@@ -2873,7 +2937,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .filter(|streaming| {
                 streaming.conversation_id == conversation_id
-                    && streaming.installed_screen.as_ref() == &current_screen
+                    && streaming.installed_lineage == current_lineage
             })
             .map(|streaming| streaming.provider_screen.as_ref().clone())
             .unwrap_or_else(|| current_screen.clone());
@@ -2883,6 +2947,9 @@ impl RuntimeSessionService {
             .remove(pane_id)
             .unwrap_or_else(|| super::super::RuntimeAgentShellPreviewPresentation {
                 conversation_id: conversation_id.clone(),
+                installed_lineage: self
+                    .agent_pane_screen_lineage(pane_id, &conversation_id)
+                    .unwrap_or_default(),
                 baseline_screen: std::sync::Arc::new(preview_baseline),
                 installed_screen: std::sync::Arc::new(current_screen.clone()),
                 next_order: 0,
@@ -2925,26 +2992,27 @@ impl RuntimeSessionService {
             &ui_theme,
         )?;
         let installed_screen = std::sync::Arc::new(candidate.clone());
-        if !self.update_agent_pane_screen_preserving_interaction(
-            pane_id,
-            &conversation_id,
-            candidate,
-        ) {
-            return Err(MezError::invalid_state(
-                "shell preview presentation conversation changed",
-            ));
-        }
+        let installed_lineage = self
+            .update_agent_pane_screen_preserving_interaction(pane_id, &conversation_id, candidate)
+            .ok_or_else(|| {
+                MezError::invalid_state("shell preview presentation conversation changed")
+            })?;
         if let Some(streaming) = self
             .presentation
             .agent_streaming_say_presentations
             .get_mut(pane_id)
             .filter(|streaming| {
                 streaming.conversation_id == conversation_id
-                    && streaming.installed_screen.as_ref() == &current_screen
+                    && streaming.installed_lineage == current_lineage
             })
         {
             streaming.installed_screen = installed_screen.clone();
+            streaming.installed_lineage = installed_lineage;
+            if streaming.projected_lineage.is_some() {
+                streaming.projected_lineage = Some(installed_lineage);
+            }
         }
+        presentation.installed_lineage = installed_lineage;
         presentation.installed_screen = installed_screen;
         self.presentation
             .agent_shell_output_previews
@@ -3012,12 +3080,9 @@ impl RuntimeSessionService {
                 .cloned()
                 .collect::<Vec<_>>();
             retired = retired.saturating_add(owners.len());
-            let owns_live_screen = self.agent_pane_screen(&pane_id).is_some_and(|screen| {
-                screen == presentation.installed_screen.as_ref()
-                    && self.agent_pane_screen_state(&pane_id).is_some_and(|state| {
-                        state.conversation_id() == presentation.conversation_id
-                    })
-            });
+            let owns_live_screen = self
+                .agent_pane_screen_lineage(&pane_id, &presentation.conversation_id)
+                == Some(presentation.installed_lineage);
             if !owns_live_screen {
                 continue;
             }
@@ -3034,16 +3099,17 @@ impl RuntimeSessionService {
                     &ui_theme,
                 )?;
             }
-            if !self.update_agent_pane_screen_preserving_interaction(
-                &pane_id,
-                &presentation.conversation_id,
-                candidate.clone(),
-            ) {
-                return Err(MezError::invalid_state(
-                    "shell preview turn retirement conversation changed",
-                ));
-            }
+            let installed_lineage = self
+                .update_agent_pane_screen_preserving_interaction(
+                    &pane_id,
+                    &presentation.conversation_id,
+                    candidate.clone(),
+                )
+                .ok_or_else(|| {
+                    MezError::invalid_state("shell preview turn retirement conversation changed")
+                })?;
             if !presentation.previews.is_empty() {
+                presentation.installed_lineage = installed_lineage;
                 presentation.installed_screen = std::sync::Arc::new(candidate);
                 self.presentation
                     .agent_shell_output_previews
@@ -3087,18 +3153,17 @@ impl RuntimeSessionService {
         else {
             return Ok(());
         };
-        let owns_live_screen = self.agent_pane_screen(pane_id).is_some_and(|screen| {
-            screen == presentation.installed_screen.as_ref()
-                && self
-                    .agent_pane_screen_state(pane_id)
-                    .is_some_and(|state| state.conversation_id() == presentation.conversation_id)
-        });
+        let owns_live_screen = self
+            .agent_pane_screen_lineage(pane_id, &presentation.conversation_id)
+            == Some(presentation.installed_lineage);
         if owns_live_screen
-            && !self.update_agent_pane_screen_preserving_interaction(
-                pane_id,
-                &presentation.conversation_id,
-                presentation.baseline_screen.as_ref().clone(),
-            )
+            && self
+                .update_agent_pane_screen_preserving_interaction(
+                    pane_id,
+                    &presentation.conversation_id,
+                    presentation.baseline_screen.as_ref().clone(),
+                )
+                .is_none()
         {
             return Err(MezError::invalid_state(
                 "shell preview cleanup conversation changed",

@@ -108,6 +108,14 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub(crate) shell_transactions_failed: u64,
     /// Number of shell transaction marker protocol violations.
     pub(crate) shell_transaction_protocol_violations: u64,
+    /// Number of completed streaming projection results received by the actor.
+    pub(crate) agent_streaming_projection_results: u64,
+    /// Number of current streaming projection results installed atomically.
+    pub(crate) agent_streaming_projection_installs: u64,
+    /// Number of streaming projection results rejected as stale.
+    pub(crate) agent_streaming_projection_rejections: u64,
+    /// Number of rejected streaming projections whose pane lineage changed.
+    pub(crate) agent_streaming_projection_lineage_rejections: u64,
     /// Histogram of provider request message counts.
     pub(crate) provider_request_message_counts: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of total provider request message bytes.
@@ -461,6 +469,28 @@ impl RuntimeMetricsSnapshot {
     pub(crate) fn record_shell_transaction_protocol_violation(&mut self) {
         self.shell_transaction_protocol_violations =
             self.shell_transaction_protocol_violations.saturating_add(1);
+    }
+
+    /// Records one content-free streaming projection completion outcome.
+    pub(crate) fn record_agent_streaming_projection_result(
+        &mut self,
+        installed: bool,
+        lineage_rejected: bool,
+    ) {
+        self.agent_streaming_projection_results =
+            self.agent_streaming_projection_results.saturating_add(1);
+        if installed {
+            self.agent_streaming_projection_installs =
+                self.agent_streaming_projection_installs.saturating_add(1);
+        } else {
+            self.agent_streaming_projection_rejections =
+                self.agent_streaming_projection_rejections.saturating_add(1);
+            if lineage_rejected {
+                self.agent_streaming_projection_lineage_rejections = self
+                    .agent_streaming_projection_lineage_rejections
+                    .saturating_add(1);
+            }
+        }
     }
 }
 

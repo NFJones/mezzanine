@@ -318,6 +318,22 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
             "shell_transaction_protocol_violations = {}",
             runtime_metrics.shell_transaction_protocol_violations
         ),
+        format!(
+            "agent_streaming_projection_results = {}",
+            runtime_metrics.agent_streaming_projection_results
+        ),
+        format!(
+            "agent_streaming_projection_installs = {}",
+            runtime_metrics.agent_streaming_projection_installs
+        ),
+        format!(
+            "agent_streaming_projection_rejections = {}",
+            runtime_metrics.agent_streaming_projection_rejections
+        ),
+        format!(
+            "agent_streaming_projection_lineage_rejections = {}",
+            runtime_metrics.agent_streaming_projection_lineage_rejections
+        ),
         "".to_string(),
         "[runtime latest]".to_string(),
         format!(

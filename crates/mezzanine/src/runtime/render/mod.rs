@@ -322,6 +322,8 @@ struct RuntimeAgentShellPreview {
 struct RuntimeAgentShellPreviewPresentation {
     /// Conversation that owns both retained screen generations.
     conversation_id: String,
+    /// Runtime-owned lineage of the exact composite screen currently installed.
+    installed_lineage: u64,
     /// Durable pane generation onto which previews are projected.
     baseline_screen: std::sync::Arc<TerminalScreen>,
     /// Exact composite generation installed by the latest projection.
@@ -490,6 +492,8 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     response_index: usize,
     /// Conversation binding captured before the first streamed action.
     conversation_id: String,
+    /// Runtime-owned lineage of the exact composite screen currently installed.
+    installed_lineage: u64,
     /// Exact pane state restored before each rich-source reprojection.
     baseline_screen: std::sync::Arc<TerminalScreen>,
     /// Latest provider-only screen before shell previews are composited.
@@ -512,8 +516,8 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     projected_actions: Option<Vec<RuntimeStreamingSayProjectedAction>>,
     /// Worker-rendered batch rationale retained with the installed projection.
     projected_rationale: Option<RuntimeStreamingSayProjectedRationale>,
-    /// Exact screen installed with the retained projection metadata.
-    projected_screen: Option<std::sync::Arc<TerminalScreen>>,
+    /// Installed screen lineage associated with retained projection metadata.
+    projected_lineage: Option<u64>,
 }
 
 /// Non-source inputs that determine one streaming projection generation.
@@ -617,6 +621,8 @@ pub(crate) struct RuntimeStreamingSayProjectionWork {
     pub(crate) conversation_id: String,
     /// Exact source generation represented by this work item.
     pub(crate) revision: u64,
+    /// Installed screen lineage captured before worker rendering began.
+    pub(crate) installed_lineage: u64,
     /// Pre-stream screen from which the complete candidate is rebuilt.
     pub(crate) baseline_screen: std::sync::Arc<TerminalScreen>,
     /// Cumulative batch rationale state captured for this generation.
@@ -654,6 +660,8 @@ pub(crate) struct RuntimeStreamingSayProjectionResult {
     pub(crate) conversation_id: String,
     /// Exact source generation represented by the candidate.
     pub(crate) revision: u64,
+    /// Installed screen lineage captured by the worker input.
+    pub(crate) installed_lineage: u64,
     /// Thinking visibility captured by the worker input.
     pub(crate) thinking_enabled: bool,
     /// Shell dialect captured by the worker input.
@@ -985,6 +993,7 @@ impl RuntimePresentationComponent {
             pane_id.to_string(),
             RuntimeAgentShellPreviewPresentation {
                 conversation_id: conversation_id.to_string(),
+                installed_lineage: 0,
                 baseline_screen: std::sync::Arc::new(baseline_screen.clone()),
                 installed_screen: std::sync::Arc::new(baseline_screen),
                 next_order: 0,
@@ -1198,13 +1207,15 @@ impl RuntimeSessionService {
         pane_id: &str,
         mut snapshot: RuntimeAgentResumePresentationSnapshot,
     ) {
-        let current_screen = self.agent_pane_screen(pane_id).cloned();
         let current_conversation = self
             .agent_pane_screen_state(pane_id)
             .map(|state| state.conversation_id().to_string());
+        let current_lineage = current_conversation
+            .as_deref()
+            .and_then(|conversation_id| self.agent_pane_screen_lineage(pane_id, conversation_id));
         snapshot.shell_output_previews = snapshot.shell_output_previews.take().filter(|preview| {
             current_conversation.as_deref() == Some(preview.conversation_id.as_str())
-                && current_screen.as_ref() == Some(preview.installed_screen.as_ref())
+                && current_lineage == Some(preview.installed_lineage)
         });
         snapshot.streaming_say_presentation =
             snapshot
@@ -1212,7 +1223,7 @@ impl RuntimeSessionService {
                 .take()
                 .filter(|streaming| {
                     current_conversation.as_deref() == Some(streaming.conversation_id.as_str())
-                        && current_screen.as_ref() == Some(streaming.installed_screen.as_ref())
+                        && current_lineage == Some(streaming.installed_lineage)
                 });
         if snapshot.streaming_say_presentation.is_none() {
             snapshot.promoted_streaming_say_actions.clear();

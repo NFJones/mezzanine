@@ -112,6 +112,8 @@ pub(crate) enum PaneSurfaceKind {
 pub(crate) struct AgentPaneScreen {
     /// Conversation whose presentation entries own this screen.
     conversation_id: String,
+    /// Runtime-owned monotonic lineage advanced on every screen mutation.
+    lineage: u64,
     /// Independently retained terminal state for agent presentation.
     screen: TerminalScreen,
 }
@@ -121,6 +123,11 @@ impl AgentPaneScreen {
     /// Returns the conversation that owns this agent presentation screen.
     pub(crate) fn conversation_id(&self) -> &str {
         &self.conversation_id
+    }
+
+    /// Returns the runtime-owned lineage of this exact agent screen state.
+    pub(crate) fn lineage(&self) -> u64 {
+        self.lineage
     }
 
     /// Returns the retained terminal screen for this agent conversation.
@@ -810,6 +817,8 @@ pub(crate) struct RuntimeProcessComponent {
         std::collections::BTreeMap<String, mez_terminal::TerminalProgressState>,
     /// Conversation-bound agent log screen state keyed by pane id.
     agent_pane_screens: std::collections::BTreeMap<String, AgentPaneScreen>,
+    /// Next runtime-owned lineage assigned to an agent screen mutation.
+    next_agent_pane_screen_lineage: u64,
     /// Live shell transactions keyed by their OSC marker.
     running_shell_transactions: std::collections::BTreeMap<String, RunningShellTransactionRef>,
     /// Exact process instances holding each transaction's exclusive input lease.
@@ -1956,13 +1965,33 @@ impl RuntimeSessionService {
             .map(AgentPaneScreen::screen)
     }
 
+    /// Returns the lineage when one pane still belongs to the requested conversation.
+    pub(crate) fn agent_pane_screen_lineage(
+        &self,
+        pane_id: &str,
+        conversation_id: &str,
+    ) -> Option<u64> {
+        self.agent_pane_screen_state(pane_id)
+            .filter(|state| state.conversation_id() == conversation_id)
+            .map(AgentPaneScreen::lineage)
+    }
+
     /// Returns mutable retained agent terminal state for one pane.
     #[allow(dead_code)]
     pub(crate) fn agent_pane_screen_mut(&mut self, pane_id: &str) -> Option<&mut TerminalScreen> {
+        self.process.next_agent_pane_screen_lineage = self
+            .process
+            .next_agent_pane_screen_lineage
+            .saturating_add(1)
+            .max(1);
+        let lineage = self.process.next_agent_pane_screen_lineage;
         self.process
             .agent_pane_screens
             .get_mut(pane_id)
-            .map(AgentPaneScreen::screen_mut)
+            .map(|state| {
+                state.lineage = lineage;
+                state.screen_mut()
+            })
     }
 
     /// Replaces one pane's retained agent screen with a conversation-bound value.
@@ -1973,11 +2002,17 @@ impl RuntimeSessionService {
         screen: TerminalScreen,
     ) {
         let pane_id = pane_id.into();
+        self.process.next_agent_pane_screen_lineage = self
+            .process
+            .next_agent_pane_screen_lineage
+            .saturating_add(1)
+            .max(1);
         self.clear_interaction_state_for_surface(&pane_id, PaneSurfaceKind::Agent);
         self.process.agent_pane_screens.insert(
             pane_id,
             AgentPaneScreen {
                 conversation_id: conversation_id.into(),
+                lineage: self.process.next_agent_pane_screen_lineage,
                 screen,
             },
         );
@@ -1985,23 +2020,27 @@ impl RuntimeSessionService {
 
     /// Replaces a current conversation's agent screen without interrupting its interaction state.
     ///
-    /// Returns `false` when the pane has no retained agent screen for the
-    /// requested conversation, preventing a delayed projection from updating a
-    /// different conversation's presentation.
+    /// Returns the newly installed lineage, or `None` when the pane has no
+    /// retained agent screen for the requested conversation. Delayed projections
+    /// can retain this token without comparing complete terminal histories.
     pub(crate) fn update_agent_pane_screen_preserving_interaction(
         &mut self,
         pane_id: &str,
         conversation_id: &str,
         screen: TerminalScreen,
-    ) -> bool {
-        let Some(current) = self.process.agent_pane_screens.get_mut(pane_id) else {
-            return false;
-        };
+    ) -> Option<u64> {
+        let current = self.process.agent_pane_screens.get_mut(pane_id)?;
         if current.conversation_id != conversation_id {
-            return false;
+            return None;
         }
+        self.process.next_agent_pane_screen_lineage = self
+            .process
+            .next_agent_pane_screen_lineage
+            .saturating_add(1)
+            .max(1);
+        current.lineage = self.process.next_agent_pane_screen_lineage;
         current.screen = screen;
-        true
+        Some(current.lineage)
     }
 
     /// Removes one pane's retained agent screen during replacement rollback.
@@ -2032,11 +2071,17 @@ impl RuntimeSessionService {
                 self.process.settings.terminal_history_limit,
                 self.process.settings.terminal_history_rotate_lines,
             )?;
+            self.process.next_agent_pane_screen_lineage = self
+                .process
+                .next_agent_pane_screen_lineage
+                .saturating_add(1)
+                .max(1);
             self.clear_interaction_state_for_surface(pane_id, PaneSurfaceKind::Agent);
             self.process.agent_pane_screens.insert(
                 pane_id.to_string(),
                 AgentPaneScreen {
                     conversation_id: conversation_id.to_string(),
+                    lineage: self.process.next_agent_pane_screen_lineage,
                     screen,
                 },
             );
