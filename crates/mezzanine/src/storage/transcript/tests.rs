@@ -1271,7 +1271,7 @@ fn transcript_store_catalog_migrates_existing_session_metadata() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies a completed catalog migration is a no-op on later startups, while
+/// Verifies later startups preserve dual-written catalog metadata, while
 /// deleting only the database causes retained sidecars to be imported again.
 ///
 /// The marker makes ordinary startup bounded. The database itself remains
@@ -1291,11 +1291,14 @@ fn transcript_store_catalog_restart_is_bounded_and_missing_database_recovers() {
         .name_session("after-migration", "Not reimported", 101, None)
         .unwrap();
     store.initialize(102).unwrap();
-    assert!(
+    assert_eq!(
         store
             .catalog_saved_session("after-migration")
             .unwrap()
-            .is_none()
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("Not reimported")
     );
 
     fs::remove_file(store.catalog_path()).unwrap();
@@ -1471,5 +1474,205 @@ fn transcript_store_catalog_explicit_rebuild_restores_metadata() {
     assert!(store.catalog_saved_session("restore-me").unwrap().is_some());
     assert!(root.join(".catalog.sqlite3.backup").exists());
     assert!(root.join("restore-me").join("history.tsv").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies ordinary metadata mutations update the catalog only after their
+/// filesystem payload or compatibility sidecar has been persisted.
+///
+/// Phase-two discovery reads SQLite directly, so transcript appends,
+/// presentation-only sessions, conversation-kind changes, entry rewrites,
+/// naming, name clearing, and deletion must remain visible without a rebuild.
+#[test]
+fn transcript_store_catalog_dual_writes_session_mutations() {
+    let root = temp_root("catalog-dual-writes");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+
+    store
+        .append(&entry("conversation", 1, TranscriptRole::User))
+        .unwrap();
+    store
+        .append(&entry("conversation", 2, TranscriptRole::Assistant))
+        .unwrap();
+    store
+        .save_conversation_kind("conversation", mez_agent::AgentConversationKind::Subagent)
+        .unwrap();
+    store
+        .name_session("conversation", "Catalogued", 30, Some("/repo".to_string()))
+        .unwrap();
+    store
+        .append_presentation(&presentation("presentation-only", 1))
+        .unwrap();
+
+    let conversation = store
+        .catalog_saved_session("conversation")
+        .unwrap()
+        .unwrap();
+    assert_eq!(conversation.summary.entries, 2);
+    assert_eq!(conversation.name.as_deref(), Some("Catalogued"));
+    assert_eq!(
+        conversation.conversation_kind,
+        mez_agent::AgentConversationKind::Subagent
+    );
+    let presentation_only = store
+        .catalog_saved_session("presentation-only")
+        .unwrap()
+        .unwrap();
+    assert_eq!(presentation_only.summary.entries, 0);
+    assert_eq!(presentation_only.summary.last_turn_id, "turn-1");
+
+    assert!(store.delete_entry("conversation", 2).unwrap());
+    assert_eq!(
+        store
+            .catalog_saved_session("conversation")
+            .unwrap()
+            .unwrap()
+            .summary
+            .entries,
+        1
+    );
+    assert!(store.clear_session_name("conversation").unwrap());
+    assert!(
+        store
+            .catalog_saved_session("conversation")
+            .unwrap()
+            .unwrap()
+            .name
+            .is_none()
+    );
+
+    store
+        .name_session("conversation", "Keep empty", 31, None)
+        .unwrap();
+    assert!(store.delete_entry("conversation", 1).unwrap());
+    let named_empty = store
+        .catalog_saved_session("conversation")
+        .unwrap()
+        .unwrap();
+    assert_eq!(named_empty.summary.entries, 0);
+    assert_eq!(named_empty.name.as_deref(), Some("Keep empty"));
+
+    assert!(store.delete("conversation").unwrap());
+    assert!(
+        store
+            .catalog_saved_session("conversation")
+            .unwrap()
+            .is_none()
+    );
+
+    store
+        .name_session("name-only", "Temporary", 32, None)
+        .unwrap();
+    assert!(store.clear_session_name("name-only").unwrap());
+    assert!(store.catalog_saved_session("name-only").unwrap().is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a presentation append repairs missing catalog name metadata from
+/// the retained compatibility sidecar without replaying the presentation log.
+#[test]
+fn transcript_store_catalog_presentation_repair_recovers_name_sidecar() {
+    let root = temp_root("catalog-presentation-name-repair");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+    store
+        .name_session(
+            "presentation",
+            "Named presentation",
+            31,
+            Some("/repo".to_string()),
+        )
+        .unwrap();
+
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    connection
+        .execute(
+            "DELETE FROM saved_conversations WHERE conversation_id = 'presentation'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    store
+        .append_presentation(&presentation("presentation", 1))
+        .unwrap();
+
+    let repaired = store
+        .catalog_saved_session("presentation")
+        .unwrap()
+        .unwrap();
+    assert_eq!(repaired.name.as_deref(), Some("Named presentation"));
+    assert_eq!(repaired.summary.directory.as_deref(), Some("/repo"));
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies exact lookup repairs a missing row from one session's retained
+/// files and removes a stale row whose payload disappeared.
+///
+/// The repair path must be UUID-local: an unrelated malformed sibling must not
+/// be parsed or prevent the requested conversation from being recovered.
+#[test]
+fn transcript_store_catalog_exact_lookup_repairs_missing_and_stale_rows() {
+    let root = temp_root("catalog-exact-repair");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+    store
+        .append(&entry("repair-me", 1, TranscriptRole::User))
+        .unwrap();
+    fs::create_dir_all(root.join("unrelated")).unwrap();
+    fs::write(root.join("unrelated").join("metadata.json"), b"not json\n").unwrap();
+
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    connection
+        .execute(
+            "DELETE FROM saved_conversations WHERE conversation_id = 'repair-me'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let repaired = store.saved_session("repair-me").unwrap().unwrap();
+    assert_eq!(repaired.summary.entries, 1);
+    assert!(store.catalog_saved_session("repair-me").unwrap().is_some());
+
+    fs::remove_dir_all(root.join("repair-me")).unwrap();
+    assert!(store.saved_session("repair-me").unwrap().is_none());
+    assert!(store.catalog_saved_session("repair-me").unwrap().is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies latest lookup uses activity ordering, excludes subagents, and
+/// advances past a stale newest root row without scanning all session files.
+#[test]
+fn transcript_store_catalog_latest_root_skips_subagents_and_stale_rows() {
+    let root = temp_root("catalog-latest-root");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+
+    let mut older_root = entry("older-root", 1, TranscriptRole::User);
+    older_root.created_at_unix_seconds = 10;
+    let mut newest_subagent = entry("newest-subagent", 1, TranscriptRole::User);
+    newest_subagent.created_at_unix_seconds = 30;
+    let mut stale_root = entry("stale-root", 1, TranscriptRole::User);
+    stale_root.created_at_unix_seconds = 20;
+    store.append(&older_root).unwrap();
+    store.append(&newest_subagent).unwrap();
+    store
+        .save_conversation_kind(
+            "newest-subagent",
+            mez_agent::AgentConversationKind::Subagent,
+        )
+        .unwrap();
+    store.append(&stale_root).unwrap();
+    fs::remove_dir_all(root.join("stale-root")).unwrap();
+
+    let latest = store.latest_root_session().unwrap().unwrap();
+    assert_eq!(latest.summary.conversation_id, "older-root");
+    assert!(store.catalog_saved_session("stale-root").unwrap().is_none());
     let _ = fs::remove_dir_all(root);
 }

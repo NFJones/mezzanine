@@ -10265,6 +10265,22 @@ readable future schema MUST fail closed rather than being replaced or
 downgraded. Catalog files, migration locks, markers, and active SQLite sidecars
 MUST use the same user-private storage boundary as saved conversation payloads.
 
+After migration, every saved-conversation metadata mutation MUST persist and
+sync its authoritative payload or retained compatibility sidecar before
+updating the catalog. This payload-first ordering MUST cover transcript and
+presentation appends, transcript rewrites, durable conversation-kind changes,
+name assignment and clearing, forks, and explicit deletion. A catalog update
+failure MUST NOT remove an already persisted payload; retained files MUST remain
+available for exact repair or rebuild.
+
+Exact UUID resume, latest-root selection, and unnamed-session pruning MUST use
+indexed catalog queries rather than enumerating the agent-session directory.
+Exact lookup MUST validate the payload files promised by its row, remove stale
+rows, and MAY reconstruct one missing row from only that UUID's retained files.
+Latest-root lookup MUST exclude subagents and advance past stale rows. Pruning
+MUST select only the oldest excess unnamed payload-backed rows and MUST recheck
+name state immediately before deletion.
+
 Every saved agent conversation MUST retain its UUID as its sole identity. The
 `/name-session <name>` command MUST assign or replace optional user-visible
 metadata for the current durable conversation. `/name-session --clear` MUST

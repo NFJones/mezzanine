@@ -3,7 +3,7 @@
 //! Store methods validate conversation ids, enforce private storage
 //! permissions, and use append-only TSV records for inspectable persistence.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs::{self as std_fs, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 #[cfg(test)]
@@ -209,13 +209,150 @@ impl AgentTranscriptStore {
         catalog::catalog_path(self)
     }
 
+    /// Loads one exact saved session, repairing catalog divergence from its files.
+    pub fn saved_session(&self, conversation_id: &str) -> Result<Option<SavedAgentSession>> {
+        validate_conversation_id(conversation_id)?;
+        if let Some(record) = catalog::record(self, conversation_id)?
+            && self.catalog_record_payloads_exist(conversation_id, &record)?
+        {
+            return Ok(Some(record.session));
+        }
+        self.upsert_catalog_from_files(conversation_id, None)?;
+        Ok(catalog::record(self, conversation_id)?.map(|record| record.session))
+    }
+
+    /// Loads the most recently active root conversation through the catalog.
+    pub fn latest_root_session(&self) -> Result<Option<SavedAgentSession>> {
+        while let Some(record) = catalog::latest_root_record(self)? {
+            let conversation_id = record.session.summary.conversation_id.clone();
+            match self.saved_session(&conversation_id)? {
+                Some(session) if session.conversation_kind == AgentConversationKind::Root => {
+                    return Ok(Some(session));
+                }
+                Some(_) | None => {}
+            }
+        }
+        Ok(None)
+    }
+
     /// Loads one exact saved-session record from the catalog for focused tests.
     #[cfg(test)]
     pub fn catalog_saved_session(
         &self,
         conversation_id: &str,
     ) -> Result<Option<SavedAgentSession>> {
-        catalog::saved_session(self, conversation_id)
+        Ok(catalog::record(self, conversation_id)?.map(|record| record.session))
+    }
+
+    /// Verifies the payload files promised by one catalog row still exist.
+    fn catalog_record_payloads_exist(
+        &self,
+        conversation_id: &str,
+        record: &super::catalog::CatalogRecord,
+    ) -> Result<bool> {
+        let transcript_exists = if !record.has_transcript {
+            true
+        } else {
+            match record.payload_layout {
+                CatalogPayloadLayout::Directory => {
+                    self.transcript_path_for(conversation_id)?.is_file()
+                }
+                CatalogPayloadLayout::LegacyTsv => {
+                    self.legacy_transcript_path_for(conversation_id)?.is_file()
+                }
+            }
+        };
+        let presentation_exists = !record.has_presentation
+            || self.presentation_path_for(conversation_id)?.is_file()
+            || self
+                .presentation_compressed_path_for(conversation_id)?
+                .is_file();
+        Ok(transcript_exists && presentation_exists)
+    }
+
+    /// Reconstructs and upserts one exact catalog row from retained files.
+    ///
+    /// This is the payload-first synchronization boundary used after ordinary
+    /// session mutations and for lazy exact-lookup repair. It never enumerates
+    /// the session root.
+    fn upsert_catalog_from_files(
+        &self,
+        conversation_id: &str,
+        kind_override: Option<AgentConversationKind>,
+    ) -> Result<bool> {
+        let Some(mut candidate) = self.catalog_candidate_for_conversation(conversation_id)? else {
+            catalog::delete(self, conversation_id)?;
+            return Ok(false);
+        };
+        if let Some(kind) = kind_override {
+            candidate.conversation_kind = kind;
+        }
+        let catalog_updated_at = candidate
+            .named_at_unix_seconds
+            .unwrap_or(candidate.summary.last_created_at_unix_seconds)
+            .max(candidate.summary.last_created_at_unix_seconds);
+        catalog::upsert(self, &candidate, catalog_updated_at)?;
+        Ok(true)
+    }
+
+    /// Reconstructs one exact candidate without scanning sibling sessions.
+    fn catalog_candidate_for_conversation(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<CatalogCandidate>> {
+        validate_conversation_id(conversation_id)?;
+        let existing = catalog::record(self, conversation_id)?;
+        let named = if existing.is_none() {
+            self.read_named_sessions_index()?.remove(conversation_id)
+        } else {
+            None
+        };
+        let session_dir = self.session_dir_for(conversation_id)?;
+        let directory_transcript = session_dir.join(SESSION_TRANSCRIPT_FILE_NAME).is_file();
+        let legacy_transcript = self.legacy_transcript_path_for(conversation_id)?.is_file();
+        let has_transcript = directory_transcript || legacy_transcript;
+        let has_presentation = session_dir.join(SESSION_PRESENTATION_FILE_NAME).is_file()
+            || session_dir
+                .join(SESSION_PRESENTATION_COMPRESSED_FILE_NAME)
+                .is_file();
+        if !has_transcript && !has_presentation {
+            return named
+                .as_ref()
+                .map(|named| self.named_only_catalog_candidate(named))
+                .transpose();
+        }
+        let candidate = self.catalog_candidate_for_payload(
+            conversation_id,
+            has_transcript,
+            has_presentation,
+            if directory_transcript || has_presentation {
+                CatalogPayloadLayout::Directory
+            } else {
+                CatalogPayloadLayout::LegacyTsv
+            },
+            named.as_ref(),
+        )?;
+        if candidate.is_some() {
+            return Ok(candidate);
+        }
+        let Some(existing) = existing.filter(|record| record.session.name.is_some()) else {
+            return Ok(None);
+        };
+        let mut summary = existing.session.summary;
+        summary.entries = 0;
+        Ok(Some(CatalogCandidate {
+            summary,
+            name: None,
+            named_at_unix_seconds: None,
+            conversation_kind: existing.session.conversation_kind,
+            has_transcript,
+            has_presentation,
+            payload_layout: if directory_transcript || has_presentation {
+                CatalogPayloadLayout::Directory
+            } else {
+                CatalogPayloadLayout::LegacyTsv
+            },
+        }))
     }
 
     /// Appends one validated transcript entry to its conversation file.
@@ -249,13 +386,13 @@ impl AgentTranscriptStore {
         let session_dir = self.ensure_session_dir(conversation_id)?;
         let path = session_dir.join(SESSION_METADATA_FILE_NAME);
         let temp_path = session_dir.join(".metadata.json.tmp");
-        let kind = match kind {
+        let kind_name = match kind {
             AgentConversationKind::Root => "root",
             AgentConversationKind::Subagent => "subagent",
         };
         let encoded = serde_json::to_vec(&serde_json::json!({
             "version": SESSION_METADATA_VERSION,
-            "conversation_kind": kind,
+            "conversation_kind": kind_name,
         }))
         .map_err(|error| {
             MezError::invalid_args(format!("conversation metadata encode failed: {error}"))
@@ -271,6 +408,7 @@ impl AgentTranscriptStore {
         set_private_file_permissions(&temp_path)?;
         std_fs::rename(&temp_path, &path)?;
         set_private_file_permissions(&path)?;
+        self.upsert_catalog_from_files(conversation_id, Some(kind))?;
         Ok(())
     }
 
@@ -334,7 +472,64 @@ impl AgentTranscriptStore {
         set_private_file_permissions(&path)?;
         self.write_presentation_index(&entry)?;
         self.compact_presentation_tail_if_needed(&entry.conversation_id)?;
+        self.upsert_catalog_after_presentation(&entry)?;
         Ok(())
+    }
+
+    /// Updates one catalog row after a presentation append without replaying history.
+    fn upsert_catalog_after_presentation(&self, entry: &AgentPresentationEntry) -> Result<()> {
+        let existing = catalog::record(self, &entry.conversation_id)?;
+        let named = if existing.is_none() {
+            self.read_named_sessions_index()?
+                .remove(&entry.conversation_id)
+        } else {
+            None
+        };
+        let summary = if let Some(summary) = self.summary(&entry.conversation_id)? {
+            summary
+        } else if let Some(record) = existing.as_ref() {
+            let mut summary = record.session.summary.clone();
+            if summary.first_created_at_unix_seconds == 0 {
+                summary.first_created_at_unix_seconds = entry.created_at_unix_seconds;
+            }
+            summary.last_created_at_unix_seconds = entry.created_at_unix_seconds;
+            summary.last_turn_id = entry.turn_id.clone().unwrap_or_default();
+            summary.pane_id = entry.pane_id.clone();
+            summary
+        } else {
+            ConversationSummary {
+                conversation_id: entry.conversation_id.clone(),
+                entries: 0,
+                first_created_at_unix_seconds: entry.created_at_unix_seconds,
+                last_created_at_unix_seconds: entry.created_at_unix_seconds,
+                last_turn_id: entry.turn_id.clone().unwrap_or_default(),
+                agent_id: String::new(),
+                pane_id: entry.pane_id.clone(),
+                directory: named.as_ref().and_then(|session| session.directory.clone()),
+                initial_prompt: None,
+                latest_user_prompt: None,
+            }
+        };
+        let candidate = CatalogCandidate {
+            summary,
+            name: named
+                .as_ref()
+                .map(|session| session.name.clone())
+                .or_else(|| {
+                    existing
+                        .as_ref()
+                        .and_then(|record| record.session.name.clone())
+                }),
+            named_at_unix_seconds: named.as_ref().map(|session| session.named_at_unix_seconds),
+            conversation_kind: self.conversation_kind(&entry.conversation_id)?,
+            has_transcript: self.transcript_path_for(&entry.conversation_id)?.is_file()
+                || self
+                    .legacy_transcript_path_for(&entry.conversation_id)?
+                    .is_file(),
+            has_presentation: true,
+            payload_layout: CatalogPayloadLayout::Directory,
+        };
+        catalog::upsert(self, &candidate, entry.created_at_unix_seconds)
     }
 
     /// Reads all presentation entries for one conversation.
@@ -402,6 +597,7 @@ impl AgentTranscriptStore {
         file.sync_all()?;
         set_private_file_permissions(&path)?;
         self.update_summary_after_append(entry)?;
+        self.upsert_catalog_from_files(&entry.conversation_id, None)?;
         if new_conversation {
             self.prune_saved_sessions_over_limit()?;
         }
@@ -521,6 +717,7 @@ impl AgentTranscriptStore {
         file.sync_all().await?;
         set_private_file_permissions_async(&path).await?;
         self.update_summary_after_append(entry)?;
+        self.upsert_catalog_from_files(&entry.conversation_id, None)?;
         if new_conversation {
             self.prune_saved_sessions_over_limit()?;
         }
@@ -600,6 +797,7 @@ impl AgentTranscriptStore {
                 std_fs::remove_file(summary_path)?;
             }
         }
+        self.upsert_catalog_from_files(conversation_id, None)?;
         Ok(true)
     }
 
@@ -694,157 +892,14 @@ impl AgentTranscriptStore {
         ))
     }
 
-    /// Lists summaries for all transcript files in this store.
+    /// Lists transcript-backed summaries from the saved-session catalog.
     pub fn list(&self) -> Result<Vec<ConversationSummary>> {
-        if !self.root.exists() {
-            return Ok(Vec::new());
-        }
-        let mut summaries = Vec::new();
-        let mut seen = BTreeSet::new();
-        for entry in std_fs::read_dir(&self.root)? {
-            let path = entry?.path();
-            let file_name = path.file_name().and_then(|name| name.to_str());
-            let conversation_id = if path.is_dir() {
-                if !path.join(SESSION_TRANSCRIPT_FILE_NAME).exists() {
-                    continue;
-                }
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .map(ToOwned::to_owned)
-            } else if matches!(
-                file_name,
-                Some(
-                    SHARED_PROMPT_HISTORY_FILE_NAME
-                        | SHARED_PROMPT_HISTORY_LOCK_FILE_NAME
-                        | SHARED_PROMPT_HISTORY_MIGRATION_FILE_NAME
-                        | SHARED_COMMAND_PROMPT_HISTORY_FILE_NAME
-                        | ACTIVE_AGENT_SESSION_METADATA_FILE_NAME
-                )
-            ) {
-                continue;
-            } else if path.extension().and_then(|extension| extension.to_str()) == Some("tsv") {
-                path.file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .map(ToOwned::to_owned)
-            } else {
-                None
-            };
-            let Some(conversation_id) = conversation_id else {
-                continue;
-            };
-            if !seen.insert(conversation_id.clone()) {
-                continue;
-            };
-            if let Some(summary) = self.summary(&conversation_id)? {
-                summaries.push(summary);
-            }
-        }
-        summaries.sort_by(|left, right| left.conversation_id.cmp(&right.conversation_id));
-        Ok(summaries)
+        catalog::transcript_summaries(self)
     }
 
     /// Lists transcript-backed and named zero-entry sessions as one durable view.
     pub fn saved_sessions(&self) -> Result<Vec<SavedAgentSession>> {
-        let names = self
-            .named_sessions()?
-            .into_iter()
-            .map(|session| (session.conversation_id.clone(), session))
-            .collect::<BTreeMap<_, _>>();
-        let mut saved = self
-            .list()?
-            .into_iter()
-            .map(|summary| {
-                let conversation_kind = self.conversation_kind(&summary.conversation_id)?;
-                Ok(SavedAgentSession {
-                    name: names
-                        .get(&summary.conversation_id)
-                        .map(|session| session.name.clone()),
-                    summary,
-                    conversation_kind,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let transcript_ids = saved
-            .iter()
-            .map(|session| session.summary.conversation_id.clone())
-            .collect::<BTreeSet<_>>();
-        if self.root.exists() {
-            for entry in std_fs::read_dir(&self.root)? {
-                let path = entry?.path();
-                if !path.is_dir() {
-                    continue;
-                }
-                let Some(conversation_id) = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(ToOwned::to_owned)
-                else {
-                    continue;
-                };
-                if transcript_ids.contains(&conversation_id)
-                    || (!path.join(SESSION_PRESENTATION_FILE_NAME).exists()
-                        && !path
-                            .join(SESSION_PRESENTATION_COMPRESSED_FILE_NAME)
-                            .exists())
-                {
-                    continue;
-                }
-                let presentation = self.inspect_presentation(&conversation_id)?;
-                let (Some(first), Some(last)) = (presentation.first(), presentation.last()) else {
-                    continue;
-                };
-                saved.push(SavedAgentSession {
-                    summary: ConversationSummary {
-                        conversation_id: conversation_id.clone(),
-                        entries: 0,
-                        first_created_at_unix_seconds: first.created_at_unix_seconds,
-                        last_created_at_unix_seconds: last.created_at_unix_seconds,
-                        last_turn_id: last.turn_id.clone().unwrap_or_default(),
-                        agent_id: String::new(),
-                        pane_id: last.pane_id.clone(),
-                        directory: names
-                            .get(&conversation_id)
-                            .and_then(|session| session.directory.clone()),
-                        initial_prompt: None,
-                        latest_user_prompt: None,
-                    },
-                    name: names
-                        .get(&conversation_id)
-                        .map(|session| session.name.clone()),
-                    conversation_kind: self.conversation_kind(&conversation_id)?,
-                });
-            }
-        }
-        for named in names.values() {
-            if saved
-                .iter()
-                .any(|session| session.summary.conversation_id == named.conversation_id)
-            {
-                continue;
-            }
-            saved.push(SavedAgentSession {
-                summary: ConversationSummary {
-                    conversation_id: named.conversation_id.clone(),
-                    entries: 0,
-                    first_created_at_unix_seconds: named.named_at_unix_seconds,
-                    last_created_at_unix_seconds: named.named_at_unix_seconds,
-                    last_turn_id: String::new(),
-                    agent_id: String::new(),
-                    pane_id: String::new(),
-                    directory: named.directory.clone(),
-                    initial_prompt: None,
-                    latest_user_prompt: None,
-                },
-                name: Some(named.name.clone()),
-                conversation_kind: self.conversation_kind(&named.conversation_id)?,
-            });
-        }
-        saved.sort_by(|left, right| {
-            left.summary
-                .conversation_id
-                .cmp(&right.summary.conversation_id)
-        });
-        Ok(saved)
+        catalog::saved_sessions(self)
     }
 
     /// Builds one deterministic migration snapshot from retained session files.
@@ -954,7 +1009,9 @@ impl AgentTranscriptStore {
             self.presentation_migration_summary(conversation_id, named)?
         };
         let Some(mut summary) = summary else {
-            return Ok(None);
+            return named
+                .map(|named| self.named_only_catalog_candidate(named))
+                .transpose();
         };
         if summary.directory.is_none() {
             summary.directory = named.and_then(|session| session.directory.clone());
@@ -1017,6 +1074,8 @@ impl AgentTranscriptStore {
         let mut sessions = self.read_named_sessions_index()?;
         sessions.insert(conversation_id.to_string(), session.clone());
         self.write_named_sessions_index(&sessions)?;
+        self.upsert_catalog_from_files(conversation_id, None)?;
+        catalog::set_name(self, conversation_id, &session.name, named_at_unix_seconds)?;
         Ok(session)
     }
 
@@ -1026,7 +1085,11 @@ impl AgentTranscriptStore {
     /// already unnamed.
     pub fn clear_session_name(&self, conversation_id: &str) -> Result<bool> {
         validate_conversation_id(conversation_id)?;
-        self.remove_named_session(conversation_id)
+        let removed = self.remove_named_session(conversation_id)?;
+        if removed && self.upsert_catalog_from_files(conversation_id, None)? {
+            catalog::clear_name(self, conversation_id)?;
+        }
+        Ok(removed)
     }
 
     /// Loads one durable name record when the conversation has been named.
@@ -1037,6 +1100,7 @@ impl AgentTranscriptStore {
     }
 
     /// Lists durable name records in conversation-id order.
+    #[cfg(test)]
     pub fn named_sessions(&self) -> Result<Vec<NamedAgentSession>> {
         Ok(self.read_named_sessions_index()?.into_values().collect())
     }
@@ -1145,18 +1209,22 @@ impl AgentTranscriptStore {
     /// already absent.
     pub fn delete(&self, conversation_id: &str) -> Result<bool> {
         validate_conversation_id(conversation_id)?;
-        let removed_name = self.remove_named_session(conversation_id)?;
         let session_dir = self.session_dir_for(conversation_id)?;
-        if session_dir.exists() {
+        let removed_payload = if session_dir.exists() {
             std_fs::remove_dir_all(session_dir)?;
-            return Ok(true);
-        }
-        let legacy_path = self.legacy_transcript_path_for(conversation_id)?;
-        if legacy_path.exists() {
-            std_fs::remove_file(legacy_path)?;
-            return Ok(true);
-        }
-        Ok(removed_name)
+            true
+        } else {
+            let legacy_path = self.legacy_transcript_path_for(conversation_id)?;
+            if legacy_path.exists() {
+                std_fs::remove_file(legacy_path)?;
+                true
+            } else {
+                false
+            }
+        };
+        let removed_name = self.remove_named_session(conversation_id)?;
+        catalog::delete(self, conversation_id)?;
+        Ok(removed_payload || removed_name)
     }
 
     /// Forks an existing conversation into a new conversation id.
@@ -1751,31 +1819,11 @@ impl AgentTranscriptStore {
 
     /// Deletes oldest saved conversations until the configured resume cap holds.
     fn prune_saved_sessions_over_limit(&self) -> Result<()> {
-        let named_ids = self
-            .named_sessions()?
-            .into_iter()
-            .map(|session| session.conversation_id)
-            .collect::<BTreeSet<_>>();
-        let mut summaries = self
-            .list()?
-            .into_iter()
-            .filter(|summary| !named_ids.contains(&summary.conversation_id))
-            .collect::<Vec<_>>();
-        if summaries.len() <= self.saved_sessions_limit {
-            return Ok(());
-        }
-        summaries.sort_by(|left, right| {
-            left.last_created_at_unix_seconds
-                .cmp(&right.last_created_at_unix_seconds)
-                .then_with(|| {
-                    left.first_created_at_unix_seconds
-                        .cmp(&right.first_created_at_unix_seconds)
-                })
-                .then_with(|| left.conversation_id.cmp(&right.conversation_id))
-        });
-        let delete_count = summaries.len().saturating_sub(self.saved_sessions_limit);
-        for summary in summaries.into_iter().take(delete_count) {
-            self.delete(&summary.conversation_id)?;
+        for conversation_id in catalog::unnamed_prune_candidates(self, self.saved_sessions_limit)? {
+            if catalog::is_named(self, &conversation_id)? {
+                continue;
+            }
+            self.delete(&conversation_id)?;
         }
         Ok(())
     }

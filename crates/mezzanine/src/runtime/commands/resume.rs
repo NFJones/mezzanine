@@ -186,14 +186,9 @@ impl RuntimeSessionService {
         };
         let conversation_id = match conversation_arg {
             Some("--latest" | "latest") => {
-                let sessions = store
-                    .saved_sessions()?
-                    .into_iter()
-                    .filter(|session| {
-                        session.conversation_kind == mez_agent::AgentConversationKind::Root
-                    })
-                    .collect::<Vec<_>>();
-                let Some(conversation_id) = Self::runtime_latest_agent_saved_session_id(&sessions)
+                let Some(conversation_id) = store
+                    .latest_root_session()?
+                    .map(|session| session.summary.conversation_id)
                 else {
                     return Ok(AgentShellCommandOutcome::Display {
                         command: "resume".to_string(),
@@ -206,16 +201,12 @@ impl RuntimeSessionService {
             Some(conversation_id) => conversation_id.to_string(),
             None => unreachable!("bare resume returns through the picker before store lookup"),
         };
-        let saved = store
-            .saved_sessions()?
-            .into_iter()
-            .find(|session| session.summary.conversation_id == conversation_id)
-            .ok_or_else(|| {
-                MezError::new(
-                    crate::error::MezErrorKind::NotFound,
-                    "conversation transcript not found",
-                )
-            })?;
+        let saved = store.saved_session(&conversation_id)?.ok_or_else(|| {
+            MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "conversation transcript not found",
+            )
+        })?;
         let summary = saved.summary;
         let entries = if summary.entries == 0 {
             Vec::new()
@@ -319,35 +310,6 @@ impl RuntimeSessionService {
             ),
             visibility,
         })
-    }
-
-    /// Returns the latest saved agent session using the same ordering as the
-    /// saved-session picker.
-    ///
-    /// # Parameters
-    /// - `summaries`: The saved conversation summaries to sort.
-    fn runtime_latest_agent_saved_session_id(sessions: &[SavedAgentSession]) -> Option<String> {
-        let mut sorted_sessions = sessions.iter().collect::<Vec<_>>();
-        sorted_sessions.sort_by(|left, right| {
-            right
-                .summary
-                .last_created_at_unix_seconds
-                .cmp(&left.summary.last_created_at_unix_seconds)
-                .then_with(|| {
-                    right
-                        .summary
-                        .first_created_at_unix_seconds
-                        .cmp(&left.summary.first_created_at_unix_seconds)
-                })
-                .then_with(|| {
-                    left.summary
-                        .conversation_id
-                        .cmp(&right.summary.conversation_id)
-                })
-        });
-        sorted_sessions
-            .first()
-            .map(|session| session.summary.conversation_id.clone())
     }
 
     /// Restores the pane to a saved session directory when that directory is

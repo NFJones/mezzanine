@@ -27,7 +27,10 @@ Saved-conversation discovery uses a private SQLite metadata catalog so a large
 session collection does not require reconstructing every summary during normal
 startup. Conversation transcripts and presentation history remain in their
 per-session files and are not stored as database blobs. The catalog can be
-rebuilt from those retained files if it is lost or corrupt.
+rebuilt from those retained files if it is lost or corrupt. Mez writes session
+files first and then updates their catalog metadata. Exact `/resume <uuid>`,
+`/resume --latest`, and automatic unnamed-session retention use indexed catalog
+queries; exact lookup can repair only the requested UUID from retained files.
 
 ## Compact and recover
 

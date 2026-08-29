@@ -110,6 +110,15 @@ database as `.catalog.sqlite3.backup`. A catalog created by a newer Mezzanine
 schema is not overwritten or downgraded; startup reports the incompatibility so
 the newer data remains intact.
 
+Ordinary session changes use payload-first consistency: Mez syncs transcript,
+presentation, classification, or naming files before updating the catalog.
+Exact UUID lookup validates its indexed row and repairs only that UUID when the
+row is missing; a row whose promised payload disappeared is removed. Latest
+root-session selection and unnamed-session pruning are also indexed, so these
+operations do not scan the complete session directory. If a catalog write
+fails after a payload write, preserve the files and rebuild the catalog rather
+than deleting the recoverable conversation.
+
 Treat `catalog.sqlite3`, its `-wal` and `-shm` files, migration markers, and
 backups as sensitive metadata. Do not remove transcript directories or legacy
 sidecars as part of catalog recovery: they are the reconstruction source.

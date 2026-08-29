@@ -100,6 +100,23 @@ pub(super) fn sqlite_i64(value: u64, field: &str) -> Result<i64> {
 
 /// Creates schema v1 or rejects unsupported database versions.
 fn initialize_schema(connection: &Connection) -> std::result::Result<(), SchemaFailure> {
+    connection
+        .execute_batch("BEGIN IMMEDIATE;")
+        .map_err(SchemaFailure::Sqlite)?;
+    let result = initialize_schema_locked(connection);
+    match result {
+        Ok(()) => connection
+            .execute_batch("COMMIT;")
+            .map_err(SchemaFailure::Sqlite),
+        Err(error) => {
+            let _ = connection.execute_batch("ROLLBACK;");
+            Err(error)
+        }
+    }
+}
+
+/// Creates or validates the schema while the caller holds a write transaction.
+fn initialize_schema_locked(connection: &Connection) -> std::result::Result<(), SchemaFailure> {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(SchemaFailure::Sqlite)?;

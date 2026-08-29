@@ -8,7 +8,6 @@
 
 mod migration;
 mod mutation;
-#[cfg(test)]
 mod query;
 mod schema;
 
@@ -23,9 +22,7 @@ use rustix::fs::{FlockOperation, flock};
 use crate::error::Result;
 
 use super::fs::{set_private_dir_permissions, set_private_file_permissions};
-use super::types::AgentTranscriptStore;
-#[cfg(test)]
-use super::types::SavedAgentSession;
+use super::types::{AgentTranscriptStore, SavedAgentSession};
 
 /// Current saved-conversation catalog schema version.
 pub(super) const SCHEMA_VERSION: i64 = 1;
@@ -75,6 +72,19 @@ pub(super) struct CatalogCandidate {
     /// Whether a presentation payload exists.
     pub(super) has_presentation: bool,
     /// Layout used by the authoritative transcript payload.
+    pub(super) payload_layout: CatalogPayloadLayout,
+}
+
+/// One catalog row with the payload flags needed for stale-row validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CatalogRecord {
+    /// Saved-session metadata exposed to runtime discovery.
+    pub(super) session: SavedAgentSession,
+    /// Whether a transcript payload should exist for this row.
+    pub(super) has_transcript: bool,
+    /// Whether a presentation payload should exist for this row.
+    pub(super) has_presentation: bool,
+    /// Filesystem layout used by the authoritative transcript payload.
     pub(super) payload_layout: CatalogPayloadLayout,
 }
 
@@ -135,14 +145,85 @@ fn rebuild_locked(store: &AgentTranscriptStore, now_unix_seconds: u64) -> Result
     Ok(())
 }
 
-/// Loads one catalog record by exact conversation id.
-#[cfg(test)]
-pub(super) fn saved_session(
+/// Upserts one payload-derived record while preserving an existing name.
+pub(super) fn upsert(
+    store: &AgentTranscriptStore,
+    candidate: &CatalogCandidate,
+    now_unix_seconds: u64,
+) -> Result<()> {
+    let connection = schema::open(&catalog_path(store))?;
+    mutation::upsert(&connection, candidate, now_unix_seconds)?;
+    set_catalog_permissions(store)
+}
+
+/// Applies one explicit durable name after its filesystem sidecar is synced.
+pub(super) fn set_name(
     store: &AgentTranscriptStore,
     conversation_id: &str,
-) -> Result<Option<SavedAgentSession>> {
+    name: &str,
+    named_at_unix_seconds: u64,
+) -> Result<()> {
     let connection = schema::open(&catalog_path(store))?;
-    query::saved_session(&connection, conversation_id)
+    mutation::set_name(&connection, conversation_id, name, named_at_unix_seconds)?;
+    set_catalog_permissions(store)
+}
+
+/// Clears one catalog name after the compatibility sidecar is updated.
+pub(super) fn clear_name(store: &AgentTranscriptStore, conversation_id: &str) -> Result<()> {
+    let connection = schema::open(&catalog_path(store))?;
+    mutation::clear_name(&connection, conversation_id)?;
+    set_catalog_permissions(store)
+}
+
+/// Deletes one discovery row after its filesystem payload is removed.
+pub(super) fn delete(store: &AgentTranscriptStore, conversation_id: &str) -> Result<()> {
+    let connection = schema::open(&catalog_path(store))?;
+    mutation::delete(&connection, conversation_id)?;
+    set_catalog_permissions(store)
+}
+
+/// Loads one catalog record by exact conversation id.
+pub(super) fn record(
+    store: &AgentTranscriptStore,
+    conversation_id: &str,
+) -> Result<Option<CatalogRecord>> {
+    let connection = schema::open(&catalog_path(store))?;
+    query::record(&connection, conversation_id)
+}
+
+/// Loads the most recently active root-session row.
+pub(super) fn latest_root_record(store: &AgentTranscriptStore) -> Result<Option<CatalogRecord>> {
+    let connection = schema::open(&catalog_path(store))?;
+    query::latest_root_record(&connection)
+}
+
+/// Lists all catalog sessions for temporary compatibility callers.
+pub(super) fn saved_sessions(store: &AgentTranscriptStore) -> Result<Vec<SavedAgentSession>> {
+    let connection = schema::open(&catalog_path(store))?;
+    query::saved_sessions(&connection)
+}
+
+/// Lists transcript-backed summaries for the temporary compatibility API.
+pub(super) fn transcript_summaries(
+    store: &AgentTranscriptStore,
+) -> Result<Vec<ConversationSummary>> {
+    let connection = schema::open(&catalog_path(store))?;
+    query::transcript_summaries(&connection)
+}
+
+/// Returns oldest unnamed payload-backed ids beyond the retention limit.
+pub(super) fn unnamed_prune_candidates(
+    store: &AgentTranscriptStore,
+    limit: usize,
+) -> Result<Vec<String>> {
+    let connection = schema::open(&catalog_path(store))?;
+    query::unnamed_prune_candidates(&connection, limit)
+}
+
+/// Returns whether one catalog record is currently named.
+pub(super) fn is_named(store: &AgentTranscriptStore, conversation_id: &str) -> Result<bool> {
+    let connection = schema::open(&catalog_path(store))?;
+    query::is_named(&connection, conversation_id)
 }
 
 /// Returns the catalog path for tests and diagnostics.
