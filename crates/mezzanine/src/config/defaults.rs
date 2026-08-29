@@ -714,10 +714,14 @@ default_model = "deepseek-v4-pro"
 [providers.deepseek.models.deepseek-v4-pro]
 id = "deepseek-v4-pro"
 context_window_tokens = 1000000
+max_input_tokens = 800000
+max_output_tokens = 60000
 
 [providers.deepseek.models.deepseek-v4-flash]
 id = "deepseek-v4-flash"
-context_window_tokens = 1000000
+context_window_tokens = 500000
+max_input_tokens = 400000
+max_output_tokens = 30000
 
 [model_profiles.anthropic-default]
 provider = "anthropic"
@@ -824,8 +828,6 @@ model = "deepseek-v4-pro"
 reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false
-context_window_tokens = 1000000
-max_output_tokens = 32768
 safety_tier = "high"
 privacy_tier = "standard"
 residency = "global"
@@ -841,8 +843,6 @@ model = "deepseek-v4-flash"
 reasoning_profile = "high"
 latency_preference = "fast"
 multimodal_required = false
-context_window_tokens = 1000000
-max_output_tokens = 32768
 safety_tier = "high"
 privacy_tier = "standard"
 residency = "global"

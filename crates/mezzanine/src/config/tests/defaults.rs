@@ -667,6 +667,88 @@ fn authenticated_provider_defaults_preserve_openai_model_overrides() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies authenticated DeepSeek defaults carry the exact editable token limits.
+#[test]
+fn default_config_uses_configured_deepseek_model_token_limits() {
+    let parsed: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let models = parsed
+        .get("providers")
+        .and_then(|providers| providers.get("deepseek"))
+        .and_then(|provider| provider.get("models"))
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    for (entry, expected) in [
+        ("deepseek-v4-pro", (1_000_000, 800_000, 60_000)),
+        ("deepseek-v4-flash", (500_000, 400_000, 30_000)),
+    ] {
+        let model = models.get(entry).and_then(toml::Value::as_table).unwrap();
+        let actual = (
+            model
+                .get("context_window_tokens")
+                .and_then(toml::Value::as_integer),
+            model
+                .get("max_input_tokens")
+                .and_then(toml::Value::as_integer),
+            model
+                .get("max_output_tokens")
+                .and_then(toml::Value::as_integer),
+        );
+        assert_eq!(
+            actual,
+            (Some(expected.0), Some(expected.1), Some(expected.2)),
+            "{entry}"
+        );
+    }
+}
+
+/// Verifies DeepSeek authentication fills missing limits without replacing overrides.
+#[test]
+fn authenticated_provider_defaults_preserve_deepseek_model_overrides() {
+    let root = temp_root("authenticated-deepseek-limit-merge");
+    let paths = ConfigPaths::from_root(root.clone());
+    let path = paths.ensure_default_config().unwrap();
+    fs::write(
+        &path,
+        "version = 78\n[providers.deepseek]\nkind = \"deepseek\"\ndefault_model = \"deepseek-v4-pro\"\n[providers.deepseek.models.deepseek-v4-pro]\nid = \"deepseek-v4-pro\"\nmax_input_tokens = 123456\n",
+    )
+    .unwrap();
+
+    paths
+        .materialize_authenticated_provider_defaults("deepseek")
+        .unwrap();
+
+    let parsed: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let models = parsed
+        .get("providers")
+        .and_then(|providers| providers.get("deepseek"))
+        .and_then(|provider| provider.get("models"))
+        .and_then(toml::Value::as_table)
+        .unwrap();
+    let pro = models
+        .get("deepseek-v4-pro")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+    assert_eq!(
+        pro.get("max_input_tokens")
+            .and_then(toml::Value::as_integer),
+        Some(123_456)
+    );
+    assert_eq!(
+        pro.get("context_window_tokens")
+            .and_then(toml::Value::as_integer),
+        Some(1_000_000)
+    );
+    assert_eq!(
+        pro.get("max_output_tokens")
+            .and_then(toml::Value::as_integer),
+        Some(60_000)
+    );
+    assert!(models.contains_key("deepseek-v4-flash"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies the built-in DeepSeek preset uses canonical auto-sizing effort
 /// names rather than provider-native aliases.
 ///
