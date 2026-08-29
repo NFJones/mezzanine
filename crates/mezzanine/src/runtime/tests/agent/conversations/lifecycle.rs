@@ -815,9 +815,13 @@ fn runtime_interrupted_turn_pending_transcript_is_visible_to_immediate_continuat
         "{}",
         interrupted_context.content
     );
-    let persistence = service
+    let side_effects = service
         .drain_transcript_persistence_transition()
         .side_effects;
+    let (presentations, persistence): (Vec<_>, Vec<_>) = side_effects
+        .into_iter()
+        .partition(|effect| matches!(effect, RuntimeSideEffect::PersistPresentationEntries { .. }));
+    assert_eq!(presentations.len(), 3, "{presentations:#?}");
     assert!(
         matches!(
             persistence.as_slice(),

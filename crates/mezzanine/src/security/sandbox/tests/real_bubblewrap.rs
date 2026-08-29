@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mez_agent::permissions::{
     EffectCompleteness, PathScopes, ResolvedPathEvidence, ResolvedPathKind,
@@ -244,13 +244,16 @@ fn bounded_child_output(mut child: std::process::Child, label: &str) -> Output {
     let timed_out = wait_for_child_with_timeout(&mut child, REAL_BUBBLEWRAP_EXECUTION_TIMEOUT)
         .unwrap()
         .is_none();
+    let process_group_id = i32::try_from(child.id()).unwrap();
+    // The direct child can exit while one of its descendants still holds a
+    // capture pipe open. Terminate any remainder of the test-owned process
+    // group before joining the readers so successful parent exit is bounded too.
+    // SAFETY: callers use `process_group(0)`, making the child PID its
+    // process-group ID; the negative value targets only that test group.
+    unsafe {
+        libc::kill(-process_group_id, libc::SIGKILL);
+    }
     if timed_out {
-        let process_group_id = i32::try_from(child.id()).unwrap();
-        // SAFETY: callers use `process_group(0)`, making the child PID its
-        // process-group ID; the negative value targets only that test group.
-        unsafe {
-            libc::kill(-process_group_id, libc::SIGKILL);
-        }
         let _ = child.kill();
     }
     let status = child.wait().unwrap();
@@ -266,6 +269,28 @@ fn bounded_child_output(mut child: std::process::Child, label: &str) -> Output {
         String::from_utf8_lossy(&output.stderr)
     );
     output
+}
+
+#[test]
+/// Verifies successful direct-child exit cannot leave capture readers blocked
+/// on a descendant that inherited the test-owned process group's output pipes.
+fn bounded_child_output_reaps_descendants_that_retain_capture_pipes() {
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "sleep 120 &"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    let started = Instant::now();
+
+    let output = bounded_child_output(command.spawn().unwrap(), "leaked pipe regression");
+
+    assert!(output.status.success(), "status={:?}", output.status);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "capture cleanup took {:?}",
+        started.elapsed()
+    );
 }
 
 /// Executes a production launch plan through the typed pane transaction seam.

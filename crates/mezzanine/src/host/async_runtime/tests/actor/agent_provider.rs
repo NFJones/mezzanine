@@ -683,8 +683,8 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
         )
         .await
         .unwrap();
-        assert_eq!(persistence.drained, 3);
-        assert_eq!(persistence.completed, 3);
+        assert_eq!(persistence.drained, 6);
+        assert_eq!(persistence.completed, 5);
         assert_eq!(persistence.failed, 0);
         assert!(persistence.bytes_written > 0);
 
@@ -771,8 +771,8 @@ async fn async_actor_defers_agent_prompt_history_to_persistence_worker() {
         )
         .await
         .unwrap();
-        assert_eq!(persistence.drained, 2);
-        assert_eq!(persistence.completed, 2);
+        assert_eq!(persistence.drained, 4);
+        assert_eq!(persistence.completed, 3);
         assert_eq!(persistence.failed, 0);
         assert!(persistence.bytes_written > 0);
 
