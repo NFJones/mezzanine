@@ -21,6 +21,14 @@ with reasoning, latency, capability, policy, and non-secret option overrides.
 Use `/model`, `/routing`, and `/thinking` for pane-scoped runtime choices where
 supported.
 
+Profile fields override configured model fields; configured model fields
+override provider discovery; discovery fills gaps ahead of built-in and
+conservative fallbacks. Lists replace lower-precedence lists, while option maps
+merge per key from provider root through model and profile. Aliases resolve to
+the canonical model id, but profiles may still name an unlisted custom model.
+Refreshing provider information updates future resolutions without changing an
+in-flight turn; config reload rebases retained generated profiles.
+
 Provider configuration describes connections and model catalogs; it does not
 store authentication secrets. Use `mez auth login`, `mez auth status`, and
 `mez auth logout` for credentials and account state. Do not put API keys,

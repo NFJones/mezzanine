@@ -673,6 +673,23 @@ identity; `id` is the canonical provider-facing model id. Ids and aliases must
 be unique within a provider. Positive token limits and `max_input_tokens <=
 context_window_tokens` are enforced when both effective values are known.
 
+Each metadata field resolves independently in this order: explicit
+`model_profiles.<name>` override, configured provider-model record, discovered
+provider catalog, built-in metadata, then the conservative fallback. Omitted
+fields inherit; configured `reasoning_levels` and `capabilities` replace lower
+lists even when explicitly empty. Provider option maps merge per key in this
+order: provider root, discovered model, configured model, profile. The last
+value for a key wins.
+
+A profile may use a configured alias; Mez stores and displays the canonical
+model `id`. Profiles may also name unlisted custom models. A provider catalog
+refresh adds discovered models and fills missing metadata but does not hide
+configured models or replace explicit local values. It rematerializes future
+profile resolutions; in-flight turns retain their cloned profile. Config reload
+rebases retained generated profiles against the new model base. Catalog fetches
+use provider-root connection options only, while concrete model requests use
+the selected profile's effective merged options.
+
 Example configured base metadata:
 
 ```toml
@@ -761,7 +778,7 @@ streaming = "enabled" # optional; backend must implement standard OpenAI SSE
 | --- | --- | --- | --- |
 | `model_profiles.<name>.provider` | string | required for custom profiles | Provider profile id. |
 | `model_profiles.<name>.model` | string | required for custom profiles | Provider model id. |
-| `model_profiles.<name>.reasoning_profile` | string | profile-specific | Human-level reasoning profile. |
+| `model_profiles.<name>.reasoning_profile` | string | profile-specific | Selected reasoning level. This is distinct from a provider-model record's supported `reasoning_levels` list. |
 | `model_profiles.<name>.reasoning_effort` | string | omitted | Compatibility scalar for reasoning effort. |
 | `model_profiles.<name>.latency_preference` | string | profile-specific | Latency/cost routing preference: `slow`, `default`, or `fast`. `slow` and `default` both use the standard tier; `fast` uses the premium priority tier. When omitted the API auto-selects. |
 | `model_profiles.<name>.multimodal_required` | boolean | profile-specific | Require multimodal model capability. |

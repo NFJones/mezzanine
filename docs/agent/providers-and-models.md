@@ -18,10 +18,21 @@ Provider-scoped base records under `providers.<name>.models.<entry>` define
 reusable model identity, aliases, context and input/output limits, supported
 reasoning levels, capabilities, and non-secret model options. Profiles may
 override those values for one usage policy without duplicating the base facts.
+The precedence is profile override, configured model, provider discovery,
+built-in metadata, then fallback. Configured lists replace lower lists; option
+maps merge per key. A model record's `reasoning_levels` lists supported choices,
+while a profile's `reasoning_profile` selects one choice.
 Use `/model list` to see the active provider's available catalog and `/model`
 to select a model or supported reasoning level for the pane. When live provider
 metadata is unavailable, the list can fall back to configured models and labels
 that source accordingly.
+
+Configured models remain available when discovery omits them, and discovered
+metadata fills only configured gaps. Aliases select the canonical model id;
+unlisted custom profile models remain valid. `/refresh-provider-info`
+rematerializes future profile lookups, but an in-flight turn keeps its cloned
+profile. Configuration reload similarly rebases retained generated selections
+against the new configured model base.
 
 Model selection does not establish an entitlement or silently lower configured
 safety, privacy, residency, or approval characteristics. If a preferred model

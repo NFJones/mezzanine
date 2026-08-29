@@ -94,7 +94,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
             trusted: true,
-            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\ndefault_model = \"gpt-5.5\"\n\n[providers.openai.models.default]\nid = \"gpt-5.5\"\n\n[providers.openai.models.provider-only]\nid = \"gpt-provider-only\"\nmax_output_tokens = 16000\ncapabilities = [\"vision\"]\n\n[providers.openai.models.provider-only.provider_options]\nservice_tier = \"configured\"\n\n[providers.openai.options]\nreasoning_effort = \"medium\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"low\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"low\"\n"
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[agents.auto_sizing]\nrouter_model_profile = \"named-provider-only\"\nsmall_model_profile = \"default\"\nmedium_model_profile = \"default\"\nlarge_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\ndefault_model = \"gpt-5.5\"\n\n[providers.openai.models.default]\nid = \"gpt-5.5\"\n\n[providers.openai.models.provider-only]\nid = \"gpt-provider-only\"\nmax_output_tokens = 16000\ncapabilities = [\"vision\"]\n\n[providers.openai.models.provider-only.provider_options]\nservice_tier = \"configured\"\n\n[providers.openai.options]\nreasoning_effort = \"medium\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"low\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"low\"\n\n[model_profiles.named-provider-only]\nprovider = \"openai\"\nmodel = \"gpt-provider-only\"\nreasoning_profile = \"low\"\n"
                 .to_string(),
         }])
         .unwrap();
@@ -127,6 +127,25 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
     let (_direct_name, direct_profile) = service
         .active_model_profile_for_pane("%1", "agent-%1", None)
         .unwrap();
+    let named_profile = service
+        .provider_registry()
+        .resolve_profile("named-provider-only")
+        .unwrap();
+    let routed_profile = service
+        .provider_registry()
+        .resolve_profile(&service.agent_auto_sizing().router_model_profile)
+        .unwrap();
+    assert_eq!(named_profile.provider, direct_profile.provider);
+    assert_eq!(named_profile.model, direct_profile.model);
+    assert_eq!(
+        named_profile.reasoning_profile,
+        direct_profile.reasoning_profile
+    );
+    assert_eq!(
+        named_profile.provider_options,
+        direct_profile.provider_options
+    );
+    assert_eq!(routed_profile, named_profile);
 
     let open_model = AttachedTerminalClientStepPlan {
         actions: vec![TerminalClientLoopAction::HandleMouse(

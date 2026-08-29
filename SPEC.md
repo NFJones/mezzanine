@@ -3805,7 +3805,9 @@ profile MUST define `provider` and `model`, and MAY define
 `max_input_tokens`, `max_output_tokens`, `provider_options`, `safety_tier`, `privacy_tier`,
 `residency`, `approval_policy`, and
 `fallback_profiles`. `reasoning_profile` is the canonical Mezzanine
-reasoning-level setting. `reasoning_effort` is accepted as a legacy alias and
+reasoning-level selection for that profile. Provider-model `reasoning_levels`
+instead advertises the ordered values supported by the model; it does not
+select one. `reasoning_effort` is accepted as a legacy alias and
 MUST be normalized as if `reasoning_profile` were set when the canonical field
 is absent. `context_window_tokens`, `context_limit_tokens`, `max_input_tokens`, and
 `max_output_tokens` MUST be positive token counts when present.
@@ -4559,6 +4561,28 @@ known. Explicit configured lists replace lower-precedence list metadata,
 including when explicitly empty. Provider-model records define reusable model
 facts; `model_profiles` define usage policy and MAY override those facts for a
 specific profile. Provider-model option defaults MUST NOT contain credentials.
+
+Effective model metadata MUST resolve each field independently in this order:
+an explicit model-profile override, the configured provider-model record,
+provider discovery metadata, built-in provider/model metadata, then a
+conservative runtime fallback. Missing higher-precedence fields MUST allow a
+lower-precedence source to fill the gap. Provider option maps MUST merge per key
+as provider root, discovered model, configured provider-model, then profile,
+with the later value winning. Configured list fields MUST replace lower lists
+rather than unioning them. A profile model alias MUST canonicalize to the
+configured provider-facing `id`; a profile MAY still name an unlisted custom
+model. Discovery MUST add observed models and fill configured gaps without
+hiding a configured model that the provider omits or overriding explicit local
+metadata.
+
+Provider catalog refresh MUST rematerialize future profile resolutions for the
+affected provider. Already-cloned in-flight turn profiles MUST remain pinned to
+their original effective metadata. Configuration reload MUST rebase retained
+runtime-generated profile definitions against the new provider-model base
+instead of retaining stale inherited values. Catalog discovery itself MUST use
+provider-root connection options only; once a concrete model profile is
+selected, ordinary, routing, compaction, memory, and internal model requests
+MUST use its effective merged options and limits.
 
 The built-in OpenAI provider default model MUST be `gpt-5.6-terra` unless the user
 overrides it through provider or model-profile configuration. The built-in

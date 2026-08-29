@@ -597,6 +597,8 @@ default_model = "gpt-5.6-terra"
 
 # Reusable provider-scoped model facts. Model profiles may override these
 # values for one usage policy without duplicating the base model identity.
+# Resolution is profile, configured model, discovery, built-in, then fallback;
+# configured lists replace lower lists and option maps merge per key.
 [providers.openai.models.gpt-5-6-sol]
 id = "gpt-5.6-sol"
 context_window_tokens = 1050000
