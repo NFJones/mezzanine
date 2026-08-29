@@ -211,7 +211,7 @@ fn provider_http_response_read_error(
     error: reqwest::Error,
 ) -> ProviderHttpError {
     let source_chain = provider_http_error_source_chain(&error);
-    ProviderHttpError::invalid_state(format!(
+    ProviderHttpError::io(format!(
         "provider HTTP response read failed (status {status_code}, \
          content-encoding {content_encoding}, timeout {}, decode {}, source {source_chain}): \
          {error}",
@@ -407,6 +407,7 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
             let mut terminal_detector = ProviderSseTerminalDetector::default();
             let mut event_decoder = expects_event_stream.then(IncrementalSseDecoder::default);
             let mut terminal_event_seen = false;
+            let mut response_eof = false;
             let mut progress_phase = ProviderHttpTimeoutPhase::FirstByte;
             let mut progress_timeout_ms = request.timeouts.first_byte_timeout_ms;
             let mut progress_deadline = first_byte_deadline;
@@ -425,7 +426,10 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                         )
                     })? {
                     Ok(Some(chunk)) => chunk,
-                    Ok(None) => break,
+                    Ok(None) => {
+                        response_eof = true;
+                        break;
+                    }
                     Err(error) => {
                         if expects_event_stream && terminal_detector.has_terminal_event(&body) {
                             break;
@@ -495,6 +499,8 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                     .finish::<SseParseError, _>(
                         "provider stream response did not contain SSE data events",
                         |event| {
+                            terminal_event_seen =
+                                terminal_event_seen || provider_sse_event_is_terminal(&event);
                             decoded_events.push(event);
                             Ok(())
                         },
@@ -503,6 +509,15 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                 for event in decoded_events {
                     on_event(event).await;
                 }
+            }
+            if expects_event_stream
+                && (200..300).contains(&status_code)
+                && response_eof
+                && !terminal_event_seen
+            {
+                return Err(ProviderHttpError::io(format!(
+                    "provider SSE stream ended before a terminal event (status {status_code}, response_bytes={response_bytes})"
+                )));
             }
             if body_truncated {
                 response_headers.insert("x-mez-body-truncated".to_string(), "true".to_string());
@@ -704,6 +719,124 @@ mod provider_transport_tests {
 
         assert_eq!(response.status_code, 200);
         assert!(response.body.contains("response.completed"));
+    }
+
+    /// Verifies EOF after a valid streaming delta but before a terminal event
+    /// is a retryable transport interruption rather than a parser failure.
+    #[tokio::test]
+    async fn provider_transport_rejects_sse_eof_before_terminal_event() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                request.extend_from_slice(&buffer[..read]);
+                if read == 0 || request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let body = concat!(
+                "event: response.output_text.delta\n",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: text/event-stream\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\
+                 \r\n\
+                 {}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.flush().await.unwrap();
+        });
+        let request = ProviderHttpRequest {
+            method: "POST".to_string(),
+            url: format!("http://{address}/responses"),
+            headers: BTreeMap::from([("Accept".to_string(), "text/event-stream".to_string())]),
+            body: "{}".to_string(),
+            timeouts: ProviderHttpTimeouts::from_total(1_000),
+            max_response_bytes: None,
+        };
+
+        let error = ReqwestProviderHttpTransport
+            .send_async(&request)
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+
+        assert_eq!(error.kind(), mez_agent::ProviderHttpErrorKind::Io);
+        assert!(error.message().contains("ended before a terminal event"));
+        let runtime_error: crate::error::MezError = error.into();
+        assert_eq!(runtime_error.kind(), crate::error::MezErrorKind::Io);
+        assert_eq!(
+            super::super::errors::provider_error_retry_class(&runtime_error),
+            mez_agent::ProviderErrorRetryClass::RetryableTransport
+        );
+    }
+
+    /// Verifies EOF cannot turn an unfinished terminal event block into a
+    /// successful response, even after earlier valid stream progress.
+    #[tokio::test]
+    async fn provider_transport_rejects_truncated_terminal_sse_event_at_eof() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                request.extend_from_slice(&buffer[..read]);
+                if read == 0 || request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let body = concat!(
+                "event: response.output_text.delta\n",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: text/event-stream\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\
+                 \r\n\
+                 {}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.flush().await.unwrap();
+        });
+        let request = ProviderHttpRequest {
+            method: "POST".to_string(),
+            url: format!("http://{address}/responses"),
+            headers: BTreeMap::from([("Accept".to_string(), "text/event-stream".to_string())]),
+            body: "{}".to_string(),
+            timeouts: ProviderHttpTimeouts::from_total(1_000),
+            max_response_bytes: None,
+        };
+
+        let error = ReqwestProviderHttpTransport
+            .send_async(&request)
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+
+        assert_eq!(error.kind(), mez_agent::ProviderHttpErrorKind::Io);
+        assert!(error.message().contains("ended before a terminal event"));
     }
 
     /// Verifies observer-based provider streaming exposes visible deltas before

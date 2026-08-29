@@ -309,6 +309,119 @@ async fn async_actor_schedules_provider_retry_timer_for_retryable_failure() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a premature SSE EOF discards provisional streamed output before
+/// the actor schedules the ordinary bounded transport retry.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_discards_streaming_output_before_retrying_premature_sse_eof() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service
+        .execute_agent_shell_command(&primary, "summarize the pane")
+        .unwrap();
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let pending = service.pending_agent_provider_tasks();
+    assert_eq!(pending.len(), 1);
+    let expected_agent = AgentId::opaque(pending[0].agent_id.clone()).unwrap();
+    let expected_turn = pending[0].turn_id.clone();
+    let high_water_mark = service
+        .agent_turn_contexts()
+        .get(&expected_turn)
+        .unwrap()
+        .event_sequence_high_water_mark();
+    service
+        .record_claimed_agent_provider_context_for_tests(&expected_turn, high_water_mark)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let mut progress = RuntimeEventBatch::new();
+        for event in [
+            mez_agent::StreamingSayEvent::Started {
+                action_index: 0,
+                status: mez_agent::SayStatus::Progress,
+                content_type: "text/plain; charset=utf-8".to_string(),
+            },
+            mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 0,
+                text: "provisional SSE output".to_string(),
+            },
+        ] {
+            progress.push(RuntimeEvent::AgentProvider(
+                AgentProviderEvent::StreamingSay {
+                    agent_id: expected_agent.clone(),
+                    turn_id: expected_turn.clone(),
+                    pane_id: "%1".to_string(),
+                    event,
+                },
+            ));
+        }
+        assert_eq!(
+            handle
+                .submit_runtime_events(progress)
+                .await
+                .unwrap()
+                .applied,
+            2
+        );
+        let work = handle
+            .take_streaming_say_projection_work("%1".to_string(), expected_turn.clone())
+            .await
+            .unwrap()
+            .expect("stream progress should produce projection work");
+        let projection = RuntimeSessionService::build_agent_streaming_say_projection(work).unwrap();
+        assert!(
+            handle
+                .apply_streaming_say_projection(projection)
+                .await
+                .unwrap()
+        );
+
+        let mut failure = RuntimeEventBatch::new();
+        failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
+            agent_id: expected_agent,
+            turn_id: expected_turn.clone(),
+            kind: "io".to_string(),
+            message: "provider SSE stream ended before a terminal event".to_string(),
+            provider_failure_json: None,
+            provider_raw_text: None,
+            provider_output_limit_state: None,
+        }));
+        assert_eq!(
+            handle.submit_runtime_events(failure).await.unwrap().applied,
+            1
+        );
+        let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        assert!(timers.iter().any(|effect| matches!(
+            effect,
+            RuntimeSideEffect::ScheduleTimer { key, .. }
+                if key.kind == RuntimeTimerKind::ProviderRetry
+                    && key.owner_id == expected_turn
+        )));
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    let pane_text = exit
+        .service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(!pane_text.contains("provisional SSE output"), "{pane_text}");
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies rate-limited provider failures receive the full bounded exponential
 /// retry policy before the runtime records a terminal turn failure.
 ///

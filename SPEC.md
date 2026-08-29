@@ -8925,6 +8925,11 @@ For provider SSE streams, Mezzanine MUST treat a terminal provider event such as
 `response.completed`, `response.failed`, `response.incomplete`, or `[DONE]` as
 the end of the provider response and MUST NOT require the HTTP peer to close the
 connection before parsing the completed stream.
+EOF before a recognized terminal SSE event MUST be treated as a retryable
+transport interruption, even when valid progress events were already decoded.
+Mezzanine MUST discard provisional streamed presentation before scheduling the
+bounded actor-owned retry and MUST NOT reinterpret truncated terminal JSON as a
+complete provider failure or response.
 When an OpenAI-compatible stream ends with `response.incomplete` and
 `incomplete_details.reason` is `max_output_tokens`, Mezzanine MUST classify the
 failure as output-token exhaustion rather than input context pressure. Mezzanine

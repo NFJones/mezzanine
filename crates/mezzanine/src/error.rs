@@ -182,6 +182,7 @@ impl From<mez_agent::ProviderHttpError> for MezError {
         match error.kind() {
             mez_agent::ProviderHttpErrorKind::InvalidArgs => Self::invalid_args(error.message()),
             mez_agent::ProviderHttpErrorKind::InvalidState => Self::invalid_state(error.message()),
+            mez_agent::ProviderHttpErrorKind::Io => Self::new(MezErrorKind::Io, error.message()),
             mez_agent::ProviderHttpErrorKind::Timeout(_) => Self::invalid_state(error.message()),
         }
     }

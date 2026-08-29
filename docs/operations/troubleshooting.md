@@ -39,6 +39,14 @@ as authenticated. For MCP, use `/list-mcp` to inspect a server's enabled,
 unavailable, or session-blacklisted state; fix its configured executable,
 endpoint, credential reference, or network reachability before retrying.
 
+Provider SSE streams require a recognized terminal event such as
+`response.completed`, `response.failed`, `response.incomplete`, `[DONE]`, or
+Anthropic `message_stop`. If the HTTP peer closes first, Mez treats the EOF as
+a retryable transport interruption, discards provisional streamed output, and
+uses the existing bounded actor-owned retry policy. Repeated premature EOF
+usually indicates an unstable provider, proxy, or network path rather than a
+malformed model response.
+
 ## Project behavior is missing or blocked
 
 Check `mez sandbox trust list` and inspect the project's `.mezzanine` overlay

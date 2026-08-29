@@ -13,6 +13,8 @@ pub enum ProviderHttpErrorKind {
     InvalidArgs,
     /// The transport could not complete or decode the provider exchange.
     InvalidState,
+    /// The provider exchange ended because of a transport I/O interruption.
+    Io,
     /// The transport exceeded one explicit request or response phase deadline.
     Timeout(ProviderHttpTimeoutPhase),
 }
@@ -62,6 +64,14 @@ impl ProviderHttpError {
     pub fn invalid_state(message: impl Into<String>) -> Self {
         Self {
             kind: ProviderHttpErrorKind::InvalidState,
+            message: message.into(),
+        }
+    }
+
+    /// Builds a provider transport I/O failure.
+    pub fn io(message: impl Into<String>) -> Self {
+        Self {
+            kind: ProviderHttpErrorKind::Io,
             message: message.into(),
         }
     }
@@ -655,6 +665,7 @@ mod tests {
     fn provider_http_errors_preserve_stable_categories() {
         let invalid_args = ProviderHttpError::invalid_args("bad method");
         let invalid_state = ProviderHttpError::invalid_state("read stalled");
+        let io = ProviderHttpError::io("stream interrupted");
         let timeout = ProviderHttpError::timeout(
             ProviderHttpTimeoutPhase::FirstByte,
             50,
@@ -665,6 +676,8 @@ mod tests {
         assert_eq!(invalid_args.message(), "bad method");
         assert_eq!(invalid_state.kind(), ProviderHttpErrorKind::InvalidState);
         assert_eq!(invalid_state.message(), "read stalled");
+        assert_eq!(io.kind(), ProviderHttpErrorKind::Io);
+        assert_eq!(io.message(), "stream interrupted");
         assert_eq!(
             timeout.kind(),
             ProviderHttpErrorKind::Timeout(ProviderHttpTimeoutPhase::FirstByte)
