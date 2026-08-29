@@ -368,6 +368,38 @@ fn foreground_serve_attach_primary_exits_cleanly_without_broken_pipe_error() {
     );
 }
 
+/// Launches a foreground-owned session and exits it through Mezzanine's
+/// command prompt. Restoring the terminal is not sufficient: the foreground
+/// process must also stop supervising its listener and worker services so the
+/// user's external shell regains control without requiring Ctrl+C.
+#[test]
+fn foreground_serve_mux_exit_stops_after_restoring_presentation() {
+    let root = test_root("foreground-serve-mux-exit");
+    let home = root.join("home");
+    let runtime = root.join("runtime");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = runtime.join("foreground.sock");
+
+    let mut process = spawn_foreground_serve(&root, &home, &runtime, &socket);
+    let mut output = Vec::new();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("serving: true") && contains_default_shell_pane_frame(text)
+        })
+        .unwrap();
+
+    process.write_input(b"\x01:exit\r").unwrap();
+    process
+        .read_until_exit(&mut output, Duration::from_secs(5))
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output);
+    assert!(!text.contains("Broken pipe"), "{text}");
+    assert!(!text.contains("mez: Io"), "{text}");
+}
+
 /// Launches a detached foreground service and attaches with a separate
 /// interactive `mez attach` process. This covers the direct attach teardown path
 /// used by normal `mez new` reattachment; closing the primary shell must not

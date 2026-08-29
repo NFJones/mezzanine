@@ -175,6 +175,7 @@ pub use actor_types::{
     serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush,
     serve_authenticated_async_runtime_control_connection_loop_with_snapshots_hooks_and_cancellation,
 };
+pub(crate) use client::attached_terminal_client_service_exit;
 #[cfg(test)]
 pub use client::build_async_attached_terminal_client_service;
 pub use client::{

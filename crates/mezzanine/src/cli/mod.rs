@@ -29,7 +29,8 @@ use crate::host::async_runtime::{
     AsyncAttachedTerminalClientServiceConfig, AsyncAttachedTerminalIo,
     AsyncAttachedTerminalLoopRequest, AsyncAttachedTerminalPresentationGuard, AsyncRuntimeService,
     AsyncRuntimeServiceExit, ClientEvent, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
-    RuntimeEvent, RuntimeEventBatch, run_async_attached_terminal_client_service,
+    RuntimeEvent, RuntimeEventBatch, attached_terminal_client_service_exit,
+    run_async_attached_terminal_client_service,
 };
 use crate::host::shell::resolve_shell;
 use crate::host::terminal::{

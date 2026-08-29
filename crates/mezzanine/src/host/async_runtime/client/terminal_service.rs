@@ -1,5 +1,8 @@
 //! Attached-terminal client service construction, wakeups, and render rate limiting.
 
+#[cfg(test)]
+use super::AsyncRuntimeService;
+use super::AsyncRuntimeServiceExit;
 use super::{
     AsyncAttachedTerminalIo, AsyncAttachedTerminalLoopRequest,
     AsyncAttachedTerminalResolvedLoopRequest, AsyncRuntimeSessionHandle, AsyncTerminalIoFuture,
@@ -12,8 +15,6 @@ use super::{
     merge_attached_terminal_loop_report, run_async_attached_terminal_client_loop_with_snapshot,
     sleep, watch,
 };
-#[cfg(test)]
-use super::{AsyncRuntimeService, AsyncRuntimeServiceExit};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -129,6 +130,22 @@ pub struct AsyncAttachedTerminalClientServiceReport {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub terminal_resizes: u64,
+}
+
+/// Converts a completed attached-terminal report into its supervisor exit.
+///
+/// A terminal lifecycle stop must cancel peer services. Otherwise the terminal
+/// can be restored while the foreground process remains alive waiting for
+/// listener or worker services to finish.
+pub(crate) fn attached_terminal_client_service_exit(
+    report: &AsyncAttachedTerminalClientServiceReport,
+) -> AsyncRuntimeServiceExit {
+    let work_units = report.loop_report.iterations;
+    if report.stopped_by_lifecycle && is_terminal_runtime_lifecycle_state(report.terminal_state) {
+        AsyncRuntimeServiceExit::shutdown(work_units)
+    } else {
+        AsyncRuntimeServiceExit::completed(work_units)
+    }
 }
 
 /// Moves final client-local paste state into a completed service report.
@@ -1008,13 +1025,7 @@ where
             &mut status_provider,
         )
         .await?;
-        let work_units = report.loop_report.iterations;
-        if report.stopped_by_lifecycle && is_terminal_runtime_lifecycle_state(report.terminal_state)
-        {
-            Ok(AsyncRuntimeServiceExit::shutdown(work_units))
-        } else {
-            Ok(AsyncRuntimeServiceExit::completed(work_units))
-        }
+        Ok(attached_terminal_client_service_exit(&report))
     }))
 }
 
@@ -1025,4 +1036,42 @@ where
 /// on duplicated control-flow logic.
 fn is_attached_terminal_client_stop_state(state: RuntimeLifecycleState) -> bool {
     state == RuntimeLifecycleState::Detached || is_terminal_runtime_lifecycle_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stopped_report(
+        terminal_state: RuntimeLifecycleState,
+    ) -> AsyncAttachedTerminalClientServiceReport {
+        let mut loop_report = empty_attached_terminal_loop_report();
+        loop_report.iterations = 7;
+        AsyncAttachedTerminalClientServiceReport {
+            batches: 1,
+            loop_report,
+            action_counts: AttachedTerminalClientActionCounts::default(),
+            terminal_state,
+            stopped_by_lifecycle: true,
+            terminal_resizes: 0,
+        }
+    }
+
+    /// Terminal lifecycle completion must stop peer services after the UI is restored.
+    #[test]
+    fn terminal_lifecycle_stop_requests_supervisor_shutdown() {
+        let exit =
+            attached_terminal_client_service_exit(&stopped_report(RuntimeLifecycleState::Stopping));
+
+        assert_eq!(exit, AsyncRuntimeServiceExit::shutdown(7));
+    }
+
+    /// Detach ends only the client and must not shut down a durable session daemon.
+    #[test]
+    fn detached_client_completion_does_not_request_supervisor_shutdown() {
+        let exit =
+            attached_terminal_client_service_exit(&stopped_report(RuntimeLifecycleState::Detached));
+
+        assert_eq!(exit, AsyncRuntimeServiceExit::completed(7));
+    }
 }

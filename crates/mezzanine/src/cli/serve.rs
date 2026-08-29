@@ -11,9 +11,10 @@ use super::{
     ClientId, ClientViewRole, ConfigFormat, ConfigLayer, ConfigPaths, ConfigScope, IsTerminal,
     MezError, PathBuf, Result, RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState, Session,
     SessionSnapshotPayload, Size, SnapshotRestoreResult, SocketSelection, TerminalClientLoopConfig,
-    Write, auxiliary_socket_path_for_control_socket, current_unix_seconds, io, json_escape,
-    load_runtime_config_layers, resolve_shell, run_async_attached_terminal_client_service,
-    selected_socket_path, terminal_size_from_fd_or_environment, write_json_or_plain,
+    Write, attached_terminal_client_service_exit, auxiliary_socket_path_for_control_socket,
+    current_unix_seconds, io, json_escape, load_runtime_config_layers, resolve_shell,
+    run_async_attached_terminal_client_service, selected_socket_path,
+    terminal_size_from_fd_or_environment, write_json_or_plain,
 };
 use crate::host::session::{
     SessionFactory, SessionFactoryRequest, SessionRuntimeConfig, SessionRuntimeLimits,
@@ -1064,14 +1065,15 @@ pub(super) fn build_foreground_attached_primary_client_service(
                     return Err(error);
                 }
             };
-            let work_units = report.loop_report.iterations;
             if report.loop_report.input_hangups > 0
                 || report.loop_report.output_hangups > 0
                 || !report.loop_report.error_roles.is_empty()
             {
-                Ok(AsyncRuntimeServiceExit::shutdown(work_units))
+                Ok(AsyncRuntimeServiceExit::shutdown(
+                    report.loop_report.iterations,
+                ))
             } else {
-                Ok(AsyncRuntimeServiceExit::completed(work_units))
+                Ok(attached_terminal_client_service_exit(&report))
             }
         },
     ))
