@@ -16,7 +16,10 @@ use super::encoding::{
     encode_structured_prompt_history_entry, encode_transcript_entry,
 };
 use super::store::{PRESENTATION_CLEAR_TAIL_COMPACT_BYTES, PROMPT_HISTORY_COMPACTION_BYTES};
-use super::{AgentPresentationEntry, AgentTranscriptStore};
+use super::{
+    AgentPresentationEntry, AgentTranscriptStore, SavedSessionCursor, SavedSessionPageAnchor,
+    SavedSessionQuery,
+};
 use mez_agent::transcript::{AgentSessionMetadata, TranscriptEntry, TranscriptRole};
 use mez_mux::readline::{ReadlineHistoryEntry, ReadlinePasteRange};
 use rusqlite::Connection;
@@ -1674,5 +1677,243 @@ fn transcript_store_catalog_latest_root_skips_subagents_and_stale_rows() {
     let latest = store.latest_root_session().unwrap().unwrap();
     assert_eq!(latest.summary.conversation_id, "older-root");
     assert!(store.catalog_saved_session("stale-root").unwrap().is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies completion is bounded and root-only, while picker pages retain
+/// deterministic named-first ordering across forward, backward, and last-page
+/// keyset boundaries.
+///
+/// Equal activity timestamps exercise the conversation-id tie-breaker. The
+/// completion assertion includes a named zero-entry root and excludes a newer
+/// delegated child so discovery semantics do not depend on transcript rows.
+#[test]
+fn transcript_store_catalog_bounds_completion_and_keyset_pages() {
+    let root = temp_root("catalog-keyset-pages");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+
+    for (conversation_id, created_at, content) in [
+        ("named-a", 20, "cwd=/repo/a\nalpha needle"),
+        ("named-b", 20, "cwd=/repo/a\nbeta needle"),
+        ("unnamed-a", 30, "cwd=/repo/b\ngamma"),
+        ("unnamed-b", 10, "cwd=/repo/b\ndelta"),
+        ("root-prefix", 40, "completion root"),
+        ("root-child", 50, "completion child"),
+    ] {
+        let mut transcript_entry = entry(conversation_id, 1, TranscriptRole::User);
+        transcript_entry.created_at_unix_seconds = created_at;
+        transcript_entry.content = content.to_string();
+        store.append(&transcript_entry).unwrap();
+    }
+    store.name_session("named-a", "Named A", 20, None).unwrap();
+    store.name_session("named-b", "Named B", 20, None).unwrap();
+    store
+        .name_session("root-zero", "Zero entry", 60, None)
+        .unwrap();
+    store
+        .save_conversation_kind("root-child", mez_agent::AgentConversationKind::Subagent)
+        .unwrap();
+
+    let completion_ids = store
+        .root_session_completions("root-", 2)
+        .unwrap()
+        .into_iter()
+        .map(|session| session.summary.conversation_id)
+        .collect::<Vec<_>>();
+    assert_eq!(completion_ids, vec!["root-zero", "root-prefix"]);
+
+    let query = SavedSessionQuery {
+        directory: None,
+        include_subagents: false,
+        require_latest_user_prompt: true,
+        search: None,
+        anchor: None,
+        limit: 2,
+    };
+    let first = store.query_saved_sessions(&query).unwrap().sessions;
+    assert_eq!(
+        first
+            .iter()
+            .map(|session| session.summary.conversation_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["named-a", "named-b"]
+    );
+
+    let second = store
+        .query_saved_sessions(&SavedSessionQuery {
+            anchor: Some(SavedSessionPageAnchor::After(
+                SavedSessionCursor::from_session(first.last().unwrap()),
+            )),
+            ..query.clone()
+        })
+        .unwrap()
+        .sessions;
+    assert_eq!(
+        second
+            .iter()
+            .map(|session| session.summary.conversation_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["root-prefix", "unnamed-a"]
+    );
+
+    let previous = store
+        .query_saved_sessions(&SavedSessionQuery {
+            anchor: Some(SavedSessionPageAnchor::Before(
+                SavedSessionCursor::from_session(second.first().unwrap()),
+            )),
+            ..query.clone()
+        })
+        .unwrap()
+        .sessions;
+    assert_eq!(previous, first);
+
+    let last = store
+        .query_saved_sessions(&SavedSessionQuery {
+            anchor: Some(SavedSessionPageAnchor::Last),
+            ..query.clone()
+        })
+        .unwrap()
+        .sessions;
+    assert_eq!(
+        last.iter()
+            .map(|session| session.summary.conversation_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["unnamed-a", "unnamed-b"]
+    );
+
+    let filtered = store
+        .query_saved_sessions(&SavedSessionQuery {
+            directory: Some("/repo/a".to_string()),
+            search: Some("NEEDLE".to_string()),
+            anchor: None,
+            limit: 10,
+            ..query
+        })
+        .unwrap()
+        .sessions;
+    assert_eq!(
+        filtered
+            .iter()
+            .map(|session| session.summary.conversation_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["named-a", "named-b"]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Exercises bounded catalog discovery against a realistically large metadata
+/// set and verifies representative normal queries retain indexed plans.
+///
+/// This is ignored in ordinary CI because constructing 100,000 rows is scale
+/// validation rather than a functional regression. It deliberately asserts
+/// bounded result counts and query plans instead of wall-clock timing.
+#[test]
+#[ignore = "large saved-session catalog scale and query-plan check"]
+fn transcript_store_catalog_scales_bounded_queries_to_one_hundred_thousand_rows() {
+    let root = temp_root("catalog-scale");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+
+    let mut connection = Connection::open(store.catalog_path()).unwrap();
+    let transaction = connection.transaction().unwrap();
+    {
+        let mut insert = transaction
+            .prepare(
+                "INSERT INTO saved_conversations (
+                     conversation_id, conversation_kind, name, named_at,
+                     entry_count, first_created_at, last_created_at,
+                     last_turn_id, agent_id, pane_id, directory,
+                     initial_prompt, latest_user_prompt, has_transcript,
+                     has_presentation, payload_layout, catalog_updated_at
+                 ) VALUES (?1, 'root', ?2, ?3, 1, ?4, ?4, 'turn',
+                           'agent', '%1', ?5, ?6, ?6, 1, 0, 'directory', ?4)",
+            )
+            .unwrap();
+        for index in 0..100_000u64 {
+            let conversation_id = format!("00000000-0000-0000-{:04x}-{index:012x}", index % 65_536);
+            let name = (index % 10 == 0).then(|| format!("Named {index}"));
+            let named_at = name.as_ref().map(|_| index as i64 + 1);
+            let directory = if index % 2 == 0 { "/repo/a" } else { "/repo/b" };
+            let prompt = format!("saved prompt {index}");
+            insert
+                .execute(rusqlite::params![
+                    conversation_id,
+                    name,
+                    named_at,
+                    index as i64 + 1,
+                    directory,
+                    prompt,
+                ])
+                .unwrap();
+        }
+    }
+    transaction.commit().unwrap();
+
+    assert_eq!(
+        store
+            .root_session_completions("00000000", 200)
+            .unwrap()
+            .len(),
+        200
+    );
+    assert_eq!(
+        store
+            .query_saved_sessions(&SavedSessionQuery {
+                directory: Some("/repo/a".to_string()),
+                include_subagents: false,
+                require_latest_user_prompt: true,
+                search: None,
+                anchor: None,
+                limit: 40,
+            })
+            .unwrap()
+            .sessions
+            .len(),
+        40
+    );
+
+    let picker_plan = connection
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT conversation_id FROM saved_conversations
+             WHERE directory = '/repo/a' AND conversation_kind = 'root'
+               AND latest_user_prompt IS NOT NULL
+             ORDER BY (name IS NOT NULL) DESC, last_created_at DESC,
+                      first_created_at DESC, conversation_id ASC
+             LIMIT 40",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+        .join("\n");
+    assert!(
+        picker_plan.contains("saved_conversations_directory_picker"),
+        "{picker_plan}"
+    );
+
+    let completion_plan = connection
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT conversation_id FROM saved_conversations
+             WHERE conversation_kind = 'root'
+             ORDER BY last_created_at DESC, first_created_at DESC,
+                      conversation_id ASC
+             LIMIT 200",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+        .join("\n");
+    assert!(
+        completion_plan.contains("saved_conversations_latest_root"),
+        "{completion_plan}"
+    );
     let _ = fs::remove_dir_all(root);
 }

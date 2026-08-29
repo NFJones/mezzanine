@@ -119,6 +119,14 @@ operations do not scan the complete session directory. If a catalog write
 fails after a payload write, preserve the files and rebuild the catalog rather
 than deleting the recoverable conversation.
 
+Resume completion returns at most 200 root-conversation candidates. The
+interactive resume picker keeps only a bounded, viewport-derived keyset page in
+memory and fetches adjacent pages as focus crosses an edge. Directory scope,
+subagent inclusion, prompt presence, and case-insensitive metadata search are
+evaluated in SQLite. Opening `i` loads only a bounded recent transcript tail for
+that selected row; merely listing or paging sessions does not read transcript
+payloads.
+
 Treat `catalog.sqlite3`, its `-wal` and `-shm` files, migration markers, and
 backups as sensitive metadata. Do not remove transcript directories or legacy
 sidecars as part of catalog recovery: they are the reconstruction source.

@@ -10302,7 +10302,20 @@ remains visible.
 Agent prompt completion for `/resume` MUST include
 root-conversation UUIDs from the active transcript store, including named root
 conversations with no transcript entries, and MUST exclude subagent UUIDs. The
-picker MUST place named conversations before UUID-only conversations and MUST
+completion query MUST return a bounded result set. The interactive picker MUST
+query SQLite in bounded keyset pages rather than materializing the complete
+catalog. Its page size SHOULD derive from the active viewport with a bounded
+preload, and forward or backward navigation across a page boundary MUST retain
+the named-first and activity ordering contract without using offset pagination.
+Directory scope, subagent inclusion, prompt-presence, and case-insensitive
+search across UUID, name, latest prompt, and directory MUST be applied by the
+catalog query. Scope, kind, search, clear-name, and deletion refreshes MUST
+preserve the selected UUID when it remains visible and otherwise select a
+deterministic neighboring row. Picker list construction MUST NOT read every
+session transcript; bounded recent transcript detail MAY be loaded only when a
+row is explicitly opened.
+
+The picker MUST place named conversations before UUID-only conversations and MUST
 order each partition by most recent activity. Named rows MUST render as
 `<uuid> - <name>` while keeping
 the name outside the UUID command link. `/resume --latest` MUST select by most

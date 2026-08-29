@@ -16,7 +16,7 @@ use mez_mux::readline::ReadlineEdit;
 use mez_mux::record_browser::{RecordBrowser, RecordBrowserRecord};
 
 use crate::runtime::service_state::RuntimeRecordBrowserOverlaySource;
-use crate::storage::transcript::SavedAgentSession;
+use crate::storage::transcript::{SavedAgentSession, SavedSessionPageAnchor, SavedSessionQuery};
 
 /// Maximum saved transcript entries to render when `/resume` has no presentation log.
 const AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES: usize = 64;
@@ -380,6 +380,9 @@ impl RuntimeSessionService {
                 directory: directory.clone(),
                 default_directory: directory,
                 include_subagents: false,
+                search: None,
+                anchor: None,
+                limit: self.saved_session_page_limit(),
             }),
         );
         Ok(AgentShellCommandOutcome::Display {
@@ -408,30 +411,44 @@ impl RuntimeSessionService {
         directory: Option<&str>,
         include_subagents: bool,
     ) -> Result<RecordBrowser> {
+        self.saved_sessions_record_browser_for_query(
+            directory,
+            include_subagents,
+            None,
+            None,
+            self.saved_session_page_limit(),
+        )
+    }
+
+    /// Builds one bounded saved-session browser page from catalog filters.
+    pub(crate) fn saved_sessions_record_browser_for_query(
+        &self,
+        directory: Option<&str>,
+        include_subagents: bool,
+        search: Option<&str>,
+        anchor: Option<SavedSessionPageAnchor>,
+        limit: usize,
+    ) -> Result<RecordBrowser> {
         let store = self
             .persistence
             .transcript_store()
             .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
-        let mut sessions = store
-            .saved_sessions()?
-            .into_iter()
-            .filter(|session| session.summary.latest_user_prompt.is_some())
-            .filter(|session| {
-                include_subagents
-                    || session.conversation_kind == mez_agent::AgentConversationKind::Root
-            })
-            .filter(|session| {
-                directory
-                    .is_none_or(|directory| session.summary.directory.as_deref() == Some(directory))
-            })
-            .collect::<Vec<_>>();
-        Self::sort_agent_saved_sessions_for_picker(&mut sessions);
+        let sessions = store
+            .query_saved_sessions(&SavedSessionQuery {
+                directory: directory.map(ToOwned::to_owned),
+                include_subagents,
+                require_latest_user_prompt: true,
+                search: search.map(ToOwned::to_owned),
+                anchor,
+                limit,
+            })?
+            .sessions;
         let prompt_width = usize::from(self.session.authoritative_size.columns)
             .saturating_sub(40)
             .clamp(20, 80);
         let records = sessions
             .into_iter()
-            .map(|session| Self::saved_session_browser_record(store, session, prompt_width))
+            .map(|session| Self::saved_session_browser_record(session, prompt_width))
             .collect::<Result<Vec<_>>>()?;
         let mut browser = RecordBrowser::new("Agent Sessions", records, Vec::new())?;
         browser.enable_deletion();
@@ -458,6 +475,13 @@ impl RuntimeSessionService {
         }
         browser.set_empty_message(Some("No saved agent sessions are available.".to_string()));
         Ok(browser)
+    }
+
+    /// Returns the viewport-derived bounded page size used by `/resume`.
+    pub(crate) fn saved_session_page_limit(&self) -> usize {
+        mez_mux::render::modal_overlay_page_rows(self.session.authoritative_size)
+            .saturating_mul(2)
+            .clamp(20, 80)
     }
 
     /// Formats the active in-memory session when transcript storage is unavailable.
@@ -519,36 +543,8 @@ impl RuntimeSessionService {
         lines.join("\n")
     }
 
-    /// Applies named-first ordering while retaining activity order per partition.
-    fn sort_agent_saved_sessions_for_picker(sessions: &mut [SavedAgentSession]) {
-        sessions.sort_by(|left, right| {
-            right
-                .name
-                .is_some()
-                .cmp(&left.name.is_some())
-                .then_with(|| {
-                    right
-                        .summary
-                        .last_created_at_unix_seconds
-                        .cmp(&left.summary.last_created_at_unix_seconds)
-                        .then_with(|| {
-                            right
-                                .summary
-                                .first_created_at_unix_seconds
-                                .cmp(&left.summary.first_created_at_unix_seconds)
-                        })
-                        .then_with(|| {
-                            left.summary
-                                .conversation_id
-                                .cmp(&right.summary.conversation_id)
-                        })
-                })
-        });
-    }
-
     /// Adapts one saved conversation to the shared record-browser contract.
     fn saved_session_browser_record(
-        store: &crate::storage::transcript::AgentTranscriptStore,
         session: SavedAgentSession,
         prompt_width: usize,
     ) -> Result<RecordBrowserRecord> {
@@ -556,7 +552,7 @@ impl RuntimeSessionService {
         let transcript_markdown = if summary.entries == 0 {
             "No saved transcript entries were found for this session.".to_string()
         } else {
-            Self::saved_session_transcript_markdown(&store.inspect(&summary.conversation_id)?)
+            "Open this row to load its recent transcript entries.".to_string()
         };
         let escaped_name = session
             .name
@@ -591,6 +587,21 @@ impl RuntimeSessionService {
             ],
             markdown: transcript_markdown,
         })
+    }
+
+    /// Loads bounded transcript detail only for the saved-session row being opened.
+    pub(crate) fn saved_session_detail_markdown(&self, conversation_id: &str) -> Result<String> {
+        let store = self
+            .persistence
+            .transcript_store()
+            .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
+        Ok(Self::saved_session_transcript_markdown(
+            &store.inspect_recent(
+                conversation_id,
+                AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES,
+                AGENT_RESUME_TRANSCRIPT_REPLAY_BYTES,
+            )?,
+        ))
     }
 
     /// Formats every durable transcript entry for saved-session inspection.

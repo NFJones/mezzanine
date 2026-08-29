@@ -293,16 +293,14 @@ impl RuntimeSessionService {
         &mut self,
         source: &RuntimeRecordBrowserOverlaySource,
         record_id: &str,
-    ) -> Result<RecordBrowser> {
+    ) -> Result<(RuntimeRecordBrowserOverlaySource, RecordBrowser)> {
         let store = self
             .persistence
             .cloned_transcript_store()
             .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
         store.clear_session_name(record_id)?;
         self.invalidate_agent_prompt_selector_extra_candidates();
-        let mut browser = self.refresh_record_browser_overlay_source(source)?;
-        browser.set_active_record_id(record_id);
-        Ok(browser)
+        self.refresh_saved_session_browser_preserving(source, Some(record_id))
     }
 
     /// Deletes one pane-owned transcript record and refreshes its context browser.
@@ -577,11 +575,17 @@ impl RuntimeSessionService {
             RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory,
                 include_subagents,
+                search,
+                anchor,
+                limit,
                 ..
             } => {
-                let mut browser = self.saved_sessions_record_browser_for_options(
+                let mut browser = self.saved_sessions_record_browser_for_query(
                     directory.as_deref(),
                     *include_subagents,
+                    search.as_deref(),
+                    anchor.clone(),
+                    *limit,
                 )?;
                 browser.enable_scope_toggle();
                 Ok(browser)
@@ -684,6 +688,55 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Refreshes a bounded saved-session page around one selected UUID.
+    ///
+    /// The inclusive keyset anchor keeps the row selected when it still
+    /// matches changed scope or search filters. If no rows exist before the
+    /// cursor under the new filters, the query falls back to the first page.
+    pub(crate) fn refresh_saved_session_browser_preserving(
+        &self,
+        source: &RuntimeRecordBrowserOverlaySource,
+        record_id: Option<&str>,
+    ) -> Result<(RuntimeRecordBrowserOverlaySource, RecordBrowser)> {
+        let mut first_page = source.clone();
+        if let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } = &mut first_page {
+            *anchor = None;
+        }
+        let mut browser = self.refresh_record_browser_overlay_source(&first_page)?;
+        if let Some(record_id) = record_id
+            && browser.set_active_record_id(record_id)
+        {
+            return Ok((first_page, browser));
+        }
+
+        let mut anchored = first_page;
+        if let Some(record_id) = record_id {
+            let store = self
+                .persistence
+                .transcript_store()
+                .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
+            if let Some(session) = store.saved_session(record_id)?
+                && let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } =
+                    &mut anchored
+            {
+                *anchor = Some(crate::storage::transcript::SavedSessionPageAnchor::At(
+                    crate::storage::transcript::SavedSessionCursor::from_session(&session),
+                ));
+            }
+        }
+        browser = self.refresh_record_browser_overlay_source(&anchored)?;
+        if let Some(record_id) = record_id
+            && browser.set_active_record_id(record_id)
+        {
+            return Ok((anchored, browser));
+        }
+        if let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } = &mut anchored {
+            *anchor = None;
+            browser = self.refresh_record_browser_overlay_source(&anchored)?;
+        }
+        Ok((anchored, browser))
+    }
+
     /// Toggles a retained record browser between its default and global scope.
     pub(crate) fn record_browser_source_toggled_scope(
         &self,
@@ -695,6 +748,9 @@ impl RuntimeSessionService {
                 directory,
                 default_directory,
                 include_subagents,
+                search,
+                limit,
+                ..
             } => RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory: if directory.is_some() {
                     None
@@ -703,6 +759,9 @@ impl RuntimeSessionService {
                 },
                 default_directory: default_directory.clone(),
                 include_subagents: *include_subagents,
+                search: search.clone(),
+                anchor: None,
+                limit: *limit,
             },
             RuntimeRecordBrowserOverlaySource::Personalities { .. } => source.clone(),
             RuntimeRecordBrowserOverlaySource::Context { .. } => source.clone(),
@@ -759,10 +818,16 @@ impl RuntimeSessionService {
                 directory,
                 default_directory,
                 include_subagents,
+                search,
+                limit,
+                ..
             } => RuntimeRecordBrowserOverlaySource::SavedSessions {
                 directory: directory.clone(),
                 default_directory: default_directory.clone(),
                 include_subagents: !include_subagents,
+                search: search.clone(),
+                anchor: None,
+                limit: *limit,
             },
             _ => source.clone(),
         }
@@ -805,7 +870,25 @@ impl RuntimeSessionService {
         let value = value.trim();
         match source {
             RuntimeRecordBrowserOverlaySource::Approvals => Ok(source.clone()),
-            RuntimeRecordBrowserOverlaySource::SavedSessions { .. } => Ok(source.clone()),
+            RuntimeRecordBrowserOverlaySource::SavedSessions {
+                directory,
+                default_directory,
+                include_subagents,
+                search,
+                limit,
+                ..
+            } => Ok(RuntimeRecordBrowserOverlaySource::SavedSessions {
+                directory: directory.clone(),
+                default_directory: default_directory.clone(),
+                include_subagents: *include_subagents,
+                search: if field == RecordBrowserFilterField::Text {
+                    (!value.is_empty()).then(|| value.to_string())
+                } else {
+                    search.clone()
+                },
+                anchor: None,
+                limit: *limit,
+            }),
             RuntimeRecordBrowserOverlaySource::Personalities { .. } => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Context { .. } => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Issues {

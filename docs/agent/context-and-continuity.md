@@ -31,6 +31,10 @@ rebuilt from those retained files if it is lost or corrupt. Mez writes session
 files first and then updates their catalog metadata. Exact `/resume <uuid>`,
 `/resume --latest`, and automatic unnamed-session retention use indexed catalog
 queries; exact lookup can repair only the requested UUID from retained files.
+Resume completion is capped, and the interactive picker fetches viewport-sized
+keyset pages rather than loading the full catalog. Directory and subagent
+toggles plus picker search are applied by SQLite, while transcript detail is
+loaded only for the row you explicitly open.
 
 ## Compact and recover
 

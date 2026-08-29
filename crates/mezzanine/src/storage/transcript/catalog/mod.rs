@@ -22,7 +22,7 @@ use rustix::fs::{FlockOperation, flock};
 use crate::error::Result;
 
 use super::fs::{set_private_dir_permissions, set_private_file_permissions};
-use super::types::{AgentTranscriptStore, SavedAgentSession};
+use super::types::{AgentTranscriptStore, SavedAgentSession, SavedSessionPage, SavedSessionQuery};
 
 /// Current saved-conversation catalog schema version.
 pub(super) const SCHEMA_VERSION: i64 = 1;
@@ -198,6 +198,7 @@ pub(super) fn latest_root_record(store: &AgentTranscriptStore) -> Result<Option<
 }
 
 /// Lists all catalog sessions for temporary compatibility callers.
+#[cfg(test)]
 pub(super) fn saved_sessions(store: &AgentTranscriptStore) -> Result<Vec<SavedAgentSession>> {
     let connection = schema::open(&catalog_path(store))?;
     query::saved_sessions(&connection)
@@ -224,6 +225,25 @@ pub(super) fn unnamed_prune_candidates(
 pub(super) fn is_named(store: &AgentTranscriptStore, conversation_id: &str) -> Result<bool> {
     let connection = schema::open(&catalog_path(store))?;
     query::is_named(&connection, conversation_id)
+}
+
+/// Returns bounded root-session completion rows for one UUID prefix.
+pub(super) fn root_session_completions(
+    store: &AgentTranscriptStore,
+    prefix: &str,
+    limit: usize,
+) -> Result<Vec<SavedAgentSession>> {
+    let connection = schema::open(&catalog_path(store))?;
+    query::root_session_completions(&connection, prefix, limit)
+}
+
+/// Returns one bounded keyset page of saved sessions.
+pub(super) fn query_saved_sessions(
+    store: &AgentTranscriptStore,
+    query: &SavedSessionQuery,
+) -> Result<SavedSessionPage> {
+    let connection = schema::open(&catalog_path(store))?;
+    query::query_saved_sessions(&connection, query)
 }
 
 /// Returns the catalog path for tests and diagnostics.

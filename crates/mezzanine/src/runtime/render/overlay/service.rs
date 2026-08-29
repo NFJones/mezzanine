@@ -122,6 +122,115 @@ fn move_record_browser_cursor(
 }
 
 impl RuntimeSessionService {
+    /// Fetches the adjacent saved-session page when cursor movement crosses a page edge.
+    fn page_saved_session_browser_for_cursor(&mut self, delta: isize) -> Result<Option<bool>> {
+        let Some((source, active_index, record_count, first_id, last_id)) = self
+            .presentation
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| {
+                let record_browser = overlay.record_browser.as_ref()?;
+                let RuntimeRecordBrowserOverlaySource::SavedSessions { .. } =
+                    record_browser.source.as_ref()?
+                else {
+                    return None;
+                };
+                let records = record_browser.browser.records();
+                Some((
+                    record_browser.source.clone()?,
+                    record_browser_active_index(overlay, record_browser.browser.active_index()),
+                    records.len(),
+                    records.first()?.id.clone(),
+                    records.last()?.id.clone(),
+                ))
+            })
+        else {
+            return Ok(None);
+        };
+        let crosses_edge = if delta.is_positive() {
+            active_index.saturating_add(delta.unsigned_abs()) >= record_count
+        } else if delta.is_negative() {
+            delta.unsigned_abs() > active_index
+        } else {
+            false
+        };
+        if !crosses_edge {
+            return Ok(None);
+        }
+
+        let store = self
+            .persistence
+            .transcript_store()
+            .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
+        let cursor_id = if delta.is_positive() {
+            &last_id
+        } else {
+            &first_id
+        };
+        let cursor = store
+            .saved_session(cursor_id)?
+            .as_ref()
+            .map(crate::storage::transcript::SavedSessionCursor::from_session)
+            .ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "saved-session page cursor was not found",
+                )
+            })?;
+        let mut next_source = source.clone();
+        let current_anchor = match &source {
+            RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } => anchor,
+            _ => unreachable!("saved-session page source was validated above"),
+        };
+        let next_anchor = if delta.is_positive() {
+            crate::storage::transcript::SavedSessionPageAnchor::After(cursor)
+        } else if current_anchor.is_none() {
+            crate::storage::transcript::SavedSessionPageAnchor::Last
+        } else {
+            crate::storage::transcript::SavedSessionPageAnchor::Before(cursor)
+        };
+        if let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } = &mut next_source {
+            *anchor = Some(next_anchor);
+        }
+        let mut browser = self.refresh_record_browser_overlay_source(&next_source)?;
+        if browser.records().is_empty() {
+            if let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } =
+                &mut next_source
+            {
+                *anchor = if delta.is_positive() {
+                    None
+                } else {
+                    Some(crate::storage::transcript::SavedSessionPageAnchor::Last)
+                };
+            }
+            browser = self.refresh_record_browser_overlay_source(&next_source)?;
+        }
+        if delta.is_negative() {
+            browser.set_active_index(browser.records().len().saturating_sub(1));
+        } else {
+            browser.set_active_index(0);
+        }
+
+        let terminal_width = usize::from(self.session.authoritative_size.columns).max(1);
+        let prose_width = terminal_width
+            .min(self.presentation.settings.terminal_agent_wrap_column_cap)
+            .max(1);
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+            return Ok(Some(false));
+        };
+        let Some(record_browser) = overlay.record_browser.as_mut() else {
+            return Ok(Some(false));
+        };
+        record_browser.source = Some(next_source);
+        record_browser.browser = browser;
+        Ok(Some(render_record_browser_overlay(
+            overlay,
+            &self.presentation.settings.ui_theme,
+            terminal_width,
+            prose_width,
+        )))
+    }
+
     /// Reflows an active record browser after terminal geometry changes.
     ///
     /// The browser retains raw Markdown and structured navigation state, so it
@@ -319,11 +428,15 @@ impl RuntimeSessionService {
         if input == b"a" && record_browser.browser.scope_toggle_enabled() {
             let source = record_browser.source.clone();
             if let Some(source) = source {
-                let active_index =
-                    record_browser_active_index(overlay, record_browser.browser.active_index());
+                let active_record_id = record_browser
+                    .browser
+                    .active_record_id()
+                    .map(str::to_string);
                 let source = self.record_browser_source_toggled_scope(&source);
-                let mut browser = self.refresh_record_browser_overlay_source(&source)?;
-                browser.set_active_index(active_index);
+                let (source, browser) = self.refresh_saved_session_browser_preserving(
+                    &source,
+                    active_record_id.as_deref(),
+                )?;
                 let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(Some(false));
                 };
@@ -353,10 +466,10 @@ impl RuntimeSessionService {
                     .active_record_id()
                     .map(str::to_string);
                 let source = self.record_browser_source_toggled_subagents(&source);
-                let mut browser = self.refresh_record_browser_overlay_source(&source)?;
-                if let Some(record_id) = active_record_id.as_deref() {
-                    browser.set_active_record_id(record_id);
-                }
+                let (source, browser) = self.refresh_saved_session_browser_preserving(
+                    &source,
+                    active_record_id.as_deref(),
+                )?;
                 let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(Some(false));
                 };
@@ -468,13 +581,15 @@ impl RuntimeSessionService {
             let source = record_browser.source.clone().ok_or_else(|| {
                 MezError::invalid_state("saved-session browser is missing its backend source")
             })?;
-            let browser = self.clear_saved_session_name_from_browser(&source, &record_id)?;
+            let (source, browser) =
+                self.clear_saved_session_name_from_browser(&source, &record_id)?;
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                 return Ok(Some(false));
             };
             let Some(record_browser) = overlay.record_browser.as_mut() else {
                 return Ok(None);
             };
+            record_browser.source = Some(source);
             record_browser.browser = browser;
             return Ok(Some(render_record_browser_overlay(
                 overlay,
@@ -505,7 +620,7 @@ impl RuntimeSessionService {
             else {
                 return Ok(None);
             };
-            let browser = match self.delete_record_browser_entry(&source, &id, active_index) {
+            let mut browser = match self.delete_record_browser_entry(&source, &id, active_index) {
                 Ok(browser) => browser,
                 Err(error) => {
                     let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
@@ -525,12 +640,20 @@ impl RuntimeSessionService {
                     )));
                 }
             };
+            let mut source = source;
+            if browser.records().is_empty()
+                && let RuntimeRecordBrowserOverlaySource::SavedSessions { anchor, .. } = &mut source
+            {
+                *anchor = None;
+                browser = self.refresh_record_browser_overlay_source(&source)?;
+            }
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                 return Ok(Some(false));
             };
             let Some(record_browser) = overlay.record_browser.as_mut() else {
                 return Ok(None);
             };
+            record_browser.source = Some(source);
             record_browser.browser = browser;
             return Ok(Some(render_record_browser_overlay(
                 overlay,
@@ -549,6 +672,9 @@ impl RuntimeSessionService {
             },
         };
         if let Some(cursor_delta) = cursor_delta {
+            if let Some(changed) = self.page_saved_session_browser_for_cursor(cursor_delta)? {
+                return Ok(Some(changed));
+            }
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                 return Ok(Some(false));
             };
@@ -640,6 +766,36 @@ impl RuntimeSessionService {
                 return Ok(None);
             };
             record_browser.browser = browser;
+            return Ok(Some(render_record_browser_overlay(
+                overlay,
+                &self.presentation.settings.ui_theme,
+                terminal_width,
+                prose_width,
+            )));
+        }
+        if input == b"i"
+            && matches!(
+                record_browser.source,
+                Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
+            )
+        {
+            let mut selected = record_browser.browser.clone();
+            selected.set_active_index(active_index);
+            let Some(record_id) = selected.active_record_id().map(str::to_string) else {
+                return Ok(Some(false));
+            };
+            let markdown = self.saved_session_detail_markdown(&record_id)?;
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(Some(false));
+            };
+            let Some(record_browser) = overlay.record_browser.as_mut() else {
+                return Ok(None);
+            };
+            record_browser.browser.set_active_index(active_index);
+            record_browser.browser.set_active_record_markdown(markdown);
+            record_browser
+                .browser
+                .apply_action(mez_mux::record_browser::RecordBrowserAction::OpenActive)?;
             return Ok(Some(render_record_browser_overlay(
                 overlay,
                 &self.presentation.settings.ui_theme,
@@ -1083,6 +1239,53 @@ impl RuntimeSessionService {
             let prose_width = terminal_width
                 .min(self.presentation.settings.terminal_agent_wrap_column_cap)
                 .max(1);
+            let saved_session_search =
+                self.presentation
+                    .primary_display_overlay
+                    .as_ref()
+                    .and_then(|overlay| {
+                        let record_browser = overlay.record_browser.as_ref()?;
+                        matches!(
+                            record_browser.source,
+                            Some(RuntimeRecordBrowserOverlaySource::SavedSessions { .. })
+                        )
+                        .then(|| {
+                            (
+                                record_browser.source.clone(),
+                                record_browser
+                                    .browser
+                                    .active_record_id()
+                                    .map(str::to_string),
+                                overlay.search_query.clone(),
+                            )
+                        })
+                    });
+            if let Some((Some(source), active_record_id, query)) = saved_session_search {
+                let source = self.record_browser_source_with_filter(
+                    &source,
+                    mez_mux::record_browser::RecordBrowserFilterField::Text,
+                    query.as_deref().unwrap_or_default(),
+                )?;
+                let (source, browser) = self.refresh_saved_session_browser_preserving(
+                    &source,
+                    active_record_id.as_deref(),
+                )?;
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                    return Ok(false);
+                };
+                let Some(record_browser) = overlay.record_browser.as_mut() else {
+                    return Ok(false);
+                };
+                record_browser.source = Some(source);
+                record_browser.browser = browser;
+                return Ok(render_record_browser_overlay_matching(
+                    overlay,
+                    &self.presentation.settings.ui_theme,
+                    terminal_width,
+                    prose_width,
+                    query.as_deref(),
+                ));
+            }
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                 return Ok(false);
             };

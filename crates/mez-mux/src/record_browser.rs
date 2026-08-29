@@ -378,6 +378,18 @@ impl RecordBrowser {
         true
     }
 
+    /// Replaces the detail Markdown for the active bounded record.
+    ///
+    /// Backends use this to defer expensive detail loading until the user
+    /// explicitly opens one row instead of preloading every list record.
+    pub fn set_active_record_markdown(&mut self, markdown: String) -> bool {
+        let Some(record) = self.records.get_mut(self.active_index) else {
+            return false;
+        };
+        record.markdown = markdown;
+        true
+    }
+
     /// Enables destructive deletion intent for browsers whose backend supports it.
     pub fn enable_deletion(&mut self) {
         self.deletion_enabled = true;

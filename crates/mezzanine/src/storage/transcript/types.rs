@@ -38,6 +38,68 @@ pub struct SavedAgentSession {
     pub conversation_kind: AgentConversationKind,
 }
 
+/// Stable keyset cursor for saved-session catalog ordering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedSessionCursor {
+    /// Whether the row belongs to the named-first picker partition.
+    pub named: bool,
+    /// Most recent durable activity timestamp.
+    pub last_created_at_unix_seconds: u64,
+    /// First durable activity timestamp used as a deterministic tie-breaker.
+    pub first_created_at_unix_seconds: u64,
+    /// Durable conversation identity used as the final ordering key.
+    pub conversation_id: String,
+}
+
+impl SavedSessionCursor {
+    /// Builds the cursor corresponding to one saved-session row.
+    pub fn from_session(session: &SavedAgentSession) -> Self {
+        Self {
+            named: session.name.is_some(),
+            last_created_at_unix_seconds: session.summary.last_created_at_unix_seconds,
+            first_created_at_unix_seconds: session.summary.first_created_at_unix_seconds,
+            conversation_id: session.summary.conversation_id.clone(),
+        }
+    }
+}
+
+/// Directional keyset anchor for one bounded saved-session page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SavedSessionPageAnchor {
+    /// Return rows ordered after this cursor.
+    After(SavedSessionCursor),
+    /// Return rows ordered before this cursor.
+    Before(SavedSessionCursor),
+    /// Return a page ending with this cursor when the row still matches.
+    At(SavedSessionCursor),
+    /// Return the final bounded page in picker order.
+    Last,
+}
+
+/// Indexed filters and bounds for one saved-session page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedSessionQuery {
+    /// Optional exact directory scope.
+    pub directory: Option<String>,
+    /// Whether delegated child conversations are included.
+    pub include_subagents: bool,
+    /// Whether rows must contain a latest user prompt.
+    pub require_latest_user_prompt: bool,
+    /// Optional case-insensitive search across identity and bounded metadata.
+    pub search: Option<String>,
+    /// Optional forward or backward keyset anchor.
+    pub anchor: Option<SavedSessionPageAnchor>,
+    /// Maximum rows returned by this query.
+    pub limit: usize,
+}
+
+/// One bounded page of catalog-backed saved sessions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedSessionPage {
+    /// Rows in named-first picker order.
+    pub sessions: Vec<SavedAgentSession>,
+}
+
 /// One durable user-visible agent transcript presentation entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentPresentationEntry {

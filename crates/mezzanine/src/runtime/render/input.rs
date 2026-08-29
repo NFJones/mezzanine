@@ -923,10 +923,9 @@ fn runtime_agent_selector_extra_candidates_from_snapshot(
     };
     candidates.extend(
         store
-            .saved_sessions()
+            .root_session_completions("", 200)
             .unwrap_or_default()
             .into_iter()
-            .filter(|session| session.conversation_kind == mez_agent::AgentConversationKind::Root)
             .map(|session| {
                 let summary = session.summary;
                 let detail = match session.name {

@@ -101,6 +101,12 @@ pub(crate) enum RuntimeRecordBrowserOverlaySource {
         default_directory: Option<String>,
         /// Whether delegated child conversations are included in discovery.
         include_subagents: bool,
+        /// Optional backend search over UUID and bounded session metadata.
+        search: Option<String>,
+        /// Keyset anchor selecting the current bounded catalog page.
+        anchor: Option<crate::storage::transcript::SavedSessionPageAnchor>,
+        /// Maximum catalog rows retained by the current browser page.
+        limit: usize,
     },
     /// Configured personality profiles selectable for one pane.
     Personalities {

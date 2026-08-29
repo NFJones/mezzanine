@@ -28,6 +28,7 @@ use super::fs::{
 };
 use super::types::{
     AgentPresentationEntry, AgentTranscriptStore, NamedAgentSession, SavedAgentSession,
+    SavedSessionPage, SavedSessionQuery,
 };
 use mez_agent::AgentConversationKind;
 use mez_agent::transcript::{
@@ -233,6 +234,20 @@ impl AgentTranscriptStore {
             }
         }
         Ok(None)
+    }
+
+    /// Returns bounded root-session completion rows for one UUID prefix.
+    pub fn root_session_completions(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<SavedAgentSession>> {
+        catalog::root_session_completions(self, prefix, limit)
+    }
+
+    /// Returns one bounded keyset page for saved-session browsing.
+    pub fn query_saved_sessions(&self, query: &SavedSessionQuery) -> Result<SavedSessionPage> {
+        catalog::query_saved_sessions(self, query)
     }
 
     /// Loads one exact saved-session record from the catalog for focused tests.
@@ -898,6 +913,7 @@ impl AgentTranscriptStore {
     }
 
     /// Lists transcript-backed and named zero-entry sessions as one durable view.
+    #[cfg(test)]
     pub fn saved_sessions(&self) -> Result<Vec<SavedAgentSession>> {
         catalog::saved_sessions(self)
     }

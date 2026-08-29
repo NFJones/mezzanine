@@ -382,6 +382,111 @@ fn runtime_resume_browser_filters_current_directory_and_toggles_all_sessions() {
     assert_eq!(scoped_record_ids, vec!["current-directory"]);
 }
 
+/// Verifies the resume overlay retains only one bounded catalog page and
+/// fetches adjacent keyset pages when keyboard focus crosses either edge.
+///
+/// The test also submits overlay search and confirms the backend query resets
+/// pagination while returning only matching metadata rows.
+#[test]
+fn runtime_resume_browser_pages_and_searches_catalog_results() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-pages"));
+    for index in 0..45 {
+        let conversation_id = format!("paged-{index:02}");
+        transcript_store
+            .append(&TranscriptEntry {
+                conversation_id,
+                sequence: 1,
+                created_at_unix_seconds: 100 - index,
+                role: TranscriptRole::User,
+                turn_id: format!("turn-{index}"),
+                agent_id: "agent-%9".to_string(),
+                pane_id: "%9".to_string(),
+                content: if index == 17 {
+                    "unique pagination needle".to_string()
+                } else {
+                    format!("ordinary paged prompt {index}")
+                },
+            })
+            .unwrap();
+    }
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/resume")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests("%1", &response)
+        .unwrap();
+    let first_ids = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .unwrap()
+        .browser
+        .records()
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(first_ids.len(), 20);
+
+    for _ in 1..first_ids.len() {
+        service
+            .apply_primary_display_overlay_input(&primary, b"\x1b[B")
+            .unwrap();
+    }
+    service
+        .apply_primary_display_overlay_input(&primary, b"\x1b[B")
+        .unwrap();
+    let second_ids = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .unwrap()
+        .browser
+        .records()
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(second_ids.len(), 20);
+    assert!(first_ids.iter().all(|id| !second_ids.contains(id)));
+
+    service
+        .apply_primary_display_overlay_input(&primary, b"\x1b[A")
+        .unwrap();
+    let previous_ids = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .unwrap()
+        .browser
+        .records()
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(previous_ids, first_ids);
+
+    service
+        .apply_primary_display_overlay_input(&primary, b"/")
+        .unwrap();
+    service
+        .apply_primary_display_overlay_input(&primary, b"needle")
+        .unwrap();
+    service
+        .apply_primary_display_overlay_input(&primary, b"\r")
+        .unwrap();
+    let searched = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .unwrap();
+    assert_eq!(searched.browser.records().len(), 1);
+    assert_eq!(searched.browser.records()[0].id, "paged-17");
+}
+
 /// Verifies delegated conversations are hidden from discovery by default,
 /// independently toggleable with `u`, excluded from `--latest`, and still
 /// directly resumable by conversation UUID.
@@ -723,8 +828,6 @@ fn runtime_resume_browser_enter_resumes_and_i_opens_details() {
         .map(|browser| browser.browser.render_page().raw_markdown)
         .expect("saved-session detail browser");
     for expected in [
-        "## User entry 1",
-        "first user line\n    second user line",
         "## Assistant entry 2",
         "assistant response",
         "## Tool entry 3",
@@ -738,8 +841,9 @@ fn runtime_resume_browser_enter_resumes_and_i_opens_details() {
     ] {
         assert!(detail.contains(expected), "{detail}");
     }
+    assert!(!detail.contains("## User entry 1"), "{detail}");
     assert!(
-        detail.find("## User entry 1").unwrap() < detail.find("## User entry 5").unwrap(),
+        detail.find("## Assistant entry 2").unwrap() < detail.find("## User entry 5").unwrap(),
         "{detail}"
     );
 
@@ -814,6 +918,9 @@ fn runtime_resume_browser_rejects_deleting_active_sessions() {
                 directory: None,
                 default_directory: None,
                 include_subagents: false,
+                search: None,
+                anchor: None,
+                limit: 20,
             },
             "active-saved",
             0,

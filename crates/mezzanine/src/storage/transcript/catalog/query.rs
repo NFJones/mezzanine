@@ -2,11 +2,15 @@
 
 use mez_agent::AgentConversationKind;
 use mez_agent::transcript::{ConversationSummary, validate_conversation_id};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::types::Value;
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
 use crate::error::{MezError, Result};
 
-use super::super::types::SavedAgentSession;
+use super::super::types::{
+    SavedAgentSession, SavedSessionPage, SavedSessionPageAnchor, SavedSessionQuery,
+};
+use super::schema::sqlite_i64;
 use super::{CatalogPayloadLayout, CatalogRecord};
 
 /// Loads one catalog row by its exact durable identity.
@@ -53,6 +57,7 @@ pub(super) fn latest_root_record(connection: &Connection) -> Result<Option<Catal
 }
 
 /// Lists all saved sessions for temporary compatibility callers.
+#[cfg(test)]
 pub(super) fn saved_sessions(connection: &Connection) -> Result<Vec<SavedAgentSession>> {
     let mut statement = connection.prepare(
         "SELECT conversation_id, conversation_kind, name, entry_count,
@@ -136,6 +141,188 @@ pub(super) fn is_named(connection: &Connection, conversation_id: &str) -> Result
         .optional()
         .map(|value| value.unwrap_or(false))
         .map_err(Into::into)
+}
+
+/// Returns bounded root-session completion records for one UUID prefix.
+pub(super) fn root_session_completions(
+    connection: &Connection,
+    prefix: &str,
+    limit: usize,
+) -> Result<Vec<SavedAgentSession>> {
+    let limit = bounded_limit(limit)?;
+    let mut statement = connection.prepare(
+        "SELECT conversation_id, conversation_kind, name, entry_count,
+                first_created_at, last_created_at, last_turn_id,
+                agent_id, pane_id, directory, initial_prompt,
+                latest_user_prompt, has_transcript, has_presentation,
+                payload_layout
+         FROM saved_conversations
+         WHERE conversation_kind = 'root'
+           AND conversation_id LIKE ?1 ESCAPE '\\' COLLATE NOCASE
+         ORDER BY last_created_at DESC, first_created_at DESC, conversation_id ASC
+         LIMIT ?2",
+    )?;
+    let pattern = format!("{}%", escape_like(prefix));
+    statement
+        .query_map(params![pattern, limit], |row| {
+            let conversation_id: String = row.get(0)?;
+            Ok(decode_record_offset(row, &conversation_id, 1)?.session)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+/// Returns one bounded keyset page in named-first picker order.
+pub(super) fn query_saved_sessions(
+    connection: &Connection,
+    query: &SavedSessionQuery,
+) -> Result<SavedSessionPage> {
+    let limit = bounded_limit(query.limit)?;
+    let backwards = matches!(
+        query.anchor,
+        Some(
+            SavedSessionPageAnchor::Before(_)
+                | SavedSessionPageAnchor::At(_)
+                | SavedSessionPageAnchor::Last
+        )
+    );
+    let mut sql = String::from(
+        "SELECT conversation_id, conversation_kind, name, entry_count,
+                first_created_at, last_created_at, last_turn_id,
+                agent_id, pane_id, directory, initial_prompt,
+                latest_user_prompt, has_transcript, has_presentation,
+                payload_layout
+         FROM saved_conversations WHERE 1 = 1",
+    );
+    let mut values = Vec::<Value>::new();
+    if !query.include_subagents {
+        sql.push_str(" AND conversation_kind = 'root'");
+    }
+    if query.require_latest_user_prompt {
+        sql.push_str(" AND latest_user_prompt IS NOT NULL");
+    }
+    if let Some(directory) = query.directory.as_deref() {
+        sql.push_str(" AND directory = ?");
+        values.push(Value::Text(directory.to_string()));
+    }
+    if let Some(search) = query
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|search| !search.is_empty())
+    {
+        sql.push_str(
+            " AND (conversation_id LIKE ? ESCAPE '\\' COLLATE NOCASE
+                    OR name LIKE ? ESCAPE '\\' COLLATE NOCASE
+                    OR latest_user_prompt LIKE ? ESCAPE '\\' COLLATE NOCASE
+                    OR directory LIKE ? ESCAPE '\\' COLLATE NOCASE)",
+        );
+        let pattern = Value::Text(format!("%{}%", escape_like(search)));
+        values.extend([pattern.clone(), pattern.clone(), pattern.clone(), pattern]);
+    }
+    if let Some(anchor) = query.anchor.as_ref()
+        && !matches!(anchor, SavedSessionPageAnchor::Last)
+    {
+        let (cursor, comparison, inclusive) = match anchor {
+            SavedSessionPageAnchor::After(cursor) => (cursor, "after", false),
+            SavedSessionPageAnchor::Before(cursor) => (cursor, "before", false),
+            SavedSessionPageAnchor::At(cursor) => (cursor, "before", true),
+            SavedSessionPageAnchor::Last => unreachable!("last-page anchors have no cursor"),
+        };
+        let named = i64::from(cursor.named);
+        if comparison == "after" {
+            sql.push_str(
+                " AND ((name IS NOT NULL) < ?
+                    OR ((name IS NOT NULL) = ? AND last_created_at < ?)
+                    OR ((name IS NOT NULL) = ? AND last_created_at = ? AND first_created_at < ?)
+                    OR ((name IS NOT NULL) = ? AND last_created_at = ? AND first_created_at = ? AND conversation_id > ?))",
+            );
+        } else if inclusive {
+            sql.push_str(
+                " AND ((name IS NOT NULL) > ?
+                    OR ((name IS NOT NULL) = ? AND last_created_at > ?)
+                    OR ((name IS NOT NULL) = ? AND last_created_at = ? AND first_created_at > ?)
+                    OR ((name IS NOT NULL) = ? AND last_created_at = ? AND first_created_at = ? AND conversation_id <= ?))",
+            );
+        } else {
+            sql.push_str(
+                " AND ((name IS NOT NULL) > ?
+                    OR ((name IS NOT NULL) = ? AND last_created_at > ?)
+                    OR ((name IS NOT NULL) = ? AND last_created_at = ? AND first_created_at > ?)
+                    OR ((name IS NOT NULL) = ? AND last_created_at = ? AND first_created_at = ? AND conversation_id < ?))",
+            );
+        }
+        values.extend([
+            Value::Integer(named),
+            Value::Integer(named),
+            Value::Integer(sqlite_i64(
+                cursor.last_created_at_unix_seconds,
+                "cursor timestamp",
+            )?),
+            Value::Integer(named),
+            Value::Integer(sqlite_i64(
+                cursor.last_created_at_unix_seconds,
+                "cursor timestamp",
+            )?),
+            Value::Integer(sqlite_i64(
+                cursor.first_created_at_unix_seconds,
+                "cursor timestamp",
+            )?),
+            Value::Integer(named),
+            Value::Integer(sqlite_i64(
+                cursor.last_created_at_unix_seconds,
+                "cursor timestamp",
+            )?),
+            Value::Integer(sqlite_i64(
+                cursor.first_created_at_unix_seconds,
+                "cursor timestamp",
+            )?),
+            Value::Text(cursor.conversation_id.clone()),
+        ]);
+    }
+    if backwards {
+        sql.push_str(
+            " ORDER BY (name IS NOT NULL) ASC, last_created_at ASC,
+                       first_created_at ASC, conversation_id DESC",
+        );
+    } else {
+        sql.push_str(
+            " ORDER BY (name IS NOT NULL) DESC, last_created_at DESC,
+                       first_created_at DESC, conversation_id ASC",
+        );
+    }
+    sql.push_str(" LIMIT ?");
+    values.push(Value::Integer(limit));
+    let mut statement = connection.prepare(&sql)?;
+    let mut sessions = statement
+        .query_map(params_from_iter(values), |row| {
+            let conversation_id: String = row.get(0)?;
+            Ok(decode_record_offset(row, &conversation_id, 1)?.session)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if backwards {
+        sessions.reverse();
+    }
+    Ok(SavedSessionPage { sessions })
+}
+
+/// Converts one bounded query limit into SQLite's integer domain.
+fn bounded_limit(limit: usize) -> Result<i64> {
+    if limit == 0 {
+        return Err(MezError::invalid_args(
+            "saved-session query limit must be greater than zero",
+        ));
+    }
+    i64::try_from(limit.min(1_000))
+        .map_err(|_| MezError::invalid_args("saved-session query limit exceeds SQLite range"))
+}
+
+/// Escapes one literal for a SQLite `LIKE ... ESCAPE '\\'` expression.
+fn escape_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 /// Decodes a record whose first selected column is the conversation kind.
