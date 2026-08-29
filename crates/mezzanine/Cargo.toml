@@ -3,6 +3,12 @@ name = "mezzanine"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.91"
+authors = ["Neil F Jones"]
+description = "A terminal multiplexer with a built-in pane-local agent"
+license = "Apache-2.0"
+documentation = "https://github.com/NFJones/mezzanine#readme"
+homepage = "https://github.com/NFJones/mezzanine"
+repository = "https://github.com/NFJones/mezzanine"
 
 [[bin]]
 name = "mez"

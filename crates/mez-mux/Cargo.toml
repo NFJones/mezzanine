@@ -2,6 +2,12 @@
 name = "mez-mux"
 version = "0.1.0"
 edition = "2024"
+authors = ["Neil F Jones"]
+description = "Multiplexer domain, PTY, layout, input, and presentation engine for Mezzanine"
+license = "Apache-2.0"
+documentation = "https://github.com/NFJones/mezzanine#readme"
+homepage = "https://github.com/NFJones/mezzanine"
+repository = "https://github.com/NFJones/mezzanine"
 
 [lib]
 path = "src/lib.rs"

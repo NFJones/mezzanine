@@ -2,6 +2,12 @@
 name = "mez-agent"
 version = "0.1.0"
 edition = "2024"
+authors = ["Neil F Jones"]
+description = "Provider-independent agent harness and deterministic policy for Mezzanine"
+license = "Apache-2.0"
+documentation = "https://github.com/NFJones/mezzanine#readme"
+homepage = "https://github.com/NFJones/mezzanine"
+repository = "https://github.com/NFJones/mezzanine"
 
 [lib]
 path = "src/lib.rs"
