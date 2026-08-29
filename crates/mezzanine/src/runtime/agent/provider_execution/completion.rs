@@ -23,45 +23,16 @@ impl RuntimeSessionService {
         turn_id: &str,
         execution: AgentTurnExecution,
     ) -> Result<bool> {
-        let mut preserved_installed_screen = false;
-        self.apply_agent_provider_completed_event_inner(
-            agent_id,
-            turn_id,
-            execution,
-            &mut preserved_installed_screen,
-        )
-        .await
+        self.apply_agent_provider_completed_event_inner(agent_id, turn_id, execution)
+            .await
     }
 
-    /// Applies provider completion and retains its terminal render intent.
-    pub(super) async fn apply_agent_provider_completed_event_with_render_intent(
-        &mut self,
-        agent_id: &AgentId,
-        turn_id: &str,
-        execution: AgentTurnExecution,
-    ) -> Result<RuntimeAgentProviderCompletionApplication> {
-        let mut preserved_installed_screen = false;
-        let applied = self
-            .apply_agent_provider_completed_event_inner(
-                agent_id,
-                turn_id,
-                execution,
-                &mut preserved_installed_screen,
-            )
-            .await?;
-        Ok(RuntimeAgentProviderCompletionApplication {
-            applied,
-            preserved_installed_screen,
-        })
-    }
-
-    /// Owns provider-completion mutation while callers select render policy.
+    /// Owns provider-completion mutation after the caller validates its pane target.
     async fn apply_agent_provider_completed_event_inner(
         &mut self,
         agent_id: &AgentId,
         turn_id: &str,
         mut execution: AgentTurnExecution,
-        preserved_installed_screen: &mut bool,
     ) -> Result<bool> {
         self.require_live()?;
         let Some(turn) = self
@@ -237,7 +208,7 @@ impl RuntimeSessionService {
             turn_id,
             &execution,
         )?;
-        *preserved_installed_screen = reconciliation.preserved_installed_screen;
+        let _ = reconciliation;
         let execution_profile = mez_agent::apply_auto_sizing_execution_profile(
             model_profile.clone(),
             &execution.request,
@@ -288,12 +259,4 @@ impl RuntimeSessionService {
         }
         Ok(true)
     }
-}
-
-/// Provider-completion state change and the terminal render policy it proved.
-pub(super) struct RuntimeAgentProviderCompletionApplication {
-    /// Whether completion changed authoritative runtime state.
-    pub(super) applied: bool,
-    /// Whether reconciliation retained the installed provisional screen.
-    pub(super) preserved_installed_screen: bool,
 }

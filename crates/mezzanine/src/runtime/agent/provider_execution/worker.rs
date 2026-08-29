@@ -129,30 +129,15 @@ impl RuntimeSessionService {
     ) -> Result<crate::runtime::RuntimeTransition> {
         let pane_id = self
             .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == turn_id)
+            .turn(turn_id)
             .map(|turn| turn.pane_id.clone());
-        let application = self
-            .apply_agent_provider_completed_event_with_render_intent(agent_id, turn_id, execution)
+        let applied = self
+            .apply_agent_provider_completed_event(agent_id, turn_id, execution)
             .await?;
-        let render_reason =
-            application
-                .applied
-                .then_some(if application.preserved_installed_screen {
-                    crate::runtime::RenderInvalidationReason::PaneOutput
-                } else {
-                    crate::runtime::RenderInvalidationReason::FullRedraw
-                });
+        let render_reason = applied.then_some(crate::runtime::RenderInvalidationReason::PaneOutput);
         Ok(pane_id.map_or_else(
-            || self.runtime_transition_with_render(application.applied, render_reason),
-            |pane_id| {
-                self.runtime_pane_transition_with_render(
-                    &pane_id,
-                    application.applied,
-                    render_reason,
-                )
-            },
+            || self.runtime_transition_with_render(applied, render_reason),
+            |pane_id| self.runtime_pane_transition_with_render(&pane_id, applied, render_reason),
         ))
     }
 
@@ -165,11 +150,7 @@ impl RuntimeSessionService {
         if !self.clear_agent_provider_persistence_pending(&turn_id) {
             return Ok(crate::runtime::RuntimeTransition::default());
         }
-        let current = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == turn_id);
+        let current = self.agent_turn_ledger().turn(&turn_id);
         let current_execution_owns_turn = current.is_some_and(|turn| {
             turn.state == AgentTurnState::Running
                 && turn.agent_id == outcome.turn.agent_id
@@ -201,7 +182,7 @@ impl RuntimeSessionService {
         Ok(self.runtime_pane_transition_with_render(
             &turn.pane_id,
             applied,
-            Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+            Some(crate::runtime::RenderInvalidationReason::PaneOutput),
         ))
     }
 
@@ -218,9 +199,8 @@ impl RuntimeSessionService {
         }
         let Some(turn) = self
             .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Running)
+            .turn(turn_id)
+            .filter(|turn| turn.state == AgentTurnState::Running)
             .cloned()
         else {
             return Ok(crate::runtime::RuntimeTransition::default());
