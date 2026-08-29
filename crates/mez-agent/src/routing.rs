@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use crate::ModelProfile;
+use crate::{ModelCatalog, ModelProfile};
 
 /// Reusable provider-scoped base metadata for one canonical model.
 ///
@@ -46,6 +46,38 @@ impl ProviderModelConfig {
             ..Self::default()
         }
     }
+}
+
+/// Explicit model-profile configuration before provider-model inheritance.
+///
+/// Optional fields retain omission separately from explicit profile policy so
+/// rematerialization can rebase the definition against updated model metadata.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelProfileDefinition {
+    /// Configured provider identity.
+    pub provider: String,
+    /// Configured canonical model id, alias, or unlisted custom model id.
+    pub model: String,
+    /// Optional selected reasoning effort.
+    pub reasoning_profile: Option<String>,
+    /// Optional latency preference.
+    pub latency_preference: Option<String>,
+    /// Optional multimodal requirement override.
+    pub multimodal_required: Option<bool>,
+    /// Optional context-window override.
+    pub context_window_tokens: Option<usize>,
+    /// Optional maximum request-input override.
+    pub max_input_tokens: Option<usize>,
+    /// Optional maximum response-output override.
+    pub max_output_tokens: Option<usize>,
+    /// Optional replacement list of supported reasoning levels.
+    pub reasoning_levels: Option<Vec<String>>,
+    /// Optional replacement list of provider-neutral capability tags.
+    pub capabilities: Option<Vec<String>>,
+    /// Secret-free profile-level provider options.
+    pub provider_options: BTreeMap<String, String>,
+    /// Optional safety tier used by failover policy.
+    pub safety_tier: Option<String>,
 }
 
 /// Stable category for invalid provider-local model identity metadata.
@@ -110,6 +142,12 @@ impl ProviderRoutingError {
     fn profile_not_configured(profile_name: &str) -> Self {
         Self {
             message: format!("model profile `{profile_name}` is not configured"),
+        }
+    }
+
+    fn materialization(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
         }
     }
 }
@@ -215,6 +253,10 @@ pub struct ProviderRegistry {
     pub providers: BTreeMap<String, ProviderConfig>,
     /// Model profiles keyed by configured profile identity.
     pub profiles: BTreeMap<String, ModelProfile>,
+    /// Override-only profile definitions keyed by configured profile identity.
+    pub profile_definitions: BTreeMap<String, ModelProfileDefinition>,
+    /// Last provider catalogs used to fill definition gaps.
+    pub profile_catalogs: BTreeMap<String, ModelCatalog>,
     /// Ordered fallback profile identities keyed by preferred profile.
     pub fallback_profiles: BTreeMap<String, Vec<String>>,
 }
@@ -254,6 +296,162 @@ impl ProviderRegistry {
         &self.profiles
     }
 
+    /// Returns override-only model-profile definitions.
+    pub fn profile_definitions(&self) -> &BTreeMap<String, ModelProfileDefinition> {
+        &self.profile_definitions
+    }
+
+    /// Inserts one definition and its newly materialized effective profile.
+    pub fn insert_profile_definition(
+        &mut self,
+        profile_name: impl Into<String>,
+        definition: ModelProfileDefinition,
+        catalog: Option<&ModelCatalog>,
+    ) -> ProviderRoutingResult<()> {
+        let profile_name = profile_name.into();
+        let profile = self.materialize_profile_definition(&definition, catalog)?;
+        self.profile_definitions
+            .insert(profile_name.clone(), definition);
+        self.profiles.insert(profile_name, profile);
+        Ok(())
+    }
+
+    /// Rematerializes future profile resolutions for one provider.
+    ///
+    /// Existing cloned profiles owned by in-flight turns are values outside the
+    /// registry and therefore remain pinned to their original metadata.
+    pub fn rematerialize_profiles_for_provider(
+        &mut self,
+        provider_id: &str,
+        catalog: Option<&ModelCatalog>,
+    ) -> ProviderRoutingResult<()> {
+        if let Some(catalog) = catalog {
+            self.profile_catalogs
+                .insert(provider_id.to_string(), catalog.clone());
+        } else {
+            self.profile_catalogs.remove(provider_id);
+        }
+        let catalog = self.profile_catalogs.get(provider_id);
+        let definitions = self
+            .profile_definitions
+            .iter()
+            .filter(|(_name, definition)| definition.provider == provider_id)
+            .map(|(name, definition)| (name.clone(), definition.clone()))
+            .collect::<Vec<_>>();
+        let materialized = definitions
+            .into_iter()
+            .map(|(name, definition)| {
+                self.materialize_profile_definition(&definition, catalog)
+                    .map(|profile| (name, profile))
+            })
+            .collect::<ProviderRoutingResult<Vec<_>>>()?;
+        for (name, profile) in materialized {
+            self.profiles.insert(name, profile);
+        }
+        Ok(())
+    }
+
+    /// Materializes one override-only definition against provider/model data.
+    pub fn materialize_profile_definition(
+        &self,
+        definition: &ModelProfileDefinition,
+        catalog: Option<&ModelCatalog>,
+    ) -> ProviderRoutingResult<ModelProfile> {
+        let provider = self.providers.get(&definition.provider).ok_or_else(|| {
+            ProviderRoutingError::materialization(format!(
+                "model profile provider `{}` is not configured",
+                definition.provider
+            ))
+        })?;
+        let configured_model = provider
+            .model(&definition.model)
+            .map_err(|error| ProviderRoutingError::materialization(error.to_string()))?;
+        let canonical_model = configured_model
+            .map(|model| model.id.as_str())
+            .unwrap_or(definition.model.as_str());
+        let catalog_model = catalog.and_then(|catalog| {
+            catalog
+                .resolve(canonical_model)
+                .or_else(|| catalog.resolve(&definition.model))
+        });
+        let model = configured_model
+            .map(|model| model.id.clone())
+            .or_else(|| catalog_model.map(|model| model.id.clone()))
+            .unwrap_or_else(|| definition.model.clone());
+
+        let mut provider_options = provider.options.clone();
+        if let Some(catalog_model) = catalog_model {
+            provider_options.extend(catalog_model.provider_options.clone());
+        }
+        if let Some(configured_model) = configured_model {
+            provider_options.extend(configured_model.provider_options.clone());
+        }
+
+        let context_window_tokens = definition
+            .context_window_tokens
+            .or_else(|| configured_model.and_then(|model| model.context_window_tokens))
+            .or_else(|| catalog_model.and_then(|model| model.context_window_tokens));
+        let max_input_tokens = definition
+            .max_input_tokens
+            .or_else(|| configured_model.and_then(|model| model.max_input_tokens))
+            .or_else(|| catalog_model.and_then(|model| model.max_input_tokens));
+        let max_output_tokens = definition
+            .max_output_tokens
+            .or_else(|| configured_model.and_then(|model| model.max_output_tokens))
+            .or_else(|| catalog_model.and_then(|model| model.max_output_tokens));
+        if let (Some(context), Some(input)) = (context_window_tokens, max_input_tokens)
+            && input > context
+        {
+            return Err(ProviderRoutingError::materialization(format!(
+                "model profile max_input_tokens {input} exceeds context_window_tokens {context}"
+            )));
+        }
+        insert_profile_limit(
+            &mut provider_options,
+            "context_window_tokens",
+            context_window_tokens,
+        );
+        insert_profile_limit(&mut provider_options, "max_input_tokens", max_input_tokens);
+        insert_profile_limit(
+            &mut provider_options,
+            "max_output_tokens",
+            max_output_tokens,
+        );
+
+        let reasoning_levels = definition
+            .reasoning_levels
+            .as_ref()
+            .or_else(|| configured_model.and_then(|model| model.reasoning_levels.as_ref()))
+            .map(Vec::as_slice)
+            .or_else(|| catalog_model.map(|model| model.reasoning_levels.as_slice()));
+        let capabilities = definition
+            .capabilities
+            .as_ref()
+            .or_else(|| configured_model.and_then(|model| model.capabilities.as_ref()))
+            .map(Vec::as_slice)
+            .or_else(|| catalog_model.map(|model| model.capabilities.as_slice()));
+        if let Some(reasoning_levels) = reasoning_levels {
+            provider_options.insert(
+                "model_reasoning_levels".to_string(),
+                reasoning_levels.join(","),
+            );
+        }
+        if let Some(capabilities) = capabilities {
+            provider_options.insert("model_capabilities".to_string(), capabilities.join(","));
+        }
+        provider_options.extend(definition.provider_options.clone());
+
+        Ok(ModelProfile {
+            provider: definition.provider.clone(),
+            model,
+            reasoning_profile: definition.reasoning_profile.clone(),
+            latency_preference: definition.latency_preference.clone(),
+            multimodal_required: definition.multimodal_required.unwrap_or(false),
+            provider_options,
+            safety_tier: definition.safety_tier.clone(),
+        })
+    }
+
     /// Returns configured fallbacks that are not weaker than the preferred profile.
     ///
     /// Missing preferred or fallback profiles return a typed routing error.
@@ -270,6 +468,17 @@ impl ProviderRegistry {
             }
         }
         Ok(safe)
+    }
+}
+
+/// Inserts one inherited positive model limit into effective profile options.
+fn insert_profile_limit(
+    provider_options: &mut BTreeMap<String, String>,
+    key: &str,
+    value: Option<usize>,
+) {
+    if let Some(value) = value {
+        provider_options.insert(key.to_string(), value.to_string());
     }
 }
 
@@ -413,6 +622,177 @@ mod tests {
             alias_collision.validate_models().unwrap_err().kind(),
             ProviderModelConfigErrorKind::AliasCollision
         );
+    }
+
+    /// Verifies effective profiles inherit reusable provider-model metadata,
+    /// canonicalize aliases, and retain explicit profile-level precedence.
+    ///
+    /// Root, model, and profile options merge per key while explicit empty
+    /// list overrides remain distinguishable from omitted list metadata.
+    #[test]
+    fn provider_registry_materializes_profile_definitions_with_base_inheritance() {
+        let provider = ProviderConfig {
+            provider_id: "custom".to_string(),
+            options: BTreeMap::from([
+                ("root-only".to_string(), "root".to_string()),
+                ("shared".to_string(), "root".to_string()),
+            ]),
+            models: vec![ProviderModelConfig {
+                id: "model-a".to_string(),
+                aliases: vec!["fast".to_string()],
+                context_window_tokens: Some(200_000),
+                max_input_tokens: Some(180_000),
+                max_output_tokens: Some(8_000),
+                reasoning_levels: Some(vec!["low".to_string(), "high".to_string()]),
+                capabilities: Some(vec!["vision".to_string(), "tool_use".to_string()]),
+                provider_options: BTreeMap::from([
+                    ("base-only".to_string(), "base".to_string()),
+                    ("shared".to_string(), "base".to_string()),
+                ]),
+                ..ProviderModelConfig::default()
+            }],
+            ..ProviderConfig::default()
+        };
+        let mut registry = ProviderRegistry {
+            providers: BTreeMap::from([("custom".to_string(), provider)]),
+            ..ProviderRegistry::default()
+        };
+        registry
+            .insert_profile_definition(
+                "work",
+                ModelProfileDefinition {
+                    provider: "custom".to_string(),
+                    model: "fast".to_string(),
+                    max_output_tokens: Some(16_000),
+                    capabilities: Some(Vec::new()),
+                    provider_options: BTreeMap::from([(
+                        "shared".to_string(),
+                        "profile".to_string(),
+                    )]),
+                    ..ModelProfileDefinition::default()
+                },
+                None,
+            )
+            .unwrap();
+
+        let profile = registry.resolve_profile("work").unwrap();
+        assert_eq!(profile.model, "model-a");
+        assert_eq!(profile.context_window_tokens(), 200_000);
+        assert_eq!(profile.max_input_tokens(), Some(180_000));
+        assert_eq!(profile.max_output_tokens(), Some(16_000));
+        assert_eq!(profile.provider_options["root-only"], "root");
+        assert_eq!(profile.provider_options["base-only"], "base");
+        assert_eq!(profile.provider_options["shared"], "profile");
+        assert_eq!(
+            profile.provider_options["model_reasoning_levels"],
+            "low,high"
+        );
+        assert_eq!(profile.provider_options["model_capabilities"], "");
+    }
+
+    /// Verifies discovered metadata fills configured gaps for future profile
+    /// resolutions while configured base values continue to win conflicts.
+    ///
+    /// Rematerialization replaces registry profiles only; previously cloned
+    /// in-flight profiles remain unchanged values owned by their turns.
+    #[test]
+    fn provider_registry_rematerializes_profiles_from_catalog_observations() {
+        let provider = ProviderConfig {
+            provider_id: "custom".to_string(),
+            models: vec![ProviderModelConfig {
+                id: "model-a".to_string(),
+                max_output_tokens: Some(16_000),
+                ..ProviderModelConfig::default()
+            }],
+            ..ProviderConfig::default()
+        };
+        let mut registry = ProviderRegistry {
+            providers: BTreeMap::from([("custom".to_string(), provider)]),
+            ..ProviderRegistry::default()
+        };
+        registry
+            .insert_profile_definition(
+                "work",
+                ModelProfileDefinition {
+                    provider: "custom".to_string(),
+                    model: "model-a".to_string(),
+                    ..ModelProfileDefinition::default()
+                },
+                None,
+            )
+            .unwrap();
+        let before = registry.resolve_profile("work").unwrap();
+
+        let catalog = crate::ModelCatalog::from_input(crate::ModelCatalogInput {
+            candidates: vec![crate::ModelCatalogCandidate::available(
+                crate::ModelCatalogSource::Discovered,
+                crate::ProviderModelInfo {
+                    id: "model-a".to_string(),
+                    display_name: None,
+                    reasoning_levels: vec!["medium".to_string()],
+                    context_window_tokens: Some(777_000),
+                    max_input_tokens: Some(700_000),
+                    max_output_tokens: Some(8_000),
+                    capabilities: vec!["tool_use".to_string()],
+                },
+            )],
+            ..crate::ModelCatalogInput::default()
+        });
+        registry
+            .rematerialize_profiles_for_provider("custom", Some(&catalog))
+            .unwrap();
+
+        let after = registry.resolve_profile("work").unwrap();
+        assert_eq!(before.known_context_window_tokens(), None);
+        assert_eq!(after.known_context_window_tokens(), Some(777_000));
+        assert_eq!(after.max_input_tokens(), Some(700_000));
+        assert_eq!(after.max_output_tokens(), Some(16_000));
+        assert_eq!(after.provider_options["model_capabilities"], "tool_use");
+        assert_eq!(before.known_context_window_tokens(), None);
+    }
+
+    /// Verifies unlisted custom models remain materializable and impossible
+    /// effective input/window combinations fail with a typed routing error.
+    #[test]
+    fn provider_registry_allows_unlisted_models_and_rejects_invalid_effective_limits() {
+        let provider = ProviderConfig {
+            provider_id: "custom".to_string(),
+            ..ProviderConfig::default()
+        };
+        let mut registry = ProviderRegistry {
+            providers: BTreeMap::from([("custom".to_string(), provider)]),
+            ..ProviderRegistry::default()
+        };
+        registry
+            .insert_profile_definition(
+                "unlisted",
+                ModelProfileDefinition {
+                    provider: "custom".to_string(),
+                    model: "external-model".to_string(),
+                    ..ModelProfileDefinition::default()
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            registry.resolve_profile("unlisted").unwrap().model,
+            "external-model"
+        );
+
+        let error = registry
+            .insert_profile_definition(
+                "invalid",
+                ModelProfileDefinition {
+                    provider: "custom".to_string(),
+                    model: "external-model".to_string(),
+                    context_window_tokens: Some(100),
+                    max_input_tokens: Some(101),
+                    ..ModelProfileDefinition::default()
+                },
+                None,
+            )
+            .unwrap_err();
+        assert!(error.message().contains("max_input_tokens"), "{error}");
     }
 
     /// Verifies preset lookup preserves configured profile identities.

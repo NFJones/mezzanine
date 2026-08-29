@@ -36,6 +36,7 @@ use crate::runtime::config::{
     runtime_pane_spawn_view_policy_from_config,
 };
 use crate::runtime::{RuntimeConfigAffectedSubsystems, RuntimePreparedConfigReload};
+use mez_agent::ModelProfileDefinition;
 
 impl RuntimeSessionService {
     /// Returns the configuration layers currently applied to the runtime.
@@ -278,7 +279,9 @@ impl RuntimeSessionService {
     }
 
     /// Captures live generated model profiles referenced by override state.
-    pub(super) fn preserved_model_override_profiles(&self) -> BTreeMap<String, ModelProfile> {
+    pub(super) fn preserved_model_override_profiles(
+        &self,
+    ) -> BTreeMap<String, (Option<ModelProfileDefinition>, ModelProfile)> {
         let mut names = BTreeSet::new();
         if let Some(profile) = self
             .integration
@@ -322,7 +325,14 @@ impl RuntimeSessionService {
                 self.provider_registry()
                     .profile(&name)
                     .cloned()
-                    .map(|profile| (name, profile))
+                    .map(|profile| {
+                        let definition = self
+                            .provider_registry()
+                            .profile_definitions
+                            .get(&name)
+                            .cloned();
+                        (name, (definition, profile))
+                    })
             })
             .collect()
     }
@@ -512,9 +522,16 @@ impl RuntimeSessionService {
             );
             let preserved_model_profiles = self.preserved_model_override_profiles();
             let mut provider_registry = runtime_provider_registry_from_config(&structured)?;
-            for (name, profile) in preserved_model_profiles {
+            for (name, (definition, profile)) in preserved_model_profiles {
                 if provider_registry.provider(&profile.provider).is_some() {
-                    provider_registry.profiles.entry(name).or_insert(profile);
+                    if provider_registry.profile(&name).is_some() {
+                        continue;
+                    }
+                    if let Some(definition) = definition {
+                        provider_registry.insert_profile_definition(name, definition, None)?;
+                    } else {
+                        provider_registry.profiles.insert(name, profile);
+                    }
                 }
             }
             let preset_registry =

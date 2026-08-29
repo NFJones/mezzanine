@@ -21,6 +21,7 @@ use super::{
     runtime_model_override_scope_name, runtime_model_profile_display,
     runtime_validate_latency_preference, select_model_profile,
 };
+use mez_agent::ModelProfileDefinition;
 
 impl RuntimeSessionService {
     pub(super) fn execute_agent_shell_model_command(
@@ -250,7 +251,7 @@ impl RuntimeSessionService {
             "thinking".to_string(),
             if enabled { "enabled" } else { "disabled" }.to_string(),
         );
-        let profile_name = self.insert_runtime_generated_model_profile(profile);
+        let profile_name = self.insert_runtime_generated_model_profile(&active_name, profile)?;
         let scope = RuntimeModelProfileOverrideScope::Pane(pane_id.to_string());
         self.set_model_profile_override(scope.clone(), &profile_name)?;
         let profile = self.provider_registry().resolve_profile(&profile_name)?;
@@ -842,35 +843,20 @@ impl RuntimeSessionService {
             })?;
         let model = &selection.model;
 
-        let mut provider_options = std::collections::BTreeMap::new();
-        if let Some(context_window_tokens) = model.context_window_tokens {
-            provider_options.insert(
-                "context_window_tokens".to_string(),
-                context_window_tokens.to_string(),
-            );
-        }
-        if let Some(max_input_tokens) = model.max_input_tokens {
-            provider_options.insert("max_input_tokens".to_string(), max_input_tokens.to_string());
-        }
-        if !model.capabilities.is_empty() {
-            provider_options.insert(
-                "model_capabilities".to_string(),
-                model.capabilities.join(","),
-            );
-        }
         let latency_preference = latency_preference
             .map(runtime_validate_latency_preference)
             .transpose()?
             .map(str::to_string);
-        let profile = ModelProfile {
+        let definition = ModelProfileDefinition {
             provider: provider_id.to_string(),
             model: model.id.clone(),
             reasoning_profile: selection.reasoning.clone(),
             latency_preference,
-            multimodal_required: false,
-            provider_options,
-            safety_tier: None,
+            ..ModelProfileDefinition::default()
         };
+        let profile = self
+            .provider_registry()
+            .materialize_profile_definition(&definition, Some(&catalog.catalog))?;
         let profile_name = runtime_generated_model_profile_name(
             self.provider_registry(),
             provider_id,
@@ -878,30 +864,67 @@ impl RuntimeSessionService {
             selection.reasoning.as_deref(),
             &profile,
         );
-        self.integration
-            .provider_registry_mut()
-            .profiles
-            .entry(profile_name.clone())
-            .or_insert(profile);
+        if self.provider_registry().profile(&profile_name).is_none() {
+            self.integration
+                .provider_registry_mut()
+                .insert_profile_definition(
+                    profile_name.clone(),
+                    definition,
+                    Some(&catalog.catalog),
+                )?;
+        }
         Ok(profile_name)
     }
 
     /// Inserts a runtime-generated profile while preserving all provider
     /// options carried by the supplied profile.
-    fn insert_runtime_generated_model_profile(&mut self, profile: ModelProfile) -> String {
+    fn insert_runtime_generated_model_profile(
+        &mut self,
+        base_profile_name: &str,
+        profile: ModelProfile,
+    ) -> Result<String> {
+        let mut definition = self
+            .provider_registry()
+            .profile_definitions
+            .get(base_profile_name)
+            .cloned()
+            .unwrap_or_else(|| ModelProfileDefinition {
+                provider: profile.provider.clone(),
+                model: profile.model.clone(),
+                reasoning_profile: profile.reasoning_profile.clone(),
+                latency_preference: profile.latency_preference.clone(),
+                multimodal_required: Some(profile.multimodal_required),
+                provider_options: profile.provider_options.clone(),
+                safety_tier: profile.safety_tier.clone(),
+                ..ModelProfileDefinition::default()
+            });
+        if let Some(base_profile) = self.provider_registry().profile(base_profile_name) {
+            for (key, value) in &profile.provider_options {
+                if base_profile.provider_options.get(key) != Some(value) {
+                    definition
+                        .provider_options
+                        .insert(key.clone(), value.clone());
+                }
+            }
+        }
+        let catalog = self.cached_provider_model_catalog(&profile.provider);
+        let catalog = catalog.as_ref().map(|catalog| &catalog.catalog);
+        let materialized = self
+            .provider_registry()
+            .materialize_profile_definition(&definition, catalog)?;
         let profile_name = runtime_generated_model_profile_name(
             self.provider_registry(),
-            &profile.provider,
-            &profile.model,
-            profile.reasoning_profile.as_deref(),
-            &profile,
+            &materialized.provider,
+            &materialized.model,
+            materialized.reasoning_profile.as_deref(),
+            &materialized,
         );
-        self.integration
-            .provider_registry_mut()
-            .profiles
-            .entry(profile_name.clone())
-            .or_insert(profile);
-        profile_name
+        if self.provider_registry().profile(&profile_name).is_none() {
+            self.integration
+                .provider_registry_mut()
+                .insert_profile_definition(profile_name.clone(), definition, catalog)?;
+        }
+        Ok(profile_name)
     }
 
     pub(crate) fn active_model_profile_for_pane(

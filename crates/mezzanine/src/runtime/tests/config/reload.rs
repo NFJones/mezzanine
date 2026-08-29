@@ -409,3 +409,56 @@ fn runtime_config_reload_rebuilds_live_emoji_cell_footprints() {
     assert_eq!(screen.cursor_state().row, 0);
     assert_eq!(screen.cursor_state().column, 4);
 }
+
+/// Verifies a pane-selected generated profile retains its explicit policy but
+/// rebases inherited provider-model metadata when configuration is replaced.
+///
+/// Reload must preserve the override definition rather than copying a stale
+/// effective option map from the old provider-model base.
+#[test]
+fn runtime_config_reload_rebases_generated_model_profile_definitions() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let config = |context_window_tokens| ConfigLayer {
+        name: "primary".to_string(),
+        path: None,
+        format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary,
+        trusted: true,
+        text: format!(
+            "[agents]\ndefault_provider = \"custom\"\ndefault_model_profile = \"work\"\n[providers.custom]\nkind = \"openai-compatible\"\ndefault_model = \"model-a\"\n[providers.custom.models.primary]\nid = \"model-a\"\ncontext_window_tokens = {context_window_tokens}\n[model_profiles.work]\nprovider = \"custom\"\nmodel = \"model-a\"\n"
+        ),
+    };
+    service
+        .replace_config_layers(vec![config(100_000)])
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let latency = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"latency","method":"agent/shell/command","params":{"idempotency_key":"latency-rebase","input":"/latency fast"}}"#,
+        &primary,
+    );
+    assert!(latency.contains(r#""kind":"mutated""#), "{latency}");
+    let (generated_name, before) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(before.known_context_window_tokens(), Some(100_000));
+    assert_eq!(before.latency_preference.as_deref(), Some("fast"));
+
+    service
+        .replace_config_layers(vec![config(200_000)])
+        .unwrap();
+
+    let (reloaded_name, after) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(reloaded_name, generated_name);
+    assert_eq!(after.known_context_window_tokens(), Some(200_000));
+    assert_eq!(after.latency_preference.as_deref(), Some("fast"));
+    assert_eq!(before.known_context_window_tokens(), Some(100_000));
+}

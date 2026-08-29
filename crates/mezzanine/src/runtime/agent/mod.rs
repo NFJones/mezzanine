@@ -1088,15 +1088,25 @@ impl RuntimeSessionService {
         &mut self,
         provider_id: impl Into<String>,
         catalog: RuntimeModelCatalog,
-    ) {
+    ) -> Result<()> {
+        let provider_id = provider_id.into();
+        self.integration
+            .provider_registry_mut()
+            .rematerialize_profiles_for_provider(&provider_id, Some(catalog.catalog()))
+            .map_err(|error| MezError::config(error.to_string()))?;
         self.agent
             .provider_model_catalog_cache
-            .insert(provider_id.into(), catalog);
+            .insert(provider_id, catalog);
+        Ok(())
     }
 
     /// Invalidates one provider's cached live model catalog.
-    pub(crate) fn remove_cached_provider_model_catalog(&mut self, provider_id: &str) {
+    pub(crate) fn remove_cached_provider_model_catalog(&mut self, provider_id: &str) -> Result<()> {
         self.agent.provider_model_catalog_cache.remove(provider_id);
+        self.integration
+            .provider_registry_mut()
+            .rematerialize_profiles_for_provider(provider_id, None)
+            .map_err(|error| MezError::config(error.to_string()))
     }
 
     /// Invalidates all live model catalogs after configuration changes.

@@ -447,8 +447,9 @@ pub use request_accounting::{
 };
 pub use response_progress::ProviderResponseProgress;
 pub use routing::{
-    ModelPreset, PresetRegistry, ProviderConfig, ProviderModelConfig, ProviderModelConfigError,
-    ProviderModelConfigErrorKind, ProviderRegistry, ProviderRoutingError, ProviderRoutingResult,
+    ModelPreset, ModelProfileDefinition, PresetRegistry, ProviderConfig, ProviderModelConfig,
+    ProviderModelConfigError, ProviderModelConfigErrorKind, ProviderRegistry, ProviderRoutingError,
+    ProviderRoutingResult,
 };
 pub use sandbox_assessment::{
     SANDBOX_FAILURE_ASSESSMENT_OUTPUT_MAX_BYTES, SandboxFailureAssessment,

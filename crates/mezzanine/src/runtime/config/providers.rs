@@ -9,9 +9,9 @@ use std::collections::BTreeMap;
 
 use mez_agent::resolve_provider_api;
 use mez_agent::{
-    ModelPreset as RuntimeModelPreset, ModelProfile, PresetRegistry as RuntimePresetRegistry,
-    ProviderConfig as RuntimeProviderConfig, ProviderModelConfig as RuntimeProviderModelConfig,
-    ProviderRegistry as RuntimeProviderRegistry,
+    ModelPreset as RuntimeModelPreset, ModelProfile, ModelProfileDefinition,
+    PresetRegistry as RuntimePresetRegistry, ProviderConfig as RuntimeProviderConfig,
+    ProviderModelConfig as RuntimeProviderModelConfig, ProviderRegistry as RuntimeProviderRegistry,
 };
 use serde_json::Value;
 
@@ -81,44 +81,51 @@ pub(crate) fn runtime_provider_registry_from_config(
     } else {
         default_model
     };
-    registry.profiles.insert(
+    registry.insert_profile_definition(
         default_profile.clone(),
-        ModelProfile {
+        ModelProfileDefinition {
             provider: default_provider.to_string(),
             model: default_model,
             reasoning_profile: default_config.options.get("reasoning_effort").cloned(),
             latency_preference: Some("default".to_string()),
-            multimodal_required: false,
-            provider_options: std::collections::BTreeMap::new(),
-            safety_tier: None,
+            ..ModelProfileDefinition::default()
         },
-    );
+        None,
+    )?;
 
-    for (provider_id, config) in &registry.providers {
-        for model in &config.models {
-            if model.id.is_empty() {
-                continue;
-            }
-            registry
-                .profiles
-                .entry(model.id.clone())
-                .or_insert(ModelProfile {
-                    provider: provider_id.clone(),
-                    model: model.id.clone(),
-                    reasoning_profile: config.options.get("reasoning_effort").cloned(),
-                    latency_preference: Some("default".to_string()),
-                    multimodal_required: false,
-                    provider_options: std::collections::BTreeMap::new(),
-                    safety_tier: None,
-                });
+    let synthesized_definitions = registry
+        .providers
+        .iter()
+        .flat_map(|(provider_id, config)| {
+            config
+                .models
+                .iter()
+                .filter(|model| !model.id.is_empty())
+                .map(|model| {
+                    (
+                        model.id.clone(),
+                        ModelProfileDefinition {
+                            provider: provider_id.clone(),
+                            model: model.id.clone(),
+                            reasoning_profile: config.options.get("reasoning_effort").cloned(),
+                            latency_preference: Some("default".to_string()),
+                            ..ModelProfileDefinition::default()
+                        },
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    for (name, definition) in synthesized_definitions {
+        if !registry.profile_definitions.contains_key(&name) {
+            registry.insert_profile_definition(name, definition, None)?;
         }
     }
 
     if let Some(configured_profiles) = runtime_json_object(root, "model_profiles") {
         for (profile_name, value) in configured_profiles {
-            let (profile, fallbacks) =
+            let (definition, fallbacks) =
                 runtime_model_profile_from_config(profile_name, value, &registry.providers)?;
-            registry.profiles.insert(profile_name.clone(), profile);
+            registry.insert_profile_definition(profile_name.clone(), definition, None)?;
             if !fallbacks.is_empty() {
                 registry
                     .fallback_profiles
@@ -249,7 +256,7 @@ fn runtime_model_profile_from_config(
     profile_name: &str,
     value: &Value,
     providers: &BTreeMap<String, RuntimeProviderConfig>,
-) -> Result<(ModelProfile, Vec<String>)> {
+) -> Result<(ModelProfileDefinition, Vec<String>)> {
     let Some(object) = value.as_object() else {
         return Err(MezError::config(format!(
             "model_profiles.{profile_name} must be an object"
@@ -285,27 +292,11 @@ fn runtime_model_profile_from_config(
             .entry("approval_policy".to_string())
             .or_insert_with(|| approval_policy.to_string());
     }
-    if let Some(context_window_tokens) =
-        runtime_model_profile_context_window_tokens(profile_name, object)?
-    {
-        provider_options
-            .entry("context_window_tokens".to_string())
-            .or_insert_with(|| context_window_tokens.to_string());
-    }
-    if let Some(max_input_tokens) =
-        runtime_model_profile_positive_token_count(profile_name, object, "max_input_tokens")?
-    {
-        provider_options
-            .entry("max_input_tokens".to_string())
-            .or_insert_with(|| max_input_tokens.to_string());
-    }
-    if let Some(max_output_tokens) =
-        runtime_model_profile_positive_token_count(profile_name, object, "max_output_tokens")?
-    {
-        provider_options
-            .entry("max_output_tokens".to_string())
-            .or_insert_with(|| max_output_tokens.to_string());
-    }
+    let context_window_tokens = runtime_model_profile_context_window_tokens(profile_name, object)?;
+    let max_input_tokens =
+        runtime_model_profile_positive_token_count(profile_name, object, "max_input_tokens")?;
+    let max_output_tokens =
+        runtime_model_profile_positive_token_count(profile_name, object, "max_output_tokens")?;
     let safety_tier = runtime_json_string(object.get("safety_tier")).map(str::to_string);
     if let Some(safety_tier) = safety_tier.as_deref()
         && !matches!(safety_tier, "basic" | "medium" | "high")
@@ -316,7 +307,7 @@ fn runtime_model_profile_from_config(
     }
     let fallbacks = runtime_json_string_array(object.get("fallback_profiles"))?.unwrap_or_default();
     Ok((
-        ModelProfile {
+        ModelProfileDefinition {
             provider: provider.to_string(),
             model: model.to_string(),
             reasoning_profile: runtime_json_string(object.get("reasoning_profile"))
@@ -330,10 +321,13 @@ fn runtime_model_profile_from_config(
                 .to_string(),
             ),
             multimodal_required: runtime_json_bool(object.get("multimodal_required"))
-                .or_else(|| runtime_json_bool(object.get("multimodal")))
-                .unwrap_or(false),
+                .or_else(|| runtime_json_bool(object.get("multimodal"))),
+            context_window_tokens,
+            max_input_tokens,
+            max_output_tokens,
             provider_options,
             safety_tier,
+            ..ModelProfileDefinition::default()
         },
         fallbacks,
     ))
@@ -590,7 +584,7 @@ pub(crate) fn runtime_recommended_model_for_provider(kind: &str) -> Result<&'sta
 
 #[cfg(test)]
 mod tests {
-    use super::runtime_provider_config_from_config;
+    use super::{runtime_provider_config_from_config, runtime_provider_registry_from_config};
 
     /// Verifies the generic streaming declaration survives provider config
     /// extraction as the string-valued compatibility option consumed by the
@@ -699,5 +693,60 @@ mod tests {
                 .contains("provider model alias `shared` collides"),
             "{error}"
         );
+    }
+
+    /// Verifies configured named profiles inherit provider-model metadata and
+    /// resolve aliases to the canonical provider-facing model id.
+    #[test]
+    fn runtime_registry_materializes_named_profiles_from_provider_models() {
+        let registry = runtime_provider_registry_from_config(&serde_json::json!({
+            "agents": {
+                "default_provider": "custom",
+                "default_model_profile": "work"
+            },
+            "providers": {
+                "custom": {
+                    "kind": "openai-compatible",
+                    "default_model": "model-a",
+                    "options": {
+                        "root-only": "root",
+                        "shared": "root"
+                    },
+                    "models": {
+                        "primary": {
+                            "id": "model-a",
+                            "aliases": ["fast"],
+                            "context_window_tokens": 200000,
+                            "max_input_tokens": 180000,
+                            "max_output_tokens": 8000,
+                            "provider_options": {
+                                "base-only": "base",
+                                "shared": "base"
+                            }
+                        }
+                    }
+                }
+            },
+            "model_profiles": {
+                "work": {
+                    "provider": "custom",
+                    "model": "fast",
+                    "max_output_tokens": 16000,
+                    "provider_options": {
+                        "shared": "profile"
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let profile = registry.resolve_profile("work").unwrap();
+        assert_eq!(profile.model, "model-a");
+        assert_eq!(profile.context_window_tokens(), 200_000);
+        assert_eq!(profile.max_input_tokens(), Some(180_000));
+        assert_eq!(profile.max_output_tokens(), Some(16_000));
+        assert_eq!(profile.provider_options["root-only"], "root");
+        assert_eq!(profile.provider_options["base-only"], "base");
+        assert_eq!(profile.provider_options["shared"], "profile");
     }
 }

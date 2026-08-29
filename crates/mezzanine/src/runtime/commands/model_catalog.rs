@@ -160,7 +160,7 @@ impl RuntimeSessionService {
             {
                 Ok(catalog) => {
                     let catalog = RuntimeModelCatalog::from_provider(catalog);
-                    self.cache_provider_model_catalog(provider_id, catalog.clone());
+                    self.cache_provider_model_catalog(provider_id, catalog.clone())?;
                     Ok(catalog)
                 }
                 Err(_error) => Ok(fallback),
@@ -246,11 +246,11 @@ impl RuntimeSessionService {
                     credential_outcome,
                 )?;
             }
-            self.remove_cached_provider_model_catalog(&provider_id);
+            self.remove_cached_provider_model_catalog(&provider_id)?;
             match entry_outcome.result {
                 Ok(catalog) => {
                     refreshed = refreshed.saturating_add(1);
-                    self.cache_provider_model_catalog(&provider_id, catalog.clone());
+                    self.cache_provider_model_catalog(&provider_id, catalog.clone())?;
                     let provider_error = catalog
                         .provider_error
                         .as_deref()
@@ -311,7 +311,8 @@ impl RuntimeSessionService {
                 reasoning_levels,
                 quota_usage: Vec::new(),
             }),
-        );
+        )
+        .expect("test provider catalog should rematerialize profiles");
     }
 
     /// Runs the runtime API model catalog async operation for this subsystem.
@@ -571,6 +572,11 @@ pub(crate) struct RuntimeModelCatalog {
 }
 
 impl RuntimeModelCatalog {
+    /// Returns the normalized provider-neutral catalog used for profile rebasing.
+    pub(crate) fn catalog(&self) -> &ModelCatalog {
+        &self.catalog
+    }
+
     /// Runs the from provider operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

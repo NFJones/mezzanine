@@ -209,6 +209,50 @@ async fn runtime_agent_shell_model_list_uses_provider_catalog_over_configured_mo
     assert!(model_list.contains("| provider |"), "{model_list}");
 }
 
+/// Verifies caching a provider catalog rematerializes named profiles from
+/// discovery metadata while preserving configured provider-model overrides.
+///
+/// Existing profile clones remain unchanged values, but later registry
+/// resolutions must observe discovered gaps filled by the new catalog.
+#[test]
+fn runtime_cached_catalog_rematerializes_named_profiles() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"custom\"\ndefault_model_profile = \"work\"\n[providers.custom]\nkind = \"openai-compatible\"\ndefault_model = \"model-a\"\n[providers.custom.models.primary]\nid = \"model-a\"\nmax_output_tokens = 16000\n[model_profiles.work]\nprovider = \"custom\"\nmodel = \"model-a\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let before = service.provider_registry().resolve_profile("work").unwrap();
+
+    service.cache_provider_model_catalog_for_tests(
+        "custom",
+        vec![mez_agent::ProviderModelInfo {
+            id: "model-a".to_string(),
+            display_name: None,
+            reasoning_levels: vec!["medium".to_string()],
+            context_window_tokens: Some(777_000),
+            max_input_tokens: Some(700_000),
+            max_output_tokens: Some(8_000),
+            capabilities: vec!["tool_use".to_string()],
+        }],
+        vec!["medium".to_string()],
+    );
+
+    let after = service.provider_registry().resolve_profile("work").unwrap();
+    assert_eq!(before.known_context_window_tokens(), None);
+    assert_eq!(after.known_context_window_tokens(), Some(777_000));
+    assert_eq!(after.max_input_tokens(), Some(700_000));
+    assert_eq!(after.max_output_tokens(), Some(16_000));
+    assert_eq!(after.provider_options["model_capabilities"], "tool_use");
+    assert_eq!(before.known_context_window_tokens(), None);
+}
+
 /// Verifies that ChatGPT browser/device credentials do not trigger a fabricated
 /// Codex model-catalog HTTP request. The runtime should skip that unsupported
 /// live catalog path and fall back to configured provider models without
