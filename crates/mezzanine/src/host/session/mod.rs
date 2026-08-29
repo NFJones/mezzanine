@@ -522,8 +522,9 @@ async fn initialize_session_dependencies(
     let token_usage_store = TokenUsageStore::under_config_root(&config.root);
     token_usage_store.initialize(created_at_unix_seconds)?;
     service.set_token_usage_store(token_usage_store);
-    service
-        .set_agent_transcript_store(AgentTranscriptStore::under_config_root(config.root.clone()));
+    let transcript_store = AgentTranscriptStore::under_config_root(config.root.clone());
+    transcript_store.initialize(created_at_unix_seconds)?;
+    service.set_agent_transcript_store(transcript_store);
     service.set_auth_store(AuthStore::new(AuthPaths::under_config_root(&config.root)));
     let trust_path = default_trust_database_path(&config.root);
     service.set_project_trust_store(

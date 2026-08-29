@@ -19,6 +19,7 @@ use super::store::{PRESENTATION_CLEAR_TAIL_COMPACT_BYTES, PROMPT_HISTORY_COMPACT
 use super::{AgentPresentationEntry, AgentTranscriptStore};
 use mez_agent::transcript::{AgentSessionMetadata, TranscriptEntry, TranscriptRole};
 use mez_mux::readline::{ReadlineHistoryEntry, ReadlinePasteRange};
+use rusqlite::Connection;
 
 /// Builds a per-test temporary root that is unique within the current process.
 fn temp_root(name: &str) -> PathBuf {
@@ -1145,5 +1146,330 @@ fn transcript_store_round_trips_structured_agent_and_command_history() {
     );
     assert_eq!(reopened.prompt_history("conv").unwrap(), vec![raw]);
 
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies first initialization imports every supported saved-session layout
+/// into the private catalog without moving or deleting source payloads.
+///
+/// Existing installations can contain current directory sessions, legacy
+/// root-level transcripts, presentation-only histories, subagents, and named
+/// conversations with no payload. The one-time migration must preserve their
+/// discovery metadata and prefer a directory payload over a duplicate legacy
+/// transcript for the same durable identity.
+#[test]
+fn transcript_store_catalog_migrates_existing_session_metadata() {
+    let root = temp_root("catalog-migration");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+
+    let mut current = entry("current", 1, TranscriptRole::User);
+    current.content = "project_root=/workspace/current\nship the catalog".to_string();
+    store.append(&current).unwrap();
+    store
+        .save_conversation_kind("current", mez_agent::AgentConversationKind::Subagent)
+        .unwrap();
+    store
+        .name_session("current", "Current session", 40, None)
+        .unwrap();
+    store
+        .append_presentation(&presentation("presentation-only", 1))
+        .unwrap();
+    store
+        .name_session(
+            "presentation-only",
+            "Presentation only",
+            41,
+            Some("/workspace/presentation".to_string()),
+        )
+        .unwrap();
+    store
+        .name_session("named-empty", "No payload yet", 42, None)
+        .unwrap();
+
+    let legacy = entry("legacy", 1, TranscriptRole::User);
+    fs::write(
+        root.join("legacy.tsv"),
+        format!("{}\n", encode_transcript_entry(&legacy).unwrap()),
+    )
+    .unwrap();
+    store
+        .append(&entry("duplicate", 1, TranscriptRole::User))
+        .unwrap();
+    let duplicate_legacy = entry("duplicate", 1, TranscriptRole::Assistant);
+    fs::write(
+        root.join("duplicate.tsv"),
+        format!("{}\n", encode_transcript_entry(&duplicate_legacy).unwrap()),
+    )
+    .unwrap();
+
+    store.initialize(100).unwrap();
+
+    let current = store.catalog_saved_session("current").unwrap().unwrap();
+    assert_eq!(current.name.as_deref(), Some("Current session"));
+    assert_eq!(
+        current.conversation_kind,
+        mez_agent::AgentConversationKind::Subagent
+    );
+    assert_eq!(
+        current.summary.directory.as_deref(),
+        Some("/workspace/current")
+    );
+    let presentation = store
+        .catalog_saved_session("presentation-only")
+        .unwrap()
+        .unwrap();
+    assert_eq!(presentation.summary.entries, 0);
+    assert_eq!(presentation.summary.last_turn_id, "turn-1");
+    assert_eq!(
+        presentation.summary.directory.as_deref(),
+        Some("/workspace/presentation")
+    );
+    let named_empty = store.catalog_saved_session("named-empty").unwrap().unwrap();
+    assert_eq!(named_empty.summary.entries, 0);
+    assert_eq!(named_empty.summary.last_created_at_unix_seconds, 42);
+
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    let records: i64 = connection
+        .query_row("SELECT COUNT(*) FROM saved_conversations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(records, 5);
+    let legacy_layout: String = connection
+        .query_row(
+            "SELECT payload_layout FROM saved_conversations WHERE conversation_id = 'legacy'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(legacy_layout, "legacy-tsv");
+    let duplicate_layout: String = connection
+        .query_row(
+            "SELECT payload_layout FROM saved_conversations WHERE conversation_id = 'duplicate'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(duplicate_layout, "directory");
+    let presentation_flags: (i64, i64) = connection
+        .query_row(
+            "SELECT has_transcript, has_presentation FROM saved_conversations
+             WHERE conversation_id = 'presentation-only'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(presentation_flags, (0, 1));
+    drop(connection);
+
+    assert!(root.join("current").join("history.tsv").exists());
+    assert!(root.join("legacy.tsv").exists());
+    assert!(root.join("duplicate.tsv").exists());
+    assert!(root.join("named-sessions.json").exists());
+    assert!(root.join(".catalog-migrated-v1").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a completed catalog migration is a no-op on later startups, while
+/// deleting only the database causes retained sidecars to be imported again.
+///
+/// The marker makes ordinary startup bounded. The database itself remains
+/// disposable, so losing it must recover catalog rows without touching saved
+/// transcript payloads.
+#[test]
+fn transcript_store_catalog_restart_is_bounded_and_missing_database_recovers() {
+    let root = temp_root("catalog-restart");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("before-migration", 1, TranscriptRole::User))
+        .unwrap();
+    store.initialize(100).unwrap();
+
+    store
+        .name_session("after-migration", "Not reimported", 101, None)
+        .unwrap();
+    store.initialize(102).unwrap();
+    assert!(
+        store
+            .catalog_saved_session("after-migration")
+            .unwrap()
+            .is_none()
+    );
+
+    fs::remove_file(store.catalog_path()).unwrap();
+    store.initialize(103).unwrap();
+    assert!(
+        store
+            .catalog_saved_session("before-migration")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        store
+            .catalog_saved_session("after-migration")
+            .unwrap()
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("Not reimported")
+    );
+    assert!(root.join("before-migration").join("history.tsv").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies the catalog schema, indexes, integrity check, and private Unix
+/// permissions are installed on an empty transcript root.
+#[test]
+fn transcript_store_catalog_initializes_private_indexed_schema() {
+    let root = temp_root("catalog-schema");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+
+    store.initialize(100).unwrap();
+
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 1);
+    let quick_check: String = connection
+        .query_row("PRAGMA quick_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(quick_check, "ok");
+    let indexes: Vec<String> = connection
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'index' AND tbl_name = 'saved_conversations'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "saved_conversations_latest_root")
+    );
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "saved_conversations_picker")
+    );
+    assert!(
+        indexes
+            .iter()
+            .any(|name| name == "saved_conversations_pruning")
+    );
+    drop(connection);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        assert_eq!(
+            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(store.catalog_path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a readable catalog from a future release fails closed rather than
+/// being overwritten or downgraded during startup initialization.
+#[test]
+fn transcript_store_catalog_rejects_future_schema_versions() {
+    let root = temp_root("catalog-future-schema");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let store = AgentTranscriptStore::new(root.clone());
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    connection.pragma_update(None, "user_version", 2).unwrap();
+    drop(connection);
+
+    let error = store.initialize(100).unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(error.message().contains("newer than supported version 1"));
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies startup recognizes an unreadable SQLite file, preserves it as the
+/// rebuild backup, and reconstructs the catalog from retained session files.
+///
+/// Catalog corruption must not make durable transcripts unavailable or cause
+/// payload cleanup. Only explicit SQLite corruption classes trigger this
+/// recovery path; readable future schemas remain protected by the preceding
+/// regression.
+#[test]
+fn transcript_store_catalog_recovers_from_corrupt_database() {
+    let root = temp_root("catalog-corruption");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("recoverable", 1, TranscriptRole::User))
+        .unwrap();
+    store.initialize(100).unwrap();
+
+    fs::write(store.catalog_path(), b"not a sqlite database").unwrap();
+    let _ = fs::remove_file(format!("{}-wal", store.catalog_path().display()));
+    let _ = fs::remove_file(format!("{}-shm", store.catalog_path().display()));
+
+    store.initialize(101).unwrap();
+
+    assert!(
+        store
+            .catalog_saved_session("recoverable")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        fs::read(root.join(".catalog.sqlite3.backup")).unwrap(),
+        b"not a sqlite database"
+    );
+    assert!(root.join("recoverable").join("history.tsv").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an explicit rebuild replaces divergent catalog contents from the
+/// retained filesystem snapshot and keeps the prior valid database as backup.
+#[test]
+fn transcript_store_catalog_explicit_rebuild_restores_metadata() {
+    let root = temp_root("catalog-explicit-rebuild");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("restore-me", 1, TranscriptRole::User))
+        .unwrap();
+    store.initialize(100).unwrap();
+
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    connection
+        .execute("DELETE FROM saved_conversations", [])
+        .unwrap();
+    drop(connection);
+    assert!(store.catalog_saved_session("restore-me").unwrap().is_none());
+
+    store.rebuild_catalog(101).unwrap();
+
+    assert!(store.catalog_saved_session("restore-me").unwrap().is_some());
+    assert!(root.join(".catalog.sqlite3.backup").exists());
+    assert!(root.join("restore-me").join("history.tsv").exists());
     let _ = fs::remove_dir_all(root);
 }

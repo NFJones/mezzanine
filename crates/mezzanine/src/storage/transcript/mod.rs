@@ -3,8 +3,15 @@
 //! Each agent session is stored in a private directory under the configured
 //! session root. The directory contains an append-only transcript, while the
 //! session root contains bounded shared prompt-history metadata for agent and
-//! primary command prompts so readline navigation can span prompt openings
-//! without requiring a database or provider credentials.
+//! primary command prompts. A rebuildable SQLite catalog indexes saved-session
+//! discovery metadata without moving transcript or presentation payloads out
+//! of their inspectable per-session files.
+
+/// Exposes the catalog module boundary.
+///
+/// The catalog owns only rebuildable discovery metadata; transcript and
+/// presentation payloads remain filesystem-backed and authoritative.
+mod catalog;
 
 /// Exposes the encoding module boundary.
 ///

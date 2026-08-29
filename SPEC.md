@@ -10240,6 +10240,31 @@ representations, the retained entry MUST use the newest representation.
 The user MUST be able to list, inspect, fork, resume, and delete saved agent
 conversations.
 
+The parent agent-session directory MUST contain a private, versioned SQLite
+catalog of bounded saved-conversation discovery metadata. Transcript and
+presentation payloads MUST remain in their existing per-conversation files and
+MUST remain authoritative for recoverable conversation content. The catalog
+MUST be rebuildable from retained payload metadata and sidecars, MUST reject a
+readable schema version newer than the running Mezzanine release, and MUST NOT
+store arbitrary absolute payload paths.
+
+The first startup after catalog support is introduced MUST perform a
+cross-process-serialized, one-time metadata migration. That migration MUST
+import current session directories, legacy root-level transcript files,
+presentation-only sessions, durable root/subagent classification, and named
+sessions with no payload. Directory payloads MUST take precedence over a
+duplicate legacy transcript without deleting either source. Migration MUST be
+transactional and restart-safe, and it MUST retain transcripts, presentation
+logs, summary and classification sidecars, and the legacy name index as rebuild
+and rollback inputs.
+
+Ordinary startup with a healthy migrated catalog MUST use bounded schema and
+integrity validation and MUST NOT enumerate all session payloads. A missing or
+SQLite-identified corrupt catalog MAY be rebuilt from retained files, while a
+readable future schema MUST fail closed rather than being replaced or
+downgraded. Catalog files, migration locks, markers, and active SQLite sidecars
+MUST use the same user-private storage boundary as saved conversation payloads.
+
 Every saved agent conversation MUST retain its UUID as its sole identity. The
 `/name-session <name>` command MUST assign or replace optional user-visible
 metadata for the current durable conversation. `/name-session --clear` MUST

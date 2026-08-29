@@ -17,6 +17,7 @@ use rustix::fs::{FlockOperation, flock};
 
 use crate::error::{MezError, MezErrorKind, Result};
 
+use super::catalog::{self, CatalogCandidate, CatalogPayloadLayout};
 use super::encoding::{
     decode_agent_session_metadata, decode_structured_prompt_history_entry, decode_transcript_entry,
     encode_agent_session_metadata, encode_structured_prompt_history_entry, encode_transcript_entry,
@@ -186,6 +187,35 @@ impl AgentTranscriptStore {
     #[cfg(test)]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Initializes and validates the rebuildable saved-conversation catalog.
+    ///
+    /// The first initialization imports existing filesystem metadata while
+    /// retaining every transcript, presentation file, and sidecar in place.
+    pub fn initialize(&self, now_unix_seconds: u64) -> Result<()> {
+        catalog::initialize(self, now_unix_seconds)
+    }
+
+    /// Reconstructs the saved-conversation catalog from retained session files.
+    #[cfg(test)]
+    pub fn rebuild_catalog(&self, now_unix_seconds: u64) -> Result<()> {
+        catalog::rebuild(self, now_unix_seconds)
+    }
+
+    /// Returns the catalog database path for focused tests.
+    #[cfg(test)]
+    pub fn catalog_path(&self) -> PathBuf {
+        catalog::catalog_path(self)
+    }
+
+    /// Loads one exact saved-session record from the catalog for focused tests.
+    #[cfg(test)]
+    pub fn catalog_saved_session(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<SavedAgentSession>> {
+        catalog::saved_session(self, conversation_id)
     }
 
     /// Appends one validated transcript entry to its conversation file.
@@ -815,6 +845,153 @@ impl AgentTranscriptStore {
                 .cmp(&right.summary.conversation_id)
         });
         Ok(saved)
+    }
+
+    /// Builds one deterministic migration snapshot from retained session files.
+    ///
+    /// The root is enumerated once. Directory payloads take precedence over a
+    /// duplicate legacy TSV, names are read once and overlaid last, and
+    /// unrelated root entries are ignored. Presentation-only metadata is read
+    /// as a stream so compressed history is never inflated into one allocation.
+    pub(super) fn catalog_migration_candidates(&self) -> Result<Vec<CatalogCandidate>> {
+        let names = self.read_named_sessions_index()?;
+        if !self.root.exists() {
+            return names
+                .values()
+                .map(|named| self.named_only_catalog_candidate(named))
+                .collect::<Result<Vec<_>>>();
+        }
+
+        let mut paths = std_fs::read_dir(&self.root)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        paths.sort();
+        let mut candidates = BTreeMap::<String, CatalogCandidate>::new();
+
+        for path in &paths {
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(conversation_id) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if validate_conversation_id(conversation_id).is_err() {
+                continue;
+            }
+            let has_transcript = path.join(SESSION_TRANSCRIPT_FILE_NAME).is_file();
+            let has_presentation = path.join(SESSION_PRESENTATION_FILE_NAME).is_file()
+                || path
+                    .join(SESSION_PRESENTATION_COMPRESSED_FILE_NAME)
+                    .is_file();
+            if !has_transcript && !has_presentation {
+                continue;
+            }
+            if let Some(candidate) = self.catalog_candidate_for_payload(
+                conversation_id,
+                has_transcript,
+                has_presentation,
+                CatalogPayloadLayout::Directory,
+                names.get(conversation_id),
+            )? {
+                candidates.insert(conversation_id.to_string(), candidate);
+            }
+        }
+
+        for path in &paths {
+            if !path.is_file()
+                || path.extension().and_then(|extension| extension.to_str()) != Some("tsv")
+            {
+                continue;
+            }
+            let Some(conversation_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            if candidates.contains_key(conversation_id)
+                || validate_conversation_id(conversation_id).is_err()
+            {
+                continue;
+            }
+            if let Some(candidate) = self.catalog_candidate_for_payload(
+                conversation_id,
+                true,
+                false,
+                CatalogPayloadLayout::LegacyTsv,
+                names.get(conversation_id),
+            )? {
+                candidates.insert(conversation_id.to_string(), candidate);
+            }
+        }
+
+        for named in names.values() {
+            if let Some(candidate) = candidates.get_mut(&named.conversation_id) {
+                candidate.name = Some(named.name.clone());
+                candidate.named_at_unix_seconds = Some(named.named_at_unix_seconds);
+                if candidate.summary.directory.is_none() {
+                    candidate.summary.directory = named.directory.clone();
+                }
+            } else {
+                candidates.insert(
+                    named.conversation_id.clone(),
+                    self.named_only_catalog_candidate(named)?,
+                );
+            }
+        }
+        Ok(candidates.into_values().collect())
+    }
+
+    /// Builds one candidate for a transcript-backed or presentation-only payload.
+    fn catalog_candidate_for_payload(
+        &self,
+        conversation_id: &str,
+        has_transcript: bool,
+        has_presentation: bool,
+        payload_layout: CatalogPayloadLayout,
+        named: Option<&NamedAgentSession>,
+    ) -> Result<Option<CatalogCandidate>> {
+        let summary = if has_transcript {
+            self.summary(conversation_id)?
+        } else {
+            self.presentation_migration_summary(conversation_id, named)?
+        };
+        let Some(mut summary) = summary else {
+            return Ok(None);
+        };
+        if summary.directory.is_none() {
+            summary.directory = named.and_then(|session| session.directory.clone());
+        }
+        Ok(Some(CatalogCandidate {
+            summary,
+            name: named.map(|session| session.name.clone()),
+            named_at_unix_seconds: named.map(|session| session.named_at_unix_seconds),
+            conversation_kind: self.conversation_kind(conversation_id)?,
+            has_transcript,
+            has_presentation,
+            payload_layout,
+        }))
+    }
+
+    /// Synthesizes one zero-entry catalog record from durable naming metadata.
+    fn named_only_catalog_candidate(&self, named: &NamedAgentSession) -> Result<CatalogCandidate> {
+        Ok(CatalogCandidate {
+            summary: ConversationSummary {
+                conversation_id: named.conversation_id.clone(),
+                entries: 0,
+                first_created_at_unix_seconds: named.named_at_unix_seconds,
+                last_created_at_unix_seconds: named.named_at_unix_seconds,
+                last_turn_id: String::new(),
+                agent_id: String::new(),
+                pane_id: String::new(),
+                directory: named.directory.clone(),
+                initial_prompt: None,
+                latest_user_prompt: None,
+            },
+            name: Some(named.name.clone()),
+            named_at_unix_seconds: Some(named.named_at_unix_seconds),
+            conversation_kind: self.conversation_kind(&named.conversation_id)?,
+            has_transcript: false,
+            has_presentation: false,
+            payload_layout: CatalogPayloadLayout::Directory,
+        })
     }
 
     /// Assigns or replaces the durable display name for one conversation.
@@ -1503,6 +1680,73 @@ impl AgentTranscriptStore {
         value.parse::<u64>().map(Some).map_err(|error| {
             MezError::invalid_args(format!("presentation index is invalid: {error}"))
         })
+    }
+
+    /// Streams presentation rows to recover only the first and latest entries.
+    fn presentation_migration_summary(
+        &self,
+        conversation_id: &str,
+        named: Option<&NamedAgentSession>,
+    ) -> Result<Option<ConversationSummary>> {
+        let mut first = None;
+        let mut last = None;
+        let compressed_path = self.presentation_compressed_path_for(conversation_id)?;
+        if compressed_path.is_file() {
+            let file = std_fs::File::open(&compressed_path)?;
+            let decoder = zstd::stream::read::Decoder::new(file).map_err(|error| {
+                MezError::invalid_args(format!(
+                    "presentation compressed history decode failed: {error}"
+                ))
+            })?;
+            Self::read_presentation_bounds(BufReader::new(decoder), &mut first, &mut last)?;
+        }
+        let cleartext_path = self.presentation_path_for(conversation_id)?;
+        if cleartext_path.is_file() {
+            Self::read_presentation_bounds(
+                BufReader::new(std_fs::File::open(cleartext_path)?),
+                &mut first,
+                &mut last,
+            )?;
+        }
+        let (Some(first), Some(last)) = (first, last) else {
+            return Ok(None);
+        };
+        Ok(Some(ConversationSummary {
+            conversation_id: conversation_id.to_string(),
+            entries: 0,
+            first_created_at_unix_seconds: first.created_at_unix_seconds,
+            last_created_at_unix_seconds: last.created_at_unix_seconds,
+            last_turn_id: last.turn_id.unwrap_or_default(),
+            agent_id: String::new(),
+            pane_id: last.pane_id,
+            directory: named.and_then(|session| session.directory.clone()),
+            initial_prompt: None,
+            latest_user_prompt: None,
+        }))
+    }
+
+    /// Updates bounded first/latest presentation state from one line reader.
+    fn read_presentation_bounds(
+        mut reader: impl BufRead,
+        first: &mut Option<AgentPresentationEntry>,
+        last: &mut Option<AgentPresentationEntry>,
+    ) -> Result<()> {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line)? == 0 {
+                return Ok(());
+            }
+            let line = line.trim_end_matches(['\r', '\n']);
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entry = AgentPresentationEntry::decode(line)?;
+            if first.is_none() {
+                *first = Some(entry.clone());
+            }
+            *last = Some(entry);
+        }
     }
 
     /// Deletes oldest saved conversations until the configured resume cap holds.

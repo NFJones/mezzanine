@@ -96,6 +96,24 @@ separately from snapshots. Use `/resume` to select a saved conversation,
 pane for a copied conversation branch. After a restart, an active turn that
 cannot be reconnected is marked interrupted rather than silently resumed.
 
+Saved-conversation discovery metadata is indexed in
+`agent-sessions/catalog.sqlite3` under Mezzanine's user-private configuration
+area. Transcript and presentation payloads remain in their existing session
+directories; the catalog does not replace or contain conversation content.
+
+The first startup after this catalog is introduced performs a one-time import
+of existing session metadata and leaves all existing payloads and sidecars in
+place. Later healthy startups validate the catalog without scanning every saved
+session. If the database is missing or SQLite identifies it as corrupt,
+Mezzanine rebuilds it from retained session files and keeps the previous
+database as `.catalog.sqlite3.backup`. A catalog created by a newer Mezzanine
+schema is not overwritten or downgraded; startup reports the incompatibility so
+the newer data remains intact.
+
+Treat `catalog.sqlite3`, its `-wal` and `-shm` files, migration markers, and
+backups as sensitive metadata. Do not remove transcript directories or legacy
+sidecars as part of catalog recovery: they are the reconstruction source.
+
 ## Related pages
 
 - [Sessions and panes](../using-mezzanine/sessions-and-panes.md)
