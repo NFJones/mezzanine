@@ -28,6 +28,7 @@ use crate::integrations::agent::provider::{
 };
 use crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger;
 use crate::runtime::agent_state::RuntimeAgentCompactionTarget;
+use crate::runtime::config::runtime_effective_provider_options;
 use crate::runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
 use mez_agent::{
     DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorRetryClass, apply_model_context_compaction_plan,
@@ -433,13 +434,15 @@ impl RuntimeSessionService {
             .base_url
             .as_deref()
             .filter(|endpoint| !endpoint.is_empty());
+        let provider_options =
+            runtime_effective_provider_options(&provider_config, &task.model_profile);
         let provider = match provider_api {
             ProviderApiCompatibility::OpenAiResponses => {
                 openai_responses_provider_from_auth_store_with_provider_options(
                     auth_store,
                     &task.model_profile.provider,
                     endpoint_override,
-                    &provider_config.options,
+                    &provider_options,
                     DEFAULT_PROVIDER_TIMEOUT_MS,
                     ReqwestProviderHttpTransport,
                 )
@@ -450,7 +453,7 @@ impl RuntimeSessionService {
                     auth_store,
                     &task.model_profile.provider,
                     endpoint_override,
-                    &provider_config.options,
+                    &provider_options,
                     DEFAULT_PROVIDER_TIMEOUT_MS,
                     ReqwestProviderHttpTransport,
                 )
@@ -471,7 +474,7 @@ impl RuntimeSessionService {
                     auth_store,
                     &task.model_profile.provider,
                     endpoint_override,
-                    &task.model_profile.provider_options,
+                    &provider_options,
                     DEFAULT_PROVIDER_TIMEOUT_MS,
                     ReqwestProviderHttpTransport,
                 )
@@ -483,8 +486,8 @@ impl RuntimeSessionService {
                 let estimate = mez_agent::provider_request_input_estimate(
                     &task.request,
                     provider_api,
-                    &provider_config.options,
-                    provider.request_stream(),
+                    &provider_options,
+                    provider.request_stream(&task.request),
                 )?;
                 if !estimate.exceeds_explicit_cap(max_input_tokens) {
                     break;

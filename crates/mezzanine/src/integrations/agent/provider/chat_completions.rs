@@ -198,6 +198,11 @@ where
         &self.provider_id
     }
 
+    /// Returns whether this provider will stream one concrete request.
+    pub(crate) fn streams_request(&self, request: &ModelRequest) -> bool {
+        self.dialect.effective_stream(request, self.stream)
+    }
+
     /// Overrides the runtime provider identity accepted by request guards.
     pub fn with_provider_id(mut self, provider_id: impl Into<String>) -> Result<Self> {
         let provider_id = provider_id.into();

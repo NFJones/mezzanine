@@ -237,11 +237,13 @@ impl RuntimeAgentProviderDispatchProvider {
         }
     }
 
-    /// Returns the wire streaming mode used to serialize provider input.
-    pub(crate) fn request_stream(&self) -> bool {
+    /// Returns the wire streaming mode used to serialize one provider request.
+    pub(crate) fn request_stream(&self, request: &ModelRequest) -> bool {
         match self {
             Self::OpenAi(provider) => provider.streams_responses(),
-            Self::DeepSeek(_) | Self::Anthropic(_) | Self::OpenAiCompatible(_) => false,
+            Self::DeepSeek(provider) => provider.streams_request(request),
+            Self::Anthropic(provider) => provider.streams_request(request),
+            Self::OpenAiCompatible(provider) => provider.streams_request(request),
         }
     }
 }

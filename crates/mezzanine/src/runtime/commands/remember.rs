@@ -22,6 +22,7 @@ use super::{
     runtime_effective_config_value, runtime_single_mode_arg, runtime_string_array_json,
 };
 use crate::integrations::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
+use crate::runtime::config::runtime_effective_provider_options;
 use crate::runtime::{AgentRememberEvent, RenderInvalidationReason, RuntimeTransition};
 use mez_agent::memory::{MemoryKind, MemoryState, new_memory_uuid};
 use std::{fs, path::PathBuf};
@@ -615,13 +616,14 @@ impl RuntimeSessionService {
             .base_url
             .as_deref()
             .filter(|endpoint| !endpoint.is_empty());
+        let provider_options = runtime_effective_provider_options(&provider_config, model_profile);
         let provider_result: Result<RuntimeAgentProviderDispatchProvider> = match api {
             ProviderApiCompatibility::OpenAiResponses => {
                 openai_responses_provider_from_auth_store_with_provider_options(
                     auth_store,
                     &model_profile.provider,
                     endpoint_override,
-                    &provider_config.options,
+                    &provider_options,
                     DEFAULT_PROVIDER_TIMEOUT_MS,
                     ReqwestProviderHttpTransport,
                 )
@@ -632,7 +634,7 @@ impl RuntimeSessionService {
                     auth_store,
                     &model_profile.provider,
                     endpoint_override,
-                    &provider_config.options,
+                    &provider_options,
                     DEFAULT_PROVIDER_TIMEOUT_MS,
                     ReqwestProviderHttpTransport,
                 )
@@ -653,7 +655,7 @@ impl RuntimeSessionService {
                     auth_store,
                     &model_profile.provider,
                     endpoint_override,
-                    &model_profile.provider_options,
+                    &provider_options,
                     DEFAULT_PROVIDER_TIMEOUT_MS,
                     ReqwestProviderHttpTransport,
                 )

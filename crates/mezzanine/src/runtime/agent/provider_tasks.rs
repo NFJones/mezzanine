@@ -7,6 +7,7 @@
 //! async actor and tests.
 
 use crate::integrations::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
+use crate::runtime::config::runtime_effective_provider_options;
 use crate::runtime::{
     RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, current_unix_millis,
 };
@@ -346,9 +347,11 @@ impl RuntimeSessionService {
         &mut self,
         provider_name: &str,
         provider_config: &RuntimeProviderConfig,
+        model_profile: &mez_agent::ModelProfile,
         audit_scope: &str,
     ) -> Result<RuntimeAgentProviderDispatchProvider> {
         let api = resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+        let provider_options = runtime_effective_provider_options(provider_config, model_profile);
         self.append_credential_access_audit(
             provider_name,
             &provider_config.auth_profile,
@@ -371,7 +374,7 @@ impl RuntimeSessionService {
                         auth_store,
                         provider_name,
                         endpoint_override,
-                        &provider_config.options,
+                        &provider_options,
                         DEFAULT_PROVIDER_TIMEOUT_MS,
                         ReqwestProviderHttpTransport,
                     )
@@ -382,7 +385,7 @@ impl RuntimeSessionService {
                         auth_store,
                         provider_name,
                         endpoint_override,
-                        &provider_config.options,
+                        &provider_options,
                         DEFAULT_PROVIDER_TIMEOUT_MS,
                         ReqwestProviderHttpTransport,
                     )
@@ -403,7 +406,7 @@ impl RuntimeSessionService {
                         auth_store,
                         provider_name,
                         endpoint_override,
-                        &provider_config.options,
+                        &provider_options,
                         DEFAULT_PROVIDER_TIMEOUT_MS,
                         ReqwestProviderHttpTransport,
                     )
@@ -684,6 +687,7 @@ impl RuntimeSessionService {
         let provider = self.runtime_dispatch_provider_from_config(
             &model_profile.provider,
             &provider_config,
+            &model_profile,
             "provider_request",
         )?;
         let macro_judge_step_index = self.macro_judge_step_index_for_turn(turn_id);
@@ -750,9 +754,7 @@ impl RuntimeSessionService {
                 "agent: routing selecting model and reasoning effort",
             )?;
         }
-        let auto_sizing_provider = if let Some(auto_sizing) = auto_sizing.as_ref()
-            && auto_sizing.router_profile.provider != model_profile.provider
-        {
+        let auto_sizing_provider = if let Some(auto_sizing) = auto_sizing.as_ref() {
             let router_provider_config = self
                 .provider_registry()
                 .provider(&auto_sizing.router_profile.provider)
@@ -766,6 +768,7 @@ impl RuntimeSessionService {
             let result = self.runtime_dispatch_provider_from_config(
                 &auto_sizing.router_profile.provider,
                 &router_provider_config,
+                &auto_sizing.router_profile,
                 "provider_request",
             );
             match result {
@@ -810,8 +813,11 @@ impl RuntimeSessionService {
             let estimate = mez_agent::provider_request_input_estimate(
                 &router_request,
                 router_api,
-                &router_provider_config.options,
-                router_provider.request_stream(),
+                &runtime_effective_provider_options(
+                    &router_provider_config,
+                    &auto_sizing.router_profile,
+                ),
+                router_provider.request_stream(&router_request),
             )?;
             if self.defer_agent_provider_for_configured_input_limit(
                 &turn,
@@ -863,8 +869,8 @@ impl RuntimeSessionService {
             let estimate = mez_agent::provider_request_input_estimate(
                 &estimated_request,
                 api,
-                &provider_config.options,
-                provider.request_stream(),
+                &runtime_effective_provider_options(&provider_config, &model_profile),
+                provider.request_stream(&estimated_request),
             )?;
             if self.defer_agent_provider_for_configured_input_limit(
                 &turn,

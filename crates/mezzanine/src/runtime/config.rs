@@ -89,7 +89,9 @@ pub(crate) use permissions::{
 pub(crate) use permissions::{
     ConfiguredSandboxEnvironment, runtime_configured_permissions_from_config_for_platform,
 };
-pub(crate) use providers::runtime_default_models_for_provider;
+pub(crate) use providers::{
+    runtime_default_models_for_provider, runtime_effective_provider_options,
+};
 pub(super) use providers::{
     runtime_preset_registry_from_config, runtime_provider_registry_from_config,
     runtime_recommended_model_for_provider,

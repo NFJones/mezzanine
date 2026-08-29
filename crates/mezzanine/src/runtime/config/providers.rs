@@ -582,9 +582,26 @@ pub(crate) fn runtime_recommended_model_for_provider(kind: &str) -> Result<&'sta
         .ok_or_else(|| MezError::config(format!("providers.{kind}.default_model is required")))
 }
 
+/// Returns the non-secret options effective for one selected model profile.
+///
+/// Materialized profiles already contain provider-root, model, discovery, and
+/// profile layers. Reapplying the provider root here keeps manually constructed
+/// runtime profiles compatible while preserving selected-profile precedence.
+pub(crate) fn runtime_effective_provider_options(
+    provider_config: &RuntimeProviderConfig,
+    model_profile: &ModelProfile,
+) -> BTreeMap<String, String> {
+    let mut options = provider_config.options.clone();
+    options.extend(model_profile.provider_options.clone());
+    options
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{runtime_provider_config_from_config, runtime_provider_registry_from_config};
+    use super::{
+        runtime_effective_provider_options, runtime_provider_config_from_config,
+        runtime_provider_registry_from_config,
+    };
 
     /// Verifies the generic streaming declaration survives provider config
     /// extraction as the string-valued compatibility option consumed by the
@@ -748,5 +765,107 @@ mod tests {
         assert_eq!(profile.provider_options["root-only"], "root");
         assert_eq!(profile.provider_options["base-only"], "base");
         assert_eq!(profile.provider_options["shared"], "profile");
+    }
+
+    /// Verifies selected-profile options override provider-root values while
+    /// root-only connection options remain available to model-aware callers.
+    #[test]
+    fn runtime_effective_provider_options_use_selected_profile_precedence() {
+        let provider = mez_agent::ProviderConfig {
+            options: std::collections::BTreeMap::from([
+                ("root-only".to_string(), "root".to_string()),
+                ("shared".to_string(), "root".to_string()),
+            ]),
+            ..mez_agent::ProviderConfig::default()
+        };
+        let profile = mez_agent::ModelProfile {
+            provider_options: std::collections::BTreeMap::from([
+                ("model-only".to_string(), "model".to_string()),
+                ("shared".to_string(), "profile".to_string()),
+            ]),
+            ..mez_agent::ModelProfile::default()
+        };
+
+        let options = runtime_effective_provider_options(&provider, &profile);
+
+        assert_eq!(options["root-only"], "root");
+        assert_eq!(options["model-only"], "model");
+        assert_eq!(options["shared"], "profile");
+    }
+
+    /// Verifies effective model options configure the concrete compatible
+    /// provider and its request-specific streaming behavior.
+    ///
+    /// Provider-root policy disables streaming, while the selected model
+    /// profile enables it; model-aware construction must use the latter.
+    #[test]
+    fn runtime_effective_provider_options_reach_compatible_provider_construction() {
+        let provider = mez_agent::ProviderConfig {
+            provider_id: "local".to_string(),
+            options: std::collections::BTreeMap::from([(
+                "streaming".to_string(),
+                "disabled".to_string(),
+            )]),
+            ..mez_agent::ProviderConfig::default()
+        };
+        let profile = mez_agent::ModelProfile {
+            provider: "local".to_string(),
+            model: "model-a".to_string(),
+            provider_options: std::collections::BTreeMap::from([(
+                "streaming".to_string(),
+                "enabled".to_string(),
+            )]),
+            ..mez_agent::ModelProfile::default()
+        };
+        let options = runtime_effective_provider_options(&provider, &profile);
+        let root = std::env::temp_dir().join(format!(
+            "mezzanine-effective-provider-options-{}",
+            std::process::id()
+        ));
+        let auth_store = crate::security::auth::AuthStore::new(
+            crate::security::auth::AuthPaths::under_config_root(&root),
+        );
+        let concrete = crate::integrations::agent::provider::openai_compatible_provider_from_auth_store_with_provider_options(
+            &auth_store,
+            "local",
+            Some("http://localhost:1234/v1"),
+            &options,
+            120_000,
+            crate::integrations::agent::provider::ReqwestProviderHttpTransport,
+        )
+        .unwrap();
+        let request = mez_agent::ModelRequest {
+            provider: "local".to_string(),
+            model: "model-a".to_string(),
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: None,
+            temperature: None,
+            stop: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: mez_agent::ModelInteractionKind::CapabilityDecision,
+            allowed_actions: mez_agent::AllowedActionSet::for_capability(
+                mez_agent::AgentCapability::RespondOnly,
+            ),
+            recovery_input: None,
+            messages: vec![mez_agent::ModelMessage {
+                role: mez_agent::ModelMessageRole::User,
+                source: mez_agent::ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                content: "hello".to_string(),
+            }]
+            .into(),
+        };
+
+        assert!(concrete.streams_request(&request));
+        let _ = std::fs::remove_dir_all(root);
     }
 }
