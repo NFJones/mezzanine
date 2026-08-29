@@ -1915,5 +1915,186 @@ fn transcript_store_catalog_scales_bounded_queries_to_one_hundred_thousand_rows(
         completion_plan.contains("saved_conversations_latest_root"),
         "{completion_plan}"
     );
+
+    let exact_plan = connection
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT conversation_kind, name FROM saved_conversations
+             WHERE conversation_id = '00000000-0000-0000-0000-000000000001'",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+        .join("\n");
+    assert!(
+        exact_plan.contains("sqlite_autoindex_saved_conversations_1"),
+        "{exact_plan}"
+    );
+
+    let pruning_plan = connection
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT conversation_id FROM saved_conversations
+             WHERE (name IS NULL) = 1
+               AND (has_transcript = 1 OR has_presentation = 1)
+             ORDER BY last_created_at ASC, first_created_at ASC,
+                      conversation_id ASC
+             LIMIT 40",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+        .join("\n");
+    assert!(
+        pruning_plan.contains("saved_conversations_pruning"),
+        "{pruning_plan}"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies bounded status reports health and process-local indexed/repair metrics.
+#[test]
+fn transcript_store_catalog_status_reports_health_and_bounded_metrics() {
+    let root = temp_root("catalog-status");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+
+    let missing = store.catalog_status();
+    assert!(!missing.database_exists);
+    assert!(!missing.integrity_ok);
+    assert!(missing.diagnostic.unwrap().contains("rebuild"));
+
+    store.initialize(100).unwrap();
+    store
+        .append(&entry("status-session", 1, TranscriptRole::User))
+        .unwrap();
+    let before = store.catalog_status();
+    assert!(before.database_exists);
+    assert!(before.migration_complete);
+    assert!(before.integrity_ok);
+    assert_eq!(before.schema_version, Some(1));
+    assert_eq!(before.indexed_conversations, Some(1));
+    assert!(before.lock_available);
+
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    connection
+        .execute(
+            "DELETE FROM saved_conversations WHERE conversation_id = 'status-session'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    assert!(store.saved_session("status-session").unwrap().is_some());
+
+    let after = store.catalog_status();
+    assert!(after.indexed_queries > before.indexed_queries);
+    assert!(after.exact_repairs > before.exact_repairs);
+    assert!(after.full_scans >= before.full_scans);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies rebuild rejects future schemas and removes stale temporary files.
+#[test]
+fn transcript_store_catalog_rebuild_rejects_future_schema_and_cleans_temporary_files() {
+    let root = temp_root("catalog-rebuild-guards");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+    fs::write(root.join(".catalog.sqlite3.rebuild"), b"stale").unwrap();
+    fs::write(root.join(".catalog.sqlite3.rebuild-wal"), b"stale").unwrap();
+
+    store.rebuild_catalog(101).unwrap();
+    assert!(!root.join(".catalog.sqlite3.rebuild").exists());
+    assert!(!root.join(".catalog.sqlite3.rebuild-wal").exists());
+
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    connection.pragma_update(None, "user_version", 2).unwrap();
+    drop(connection);
+    let error = store.rebuild_catalog(102).unwrap_err();
+    assert!(error.message().contains("refusing to rebuild or downgrade"));
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a failed rebuild removes its temporary SQLite family and leaves
+/// the previously healthy catalog available for indexed discovery.
+#[test]
+fn transcript_store_catalog_failed_rebuild_cleans_temporary_files() {
+    let root = temp_root("catalog-failed-rebuild-cleanup");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+    store
+        .append(&entry("healthy", 1, TranscriptRole::User))
+        .unwrap();
+    fs::write(
+        root.join("healthy").join("summary.json"),
+        b"not valid summary json\n",
+    )
+    .unwrap();
+
+    let error = store.rebuild_catalog(101).unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("conversation summary decode failed")
+    );
+    assert!(!root.join(".catalog.sqlite3.rebuild").exists());
+    assert!(!root.join(".catalog.sqlite3.rebuild-wal").exists());
+    assert!(!root.join(".catalog.sqlite3.rebuild-shm").exists());
+    assert!(store.catalog_status().integrity_ok);
+    assert!(store.catalog_saved_session("healthy").unwrap().is_some());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies status detects lock contention without waiting or scanning payloads.
+#[test]
+fn transcript_store_catalog_status_reports_lock_contention() {
+    let root = temp_root("catalog-lock-status");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+    let lock_path = root.join(".catalog-migration.lock");
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .unwrap();
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive).unwrap();
+
+    let status = store.catalog_status();
+    assert!(!status.lock_available);
+    assert!(status.integrity_ok);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an explicit rebuild reports bounded lock contention instead of
+/// waiting indefinitely or entering the recovery scanner concurrently.
+#[test]
+fn transcript_store_catalog_rebuild_reports_bounded_lock_contention() {
+    let root = temp_root("catalog-lock-rebuild");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(root.join(".catalog-migration.lock"))
+        .unwrap();
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive).unwrap();
+
+    let error = store.rebuild_catalog(101).unwrap_err();
+
+    assert!(error.message().contains("migration lock is busy"));
+    assert!(!root.join(".catalog.sqlite3.rebuild").exists());
+    assert!(store.catalog_status().integrity_ok);
     let _ = fs::remove_dir_all(root);
 }

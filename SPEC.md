@@ -10265,6 +10265,23 @@ readable future schema MUST fail closed rather than being replaced or
 downgraded. Catalog files, migration locks, markers, and active SQLite sidecars
 MUST use the same user-private storage boundary as saved conversation payloads.
 
+Mezzanine MUST provide bounded, read-only saved-session catalog status and an
+explicit rebuild operation. Status MUST NOT create a missing catalog or scan
+session payloads; it SHOULD report schema and integrity state, indexed row
+count, migration-marker and lock state, retained backup or temporary rebuild
+files, secret-safe diagnostics, and process-local indexed-query, UUID-repair,
+rebuild, and full-scan counters. Rebuild MUST be the only ordinary operator
+operation that performs a full saved-session scan. It MUST wait only a bounded
+time for exclusive ownership, clean failed temporary SQLite files, retain the
+previous database as a backup after successful verification, and refuse to
+replace a readable future schema. Ordinary metadata mutations MUST hold shared
+catalog ownership so they cannot race an exclusive rebuild.
+
+The legacy name index and per-session summary and classification sidecars MUST
+remain enabled as rebuild and rollback inputs for catalog schema version 1.
+Removing or rewriting those compatibility sources requires a separately
+reviewed version-boundary decision.
+
 After migration, every saved-conversation metadata mutation MUST persist and
 sync its authoritative payload or retained compatibility sidecar before
 updating the catalog. This payload-first ordering MUST cover transcript and
@@ -10327,6 +10344,8 @@ MUST be deleted when a new conversation is created. Named conversations MUST
 never expire and MUST be exempt from automatic pruning, so total retained
 conversations MAY exceed `history.saved_sessions_limit`. Explicit deletion MUST
 remain available and MUST remove both conversation data and name metadata.
+Named-session archival, storage accounting, or retention limits are separate
+product-policy decisions and MUST NOT be introduced implicitly by the catalog.
 
 When `/resume <session-uuid>` is invoked, Mezzanine MUST load the saved
 conversation transcript into subsequent model context, MUST bind the pane's

@@ -36,6 +36,10 @@ keyset pages rather than loading the full catalog. Directory and subagent
 toggles plus picker search are applied by SQLite, while transcript detail is
 loaded only for the row you explicitly open.
 
+For catalog diagnostics and explicit recovery, use `mez session-catalog
+status` and `mez session-catalog rebuild`. Normal status and discovery remain
+bounded; rebuild is the deliberate full scan of retained session files.
+
 ## Compact and recover
 
 Use `/compact` when an old conversation no longer fits efficiently. Mez

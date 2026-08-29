@@ -14,7 +14,8 @@ use super::{
     host_list_sessions_with_all, host_resolve_or_create_session, host_resolve_session, io,
     json_escape, list_iroh_host_sessions, prune_stale_socket_files_in_directory, run_attach,
     run_auth, run_config, run_control_request_for_target, run_host, run_issue, run_lease, run_list,
-    run_mcp, run_memory, run_new, run_remote, run_sandbox, run_serve, run_snapshot,
+    run_mcp, run_memory, run_new, run_remote, run_sandbox, run_serve, run_session_catalog,
+    run_snapshot,
 };
 
 // Top-level CLI run and command dispatch.
@@ -472,6 +473,9 @@ async fn run_with_inner<W: Write, E: Write>(
         }
         Some(CliCommand::Memory(args)) => {
             run_memory(args, env, output_format, stdout)?;
+        }
+        Some(CliCommand::SessionCatalog(args)) => {
+            run_session_catalog(args, env, output_format, stdout)?;
         }
         Some(CliCommand::Remote(args)) => {
             run_remote(args, &socket_selection, &env, output_format, stdout).await?;

@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 use crate::error::{MezError, Result};
 
@@ -28,6 +28,13 @@ enum SchemaFailure {
 /// Opens one short-lived configured catalog connection.
 pub(super) fn open(path: &Path) -> Result<Connection> {
     open_inner(path).map_err(SchemaFailure::into_mez_error)
+}
+
+/// Opens an existing catalog read-only without creating or migrating it.
+pub(super) fn open_read_only(path: &Path) -> rusqlite::Result<Connection> {
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection.busy_timeout(Duration::from_secs(1))?;
+    Ok(connection)
 }
 
 /// Opens and validates an existing catalog while retaining exact corruption

@@ -28,7 +28,7 @@ use super::fs::{
 };
 use super::types::{
     AgentPresentationEntry, AgentTranscriptStore, NamedAgentSession, SavedAgentSession,
-    SavedSessionPage, SavedSessionQuery,
+    SavedSessionCatalogStatus, SavedSessionPage, SavedSessionQuery,
 };
 use mez_agent::AgentConversationKind;
 use mez_agent::transcript::{
@@ -199,9 +199,13 @@ impl AgentTranscriptStore {
     }
 
     /// Reconstructs the saved-conversation catalog from retained session files.
-    #[cfg(test)]
     pub fn rebuild_catalog(&self, now_unix_seconds: u64) -> Result<()> {
         catalog::rebuild(self, now_unix_seconds)
+    }
+
+    /// Returns bounded, read-only saved-session catalog health information.
+    pub fn catalog_status(&self) -> SavedSessionCatalogStatus {
+        catalog::status(self)
     }
 
     /// Returns the catalog database path for focused tests.
@@ -218,6 +222,7 @@ impl AgentTranscriptStore {
         {
             return Ok(Some(record.session));
         }
+        catalog::note_exact_repair();
         self.upsert_catalog_from_files(conversation_id, None)?;
         Ok(catalog::record(self, conversation_id)?.map(|record| record.session))
     }
@@ -907,7 +912,8 @@ impl AgentTranscriptStore {
         ))
     }
 
-    /// Lists transcript-backed summaries from the saved-session catalog.
+    /// Lists transcript-backed summaries for focused compatibility tests.
+    #[cfg(test)]
     pub fn list(&self) -> Result<Vec<ConversationSummary>> {
         catalog::transcript_summaries(self)
     }
@@ -925,6 +931,7 @@ impl AgentTranscriptStore {
     /// unrelated root entries are ignored. Presentation-only metadata is read
     /// as a stream so compressed history is never inflated into one allocation.
     pub(super) fn catalog_migration_candidates(&self) -> Result<Vec<CatalogCandidate>> {
+        catalog::note_full_scan();
         let names = self.read_named_sessions_index()?;
         if !self.root.exists() {
             return names
@@ -1280,9 +1287,8 @@ impl AgentTranscriptStore {
                 };
                 self.append_presentation(&forked)?;
             }
-            self.list()?
-                .into_iter()
-                .find(|summary| summary.conversation_id == target_conversation_id)
+            self.saved_session(target_conversation_id)?
+                .map(|session| session.summary)
                 .ok_or_else(|| MezError::invalid_state("forked conversation summary missing"))
         })();
         if fork_result.is_err()

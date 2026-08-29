@@ -142,6 +142,8 @@ mod sandbox;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod serve;
+/// Exposes saved-session catalog administration.
+mod session_catalog;
 /// Exposes the snapshot module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -190,6 +192,7 @@ use serve::{
     apply_default_serve_auxiliary_sockets, run_foreground_control_daemon, run_new, run_serve,
     validate_serve_options,
 };
+use session_catalog::run_session_catalog;
 use snapshot::run_snapshot;
 
 /// Exposes the tests module boundary.

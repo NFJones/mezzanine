@@ -131,6 +131,25 @@ Treat `catalog.sqlite3`, its `-wal` and `-shm` files, migration markers, and
 backups as sensitive metadata. Do not remove transcript directories or legacy
 sidecars as part of catalog recovery: they are the reconstruction source.
 
+Use `mez session-catalog status` for a bounded, read-only health report. It
+shows schema and integrity state, indexed row count, migration-marker and lock
+state, retained backup or rebuild-temporary files, process-local operation
+counters, and an actionable diagnostic without prompt content. Status does not
+create a missing catalog or enumerate session directories.
+
+Use `mez session-catalog rebuild` only when status recommends recovery or an
+operator intentionally wants full reconciliation. Rebuild is the explicit
+full-session scan: it waits a bounded time for catalog ownership, rebuilds a
+verified temporary database, retains the previous database as
+`.catalog.sqlite3.backup`, and cleans failed temporary SQLite files. It refuses
+to replace a readable future schema. Keep `named-sessions.json`, `summary.json`,
+and `metadata.json`; they remain rollback and rebuild inputs for this catalog
+version, and compatibility name writes remain enabled.
+
+Named sessions remain exempt from automatic pruning and can grow without
+bound. Archival, storage accounting, and named-session retention limits are a
+separate product-policy decision; this catalog does not change that behavior.
+
 ## Related pages
 
 - [Sessions and panes](../using-mezzanine/sessions-and-panes.md)

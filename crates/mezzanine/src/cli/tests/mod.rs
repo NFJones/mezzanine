@@ -268,5 +268,6 @@ mod memory;
 mod new_serve;
 mod remote;
 mod sandbox;
+mod session_catalog;
 mod snapshot;
 mod terminal_protocol;

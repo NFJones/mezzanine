@@ -10,6 +10,37 @@ use mez_agent::AgentConversationKind;
 use mez_agent::transcript::ConversationSummary;
 use serde::{Deserialize, Serialize};
 
+/// Read-only health report for the saved-session discovery catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SavedSessionCatalogStatus {
+    /// Whether the SQLite database currently exists.
+    pub database_exists: bool,
+    /// Whether the durable schema-v1 migration marker exists.
+    pub migration_complete: bool,
+    /// Whether a previous database backup is retained.
+    pub backup_exists: bool,
+    /// Whether an interrupted rebuild temporary database exists.
+    pub rebuild_temporary_exists: bool,
+    /// SQLite schema version when the database could be read.
+    pub schema_version: Option<i64>,
+    /// Number of indexed saved conversations when readable.
+    pub indexed_conversations: Option<u64>,
+    /// Whether SQLite's bounded integrity check succeeded.
+    pub integrity_ok: bool,
+    /// Whether the migration/rebuild lock was immediately available.
+    pub lock_available: bool,
+    /// Number of indexed catalog queries observed by this process.
+    pub indexed_queries: u64,
+    /// Number of exact UUID repair attempts observed by this process.
+    pub exact_repairs: u64,
+    /// Number of full catalog rebuilds observed by this process.
+    pub rebuilds: u64,
+    /// Number of recovery-only full session-root scans observed by this process.
+    pub full_scans: u64,
+    /// Secret-safe actionable diagnostic for an unreadable catalog.
+    pub diagnostic: Option<String>,
+}
+
 /// Durable user-assigned metadata for one agent conversation.
 ///
 /// Names are independent of transcript-derived summaries so summary rebuilds

@@ -78,6 +78,7 @@ pub(super) fn saved_sessions(connection: &Connection) -> Result<Vec<SavedAgentSe
 }
 
 /// Lists transcript-backed summaries for the legacy compatibility API.
+#[cfg(test)]
 pub(super) fn transcript_summaries(connection: &Connection) -> Result<Vec<ConversationSummary>> {
     let mut statement = connection.prepare(
         "SELECT conversation_id, conversation_kind, name, entry_count,
@@ -107,7 +108,8 @@ pub(super) fn unnamed_prune_candidates(
 ) -> Result<Vec<String>> {
     let count: i64 = connection.query_row(
         "SELECT COUNT(*) FROM saved_conversations
-         WHERE name IS NULL AND (has_transcript = 1 OR has_presentation = 1)",
+         WHERE (name IS NULL) = 1
+           AND (has_transcript = 1 OR has_presentation = 1)",
         [],
         |row| row.get(0),
     )?;
@@ -119,7 +121,8 @@ pub(super) fn unnamed_prune_candidates(
     let excess = count - limit;
     let mut statement = connection.prepare(
         "SELECT conversation_id FROM saved_conversations
-         WHERE name IS NULL AND (has_transcript = 1 OR has_presentation = 1)
+         WHERE (name IS NULL) = 1
+           AND (has_transcript = 1 OR has_presentation = 1)
          ORDER BY last_created_at ASC, first_created_at ASC, conversation_id ASC
          LIMIT ?1",
     )?;
