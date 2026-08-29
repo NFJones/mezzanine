@@ -766,7 +766,8 @@ impl RuntimeSessionService {
         }
         let scroll_delta = match overlay_input_action(input) {
             OverlayInputAction::ScrollBy(delta) => {
-                let page_rows = modal_overlay_page_rows(self.session.authoritative_size).max(1);
+                let page_rows =
+                    overlay_scroll_page_rows(overlay, self.session.authoritative_size).max(1);
                 Some(if delta.is_negative() {
                     -(page_rows as isize)
                 } else {
@@ -986,10 +987,8 @@ impl RuntimeSessionService {
                         terminal_width,
                         prose_width,
                     );
-                    overlay.scroll_offset = scroll_offset.min(modal_overlay_max_scroll(
-                        overlay.lines.len(),
-                        self.session.authoritative_size,
-                    ));
+                    overlay.scroll_offset = scroll_offset;
+                    clamp_overlay_scroll(overlay, self.session.authoritative_size);
                     return Ok(Some(changed));
                 }
                 let outcome = record_browser
@@ -1939,9 +1938,13 @@ impl RuntimeSessionService {
         if position.line == 0 {
             return Ok(false);
         }
-        let display_line_index = overlay
-            .scroll_offset
-            .saturating_add(position.line.saturating_sub(1));
+        let Some(display_line_index) = overlay_content_line_index_for_view_row(
+            overlay,
+            self.session.authoritative_size,
+            position.line.saturating_sub(1),
+        ) else {
+            return Ok(false);
+        };
         let selection_index =
             overlay_selection_index_at_position(overlay, display_line_index, position.column);
         let Some(command) = selection_index
@@ -2027,8 +2030,12 @@ impl RuntimeSessionService {
         position: CopyPosition,
     ) -> Option<CopyPosition> {
         let overlay = self.presentation.primary_display_overlay.as_ref()?;
-        let line = position.line.checked_sub(1)?;
-        let line = overlay.scroll_offset.saturating_add(line);
+        let view_row = position.line.checked_sub(1)?;
+        let line = overlay_content_line_index_for_view_row(
+            overlay,
+            self.session.authoritative_size,
+            view_row,
+        )?;
         let text = overlay.lines.get(line)?;
         let prefix_columns = overlay_line_prefix_columns(overlay, line);
         let column = position.column.saturating_sub(prefix_columns);

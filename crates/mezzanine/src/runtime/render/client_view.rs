@@ -16,11 +16,9 @@ use super::{
     TerminalWindowFrameContext, TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
     WindowPresentationOptions, WindowPresentationPlan, agent_prompt_reserved_line_count,
     compose_modal_display_overlay_lines, compose_prompt_overlay_presentation_with_styles,
-    current_unix_millis, current_unix_seconds, modal_overlay_page_rows,
-    mouse_border_cells_for_geometries, overlay_footer, overlay_render_lines,
-    overlay_rendered_line_style_spans, overlay_rendered_selection_start,
-    overlay_selection_rendition, overlay_styled_lines, overlay_text_at,
-    pane_frame_agent_status_pillbox_cells, plan_window_presentation,
+    current_unix_millis, current_unix_seconds, mouse_border_cells_for_geometries, overlay_footer,
+    overlay_render_lines, overlay_rendered_line_style_spans, overlay_styled_lines, overlay_text_at,
+    overlay_visible_line_indices, pane_frame_agent_status_pillbox_cells, plan_window_presentation,
     render_attached_client_view_with_screen_and_row_resolvers, runtime_agent_turn_duration_display,
     runtime_agent_turn_state_name, runtime_fit_status_line, runtime_human_system_uptime,
     runtime_local_datetime_seconds_string, runtime_pane_agent_selector_rendition,
@@ -446,11 +444,13 @@ impl RuntimeSessionService {
         overlay: &RuntimeDisplayOverlay,
     ) {
         let render_lines = overlay_render_lines(overlay);
-        view.lines = compose_modal_display_overlay_lines(
-            &render_lines,
-            view.authoritative_size,
-            overlay.scroll_offset,
-        );
+        let visible_line_indices = overlay_visible_line_indices(overlay, view.authoritative_size);
+        let visible_lines = visible_line_indices
+            .iter()
+            .filter_map(|line_index| render_lines.get(*line_index).cloned())
+            .collect::<Vec<_>>();
+        view.lines =
+            compose_modal_display_overlay_lines(&visible_lines, view.authoritative_size, 0);
         view.line_style_spans = vec![Vec::new(); view.lines.len()];
         if let Some(footer) = view.lines.last_mut() {
             *footer = runtime_fit_status_line(
@@ -458,51 +458,8 @@ impl RuntimeSessionService {
                 usize::from(view.authoritative_size.columns),
             );
         }
-        let page_rows = modal_overlay_page_rows(view.authoritative_size);
         let max_columns = usize::from(view.authoritative_size.columns);
-        for (selection_index, selection) in overlay.selections.iter().enumerate() {
-            if selection.line_index < overlay.scroll_offset {
-                continue;
-            }
-            let offset = selection.line_index.saturating_sub(overlay.scroll_offset);
-            if offset >= page_rows {
-                continue;
-            }
-            let row = offset.saturating_add(1);
-            let active = overlay.active_selection_index == Some(selection_index);
-            if let Some(spans) = view.line_style_spans.get_mut(row) {
-                let start = overlay_rendered_selection_start(overlay, selection);
-                if start < max_columns && selection.width > 0 {
-                    spans.push(TerminalStyleSpan {
-                        start,
-                        length: selection.width.min(max_columns.saturating_sub(start)),
-                        rendition: overlay_selection_rendition(
-                            &self.presentation.settings.ui_theme,
-                            selection.kind,
-                            active,
-                        ),
-                    });
-                }
-                if active {
-                    spans.push(TerminalStyleSpan {
-                        start: 0,
-                        length: 1,
-                        rendition: overlay_selection_rendition(
-                            &self.presentation.settings.ui_theme,
-                            selection.kind,
-                            true,
-                        ),
-                    });
-                }
-            }
-        }
-        for line_index in overlay.scroll_offset
-            ..overlay
-                .scroll_offset
-                .saturating_add(page_rows)
-                .min(overlay.lines.len())
-        {
-            let offset = line_index.saturating_sub(overlay.scroll_offset);
+        for (offset, line_index) in visible_line_indices.into_iter().enumerate() {
             let row = offset.saturating_add(1);
             let Some(spans) = view.line_style_spans.get_mut(row) else {
                 continue;

@@ -9,8 +9,8 @@ use crate::input::{KeyCode, parse_key_chord_bytes};
 use crate::layout::Size;
 
 use super::{
-    AnchoredSelector, DisplayOverlay, apply_overlay_scroll_delta, clamp_overlay_scroll,
-    overlay_next_search_match, overlay_selection_index_is_visible, scroll_overlay_to_line,
+    AnchoredSelector, DisplayOverlay, apply_overlay_scroll_delta, overlay_next_search_match,
+    overlay_selection_index_is_visible, scroll_overlay_to_line,
 };
 
 /// Display-overlay navigation action decoded from terminal input.
@@ -379,8 +379,7 @@ fn submit_overlay_search<Source, LiveSource>(
         return;
     };
     overlay.search_match = Some(search_match);
-    overlay.scroll_offset = search_match.line_index;
-    clamp_overlay_scroll(overlay, size);
+    scroll_overlay_to_line(overlay, search_match.line_index, size);
     overlay.search_status = None;
 }
 

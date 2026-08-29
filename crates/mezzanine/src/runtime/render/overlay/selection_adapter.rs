@@ -187,7 +187,9 @@ pub(super) fn render_record_browser_overlay_matching(
             .is_none()
             .then(|| format!("pattern not found: {query}"));
         if let Some(search_match) = overlay.search_match {
-            overlay.scroll_offset = search_match.line_index;
+            overlay.scroll_offset = search_match
+                .line_index
+                .saturating_sub(mez_mux::overlay::overlay_fixed_prefix_rows(overlay));
         }
     }
     true

@@ -18,13 +18,15 @@ pub use input::{
 pub use interaction::{
     OVERLAY_ACTIVE_SELECTOR, OVERLAY_INACTIVE_SELECTOR, apply_overlay_scroll_delta,
     clamp_overlay_scroll, overlay_active_line_index, overlay_body_style_spans,
-    overlay_copy_selection, overlay_footer, overlay_line_prefix_columns, overlay_line_slice,
-    overlay_link_rendition, overlay_next_search_match, overlay_render_lines,
-    overlay_rendered_line_style_spans, overlay_rendered_selection_start,
-    overlay_search_match_on_line, overlay_selection_gutter_rendition,
-    overlay_selection_index_at_position, overlay_selection_index_is_visible,
-    overlay_selection_prefix_columns, overlay_selection_rendition, overlay_text_at,
-    scroll_overlay_to_line, update_overlay_active_selection_for_viewport,
+    overlay_content_line_index_for_view_row, overlay_copy_selection, overlay_fixed_prefix_rows,
+    overlay_footer, overlay_line_prefix_columns, overlay_line_slice, overlay_link_rendition,
+    overlay_next_search_match, overlay_render_lines, overlay_rendered_line_style_spans,
+    overlay_rendered_selection_start, overlay_scroll_page_rows, overlay_search_match_on_line,
+    overlay_selection_gutter_rendition, overlay_selection_index_at_position,
+    overlay_selection_index_is_visible, overlay_selection_prefix_columns,
+    overlay_selection_rendition, overlay_text_at, overlay_view_row_for_line_index,
+    overlay_visible_line_indices, scroll_overlay_to_line,
+    update_overlay_active_selection_for_viewport,
 };
 pub use state::{
     AnchoredSelector, DisplayOverlay, OverlaySearchMatch, OverlaySelection, OverlaySelectionKind,

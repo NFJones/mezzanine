@@ -507,7 +507,8 @@ fn runtime_record_browser_resize_reflows_rows_and_footer_counts_physical_lines()
             .all(|line| unicode_width::UnicodeWidthStr::width(line.as_str()) <= 18),
         "{overlay:?}"
     );
-    let physical_line_count = overlay.lines.len();
+    let fixed_prefix_rows = mez_mux::overlay::overlay_fixed_prefix_rows(overlay);
+    let physical_body_line_count = overlay.lines.len().saturating_sub(fixed_prefix_rows);
     let view = service
         .render_client_view(
             ClientViewRole::Primary,
@@ -519,8 +520,93 @@ fn runtime_record_browser_resize_reflows_rows_and_footer_counts_physical_lines()
     assert!(
         view.lines
             .last()
-            .is_some_and(|footer| footer.contains(&format!("/{physical_line_count}"))),
+            .is_some_and(|footer| footer.contains(&format!("/{physical_body_line_count}"))),
         "{view:?}"
+    );
+}
+
+/// Verifies RecordBrowser list chrome remains fixed while record rows move
+/// through keyboard, page, and wheel navigation on a short terminal.
+#[test]
+fn runtime_record_browser_keeps_list_framing_fixed_while_paging() {
+    let mut service = test_runtime_service_with_size(Size::new(60, 12).unwrap());
+    let size = Size::new(60, 12).unwrap();
+    let primary = service.attach_primary("primary", true, size, 120).unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let records = (0..20)
+        .map(|index| mez_mux::record_browser::RecordBrowserRecord {
+            id: format!("issue-{index:02}"),
+            open_command: Some(format!("/show-issues issue-{index:02}")),
+            title: format!("Issue {index:02} with a title that wraps in the table"),
+            metadata: vec![("kind".to_string(), "task".to_string())],
+            markdown: format!("Body {index}"),
+        })
+        .collect();
+    let browser =
+        mez_mux::record_browser::RecordBrowser::new("Issues", records, Vec::new()).unwrap();
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    let overlay = service.primary_display_overlay().unwrap();
+    let fixed_prefix_rows = mez_mux::overlay::overlay_fixed_prefix_rows(overlay);
+    assert!(fixed_prefix_rows >= 4, "{overlay:?}");
+    let initial_view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            size,
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    let fixed_screen_rows = initial_view.lines[1..=fixed_prefix_rows].to_vec();
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b[1;5B");
+    apply_record_browser_input(&mut service, &primary, b"\x1b[6~");
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::ScrollDisplayOverlay { lines: 2 },
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(overlay.scroll_offset > 0, "{overlay:?}");
+    let moved_view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            size,
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(moved_view.lines[1..=fixed_prefix_rows], fixed_screen_rows);
+    assert!(
+        moved_view.lines.iter().any(|line| line.starts_with("> ")),
+        "{moved_view:?}"
     );
 }
 

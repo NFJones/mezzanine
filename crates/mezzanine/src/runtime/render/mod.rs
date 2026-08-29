@@ -14,14 +14,15 @@ use mez_mux::input::{
 use mez_mux::overlay::{
     OVERLAY_ACTIVE_SELECTOR as DISPLAY_OVERLAY_ACTIVE_SELECTOR,
     OVERLAY_INACTIVE_SELECTOR as DISPLAY_OVERLAY_INACTIVE_SELECTOR,
+    overlay_rendered_selection_start,
 };
 use mez_mux::overlay::{
     OverlaySelection, OverlaySelectionKind, apply_overlay_scroll_delta, clamp_overlay_scroll,
-    overlay_copy_selection, overlay_footer, overlay_line_prefix_columns, overlay_link_rendition,
-    overlay_render_lines, overlay_rendered_line_style_spans, overlay_rendered_selection_start,
-    overlay_selection_index_at_position, overlay_selection_rendition, overlay_text_at,
+    overlay_content_line_index_for_view_row, overlay_copy_selection, overlay_footer,
+    overlay_line_prefix_columns, overlay_link_rendition, overlay_render_lines,
+    overlay_rendered_line_style_spans, overlay_scroll_page_rows,
+    overlay_selection_index_at_position, overlay_text_at, overlay_visible_line_indices,
 };
-use mez_mux::render::{modal_overlay_max_scroll, modal_overlay_page_rows};
 
 use super::service_state::{
     RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimeLiveOverlaySourceKind,

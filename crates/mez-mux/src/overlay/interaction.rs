@@ -37,13 +37,109 @@ pub fn overlay_active_line_index(
         .map(|selection| selection.line_index)
 }
 
+/// Returns the fixed list-chrome rows for one RecordBrowser list overlay.
+pub fn overlay_fixed_prefix_rows(overlay: &DisplayOverlay<impl Sized, impl Sized>) -> usize {
+    let Some(record_browser) = overlay.record_browser.as_ref() else {
+        return 0;
+    };
+    if record_browser.browser.is_detail_view() || record_browser.browser.prompt().is_some() {
+        return 0;
+    }
+    overlay
+        .selections
+        .iter()
+        .map(|selection| selection.line_index)
+        .min()
+        .unwrap_or(0)
+}
+
+/// Returns the rows available to the scrollable overlay body.
+pub fn overlay_scroll_page_rows(
+    overlay: &DisplayOverlay<impl Sized, impl Sized>,
+    size: Size,
+) -> usize {
+    let page_rows = modal_overlay_page_rows(size);
+    let fixed_rows = overlay_fixed_prefix_rows(overlay);
+    let visible_fixed_rows = if overlay.lines.len() > fixed_rows {
+        fixed_rows.min(page_rows.saturating_sub(1))
+    } else {
+        fixed_rows.min(page_rows)
+    };
+    page_rows.saturating_sub(visible_fixed_rows)
+}
+
+/// Returns visible content-line indices in terminal row order.
+pub fn overlay_visible_line_indices(
+    overlay: &DisplayOverlay<impl Sized, impl Sized>,
+    size: Size,
+) -> Vec<usize> {
+    let page_rows = modal_overlay_page_rows(size);
+    let fixed_rows = overlay_fixed_prefix_rows(overlay);
+    if fixed_rows == 0 {
+        return (overlay.scroll_offset
+            ..overlay
+                .scroll_offset
+                .saturating_add(page_rows)
+                .min(overlay.lines.len()))
+            .collect();
+    }
+    let visible_fixed_rows = fixed_rows.min(page_rows.saturating_sub(1));
+    let body_rows = page_rows.saturating_sub(visible_fixed_rows);
+    let body_start = fixed_rows.saturating_add(overlay.scroll_offset);
+    (0..visible_fixed_rows)
+        .chain(
+            body_start
+                ..body_start
+                    .saturating_add(body_rows)
+                    .min(overlay.lines.len()),
+        )
+        .collect()
+}
+
+/// Maps one modal content row to its source overlay line.
+pub fn overlay_content_line_index_for_view_row(
+    overlay: &DisplayOverlay<impl Sized, impl Sized>,
+    size: Size,
+    view_row: usize,
+) -> Option<usize> {
+    overlay_visible_line_indices(overlay, size)
+        .get(view_row)
+        .copied()
+}
+
+/// Maps one source overlay line to its visible modal content row.
+pub fn overlay_view_row_for_line_index(
+    overlay: &DisplayOverlay<impl Sized, impl Sized>,
+    size: Size,
+    line_index: usize,
+) -> Option<usize> {
+    overlay_visible_line_indices(overlay, size)
+        .iter()
+        .position(|visible| *visible == line_index)
+}
+
+/// Returns the greatest valid body-relative overlay scroll offset.
+fn overlay_max_scroll(overlay: &DisplayOverlay<impl Sized, impl Sized>, size: Size) -> usize {
+    let fixed_rows = overlay_fixed_prefix_rows(overlay);
+    if fixed_rows == 0 {
+        return modal_overlay_max_scroll(overlay.lines.len(), size);
+    }
+    overlay
+        .lines
+        .len()
+        .saturating_sub(fixed_rows)
+        .saturating_sub(overlay_scroll_page_rows(overlay, size))
+}
+
 /// Keeps a target overlay line within the modal page.
 pub fn scroll_overlay_to_line(
     overlay: &mut DisplayOverlay<impl Sized, impl Sized>,
     line_index: usize,
     client_size: Size,
 ) {
-    let page_rows = modal_overlay_page_rows(client_size).max(1);
+    let fixed_rows = overlay_fixed_prefix_rows(overlay);
+    let line_index = line_index.saturating_sub(fixed_rows);
+    let page_rows = overlay_scroll_page_rows(overlay, client_size).max(1);
     if line_index < overlay.scroll_offset {
         overlay.scroll_offset = line_index;
     } else if line_index >= overlay.scroll_offset.saturating_add(page_rows) {
@@ -51,7 +147,7 @@ pub fn scroll_overlay_to_line(
     }
     overlay.scroll_offset = overlay
         .scroll_offset
-        .min(modal_overlay_max_scroll(overlay.lines.len(), client_size));
+        .min(overlay_max_scroll(overlay, client_size));
 }
 
 /// Clamps overlay scrolling to the visible content range for the client size.
@@ -61,7 +157,7 @@ pub fn clamp_overlay_scroll(
 ) {
     overlay.scroll_offset = overlay
         .scroll_offset
-        .min(modal_overlay_max_scroll(overlay.lines.len(), client_size));
+        .min(overlay_max_scroll(overlay, client_size));
 }
 
 /// Returns display overlay lines with selector markers on actionable rows.
@@ -107,10 +203,12 @@ pub fn overlay_selection_prefix_columns() -> usize {
 
 /// Returns the modal overlay footer with physical-row progress and key hints.
 pub fn overlay_footer(overlay: &DisplayOverlay<impl Sized, impl Sized>, size: Size) -> String {
-    let page_rows = modal_overlay_page_rows(size);
-    let max_scroll = modal_overlay_max_scroll(overlay.lines.len(), size);
+    let fixed_rows = overlay_fixed_prefix_rows(overlay);
+    let page_rows = overlay_scroll_page_rows(overlay, size);
+    let display_line_count = overlay.lines.len().saturating_sub(fixed_rows);
+    let max_scroll = overlay_max_scroll(overlay, size);
     let offset = overlay.scroll_offset.min(max_scroll);
-    let visible_count = overlay.lines.len().saturating_sub(offset).min(page_rows);
+    let visible_count = display_line_count.saturating_sub(offset).min(page_rows);
     let start_line = usize::from(visible_count > 0).saturating_add(offset);
     let end_line = offset.saturating_add(visible_count);
     let navigation = if let Some(input) = overlay.search_input.as_deref() {
@@ -163,7 +261,7 @@ pub fn overlay_footer(overlay: &DisplayOverlay<impl Sized, impl Sized>, size: Si
     };
     format!(
         "{start_line}-{end_line}/{} | {navigation}",
-        overlay.lines.len()
+        display_line_count
     )
 }
 
@@ -551,10 +649,7 @@ pub fn overlay_selection_index_is_visible(
     let Some(selection) = overlay.selections.get(selection_index) else {
         return false;
     };
-    let page_rows = modal_overlay_page_rows(size).max(1);
-    let visible_start = overlay.scroll_offset;
-    let visible_end = visible_start.saturating_add(page_rows);
-    selection.line_index >= visible_start && selection.line_index < visible_end
+    overlay_view_row_for_line_index(overlay, size, selection.line_index).is_some()
 }
 
 /// Keeps the active overlay selection executable only when it is visible.
@@ -574,11 +669,8 @@ pub fn update_overlay_active_selection_for_viewport(
     {
         return;
     }
-    let page_rows = modal_overlay_page_rows(size).max(1);
-    let visible_start = overlay.scroll_offset;
-    let visible_end = visible_start.saturating_add(page_rows);
     overlay.active_selection_index = overlay.selections.iter().position(|selection| {
-        selection.line_index >= visible_start && selection.line_index < visible_end
+        overlay_view_row_for_line_index(overlay, size, selection.line_index).is_some()
     });
 }
 
@@ -753,6 +845,68 @@ mod tests {
 
         assert!(footer.starts_with("2-3/4 | "), "{footer}");
         assert!(footer.contains("esc: return"), "{footer}");
+    }
+
+    /// Verifies fixed RecordBrowser chrome and scrolled body rows share one
+    /// terminal-to-content coordinate projection used by mouse and copy paths.
+    #[test]
+    fn record_browser_viewport_maps_scrolled_body_rows_to_content() {
+        let browser = crate::record_browser::RecordBrowser::new(
+            "Issues",
+            (0..4)
+                .map(|index| crate::record_browser::RecordBrowserRecord {
+                    id: format!("issue-{index}"),
+                    open_command: Some(format!("/show-issues issue-{index}")),
+                    title: format!("Issue {index}"),
+                    metadata: Vec::new(),
+                    markdown: String::new(),
+                })
+                .collect(),
+            Vec::new(),
+        )
+        .unwrap();
+        let mut overlay = overlay(&[
+            "Issues", "header", "issue-0", "issue-1", "issue-2", "issue-3",
+        ]);
+        overlay.record_browser = Some(crate::overlay::RecordBrowserOverlayState {
+            pane_id: "%1".to_string(),
+            command: "show-issues".to_string(),
+            source: None,
+            browser,
+            stack: Vec::new(),
+        });
+        overlay.selections = (0..4)
+            .map(|index| OverlaySelection {
+                logical_id: index,
+                line_index: index + 2,
+                start_column: 0,
+                width: 7,
+                command: format!("/show-issues issue-{index}"),
+                kind: OverlaySelectionKind::Primary,
+            })
+            .collect();
+        overlay.active_selection_index = Some(2);
+        overlay.scroll_offset = 2;
+        let size = Size::new(20, 6).unwrap();
+
+        assert_eq!(
+            overlay_visible_line_indices(&overlay, size),
+            vec![0, 1, 4, 5]
+        );
+        assert_eq!(
+            overlay_content_line_index_for_view_row(&overlay, size, 2),
+            Some(4)
+        );
+        assert_eq!(overlay_view_row_for_line_index(&overlay, size, 4), Some(2));
+        assert!(overlay_selection_index_is_visible(&overlay, 2, size));
+        assert!(!overlay_selection_index_is_visible(&overlay, 0, size));
+        assert_eq!(overlay_selection_index_at_position(&overlay, 4, 2), Some(2));
+
+        overlay.mouse_selection = Some((
+            CopyPosition { line: 4, column: 0 },
+            CopyPosition { line: 4, column: 7 },
+        ));
+        assert_eq!(overlay_copy_selection(&overlay).as_deref(), Some("issue-2"));
     }
 
     /// Verifies multiline mouse selections produce bounded copied text.
