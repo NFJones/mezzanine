@@ -26,7 +26,7 @@ use super::{
     runtime_max_subagent_panes_per_window_from_config,
     runtime_max_subagents_per_subagent_from_config, runtime_mcp_registry_from_config,
     runtime_preset_registry_from_config, runtime_provider_auth_refresh_leeway_seconds_from_config,
-    runtime_provider_registry_from_config, runtime_saved_agent_session_limit_from_config,
+    runtime_provider_registry_from_config, runtime_saved_session_retention_policy_from_config,
     runtime_shell_mode_from_config, runtime_subagent_profiles_from_config,
     runtime_subagent_wait_policy_from_config, runtime_terminal_emoji_width_from_config,
     runtime_terminal_shell_output_preview_lines_from_config, runtime_terminal_term_from_config,
@@ -380,8 +380,8 @@ impl RuntimeSessionService {
             let terminal_history_limit = runtime_history_limit_from_config(&structured)?;
             let terminal_history_rotate_lines =
                 runtime_history_rotate_lines_from_config(&structured)?;
-            let saved_agent_session_limit =
-                runtime_saved_agent_session_limit_from_config(&structured)?;
+            let saved_session_retention =
+                runtime_saved_session_retention_policy_from_config(&structured)?;
             let terminal_term = runtime_terminal_term_from_config(&structured)?;
             let pane_spawn_policy = PaneSpawnPolicy {
                 directory: runtime_pane_spawn_directory_policy_from_config(&structured)?,
@@ -391,7 +391,7 @@ impl RuntimeSessionService {
             let terminal_shell_output_preview_lines =
                 runtime_terminal_shell_output_preview_lines_from_config(&structured)?;
             if let Some(store) = self.persistence.transcript_store_mut() {
-                store.set_saved_sessions_limit(saved_agent_session_limit)?;
+                store.set_saved_session_retention_policy(saved_session_retention)?;
             }
             self.apply_process_terminal_settings(
                 terminal_history_limit,

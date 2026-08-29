@@ -5,7 +5,7 @@
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 77
+version = 78
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -317,8 +317,10 @@ syntax_operator_bg = "surface"
 lines = 10000
 # Number of oldest lines removed when history exceeds its limit.
 rotate_lines = 1000
-# Maximum saved agent conversations retained on disk.
-saved_sessions_limit = 100
+# Maximum active saved agent conversations retained on disk.
+saved_sessions_limit = 10000
+# Maximum age in days since the last durable activity of an active saved conversation.
+saved_sessions_retention_days = 90
 # Persist history and saved conversations across launches.
 persist = true
 

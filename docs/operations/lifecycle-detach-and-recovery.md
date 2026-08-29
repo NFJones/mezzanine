@@ -114,7 +114,7 @@ Ordinary session changes use payload-first consistency: Mez syncs transcript,
 presentation, classification, or naming files before updating the catalog.
 Exact UUID lookup validates its indexed row and repairs only that UUID when the
 row is missing; a row whose promised payload disappeared is removed. Latest
-root-session selection and unnamed-session pruning are also indexed, so these
+root-session selection and active-session retention are also indexed, so these
 operations do not scan the complete session directory. If a catalog write
 fails after a payload write, preserve the files and rebuild the catalog rather
 than deleting the recoverable conversation.

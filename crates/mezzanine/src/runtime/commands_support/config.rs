@@ -1028,6 +1028,7 @@ pub(crate) fn runtime_option_live_mutable(path: &str) -> bool {
             "history.lines"
                 | "history.rotate_lines"
                 | "history.saved_sessions_limit"
+                | "history.saved_sessions_retention_days"
                 | "agents.max_concurrent_agents"
                 | "agents.max_queued_turns"
                 | "agents.max_queued_bytes"

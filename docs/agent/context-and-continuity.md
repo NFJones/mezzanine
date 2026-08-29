@@ -29,8 +29,10 @@ startup. Conversation transcripts and presentation history remain in their
 per-session files and are not stored as database blobs. The catalog can be
 rebuilt from those retained files if it is lost or corrupt. Mez writes session
 files first and then updates their catalog metadata. Exact `/resume <uuid>`,
-`/resume --latest`, and automatic unnamed-session retention use indexed catalog
-queries; exact lookup can repair only the requested UUID from retained files.
+`/resume --latest`, and active-session retention use indexed catalog queries;
+exact lookup can repair only the requested UUID from retained files. Active
+sessions are governed by the configured age and count limits; named sessions
+count toward those limits, while archived sessions are exempt.
 Resume completion is capped, and the interactive picker fetches viewport-sized
 keyset pages rather than loading the full catalog. Directory and subagent
 toggles plus picker search are applied by SQLite, while transcript detail is

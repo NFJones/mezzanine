@@ -14,7 +14,10 @@ use crate::host::terminal::{
     DEFAULT_AGENT_WRAP_COLUMN_CAP, DEFAULT_HOST_CLIPBOARD_READ_MAX_BYTES,
     DEFAULT_HOST_CLIPBOARD_READ_TIMEOUT, HostClipboard, HostClipboardCommand,
 };
-use crate::storage::transcript::DEFAULT_SAVED_AGENT_SESSION_LIMIT;
+use crate::storage::transcript::{
+    DEFAULT_SAVED_AGENT_SESSION_LIMIT, DEFAULT_SAVED_AGENT_SESSION_RETENTION_DAYS,
+    SavedSessionRetentionPolicy,
+};
 use mez_mux::clipboard::ClipboardPolicy;
 use mez_mux::presentation::TerminalCursorStyle;
 use mez_terminal::{
@@ -131,28 +134,52 @@ pub(crate) fn runtime_history_limit_from_config(root: &Value) -> Result<usize> {
     Ok(limit)
 }
 
-/// Reads the configured saved agent conversation retention limit.
-pub(crate) fn runtime_saved_agent_session_limit_from_config(root: &Value) -> Result<usize> {
+/// Reads the configured active saved-conversation retention policy.
+pub(crate) fn runtime_saved_session_retention_policy_from_config(
+    root: &Value,
+) -> Result<SavedSessionRetentionPolicy> {
     let Some(history) = runtime_json_object(root, "history") else {
-        return Ok(DEFAULT_SAVED_AGENT_SESSION_LIMIT);
+        return Ok(SavedSessionRetentionPolicy {
+            max_active_sessions: DEFAULT_SAVED_AGENT_SESSION_LIMIT,
+            retention_days: DEFAULT_SAVED_AGENT_SESSION_RETENTION_DAYS,
+        });
     };
-    let Some(value) = history.get("saved_sessions_limit") else {
-        return Ok(DEFAULT_SAVED_AGENT_SESSION_LIMIT);
+    let max_active_sessions = match history.get("saved_sessions_limit") {
+        Some(value) => parse_positive_saved_session_usize(value, "history.saved_sessions_limit")?,
+        None => DEFAULT_SAVED_AGENT_SESSION_LIMIT,
     };
-    let Some(limit) = value.as_u64() else {
-        return Err(MezError::config(
-            "history.saved_sessions_limit must be a positive integer",
-        ));
+    let retention_days = match history.get("saved_sessions_retention_days") {
+        Some(value) => {
+            parse_positive_saved_session_u64(value, "history.saved_sessions_retention_days")?
+        }
+        None => DEFAULT_SAVED_AGENT_SESSION_RETENTION_DAYS,
     };
-    let limit = usize::try_from(limit).map_err(|_| {
-        MezError::config("history.saved_sessions_limit is too large for this platform")
-    })?;
-    if limit == 0 {
-        return Err(MezError::config(
-            "history.saved_sessions_limit must be greater than zero",
-        ));
+    Ok(SavedSessionRetentionPolicy {
+        max_active_sessions,
+        retention_days,
+    })
+}
+
+/// Parses one positive platform-sized saved-session setting.
+fn parse_positive_saved_session_usize(value: &Value, path: &str) -> Result<usize> {
+    let value = parse_positive_saved_session_u64(value, path)?;
+    usize::try_from(value)
+        .map_err(|_| MezError::config(format!("{path} is too large for this platform")))
+}
+
+/// Parses one positive unsigned saved-session setting.
+fn parse_positive_saved_session_u64(value: &Value, path: &str) -> Result<u64> {
+    let Some(value) = value.as_u64() else {
+        return Err(MezError::config(format!(
+            "{path} must be a positive integer"
+        )));
+    };
+    if value == 0 {
+        return Err(MezError::config(format!(
+            "{path} must be greater than zero"
+        )));
     }
-    Ok(limit)
+    Ok(value)
 }
 
 /// Reads the configured terminal history overflow rotation batch.

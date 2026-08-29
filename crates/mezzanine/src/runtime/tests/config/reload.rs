@@ -134,6 +134,54 @@ fn runtime_config_reload_applies_history_limit_to_live_screens() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies a live history reload applies saved-session age and count as one
+/// typed policy rather than leaving either half at a stale prior value.
+#[test]
+fn runtime_config_reload_applies_saved_session_retention_policy_atomically() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let root = temp_root("runtime-saved-session-retention-reload");
+    let path = root.join("config.toml");
+    let transcript_store = AgentTranscriptStore::new(root.join("agent-sessions"));
+    service.set_agent_transcript_store(transcript_store);
+    fs::write(
+        &path,
+        "[history]\nsaved_sessions_limit = 40\nsaved_sessions_retention_days = 30\n",
+    )
+    .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: fs::read_to_string(&path).unwrap(),
+        }])
+        .unwrap();
+
+    fs::write(
+        &path,
+        "[history]\nsaved_sessions_limit = 25\nsaved_sessions_retention_days = 15\n",
+    )
+    .unwrap();
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"reload","method":"config/reload","params":{"idempotency_key":"reload-saved-session-retention"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains(r#""operation":"reload""#), "{response}");
+    let policy = service
+        .agent_transcript_store()
+        .unwrap()
+        .saved_session_retention_policy();
+    assert_eq!(policy.max_active_sessions, 25);
+    assert_eq!(policy.retention_days, 15);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies an unrelated live reload does not rescan persistent memory.
 ///
 /// Persistent records are hydrated during daemon startup. A later history

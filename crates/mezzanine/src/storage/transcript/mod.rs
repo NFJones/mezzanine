@@ -36,7 +36,8 @@ mod types;
 
 pub use types::{
     AgentPresentationEntry, AgentTranscriptStore, SavedAgentSession, SavedSessionCursor,
-    SavedSessionPageAnchor, SavedSessionQuery,
+    SavedSessionLifecycleFilter, SavedSessionPageAnchor, SavedSessionQuery,
+    SavedSessionRetentionPolicy,
 };
 
 /// Exposes the tests module boundary.
@@ -46,7 +47,7 @@ pub use types::{
 #[cfg(test)]
 mod tests;
 
-pub use store::DEFAULT_SAVED_AGENT_SESSION_LIMIT;
+pub use store::{DEFAULT_SAVED_AGENT_SESSION_LIMIT, DEFAULT_SAVED_AGENT_SESSION_RETENTION_DAYS};
 
 impl mez_agent::TranscriptPersistence for AgentTranscriptStore {
     type Error = crate::error::MezError;

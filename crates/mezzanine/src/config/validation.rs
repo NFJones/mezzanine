@@ -426,6 +426,7 @@ pub fn validate_config_text(
             || path == "history.lines"
             || path == "history.rotate_lines"
             || path == "history.saved_sessions_limit"
+            || path == "history.saved_sessions_retention_days"
             || path == "agents.max_concurrent_agents"
             || path == "agents.max_queued_turns"
             || path == "agents.max_queued_bytes"

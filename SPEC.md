@@ -3639,10 +3639,12 @@ invalidate retained differential output, but it MUST NOT reinterpret literal
 ANSI or RGB colors already emitted by applications into pane history.
 
 The `history` table MUST support `lines`, `rotate_lines`,
-`saved_sessions_limit`, and `persist`.
+`saved_sessions_limit`, `saved_sessions_retention_days`, and `persist`.
 `history.lines` MUST default to `10000`.
 `history.rotate_lines` MUST default to `1000`.
-`history.saved_sessions_limit` MUST default to `100`.
+`history.saved_sessions_limit` MUST default to `10000` and MUST be a positive
+integer. `history.saved_sessions_retention_days` MUST default to `90` and MUST
+be a positive integer.
 
 The `memory` table MUST support `enabled`, `max_records`, `max_bytes`,
 `fts_enabled`, `archive_before_prune`, and `default_ttl_days`.
@@ -10382,14 +10384,22 @@ order each partition by most recent activity. Named rows MUST render as
 the name outside the UUID command link. `/resume --latest` MUST select by most
 recent activity across saved root conversations without applying the
 named-first picker partition.
-The active transcript store MUST retain at most the configured most recent
-unnamed saved agent conversations for `/resume`; older unnamed conversations
-MUST be deleted when a new conversation is created. Named conversations MUST
-never expire and MUST be exempt from automatic pruning, so total retained
-conversations MAY exceed `history.saved_sessions_limit`. Explicit deletion MUST
-remain available and MUST remove both conversation data and name metadata.
-Named-session archival, storage accounting, or retention limits are separate
-product-policy decisions and MUST NOT be introduced implicitly by the catalog.
+Saved-conversation retention MUST cover active, unarchived, payload-backed
+sessions, including named sessions. Archives MUST be exempt. Age MUST be
+measured from the latest durable activity (`last_created_at`); a session whose
+timestamp is exactly at the age cutoff MUST be eligible for expiry. Age expiry
+MUST run before count enforcement. Count enforcement MUST retain at most
+`history.saved_sessions_limit` active sessions in deterministic oldest-first
+order by `last_created_at`, then `first_created_at`, then conversation UUID.
+Automated retention MUST protect conversations bound to live durable panes.
+Archival is the explicit long-term preservation mechanism for named sessions.
+Explicit lifecycle-aware deletion MUST remain available and MUST remove the
+selected conversation data and name metadata.
+
+The saved-conversation catalog MUST distinguish active rows from archived rows.
+Default `/resume` browsing, completion, and `--latest` selection MUST include
+active sessions only. Exact UUID lookup, deletion, repair, and explicit archived
+browsing MUST remain lifecycle-aware.
 
 When `/resume <session-uuid>` is invoked, Mezzanine MUST load the saved
 conversation transcript into subsequent model context, MUST bind the pane's

@@ -67,6 +67,25 @@ pub struct SavedAgentSession {
     pub name: Option<String>,
     /// Durable origin classification used by resume discovery filters.
     pub conversation_kind: AgentConversationKind,
+    /// Time at which the active payload was archived, when archived.
+    pub archived_at_unix_seconds: Option<u64>,
+    /// Compressed archive size recorded by the lifecycle transaction.
+    pub archive_compressed_bytes: Option<u64>,
+    /// Lowercase SHA-256 digest of the installed archive.
+    pub archive_sha256: Option<String>,
+}
+
+/// Lifecycle partition selected by one saved-session discovery query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "archived discovery is consumed by the dependent archive browser work"
+)]
+pub enum SavedSessionLifecycleFilter {
+    /// Active payload-backed sessions only.
+    Active,
+    /// Archived sessions only.
+    Archived,
 }
 
 /// Stable keyset cursor for saved-session catalog ordering.
@@ -110,6 +129,8 @@ pub enum SavedSessionPageAnchor {
 /// Indexed filters and bounds for one saved-session page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SavedSessionQuery {
+    /// Active or archived lifecycle partition.
+    pub lifecycle: SavedSessionLifecycleFilter,
     /// Optional exact directory scope.
     pub directory: Option<String>,
     /// Whether delegated child conversations are included.
@@ -168,8 +189,17 @@ pub struct AgentTranscriptStore {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) root: PathBuf,
-    /// Maximum saved conversations retained for resume listing and loading.
-    pub(super) saved_sessions_limit: usize,
+    /// Time-and-count policy applied to active saved conversations.
+    pub(super) saved_session_retention: SavedSessionRetentionPolicy,
     /// Cleartext presentation bytes retained before compaction.
     pub(super) presentation_compaction_threshold: u64,
+}
+
+/// Time-and-count retention policy for active saved conversations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SavedSessionRetentionPolicy {
+    /// Maximum active payload-backed conversations retained on disk.
+    pub max_active_sessions: usize,
+    /// Maximum age in days since the latest durable activity.
+    pub retention_days: u64,
 }

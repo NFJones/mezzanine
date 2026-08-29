@@ -567,7 +567,8 @@ and `high_contrast_light` are Mezzanine-native themes.
 | --- | --- | --- | --- |
 | `history.lines` | integer | `10000` | Maximum retained history lines per pane. |
 | `history.rotate_lines` | integer | `1000` | Number of old lines to evict on overflow. |
-| `history.saved_sessions_limit` | integer | `100` | Maximum saved agent conversations listed by `/resume`; older saved sessions are deleted when new conversations are created. |
+| `history.saved_sessions_limit` | integer | `10000` | Maximum active saved agent conversations retained after age expiry. Named active sessions count toward the cap; archives do not. |
+| `history.saved_sessions_retention_days` | integer | `90` | Maximum age in days since an active conversation's latest durable activity. Expiry runs before count enforcement. |
 | `history.persist` | boolean | `true` | Persist retained history across supported restarts. |
 
 ### `memory`

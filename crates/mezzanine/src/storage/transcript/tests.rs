@@ -17,8 +17,8 @@ use super::encoding::{
 };
 use super::store::{PRESENTATION_CLEAR_TAIL_COMPACT_BYTES, PROMPT_HISTORY_COMPACTION_BYTES};
 use super::{
-    AgentPresentationEntry, AgentTranscriptStore, SavedSessionCursor, SavedSessionPageAnchor,
-    SavedSessionQuery,
+    AgentPresentationEntry, AgentTranscriptStore, SavedSessionCursor, SavedSessionLifecycleFilter,
+    SavedSessionPageAnchor, SavedSessionQuery,
 };
 use mez_agent::transcript::{AgentSessionMetadata, TranscriptEntry, TranscriptRole};
 use mez_mux::readline::{ReadlineHistoryEntry, ReadlinePasteRange};
@@ -1402,7 +1402,7 @@ fn transcript_store_catalog_initializes_private_indexed_schema() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 2);
     let quick_check: String = connection
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
         .unwrap();
@@ -1455,6 +1455,70 @@ fn transcript_store_catalog_initializes_private_indexed_schema() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies a schema-v1 catalog is upgraded in place with nullable archive
+/// metadata while preserving every existing active saved-conversation row.
+#[test]
+fn transcript_store_catalog_migrates_v1_rows_to_active_v2_rows() {
+    let root = temp_root("catalog-v1-v2-migration");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let store = AgentTranscriptStore::new(root.clone());
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE saved_conversations (
+                 conversation_id TEXT PRIMARY KEY NOT NULL,
+                 conversation_kind TEXT NOT NULL DEFAULT 'root',
+                 name TEXT,
+                 named_at INTEGER,
+                 entry_count INTEGER NOT NULL DEFAULT 0,
+                 first_created_at INTEGER NOT NULL,
+                 last_created_at INTEGER NOT NULL,
+                 last_turn_id TEXT NOT NULL DEFAULT '',
+                 agent_id TEXT NOT NULL DEFAULT '',
+                 pane_id TEXT NOT NULL DEFAULT '',
+                 directory TEXT,
+                 initial_prompt TEXT,
+                 latest_user_prompt TEXT,
+                 has_transcript INTEGER NOT NULL DEFAULT 0,
+                 has_presentation INTEGER NOT NULL DEFAULT 0,
+                 payload_layout TEXT NOT NULL DEFAULT 'directory',
+                 catalog_updated_at INTEGER NOT NULL
+             );
+             INSERT INTO saved_conversations (
+                 conversation_id, conversation_kind, entry_count,
+                 first_created_at, last_created_at, last_turn_id,
+                 agent_id, pane_id, latest_user_prompt, has_transcript,
+                 payload_layout, catalog_updated_at
+             ) VALUES (
+                 'legacy-active', 'root', 1, 10, 20, 'turn-1',
+                 'agent', '%1', 'legacy prompt', 1, 'directory', 20
+             );
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    drop(connection);
+    fs::write(root.join(".catalog-migrated-v1"), b"complete\n").unwrap();
+
+    store.initialize(100).unwrap();
+
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
+    let lifecycle: (Option<i64>, Option<i64>, Option<String>) = connection
+        .query_row(
+            "SELECT archived_at, archive_compressed_bytes, archive_sha256
+             FROM saved_conversations WHERE conversation_id = 'legacy-active'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(lifecycle, (None, None, None));
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies a readable catalog from a future release fails closed rather than
 /// being overwritten or downgraded during startup initialization.
 #[test]
@@ -1464,18 +1528,18 @@ fn transcript_store_catalog_rejects_future_schema_versions() {
     fs::create_dir_all(&root).unwrap();
     let store = AgentTranscriptStore::new(root.clone());
     let connection = Connection::open(store.catalog_path()).unwrap();
-    connection.pragma_update(None, "user_version", 2).unwrap();
+    connection.pragma_update(None, "user_version", 3).unwrap();
     drop(connection);
 
     let error = store.initialize(100).unwrap_err();
 
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
-    assert!(error.message().contains("newer than supported version 1"));
+    assert!(error.message().contains("newer than supported version 2"));
     let connection = Connection::open(store.catalog_path()).unwrap();
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1788,6 +1852,7 @@ fn transcript_store_catalog_bounds_completion_and_keyset_pages() {
     assert_eq!(completion_ids, vec!["root-zero", "root-prefix"]);
 
     let query = SavedSessionQuery {
+        lifecycle: SavedSessionLifecycleFilter::Active,
         directory: None,
         include_subagents: false,
         require_latest_user_prompt: true,
@@ -1866,6 +1931,78 @@ fn transcript_store_catalog_bounds_completion_and_keyset_pages() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies active discovery paths exclude archived rows while exact lookup
+/// and an explicit archived pager query retain lifecycle-aware addressability.
+#[test]
+fn transcript_store_catalog_filters_active_and_archived_lifecycles() {
+    let root = temp_root("catalog-lifecycle-filter");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut active_entry = entry("active-session", 1, TranscriptRole::User);
+    active_entry.created_at_unix_seconds = 20;
+    let mut archived_entry = entry("archived-session", 1, TranscriptRole::User);
+    archived_entry.created_at_unix_seconds = 30;
+    store.append(&active_entry).unwrap();
+    store.append(&archived_entry).unwrap();
+    let connection = Connection::open(store.catalog_path()).unwrap();
+    connection
+        .execute(
+            "UPDATE saved_conversations
+             SET archived_at = 40, archive_compressed_bytes = 512,
+                 archive_sha256 = ?2
+             WHERE conversation_id = ?1",
+            rusqlite::params!["archived-session", "a".repeat(64)],
+        )
+        .unwrap();
+    drop(connection);
+
+    assert_eq!(
+        store
+            .latest_root_session()
+            .unwrap()
+            .unwrap()
+            .summary
+            .conversation_id,
+        "active-session"
+    );
+    assert!(
+        store
+            .root_session_completions("archived-", 10)
+            .unwrap()
+            .is_empty()
+    );
+    let archived = store.saved_session("archived-session").unwrap().unwrap();
+    assert_eq!(archived.archived_at_unix_seconds, Some(40));
+    assert_eq!(archived.archive_compressed_bytes, Some(512));
+
+    let query = SavedSessionQuery {
+        lifecycle: SavedSessionLifecycleFilter::Archived,
+        directory: None,
+        include_subagents: true,
+        require_latest_user_prompt: true,
+        search: None,
+        anchor: None,
+        limit: 10,
+    };
+    let archived_rows = store.query_saved_sessions(&query).unwrap().sessions;
+    assert_eq!(archived_rows, vec![archived]);
+    let active_rows = store
+        .query_saved_sessions(&SavedSessionQuery {
+            lifecycle: SavedSessionLifecycleFilter::Active,
+            ..query
+        })
+        .unwrap()
+        .sessions;
+    assert_eq!(
+        active_rows
+            .iter()
+            .map(|session| session.summary.conversation_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["active-session"]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Exercises bounded catalog discovery against a realistically large metadata
 /// set and verifies representative normal queries retain indexed plans.
 ///
@@ -1925,6 +2062,7 @@ fn transcript_store_catalog_scales_bounded_queries_to_one_hundred_thousand_rows(
     assert_eq!(
         store
             .query_saved_sessions(&SavedSessionQuery {
+                lifecycle: SavedSessionLifecycleFilter::Active,
                 directory: Some("/repo/a".to_string()),
                 include_subagents: false,
                 require_latest_user_prompt: true,
@@ -1942,7 +2080,8 @@ fn transcript_store_catalog_scales_bounded_queries_to_one_hundred_thousand_rows(
         .prepare(
             "EXPLAIN QUERY PLAN
              SELECT conversation_id FROM saved_conversations
-             WHERE directory = '/repo/a' AND conversation_kind = 'root'
+             WHERE archived_at IS NULL
+               AND directory = '/repo/a' AND conversation_kind = 'root'
                AND latest_user_prompt IS NOT NULL
              ORDER BY (name IS NOT NULL) DESC, last_created_at DESC,
                       first_created_at DESC, conversation_id ASC
@@ -1963,7 +2102,7 @@ fn transcript_store_catalog_scales_bounded_queries_to_one_hundred_thousand_rows(
         .prepare(
             "EXPLAIN QUERY PLAN
              SELECT conversation_id FROM saved_conversations
-             WHERE conversation_kind = 'root'
+             WHERE archived_at IS NULL AND conversation_kind = 'root'
              ORDER BY last_created_at DESC, first_created_at DESC,
                       conversation_id ASC
              LIMIT 200",
@@ -2039,7 +2178,7 @@ fn transcript_store_catalog_status_reports_health_and_bounded_metrics() {
     assert!(before.database_exists);
     assert!(before.migration_complete);
     assert!(before.integrity_ok);
-    assert_eq!(before.schema_version, Some(1));
+    assert_eq!(before.schema_version, Some(2));
     assert_eq!(before.indexed_conversations, Some(1));
     assert!(before.lock_available);
 
@@ -2075,7 +2214,7 @@ fn transcript_store_catalog_rebuild_rejects_future_schema_and_cleans_temporary_f
     assert!(!root.join(".catalog.sqlite3.rebuild-wal").exists());
 
     let connection = Connection::open(store.catalog_path()).unwrap();
-    connection.pragma_update(None, "user_version", 2).unwrap();
+    connection.pragma_update(None, "user_version", 3).unwrap();
     drop(connection);
     let error = store.rebuild_catalog(102).unwrap_err();
     assert!(error.message().contains("refusing to rebuild or downgrade"));
@@ -2083,7 +2222,7 @@ fn transcript_store_catalog_rebuild_rejects_future_schema_and_cleans_temporary_f
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let _ = fs::remove_dir_all(root);
 }
 

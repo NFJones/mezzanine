@@ -16,7 +16,9 @@ use mez_mux::readline::ReadlineEdit;
 use mez_mux::record_browser::{RecordBrowser, RecordBrowserRecord};
 
 use crate::runtime::service_state::RuntimeRecordBrowserOverlaySource;
-use crate::storage::transcript::{SavedAgentSession, SavedSessionPageAnchor, SavedSessionQuery};
+use crate::storage::transcript::{
+    SavedAgentSession, SavedSessionLifecycleFilter, SavedSessionPageAnchor, SavedSessionQuery,
+};
 
 /// Maximum saved transcript entries to render when `/resume` has no presentation log.
 const AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES: usize = 64;
@@ -435,6 +437,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
         let sessions = store
             .query_saved_sessions(&SavedSessionQuery {
+                lifecycle: SavedSessionLifecycleFilter::Active,
                 directory: directory.map(ToOwned::to_owned),
                 include_subagents,
                 require_latest_user_prompt: true,

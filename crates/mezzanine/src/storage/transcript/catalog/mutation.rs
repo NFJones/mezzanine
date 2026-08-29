@@ -46,6 +46,9 @@ pub(super) fn upsert(
              has_transcript = excluded.has_transcript,
              has_presentation = excluded.has_presentation,
              payload_layout = excluded.payload_layout,
+             archived_at = NULL,
+             archive_compressed_bytes = NULL,
+             archive_sha256 = NULL,
              catalog_updated_at = excluded.catalog_updated_at",
         params![
             candidate.summary.conversation_id,

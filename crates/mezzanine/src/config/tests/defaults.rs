@@ -38,6 +38,30 @@ fn default_config_pane_frame_template_uses_raw_title_content() {
     );
 }
 
+/// Verifies generated configuration declares the active saved-session age and
+/// count policy explicitly so first-run and omitted-value behavior agree.
+#[test]
+fn default_config_uses_time_and_count_saved_session_retention() {
+    let parsed: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let history = parsed
+        .get("history")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    assert_eq!(
+        history
+            .get("saved_sessions_limit")
+            .and_then(toml::Value::as_integer),
+        Some(10_000)
+    );
+    assert_eq!(
+        history
+            .get("saved_sessions_retention_days")
+            .and_then(toml::Value::as_integer),
+        Some(90)
+    );
+}
+
 /// Verifies enhanced keyboard reporting remains an explicit opt-in in newly
 /// generated configuration files.
 #[test]

@@ -126,7 +126,7 @@ fn validates_named_model_profile_schema() {
 fn validates_structured_provider_model_schema() {
     let valid = validate_config_text(
         ConfigFormat::Toml,
-        "version = 77\n[providers.custom]\nkind = \"openai-compatible\"\ndefault_model = \"model.a\"\n[providers.custom.models.primary]\nid = \"model.a\"\ndisplay_name = \"Model A\"\naliases = [\"fast\"]\ncontext_window_tokens = 200000\nmax_input_tokens = 180000\nmax_output_tokens = 16000\nreasoning_levels = [\"low\", \"high\"]\ncapabilities = [\"vision\", \"tool_use\"]\n[providers.custom.models.primary.provider_options]\nservice_tier = \"priority\"\n",
+        "version = 78\n[providers.custom]\nkind = \"openai-compatible\"\ndefault_model = \"model.a\"\n[providers.custom.models.primary]\nid = \"model.a\"\ndisplay_name = \"Model A\"\naliases = [\"fast\"]\ncontext_window_tokens = 200000\nmax_input_tokens = 180000\nmax_output_tokens = 16000\nreasoning_levels = [\"low\", \"high\"]\ncapabilities = [\"vision\", \"tool_use\"]\n[providers.custom.models.primary.provider_options]\nservice_tier = \"priority\"\n",
         ConfigScope::Primary,
     );
     assert!(valid.valid, "{:?}", valid.diagnostics);
@@ -167,7 +167,7 @@ fn validates_structured_provider_model_schema() {
     ] {
         let validation = validate_config_text(
             ConfigFormat::Toml,
-            &format!("version = 77\n{body}"),
+            &format!("version = 78\n{body}"),
             ConfigScope::Primary,
         );
         assert!(!validation.valid, "{body}");
@@ -201,7 +201,7 @@ fn validates_provider_model_inheritance_and_non_secret_options() {
     ] {
         let validation = validate_config_text(
             ConfigFormat::Toml,
-            &format!("version = 77\n{body}"),
+            &format!("version = 78\n{body}"),
             ConfigScope::Primary,
         );
         assert!(!validation.valid, "{body}");

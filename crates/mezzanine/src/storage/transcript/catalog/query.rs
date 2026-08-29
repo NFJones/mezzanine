@@ -8,7 +8,8 @@ use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use crate::error::{MezError, Result};
 
 use super::super::types::{
-    SavedAgentSession, SavedSessionPage, SavedSessionPageAnchor, SavedSessionQuery,
+    SavedAgentSession, SavedSessionLifecycleFilter, SavedSessionPage, SavedSessionPageAnchor,
+    SavedSessionQuery,
 };
 use super::schema::sqlite_i64;
 use super::{CatalogPayloadLayout, CatalogRecord};
@@ -24,7 +25,8 @@ pub(super) fn record(
                 first_created_at, last_created_at, last_turn_id,
                 agent_id, pane_id, directory, initial_prompt,
                 latest_user_prompt, has_transcript, has_presentation,
-                payload_layout
+                payload_layout, archived_at, archive_compressed_bytes,
+                archive_sha256
          FROM saved_conversations
          WHERE conversation_id = ?1",
     )?;
@@ -41,9 +43,10 @@ pub(super) fn latest_root_record(connection: &Connection) -> Result<Option<Catal
                 first_created_at, last_created_at, last_turn_id,
                 agent_id, pane_id, directory, initial_prompt,
                 latest_user_prompt, has_transcript, has_presentation,
-                payload_layout
+                payload_layout, archived_at, archive_compressed_bytes,
+                archive_sha256
          FROM saved_conversations
-         WHERE conversation_kind = 'root'
+         WHERE conversation_kind = 'root' AND archived_at IS NULL
          ORDER BY last_created_at DESC, first_created_at DESC, conversation_id ASC
          LIMIT 1",
     )?;
@@ -64,7 +67,8 @@ pub(super) fn saved_sessions(connection: &Connection) -> Result<Vec<SavedAgentSe
                 first_created_at, last_created_at, last_turn_id,
                 agent_id, pane_id, directory, initial_prompt,
                 latest_user_prompt, has_transcript, has_presentation,
-                payload_layout
+                payload_layout, archived_at, archive_compressed_bytes,
+                archive_sha256
          FROM saved_conversations
          ORDER BY conversation_id ASC",
     )?;
@@ -85,9 +89,10 @@ pub(super) fn transcript_summaries(connection: &Connection) -> Result<Vec<Conver
                 first_created_at, last_created_at, last_turn_id,
                 agent_id, pane_id, directory, initial_prompt,
                 latest_user_prompt, has_transcript, has_presentation,
-                payload_layout
+                payload_layout, archived_at, archive_compressed_bytes,
+                archive_sha256
          FROM saved_conversations
-         WHERE has_transcript = 1
+         WHERE has_transcript = 1 AND archived_at IS NULL
          ORDER BY conversation_id ASC",
     )?;
     statement
@@ -109,6 +114,7 @@ pub(super) fn unnamed_prune_candidates(
     let count: i64 = connection.query_row(
         "SELECT COUNT(*) FROM saved_conversations
          WHERE (name IS NULL) = 1
+           AND archived_at IS NULL
            AND (has_transcript = 1 OR has_presentation = 1)",
         [],
         |row| row.get(0),
@@ -122,6 +128,7 @@ pub(super) fn unnamed_prune_candidates(
     let mut statement = connection.prepare(
         "SELECT conversation_id FROM saved_conversations
          WHERE (name IS NULL) = 1
+           AND archived_at IS NULL
            AND (has_transcript = 1 OR has_presentation = 1)
          ORDER BY last_created_at ASC, first_created_at ASC, conversation_id ASC
          LIMIT ?1",
@@ -158,9 +165,11 @@ pub(super) fn root_session_completions(
                 first_created_at, last_created_at, last_turn_id,
                 agent_id, pane_id, directory, initial_prompt,
                 latest_user_prompt, has_transcript, has_presentation,
-                payload_layout
+                payload_layout, archived_at, archive_compressed_bytes,
+                archive_sha256
          FROM saved_conversations
          WHERE conversation_kind = 'root'
+           AND archived_at IS NULL
            AND conversation_id LIKE ?1 ESCAPE '\\' COLLATE NOCASE
          ORDER BY last_created_at DESC, first_created_at DESC, conversation_id ASC
          LIMIT ?2",
@@ -194,10 +203,15 @@ pub(super) fn query_saved_sessions(
                 first_created_at, last_created_at, last_turn_id,
                 agent_id, pane_id, directory, initial_prompt,
                 latest_user_prompt, has_transcript, has_presentation,
-                payload_layout
+                payload_layout, archived_at, archive_compressed_bytes,
+                archive_sha256
          FROM saved_conversations WHERE 1 = 1",
     );
     let mut values = Vec::<Value>::new();
+    match query.lifecycle {
+        SavedSessionLifecycleFilter::Active => sql.push_str(" AND archived_at IS NULL"),
+        SavedSessionLifecycleFilter::Archived => sql.push_str(" AND archived_at IS NOT NULL"),
+    }
     if !query.include_subagents {
         sql.push_str(" AND conversation_kind = 'root'");
     }
@@ -368,11 +382,24 @@ fn decode_record_offset(
             },
             name: row.get(offset + 1)?,
             conversation_kind: kind,
+            archived_at_unix_seconds: row_optional_u64(row, offset + 14)?,
+            archive_compressed_bytes: row_optional_u64(row, offset + 15)?,
+            archive_sha256: row.get(offset + 16)?,
         },
         has_transcript: row.get(offset + 11)?,
         has_presentation: row.get(offset + 12)?,
         payload_layout,
     })
+}
+
+/// Converts one optional non-negative SQLite integer into `u64`.
+fn row_optional_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Option<u64>> {
+    let value: Option<i64> = row.get(index)?;
+    value
+        .map(|value| {
+            u64::try_from(value).map_err(|_| conversion_error(index, "negative catalog integer"))
+        })
+        .transpose()
 }
 
 /// Converts a non-negative SQLite integer into `u64`.

@@ -26,7 +26,7 @@ use super::fs::{
 };
 use super::types::{
     AgentPresentationEntry, AgentTranscriptStore, NamedAgentSession, SavedAgentSession,
-    SavedSessionCatalogStatus, SavedSessionPage, SavedSessionQuery,
+    SavedSessionCatalogStatus, SavedSessionPage, SavedSessionQuery, SavedSessionRetentionPolicy,
 };
 use mez_agent::AgentConversationKind;
 use mez_agent::transcript::{
@@ -129,14 +129,24 @@ const DEFAULT_PRESENTATION_TAIL_READ_BYTES: u64 = 2 * 1024 * 1024;
 pub(super) const PRESENTATION_CLEAR_TAIL_COMPACT_BYTES: u64 = 256 * 1024;
 
 /// Maximum saved agent conversations retained by default for `/resume`.
-pub const DEFAULT_SAVED_AGENT_SESSION_LIMIT: usize = 100;
+pub const DEFAULT_SAVED_AGENT_SESSION_LIMIT: usize = 10_000;
+/// Maximum age of an active saved conversation since its latest durable activity.
+pub const DEFAULT_SAVED_AGENT_SESSION_RETENTION_DAYS: u64 = 90;
+
+/// Returns the built-in active saved-session retention policy.
+const fn default_saved_session_retention_policy() -> SavedSessionRetentionPolicy {
+    SavedSessionRetentionPolicy {
+        max_active_sessions: DEFAULT_SAVED_AGENT_SESSION_LIMIT,
+        retention_days: DEFAULT_SAVED_AGENT_SESSION_RETENTION_DAYS,
+    }
+}
 
 impl AgentTranscriptStore {
     /// Creates a store under the standard config-root agent-session directory.
     pub fn under_config_root(config_root: impl Into<PathBuf>) -> Self {
         Self {
             root: config_root.into().join("agent-sessions"),
-            saved_sessions_limit: DEFAULT_SAVED_AGENT_SESSION_LIMIT,
+            saved_session_retention: default_saved_session_retention_policy(),
             presentation_compaction_threshold: PRESENTATION_CLEAR_TAIL_COMPACT_BYTES,
         }
     }
@@ -146,7 +156,7 @@ impl AgentTranscriptStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
-            saved_sessions_limit: DEFAULT_SAVED_AGENT_SESSION_LIMIT,
+            saved_session_retention: default_saved_session_retention_policy(),
             presentation_compaction_threshold: PRESENTATION_CLEAR_TAIL_COMPACT_BYTES,
         }
     }
@@ -159,7 +169,7 @@ impl AgentTranscriptStore {
                 "saved agent session limit must be greater than zero",
             ));
         }
-        self.saved_sessions_limit = limit;
+        self.saved_session_retention.max_active_sessions = limit;
         Ok(self)
     }
 
@@ -175,15 +185,29 @@ impl AgentTranscriptStore {
         Ok(self)
     }
 
-    /// Updates the configured saved-conversation retention limit.
-    pub fn set_saved_sessions_limit(&mut self, limit: usize) -> Result<()> {
-        if limit == 0 {
+    /// Atomically updates the active saved-conversation retention policy.
+    pub fn set_saved_session_retention_policy(
+        &mut self,
+        policy: SavedSessionRetentionPolicy,
+    ) -> Result<()> {
+        if policy.max_active_sessions == 0 {
             return Err(MezError::invalid_args(
                 "saved agent session limit must be greater than zero",
             ));
         }
-        self.saved_sessions_limit = limit;
+        if policy.retention_days == 0 {
+            return Err(MezError::invalid_args(
+                "saved agent session retention days must be greater than zero",
+            ));
+        }
+        self.saved_session_retention = policy;
         Ok(())
+    }
+
+    /// Returns the configured active saved-session retention policy in tests.
+    #[cfg(test)]
+    pub fn saved_session_retention_policy(&self) -> SavedSessionRetentionPolicy {
+        self.saved_session_retention
     }
 
     /// Returns the root directory used by this store.
@@ -272,6 +296,9 @@ impl AgentTranscriptStore {
         conversation_id: &str,
         record: &super::catalog::CatalogRecord,
     ) -> Result<bool> {
+        if record.session.archived_at_unix_seconds.is_some() {
+            return Ok(true);
+        }
         let transcript_exists = if !record.has_transcript {
             true
         } else {
@@ -1844,7 +1871,10 @@ impl AgentTranscriptStore {
 
     /// Deletes oldest saved conversations until the configured resume cap holds.
     fn prune_saved_sessions_over_limit(&self) -> Result<()> {
-        for conversation_id in catalog::unnamed_prune_candidates(self, self.saved_sessions_limit)? {
+        for conversation_id in catalog::unnamed_prune_candidates(
+            self,
+            self.saved_session_retention.max_active_sessions,
+        )? {
             if catalog::is_named(self, &conversation_id)? {
                 continue;
             }

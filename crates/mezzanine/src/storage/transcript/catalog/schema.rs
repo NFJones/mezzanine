@@ -105,7 +105,7 @@ pub(super) fn sqlite_i64(value: u64, field: &str) -> Result<i64> {
     })
 }
 
-/// Creates schema v1 or rejects unsupported database versions.
+/// Creates schema v2, migrates v1 in place, or rejects unsupported versions.
 fn initialize_schema(connection: &Connection) -> std::result::Result<(), SchemaFailure> {
     connection
         .execute_batch("BEGIN IMMEDIATE;")
@@ -151,11 +151,27 @@ fn initialize_schema_locked(connection: &Connection) -> std::result::Result<(), 
                      CHECK (has_presentation IN (0, 1)),
                  payload_layout TEXT NOT NULL DEFAULT 'directory'
                      CHECK (payload_layout IN ('directory', 'legacy-tsv')),
+                 archived_at INTEGER CHECK (archived_at >= 0),
+                 archive_compressed_bytes INTEGER CHECK (archive_compressed_bytes >= 0),
+                 archive_sha256 TEXT CHECK (
+                     length(archive_sha256) = 64
+                     AND archive_sha256 NOT GLOB '*[^0-9a-f]*'
+                 ),
                  catalog_updated_at INTEGER NOT NULL CHECK (catalog_updated_at >= 0),
-                 CHECK ((name IS NULL) = (named_at IS NULL))
+                 CHECK ((name IS NULL) = (named_at IS NULL)),
+                 CHECK (
+                     (archived_at IS NULL
+                      AND archive_compressed_bytes IS NULL
+                      AND archive_sha256 IS NULL)
+                     OR
+                     (archived_at IS NOT NULL
+                      AND archive_compressed_bytes IS NOT NULL
+                      AND archive_sha256 IS NOT NULL)
+                 )
              );
              CREATE INDEX saved_conversations_latest_root
                  ON saved_conversations(
+                     archived_at,
                      conversation_kind,
                      last_created_at DESC,
                      first_created_at DESC,
@@ -163,6 +179,7 @@ fn initialize_schema_locked(connection: &Connection) -> std::result::Result<(), 
                  );
              CREATE INDEX saved_conversations_picker
                  ON saved_conversations(
+                     archived_at,
                      conversation_kind,
                      (name IS NOT NULL) DESC,
                      last_created_at DESC,
@@ -171,6 +188,7 @@ fn initialize_schema_locked(connection: &Connection) -> std::result::Result<(), 
                  );
              CREATE INDEX saved_conversations_directory_picker
                  ON saved_conversations(
+                     archived_at,
                      directory,
                      conversation_kind,
                      (name IS NOT NULL) DESC,
@@ -180,7 +198,7 @@ fn initialize_schema_locked(connection: &Connection) -> std::result::Result<(), 
                  );
              CREATE INDEX saved_conversations_pruning
                  ON saved_conversations(
-                     (name IS NULL),
+                     archived_at,
                      last_created_at,
                      first_created_at,
                      conversation_id
@@ -188,9 +206,10 @@ fn initialize_schema_locked(connection: &Connection) -> std::result::Result<(), 
              CREATE INDEX saved_conversations_name_nocase
                  ON saved_conversations(name COLLATE NOCASE)
                  WHERE name IS NOT NULL;
-             PRAGMA user_version = 1;",
+             PRAGMA user_version = 2;",
             )
             .map_err(SchemaFailure::Sqlite)?,
+        1 => migrate_v1_to_v2(connection)?,
         SCHEMA_VERSION => {}
         future if future > SCHEMA_VERSION => {
             return Err(SchemaFailure::Semantic(MezError::invalid_state(format!(
@@ -204,6 +223,92 @@ fn initialize_schema_locked(connection: &Connection) -> std::result::Result<(), 
         }
     }
     Ok(())
+}
+
+/// Rebuilds the v1 table with archive lifecycle columns and lifecycle-leading indexes.
+fn migrate_v1_to_v2(connection: &Connection) -> std::result::Result<(), SchemaFailure> {
+    connection
+        .execute_batch(
+            "ALTER TABLE saved_conversations RENAME TO saved_conversations_v1;
+             CREATE TABLE saved_conversations (
+                 conversation_id TEXT PRIMARY KEY NOT NULL,
+                 conversation_kind TEXT NOT NULL DEFAULT 'root'
+                     CHECK (conversation_kind IN ('root', 'subagent')),
+                 name TEXT,
+                 named_at INTEGER CHECK (named_at >= 0),
+                 entry_count INTEGER NOT NULL DEFAULT 0 CHECK (entry_count >= 0),
+                 first_created_at INTEGER NOT NULL CHECK (first_created_at >= 0),
+                 last_created_at INTEGER NOT NULL CHECK (last_created_at >= 0),
+                 last_turn_id TEXT NOT NULL DEFAULT '',
+                 agent_id TEXT NOT NULL DEFAULT '',
+                 pane_id TEXT NOT NULL DEFAULT '',
+                 directory TEXT,
+                 initial_prompt TEXT,
+                 latest_user_prompt TEXT,
+                 has_transcript INTEGER NOT NULL DEFAULT 0
+                     CHECK (has_transcript IN (0, 1)),
+                 has_presentation INTEGER NOT NULL DEFAULT 0
+                     CHECK (has_presentation IN (0, 1)),
+                 payload_layout TEXT NOT NULL DEFAULT 'directory'
+                     CHECK (payload_layout IN ('directory', 'legacy-tsv')),
+                 archived_at INTEGER CHECK (archived_at >= 0),
+                 archive_compressed_bytes INTEGER CHECK (archive_compressed_bytes >= 0),
+                 archive_sha256 TEXT CHECK (
+                     length(archive_sha256) = 64
+                     AND archive_sha256 NOT GLOB '*[^0-9a-f]*'
+                 ),
+                 catalog_updated_at INTEGER NOT NULL CHECK (catalog_updated_at >= 0),
+                 CHECK ((name IS NULL) = (named_at IS NULL)),
+                 CHECK (
+                     (archived_at IS NULL
+                      AND archive_compressed_bytes IS NULL
+                      AND archive_sha256 IS NULL)
+                     OR
+                     (archived_at IS NOT NULL
+                      AND archive_compressed_bytes IS NOT NULL
+                      AND archive_sha256 IS NOT NULL)
+                 )
+             );
+             INSERT INTO saved_conversations (
+                 conversation_id, conversation_kind, name, named_at,
+                 entry_count, first_created_at, last_created_at,
+                 last_turn_id, agent_id, pane_id, directory,
+                 initial_prompt, latest_user_prompt, has_transcript,
+                 has_presentation, payload_layout, catalog_updated_at
+             )
+             SELECT conversation_id, conversation_kind, name, named_at,
+                    entry_count, first_created_at, last_created_at,
+                    last_turn_id, agent_id, pane_id, directory,
+                    initial_prompt, latest_user_prompt, has_transcript,
+                    has_presentation, payload_layout, catalog_updated_at
+             FROM saved_conversations_v1;
+             DROP TABLE saved_conversations_v1;
+             CREATE INDEX saved_conversations_latest_root
+                 ON saved_conversations(
+                     archived_at, conversation_kind, last_created_at DESC,
+                     first_created_at DESC, conversation_id
+                 );
+             CREATE INDEX saved_conversations_picker
+                 ON saved_conversations(
+                     archived_at, conversation_kind, (name IS NOT NULL) DESC,
+                     last_created_at DESC, first_created_at DESC, conversation_id
+                 );
+             CREATE INDEX saved_conversations_directory_picker
+                 ON saved_conversations(
+                     archived_at, directory, conversation_kind,
+                     (name IS NOT NULL) DESC, last_created_at DESC,
+                     first_created_at DESC, conversation_id
+                 );
+             CREATE INDEX saved_conversations_pruning
+                 ON saved_conversations(
+                     archived_at, last_created_at, first_created_at, conversation_id
+                 );
+             CREATE INDEX saved_conversations_name_nocase
+                 ON saved_conversations(name COLLATE NOCASE)
+                 WHERE name IS NOT NULL;
+             PRAGMA user_version = 2;",
+        )
+        .map_err(SchemaFailure::Sqlite)
 }
 
 /// Returns whether one SQLite failure proves the file needs reconstruction.
