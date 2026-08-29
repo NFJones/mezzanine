@@ -117,6 +117,25 @@ struct RuntimeInterruptedSubagentRedirection {
     parent_agent_id: Option<String>,
     /// Joined parent action transferred to the redirected turn, when any.
     joined_dependency: Option<JoinedSubagentDependency>,
+    /// Managed routed-child ownership transferred to the redirected turn.
+    routed_ownership: Option<RuntimeInterruptedRoutedOwnership>,
+    /// Routed loop iteration retained across the interruption, when any.
+    routed_loop_turn: Option<RuntimeAgentLoopTurn>,
+}
+
+/// Turn-keyed routed metadata retained while a managed child awaits guidance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeInterruptedRoutedOwnership {
+    /// Parent workflow that remains blocked on the managed child.
+    parent_turn_id: String,
+    /// Effective worker profile pinned by the routing decision.
+    model_profile: ModelProfile,
+    /// Configured profile identity retained separately from the effective profile.
+    configured_model_profile_name: String,
+    /// Capability restriction retained for handoff and repair continuations.
+    initial_capability: Option<mez_agent::AgentCapability>,
+    /// Exceptional handoff interaction retained for handoff and repair turns.
+    interaction_kind: Option<ModelInteractionKind>,
 }
 
 mod approvals;
@@ -975,20 +994,19 @@ impl RuntimeSessionService {
         self.agent.subagent_task_routes.get(turn_id).cloned()
     }
 
-    /// Retains an ordinary child route across a user interruption boundary.
+    /// Retains a child route across a user interruption boundary.
     pub(crate) fn retain_subagent_interruption_for_redirection(
         &mut self,
         turn: &AgentTurnRecord,
     ) -> bool {
+        let routed_parent_turn_id = self.routed_parent_turn_id_for_child(&turn.turn_id);
         if !self.has_subagent_authority_state(&turn.agent_id)
-            || self
-                .routed_parent_turn_id_for_child(&turn.turn_id)
-                .is_some()
             || self
                 .agent
                 .macro_managed_subagent_agents
                 .contains_key(&turn.agent_id)
-            || self.agent.agent_loop_turns.contains_key(&turn.turn_id)
+            || (routed_parent_turn_id.is_none()
+                && self.agent.agent_loop_turns.contains_key(&turn.turn_id))
         {
             return false;
         }
@@ -1007,6 +1025,40 @@ impl RuntimeSessionService {
         if parent_agent_id.is_none() && joined_dependency.is_none() {
             return false;
         }
+        let routed_ownership = if let Some(parent_turn_id) = routed_parent_turn_id {
+            let Some(model_profile) = self
+                .agent
+                .agent_turn_model_profiles
+                .get(&turn.turn_id)
+                .cloned()
+            else {
+                return false;
+            };
+            let Some(configured_model_profile_name) = self
+                .agent
+                .agent_turn_configured_model_profiles
+                .get(&turn.turn_id)
+                .cloned()
+            else {
+                return false;
+            };
+            Some(RuntimeInterruptedRoutedOwnership {
+                parent_turn_id,
+                model_profile,
+                configured_model_profile_name,
+                initial_capability: turn.initial_capability,
+                interaction_kind: self
+                    .agent
+                    .agent_turn_interaction_kinds
+                    .get(&turn.turn_id)
+                    .copied(),
+            })
+        } else {
+            None
+        };
+        let routed_loop_turn = routed_ownership
+            .as_ref()
+            .and_then(|_| self.agent.agent_loop_turns.get(&turn.turn_id).cloned());
         self.agent.pending_interrupted_subagent_redirections.insert(
             turn.agent_id.clone(),
             RuntimeInterruptedSubagentRedirection {
@@ -1014,9 +1066,45 @@ impl RuntimeSessionService {
                 conversation_id: turn.conversation_id.clone(),
                 parent_agent_id,
                 joined_dependency,
+                routed_ownership,
+                routed_loop_turn,
             },
         );
         true
+    }
+
+    /// Applies retained routed identity to a pane-local continuation before
+    /// that turn is queued, preserving stale-result and capability semantics.
+    pub(crate) fn prepare_interrupted_subagent_redirected_turn(
+        &self,
+        turn: &mut AgentTurnRecord,
+    ) -> Result<Option<(String, ModelProfile)>> {
+        let Some(redirection) = self
+            .agent
+            .pending_interrupted_subagent_redirections
+            .get(&turn.agent_id)
+            .filter(|redirection| redirection.conversation_id == turn.conversation_id)
+        else {
+            return Ok(None);
+        };
+        let Some(routed) = redirection.routed_ownership.as_ref() else {
+            return Ok(None);
+        };
+        if self.routed_parent_turn_id_for_child(&redirection.interrupted_turn_id)
+            != Some(routed.parent_turn_id.clone())
+        {
+            return Err(MezError::invalid_state(
+                "interrupted routed child ownership is no longer active",
+            ));
+        }
+        turn.parent_turn_id = Some(routed.parent_turn_id.clone());
+        turn.cooperation_mode = Some("routed-worker".to_string());
+        turn.model_profile = format!("routed:{}", routed.model_profile.model);
+        turn.initial_capability = routed.initial_capability;
+        Ok(Some((
+            routed.configured_model_profile_name.clone(),
+            routed.model_profile.clone(),
+        )))
     }
 
     /// Reports whether one interrupted turn is waiting for a redirected prompt.
@@ -1043,6 +1131,15 @@ impl RuntimeSessionService {
         else {
             return false;
         };
+        if let Some(routed) = redirection.routed_ownership.as_ref()
+            && !self.transfer_interrupted_routed_child_ownership(
+                &redirection.interrupted_turn_id,
+                redirected_turn_id,
+                routed,
+            )
+        {
+            return false;
+        }
         self.agent
             .pending_interrupted_subagent_redirections
             .remove(agent_id);
@@ -1062,6 +1159,14 @@ impl RuntimeSessionService {
             self.agent
                 .joined_subagent_dependencies
                 .insert(redirected_turn_id.to_string(), dependency);
+        }
+        if let Some(loop_turn) = redirection.routed_loop_turn {
+            self.agent
+                .agent_loop_turns
+                .remove(&redirection.interrupted_turn_id);
+            self.agent
+                .agent_loop_turns
+                .insert(redirected_turn_id.to_string(), loop_turn);
         }
         true
     }

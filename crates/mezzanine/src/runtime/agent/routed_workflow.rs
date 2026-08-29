@@ -57,6 +57,70 @@ impl RuntimeSessionService {
             .map(|(parent_turn_id, _)| parent_turn_id.clone())
     }
 
+    /// Atomically transfers one interrupted managed-child identity to its
+    /// pane-local continuation turn after validating current workflow ownership.
+    pub(super) fn transfer_interrupted_routed_child_ownership(
+        &mut self,
+        interrupted_turn_id: &str,
+        redirected_turn_id: &str,
+        ownership: &super::RuntimeInterruptedRoutedOwnership,
+    ) -> bool {
+        let redirected_turn_matches = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == redirected_turn_id)
+            .is_some_and(|turn| {
+                turn.parent_turn_id.as_deref() == Some(ownership.parent_turn_id.as_str())
+                    && turn.cooperation_mode.as_deref() == Some("routed-worker")
+                    && turn.initial_capability == ownership.initial_capability
+            });
+        if self.routed_parent_turn_id_for_child(interrupted_turn_id)
+            != Some(ownership.parent_turn_id.clone())
+            || !redirected_turn_matches
+            || self
+                .agent
+                .routed_workflows_by_parent_turn
+                .get(&ownership.parent_turn_id)
+                .is_none_or(|workflow| {
+                    workflow.child_turn_id.as_deref() != Some(interrupted_turn_id)
+                })
+        {
+            return false;
+        }
+
+        let Some(workflow) = self
+            .agent
+            .routed_workflows_by_parent_turn
+            .get_mut(&ownership.parent_turn_id)
+        else {
+            return false;
+        };
+        workflow.child_turn_id = Some(redirected_turn_id.to_string());
+        self.agent
+            .routed_workflow_by_child_turn
+            .remove(interrupted_turn_id);
+        self.agent.routed_workflow_by_child_turn.insert(
+            redirected_turn_id.to_string(),
+            ownership.parent_turn_id.clone(),
+        );
+        self.agent.agent_turn_model_profiles.insert(
+            redirected_turn_id.to_string(),
+            ownership.model_profile.clone(),
+        );
+        self.agent.agent_turn_configured_model_profiles.insert(
+            redirected_turn_id.to_string(),
+            ownership.configured_model_profile_name.clone(),
+        );
+        self.mark_agent_turn_routing_applied(redirected_turn_id.to_string());
+        if let Some(interaction_kind) = ownership.interaction_kind {
+            self.agent
+                .agent_turn_interaction_kinds
+                .insert(redirected_turn_id.to_string(), interaction_kind);
+        }
+        true
+    }
+
     /// Makes a routed parent eligible for its next provider request without
     /// bypassing scheduler capacity or fairness.
     ///
@@ -1003,6 +1067,11 @@ impl RuntimeSessionService {
         else {
             return Ok(false);
         };
+        if let Some(child_agent_id) = state.child_agent_id.as_deref() {
+            self.agent
+                .pending_interrupted_subagent_redirections
+                .remove(child_agent_id);
+        }
         if let Some(loop_id) = self
             .agent
             .agent_loops_by_id
@@ -1056,10 +1125,10 @@ impl RuntimeSessionService {
                         | AgentTurnState::Failed
                         | AgentTurnState::Interrupted
                 );
+                self.agent
+                    .pending_terminal_subagent_pane_closes
+                    .insert(child_turn.pane_id.clone());
                 if !child_is_terminal {
-                    self.agent
-                        .pending_terminal_subagent_pane_closes
-                        .insert(child_turn.pane_id.clone());
                     if self
                         .agent_shell_store()
                         .get(&child_turn.pane_id)
@@ -1083,6 +1152,10 @@ impl RuntimeSessionService {
                             cleanup_error = Some(error);
                         }
                     }
+                } else if let Err(error) = self.close_terminal_subagent_pane_if_pending(&child_turn)
+                    && cleanup_error.is_none()
+                {
+                    cleanup_error = Some(error);
                 }
             }
         }

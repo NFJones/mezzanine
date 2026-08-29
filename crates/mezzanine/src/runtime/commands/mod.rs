@@ -718,7 +718,8 @@ impl RuntimeSessionService {
                     })?
             }
         };
-        if let Some(loop_turn) = self.remove_agent_loop_turn(&turn_id)
+        if !awaiting_redirection
+            && let Some(loop_turn) = self.remove_agent_loop_turn(&turn_id)
             && let Some(state) = self.remove_agent_loop_state(&loop_turn.pane_id)
         {
             self.restore_agent_loop_parent_conversation(&loop_turn.pane_id, &state)?;
@@ -1268,9 +1269,9 @@ impl RuntimeSessionService {
         let context_blocks = context.blocks().len();
         let created_at_unix_seconds = current_unix_seconds();
         let prompt_preview = prompt.chars().take(160).collect::<String>();
-        let (model_profile_name, model_profile) =
+        let (mut model_profile_name, mut model_profile) =
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
-        let turn = AgentTurnRecord {
+        let mut turn = AgentTurnRecord {
             turn_id: turn_id.clone(),
             conversation_id: conversation_id.clone(),
             agent_id: agent_id.clone(),
@@ -1286,6 +1287,12 @@ impl RuntimeSessionService {
             state: AgentTurnState::Queued,
             initial_capability,
         };
+        if let Some((redirected_profile_name, redirected_profile)) =
+            self.prepare_interrupted_subagent_redirected_turn(&mut turn)?
+        {
+            model_profile_name = redirected_profile_name;
+            model_profile = redirected_profile;
+        }
         self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
         self.append_agent_trace_turn_event(
             pane_id,

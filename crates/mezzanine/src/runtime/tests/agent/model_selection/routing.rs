@@ -2384,14 +2384,14 @@ fn runtime_routed_selection_missing_parent_context_fails_cleanly() {
     assert!(!service.has_active_routed_workflow("turn-1"));
 }
 
-/// Verifies routed child cancellation resumes the parent exactly once and
-/// routed parent cancellation terminates its active managed child.
+/// Verifies routed child interruption supports repeated pane-local guidance.
 ///
-/// Worker, handoff, and parent interruption use the normal routed selection
-/// and pane stop paths. Late child settlement after parent cancellation must
-/// be a handled no-op rather than reviving the interrupted workflow.
+/// Worker and handoff turns retain the same managed pane and workflow across
+/// multiple stops. Only the final valid handoff resumes the parent and closes
+/// the child, while parent cancellation remains terminal and late child
+/// settlement cannot revive the workflow.
 #[test]
-fn runtime_routed_child_cancellation_resumes_parent_once() {
+fn runtime_routed_child_interruption_redirects_until_terminal_handoff() {
     let setup = || {
         let mut service = test_runtime_service();
         service
@@ -2526,37 +2526,119 @@ reasoning_profile = "high"
         .strip_prefix("agent-")
         .expect("managed child agent should identify its pane")
         .to_string();
+    let worker_profile = worker_service
+        .agent_turn_model_profile(&worker_turn.turn_id)
+        .expect("managed worker profile should be pinned")
+        .clone();
     worker_service
         .stop_agent_turn_for_pane(&worker_pane_id)
         .unwrap();
     let worker_workflow = worker_service
         .routed_workflow_for_tests("turn-1")
-        .expect("cancelled worker should retain parent recovery state");
+        .expect("interrupted worker should retain its parent workflow");
     assert_eq!(
         worker_workflow.phase,
-        mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForErrorExplanation
+        mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult
     );
-    assert!(worker_workflow.error_explanation_attempted);
-    assert_eq!(worker_service.pending_agent_provider_tasks().len(), 1);
-    assert_eq!(worker_service.subagent_task_parent(&worker_turn_id), None);
-    let worker_failure_count = worker_service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .expect("parent context should remain available")
-        .blocks()
-        .iter()
-        .filter(|block| {
-            block.label == "routed workflow failure"
-                && block.content.contains("routed worker was cancelled")
-        })
-        .count();
-    assert_eq!(worker_failure_count, 1);
+    assert!(!worker_workflow.error_explanation_attempted);
+    assert!(worker_service.pending_agent_provider_tasks().is_empty());
     assert!(
         worker_service
-            .handle_routed_child_cancellation(&worker_turn)
+            .find_pane_descriptor(&worker_pane_id)
+            .is_some()
+    );
+    assert!(worker_service.has_subagent_authority_state(&worker_turn.agent_id));
+    assert!(worker_service.interrupted_subagent_awaits_redirection(&worker_turn_id));
+
+    let redirected = worker_service
+        .start_agent_prompt_turn(&worker_pane_id, "continue with this guidance")
+        .unwrap();
+    assert_eq!(
+        worker_service
+            .routed_workflow_for_tests("turn-1")
+            .and_then(|workflow| workflow.child_turn_id.as_deref()),
+        Some(redirected.turn_id.as_str())
+    );
+    assert_eq!(
+        worker_service.routed_parent_turn_id_for_child(&redirected.turn_id),
+        Some("turn-1".to_string())
+    );
+    assert_eq!(
+        worker_service.agent_turn_model_profile(&redirected.turn_id),
+        Some(&worker_profile)
+    );
+    assert!(worker_service.agent_turn_routing_applied(&redirected.turn_id));
+    assert!(
+        worker_service
+            .subagent_task_parent(&worker_turn_id)
+            .is_none()
+    );
+    assert_eq!(
+        worker_service.subagent_task_parent(&redirected.turn_id),
+        Some("agent-%1".to_string())
+    );
+
+    worker_service
+        .stop_agent_turn_for_pane(&worker_pane_id)
+        .unwrap();
+    let redirected_again = worker_service
+        .start_agent_prompt_turn(&worker_pane_id, "continue after more guidance")
+        .unwrap();
+    let redirected_again_turn = worker_service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == redirected_again.turn_id)
+        .cloned()
+        .expect("second redirected worker turn should exist");
+    assert_eq!(
+        worker_service
+            .routed_workflow_for_tests("turn-1")
+            .and_then(|workflow| workflow.child_turn_id.as_deref()),
+        Some(redirected_again.turn_id.as_str())
+    );
+    assert!(
+        worker_service
+            .subagent_task_parent(&redirected.turn_id)
+            .is_none()
+    );
+    assert_eq!(
+        worker_service.subagent_task_parent(&redirected_again.turn_id),
+        Some("agent-%1".to_string())
+    );
+
+    let late_execution = completed_execution(&worker_turn, "late superseded worker result");
+    assert!(
+        worker_service
+            .handle_routed_child_execution_result(&worker_turn, &late_execution)
             .unwrap()
     );
-    assert_eq!(worker_service.pending_agent_provider_tasks().len(), 1);
+    assert_eq!(
+        worker_service
+            .routed_workflow_for_tests("turn-1")
+            .and_then(|workflow| workflow.child_turn_id.as_deref()),
+        Some(redirected_again.turn_id.as_str())
+    );
+
+    worker_service
+        .apply_agent_provider_execution(
+            &redirected_again_turn,
+            &worker_profile,
+            "runtime-batch",
+            completed_execution(&redirected_again_turn, "guided worker completed"),
+        )
+        .unwrap();
+    assert_eq!(
+        worker_service
+            .routed_workflow_for_tests("turn-1")
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForHandoff)
+    );
+    assert!(
+        worker_service
+            .find_pane_descriptor(&worker_pane_id)
+            .is_some()
+    );
 
     let (mut handoff_service, _handoff_primary, worker_turn_id) = setup();
     let worker_turn = handoff_service
@@ -2588,7 +2670,7 @@ reasoning_profile = "high"
         .routed_workflow_for_tests("turn-1")
         .and_then(|workflow| workflow.child_turn_id.clone())
         .expect("worker completion should queue a handoff turn");
-    let handoff_turn = handoff_service
+    let _handoff_turn = handoff_service
         .agent_turn_ledger()
         .turns()
         .iter()
@@ -2608,18 +2690,76 @@ reasoning_profile = "high"
         .unwrap();
     let handoff_workflow = handoff_service
         .routed_workflow_for_tests("turn-1")
-        .expect("cancelled handoff should retain parent recovery state");
+        .expect("interrupted handoff should retain the parent workflow");
     assert_eq!(
         handoff_workflow.phase,
-        mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForErrorExplanation
+        mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForHandoff
     );
-    assert!(handoff_workflow.error_explanation_attempted);
+    assert!(!handoff_workflow.error_explanation_attempted);
+    assert!(handoff_service.pending_agent_provider_tasks().is_empty());
+    assert!(
+        handoff_service
+            .find_pane_descriptor(&worker_pane_id)
+            .is_some()
+    );
+
+    let redirected_handoff = handoff_service
+        .start_agent_prompt_turn(&worker_pane_id, "include the validation evidence")
+        .unwrap();
+    let redirected_handoff_turn = handoff_service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == redirected_handoff.turn_id)
+        .cloned()
+        .expect("redirected handoff turn should exist");
+    assert_eq!(
+        redirected_handoff_turn.initial_capability,
+        Some(mez_agent::AgentCapability::RespondOnly)
+    );
+    assert_eq!(
+        handoff_service
+            .agent_provider_request_control_for_turn(&redirected_handoff_turn)
+            .1,
+        Some(mez_agent::ModelInteractionKind::RoutedHandoff)
+    );
+    assert_eq!(
+        handoff_service
+            .routed_workflow_for_tests("turn-1")
+            .and_then(|workflow| workflow.child_turn_id.as_deref()),
+        Some(redirected_handoff.turn_id.as_str())
+    );
+    assert!(
+        handoff_service
+            .subagent_task_parent(&handoff_turn_id)
+            .is_none()
+    );
+
+    let valid_handoff = r#"{"version":1,"result_summary":"Guided routing fix complete","decisions":["preserve the routed workflow"],"evidence":["repeated interruption regression"],"changes":["transferred child ownership"],"validation":["focused test"],"assumptions":[],"unresolved_risks":[],"follow_up_context":[]}"#;
+    handoff_service
+        .apply_agent_provider_execution(
+            &redirected_handoff_turn,
+            &worker_profile,
+            "runtime-batch",
+            completed_execution(&redirected_handoff_turn, valid_handoff),
+        )
+        .unwrap();
+    assert_eq!(
+        handoff_service
+            .routed_workflow_for_tests("turn-1")
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForPresentation)
+    );
     assert_eq!(handoff_service.pending_agent_provider_tasks().len(), 1);
-    assert_eq!(handoff_service.subagent_task_parent(&handoff_turn_id), None);
+    assert!(
+        handoff_service
+            .find_pane_descriptor(&worker_pane_id)
+            .is_none()
+    );
     let parent_context = handoff_service
         .agent_turn_contexts()
         .get("turn-1")
-        .expect("parent context should remain available");
+        .expect("parent context should contain the final routed handoff");
     assert_eq!(
         parent_context
             .blocks()
@@ -2630,23 +2770,10 @@ reasoning_profile = "high"
             .count(),
         1
     );
-    assert_eq!(
-        parent_context
-            .blocks()
-            .iter()
-            .filter(|block| {
-                block.label == "routed workflow failure"
-                    && block.content.contains("routed handoff was cancelled")
-            })
-            .count(),
-        1
-    );
-    assert!(
-        handoff_service
-            .handle_routed_child_cancellation(&handoff_turn)
-            .unwrap()
-    );
-    assert_eq!(handoff_service.pending_agent_provider_tasks().len(), 1);
+    assert!(parent_context.blocks().iter().all(|block| {
+        block.label != "routed workflow failure"
+            && !block.content.contains("routed handoff was cancelled")
+    }));
 
     let (mut parent_service, _parent_primary, child_turn_id) = setup();
     let child_turn = parent_service

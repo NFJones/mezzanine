@@ -1955,6 +1955,13 @@ cleared after interruption, Mezzanine MUST durably retain its original user
 prompt, interruption reason, and safely serializable action observations for
 later conversation context. A subsequent `Continue` MUST receive that
 interrupted-task context, but MUST NOT resume cancelled execution.
+When the interrupted turn belongs to a managed routed-worker workflow, the
+runtime MUST keep the child pane and parent workflow open for pane-local user
+guidance. The next prompt in that child pane MUST transfer managed-child
+ownership to the new turn without settling or resuming the parent, and this
+retention MUST support repeated interruption and guidance cycles. Only a later
+terminal completion or failure of the active child turn, or cancellation of the
+parent workflow, may settle that routed workflow and release its child pane.
 
 Using the agent shell toggle while the agent shell is visible MUST request
 `/stop` for any in-progress pane-local agent task before hiding the prompt and
