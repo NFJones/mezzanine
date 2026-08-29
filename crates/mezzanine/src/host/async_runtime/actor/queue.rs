@@ -12,6 +12,26 @@ use super::{
 };
 
 impl AsyncRuntimeSessionActor {
+    /// Reconciles the daily saved-session retention maintenance timer.
+    pub(super) fn saved_session_retention_timer_side_effects(
+        &self,
+        generation_base_ms: u64,
+    ) -> Vec<RuntimeSideEffect> {
+        const RETENTION_INTERVAL_MS: u64 = 24 * 60 * 60 * 1_000;
+        if self.timers.saved_session_retention.is_some() {
+            return Vec::new();
+        }
+        let generation = generation_base_ms.saturating_add(RETENTION_INTERVAL_MS);
+        vec![RuntimeSideEffect::ScheduleTimer {
+            key: RuntimeTimerKey::new(
+                RuntimeTimerKind::SavedSessionRetention,
+                "saved-sessions",
+                generation,
+            ),
+            delay_ms: RETENTION_INTERVAL_MS,
+        }]
+    }
+
     /// Applies timer scheduling bookkeeping in emitted side-effect order.
     ///
     /// A cancellation followed by a schedule for the same generation must
@@ -40,6 +60,13 @@ impl AsyncRuntimeSessionActor {
                     self.timers.idle_cleanup = Some(key.clone());
                 } else if self.timers.idle_cleanup.as_ref() == Some(key) {
                     self.timers.idle_cleanup = None;
+                }
+            }
+            RuntimeTimerKind::SavedSessionRetention => {
+                if scheduled {
+                    self.timers.saved_session_retention = Some(key.clone());
+                } else if self.timers.saved_session_retention.as_ref() == Some(key) {
+                    self.timers.saved_session_retention = None;
                 }
             }
             RuntimeTimerKind::ResizeDebounce => {

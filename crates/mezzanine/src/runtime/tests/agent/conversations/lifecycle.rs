@@ -815,5 +815,22 @@ fn runtime_interrupted_turn_pending_transcript_is_visible_to_immediate_continuat
         "{}",
         interrupted_context.content
     );
+    let persistence = service
+        .drain_transcript_persistence_transition()
+        .side_effects;
+    assert!(
+        matches!(
+            persistence.as_slice(),
+            [
+                RuntimeSideEffect::PersistTranscriptEntries { .. },
+                RuntimeSideEffect::PersistSavedSessionRetention {
+                    protected_conversation_ids,
+                    schedule_next: false,
+                    ..
+                }
+            ] if protected_conversation_ids.contains(&conversation_id)
+        ),
+        "{persistence:#?}"
+    );
     service.terminate_all_pane_processes().unwrap();
 }

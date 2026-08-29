@@ -257,6 +257,38 @@ impl RuntimePersistenceComponent {
         self.pending_session_archive_resumes.remove(conversation_id)
     }
 
+    /// Queues one active saved-session retention pass unless work is already pending.
+    pub(crate) fn queue_saved_session_retention(
+        &mut self,
+        effect: RuntimeSideEffect,
+    ) -> crate::error::Result<bool> {
+        let RuntimeSideEffect::PersistSavedSessionRetention { schedule_next, .. } = &effect else {
+            return Err(crate::error::MezError::invalid_args(
+                "saved-session retention queue requires a retention side effect",
+            ));
+        };
+        if self.saved_session_retention_pending {
+            self.saved_session_retention_rerun_requested = true;
+            self.saved_session_retention_rerun_schedule_next |= *schedule_next;
+            return Ok(false);
+        }
+        self.saved_session_retention_pending = true;
+        self.queued_transcript_effects.push(effect);
+        Ok(true)
+    }
+
+    /// Clears duplicate suppression and returns deferred rerun scheduling intent.
+    pub(crate) fn finish_saved_session_retention(&mut self) -> Option<bool> {
+        self.saved_session_retention_pending = false;
+        if !std::mem::take(&mut self.saved_session_retention_rerun_requested) {
+            self.saved_session_retention_rerun_schedule_next = false;
+            return None;
+        }
+        Some(std::mem::take(
+            &mut self.saved_session_retention_rerun_schedule_next,
+        ))
+    }
+
     /// Returns queued transcript entries for one conversation without draining
     /// the external persistence worker's ordered effect queue.
     pub(crate) fn pending_transcript_entries(

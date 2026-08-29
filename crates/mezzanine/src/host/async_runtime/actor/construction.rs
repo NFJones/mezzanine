@@ -4,7 +4,7 @@ use super::{
     Arc, AsyncRuntimeActorConfig, AsyncRuntimeActorExit, AsyncRuntimeSessionActor,
     AsyncRuntimeSessionHandle, MezError, Notify, Result, RuntimeSessionService,
     RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
-    RuntimeSnapshotControlAsyncWorkKind, VecDeque, decode_control_frame, mpsc, watch,
+    RuntimeSnapshotControlAsyncWorkKind, decode_control_frame, mpsc, watch,
 };
 
 /// Runs the execute snapshot control async work operation for this subsystem.
@@ -139,6 +139,17 @@ impl AsyncRuntimeSessionActor {
         service.use_registry_effect_adapter();
         service.use_config_effect_adapter();
         service.use_hook_effect_adapter();
+        let mut initial_side_effects = service
+            .queue_saved_session_retention_operation(
+                super::coalesce::async_runtime_current_unix_millis() / 1_000,
+                true,
+            )?
+            .side_effects;
+        initial_side_effects.extend(
+            service
+                .drain_transcript_persistence_transition()
+                .side_effects,
+        );
         Ok((
             AsyncRuntimeSessionHandle {
                 sender: sender.clone(),
@@ -168,7 +179,7 @@ impl AsyncRuntimeSessionActor {
                 lifecycle_state_tx,
                 terminal_config_generation: 0,
                 terminal_config_generation_tx,
-                side_effects: VecDeque::with_capacity(config.side_effect_buffer),
+                side_effects: initial_side_effects.into_iter().collect(),
                 side_effect_queue_nonempty_since: None,
                 pane_input_leases: Default::default(),
                 timers: Default::default(),

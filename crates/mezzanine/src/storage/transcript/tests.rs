@@ -1,7 +1,7 @@
 //! Tests for transcript persistence, forking, and TSV escaping.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::PathBuf,
     sync::{
@@ -499,44 +499,61 @@ fn transcript_store_inspects_recent_entries_and_next_sequence_from_tail() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies saved conversation retention deletes aged-out sessions only after
-/// a new conversation is persisted.
-///
-/// `/resume` uses saved transcript summaries rather than full transcript
-/// decoding. This regression keeps the picker bounded by pruning the oldest
-/// saved conversation directory when appending a fresh conversation beyond the
-/// configured retention limit.
+/// Verifies retention applies inclusive age expiry before count enforcement,
+/// includes named active sessions, protects live ids, and exempts archives.
 #[test]
-fn transcript_store_prunes_oldest_saved_sessions_when_limit_exceeded() {
+fn transcript_store_enforces_age_then_count_retention() {
     let root = temp_root("saved-session-retention");
     let _ = fs::remove_dir_all(&root);
-    let store = AgentTranscriptStore::new(root.clone())
-        .with_saved_sessions_limit(2)
+    let mut store = AgentTranscriptStore::new(root.clone());
+    store
+        .set_saved_session_retention_policy(super::SavedSessionRetentionPolicy {
+            max_active_sessions: 3,
+            retention_days: 1,
+        })
         .unwrap();
-    let mut old = entry("conv-old", 1, TranscriptRole::User);
-    old.created_at_unix_seconds = 10;
-    let mut middle = entry("conv-middle", 1, TranscriptRole::User);
-    middle.created_at_unix_seconds = 20;
-    let mut new = entry("conv-new", 1, TranscriptRole::User);
-    new.created_at_unix_seconds = 30;
+    let now = 200_000;
+    let cutoff = now - 24 * 60 * 60;
+    for (conversation_id, created_at) in [
+        ("named-at-cutoff", cutoff),
+        ("archived-old", cutoff - 1),
+        ("protected-old", cutoff - 1),
+        ("count-old", cutoff + 1),
+        ("count-middle", cutoff + 2),
+        ("count-new", cutoff + 3),
+    ] {
+        let mut transcript_entry = entry(conversation_id, 1, TranscriptRole::User);
+        transcript_entry.created_at_unix_seconds = created_at;
+        store.append(&transcript_entry).unwrap();
+    }
+    store
+        .name_session("named-at-cutoff", "Named but expiring", cutoff, None)
+        .unwrap();
+    store.archive_session("archived-old", cutoff + 10).unwrap();
+    let protected = ["protected-old".to_string()].into_iter().collect();
 
-    store.append(&old).unwrap();
-    store.append(&middle).unwrap();
-    store.append(&new).unwrap();
+    let report = store
+        .enforce_saved_session_retention(now, &protected)
+        .unwrap();
 
-    let summaries = store.list().unwrap();
-    let retained = summaries
-        .iter()
-        .map(|summary| summary.conversation_id.as_str())
-        .collect::<Vec<_>>();
-
-    assert_eq!(retained, vec!["conv-middle", "conv-new"]);
-    assert!(!root.join("conv-old").exists());
-    assert!(root.join("conv-middle").exists());
-    assert!(root.join("conv-new").exists());
-    assert!(store.inspect("conv-old").is_err());
-    assert_eq!(store.inspect("conv-middle").unwrap()[0], middle);
-    assert_eq!(store.inspect("conv-new").unwrap()[0], new);
+    assert_eq!(
+        report.deleted_conversation_ids,
+        vec!["named-at-cutoff", "count-old"]
+    );
+    assert!(report.failures.is_empty());
+    assert!(store.saved_session("named-at-cutoff").unwrap().is_none());
+    assert!(store.saved_session("count-old").unwrap().is_none());
+    assert!(store.saved_session("protected-old").unwrap().is_some());
+    assert_eq!(
+        store
+            .saved_session("archived-old")
+            .unwrap()
+            .unwrap()
+            .archived_at_unix_seconds,
+        Some(cutoff + 10)
+    );
+    assert!(store.saved_session("count-middle").unwrap().is_some());
+    assert!(store.saved_session("count-new").unwrap().is_some());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -585,38 +602,37 @@ fn transcript_store_persists_and_merges_named_sessions() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies named conversations neither consume the unnamed retention limit
-/// nor get removed when a newer unnamed conversation triggers pruning.
+/// Verifies count ties use UUID order and one failed candidate does not prevent
+/// independent later deletions in the same retention pass.
 #[test]
-fn transcript_store_never_prunes_named_sessions_automatically() {
-    let root = temp_root("named-session-retention");
+fn transcript_store_retention_orders_ties_and_reports_partial_failures() {
+    let root = temp_root("saved-session-retention-failures");
     let _ = fs::remove_dir_all(&root);
-    let store = AgentTranscriptStore::new(root.clone())
-        .with_saved_sessions_limit(1)
-        .unwrap();
-    let mut named = entry("named-old", 1, TranscriptRole::User);
-    named.created_at_unix_seconds = 10;
-    let mut unnamed_old = entry("unnamed-old", 1, TranscriptRole::User);
-    unnamed_old.created_at_unix_seconds = 20;
-    let mut unnamed_new = entry("unnamed-new", 1, TranscriptRole::User);
-    unnamed_new.created_at_unix_seconds = 30;
-
-    store.append(&named).unwrap();
+    let mut store = AgentTranscriptStore::new(root.clone());
     store
-        .name_session("named-old", "Keep forever", 10, None)
+        .set_saved_session_retention_policy(super::SavedSessionRetentionPolicy {
+            max_active_sessions: 1,
+            retention_days: 365,
+        })
         .unwrap();
-    store.append(&unnamed_old).unwrap();
-    store.append(&unnamed_new).unwrap();
+    for conversation_id in ["fail", "middle", "new"] {
+        let mut transcript_entry = entry(conversation_id, 1, TranscriptRole::User);
+        transcript_entry.created_at_unix_seconds = 100;
+        store.append(&transcript_entry).unwrap();
+    }
+    fs::remove_file(root.join(".conversation-locks/fail.lock")).unwrap();
+    fs::create_dir(root.join(".conversation-locks/fail.lock")).unwrap();
 
-    let retained = store
-        .saved_sessions()
-        .unwrap()
-        .into_iter()
-        .map(|session| session.summary.conversation_id)
-        .collect::<Vec<_>>();
-    assert_eq!(retained, vec!["named-old", "unnamed-new"]);
-    assert!(store.inspect("named-old").is_ok());
-    assert!(store.inspect("unnamed-old").is_err());
+    let report = store
+        .enforce_saved_session_retention(101, &BTreeSet::new())
+        .unwrap();
+
+    assert_eq!(report.deleted_conversation_ids, vec!["middle", "new"]);
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(report.failures[0].conversation_id, "fail");
+    assert!(store.saved_session("fail").unwrap().is_some());
+    assert!(store.saved_session("middle").unwrap().is_none());
+    assert!(store.saved_session("new").unwrap().is_none());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -2406,7 +2422,7 @@ fn transcript_store_catalog_scales_bounded_queries_to_one_hundred_thousand_rows(
         .prepare(
             "EXPLAIN QUERY PLAN
              SELECT conversation_id FROM saved_conversations
-             WHERE (name IS NULL) = 1
+             WHERE archived_at IS NULL
                AND (has_transcript = 1 OR has_presentation = 1)
              ORDER BY last_created_at ASC, first_created_at ASC,
                       conversation_id ASC

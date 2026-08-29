@@ -106,50 +106,81 @@ pub(super) fn transcript_summaries(connection: &Connection) -> Result<Vec<Conver
         .map_err(Into::into)
 }
 
-/// Selects only the oldest unnamed payload-backed rows beyond `limit`.
-pub(super) fn unnamed_prune_candidates(
+/// Selects one bounded oldest-first age-expiry batch outside the protected set.
+pub(super) fn age_retention_candidates(
     connection: &Connection,
+    cutoff_unix_seconds: u64,
+    excluded_conversation_ids: &std::collections::BTreeSet<String>,
     limit: usize,
 ) -> Result<Vec<String>> {
+    retention_candidates(
+        connection,
+        Some(cutoff_unix_seconds),
+        excluded_conversation_ids,
+        limit,
+    )
+}
+
+/// Counts every active payload-backed session, including protected rows.
+pub(super) fn active_payload_session_count(connection: &Connection) -> Result<usize> {
     let count: i64 = connection.query_row(
         "SELECT COUNT(*) FROM saved_conversations
-         WHERE (name IS NULL) = 1
-           AND archived_at IS NULL
+         WHERE archived_at IS NULL
            AND (has_transcript = 1 OR has_presentation = 1)",
         [],
         |row| row.get(0),
     )?;
-    let limit = i64::try_from(limit)
-        .map_err(|_| MezError::invalid_args("saved-session limit exceeds SQLite range"))?;
-    if count <= limit {
-        return Ok(Vec::new());
-    }
-    let excess = count - limit;
-    let mut statement = connection.prepare(
-        "SELECT conversation_id FROM saved_conversations
-         WHERE (name IS NULL) = 1
-           AND archived_at IS NULL
-           AND (has_transcript = 1 OR has_presentation = 1)
-         ORDER BY last_created_at ASC, first_created_at ASC, conversation_id ASC
-         LIMIT ?1",
-    )?;
-    statement
-        .query_map([excess], |row| row.get(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+    usize::try_from(count)
+        .map_err(|_| MezError::invalid_state("saved-session catalog count is invalid"))
 }
 
-/// Returns whether one exact catalog row currently has a durable name.
-pub(super) fn is_named(connection: &Connection, conversation_id: &str) -> Result<bool> {
-    validate_conversation_id(conversation_id)?;
-    connection
-        .query_row(
-            "SELECT name IS NOT NULL FROM saved_conversations WHERE conversation_id = ?1",
-            params![conversation_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map(|value| value.unwrap_or(false))
+/// Selects one bounded oldest-first count-enforcement batch outside the protected set.
+pub(super) fn count_retention_candidates(
+    connection: &Connection,
+    excluded_conversation_ids: &std::collections::BTreeSet<String>,
+    limit: usize,
+) -> Result<Vec<String>> {
+    retention_candidates(connection, None, excluded_conversation_ids, limit)
+}
+
+/// Builds one indexed active payload query with dynamic protected-id exclusion.
+fn retention_candidates(
+    connection: &Connection,
+    cutoff_unix_seconds: Option<u64>,
+    excluded_conversation_ids: &std::collections::BTreeSet<String>,
+    limit: usize,
+) -> Result<Vec<String>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let mut sql = String::from(
+        "SELECT conversation_id FROM saved_conversations
+         WHERE archived_at IS NULL
+           AND (has_transcript = 1 OR has_presentation = 1)",
+    );
+    let mut values = Vec::<Value>::new();
+    if let Some(cutoff) = cutoff_unix_seconds {
+        sql.push_str(" AND last_created_at <= ?");
+        values.push(Value::Integer(sqlite_i64(cutoff, "retention cutoff")?));
+    }
+    if !excluded_conversation_ids.is_empty() {
+        sql.push_str(" AND conversation_id NOT IN (");
+        sql.push_str(
+            &std::iter::repeat_n("?", excluded_conversation_ids.len())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        sql.push(')');
+        values.extend(excluded_conversation_ids.iter().cloned().map(Value::Text));
+    }
+    sql.push_str(
+        " ORDER BY last_created_at ASC, first_created_at ASC, conversation_id ASC LIMIT ?",
+    );
+    values.push(Value::Integer(bounded_limit(limit)?));
+    let mut statement = connection.prepare(&sql)?;
+    statement
+        .query_map(params_from_iter(values), |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
 }
 

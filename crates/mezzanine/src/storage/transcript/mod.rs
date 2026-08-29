@@ -37,10 +37,12 @@ mod store;
 /// declaration makes the boundary available to the crate.
 mod types;
 
+#[cfg(test)]
+pub use types::SavedSessionRetentionFailure;
 pub use types::{
     AgentPresentationEntry, AgentTranscriptStore, SavedAgentSession, SavedSessionCursor,
     SavedSessionLifecycleFilter, SavedSessionPageAnchor, SavedSessionQuery,
-    SavedSessionRetentionPolicy,
+    SavedSessionRetentionPolicy, SavedSessionRetentionReport,
 };
 /// Exposes the tests module boundary.
 ///

@@ -759,6 +759,7 @@ async fn async_attached_terminal_loop_runs_actor_owned_command_prompt() {
     ));
     let _ = std::fs::remove_dir_all(&transcript_root);
     let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+    transcript_store.initialize(1).unwrap();
     let mut service = test_service();
     service.set_agent_transcript_store(transcript_store.clone());
     let primary = service
@@ -890,8 +891,8 @@ async fn async_attached_terminal_loop_runs_actor_owned_command_prompt() {
         )
         .await
         .unwrap();
-        assert_eq!(persistence.drained, 1);
-        assert_eq!(persistence.completed, 1);
+        assert_eq!(persistence.drained, 2);
+        assert_eq!(persistence.completed, 2);
         assert_eq!(persistence.failed, 0);
         assert_eq!(
             transcript_store.command_prompt_history().unwrap(),

@@ -203,3 +203,21 @@ pub struct SavedSessionRetentionPolicy {
     /// Maximum age in days since the latest durable activity.
     pub retention_days: u64,
 }
+
+/// One failed deletion observed while enforcing saved-session retention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedSessionRetentionFailure {
+    /// Durable conversation identity whose deletion failed.
+    pub conversation_id: String,
+    /// Secret-safe storage failure diagnostic.
+    pub error: String,
+}
+
+/// Outcome of one age-before-count active saved-session retention pass.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SavedSessionRetentionReport {
+    /// Conversations deleted in deterministic oldest-first order.
+    pub deleted_conversation_ids: Vec<String>,
+    /// Candidate deletions that failed while other independent work continued.
+    pub failures: Vec<SavedSessionRetentionFailure>,
+}

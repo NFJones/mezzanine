@@ -542,6 +542,20 @@ pub enum PersistenceEvent {
         /// Human-readable failure.
         error: String,
     },
+    /// One active saved-session retention pass completed.
+    SavedSessionRetentionCompleted {
+        /// Age-before-count deletion and partial-failure report.
+        report: crate::storage::transcript::SavedSessionRetentionReport,
+        /// Whether settlement must schedule the next daily maintenance pass.
+        schedule_next: bool,
+    },
+    /// One active saved-session retention pass failed before producing a report.
+    SavedSessionRetentionFailed {
+        /// Human-readable storage failure.
+        error: String,
+        /// Whether settlement must schedule the next daily maintenance pass.
+        schedule_next: bool,
+    },
 }
 
 /// Saved-session archive lifecycle work executed by the persistence worker.
@@ -658,6 +672,8 @@ pub enum RuntimeTimerKind {
     StatusRefresh,
     /// Idle cleanup.
     IdleCleanup,
+    /// Daily active saved-session retention maintenance.
+    SavedSessionRetention,
     /// Ordinary provider dispatch wakeup for pending work.
     ProviderPoll,
     /// Delayed provider retry after a transient provider failure.
@@ -898,6 +914,17 @@ pub enum RuntimeSideEffect {
         conversation_id: String,
         /// Archive, restore, or delete operation to execute.
         operation: SessionArchiveOperation,
+    },
+    /// Enforce active saved-session age and count retention on a blocking worker.
+    PersistSavedSessionRetention {
+        /// Transcript store owning active and archived saved sessions.
+        store: AgentTranscriptStore,
+        /// Wall-clock time used to compute the inclusive age cutoff.
+        now_unix_seconds: u64,
+        /// Durable conversations protected by live pane bindings.
+        protected_conversation_ids: std::collections::BTreeSet<String>,
+        /// Whether settlement must schedule the next daily maintenance pass.
+        schedule_next: bool,
     },
     /// Append one submitted prompt to the shared prompt-history file.
     PersistPromptHistory {

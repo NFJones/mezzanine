@@ -3,7 +3,7 @@
 //! Store methods validate conversation ids, enforce private storage
 //! permissions, and use append-only TSV records for inspectable persistence.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self as std_fs, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -29,7 +29,8 @@ use super::fs::{
 };
 use super::types::{
     AgentPresentationEntry, AgentTranscriptStore, NamedAgentSession, SavedAgentSession,
-    SavedSessionCatalogStatus, SavedSessionPage, SavedSessionQuery, SavedSessionRetentionPolicy,
+    SavedSessionCatalogStatus, SavedSessionPage, SavedSessionQuery, SavedSessionRetentionFailure,
+    SavedSessionRetentionPolicy, SavedSessionRetentionReport,
 };
 use mez_agent::AgentConversationKind;
 use mez_agent::transcript::{
@@ -164,18 +165,6 @@ impl AgentTranscriptStore {
         }
     }
 
-    /// Returns this store with a configured saved-conversation retention limit.
-    #[cfg(test)]
-    pub fn with_saved_sessions_limit(mut self, limit: usize) -> Result<Self> {
-        if limit == 0 {
-            return Err(MezError::invalid_args(
-                "saved agent session limit must be greater than zero",
-            ));
-        }
-        self.saved_session_retention.max_active_sessions = limit;
-        Ok(self)
-    }
-
     /// Returns this test store with a smaller presentation compaction threshold.
     #[cfg(test)]
     pub fn with_presentation_compaction_threshold(mut self, threshold: u64) -> Result<Self> {
@@ -207,8 +196,7 @@ impl AgentTranscriptStore {
         Ok(())
     }
 
-    /// Returns the configured active saved-session retention policy in tests.
-    #[cfg(test)]
+    /// Returns the configured active saved-session retention policy.
     pub fn saved_session_retention_policy(&self) -> SavedSessionRetentionPolicy {
         self.saved_session_retention
     }
@@ -668,7 +656,6 @@ impl AgentTranscriptStore {
 
     /// Appends one validated transcript entry while its conversation lock is held.
     fn append_one_locked(&self, entry: &TranscriptEntry) -> Result<usize> {
-        let new_conversation = !self.conversation_exists(&entry.conversation_id)?;
         self.ensure_session_dir(&entry.conversation_id)?;
         let path = self.transcript_path_for(&entry.conversation_id)?;
         let encoded = encode_transcript_entry(entry)?;
@@ -679,9 +666,6 @@ impl AgentTranscriptStore {
         set_private_file_permissions(&path)?;
         self.update_summary_after_append(entry)?;
         self.upsert_catalog_from_files(&entry.conversation_id, None)?;
-        if new_conversation {
-            self.prune_saved_sessions_over_limit()?;
-        }
         Ok(encoded.len().saturating_add(1))
     }
 
@@ -1292,6 +1276,11 @@ impl AgentTranscriptStore {
     pub fn delete(&self, conversation_id: &str) -> Result<bool> {
         validate_conversation_id(conversation_id)?;
         let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        self.delete_locked(conversation_id)
+    }
+
+    /// Deletes one conversation while its per-conversation lock is held.
+    fn delete_locked(&self, conversation_id: &str) -> Result<bool> {
         let session_dir = self.session_dir_for(conversation_id)?;
         let removed_payload = if session_dir.exists() {
             std_fs::remove_dir_all(session_dir)?;
@@ -1899,16 +1888,104 @@ impl AgentTranscriptStore {
         }
     }
 
-    /// Deletes oldest saved conversations until the configured resume cap holds.
-    fn prune_saved_sessions_over_limit(&self) -> Result<()> {
-        for conversation_id in catalog::unnamed_prune_candidates(
-            self,
-            self.saved_session_retention.max_active_sessions,
-        )? {
-            if catalog::is_named(self, &conversation_id)? {
-                continue;
+    /// Enforces active saved-session age and count retention in bounded batches.
+    ///
+    /// Age expiry is inclusive at the cutoff and completes before count
+    /// enforcement. Protected durable conversations and archived rows are never
+    /// deleted. Independent deletion failures are reported while later
+    /// candidates continue.
+    pub fn enforce_saved_session_retention(
+        &self,
+        now_unix_seconds: u64,
+        protected_conversation_ids: &BTreeSet<String>,
+    ) -> Result<SavedSessionRetentionReport> {
+        const RETENTION_BATCH_LIMIT: usize = 256;
+        const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
+
+        let retention_seconds = self
+            .saved_session_retention
+            .retention_days
+            .saturating_mul(SECONDS_PER_DAY);
+        let cutoff_unix_seconds = now_unix_seconds.saturating_sub(retention_seconds);
+        let mut excluded = protected_conversation_ids.clone();
+        let mut report = SavedSessionRetentionReport::default();
+
+        loop {
+            let candidates = catalog::age_retention_candidates(
+                self,
+                cutoff_unix_seconds,
+                &excluded,
+                RETENTION_BATCH_LIMIT,
+            )?;
+            if candidates.is_empty() {
+                break;
             }
-            self.delete(&conversation_id)?;
+            self.delete_retention_candidates(
+                candidates,
+                protected_conversation_ids,
+                &mut excluded,
+                &mut report,
+            )?;
+        }
+
+        loop {
+            let active_count = catalog::active_payload_session_count(self)?;
+            let excess =
+                active_count.saturating_sub(self.saved_session_retention.max_active_sessions);
+            if excess == 0 {
+                break;
+            }
+            let candidates = catalog::count_retention_candidates(
+                self,
+                &excluded,
+                excess.min(RETENTION_BATCH_LIMIT),
+            )?;
+            if candidates.is_empty() {
+                break;
+            }
+            self.delete_retention_candidates(
+                candidates,
+                protected_conversation_ids,
+                &mut excluded,
+                &mut report,
+            )?;
+        }
+        Ok(report)
+    }
+
+    /// Rechecks and deletes one bounded retention candidate batch.
+    fn delete_retention_candidates(
+        &self,
+        candidates: Vec<String>,
+        protected_conversation_ids: &BTreeSet<String>,
+        excluded: &mut BTreeSet<String>,
+        report: &mut SavedSessionRetentionReport,
+    ) -> Result<()> {
+        for conversation_id in candidates {
+            excluded.insert(conversation_id.clone());
+            let deletion = (|| {
+                let _conversation_lock = self.acquire_conversation_lock(&conversation_id)?;
+                if protected_conversation_ids.contains(&conversation_id) {
+                    return Ok(false);
+                }
+                let Some(record) = catalog::record(self, &conversation_id)? else {
+                    return Ok(false);
+                };
+                if record.session.archived_at_unix_seconds.is_some()
+                    || (!record.has_transcript && !record.has_presentation)
+                {
+                    return Ok(false);
+                }
+                self.delete_locked(&conversation_id)
+            })();
+            match deletion {
+                Ok(true) => report.deleted_conversation_ids.push(conversation_id),
+                Ok(false) => {}
+                Err(error) => report.failures.push(SavedSessionRetentionFailure {
+                    conversation_id,
+                    error: error.message().to_string(),
+                }),
+            }
         }
         Ok(())
     }

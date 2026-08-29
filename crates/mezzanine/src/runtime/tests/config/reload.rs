@@ -161,6 +161,7 @@ fn runtime_config_reload_applies_saved_session_retention_policy_atomically() {
             text: fs::read_to_string(&path).unwrap(),
         }])
         .unwrap();
+    service.persistence.enable_transcript_adapter();
 
     fs::write(
         &path,
@@ -179,6 +180,16 @@ fn runtime_config_reload_applies_saved_session_retention_policy_atomically() {
         .saved_session_retention_policy();
     assert_eq!(policy.max_active_sessions, 25);
     assert_eq!(policy.retention_days, 15);
+    let persistence = service
+        .drain_transcript_persistence_transition()
+        .side_effects;
+    assert!(matches!(
+        persistence.as_slice(),
+        [RuntimeSideEffect::PersistSavedSessionRetention {
+            schedule_next: false,
+            ..
+        }]
+    ));
     let _ = fs::remove_dir_all(root);
 }
 

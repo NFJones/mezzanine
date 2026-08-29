@@ -385,21 +385,39 @@ pub(super) fn transcript_summaries(
     query::transcript_summaries(&connection)
 }
 
-/// Returns oldest unnamed payload-backed ids beyond the retention limit.
-pub(super) fn unnamed_prune_candidates(
+/// Returns one bounded oldest-first age-expiry batch.
+pub(super) fn age_retention_candidates(
     store: &AgentTranscriptStore,
+    cutoff_unix_seconds: u64,
+    excluded_conversation_ids: &std::collections::BTreeSet<String>,
     limit: usize,
 ) -> Result<Vec<String>> {
     note_indexed_query();
     let connection = schema::open(&catalog_path(store))?;
-    query::unnamed_prune_candidates(&connection, limit)
+    query::age_retention_candidates(
+        &connection,
+        cutoff_unix_seconds,
+        excluded_conversation_ids,
+        limit,
+    )
 }
 
-/// Returns whether one catalog record is currently named.
-pub(super) fn is_named(store: &AgentTranscriptStore, conversation_id: &str) -> Result<bool> {
+/// Returns the active payload-backed session count.
+pub(super) fn active_payload_session_count(store: &AgentTranscriptStore) -> Result<usize> {
     note_indexed_query();
     let connection = schema::open(&catalog_path(store))?;
-    query::is_named(&connection, conversation_id)
+    query::active_payload_session_count(&connection)
+}
+
+/// Returns one bounded oldest-first count-enforcement batch.
+pub(super) fn count_retention_candidates(
+    store: &AgentTranscriptStore,
+    excluded_conversation_ids: &std::collections::BTreeSet<String>,
+    limit: usize,
+) -> Result<Vec<String>> {
+    note_indexed_query();
+    let connection = schema::open(&catalog_path(store))?;
+    query::count_retention_candidates(&connection, excluded_conversation_ids, limit)
 }
 
 /// Returns bounded root-session completion rows for one UUID prefix.

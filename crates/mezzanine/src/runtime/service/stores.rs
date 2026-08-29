@@ -13,6 +13,35 @@ use mez_agent::permissions::{
 };
 
 impl RuntimeSessionService {
+    /// Queues one duplicate-suppressed active saved-session retention pass.
+    pub(crate) fn queue_saved_session_retention_operation(
+        &mut self,
+        now_unix_seconds: u64,
+        schedule_next: bool,
+    ) -> Result<crate::runtime::RuntimeTransition> {
+        let Some(store) = self.persistence.cloned_transcript_store() else {
+            return Ok(crate::runtime::RuntimeTransition::default());
+        };
+        let protected_conversation_ids = self
+            .agent_shell_store()
+            .sessions()
+            .filter(|session| !session.ephemeral)
+            .map(|session| session.session_id.clone())
+            .collect();
+        let queued = self.persistence.queue_saved_session_retention(
+            crate::runtime::RuntimeSideEffect::PersistSavedSessionRetention {
+                store,
+                now_unix_seconds,
+                protected_conversation_ids,
+                schedule_next,
+            },
+        )?;
+        Ok(crate::runtime::RuntimeTransition {
+            applied: queued,
+            side_effects: Vec::new(),
+        })
+    }
+
     /// Plans one saved-session archive lifecycle operation for the persistence worker.
     #[allow(
         dead_code,
@@ -73,6 +102,9 @@ impl RuntimeSessionService {
         &mut self,
         event: crate::runtime::PersistenceEvent,
     ) -> Result<crate::runtime::RuntimeTransition> {
+        let mut schedule_next_retention = false;
+        let mut queued_retention_rerun = false;
+        let mut render_overlay = true;
         let payload = match event {
             crate::runtime::PersistenceEvent::Completed {
                 target,
@@ -185,12 +217,74 @@ impl RuntimeSessionService {
                 })
                 .to_string()
             }
+            crate::runtime::PersistenceEvent::SavedSessionRetentionCompleted {
+                report,
+                schedule_next,
+            } => {
+                let rerun = self.persistence.finish_saved_session_retention();
+                if !report.deleted_conversation_ids.is_empty() {
+                    self.invalidate_agent_prompt_selector_extra_candidates();
+                    self.refresh_saved_session_overlay_after_retention()?;
+                }
+                schedule_next_retention = schedule_next && rerun.is_none();
+                if let Some(rerun_schedule_next) = rerun {
+                    self.queue_saved_session_retention_operation(
+                        current_unix_seconds(),
+                        schedule_next || rerun_schedule_next,
+                    )?;
+                    queued_retention_rerun = true;
+                }
+                render_overlay = !report.deleted_conversation_ids.is_empty();
+                serde_json::json!({
+                    "worker": "async-persistence",
+                    "target": "saved_session_retention",
+                    "state": if report.failures.is_empty() { "completed" } else { "partial" },
+                    "deleted": report.deleted_conversation_ids.len(),
+                    "failures": report.failures.len(),
+                })
+                .to_string()
+            }
+            crate::runtime::PersistenceEvent::SavedSessionRetentionFailed {
+                error,
+                schedule_next,
+            } => {
+                let rerun = self.persistence.finish_saved_session_retention();
+                schedule_next_retention = schedule_next && rerun.is_none();
+                if let Some(rerun_schedule_next) = rerun {
+                    self.queue_saved_session_retention_operation(
+                        current_unix_seconds(),
+                        schedule_next || rerun_schedule_next,
+                    )?;
+                    queued_retention_rerun = true;
+                }
+                render_overlay = false;
+                serde_json::json!({
+                    "worker": "async-persistence",
+                    "target": "saved_session_retention",
+                    "state": "failed",
+                    "error": error,
+                })
+                .to_string()
+            }
         };
         self.append_runtime_diagnostic_event(payload)?;
-        Ok(self.runtime_transition_with_render(
+        let mut transition = self.runtime_transition_with_render(
             true,
-            Some(crate::runtime::RenderInvalidationReason::Overlay),
-        ))
+            render_overlay.then_some(crate::runtime::RenderInvalidationReason::Overlay),
+        );
+        if schedule_next_retention {
+            transition
+                .side_effects
+                .push(saved_session_retention_schedule_effect(
+                    current_unix_seconds(),
+                ));
+        }
+        if queued_retention_rerun {
+            transition
+                .side_effects
+                .extend(self.drain_transcript_persistence_transition().side_effects);
+        }
+        Ok(transition)
     }
 
     /// Refreshes an open saved-session browser after one archive lifecycle settlement.
@@ -212,6 +306,16 @@ impl RuntimeSessionService {
             operation
                 .map(|operation| format!("{} completed for {conversation_id}", operation.as_str()))
         }));
+        self.replace_active_saved_session_browser(source, browser);
+        Ok(())
+    }
+
+    /// Refreshes an open active-session browser after retention removes rows.
+    fn refresh_saved_session_overlay_after_retention(&mut self) -> Result<()> {
+        let Some(source) = self.active_saved_session_browser_source() else {
+            return Ok(());
+        };
+        let (source, browser) = self.refresh_saved_session_browser_preserving(&source, None)?;
         self.replace_active_saved_session_browser(source, browser);
         Ok(())
     }
@@ -490,5 +594,23 @@ impl RuntimeSessionService {
     pub fn delete_session_memory(&mut self, id: &str) -> Result<bool> {
         self.require_live()?;
         Ok(self.integration.session_memory_mut().delete(id))
+    }
+}
+
+/// Builds the next daily active saved-session retention timer effect.
+fn saved_session_retention_schedule_effect(
+    now_unix_seconds: u64,
+) -> crate::runtime::RuntimeSideEffect {
+    const RETENTION_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
+    let delay_ms = RETENTION_INTERVAL_SECONDS.saturating_mul(1_000);
+    crate::runtime::RuntimeSideEffect::ScheduleTimer {
+        key: crate::runtime::RuntimeTimerKey::new(
+            crate::runtime::RuntimeTimerKind::SavedSessionRetention,
+            "saved-sessions",
+            now_unix_seconds
+                .saturating_mul(1_000)
+                .saturating_add(delay_ms),
+        ),
+        delay_ms,
     }
 }

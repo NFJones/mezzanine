@@ -65,6 +65,7 @@ impl RuntimeSessionService {
                 .deferred_transcript_next_sequence(&conversation_id)
                 .map(Ok)
                 .unwrap_or_else(|| next_transcript_sequence(&store, &conversation_id))?;
+            let first_persistence = first_sequence == 1;
             let entries = self.runtime_transcript_entries_for_execution(
                 &conversation_id,
                 first_sequence,
@@ -84,6 +85,9 @@ impl RuntimeSessionService {
                     store,
                     entries: entries.clone(),
                 });
+            if first_persistence {
+                self.queue_saved_session_retention_operation(created_at_unix_seconds, false)?;
+            }
             entries
         } else {
             let first_sequence = next_transcript_sequence(&store, &conversation_id)?;
@@ -186,6 +190,7 @@ impl RuntimeSessionService {
         } else {
             next_transcript_sequence(&store, &turn.conversation_id)?
         };
+        let first_persistence = first_sequence == 1;
         let entry = TranscriptEntry {
             conversation_id: turn.conversation_id.clone(),
             sequence: first_sequence,
@@ -213,6 +218,9 @@ impl RuntimeSessionService {
                     store,
                     entries: vec![entry],
                 });
+            if first_persistence {
+                self.queue_saved_session_retention_operation(created_at_unix_seconds, false)?;
+            }
         } else {
             store.append_many(&[entry])?;
         }

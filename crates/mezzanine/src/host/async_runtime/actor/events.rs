@@ -460,6 +460,27 @@ impl AsyncRuntimeSessionActor {
                     side_effects,
                 })
             }
+            RuntimeTimerKind::SavedSessionRetention => {
+                if self.timers.saved_session_retention.as_ref() != Some(&timer.key) {
+                    self.record_ignored_timer_event();
+                    return Ok(RuntimeTransition::default());
+                }
+                self.timers.saved_session_retention = None;
+                let mut transition = self
+                    .service
+                    .queue_saved_session_retention_operation(timer.now_ms / 1_000, true)?;
+                transition.side_effects.extend(
+                    self.service
+                        .drain_transcript_persistence_transition()
+                        .side_effects,
+                );
+                if !transition.applied {
+                    transition
+                        .side_effects
+                        .extend(self.saved_session_retention_timer_side_effects(timer.now_ms));
+                }
+                Ok(transition)
+            }
             RuntimeTimerKind::ProviderPoll => {
                 if self.timers.provider_poll.as_ref() != Some(&timer.key) {
                     self.record_ignored_timer_event();

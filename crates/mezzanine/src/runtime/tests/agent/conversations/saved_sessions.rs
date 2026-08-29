@@ -3,6 +3,75 @@
 use super::*;
 use crate::runtime::{PersistenceEvent, SessionArchiveOperation};
 
+/// Verifies retention work is duplicate-suppressed while pending, deferred
+/// requests rerun after total failure, and partial reports settle without an
+/// overlay render when no conversation was deleted.
+#[test]
+fn runtime_saved_session_retention_settlement_preserves_deferred_work() {
+    let root = temp_root("runtime-saved-session-retention-settlement");
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(store);
+
+    assert!(
+        service
+            .queue_saved_session_retention_operation(100, false)
+            .unwrap()
+            .applied
+    );
+    assert!(
+        !service
+            .queue_saved_session_retention_operation(101, true)
+            .unwrap()
+            .applied
+    );
+    let initial = service
+        .drain_transcript_persistence_transition()
+        .side_effects;
+    assert!(matches!(
+        initial.as_slice(),
+        [RuntimeSideEffect::PersistSavedSessionRetention {
+            now_unix_seconds: 100,
+            schedule_next: false,
+            ..
+        }]
+    ));
+
+    let rerun = service
+        .apply_persistence_transition(PersistenceEvent::SavedSessionRetentionFailed {
+            error: "catalog unavailable".to_string(),
+            schedule_next: false,
+        })
+        .unwrap();
+    assert!(matches!(
+        rerun.side_effects.as_slice(),
+        [RuntimeSideEffect::PersistSavedSessionRetention {
+            schedule_next: true,
+            ..
+        }]
+    ));
+
+    let partial = service
+        .apply_persistence_transition(PersistenceEvent::SavedSessionRetentionCompleted {
+            report: crate::storage::transcript::SavedSessionRetentionReport {
+                deleted_conversation_ids: Vec::new(),
+                failures: vec![crate::storage::transcript::SavedSessionRetentionFailure {
+                    conversation_id: "failed-retention".to_string(),
+                    error: "conversation lock unavailable".to_string(),
+                }],
+            },
+            schedule_next: true,
+        })
+        .unwrap();
+    assert!(matches!(
+        partial.side_effects.as_slice(),
+        [RuntimeSideEffect::ScheduleTimer { key, delay_ms }]
+            if key.kind == crate::runtime::RuntimeTimerKind::SavedSessionRetention
+                && *delay_ms == 24 * 60 * 60 * 1_000
+    ));
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies archive planning rejects live durable bindings and suppresses
 /// duplicate lifecycle work until the persistence worker settles it.
 #[test]

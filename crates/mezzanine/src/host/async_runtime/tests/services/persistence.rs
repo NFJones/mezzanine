@@ -696,3 +696,122 @@ async fn async_persistence_side_effect_service_archives_saved_sessions() {
     }));
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// Verifies actor startup runs retention only after live durable bindings are
+/// available, protects those conversations, and schedules the next daily pass.
+#[tokio::test(flavor = "current_thread")]
+async fn async_persistence_side_effect_service_enforces_saved_session_retention() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-session-retention-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let mut store = AgentTranscriptStore::new(root.clone());
+    store
+        .set_saved_session_retention_policy(
+            crate::storage::transcript::SavedSessionRetentionPolicy {
+                max_active_sessions: 10,
+                retention_days: 1,
+            },
+        )
+        .unwrap();
+    for conversation_id in ["protected-old", "expired-old"] {
+        store
+            .append(&mez_agent::transcript::TranscriptEntry {
+                conversation_id: conversation_id.to_string(),
+                sequence: 1,
+                created_at_unix_seconds: 1,
+                role: mez_agent::transcript::TranscriptRole::User,
+                turn_id: format!("turn-{conversation_id}"),
+                agent_id: "agent-retention".to_string(),
+                pane_id: "%9".to_string(),
+                content: "old retained session".to_string(),
+            })
+            .unwrap();
+    }
+    let mut service = test_service_with_event_log();
+    service.set_agent_transcript_store(store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "protected-old", 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let report = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 2,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+            },
+            |polls, _| polls >= 2,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.drained, 1);
+        assert_eq!(report.completed, 1);
+        assert_eq!(report.failed, 0);
+        assert!(store.saved_session("protected-old").unwrap().is_some());
+        assert!(store.saved_session("expired-old").unwrap().is_none());
+        let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        let timer_key = match timers.as_slice() {
+            [RuntimeSideEffect::ScheduleTimer { key, delay_ms }]
+                if key.kind == RuntimeTimerKind::SavedSessionRetention
+                    && *delay_ms == 24 * 60 * 60 * 1_000 =>
+            {
+                key.clone()
+            }
+            _ => panic!("missing daily retention timer: {timers:?}"),
+        };
+        let mut timer_batch = RuntimeEventBatch::new();
+        timer_batch.push(RuntimeEvent::Timer(TimerEvent {
+            now_ms: timer_key.generation,
+            key: timer_key,
+        }));
+        let timer_report = handle.submit_runtime_events(timer_batch).await.unwrap();
+        assert_eq!(timer_report.applied, 1);
+        let periodic = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 2,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+            },
+            |polls, _| polls >= 2,
+        )
+        .await
+        .unwrap();
+        assert_eq!(periodic.drained, 1);
+        assert_eq!(periodic.completed, 1);
+        assert_eq!(periodic.failed, 0);
+        assert!(matches!(
+            handle.drain_timer_side_effects(8).await.unwrap().as_slice(),
+            [RuntimeSideEffect::ScheduleTimer { key, delay_ms }]
+                if key.kind == RuntimeTimerKind::SavedSessionRetention
+                    && *delay_ms == 24 * 60 * 60 * 1_000
+        ));
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    let events = exit
+        .service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::AllPrimaries);
+    assert!(events.iter().any(|event| {
+        event
+            .payload
+            .contains(r#""target":"saved_session_retention""#)
+            && event.payload.contains(r#""deleted":1"#)
+    }));
+    let _ = std::fs::remove_dir_all(root);
+}

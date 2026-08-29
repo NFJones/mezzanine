@@ -390,8 +390,16 @@ impl RuntimeSessionService {
             let terminal_emoji_width = runtime_terminal_emoji_width_from_config(&structured)?;
             let terminal_shell_output_preview_lines =
                 runtime_terminal_shell_output_preview_lines_from_config(&structured)?;
+            let retention_tightened = self.persistence.transcript_store().is_some_and(|store| {
+                let previous = store.saved_session_retention_policy();
+                saved_session_retention.max_active_sessions < previous.max_active_sessions
+                    || saved_session_retention.retention_days < previous.retention_days
+            });
             if let Some(store) = self.persistence.transcript_store_mut() {
                 store.set_saved_session_retention_policy(saved_session_retention)?;
+            }
+            if retention_tightened && self.persistence.transcript_uses_adapter() {
+                self.queue_saved_session_retention_operation(current_unix_seconds(), false)?;
             }
             self.apply_process_terminal_settings(
                 terminal_history_limit,

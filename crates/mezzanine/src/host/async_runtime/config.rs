@@ -401,6 +401,7 @@ pub(super) struct RuntimeTimerTracker {
     pub(super) synchronized_output: HashMap<String, RuntimeTimerKey>,
     pub(super) next_pane_pipe_health_generation: u64,
     pub(super) idle_cleanup: Option<RuntimeTimerKey>,
+    pub(super) saved_session_retention: Option<RuntimeTimerKey>,
 }
 
 /// Carries Async Runtime Session Actor state for this subsystem.

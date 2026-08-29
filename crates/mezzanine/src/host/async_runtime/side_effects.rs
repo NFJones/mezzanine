@@ -979,6 +979,37 @@ where
                         ));
                     }
                 },
+                RuntimeSideEffect::PersistSavedSessionRetention {
+                    store,
+                    now_unix_seconds,
+                    protected_conversation_ids,
+                    schedule_next,
+                } => match persist_saved_session_retention(
+                    store,
+                    now_unix_seconds,
+                    protected_conversation_ids,
+                )
+                .await
+                {
+                    Ok(retention_report) => {
+                        report.completed = report.completed.saturating_add(1);
+                        batch.push(RuntimeEvent::Persistence(
+                            PersistenceEvent::SavedSessionRetentionCompleted {
+                                report: retention_report,
+                                schedule_next,
+                            },
+                        ));
+                    }
+                    Err(error) => {
+                        report.failed = report.failed.saturating_add(1);
+                        batch.push(RuntimeEvent::Persistence(
+                            PersistenceEvent::SavedSessionRetentionFailed {
+                                error: error.message().to_string(),
+                                schedule_next,
+                            },
+                        ));
+                    }
+                },
                 RuntimeSideEffect::PersistTokenUsage { store, event } => {
                     let path = store.path().to_path_buf();
                     match persist_token_usage_event(store, event).await {
@@ -1779,6 +1810,23 @@ async fn persist_session_archive_operation(
     .await
     .map_err(|error| {
         MezError::invalid_state(format!("session archive worker join failed: {error}"))
+    })?
+}
+
+/// Enforces active saved-session retention on the blocking persistence pool.
+async fn persist_saved_session_retention(
+    store: AgentTranscriptStore,
+    now_unix_seconds: u64,
+    protected_conversation_ids: std::collections::BTreeSet<String>,
+) -> Result<crate::storage::transcript::SavedSessionRetentionReport> {
+    tokio::task::spawn_blocking(move || {
+        store.enforce_saved_session_retention(now_unix_seconds, &protected_conversation_ids)
+    })
+    .await
+    .map_err(|error| {
+        MezError::invalid_state(format!(
+            "saved-session retention worker join failed: {error}"
+        ))
     })?
 }
 
