@@ -3872,7 +3872,9 @@ and request `text/event-stream`, MUST accumulate content and indexed tool-call
 deltas until `[DONE]` or a non-null finish reason, and MUST validate MAAP only
 after stream finalization. Invalid JSON, provider error events, empty streams,
 and streams without a terminal condition MUST fail as provider compatibility
-errors. Mezzanine MUST NOT silently retry such failures as unary requests.
+errors. Mezzanine MAY retry these failures through its bounded provider retry
+policy using the same streaming request, but MUST NOT silently retry them as
+unary requests.
 For Anthropic profiles, `provider_options.prompt_caching` MAY be set to
 `enabled`/`true` or `disabled`/`false` to control Anthropic prompt-cache
 `cache_control` request markers. It MUST default to enabled. When enabled and a

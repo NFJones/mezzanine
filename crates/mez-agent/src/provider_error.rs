@@ -208,6 +208,7 @@ pub fn classify_provider_error_retry(
         || message.contains("provider HTTP response read failed")
         || message.contains("provider HTTP response read stalled")
         || message.contains("provider HTTP timeout phase=")
+        || message.contains("provider stream response did not contain SSE data events")
         || provider_error_invites_retry(message, provider_failure_json)
     {
         ProviderErrorRetryClass::RetryableTransport
@@ -508,6 +509,20 @@ mod tests {
             classify_provider_error_retry(
                 ProviderErrorKind::InvalidState,
                 "provider HTTP timeout phase=total limit_ms=100 while waiting for provider response body progress",
+                None,
+            ),
+            ProviderErrorRetryClass::RetryableTransport
+        );
+    }
+
+    /// Verifies an otherwise successful streaming response with no SSE data
+    /// events is retried through the bounded provider transport recovery path.
+    #[test]
+    fn empty_sse_streams_are_retryable_transport_failures() {
+        assert_eq!(
+            classify_provider_error_retry(
+                ProviderErrorKind::InvalidState,
+                "provider stream response did not contain SSE data events",
                 None,
             ),
             ProviderErrorRetryClass::RetryableTransport
