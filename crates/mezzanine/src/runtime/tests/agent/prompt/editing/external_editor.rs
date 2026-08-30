@@ -127,6 +127,139 @@ fn runtime_prompt_editor_binding_restores_changed_text_without_submitting() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies native-mode prompt editing can launch from an unmanaged Bash pane.
+///
+/// Native mode deliberately leaves the user's Bash process without Mezzanine's
+/// private receiver. The editor may use the ordinary POSIX-compatible wrapper
+/// only after readiness and draft tracking prove that generated input cannot be
+/// appended to a hidden user command.
+#[test]
+fn runtime_prompt_editor_native_bash_does_not_require_private_receiver() {
+    let Some(bash_path) = bash_path_for_tests() else {
+        eprintln!("skipping native Bash editor regression because bash is unavailable");
+        return;
+    };
+    let root = temp_root("prompt-editor-native-bash");
+    let socket_path = root.join("runtime/default.sock");
+    let mut service = RuntimeServiceFixture::new()
+        .control_socket(&socket_path)
+        .build();
+    service.session.shell = ResolvedShell::new(bash_path, ShellSource::ShellEnv).into();
+    let primary = service
+        .attach_primary("primary", true, Size::new(40, 16).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "native-bash-prompt-editor-test".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nshell_mode = \"native\"\n[external_editor]\ncommand = [\"/bin/sh\", \"-c\", \"exit 0\", \"{file}\"]\nfallback = []\n"
+                .to_string(),
+        }])
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.reload_agent_prompt_history_for_pane("%1").unwrap();
+
+    let identities = start_prompt_editor(&mut service, &primary);
+
+    assert!(service.external_editor_session_is_active("%1"));
+    assert!(service.bash_receiver_token_for_pane("%1").is_none());
+    complete_prompt_editor(&mut service, &root, &identities, b"edited in bash\n", 0);
+    assert_eq!(
+        service.agent_prompt_inputs_for_tests()["%1"]
+            .prompt
+            .buffer
+            .line(),
+        "edited in bash"
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a prompt-candidate native Bash pane can run the editor-owned
+/// readiness probe without a private receiver and then launch the editor.
+#[test]
+fn runtime_prompt_editor_native_bash_resumes_after_readiness_probe() {
+    let Some(bash_path) = bash_path_for_tests() else {
+        eprintln!("skipping native Bash editor readiness regression because bash is unavailable");
+        return;
+    };
+    let root = temp_root("prompt-editor-native-bash-readiness");
+    let socket_path = root.join("runtime/default.sock");
+    let mut service = RuntimeServiceFixture::new()
+        .control_socket(&socket_path)
+        .build();
+    service.session.shell = ResolvedShell::new(bash_path, ShellSource::ShellEnv).into();
+    let primary = service
+        .attach_primary("primary", true, Size::new(40, 16).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service.set_pane_readiness("%1", PaneReadinessState::PromptCandidate);
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "native-bash-prompt-editor-readiness-test".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nshell_mode = \"native\"\n[external_editor]\ncommand = [\"/bin/sh\", \"-c\", \"exit 0\", \"{file}\"]\nfallback = []\n"
+                .to_string(),
+        }])
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.reload_agent_prompt_history_for_pane("%1").unwrap();
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ExecuteMux(
+                    MuxAction::EditAgentPrompt,
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(report.mux_actions_applied, 1);
+    let (marker, turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::AgentPromptEditorReadinessProbe { .. }
+            )
+            .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("native Bash prompt candidate should dispatch a readiness probe");
+
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, &turn_id, "mez-ui", "%1")
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", &marker, &turn_id, "mez-ui", "%1", 0)
+        .unwrap();
+
+    assert!(service.external_editor_session_is_active("%1"));
+    assert!(service.bash_receiver_token_for_pane("%1").is_none());
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies a prompt-candidate pane is certified before the external editor
 /// wrapper is injected and that the original binding resumes automatically.
 #[test]

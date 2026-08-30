@@ -54,7 +54,8 @@ impl RuntimeSessionService {
                 probe_command,
             )?,
         );
-        let transaction_input = transaction.render_for_classification_input(classification);
+        let transaction_input =
+            self.render_external_editor_shell_input(pane_id, &transaction, classification);
         self.require_generated_shell_input(&transaction_input)?;
         let receiver_payload = (!transaction_input.receiver_payload.is_empty()).then(|| {
             mez_mux::process::ShellInputDelivery::receiver_acknowledged(
