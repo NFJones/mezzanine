@@ -779,6 +779,87 @@ fn attached_terminal_client_step_forwards_raw_input_when_primary_prompt_is_activ
     );
 }
 
+/// Verifies an external-editor takeover receives terminal bytes opaquely and
+/// suppresses the status row that normally belongs to Mezzanine. Prefix keys,
+/// mouse reports, and editor escape sequences must reach the editor unchanged,
+/// while no Mez-owned text may overwrite the editor's final screen row.
+#[test]
+fn attached_terminal_client_step_external_editor_takeover_is_opaque_and_statusless() {
+    let config = TerminalClientLoopConfig {
+        external_editor_takeover_active: true,
+        ..TerminalClientLoopConfig::default()
+    };
+    let view = RenderedClientView {
+        role: ClientViewRole::Primary,
+        authoritative_size: Size::new(12, 2).unwrap(),
+        client_size: Size::new(12, 2).unwrap(),
+        lines: vec!["editor body ".to_string(), "editor last ".to_string()],
+        line_style_spans: vec![Vec::new(), Vec::new()],
+        selection: None,
+        requires_client_scroll: false,
+        viewport_row: 0,
+        viewport_column: 0,
+        cursor_row: 1,
+        cursor_column: 6,
+        cursor_visible: true,
+        cursor_style: TerminalCursorStyle::Block,
+        cursor_blink: false,
+        cursor_blink_interval_ms: 500,
+        application_keypad: false,
+        bracketed_paste: false,
+        focus_events: false,
+        alternate_screen: true,
+        host_mouse_reporting: false,
+        animation_refresh_interval_ms: 0,
+        ui_theme: UiTheme::default(),
+        agent_prompt_region: None,
+        primary_prompt_active: false,
+        readline_input_active: false,
+    };
+    let readiness = vec![
+        AttachedTerminalFdReadiness {
+            role: AttachedTerminalFdRole::Input,
+            fd: 0,
+            interest: TerminalFdInterest::read(),
+            readable: true,
+            writable: false,
+            hangup: false,
+            error: false,
+        },
+        AttachedTerminalFdReadiness {
+            role: AttachedTerminalFdRole::Output,
+            fd: 1,
+            interest: TerminalFdInterest::write(),
+            readable: false,
+            writable: true,
+            hangup: false,
+            error: false,
+        },
+    ];
+    let status = ClientStatusLine {
+        kind: ClientStatusKind::Plain,
+        text: "mez status".to_string(),
+    };
+
+    let plan = plan_attached_terminal_client_step(
+        &readiness,
+        Some(b"\x01%\x1b[<0;2;1M"),
+        Some(&view),
+        Some(&status),
+        &config,
+    )
+    .unwrap();
+
+    assert_eq!(
+        plan.actions,
+        vec![TerminalClientLoopAction::ForwardToPane(
+            b"\x01%\x1b[<0;2;1M".to_vec()
+        )]
+    );
+    assert_eq!(plan.output_lines, ["editor body ", "editor last "]);
+    assert!(plan.output_lines.iter().all(|line| !line.contains("mez")));
+}
+
 /// Verifies attached terminal client step routes batched prefix command prompt.
 ///
 /// This regression scenario documents the behavior being protected so a

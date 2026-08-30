@@ -2998,7 +2998,12 @@ strings. Each candidate MUST contain a non-empty executable, MUST contain only
 strings without NUL bytes, and MAY contain `{file}` at most once. Unsupported
 brace interpolation MUST be rejected. If `{file}` is absent, the runtime MUST
 append the private draft path. Fallbacks MUST be attempted only after lookup or
-spawn failure; a started editor's nonzero exit MUST end that edit session.
+spawn failure; a started editor's nonzero exit MUST end that edit session. While
+an editor session is active, the editor MUST exclusively own the initiating
+client's complete terminal: Mezzanine frames, prompts, overlays, and status rows
+MUST NOT be composed over it, terminal input MUST be forwarded without mux-key
+classification, and editor settlement MUST restore the Mezzanine presentation
+with a full redraw.
 
 The `76 -> 77` migration MUST replace each `providers.<name>.models` string
 array with a table of model records. Every migrated record MUST preserve its

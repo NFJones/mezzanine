@@ -84,6 +84,91 @@ fn start_prompt_editor(
     editor_transaction(service)
 }
 
+/// Verifies an active prompt editor replaces the complete attached terminal,
+/// uses the initiating client's full geometry, and excludes every Mez-owned
+/// frame and prompt surface until the lease settles.
+#[test]
+fn runtime_prompt_editor_takes_over_complete_terminal_projection() {
+    let (mut service, primary, root) = prompt_editor_fixture("prompt-editor-terminal-takeover");
+    service
+        .apply_attached_agent_prompt_input_for_pane(&primary, "%1", b"mez prompt must be hidden")
+        .unwrap();
+    let _identities = start_prompt_editor(&mut service, &primary);
+    let takeover_size = Size::new(40, 16).unwrap();
+    service
+        .process_pane_screen_mut("%1")
+        .unwrap()
+        .feed(b"\x1b[2J\x1b[HEDITOR FULL SCREEN");
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(config.external_editor_takeover_active);
+    assert_eq!(
+        service
+            .tracked_pane_descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.pane_id.as_str() == "%1")
+            .unwrap()
+            .size,
+        takeover_size
+    );
+    assert_eq!(
+        service.process_pane_screen("%1").unwrap().size(),
+        takeover_size
+    );
+
+    let view = service
+        .render_client_view_for_client_with_resolved_config(
+            &primary,
+            ClientViewRole::Primary,
+            takeover_size,
+            &config,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(view.authoritative_size, takeover_size);
+    assert_eq!(view.client_size, takeover_size);
+    assert_eq!(view.lines.len(), usize::from(takeover_size.rows));
+    assert!(
+        view.lines[0].contains("EDITOR FULL SCREEN"),
+        "{:?}",
+        view.lines
+    );
+    assert!(view.agent_prompt_region.is_none());
+    assert!(!view.primary_prompt_active);
+    assert!(view.lines.iter().all(|line| !line.contains("mez prompt")));
+
+    service
+        .show_primary_error_overlay(vec!["error: stale Mez overlay".to_string()])
+        .unwrap();
+    let (_, transition) = service
+        .apply_attached_terminal_step_transition(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(
+                    b"editor input".to_vec(),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    let input_effects = pane_input_effects(&transition.side_effects);
+    assert_eq!(input_effects.len(), 1);
+    assert_eq!(
+        input_effects[0].pane_input_parts(),
+        ("%1", b"editor input".as_slice(), false)
+    );
+    assert!(service.primary_error_status_overlay().is_some());
+
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Completes the correlated shell transaction after replacing its private draft.
 fn complete_prompt_editor(
     service: &mut RuntimeSessionService,
@@ -1152,6 +1237,10 @@ fn runtime_issue_external_editor_applies_only_selected_text_field() {
     assert!(response.contains("editor_started=true"), "{response}");
     let identities = editor_transaction(&service);
     assert_eq!(
+        service.process_pane_screen("%1").unwrap().size(),
+        Size::new(40, 16).unwrap()
+    );
+    assert_eq!(
         fs::read_to_string(
             root.join("runtime/editor-sessions")
                 .join(&identities.2)
@@ -1160,8 +1249,34 @@ fn runtime_issue_external_editor_applies_only_selected_text_field() {
         .unwrap(),
         "body before"
     );
+    let _ = service.drain_deferred_effects_transition();
 
     complete_prompt_editor(&mut service, &root, &identities, b"body after\n", 0);
+    assert_eq!(
+        service.process_pane_screen("%1").unwrap().size(),
+        service
+            .pane_presentation_size_for(service.session().active_window().unwrap(), "%1")
+            .unwrap()
+    );
+    assert_eq!(
+        service
+            .tracked_pane_descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.pane_id.as_str() == "%1")
+            .unwrap()
+            .size,
+        service
+            .pane_process_size_for(service.session().active_window().unwrap(), "%1")
+            .unwrap()
+    );
+    let effects = service.drain_deferred_effects_transition().side_effects;
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::RenderClient {
+            reason: RenderInvalidationReason::FullRedraw,
+            ..
+        }
+    )));
     let updated = issues
         .get_issue(project, issue.id)
         .unwrap()

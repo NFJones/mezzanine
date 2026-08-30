@@ -255,6 +255,9 @@ impl RuntimeSessionService {
                 Err(MezError::invalid_state("session has no active window"))
             };
         };
+        if let Some(view) = self.external_editor_takeover_view(role, client_size, config, window) {
+            return Ok(Some(view));
+        }
         let active_pane_ids = window
             .panes()
             .iter()
@@ -333,6 +336,58 @@ impl RuntimeSessionService {
             self.overlay_primary_error_status(view, message);
         }
         Ok(view)
+    }
+
+    /// Projects an active external editor as the complete attached terminal.
+    ///
+    /// Editor output still passes through the pane terminal parser so local
+    /// and remote clients share one canonical screen model. Unlike ordinary
+    /// pane rendering, this projection adds no window frames, pane frames,
+    /// agent surfaces, prompts, copy state, selectors, notices, or status rows.
+    fn external_editor_takeover_view(
+        &self,
+        role: ClientViewRole,
+        client_size: Size,
+        config: &TerminalClientLoopConfig,
+        window: &mez_mux::layout::Window,
+    ) -> Option<RenderedClientView> {
+        let pane_id = window.active_pane().id.as_str();
+        if !self.external_editor_session_is_active(pane_id) {
+            return None;
+        }
+        let screen = self.process_pane_screen(pane_id)?;
+        let styled_lines = screen.presentation_visible_styled_lines();
+        let cursor = screen.presentation_cursor_state();
+        Some(RenderedClientView {
+            role,
+            authoritative_size: client_size,
+            client_size,
+            lines: styled_lines.iter().map(|line| line.text.clone()).collect(),
+            line_style_spans: styled_lines
+                .into_iter()
+                .map(|line| line.style_spans)
+                .collect(),
+            selection: None,
+            requires_client_scroll: false,
+            viewport_row: 0,
+            viewport_column: 0,
+            cursor_row: cursor.row,
+            cursor_column: cursor.column,
+            cursor_visible: screen.presentation_cursor_visible(),
+            cursor_style: config.cursor_style,
+            cursor_blink: config.cursor_blink,
+            cursor_blink_interval_ms: config.cursor_blink_interval_ms,
+            application_keypad: screen.application_keypad_enabled(),
+            bracketed_paste: screen.bracketed_paste_enabled(),
+            focus_events: screen.focus_events_enabled(),
+            alternate_screen: screen.presentation_alternate_screen_active(),
+            host_mouse_reporting: screen.application_mouse_enabled(),
+            animation_refresh_interval_ms: 0,
+            ui_theme: config.ui_theme.clone(),
+            agent_prompt_region: None,
+            primary_prompt_active: false,
+            readline_input_active: false,
+        })
     }
 
     /// Runs the overlay primary prompt input operation for this subsystem.
@@ -854,6 +909,7 @@ impl RuntimeSessionService {
         config.primary_display_overlay_active = self.presentation.primary_display_overlay.is_some();
         config.primary_prompt_active = self.presentation.primary_prompt_input.is_some()
             && self.presentation.primary_display_overlay.is_none();
+        config.external_editor_takeover_active = false;
         let frame_context = self.terminal_frame_context();
         config.mouse_border_cells = self.active_window_mouse_border_cells();
         config.mouse_window_frame_cells = self.active_window_mouse_frame_cells(&frame_context);
@@ -880,6 +936,8 @@ impl RuntimeSessionService {
         config.mouse_selection_autoscroll_position =
             active_mouse_selection_state.and_then(|state| state.autoscroll_position);
         if let Some(pane_id) = active_pane_id {
+            config.external_editor_takeover_active =
+                self.external_editor_session_is_active(pane_id.as_str());
             let process_surface_presented = self.presented_pane_surface(pane_id.as_str())
                 == crate::runtime::PaneSurfaceKind::Process;
             config.mouse_policy.copy_mode_active = self
@@ -910,6 +968,13 @@ impl RuntimeSessionService {
             } else {
                 true
             };
+            if config.external_editor_takeover_active {
+                config.mouse_policy.enabled = self
+                    .process_pane_screen(pane_id.as_str())
+                    .is_some_and(TerminalScreen::application_mouse_enabled);
+                config.primary_display_overlay_active = false;
+                config.primary_prompt_active = false;
+            }
         }
         Ok(config)
     }

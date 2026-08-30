@@ -175,6 +175,12 @@ pub struct TerminalClientLoopConfig {
     /// Input-only loop iterations use this actor-resolved interaction state so
     /// they can route bytes without composing a complete rendered view first.
     pub primary_prompt_active: bool,
+    /// Whether an external editor exclusively owns the attached terminal.
+    ///
+    /// Takeover mode suppresses Mezzanine status composition and forwards
+    /// terminal input opaquely so editor key sequences cannot be interpreted
+    /// as mux bindings before reaching the pane PTY.
+    pub external_editor_takeover_active: bool,
     /// Whether Mez-owned readline prompts may request enhanced keyboard input.
     pub enhanced_keyboard_reporting: bool,
     /// Stores the mouse border cells value for this data structure.
@@ -351,6 +357,7 @@ impl Default for TerminalClientLoopConfig {
             scrollback_copy_mode_active: false,
             primary_display_overlay_active: false,
             primary_prompt_active: false,
+            external_editor_takeover_active: false,
             enhanced_keyboard_reporting: false,
             mouse_border_cells: Vec::new(),
             mouse_window_frame_cells: Vec::new(),

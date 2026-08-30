@@ -25,7 +25,7 @@ use crate::runtime::render::{
 };
 use crate::runtime::{
     AgentShellVisibility, PaneReadinessState, RenderInvalidationReason,
-    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService,
+    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService, Size,
     current_unix_millis, runtime_pane_by_id, runtime_random_marker_token,
 };
 use crate::ui::readline::ReadlineInputDecoder;
@@ -264,6 +264,43 @@ impl RuntimeSessionService {
         self.external_editor.is_active(pane_id)
     }
 
+    /// Returns the initiating primary client's complete terminal geometry.
+    ///
+    /// An active editor owns the whole attached terminal rather than the
+    /// pane-content rectangle inside Mezzanine's frames. Detach settlement
+    /// removes the lease before its client descriptor can become stale.
+    pub(crate) fn external_editor_terminal_size(&self, pane_id: &str) -> Option<Size> {
+        let initiating_client_id = &self.external_editor.active(pane_id)?.initiating_client_id;
+        let terminal = self
+            .session
+            .clients()
+            .iter()
+            .find(|client| client.id.as_str() == initiating_client_id)
+            .and_then(|client| client.terminal.as_ref())?;
+        Size::new(terminal.columns, terminal.rows).ok()
+    }
+
+    /// Restores normal pane geometry and invalidates every projection after takeover.
+    ///
+    /// This target-neutral boundary runs as soon as an editor lease is consumed,
+    /// so prompt, issue, memory, and context-document editors all return from the
+    /// full-terminal screen through the same resize and redraw lifecycle.
+    fn restore_external_editor_terminal_presentation(&mut self, pane_id: &str) -> Result<()> {
+        let Some(window_id) = self
+            .find_pane_descriptor(pane_id)
+            .map(|descriptor| descriptor.window_id.to_string())
+        else {
+            return Ok(());
+        };
+        self.sync_tracked_pty_sizes()?;
+        let render_effects = self.render_effects_for_clients_projecting_windows(
+            &[window_id],
+            RenderInvalidationReason::FullRedraw,
+        );
+        self.presentation.defer_render_effects(render_effects);
+        Ok(())
+    }
+
     /// Arms one completion-time recovery persistence failure for integration tests.
     #[cfg(test)]
     pub(crate) fn fail_next_external_editor_completion_recovery_write_for_tests(&mut self) {
@@ -332,9 +369,6 @@ impl RuntimeSessionService {
         let Some(session) = self.external_editor.abort(pane_id) else {
             return Ok(false);
         };
-        let window_id = self
-            .find_pane_descriptor(pane_id)
-            .map(|descriptor| descriptor.window_id.to_string());
         self.remove_running_shell_transaction(&session.marker);
         self.clear_shell_transaction_protocol_state(&session.marker);
         let _ = write_recovery_manifest(&session.artifacts, &session.recovery_manifest);
@@ -355,14 +389,7 @@ impl RuntimeSessionService {
         self.settle_agent_prompt_external_edit_abort(&completion)?;
         if self.find_pane_descriptor(pane_id).is_some() {
             self.set_pane_readiness(pane_id, PaneReadinessState::PromptCandidate);
-            self.sync_tracked_pty_sizes()?;
-            if let Some(window_id) = window_id {
-                let render_effects = self.render_effects_for_clients_projecting_windows(
-                    &[window_id],
-                    RenderInvalidationReason::FullRedraw,
-                );
-                self.presentation.defer_render_effects(render_effects);
-            }
+            self.restore_external_editor_terminal_presentation(pane_id)?;
         }
         Ok(true)
     }
@@ -420,6 +447,7 @@ impl RuntimeSessionService {
         else {
             return Ok(0);
         };
+        self.restore_external_editor_terminal_presentation(pane_id)?;
         let mut recovery_manifest = active_manifest.clone();
         let validation = super::artifacts::validate_external_editor_draft(
             &active_artifacts,

@@ -5305,6 +5305,9 @@ impl RuntimeSessionService {
         window: &mez_mux::layout::Window,
         pane_id: &str,
     ) -> Option<Size> {
+        if let Some(size) = self.external_editor_terminal_size(pane_id) {
+            return Some(size);
+        }
         let pane = window
             .panes()
             .iter()

@@ -45,7 +45,10 @@ prompt recognizes `/` slash commands, `$` skills, `#` macros, and `@` MCP
 servers. `Ctrl+V` pastes host clipboard text into the visible agent prompt
 without submitting it. External editing is also non-submitting: after a
 successful editor close, the edited text returns to the in-pane prompt for
-review and normal submission.
+review and normal submission. While the editor is open, it exclusively owns
+the complete attached terminal: Mez frames, prompts, overlays, and status rows
+are hidden, the editor receives raw terminal input, and closing it restores a
+full Mez redraw.
 
 Changed drafts that cannot be safely applied after an editor failure,
 interruption, restart, or conflict remain in private host-owned recovery

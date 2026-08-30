@@ -475,6 +475,33 @@ impl RuntimeSessionService {
             client_clipboard_write: None,
         };
 
+        let editor_pane_id = self
+            .active_pane_id()
+            .ok()
+            .filter(|pane_id| self.external_editor_session_is_active(pane_id));
+        if let Some(pane_id) = editor_pane_id {
+            if !self.external_editor_session_owned_by(&pane_id, primary_client_id) {
+                return Ok((report, pane_input_effects));
+            }
+            for action in &step.actions {
+                let TerminalClientLoopAction::ForwardToPane(input) = action else {
+                    continue;
+                };
+                self.clear_copy_state_for_surface(
+                    &pane_id,
+                    crate::runtime::PaneSurfaceKind::Process,
+                );
+                if defer_pane_io {
+                    pane_input_effects
+                        .push(self.deferred_pane_input_effect(pane_id.clone(), input.clone()));
+                } else {
+                    self.write_runtime_pane_input(&pane_id, input)?;
+                }
+                report.forwarded_bytes = report.forwarded_bytes.saturating_add(input.len());
+            }
+            return Ok((report, pane_input_effects));
+        }
+
         if !step.actions.is_empty()
             && let Some(message) = self.presentation.primary_error_status_overlay.take()
         {
