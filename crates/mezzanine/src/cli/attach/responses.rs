@@ -445,6 +445,16 @@ pub(in crate::cli) fn terminal_step_response_output_modes(
         .and_then(|modes| modes.get("bracketed_paste"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    let focus_events = view
+        .get("output_modes")
+        .and_then(|modes| modes.get("focus_events"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let alternate_screen = view
+        .get("output_modes")
+        .and_then(|modes| modes.get("alternate_screen"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let host_mouse_reporting = view
         .get("output_modes")
         .and_then(|modes| modes.get("host_mouse_reporting"))
@@ -458,6 +468,8 @@ pub(in crate::cli) fn terminal_step_response_output_modes(
     Ok(Some(AttachedTerminalOutputModes {
         application_keypad,
         bracketed_paste,
+        focus_events,
+        alternate_screen,
         host_mouse_reporting,
         animation_refresh_interval_ms,
         cursor_style,

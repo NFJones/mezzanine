@@ -3214,6 +3214,75 @@ mod tests {
             );
             assert!(repaint_body.contains(r#""revision":2"#), "{repaint_body}");
 
+            let mut editor_modes = crate::runtime::RuntimeEventBatch::new();
+            editor_modes.push(crate::runtime::RuntimeEvent::Pane(
+                crate::runtime::PaneEvent::Output {
+                    pane_id: "%1".to_string(),
+                    bytes: b"\x1b[?1004h\x1b[?1049h".to_vec(),
+                },
+            ));
+            let report = output_handle
+                .submit_runtime_events(editor_modes)
+                .await
+                .unwrap();
+            assert_eq!(report.applied, 1);
+            let entered_modes = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("editor terminal modes should push an authoritative render update");
+            assert!(
+                entered_modes.contains(r#""method":"render/snapshot""#)
+                    || entered_modes.contains(r#""method":"render/delta""#),
+                "{entered_modes}"
+            );
+            assert!(entered_modes.contains(r#""revision":3"#), "{entered_modes}");
+            assert!(
+                entered_modes.contains(r#""focus_events":true"#),
+                "{entered_modes}"
+            );
+            assert!(
+                entered_modes.contains(r#""alternate_screen":true"#),
+                "{entered_modes}"
+            );
+
+            let mut restored_modes = crate::runtime::RuntimeEventBatch::new();
+            restored_modes.push(crate::runtime::RuntimeEvent::Pane(
+                crate::runtime::PaneEvent::Output {
+                    pane_id: "%1".to_string(),
+                    bytes: b"\x1b[?1049l\x1b[?1004l".to_vec(),
+                },
+            ));
+            let report = output_handle
+                .submit_runtime_events(restored_modes)
+                .await
+                .unwrap();
+            assert_eq!(report.applied, 1);
+            let restored_modes = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("editor terminal-mode restoration should push a render update");
+            assert!(
+                restored_modes.contains(r#""method":"render/snapshot""#)
+                    || restored_modes.contains(r#""method":"render/delta""#),
+                "{restored_modes}"
+            );
+            assert!(
+                restored_modes.contains(r#""revision":4"#),
+                "{restored_modes}"
+            );
+            assert!(
+                restored_modes.contains(r#""focus_events":false"#),
+                "{restored_modes}"
+            );
+            assert!(
+                restored_modes.contains(r#""alternate_screen":false"#),
+                "{restored_modes}"
+            );
+
             tokio::time::sleep(std::time::Duration::from_millis(900)).await;
 
             send.write_all(&encode_control_body(kill)).await.unwrap();

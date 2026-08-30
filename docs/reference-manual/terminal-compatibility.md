@@ -57,6 +57,13 @@ into normal scrollback or default agent context. Host bracketed paste, mouse,
 focus, application cursor, and keypad behavior follow the active pane mode
 where supported.
 
+External terminal editors use the same host-owned pane PTY for local Unix-socket
+and Iroh clients. While an editor owns the pane, the initiating primary's input,
+including prefix-like bytes and bracketed paste, is forwarded without Mez prompt
+or keybinding decoding; resize and editor-driven focus and alternate-screen modes
+are propagated and restored through both transports. Observers remain read-only,
+and editor draft paths and content are not added to transport metadata.
+
 The agent shell is a separate pane presentation surface whose prompt appears at
 the bottom of its pane. While it is visible, ordinary process input is captured
 by the agent prompt, but the retained process screen remains distinct and is

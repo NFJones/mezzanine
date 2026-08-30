@@ -1891,12 +1891,21 @@ mod iroh_tests {
                     "lines": ["stable", "before", "tail"],
                     "line_style_spans": [[], [], []],
                     "cursor": {"row": 1, "column": 6, "visible": true},
-                    "output_modes": {"application_keypad": false}
+                    "output_modes": {
+                        "application_keypad": false,
+                        "focus_events": false,
+                        "alternate_screen": false
+                    }
                 }
             }
         });
         let mut render_state = IrohRetainedRenderState::default();
-        parse_iroh_pushed_render_snapshot(&snapshot, &mut render_state).unwrap();
+        let initial = parse_iroh_pushed_render_snapshot(&snapshot, &mut render_state)
+            .unwrap()
+            .pushed_snapshot
+            .expect("snapshot should decode");
+        assert!(!initial.frame.modes.focus_events);
+        assert!(!initial.frame.modes.alternate_screen);
 
         let delta = serde_json::json!({
             "jsonrpc": "2.0",
@@ -1913,7 +1922,11 @@ mod iroh_tests {
                     "authoritative_size": {"columns": 80, "rows": 24},
                     "client_size": {"columns": 80, "rows": 24},
                     "cursor": {"row": 1, "column": 5, "visible": true},
-                    "output_modes": {"application_keypad": false}
+                    "output_modes": {
+                        "application_keypad": false,
+                        "focus_events": true,
+                        "alternate_screen": true
+                    }
                 },
                 "rows": [
                     {"index": 1, "line": "after", "style_spans": []}
@@ -1935,6 +1948,8 @@ mod iroh_tests {
         assert_eq!(pushed.revision, 2);
         assert_eq!(pushed.frame.lines, ["stable", "after", "tail"]);
         assert_eq!(pushed.frame.event_cutoff, Some(7));
+        assert!(pushed.frame.modes.focus_events);
+        assert!(pushed.frame.modes.alternate_screen);
         assert_eq!(render_state.revision, 2);
 
         let retained_before_error = render_state.clone();

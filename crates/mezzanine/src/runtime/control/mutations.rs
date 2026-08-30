@@ -663,6 +663,18 @@ impl RuntimeSessionService {
         }
         let terminal_config =
             self.terminal_client_loop_config(TerminalClientLoopConfig::default())?;
+        let editor_actions = if input.is_empty() {
+            None
+        } else {
+            let pane_id = self.active_pane_id()?;
+            self.external_editor_session_is_active(&pane_id).then(|| {
+                if self.external_editor_session_owned_by(&pane_id, primary_client_id) {
+                    vec![TerminalClientLoopAction::ForwardToPane(input.clone())]
+                } else {
+                    Vec::new()
+                }
+            })
+        };
         let prompt_active = if input.is_empty() {
             false
         } else {
@@ -673,7 +685,9 @@ impl RuntimeSessionService {
             )?
             .is_some_and(|view| view.primary_prompt_active)
         };
-        let actions = if prompt_active {
+        let actions = if let Some(actions) = editor_actions {
+            actions
+        } else if prompt_active {
             vec![TerminalClientLoopAction::ForwardToPane(input.clone())]
         } else {
             route_client_input_actions(&input, &terminal_config)?

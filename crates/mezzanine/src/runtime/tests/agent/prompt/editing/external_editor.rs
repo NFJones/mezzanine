@@ -484,3 +484,91 @@ fn runtime_prompt_editor_recovery_is_discovered_after_restart_without_auto_apply
     );
     let _ = fs::remove_dir_all(root);
 }
+
+/// Verifies the framed terminal-step path used by Iroh bypasses prefix,
+/// keybinding, and bracketed-paste decoding while the initiating primary owns
+/// an editor lease. The same request also carries authoritative resize state.
+#[test]
+fn runtime_prompt_editor_framed_input_forwards_exact_bytes_and_resize() {
+    let (mut service, primary, root) = prompt_editor_fixture("prompt-editor-framed-input");
+    service
+        .apply_attached_agent_prompt_input_for_pane(&primary, "%1", b"unchanged prompt")
+        .unwrap();
+    let start_request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "editor-start",
+        "method": "terminal/step",
+        "params": {
+            "idempotency_key": "editor-start",
+            "client_size": {"columns": 40, "rows": 16},
+            "render": false,
+            "input_bytes": [1, 101],
+        }
+    })
+    .to_string();
+    let start_response = service.dispatch_runtime_control_body(&start_request, &primary);
+    let start_response: serde_json::Value = serde_json::from_str(&start_response).unwrap();
+    assert!(start_response.get("error").is_none(), "{start_response}");
+    assert_eq!(
+        start_response["result"]["application"]["mux_actions_applied"],
+        1
+    );
+    assert_eq!(
+        start_response["result"]["application"]["full_redraw_required"],
+        true
+    );
+    let identities = editor_transaction(&service);
+    let input = vec![
+        0x01, b'e', 0x1b, b'[', b'2', b'0', b'0', b'~', b'p', b'a', b's', b't', b'e', 0x1b, b'[',
+        b'2', b'0', b'1', b'~',
+    ];
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "editor-input",
+        "method": "terminal/step",
+        "params": {
+            "idempotency_key": "editor-input",
+            "client_size": {"columns": 52, "rows": 18},
+            "render": false,
+            "input_bytes": input,
+        }
+    })
+    .to_string();
+
+    let response = service.dispatch_runtime_control_body(&request, &primary);
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert!(response.get("error").is_none(), "{response}");
+    assert_eq!(response["result"]["application"]["forwarded_bytes"], 19);
+    assert_eq!(response["result"]["application"]["mux_actions_applied"], 0);
+    assert_eq!(
+        response["result"]["application"]["agent_prompt_inputs_applied"],
+        0
+    );
+    assert_eq!(
+        service.session.authoritative_size,
+        Size::new(52, 18).unwrap()
+    );
+    assert!(service.external_editor_session_is_active("%1"));
+    assert_eq!(editor_transaction(&service), identities);
+    assert_eq!(
+        service.agent_prompt_inputs_for_tests()["%1"]
+            .prompt
+            .buffer
+            .line(),
+        "unchanged prompt"
+    );
+
+    complete_prompt_editor(&mut service, &root, &identities, b"remote edit\n", 0);
+    assert!(!service.external_editor_session_is_active("%1"));
+    assert_eq!(
+        service.agent_prompt_inputs_for_tests()["%1"]
+            .prompt
+            .buffer
+            .line(),
+        "remote edit"
+    );
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert_eq!(service.presented_pane_surface("%1"), PaneSurfaceKind::Agent);
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}

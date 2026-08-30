@@ -46,7 +46,7 @@ pub(crate) fn rendered_client_view_json(
         })
         .unwrap_or_else(|| "null".to_string());
     format!(
-        r#"{{"role":"{}","authoritative_size":{{"columns":{},"rows":{}}},"client_size":{{"columns":{},"rows":{}}},"requires_client_scroll":{},"viewport":{{"row":{},"column":{},"max_row":{},"max_column":{}}},"cursor":{{"row":{},"column":{},"visible":{},"style":"{}","blink":{},"blink_interval_ms":{}}},"output_modes":{{"application_keypad":{},"bracketed_paste":{},"host_mouse_reporting":{},"animation_refresh_interval_ms":{}}},"agent_prompt_region":{},"iroh_status_slot":{},"primary_prompt_active":{},"readline_input_active":{},"lines":[{}],"line_style_spans":{}}}"#,
+        r#"{{"role":"{}","authoritative_size":{{"columns":{},"rows":{}}},"client_size":{{"columns":{},"rows":{}}},"requires_client_scroll":{},"viewport":{{"row":{},"column":{},"max_row":{},"max_column":{}}},"cursor":{{"row":{},"column":{},"visible":{},"style":"{}","blink":{},"blink_interval_ms":{}}},"output_modes":{{"application_keypad":{},"bracketed_paste":{},"focus_events":{},"alternate_screen":{},"host_mouse_reporting":{},"animation_refresh_interval_ms":{}}},"agent_prompt_region":{},"iroh_status_slot":{},"primary_prompt_active":{},"readline_input_active":{},"lines":[{}],"line_style_spans":{}}}"#,
         client_view_role_name(view.role),
         view.authoritative_size.columns,
         view.authoritative_size.rows,
@@ -65,6 +65,8 @@ pub(crate) fn rendered_client_view_json(
         view.cursor_blink_interval_ms,
         view.application_keypad,
         view.bracketed_paste,
+        view.focus_events,
+        view.alternate_screen,
         view.host_mouse_reporting,
         view.animation_refresh_interval_ms,
         agent_prompt_region,
