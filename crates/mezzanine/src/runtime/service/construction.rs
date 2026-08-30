@@ -11,8 +11,8 @@ use super::{
 use crate::host::terminal::HostClipboard;
 use crate::runtime::{
     RuntimeAgentComponent, RuntimeAutoSizingConfig, RuntimeControlComponent,
-    RuntimeIntegrationComponent, RuntimePersistenceComponent, RuntimePresentationComponent,
-    RuntimeProcessComponent, RuntimeSessionComponent,
+    RuntimeExternalEditorComponent, RuntimeIntegrationComponent, RuntimePersistenceComponent,
+    RuntimePresentationComponent, RuntimeProcessComponent, RuntimeSessionComponent,
 };
 
 impl RuntimeSessionService {
@@ -139,6 +139,7 @@ impl RuntimeSessionService {
                 runtime_provider_registry_from_config(&Value::Object(serde_json::Map::new()))?,
                 builtin_subagent_profiles(),
             ),
+            external_editor: RuntimeExternalEditorComponent::default(),
             session: RuntimeSessionComponent::new(
                 session,
                 window_created_at_unix_seconds,

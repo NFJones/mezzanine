@@ -2093,7 +2093,9 @@ impl RuntimeSessionService {
     /// Returns the presentation surface selected by pane-local agent visibility.
     #[allow(dead_code)]
     pub(crate) fn presented_pane_surface(&self, pane_id: &str) -> PaneSurfaceKind {
-        if self
+        if self.external_editor_session_is_active(pane_id) {
+            PaneSurfaceKind::Process
+        } else if self
             .agent_shell_store()
             .get(pane_id)
             .is_some_and(|session| session.visibility != super::AgentShellVisibility::Hidden)
@@ -2260,6 +2262,26 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Option<&EnvironmentSignature> {
         self.process.pane_environment_signatures.get(pane_id)
+    }
+
+    /// Returns the pane process's effective PATH when it is available as UTF-8.
+    pub(crate) fn pane_environment_path(&self, pane_id: &str) -> Option<String> {
+        if let Some(path) = self
+            .process
+            .pane_environment_signatures
+            .get(pane_id)
+            .and_then(|signature| signature.path.clone())
+        {
+            return Some(path);
+        }
+        let primary_pid = self.primary_pid_for_live_pane_process(pane_id);
+        self.process
+            .pane_processes
+            .environment(pane_id)
+            .or_else(|| primary_pid.and_then(mez_mux::process::process_environment_for_pid))?
+            .into_iter()
+            .find(|entry| entry.key == b"PATH")
+            .and_then(|entry| String::from_utf8(entry.value).ok())
     }
 
     /// Returns the typed authority state for pane-relative provider work.
@@ -4010,6 +4032,7 @@ impl RuntimeSessionService {
                     format!(" action={action_id}")
                 }
                 RunningShellTransactionKind::FocusedShellHook
+                | RunningShellTransactionKind::ExternalEditor { .. }
                 | RunningShellTransactionKind::ReadinessProbe
                 | RunningShellTransactionKind::Bootstrap
                 | RunningShellTransactionKind::ShellIdentityProbe { .. }
@@ -4928,6 +4951,7 @@ impl RuntimeSessionService {
                 "pane removed from session layout",
             )?;
         }
+        self.abort_external_editor_session(pane_id);
         self.presentation.remove_completion_attention(pane_id);
         self.presentation.remove_agent_presentation_state(pane_id);
         self.discard_agent_loop_parent_projections_for_pane(pane_id);

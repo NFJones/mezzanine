@@ -971,6 +971,12 @@ impl RuntimeSessionService {
             return Ok(1);
         }
         self.release_agent_shell_transaction_payload_after_start(marker, pane_id)?;
+        if matches!(
+            transaction.kind,
+            RunningShellTransactionKind::ExternalEditor { .. }
+        ) {
+            self.release_shell_transaction_input_lease(marker);
+        }
         Ok(1)
     }
 
@@ -1006,6 +1012,12 @@ impl RuntimeSessionService {
             );
         }
         self.release_agent_shell_transaction_payload_after_start(marker, pane_id)?;
+        if matches!(
+            transaction.kind,
+            RunningShellTransactionKind::ExternalEditor { .. }
+        ) {
+            self.release_shell_transaction_input_lease(marker);
+        }
         Ok(1)
     }
 
@@ -1771,6 +1783,19 @@ impl RuntimeSessionService {
             .get(marker)
             .copied();
         self.clear_shell_transaction_protocol_state(marker);
+        if let RunningShellTransactionKind::ExternalEditor {
+            session_id,
+            completion_nonce,
+        } = transaction_ref.kind.clone()
+        {
+            return self.observe_external_editor_transaction_end(
+                pane_id,
+                &session_id,
+                &completion_nonce,
+                marker,
+                exit_code,
+            );
+        }
         if transaction_ref.kind == RunningShellTransactionKind::FocusedShellHook {
             return self.observe_focused_shell_hook_transaction_end(
                 output_pane_id,

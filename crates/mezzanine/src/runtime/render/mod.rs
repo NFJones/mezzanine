@@ -1480,6 +1480,11 @@ impl RuntimeSessionService {
         &self.presentation.settings.ui_theme
     }
 
+    /// Returns the structured blocking-editor command candidates.
+    pub(crate) fn external_editor_config(&self) -> &crate::runtime::RuntimeExternalEditorConfig {
+        &self.presentation.settings.external_editor
+    }
+
     /// Returns the configured mux key bindings.
     pub(crate) fn key_bindings(&self) -> &KeyBindings {
         &self.presentation.settings.key_bindings

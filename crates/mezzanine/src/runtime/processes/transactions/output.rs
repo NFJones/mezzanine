@@ -348,6 +348,7 @@ impl RuntimeSessionService {
                             &transaction.command,
                         )
                     }
+                    RunningShellTransactionKind::ExternalEditor { .. } => Vec::new(),
                     RunningShellTransactionKind::FocusedShellHook
                     | RunningShellTransactionKind::ReadinessProbe
                     | RunningShellTransactionKind::Bootstrap

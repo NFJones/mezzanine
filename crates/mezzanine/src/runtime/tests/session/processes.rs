@@ -2354,3 +2354,123 @@ fn runtime_terminal_features_progress_advertising_is_additive() {
         std::ffi::OsString::from("AP")
     );
 }
+
+/// Verifies a runtime-owned editor session leases one pane, presents the
+/// process surface, bypasses normal key classification, and accepts completion
+/// only through the transaction identities returned by the launch operation.
+/// The target-specific prompt adapter is deliberately outside this test: it
+/// consumes the retained completion in the dependent prompt-editing issue.
+#[test]
+fn runtime_external_editor_session_routes_input_and_retains_completion() {
+    let root = temp_root("external-editor-session");
+    let socket_path = root.join("runtime/default.sock");
+    let mut service = RuntimeServiceFixture::new()
+        .control_socket(&socket_path)
+        .build();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "external-editor-test".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nshell_mode = \"pane\"\n[external_editor]\ncommand = [\"/bin/sh\", \"-c\", \"exit 0\", \"{file}\"]\nfallback = []\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .ensure_agent_pane_screen("%1", &conversation_id, Size::new(80, 24).unwrap())
+        .unwrap();
+    assert_eq!(service.presented_pane_surface("%1"), PaneSurfaceKind::Agent);
+
+    let started = service
+        .start_external_editor_session(
+            &primary,
+            "%1",
+            crate::runtime::ExternalEditTarget::AgentPrompt,
+            "draft before editor\n".to_string(),
+        )
+        .unwrap();
+    assert!(service.external_editor_session_is_active("%1"));
+    assert_eq!(
+        service.presented_pane_surface("%1"),
+        PaneSurfaceKind::Process
+    );
+    assert!(
+        service
+            .start_external_editor_session(
+                &primary,
+                "%1",
+                crate::runtime::ExternalEditTarget::AgentPrompt,
+                String::new(),
+            )
+            .is_err()
+    );
+
+    let input = service
+        .apply_client_input_transition(&primary, b"\x01e")
+        .unwrap();
+    assert_eq!(input.side_effects.len(), 1);
+    assert!(matches!(
+        &input.side_effects[0],
+        RuntimeSideEffect::WritePaneInput { pane_id, bytes }
+            if pane_id == "%1" && bytes == b"\x01e"
+    ));
+
+    let turn_id = format!("external-editor-{}", started.session_id);
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_start("%1", &started.marker, &turn_id, "mez-ui", "%1",)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_end(
+                "%1",
+                &started.marker,
+                &turn_id,
+                "mez-ui",
+                "%1",
+                0,
+            )
+            .unwrap(),
+        1
+    );
+    assert!(!service.external_editor_session_is_active("%1"));
+    assert_eq!(service.presented_pane_surface("%1"), PaneSurfaceKind::Agent);
+
+    let completion = service
+        .take_external_editor_completion("%1", &started.session_id, &started.completion_nonce)
+        .unwrap();
+    assert_eq!(completion.pane_id, started.pane_id);
+    assert_eq!(completion.exit_code, 0);
+    assert_eq!(completion.original_content, "draft before editor\n");
+    assert_eq!(
+        fs::read_to_string(&completion.draft_path).unwrap(),
+        completion.original_content
+    );
+    assert!(matches!(
+        completion.target,
+        crate::runtime::ExternalEditTarget::AgentPrompt
+    ));
+    assert!(
+        service
+            .take_external_editor_completion("%1", &started.session_id, &started.completion_nonce,)
+            .is_none()
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}

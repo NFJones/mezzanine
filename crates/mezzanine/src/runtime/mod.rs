@@ -210,6 +210,8 @@ pub struct RuntimeSessionService {
     control: RuntimeControlComponent,
     /// Concrete config, security, provider, trust, and hook bindings.
     integration: RuntimeIntegrationComponent,
+    /// Pane-scoped external-editor leases, artifacts, and completions.
+    external_editor: RuntimeExternalEditorComponent,
     /// Canonical mux session and application lifecycle metadata.
     session: RuntimeSessionComponent,
 }
@@ -268,6 +270,16 @@ mod deferred;
 /// The nested module keeps socket-directory and pane-environment contracts out
 /// of the central runtime service state.
 mod env;
+/// Exposes runtime-owned external-editor sessions and private artifacts.
+mod external_editor;
+#[allow(
+    unused_imports,
+    reason = "target-specific external-editor adapters consume these contracts in dependent issues"
+)]
+pub(crate) use external_editor::{
+    ExternalEditTarget, ExternalEditorCompletion, ExternalEditorSessionStart,
+    RuntimeExternalEditorComponent, run_internal_editor_process,
+};
 /// Exposes runtime message and event fanout connection tables.
 ///
 /// The nested module keeps socket delivery bookkeeping out of the central

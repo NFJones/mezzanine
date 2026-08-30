@@ -1782,6 +1782,47 @@ fn typed_fish_child_launch_without_command_file_skips_payload_receiver() {
 }
 
 #[test]
+/// Verifies an explicitly interactive typed child inherits the pane terminal
+/// instead of starting in an isolated session with stdin redirected away.
+/// Blocking terminal editors need normal shell job control to become the PTY
+/// foreground process and receive keyboard, paste, mouse, and resize traffic.
+fn typed_child_launch_can_inherit_the_pane_terminal() {
+    let launch = ShellChildLaunch::new(
+        "/usr/bin/editor",
+        vec![ShellChildArgument::Literal("/private/draft.md".to_string())],
+    )
+    .unwrap()
+    .with_inherited_terminal();
+    let transaction = ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/sh"), "")
+        .unwrap()
+        .with_child_launch(launch);
+
+    let posix = decoded_posix_wrapper_source(
+        &transaction
+            .render_for_classification_input(ShellClassification::PosixSh)
+            .wrapper,
+    );
+    assert!(
+        posix.contains("command '/usr/bin/editor' '/private/draft.md'"),
+        "{posix}"
+    );
+    assert!(!posix.contains("setsid"), "{posix}");
+    assert!(!posix.contains("</dev/null"), "{posix}");
+
+    let fish = decoded_fish_wrapper_source(
+        &transaction
+            .render_for_classification_input(ShellClassification::Fish)
+            .wrapper,
+    );
+    assert!(
+        fish.contains("command '/usr/bin/editor' \\\n'/private/draft.md'"),
+        "{fish}"
+    );
+    assert!(!fish.contains("setsid"), "{fish}");
+    assert!(!fish.contains("</dev/null"), "{fish}");
+}
+
+#[test]
 /// Verifies a long typed POSIX child argument is split across bounded physical
 /// wrapper lines while preserving its one-argument argv boundary at execution.
 /// Forwarded sandbox environment values can exceed terminal line-discipline

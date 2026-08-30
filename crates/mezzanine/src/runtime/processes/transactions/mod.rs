@@ -185,6 +185,7 @@ pub(super) fn runtime_running_shell_transaction_kind_name(
 ) -> &'static str {
     match kind {
         RunningShellTransactionKind::AgentAction { .. } => "agent_action",
+        RunningShellTransactionKind::ExternalEditor { .. } => "external_editor",
         RunningShellTransactionKind::FocusedShellHook => "focused_shell_hook",
         RunningShellTransactionKind::ReadinessProbe => "readiness_probe",
         RunningShellTransactionKind::Bootstrap => "bootstrap",
@@ -325,6 +326,9 @@ fn runtime_shell_transaction_timer_kind(
     match kind {
         RunningShellTransactionKind::AgentAction { .. } => {
             RuntimeShellTransactionTimerKind::AgentAction
+        }
+        RunningShellTransactionKind::ExternalEditor { .. } => {
+            RuntimeShellTransactionTimerKind::ExternalEditor
         }
         RunningShellTransactionKind::FocusedShellHook => {
             RuntimeShellTransactionTimerKind::FocusedShellHook

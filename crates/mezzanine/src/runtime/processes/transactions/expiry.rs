@@ -62,6 +62,10 @@ impl RuntimeSessionService {
                         elapsed_ms,
                     )?;
                 }
+                RunningShellTransactionKind::ExternalEditor { .. } => {
+                    self.abort_external_editor_session(&transaction.pane_id);
+                    self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Degraded);
+                }
                 RunningShellTransactionKind::FocusedShellHook => {
                     let _ = self.observe_focused_shell_hook_transaction_end(
                         &transaction.pane_id,

@@ -438,7 +438,7 @@ pub enum ShellChildArgument {
     },
 }
 
-/// Typed executable and argv for an isolated child process.
+/// Typed executable and argv for a child process.
 ///
 /// The contract deliberately excludes raw shell fragments. Renderers quote
 /// every literal and substitute the wrapper-owned command-file variable only
@@ -457,6 +457,12 @@ pub struct ShellChildLaunch {
     /// file and emits that file through a framing channel separate from child
     /// stdout and stderr after the process exits.
     pub status_fd: Option<u8>,
+    /// Whether the child inherits the pane terminal under shell job control.
+    ///
+    /// The default remains an isolated session with stdin detached. Blocking
+    /// terminal applications opt in so the interactive shell can make the
+    /// child the foreground PTY process and wait for its exit.
+    pub inherited_terminal: bool,
 }
 
 impl ShellChildLaunch {
@@ -560,7 +566,14 @@ impl ShellChildLaunch {
             arguments,
             artifacts,
             status_fd: None,
+            inherited_terminal: false,
         })
+    }
+
+    /// Selects inherited pane-terminal ownership for a blocking child.
+    pub fn with_inherited_terminal(mut self) -> Self {
+        self.inherited_terminal = true;
+        self
     }
 
     /// Selects one inherited descriptor for runtime-owned child status.
@@ -752,6 +765,7 @@ fn posix_child_command_invocation_lines(
     child_env: &str,
     shell_invocation: &str,
     status_fd: Option<u8>,
+    inherited_terminal: bool,
 ) -> String {
     let mut lines = Vec::new();
     if status_fd.is_some() {
@@ -773,7 +787,20 @@ fn posix_child_command_invocation_lines(
     } else {
         lines.push("MEZ_OUTPUT_FILE=".to_string());
     }
-    lines.extend([
+    if inherited_terminal {
+        lines.extend([
+            "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then".to_string(),
+            posix_inherited_terminal_child_command_line(
+                "    command",
+                child_env,
+                shell_invocation,
+                transport,
+                status_fd,
+            ),
+            "  MEZ_STATUS=$?".to_string(),
+        ]);
+    } else {
+        lines.extend([
         "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then".to_string(),
         "  if command -v setsid >/dev/null 2>&1 && command setsid -w true >/dev/null 2>&1; then"
             .to_string(),
@@ -810,7 +837,8 @@ fn posix_child_command_invocation_lines(
         ),
         "  fi".to_string(),
         "  MEZ_STATUS=$?".to_string(),
-    ]);
+        ]);
+    }
     if transport == ShellTransactionOutputTransport::Base64 {
         lines.extend([
             format!(
@@ -885,6 +913,30 @@ fn posix_child_command_line(
     format!("{prefix} {child_env} {shell_invocation} </dev/null{redirect}{status_redirect}")
 }
 
+/// Renders one typed child command that inherits the pane terminal.
+fn posix_inherited_terminal_child_command_line(
+    prefix: &str,
+    child_env: &str,
+    shell_invocation: &str,
+    transport: ShellTransactionOutputTransport,
+    status_fd: Option<u8>,
+) -> String {
+    let redirect = if transport == ShellTransactionOutputTransport::Base64 {
+        " > \"$MEZ_OUTPUT_FILE\" 2>&1"
+    } else {
+        ""
+    };
+    let status_redirect = status_fd
+        .map(|fd| format!(" {fd}>\"$MEZ_STATUS_FILE\""))
+        .unwrap_or_default();
+    let child_env = if child_env.is_empty() {
+        String::new()
+    } else {
+        format!("{child_env} ")
+    };
+    format!("{prefix} {child_env}{shell_invocation}{redirect}{status_redirect}")
+}
+
 /// Renders the isolated Fish child-shell execution block.
 ///
 /// # Parameters
@@ -897,6 +949,7 @@ fn fish_child_command_invocation_lines(
     noninteractive_env: &str,
     shell_invocation: &str,
     status_fd: Option<u8>,
+    inherited_terminal: bool,
 ) -> String {
     let mut lines = Vec::new();
     if status_fd.is_some() {
@@ -916,43 +969,58 @@ fn fish_child_command_invocation_lines(
     } else {
         lines.push("set -l MEZ_OUTPUT_FILE ''".to_string());
     }
-    lines.extend([
-        "if test \"$MEZ_WRITE_STATUS\" -eq 0".to_string(),
-        "if command -q setsid; and command setsid -w true >/dev/null 2>&1".to_string(),
-        fish_child_command_line(
-            "    command setsid -w env",
+    lines.push("if test \"$MEZ_WRITE_STATUS\" -eq 0".to_string());
+    if inherited_terminal {
+        lines.push(fish_child_command_line(
+            "    command",
             noninteractive_env,
             shell_invocation,
             transport,
             status_fd,
-        ),
-        "else if command -q python3".to_string(),
-        fish_child_command_line(
-            &format!("    {PYTHON_SETSID_WAIT_COMMAND} env"),
-            noninteractive_env,
-            shell_invocation,
-            transport,
-            status_fd,
-        ),
-        "else if command -q perl".to_string(),
-        fish_child_command_line(
-            &format!("    {PERL_SETSID_WAIT_COMMAND} env"),
-            noninteractive_env,
-            shell_invocation,
-            transport,
-            status_fd,
-        ),
-        "else".to_string(),
-        fish_child_command_line(
-            "    command env",
-            noninteractive_env,
-            shell_invocation,
-            transport,
-            status_fd,
-        ),
-        "end".to_string(),
-        "set MEZ_STATUS $status".to_string(),
-    ]);
+            true,
+        ));
+    } else {
+        lines.extend([
+            "if command -q setsid; and command setsid -w true >/dev/null 2>&1".to_string(),
+            fish_child_command_line(
+                "    command setsid -w env",
+                noninteractive_env,
+                shell_invocation,
+                transport,
+                status_fd,
+                false,
+            ),
+            "else if command -q python3".to_string(),
+            fish_child_command_line(
+                &format!("    {PYTHON_SETSID_WAIT_COMMAND} env"),
+                noninteractive_env,
+                shell_invocation,
+                transport,
+                status_fd,
+                false,
+            ),
+            "else if command -q perl".to_string(),
+            fish_child_command_line(
+                &format!("    {PERL_SETSID_WAIT_COMMAND} env"),
+                noninteractive_env,
+                shell_invocation,
+                transport,
+                status_fd,
+                false,
+            ),
+            "else".to_string(),
+            fish_child_command_line(
+                "    command env",
+                noninteractive_env,
+                shell_invocation,
+                transport,
+                status_fd,
+                false,
+            ),
+            "end".to_string(),
+        ]);
+    }
+    lines.push("set MEZ_STATUS $status".to_string());
     if transport == ShellTransactionOutputTransport::Base64 {
         lines.extend([
             format!(
@@ -1021,6 +1089,7 @@ fn fish_child_command_line(
     shell_invocation: &str,
     transport: ShellTransactionOutputTransport,
     status_fd: Option<u8>,
+    inherited_terminal: bool,
 ) -> String {
     let redirect = if transport == ShellTransactionOutputTransport::Base64 {
         " > \"$MEZ_OUTPUT_FILE\" 2>&1"
@@ -1030,8 +1099,18 @@ fn fish_child_command_line(
     let status_redirect = status_fd
         .map(|fd| format!(" {fd}>\"$MEZ_STATUS_FILE\""))
         .unwrap_or_default();
+    let noninteractive_env = if noninteractive_env.is_empty() {
+        String::new()
+    } else {
+        format!("{noninteractive_env} ")
+    };
+    let input_redirect = if inherited_terminal {
+        ""
+    } else {
+        " </dev/null"
+    };
     format!(
-        "{prefix} {noninteractive_env} {shell_invocation} </dev/null{redirect}{status_redirect}"
+        "{prefix} {noninteractive_env}{shell_invocation}{input_redirect}{redirect}{status_redirect}"
     )
 }
 
@@ -1303,6 +1382,9 @@ impl ShellTransaction {
             self.child_launch
                 .as_ref()
                 .and_then(|launch| launch.status_fd),
+            self.child_launch
+                .as_ref()
+                .is_some_and(|launch| launch.inherited_terminal),
         );
         let (history_start, history_restore, history_marker_finish) =
             if classification == ShellClassification::Bash && self.bash_receiver_token.is_some() {
@@ -1614,6 +1696,9 @@ set -l MEZ_WRITE_STATUS 0\n\
             self.child_launch
                 .as_ref()
                 .and_then(|launch| launch.status_fd),
+            self.child_launch
+                .as_ref()
+                .is_some_and(|launch| launch.inherited_terminal),
         );
         let child_output_separator = if self.child_launch.is_some() {
             ""

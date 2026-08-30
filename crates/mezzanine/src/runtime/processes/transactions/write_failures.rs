@@ -59,6 +59,10 @@ impl RuntimeSessionService {
                     },
                 )
             }
+            RunningShellTransactionKind::ExternalEditor { .. } => {
+                self.abort_external_editor_session(&transaction.pane_id);
+                Ok(1)
+            }
             RunningShellTransactionKind::FocusedShellHook => self
                 .observe_focused_shell_hook_transaction_end(
                     &transaction.pane_id,
@@ -235,6 +239,9 @@ impl RuntimeSessionService {
                         &action_id,
                         error,
                     )?;
+                }
+                RunningShellTransactionKind::ExternalEditor { .. } => {
+                    self.abort_external_editor_session(pane_id);
                 }
                 RunningShellTransactionKind::FocusedShellHook => {
                     let _ = self

@@ -1,0 +1,232 @@
+//! Pane-scoped external-editor session and completion records.
+
+use std::collections::BTreeMap;
+
+use super::artifacts::ExternalEditorArtifacts;
+use super::command::ResolvedExternalEditorCommand;
+use crate::error::{MezError, Result};
+
+/// Typed artifact being edited by one external-editor session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ExternalEditTarget {
+    /// Pane-local agent prompt text.
+    AgentPrompt,
+    /// Free-form issue body content.
+    IssueBody { issue_id: String },
+    /// Free-form issue notes content.
+    IssueNotes { issue_id: String },
+    /// Durable memory content.
+    MemoryContent { memory_id: String },
+    /// Persisted user-owned context document content.
+    ContextDocument { document_id: String },
+}
+
+/// Process identity fenced when an editor session starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ExternalEditorPaneIdentity {
+    /// Pane root process id.
+    pub(super) primary_pid: u32,
+    /// Async pane-worker generation when adapter ownership is active.
+    pub(super) generation: Option<u64>,
+}
+
+/// One active runtime-owned editor session.
+#[derive(Debug, Clone)]
+pub(super) struct ExternalEditorSession {
+    pub(super) session_id: String,
+    pub(super) completion_nonce: String,
+    pub(super) marker: String,
+    pub(super) initiating_client_id: String,
+    pub(super) pane_id: String,
+    pub(super) pane_identity: ExternalEditorPaneIdentity,
+    pub(super) target: ExternalEditTarget,
+    pub(super) original_content: String,
+    pub(super) artifacts: ExternalEditorArtifacts,
+    pub(super) commands: Vec<ResolvedExternalEditorCommand>,
+}
+
+/// Non-secret launch facts returned to target-specific UI code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExternalEditorSessionStart {
+    /// Opaque editor-session identity.
+    pub(crate) session_id: String,
+    /// Completion nonce correlated through the shell transaction.
+    pub(crate) completion_nonce: String,
+    /// Shell transaction marker that owns pane input until completion.
+    pub(crate) marker: String,
+    /// Pane whose foreground PTY is leased to the editor.
+    pub(crate) pane_id: String,
+}
+
+/// Completed editor result retained for target-specific validation/application.
+#[derive(Debug, Clone)]
+pub(crate) struct ExternalEditorCompletion {
+    /// Opaque editor-session identity.
+    pub(crate) session_id: String,
+    /// Completion nonce accepted exactly once for this session.
+    pub(crate) completion_nonce: String,
+    /// Pane that hosted the blocking editor.
+    pub(crate) pane_id: String,
+    /// Typed target awaiting target-specific validation and application.
+    pub(crate) target: ExternalEditTarget,
+    /// Original target text retained for unchanged and rollback decisions.
+    pub(crate) original_content: String,
+    /// Private draft path retained until target-specific settlement.
+    pub(crate) draft_path: std::path::PathBuf,
+    /// Blocking editor process exit code.
+    pub(crate) exit_code: i32,
+}
+
+/// Editor-session state owned independently from prompt or durable targets.
+#[derive(Debug, Default)]
+pub(crate) struct RuntimeExternalEditorComponent {
+    pub(super) active_by_pane: BTreeMap<String, ExternalEditorSession>,
+    pub(super) completed_by_pane: BTreeMap<String, ExternalEditorCompletion>,
+}
+
+impl RuntimeExternalEditorComponent {
+    /// Reports whether one pane currently leases its PTY to an editor.
+    pub(super) fn is_active(&self, pane_id: &str) -> bool {
+        self.active_by_pane.contains_key(pane_id)
+    }
+
+    /// Returns the active session retained for one pane.
+    pub(super) fn active(&self, pane_id: &str) -> Option<&ExternalEditorSession> {
+        self.active_by_pane.get(pane_id)
+    }
+
+    /// Installs one pane-scoped lease, rejecting duplicate ownership.
+    pub(super) fn start(&mut self, session: ExternalEditorSession) -> Result<()> {
+        if self.active_by_pane.contains_key(&session.pane_id) {
+            return Err(MezError::conflict(
+                "pane already has an active external-editor session",
+            ));
+        }
+        self.completed_by_pane.remove(&session.pane_id);
+        self.active_by_pane.insert(session.pane_id.clone(), session);
+        Ok(())
+    }
+
+    /// Accepts one exactly matching completion and releases the pane lease.
+    pub(super) fn complete(
+        &mut self,
+        pane_id: &str,
+        session_id: &str,
+        completion_nonce: &str,
+        marker: &str,
+        exit_code: i32,
+    ) -> Option<ExternalEditorCompletion> {
+        let matches = self.active_by_pane.get(pane_id).is_some_and(|session| {
+            session.session_id == session_id
+                && session.completion_nonce == completion_nonce
+                && session.marker == marker
+        });
+        if !matches {
+            return None;
+        }
+        let session = self.active_by_pane.remove(pane_id)?;
+        let completion = ExternalEditorCompletion {
+            session_id: session.session_id,
+            completion_nonce: session.completion_nonce,
+            pane_id: session.pane_id.clone(),
+            target: session.target,
+            original_content: session.original_content,
+            draft_path: session.artifacts.draft_path,
+            exit_code,
+        };
+        self.completed_by_pane
+            .insert(session.pane_id, completion.clone());
+        Some(completion)
+    }
+
+    /// Removes an active lease without fabricating a successful completion.
+    pub(super) fn abort(&mut self, pane_id: &str) -> Option<ExternalEditorSession> {
+        self.active_by_pane.remove(pane_id)
+    }
+
+    /// Takes one completion only when all supplied identities match.
+    pub(super) fn take_completion(
+        &mut self,
+        pane_id: &str,
+        session_id: &str,
+        completion_nonce: &str,
+    ) -> Option<ExternalEditorCompletion> {
+        let matches = self
+            .completed_by_pane
+            .get(pane_id)
+            .is_some_and(|completion| {
+                completion.session_id == session_id
+                    && completion.completion_nonce == completion_nonce
+            });
+        matches
+            .then(|| self.completed_by_pane.remove(pane_id))
+            .flatten()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn session() -> ExternalEditorSession {
+        ExternalEditorSession {
+            session_id: "session-a".to_string(),
+            completion_nonce: "nonce-a".to_string(),
+            marker: "marker-a".to_string(),
+            initiating_client_id: "client-a".to_string(),
+            pane_id: "%1".to_string(),
+            pane_identity: ExternalEditorPaneIdentity {
+                primary_pid: 42,
+                generation: Some(7),
+            },
+            target: ExternalEditTarget::AgentPrompt,
+            original_content: "before".to_string(),
+            artifacts: ExternalEditorArtifacts {
+                session_directory: PathBuf::from("/private/session-a"),
+                draft_path: PathBuf::from("/private/session-a/draft.md"),
+            },
+            commands: vec![ResolvedExternalEditorCommand {
+                executable: "/usr/bin/editor".to_string(),
+                arguments: vec!["/private/session-a/draft.md".to_string()],
+            }],
+        }
+    }
+
+    /// Verifies one pane lease rejects duplicates and accepts completion only
+    /// for the exact session, nonce, and transaction marker.
+    #[test]
+    fn pane_lease_and_completion_are_identity_fenced() {
+        let mut component = RuntimeExternalEditorComponent::default();
+        component.start(session()).unwrap();
+        assert!(component.is_active("%1"));
+        assert!(component.start(session()).is_err());
+        assert!(
+            component
+                .complete("%1", "session-a", "stale", "marker-a", 0)
+                .is_none()
+        );
+        assert!(component.is_active("%1"));
+
+        let completion = component
+            .complete("%1", "session-a", "nonce-a", "marker-a", 0)
+            .unwrap();
+        assert_eq!(completion.exit_code, 0);
+        assert!(!component.is_active("%1"));
+        assert!(
+            component
+                .complete("%1", "session-a", "nonce-a", "marker-a", 0)
+                .is_none()
+        );
+        assert!(
+            component
+                .take_completion("%1", "session-a", "stale")
+                .is_none()
+        );
+        assert!(
+            component
+                .take_completion("%1", "session-a", "nonce-a")
+                .is_some()
+        );
+    }
+}

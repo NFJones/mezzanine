@@ -514,6 +514,7 @@ impl RuntimeSessionService {
                 RunningShellTransactionKind::AgentAction { .. } => {
                     has_agent_action = true;
                 }
+                RunningShellTransactionKind::ExternalEditor { .. } => {}
                 RunningShellTransactionKind::FocusedShellHook
                 | RunningShellTransactionKind::ReadinessProbe
                 | RunningShellTransactionKind::Bootstrap

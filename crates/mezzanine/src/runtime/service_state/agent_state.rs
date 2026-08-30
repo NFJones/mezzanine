@@ -386,6 +386,13 @@ pub(crate) enum RunningShellTransactionKind {
         /// boundary and should remain aligned with the owning type invariant.
         action_id: String,
     },
+    /// Runtime-owned blocking external editor using the pane foreground PTY.
+    ExternalEditor {
+        /// Opaque editor-session identity.
+        session_id: String,
+        /// Completion nonce retained outside pane output.
+        completion_nonce: String,
+    },
     /// Stateful configured hook executed in the focused pane shell.
     FocusedShellHook,
     /// Represents the Readiness Probe case for this enumeration.
@@ -452,6 +459,8 @@ pub(crate) enum RunningShellTransactionKind {
 pub enum RuntimeShellTransactionTimerKind {
     /// Agent shell command action timeout.
     AgentAction,
+    /// External editor transaction timeout family (normally unbounded).
+    ExternalEditor,
     /// Readiness probe timeout.
     ReadinessProbe,
     /// Pane bootstrap transaction or completion-certification timeout.

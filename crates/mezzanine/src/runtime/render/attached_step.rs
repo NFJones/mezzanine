@@ -42,6 +42,9 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn active_agent_shell_visible(&self) -> Result<bool> {
         let pane_id = self.active_pane_id()?;
+        if self.external_editor_session_is_active(&pane_id) {
+            return Ok(false);
+        }
         Ok(self
             .agent_shell_store()
             .get(&pane_id)
@@ -362,6 +365,17 @@ impl RuntimeSessionService {
         else {
             return Ok(RuntimeTransition::default());
         };
+        let pane_id = self.active_pane_id()?;
+        if self.external_editor_session_is_active(&pane_id) {
+            if !self.external_editor_session_owned_by(&pane_id, client_id) {
+                return Ok(RuntimeTransition::default());
+            }
+            self.clear_copy_state_for_surface(&pane_id, crate::runtime::PaneSurfaceKind::Process);
+            return Ok(RuntimeTransition {
+                applied: true,
+                side_effects: vec![self.deferred_pane_input_effect(pane_id, bytes.to_vec())],
+            });
+        }
         self.presentation.activate_client_state(client_id);
         self.session.activate_client_navigation(client_id)?;
         let size = Size::new(terminal.columns, terminal.rows)?;
