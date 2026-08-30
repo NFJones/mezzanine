@@ -212,6 +212,112 @@ fn runtime_prompt_editor_binding_restores_changed_text_without_submitting() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies pane-mode prompt editing can launch when Bash has no private receiver.
+///
+/// Agent prompt ownership and the absence of an unsubmitted process draft make
+/// the ordinary POSIX wrapper safe here just as they do in native mode. The
+/// editor must not fail merely because this pane epoch has no managed receiver.
+#[test]
+fn runtime_prompt_editor_pane_mode_bash_does_not_require_private_receiver() {
+    let Some(bash_path) = bash_path_for_tests() else {
+        eprintln!("skipping pane-mode Bash editor regression because bash is unavailable");
+        return;
+    };
+    let root = temp_root("prompt-editor-pane-mode-bash");
+    let socket_path = root.join("runtime/default.sock");
+    let mut service = RuntimeServiceFixture::new()
+        .control_socket(&socket_path)
+        .build();
+    service.session.shell = ResolvedShell::new(bash_path, ShellSource::ShellEnv).into();
+    let primary = service
+        .attach_primary("primary", true, Size::new(40, 16).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "pane-mode-bash-prompt-editor-test".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nshell_mode = \"pane\"\n[external_editor]\ncommand = [\"/bin/sh\", \"-c\", \"exit 0\", \"{file}\"]\nfallback = []\n"
+                .to_string(),
+        }])
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.reload_agent_prompt_history_for_pane("%1").unwrap();
+
+    let identities = start_prompt_editor(&mut service, &primary);
+
+    assert!(service.external_editor_session_is_active("%1"));
+    assert!(service.bash_receiver_token_for_pane("%1").is_none());
+    complete_prompt_editor(
+        &mut service,
+        &root,
+        &identities,
+        b"edited in pane-mode bash\n",
+        0,
+    );
+    assert_eq!(
+        service.agent_prompt_inputs_for_tests()["%1"]
+            .prompt
+            .buffer
+            .line(),
+        "edited in pane-mode bash"
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies Bash without a private receiver still rejects a dirty process prompt.
+///
+/// The POSIX editor fallback must remain unavailable when user-originated input
+/// may be an unsubmitted shell draft, regardless of the configured shell mode.
+#[test]
+fn runtime_prompt_editor_bash_without_receiver_rejects_unsubmitted_process_input() {
+    let Some(bash_path) = bash_path_for_tests() else {
+        eprintln!("skipping dirty Bash editor regression because bash is unavailable");
+        return;
+    };
+    let root = temp_root("prompt-editor-bash-dirty-process-input");
+    let socket_path = root.join("runtime/default.sock");
+    let mut service = RuntimeServiceFixture::new()
+        .control_socket(&socket_path)
+        .build();
+    service.session.shell = ResolvedShell::new(bash_path, ShellSource::ShellEnv).into();
+    let primary = service
+        .attach_primary("primary", true, Size::new(40, 16).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service.record_user_process_input("%1", b"unsubmitted command");
+
+    let error = service
+        .start_external_editor_session(
+            &primary,
+            "%1",
+            crate::runtime::ExternalEditTarget::AgentPrompt,
+            String::new(),
+            String::new(),
+            true,
+        )
+        .expect_err("dirty Bash process input must prevent the POSIX editor fallback");
+
+    assert!(
+        error
+            .message()
+            .contains("managed Bash private receiver is unavailable"),
+        "{error:?}"
+    );
+    assert!(!service.external_editor_session_is_active("%1"));
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies native-mode prompt editing can launch from an unmanaged Bash pane.
 ///
 /// Native mode deliberately leaves the user's Bash process without Mezzanine's

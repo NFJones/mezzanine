@@ -35,8 +35,9 @@ use mez_agent::{
 };
 
 impl RuntimeSessionService {
-    /// Renders editor-owned shell input, allowing native-mode Bash to use the
-    /// ordinary POSIX wrapper only when no hidden parent-shell draft is tracked.
+    /// Renders editor-owned shell input, allowing Bash without a private
+    /// receiver to use the ordinary POSIX wrapper only when no hidden
+    /// parent-shell draft is tracked.
     pub(crate) fn render_external_editor_shell_input(
         &self,
         pane_id: &str,
@@ -46,8 +47,6 @@ impl RuntimeSessionService {
         let mut input = transaction.render_for_classification_input(classification);
         if input.is_empty()
             && classification == mez_agent::ShellClassification::Bash
-            && self.effective_agent_shell_mode_for_pane(pane_id)
-                == crate::runtime::config::ShellMode::Native
             && !self.pane_has_unsubmitted_process_input(pane_id)
         {
             input = transaction
