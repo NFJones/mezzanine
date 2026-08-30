@@ -537,8 +537,9 @@ use config::{
     runtime_window_frames_enabled_from_config,
 };
 pub(crate) use config::{
-    RuntimeExternalEditorConfig, RuntimeIrohAddressLookupPolicy, RuntimeIrohCompressionCodec,
-    RuntimeIrohIdentityPolicy, RuntimeIrohRelayPolicy, RuntimeIrohTransportPolicy,
+    EXTERNAL_EDITOR_MAX_CANDIDATES, RuntimeExternalEditorConfig, RuntimeIrohAddressLookupPolicy,
+    RuntimeIrohCompressionCodec, RuntimeIrohIdentityPolicy, RuntimeIrohRelayPolicy,
+    RuntimeIrohTransportPolicy, external_editor_argument_contains_ascii_control,
     runtime_audit_log_from_config, runtime_external_editor_config_from_config,
     runtime_iroh_transport_policy_from_config, runtime_validate_key_binding_collisions,
 };

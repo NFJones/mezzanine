@@ -51,7 +51,8 @@ pub(super) use audit::runtime_audit_config_present;
 pub(crate) use audit::runtime_audit_log_from_config;
 pub use effective::runtime_effective_config_value;
 pub(crate) use external_editor::{
-    RuntimeExternalEditorConfig, runtime_external_editor_config_from_config,
+    EXTERNAL_EDITOR_MAX_CANDIDATES, RuntimeExternalEditorConfig,
+    external_editor_argument_contains_ascii_control, runtime_external_editor_config_from_config,
 };
 pub(crate) use frames::{
     runtime_chord_from_binding_config_key, runtime_command_bindings_from_effective,

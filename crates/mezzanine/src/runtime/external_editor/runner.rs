@@ -19,6 +19,9 @@ use serde::{Deserialize, Serialize};
 
 use super::command::ResolvedExternalEditorCommand;
 use crate::error::{MezError, Result};
+use crate::runtime::{
+    EXTERNAL_EDITOR_MAX_CANDIDATES, external_editor_argument_contains_ascii_control,
+};
 
 pub(super) const INTERNAL_EDITOR_ARGUMENT: &str = "--mez-internal-external-editor";
 const MANIFEST_VERSION: u8 = 1;
@@ -145,6 +148,23 @@ impl Drop for EditorProcessGroup {
 pub(super) fn external_editor_runner_manifest(
     commands: &[ResolvedExternalEditorCommand],
 ) -> Result<Vec<u8>> {
+    if !(1..=EXTERNAL_EDITOR_MAX_CANDIDATES).contains(&commands.len()) {
+        return Err(MezError::invalid_args(format!(
+            "external editor runner supports at most {EXTERNAL_EDITOR_MAX_CANDIDATES} candidates"
+        )));
+    }
+    if commands.iter().any(|command| {
+        !Path::new(&command.executable).is_absolute()
+            || external_editor_argument_contains_ascii_control(&command.executable)
+            || command
+                .arguments
+                .iter()
+                .any(|argument| external_editor_argument_contains_ascii_control(argument))
+    }) {
+        return Err(MezError::invalid_args(
+            "external editor runner command violates the manifest contract",
+        ));
+    }
     let manifest = ExternalEditorRunnerManifest {
         version: MANIFEST_VERSION,
         candidates: commands
@@ -293,7 +313,9 @@ fn wait_for_editor_grace(
 fn validate_manifest(
     manifest: &ExternalEditorRunnerManifest,
 ) -> std::result::Result<(), &'static str> {
-    if manifest.version != MANIFEST_VERSION || !(1..=16).contains(&manifest.candidates.len()) {
+    if manifest.version != MANIFEST_VERSION
+        || !(1..=EXTERNAL_EDITOR_MAX_CANDIDATES).contains(&manifest.candidates.len())
+    {
         return Err("manifest-contract");
     }
     for candidate in &manifest.candidates {
@@ -301,9 +323,9 @@ fn validate_manifest(
             return Err("candidate-empty");
         };
         if !Path::new(executable).is_absolute()
-            || candidate.iter().any(|argument| {
-                argument.contains('\0') || argument.bytes().any(|byte| byte.is_ascii_control())
-            })
+            || candidate
+                .iter()
+                .any(|argument| external_editor_argument_contains_ascii_control(argument))
         {
             return Err("candidate-invalid");
         }

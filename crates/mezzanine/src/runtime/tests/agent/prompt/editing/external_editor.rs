@@ -370,6 +370,50 @@ fn runtime_prompt_editor_binding_rejects_inactive_prompt() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies a runner-manifest construction failure occurs before private
+/// recovery artifacts are materialized, avoiding a false interrupted edit.
+#[test]
+fn runtime_prompt_editor_manifest_failure_leaves_no_recovery_artifacts() {
+    let (mut service, primary, root) = prompt_editor_fixture("prompt-editor-manifest-failure");
+    let oversized_argument = "x".repeat(300 * 1024);
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "oversized-editor-manifest".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "[agents]\nshell_mode = \"pane\"\n[external_editor]\ncommand = [\"/bin/sh\", \"{oversized_argument}\", \"{{file}}\"]\nfallback = []\n"
+            ),
+        }])
+        .unwrap();
+
+    let error = service
+        .start_external_editor_session(
+            &primary,
+            "%1",
+            crate::runtime::ExternalEditTarget::AgentPrompt,
+            String::new(),
+            String::new(),
+            true,
+        )
+        .expect_err("oversized runner manifest should be rejected");
+
+    assert!(
+        error.message().contains("runner manifest exceeds"),
+        "{error:?}"
+    );
+    let sessions = root.join("runtime/editor-sessions");
+    assert!(
+        !sessions.exists() || fs::read_dir(&sessions).unwrap().next().is_none(),
+        "pre-lease failure left recovery artifacts under {}",
+        sessions.display()
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies failed changed drafts remain private and recoverable, observers
 /// cannot inspect or mutate them, explicit apply is conflict-safe, and discard
 /// remains idempotent after a successful apply consumes the recovery.

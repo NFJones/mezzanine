@@ -563,6 +563,19 @@ fn validate_external_editor_config(format: ConfigFormat, text: &str) -> Vec<Conf
         return Vec::new();
     };
     let mut diagnostics = Vec::new();
+    let fallback_count = editor
+        .get("fallback")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    if fallback_count.saturating_add(1) > crate::runtime::EXTERNAL_EDITOR_MAX_CANDIDATES {
+        diagnostics.push(ConfigDiagnostic {
+            path: "external_editor.fallback".to_string(),
+            message: format!(
+                "external_editor supports at most {} command and fallback candidates",
+                crate::runtime::EXTERNAL_EDITOR_MAX_CANDIDATES
+            ),
+        });
+    }
     if let Some(command) = editor.get("command") {
         validate_external_editor_argv(command, "external_editor.command", &mut diagnostics);
     }
@@ -617,10 +630,13 @@ fn validate_external_editor_argv(
             message: format!("{path} executable must not be empty"),
         });
     }
-    if arguments.iter().any(|argument| argument.contains('\0')) {
+    if arguments
+        .iter()
+        .any(|argument| crate::runtime::external_editor_argument_contains_ascii_control(argument))
+    {
         diagnostics.push(ConfigDiagnostic {
             path: path.to_string(),
-            message: format!("{path} arguments must not contain NUL bytes"),
+            message: format!("{path} arguments must not contain ASCII control bytes"),
         });
     }
     let placeholder_count = arguments

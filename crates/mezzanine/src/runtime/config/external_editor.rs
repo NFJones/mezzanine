@@ -8,6 +8,14 @@ use serde_json::Value;
 
 use crate::error::{MezError, Result};
 
+/// Maximum preferred-plus-fallback editor candidates accepted by the runner.
+pub(crate) const EXTERNAL_EDITOR_MAX_CANDIDATES: usize = 16;
+
+/// Reports whether one inert argv field violates the runner manifest contract.
+pub(crate) fn external_editor_argument_contains_ascii_control(argument: &str) -> bool {
+    argument.bytes().any(|byte| byte.is_ascii_control())
+}
+
 /// Structured blocking-editor command candidates in preference order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeExternalEditorConfig {
@@ -38,7 +46,7 @@ pub(crate) fn runtime_external_editor_config_from_config(
     let Some(editor) = root.get("external_editor").and_then(Value::as_object) else {
         return Ok(defaults);
     };
-    Ok(RuntimeExternalEditorConfig {
+    let config = RuntimeExternalEditorConfig {
         command: editor
             .get("command")
             .map(|value| runtime_editor_argv(value, "external_editor.command"))
@@ -49,7 +57,13 @@ pub(crate) fn runtime_external_editor_config_from_config(
             .map(runtime_editor_fallback)
             .transpose()?
             .unwrap_or(defaults.fallback),
-    })
+    };
+    if config.fallback.len().saturating_add(1) > EXTERNAL_EDITOR_MAX_CANDIDATES {
+        return Err(MezError::config(format!(
+            "external_editor supports at most {EXTERNAL_EDITOR_MAX_CANDIDATES} command and fallback candidates"
+        )));
+    }
+    Ok(config)
 }
 
 /// Parses one non-empty string argv candidate defensively at runtime.
@@ -58,14 +72,24 @@ fn runtime_editor_argv(value: &Value, path: &str) -> Result<Vec<String>> {
         .as_array()
         .filter(|argv| !argv.is_empty())
         .ok_or_else(|| MezError::config(format!("{path} must be a non-empty argv string array")))?;
-    argv.iter()
+    let arguments = argv
+        .iter()
         .map(|argument| {
             argument
                 .as_str()
                 .map(ToOwned::to_owned)
                 .ok_or_else(|| MezError::config(format!("{path} must contain only strings")))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    if arguments
+        .iter()
+        .any(|argument| external_editor_argument_contains_ascii_control(argument))
+    {
+        return Err(MezError::config(format!(
+            "{path} arguments must not contain ASCII control bytes"
+        )));
+    }
+    Ok(arguments)
 }
 
 /// Parses the ordered fallback candidate array defensively at runtime.

@@ -102,7 +102,7 @@ fn accepts_external_editor_and_edit_prompt_schema_paths() {
 }
 
 /// Verifies editor candidates reject shell strings, empty executables,
-/// duplicate file placeholders, unsupported interpolation, and NUL bytes.
+/// duplicate file placeholders, unsupported interpolation, and ASCII controls.
 #[test]
 fn rejects_invalid_external_editor_argv() {
     for (body, expected) in [
@@ -124,7 +124,11 @@ fn rejects_invalid_external_editor_argv() {
         ),
         (
             "command = [\"vim\\u0000\", \"{file}\"]",
-            "external_editor.command arguments must not contain NUL bytes",
+            "external_editor.command arguments must not contain ASCII control bytes",
+        ),
+        (
+            "command = [\"vim\", \"label\\tvalue\", \"{file}\"]",
+            "external_editor.command arguments must not contain ASCII control bytes",
         ),
         (
             "command = [\"vim\", \"{file}\"]\nfallback = [[\"nano\"], []]",
@@ -149,4 +153,33 @@ fn rejects_invalid_external_editor_argv() {
             validation.diagnostics
         );
     }
+}
+
+/// Verifies configuration rejects more candidates than the hidden runner can
+/// execute so invocation cannot fail later with its internal contract status.
+#[test]
+fn rejects_external_editor_candidate_count_above_runner_limit() {
+    let fallback = (0..16)
+        .map(|index| vec![format!("editor-{index}")])
+        .collect::<Vec<_>>();
+    let text = serde_json::json!({
+        "version": CURRENT_CONFIG_SCHEMA_VERSION,
+        "external_editor": {
+            "command": ["editor", "{file}"],
+            "fallback": fallback,
+        }
+    })
+    .to_string();
+
+    let validation = validate_config_text(ConfigFormat::Json, &text, ConfigScope::Primary);
+
+    assert!(
+        validation.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "external_editor.fallback"
+                && diagnostic.message
+                    == "external_editor supports at most 16 command and fallback candidates"
+        }),
+        "{:?}",
+        validation.diagnostics
+    );
 }

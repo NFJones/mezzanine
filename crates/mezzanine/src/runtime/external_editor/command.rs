@@ -18,9 +18,16 @@ pub(super) struct ResolvedExternalEditorCommand {
 pub(super) fn resolve_external_editor_command(
     config: &RuntimeExternalEditorConfig,
     pane_path: Option<&str>,
+    pane_current_working_directory: Option<&Path>,
     draft_path: &Path,
 ) -> Result<ResolvedExternalEditorCommand> {
-    resolve_external_editor_commands(config, pane_path, draft_path).map(|commands| {
+    resolve_external_editor_commands(
+        config,
+        pane_path,
+        pane_current_working_directory,
+        draft_path,
+    )
+    .map(|commands| {
         commands
             .into_iter()
             .next()
@@ -32,11 +39,19 @@ pub(super) fn resolve_external_editor_command(
 pub(super) fn resolve_external_editor_commands(
     config: &RuntimeExternalEditorConfig,
     pane_path: Option<&str>,
+    pane_current_working_directory: Option<&Path>,
     draft_path: &Path,
 ) -> Result<Vec<ResolvedExternalEditorCommand>> {
     let commands = std::iter::once(&config.command)
         .chain(config.fallback.iter())
-        .filter_map(|candidate| resolve_candidate(candidate, pane_path, draft_path))
+        .filter_map(|candidate| {
+            resolve_candidate(
+                candidate,
+                pane_path,
+                pane_current_working_directory,
+                draft_path,
+            )
+        })
         .collect::<Vec<_>>();
     if commands.is_empty() {
         Err(MezError::new(
@@ -51,10 +66,15 @@ pub(super) fn resolve_external_editor_commands(
 fn resolve_candidate(
     candidate: &[String],
     pane_path: Option<&str>,
+    pane_current_working_directory: Option<&Path>,
     draft_path: &Path,
 ) -> Option<ResolvedExternalEditorCommand> {
     let configured_executable = candidate.first()?;
-    let executable = resolve_executable(configured_executable, pane_path)?;
+    let executable = resolve_executable(
+        configured_executable,
+        pane_path,
+        pane_current_working_directory,
+    )?;
     let draft = draft_path.to_string_lossy();
     let mut substituted = false;
     let mut arguments = candidate
@@ -78,16 +98,33 @@ fn resolve_candidate(
     })
 }
 
-fn resolve_executable(executable: &str, pane_path: Option<&str>) -> Option<PathBuf> {
+fn resolve_executable(
+    executable: &str,
+    pane_path: Option<&str>,
+    pane_current_working_directory: Option<&Path>,
+) -> Option<PathBuf> {
     let path = Path::new(executable);
     if path.is_absolute() {
         return executable_is_runnable(path).then(|| path.to_path_buf());
     }
+    if path.components().count() > 1 {
+        let candidate = pane_current_working_directory?.join(path);
+        return executable_is_runnable(&candidate).then_some(candidate);
+    }
     pane_path?
         .split(':')
-        .filter(|entry| !entry.is_empty())
-        .map(Path::new)
-        .map(|directory| directory.join(executable))
+        .filter_map(|entry| {
+            if entry.is_empty() {
+                return pane_current_working_directory.map(Path::to_path_buf);
+            }
+            let directory = Path::new(entry);
+            if directory.is_absolute() {
+                Some(directory.to_path_buf())
+            } else {
+                pane_current_working_directory.map(|cwd| cwd.join(directory))
+            }
+        })
+        .map(|directory| directory.join(path))
         .find(|candidate| executable_is_runnable(candidate))
 }
 
@@ -139,13 +176,80 @@ mod tests {
             ]],
         };
         let draft = root.join("draft.md");
-        let resolved = resolve_external_editor_command(&config, root.to_str(), &draft).unwrap();
+        let resolved =
+            resolve_external_editor_command(&config, root.to_str(), Some(&root), &draft).unwrap();
 
         assert_eq!(resolved.executable, editor.to_string_lossy());
         assert_eq!(
             resolved.arguments,
             ["--label", "space value", draft.to_string_lossy().as_ref()]
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies slash-containing relative executables resolve against the pane
+    /// working directory instead of being appended to each PATH entry.
+    #[test]
+    fn resolves_explicit_relative_editor_against_pane_working_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-editor-relative-command-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let editor = root.join("working-editor");
+        fs::write(&editor, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&editor, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let config = RuntimeExternalEditorConfig {
+            command: vec!["./working-editor".to_string(), "{file}".to_string()],
+            fallback: Vec::new(),
+        };
+        let draft = root.join("draft.md");
+
+        let resolved = resolve_external_editor_command(
+            &config,
+            Some("/definitely/not/the/pane"),
+            Some(&root),
+            &draft,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::canonicalize(&resolved.executable).unwrap(),
+            fs::canonicalize(&editor).unwrap()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies an empty PATH component retains standard current-directory
+    /// semantics using the pane working directory rather than the daemon cwd.
+    #[test]
+    fn resolves_empty_path_component_against_pane_working_directory() {
+        let root =
+            std::env::temp_dir().join(format!("mez-editor-empty-path-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let editor = root.join("working-editor");
+        fs::write(&editor, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&editor, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let config = RuntimeExternalEditorConfig {
+            command: vec!["working-editor".to_string(), "{file}".to_string()],
+            fallback: Vec::new(),
+        };
+        let draft = root.join("draft.md");
+
+        let resolved =
+            resolve_external_editor_command(&config, Some(":/bin"), Some(&root), &draft).unwrap();
+
+        assert_eq!(resolved.executable, editor.to_string_lossy());
         let _ = fs::remove_dir_all(root);
     }
 }

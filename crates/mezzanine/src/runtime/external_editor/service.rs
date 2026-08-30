@@ -98,37 +98,18 @@ impl RuntimeSessionService {
             .socket_path()
             .parent()
             .ok_or_else(|| MezError::invalid_state("runtime socket has no parent directory"))?;
-        let artifacts =
-            create_external_editor_artifacts(runtime_root, &session_id, &initial_draft_content)?;
-        let recovery_manifest = ExternalEditorRecoveryManifest::new(
-            session_id.clone(),
-            self.session.id.to_string(),
-            pane_id.to_string(),
-            target.clone(),
-            &original_content,
-        );
-        if let Err(error) = write_recovery_manifest(&artifacts, &recovery_manifest) {
-            let _ = fs::remove_dir_all(&artifacts.session_directory);
-            return Err(error);
-        }
-        let commands = match resolve_external_editor_commands(
+        let planned_session_directory = runtime_root.join("editor-sessions").join(&session_id);
+        let planned_draft_path = planned_session_directory.join("draft.md");
+        let commands = resolve_external_editor_commands(
             self.external_editor_config(),
             self.pane_environment_path(pane_id).as_deref(),
-            &artifacts.draft_path,
-        ) {
-            Ok(command) => command,
-            Err(error) => {
-                let _ = fs::remove_dir_all(&artifacts.session_directory);
-                return Err(error);
-            }
-        };
+            self.pane_current_working_directory(pane_id).as_deref(),
+            &planned_draft_path,
+        )?;
+        let runner_manifest = external_editor_runner_manifest(&commands)?;
         let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;
         let manifest_id = ShellLaunchArtifactId::new("editor-manifest")?;
-        let manifest = ShellLaunchArtifact::new(
-            manifest_id.clone(),
-            external_editor_runner_manifest(&commands)?,
-            0o400,
-        )?;
+        let manifest = ShellLaunchArtifact::new(manifest_id.clone(), runner_manifest, 0o400)?;
         let runner = std::env::current_exe().map_err(|error| {
             MezError::invalid_state(format!("failed to locate external-editor runner: {error}"))
         })?;
@@ -159,6 +140,19 @@ impl RuntimeSessionService {
         let transaction_input =
             transaction.render_for_classification_input(shell_identity.classification());
         self.require_generated_shell_input(&transaction_input)?;
+        let artifacts =
+            create_external_editor_artifacts(runtime_root, &session_id, &initial_draft_content)?;
+        let recovery_manifest = ExternalEditorRecoveryManifest::new(
+            session_id.clone(),
+            self.session.id.to_string(),
+            pane_id.to_string(),
+            target.clone(),
+            &original_content,
+        );
+        if let Err(error) = write_recovery_manifest(&artifacts, &recovery_manifest) {
+            let _ = fs::remove_dir_all(&artifacts.session_directory);
+            return Err(error);
+        }
         let mut wrapper = transaction_input.wrapper;
         if !wrapper.ends_with('\n') {
             wrapper.push('\n');
@@ -173,7 +167,8 @@ impl RuntimeSessionService {
         let requires_payload_receiver_ready = shell_identity.classification()
             == mez_agent::ShellClassification::Fish
             && !transaction_input.payload.is_empty();
-        self.external_editor.start(ExternalEditorSession {
+        let artifact_session_directory = artifacts.session_directory.clone();
+        if let Err(error) = self.external_editor.start(ExternalEditorSession {
             session_id: session_id.clone(),
             completion_nonce: completion_nonce.clone(),
             marker: marker_id.clone(),
@@ -191,7 +186,10 @@ impl RuntimeSessionService {
             artifacts,
             commands,
             recovery_manifest,
-        })?;
+        }) {
+            let _ = fs::remove_dir_all(&artifact_session_directory);
+            return Err(error);
+        }
         self.set_pane_readiness(pane_id, PaneReadinessState::Busy);
         self.register_running_shell_transaction(
             marker_id.clone(),
