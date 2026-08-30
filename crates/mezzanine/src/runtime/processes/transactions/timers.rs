@@ -342,9 +342,6 @@ impl RuntimeSessionService {
                         RuntimeShellTransactionTimerKind::AgentAction => {
                             RuntimeTimerKind::ShellTransaction
                         }
-                        RuntimeShellTransactionTimerKind::ExternalEditor => {
-                            RuntimeTimerKind::ShellTransaction
-                        }
                         RuntimeShellTransactionTimerKind::ReadinessProbe => {
                             RuntimeTimerKind::ReadinessProbe
                         }

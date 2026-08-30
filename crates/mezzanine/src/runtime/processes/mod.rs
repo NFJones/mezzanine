@@ -4046,8 +4046,6 @@ impl RuntimeSessionService {
                     format!(" action={action_id}")
                 }
                 RunningShellTransactionKind::FocusedShellHook
-                | RunningShellTransactionKind::ExternalEditor { .. }
-                | RunningShellTransactionKind::AgentPromptEditorReadinessProbe { .. }
                 | RunningShellTransactionKind::ReadinessProbe
                 | RunningShellTransactionKind::Bootstrap
                 | RunningShellTransactionKind::ShellIdentityProbe { .. }
@@ -4633,14 +4631,15 @@ impl RuntimeSessionService {
                 "async pane process handoff limit must be greater than zero",
             ));
         }
+        let mut processes = self.take_pending_external_editor_processes(limit);
+        let remaining = limit.saturating_sub(processes.len());
         let pane_ids = self
             .process
             .pane_processes
             .tracked_running_pane_ids()
             .into_iter()
-            .take(limit)
+            .take(remaining)
             .collect::<Vec<_>>();
-        let mut processes = Vec::with_capacity(pane_ids.len());
         for pane_id in pane_ids {
             let process = self.take_running_pane_process_for_adapter(&pane_id)?;
             let generation = self
@@ -4711,12 +4710,13 @@ impl RuntimeSessionService {
 
     /// Returns whether an adapter event belongs to the currently owned process instance.
     pub(crate) fn pane_process_instance_is_current(&self, instance: &PaneProcessInstance) -> bool {
-        self.find_pane_descriptor(&instance.pane_id).is_some()
-            && self
-                .process
-                .detached_pane_processes
-                .get(&instance.pane_id)
-                .is_some_and(|process| process.generation == instance.generation)
+        self.external_editor_process_instance_is_current(instance)
+            || (self.find_pane_descriptor(&instance.pane_id).is_some()
+                && self
+                    .process
+                    .detached_pane_processes
+                    .get(&instance.pane_id)
+                    .is_some_and(|process| process.generation == instance.generation))
     }
 
     /// Returns the current adapter-owned process identity for one pane.
@@ -5305,9 +5305,6 @@ impl RuntimeSessionService {
         window: &mez_mux::layout::Window,
         pane_id: &str,
     ) -> Option<Size> {
-        if let Some(size) = self.external_editor_terminal_size(pane_id) {
-            return Some(size);
-        }
         let pane = window
             .panes()
             .iter()

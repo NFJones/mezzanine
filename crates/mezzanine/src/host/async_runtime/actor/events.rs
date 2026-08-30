@@ -189,6 +189,14 @@ impl AsyncRuntimeSessionActor {
                         side_effects: Vec::new(),
                     });
                 }
+                if self
+                    .service
+                    .external_editor_process_instance_is_current(&instance)
+                {
+                    return self
+                        .service
+                        .apply_external_editor_process_event(instance, event);
+                }
                 match event {
                     PaneProcessEvent::Pane(pane_event) => {
                         Box::pin(self.apply_runtime_event(RuntimeEvent::Pane(pane_event))).await

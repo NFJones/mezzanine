@@ -3003,7 +3003,10 @@ an editor session is active, the editor MUST exclusively own the initiating
 client's complete terminal: Mezzanine frames, prompts, overlays, and status rows
 MUST NOT be composed over it, terminal input MUST be forwarded without mux-key
 classification, and editor settlement MUST restore the Mezzanine presentation
-with a full redraw.
+with a full redraw. The editor MUST run as a direct subprocess on the Mezzanine
+server with a dedicated PTY, regardless of agent shell mode. Editor launch,
+input, output, resize, and completion MUST NOT pass through the pane shell or
+modify its history, pending input, terminal screen, or shell-transaction state.
 
 The `76 -> 77` migration MUST replace each `providers.<name>.models` string
 array with a table of model records. Every migrated record MUST preserve its

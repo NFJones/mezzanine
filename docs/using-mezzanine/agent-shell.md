@@ -30,7 +30,11 @@ slash commands, `$` skills, `#` macros, and `@` MCP server names where enabled.
 The prompt remains in this in-pane entry area by default. Press `Ctrl+A e` (or
 the active key preset's `edit_prompt` binding) to request external editing;
 closing a successful editor returns the text to the same prompt and never
-submits it automatically.
+submits it automatically. Mez launches the editor on the server machine as a
+direct subprocess with its own PTY. It does not run a command through the pane
+shell, so opening an editor does not add to shell history or disturb a command
+draft already present there. This behavior is the same in `pane` and `native`
+agent shell modes.
 Large bracketed pastes are shown as compact `[Pasted …]` blocks, but typed text
 and smaller pastes remain visible literally. History recall and `Ctrl+R` restore
 the same pasted blocks shown when the prompt was entered, and submission still

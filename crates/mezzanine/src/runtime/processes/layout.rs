@@ -742,6 +742,7 @@ impl RuntimeSessionService {
                 .find_pane_descriptor(effect.pane_id.as_str())
                 .ok_or_else(|| MezError::invalid_state("resized pane descriptor was not found"))?;
             let pane_id = descriptor.pane_id.as_str();
+            self.sync_external_editor_size(pane_id)?;
             let Some(primary_pid) = self.primary_pid_for_live_pane_process(pane_id) else {
                 continue;
             };

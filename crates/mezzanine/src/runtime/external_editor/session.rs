@@ -9,6 +9,10 @@ use super::recovery::{
     discover_external_editor_recoveries,
 };
 use crate::error::{MezError, Result};
+use crate::runtime::PaneProcessInstance;
+use mez_mux::process::PaneProcess;
+use mez_terminal::TerminalScreen;
+use std::time::Duration;
 
 /// Typed artifact being edited by one external-editor session.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -78,6 +82,7 @@ pub(super) struct ExternalEditorSession {
     pub(super) artifacts: ExternalEditorArtifacts,
     pub(super) commands: Vec<ResolvedExternalEditorCommand>,
     pub(super) recovery_manifest: ExternalEditorRecoveryManifest,
+    pub(super) process_instance: PaneProcessInstance,
 }
 
 /// Non-secret launch facts returned to target-specific UI code.
@@ -124,12 +129,151 @@ pub(crate) struct RuntimeExternalEditorComponent {
     pub(super) active_by_pane: BTreeMap<String, ExternalEditorSession>,
     pub(super) completed_by_pane: BTreeMap<String, ExternalEditorCompletion>,
     pub(super) recoveries_by_id: BTreeMap<String, ExternalEditorRecoveryRecord>,
+    /// Direct editor PTYs awaiting handoff to the async process supervisor.
+    pending_processes: BTreeMap<String, PaneProcess>,
+    /// Terminal state rendered during full-client editor takeover.
+    screens_by_pane: BTreeMap<String, TerminalScreen>,
+    /// Next synthetic process generation assigned to a direct editor child.
+    next_process_generation: u64,
     /// Test-only one-shot failure for completion-time recovery persistence.
     #[cfg(test)]
     fail_next_completion_recovery_write: bool,
 }
 
 impl RuntimeExternalEditorComponent {
+    /// Allocates the process identity used by one server-local editor child.
+    pub(super) fn allocate_process_instance(
+        &mut self,
+        session_id: &str,
+    ) -> Result<PaneProcessInstance> {
+        self.next_process_generation =
+            self.next_process_generation.checked_add(1).ok_or_else(|| {
+                MezError::invalid_state("external-editor process generation exhausted")
+            })?;
+        Ok(PaneProcessInstance {
+            pane_id: format!("@external-editor:{session_id}"),
+            generation: self.next_process_generation,
+        })
+    }
+
+    /// Installs the direct editor PTY and its independent terminal screen.
+    pub(super) fn install_process(
+        &mut self,
+        pane_id: &str,
+        instance: &PaneProcessInstance,
+        process: PaneProcess,
+        screen: TerminalScreen,
+    ) -> Result<()> {
+        if self.pending_processes.contains_key(&instance.pane_id)
+            || self.screens_by_pane.contains_key(pane_id)
+        {
+            return Err(MezError::conflict(
+                "external-editor process state already exists",
+            ));
+        }
+        self.pending_processes
+            .insert(instance.pane_id.clone(), process);
+        self.screens_by_pane.insert(pane_id.to_string(), screen);
+        Ok(())
+    }
+
+    /// Moves pending direct editor PTYs to the async process supervisor.
+    pub(super) fn take_pending_processes(
+        &mut self,
+        limit: usize,
+    ) -> Vec<(PaneProcessInstance, PaneProcess)> {
+        let keys = self
+            .pending_processes
+            .keys()
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.into_iter()
+            .filter_map(|key| {
+                let process = self.pending_processes.remove(&key)?;
+                let instance = self
+                    .active_by_pane
+                    .values()
+                    .find(|session| session.process_instance.pane_id == key)?
+                    .process_instance
+                    .clone();
+                Some((instance, process))
+            })
+            .collect()
+    }
+
+    /// Reports whether an event belongs to the current direct editor process.
+    pub(super) fn process_instance_is_current(&self, instance: &PaneProcessInstance) -> bool {
+        self.active_by_pane
+            .values()
+            .any(|session| session.process_instance == *instance)
+    }
+
+    /// Returns the pane lease owning one synthetic editor process.
+    pub(super) fn pane_for_process_instance(&self, instance: &PaneProcessInstance) -> Option<&str> {
+        self.active_by_pane
+            .values()
+            .find(|session| session.process_instance == *instance)
+            .map(|session| session.pane_id.as_str())
+    }
+
+    /// Returns the direct process identity for one active pane editor.
+    pub(super) fn process_instance(&self, pane_id: &str) -> Option<PaneProcessInstance> {
+        self.active(pane_id)
+            .map(|session| session.process_instance.clone())
+    }
+
+    /// Returns the independently modeled editor terminal screen.
+    pub(super) fn screen(&self, pane_id: &str) -> Option<&TerminalScreen> {
+        self.screens_by_pane.get(pane_id)
+    }
+
+    /// Returns mutable editor terminal state.
+    pub(super) fn screen_mut(&mut self, pane_id: &str) -> Option<&mut TerminalScreen> {
+        self.screens_by_pane.get_mut(pane_id)
+    }
+
+    /// Writes input directly while the process still awaits async handoff.
+    pub(super) fn write_pending_process_input(
+        &mut self,
+        instance: &PaneProcessInstance,
+        input: &[u8],
+    ) -> Result<bool> {
+        let Some(process) = self.pending_processes.get_mut(&instance.pane_id) else {
+            return Ok(false);
+        };
+        process.write_input(input)?;
+        Ok(true)
+    }
+
+    /// Resizes the direct PTY before its async worker claims ownership.
+    pub(super) fn resize_pending_process(
+        &self,
+        instance: &PaneProcessInstance,
+        size: crate::runtime::Size,
+    ) -> Result<bool> {
+        let Some(process) = self.pending_processes.get(&instance.pane_id) else {
+            return Ok(false);
+        };
+        process.resize(size)?;
+        Ok(true)
+    }
+
+    /// Removes process and terminal state after completion or abort.
+    pub(super) fn remove_process_state(&mut self, session: &ExternalEditorSession) {
+        if let Some(mut process) = self
+            .pending_processes
+            .remove(&session.process_instance.pane_id)
+        {
+            let _ = process.terminate(Duration::from_millis(100));
+        }
+        self.screens_by_pane.remove(&session.pane_id);
+    }
+
+    /// Reports whether the process still awaits async handoff.
+    pub(super) fn process_is_pending(&self, instance: &PaneProcessInstance) -> bool {
+        self.pending_processes.contains_key(&instance.pane_id)
+    }
     /// Discovers retained recovery records for one exact runtime session.
     pub(crate) fn discover(
         runtime_root: &std::path::Path,
@@ -323,6 +467,10 @@ mod tests {
                 ExternalEditTarget::AgentPrompt,
                 "before",
             ),
+            process_instance: PaneProcessInstance {
+                pane_id: "@external-editor:session-a".to_string(),
+                generation: 1,
+            },
         }
     }
 

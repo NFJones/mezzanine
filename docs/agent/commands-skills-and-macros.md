@@ -71,7 +71,9 @@ runtime-owned project issues rather than an external tracker, and `/issue edit
 <id> body|notes` externally edits only the selected prose field. Structured
 metadata remains in typed commands. Durable edits use full-record
 compare-and-swap checks, so concurrent changes or deletion retain the private
-draft for `/editor-recovery` instead of overwriting the record. `/init` creates
+draft for `/editor-recovery` instead of overwriting the record. External editors
+run directly on the Mez server with a dedicated PTY and never through the pane
+shell, regardless of agent shell mode. `/init` creates
 a project instruction scaffold. `/auth-status`, `/refresh-provider-info`,
 `/debug-config`, `/reset-status`, and `/log-level` provide non-secret
 authentication, provider, configuration, token-accounting, and verbosity

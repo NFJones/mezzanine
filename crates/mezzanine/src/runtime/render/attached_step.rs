@@ -376,7 +376,9 @@ impl RuntimeSessionService {
             self.clear_copy_state_for_surface(&pane_id, crate::runtime::PaneSurfaceKind::Process);
             let transition = RuntimeTransition {
                 applied: true,
-                side_effects: vec![self.deferred_pane_input_effect(pane_id, bytes.to_vec())],
+                side_effects: vec![
+                    self.deferred_external_editor_input_effect(&pane_id, bytes.to_vec())?,
+                ],
             };
             self.presentation.capture_projected_client_state();
             return Ok(transition);
@@ -493,9 +495,9 @@ impl RuntimeSessionService {
                 );
                 if defer_pane_io {
                     pane_input_effects
-                        .push(self.deferred_pane_input_effect(pane_id.clone(), input.clone()));
+                        .push(self.deferred_external_editor_input_effect(&pane_id, input.clone())?);
                 } else {
-                    self.write_runtime_pane_input(&pane_id, input)?;
+                    self.write_external_editor_input(&pane_id, input)?;
                 }
                 report.forwarded_bytes = report.forwarded_bytes.saturating_add(input.len());
             }

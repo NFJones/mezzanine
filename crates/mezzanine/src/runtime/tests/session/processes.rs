@@ -2410,10 +2410,17 @@ fn runtime_external_editor_session_routes_input_and_retains_completion() {
         service.presented_pane_surface("%1"),
         PaneSurfaceKind::Process
     );
-    assert_eq!(
-        service.renderable_pane_output_bytes("%1", b"editor-visible"),
-        b"editor-visible",
-        "external-editor output must override hidden agent-subshell rendering"
+    service
+        .external_editor_screen_mut_for_tests("%1")
+        .unwrap()
+        .feed(b"editor-visible");
+    assert!(
+        service
+            .external_editor_screen("%1")
+            .unwrap()
+            .visible_lines()[0]
+            .contains("editor-visible"),
+        "external-editor output must use its independent terminal screen"
     );
     assert!(
         service
@@ -2434,25 +2441,20 @@ fn runtime_external_editor_session_routes_input_and_retains_completion() {
     assert_eq!(input.side_effects.len(), 1);
     assert!(matches!(
         &input.side_effects[0],
-        RuntimeSideEffect::WritePaneInput { pane_id, bytes }
-            if pane_id == "%1" && bytes == b"\x01e"
+        RuntimeSideEffect::PaneProcessIo {
+            instance,
+            effect: crate::runtime::PaneProcessIoEffect::WriteInput { bytes },
+        } if instance.pane_id == format!("@external-editor:{}", started.session_id)
+            && bytes == b"\x01e"
     ));
 
-    let turn_id = format!("external-editor-{}", started.session_id);
     assert_eq!(
         service
-            .observe_agent_shell_transaction_start("%1", &started.marker, &turn_id, "mez-ui", "%1",)
-            .unwrap(),
-        1
-    );
-    assert_eq!(
-        service
-            .observe_agent_shell_transaction_end(
+            .complete_external_editor_session(
                 "%1",
+                &started.session_id,
+                &started.completion_nonce,
                 &started.marker,
-                &turn_id,
-                "mez-ui",
-                "%1",
                 0,
             )
             .unwrap(),

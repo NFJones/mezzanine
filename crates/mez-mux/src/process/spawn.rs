@@ -14,6 +14,70 @@ use super::pane::{PaneProcess, configure_pty_master_nonblocking};
 use super::pty::pty_size;
 use super::types::{PaneCommandPlan, PaneProcessEnvironment, PaneProcessLaunch};
 
+/// Opens a PTY and starts one argv-addressed program directly.
+///
+/// This path does not invoke a shell. The child receives the server process
+/// environment plus the supplied overrides, starts in `start_directory` when
+/// present, and owns a fresh controlling terminal sized to `size`.
+pub fn spawn_argv_pty_process(
+    executable: &Path,
+    arguments: &[String],
+    environment: &[(String, String)],
+    size: TerminalSize,
+    start_directory: Option<&Path>,
+) -> Result<PaneProcess> {
+    if executable.as_os_str().is_empty() {
+        return Err(MezError::invalid_args(
+            "PTY process executable must not be empty",
+        ));
+    }
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(pty_size(size))
+        .map_err(|error| MezError::invalid_state(format!("failed to open process PTY: {error}")))?;
+
+    let mut command = CommandBuilder::new(executable);
+    command.args(arguments);
+    let initial_working_directory = initial_working_directory(start_directory);
+    if let Some(start_directory) = start_directory {
+        validate_start_directory(start_directory)?;
+        command.cwd(start_directory);
+    }
+    for (key, value) in environment {
+        command.env(key, value);
+    }
+
+    let child = pair
+        .slave
+        .spawn_command(command)
+        .map_err(|error| MezError::io(format!("failed to spawn PTY process: {error}")))?;
+    drop(pair.slave);
+
+    let primary_pid = child
+        .process_id()
+        .ok_or_else(|| MezError::invalid_state("spawned PTY process did not expose a pid"))?;
+    let process_group_leader = pair.master.process_group_leader();
+    configure_pty_master_nonblocking(pair.master.as_ref())?;
+
+    Ok(PaneProcess {
+        child,
+        master: pair.master,
+        output_backlog: std::collections::VecDeque::new(),
+        output_read_buffer: vec![0; super::pty::PTY_IO_CHUNK_BYTES],
+        output_backlog_limit_bytes: super::pane::DEFAULT_OUTPUT_BACKLOG_LIMIT_BYTES,
+        output_activity_sequence: 0,
+        output_closed: false,
+        #[cfg(target_os = "macos")]
+        shell_input_acknowledgements_supported: false,
+        #[cfg(target_os = "macos")]
+        shell_input_acknowledgements_seen: 0,
+        primary_pid,
+        process_group_leader,
+        initial_working_directory,
+        exit_status: None,
+    })
+}
+
 /// Runs the pane command plan operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

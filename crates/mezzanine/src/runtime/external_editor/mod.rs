@@ -1,9 +1,8 @@
 //! Runtime-owned external-editor sessions.
 //!
 //! This subsystem owns private draft artifacts, pane-scoped edit leases,
-//! editor command resolution, and completion records. Process launch remains
-//! on the managed pane-shell transaction path so a blocking editor inherits
-//! the pane PTY without becoming a model-authored shell action.
+//! editor command resolution, direct server-local PTY processes, independent
+//! terminal screens, and completion records. Pane shells are never involved.
 
 #![allow(
     dead_code,

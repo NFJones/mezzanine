@@ -48,7 +48,9 @@ successful editor close, the edited text returns to the in-pane prompt for
 review and normal submission. While the editor is open, it exclusively owns
 the complete attached terminal: Mez frames, prompts, overlays, and status rows
 are hidden, the editor receives raw terminal input, and closing it restores a
-full Mez redraw.
+full Mez redraw. The editor is a server-local subprocess on a dedicated PTY;
+the pane shell is not invoked, and its history, current input, and terminal
+screen remain unchanged.
 
 Changed drafts that cannot be safely applied after an editor failure,
 interruption, restart, or conflict remain in private host-owned recovery

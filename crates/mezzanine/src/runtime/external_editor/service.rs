@@ -1,10 +1,12 @@
 //! Runtime service integration for pane-scoped external-editor sessions.
 //!
-//! Launches reuse authenticated pane-shell transactions with typed argv and an
-//! inherited terminal. The editor session owns target content and private
-//! artifacts independently from shell-action results or model transcripts.
+//! Editors run as server-local subprocesses on dedicated PTYs. Pane shells are
+//! never invoked or written, so editor execution cannot alter user history,
+//! drafts, shell protocol state, or pane terminal contents.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::Path;
 
 use super::artifacts::create_external_editor_artifacts;
 use super::command::resolve_external_editor_commands;
@@ -24,38 +26,17 @@ use crate::runtime::render::{
     normalize_external_agent_prompt,
 };
 use crate::runtime::{
-    AgentShellVisibility, PaneReadinessState, RenderInvalidationReason,
-    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService, Size,
-    current_unix_millis, runtime_pane_by_id, runtime_random_marker_token,
+    AgentShellVisibility, PaneProcessEvent, PaneProcessInstance, PaneProcessIoEffect,
+    PaneReadinessState, ProcessEvent, RenderInvalidationReason, RuntimeSessionService,
+    RuntimeSideEffect, RuntimeTransition, Size, current_unix_millis, runtime_pane_by_id,
+    runtime_random_marker_token,
 };
 use crate::ui::readline::ReadlineInputDecoder;
-use mez_agent::{
-    ShellChildArgument, ShellChildLaunch, ShellLaunchArtifact, ShellLaunchArtifactId,
-    ShellTransaction,
-};
+use mez_mux::process::{PaneProcess, spawn_argv_pty_process};
+use mez_terminal::TerminalScreen;
 
 impl RuntimeSessionService {
-    /// Renders editor-owned shell input, allowing Bash without a private
-    /// receiver to use the ordinary POSIX wrapper only when no hidden
-    /// parent-shell draft is tracked.
-    pub(crate) fn render_external_editor_shell_input(
-        &self,
-        pane_id: &str,
-        transaction: &ShellTransaction,
-        classification: mez_agent::ShellClassification,
-    ) -> mez_agent::ShellTransactionInput {
-        let mut input = transaction.render_for_classification_input(classification);
-        if input.is_empty()
-            && classification == mez_agent::ShellClassification::Bash
-            && !self.pane_has_unsubmitted_process_input(pane_id)
-        {
-            input = transaction
-                .render_for_classification_input(mez_agent::ShellClassification::PosixSh);
-        }
-        input
-    }
-
-    /// Starts one blocking editor session through the focused pane shell.
+    /// Starts one blocking editor session as a server-local PTY subprocess.
     pub(crate) fn start_external_editor_session(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
@@ -76,18 +57,9 @@ impl RuntimeSessionService {
                 "pane already has an active external-editor session",
             ));
         }
-        if self.managed_shell_handoff_is_pending(pane_id) {
-            return Err(MezError::conflict(
-                "pane has an active managed-shell handoff",
-            ));
-        }
-        if self.pane_has_running_shell_transaction(pane_id) {
-            return Err(MezError::conflict("pane has an active shell transaction"));
-        }
         if self.pane_is_closing(pane_id) {
             return Err(MezError::conflict("pane is closing"));
         }
-        self.require_pane_ready_for_agent_command(pane_id)?;
         let primary_pid = self
             .primary_pid_for_live_pane_process(pane_id)
             .ok_or_else(|| {
@@ -96,7 +68,7 @@ impl RuntimeSessionService {
                     "pane process not found",
                 )
             })?;
-        let process_instance = self.adapter_owned_pane_process_instance(pane_id);
+        let pane_process_instance = self.adapter_owned_pane_process_instance(pane_id);
         let session_id = runtime_random_marker_token(&format!(
             "external-editor-session\0{}\0{pane_id}\0{}",
             self.session.id,
@@ -127,40 +99,9 @@ impl RuntimeSessionService {
             &planned_draft_path,
         )?;
         let runner_manifest = external_editor_runner_manifest(&commands)?;
-        let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;
-        let manifest_id = ShellLaunchArtifactId::new("editor-manifest")?;
-        let manifest = ShellLaunchArtifact::new(manifest_id.clone(), runner_manifest, 0o400)?;
         let runner = std::env::current_exe().map_err(|error| {
             MezError::invalid_state(format!("failed to locate external-editor runner: {error}"))
         })?;
-        let runner = runner.to_str().ok_or_else(|| {
-            MezError::invalid_state("external-editor runner path is not valid UTF-8")
-        })?;
-        let child_launch = ShellChildLaunch::new_with_artifacts(
-            runner,
-            vec![
-                ShellChildArgument::Literal(INTERNAL_EDITOR_ARGUMENT.to_string()),
-                ShellChildArgument::MaterializedArtifact(manifest_id),
-            ],
-            vec![manifest],
-        )?
-        .with_inherited_terminal();
-        let transaction = self.configure_shell_transaction_for_pane(
-            pane_id,
-            ShellTransaction::new(
-                marker,
-                format!("external-editor-{session_id}"),
-                "mez-ui",
-                pane_id,
-                shell_identity.shell_path(),
-                "",
-            )?
-            .with_child_launch(child_launch),
-        );
-        let classification = shell_identity.classification();
-        let transaction_input =
-            self.render_external_editor_shell_input(pane_id, &transaction, classification);
-        self.require_generated_shell_input(&transaction_input)?;
         let artifacts =
             create_external_editor_artifacts(runtime_root, &session_id, &initial_draft_content)?;
         let recovery_manifest = ExternalEditorRecoveryManifest::new(
@@ -174,20 +115,41 @@ impl RuntimeSessionService {
             let _ = fs::remove_dir_all(&artifacts.session_directory);
             return Err(error);
         }
-        let mut wrapper = transaction_input.wrapper;
-        if !wrapper.ends_with('\n') {
-            wrapper.push('\n');
+        let manifest_path = artifacts.session_directory.join("runner.json");
+        if let Err(error) = write_external_editor_runner_manifest(&manifest_path, &runner_manifest)
+        {
+            let _ = fs::remove_dir_all(&artifacts.session_directory);
+            return Err(error);
         }
-        let receiver_payload = (!transaction_input.receiver_payload.is_empty()).then(|| {
-            mez_mux::process::ShellInputDelivery::receiver_acknowledged(
-                transaction_input.receiver_payload.into_bytes(),
-                marker_id.clone(),
-                true,
-            )
-        });
-        let requires_payload_receiver_ready = shell_identity.classification()
-            == mez_agent::ShellClassification::Fish
-            && !transaction_input.payload.is_empty();
+        let size = self.external_editor_terminal_size_for_client(primary_client_id)?;
+        let process_instance = self
+            .external_editor
+            .allocate_process_instance(&session_id)?;
+        let environment = self
+            .pane_environment_path(pane_id)
+            .map(|path| vec![("PATH".to_string(), path)])
+            .unwrap_or_default()
+            .into_iter()
+            .chain(std::iter::once((
+                "TERM".to_string(),
+                self.terminal_term().to_string(),
+            )))
+            .collect::<Vec<_>>();
+        let process = spawn_argv_pty_process(
+            &runner,
+            &[
+                INTERNAL_EDITOR_ARGUMENT.to_string(),
+                manifest_path.to_string_lossy().into_owned(),
+            ],
+            &environment,
+            size,
+            self.pane_current_working_directory(pane_id).as_deref(),
+        )
+        .map_err(|error| {
+            let _ = fs::remove_dir_all(&artifacts.session_directory);
+            MezError::invalid_state(format!("failed to launch external editor: {error}"))
+        })?;
+        let screen = TerminalScreen::new_with_history_config(size, 1, 1)?;
         let artifact_session_directory = artifacts.session_directory.clone();
         if let Err(error) = self.external_editor.start(ExternalEditorSession {
             session_id: session_id.clone(),
@@ -197,7 +159,7 @@ impl RuntimeSessionService {
             pane_id: pane_id.to_string(),
             pane_identity: ExternalEditorPaneIdentity {
                 primary_pid,
-                generation: process_instance
+                generation: pane_process_instance
                     .as_ref()
                     .map(|instance| instance.generation),
             },
@@ -207,49 +169,20 @@ impl RuntimeSessionService {
             artifacts,
             commands,
             recovery_manifest,
+            process_instance: process_instance.clone(),
         }) {
             let _ = fs::remove_dir_all(&artifact_session_directory);
             return Err(error);
         }
-        self.set_pane_readiness(pane_id, PaneReadinessState::Busy);
-        self.register_running_shell_transaction(
-            marker_id.clone(),
-            RunningShellTransactionRef {
-                turn_id: format!("external-editor-{session_id}"),
-                kind: RunningShellTransactionKind::ExternalEditor {
-                    session_id: session_id.clone(),
-                    completion_nonce: completion_nonce.clone(),
-                },
-                pane_id: pane_id.to_string(),
-                command: String::new(),
-                started_at_unix_ms: current_unix_millis(),
-                timeout_ms: None,
-                pending_input_payload: (!transaction_input.payload.is_empty()).then(|| {
-                    mez_mux::process::ShellInputDelivery::receiver_acknowledged(
-                        transaction_input.payload.into_bytes(),
-                        marker_id.clone(),
-                        transaction_input.payload_receiver_acknowledgements,
-                    )
-                }),
-                observed_output_bytes: 0,
-                observed_output_preview: String::new(),
-                observed_output_truncated: false,
-            },
-            true,
-        );
-        if requires_payload_receiver_ready {
-            self.require_shell_transaction_payload_receiver_ready(&marker_id);
-        }
-        if let Some(receiver_payload) = receiver_payload {
-            self.register_shell_receiver_payload(&marker_id, receiver_payload);
-        }
-        if let Err(error) = self.write_runtime_pane_shell_input(pane_id, wrapper.as_bytes()) {
-            self.remove_running_shell_transaction(&marker_id);
-            self.clear_shell_transaction_protocol_state(&marker_id);
-            let _ = self.abort_external_editor_session(pane_id);
-            self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+        if let Err(error) =
+            self.external_editor
+                .install_process(pane_id, &process_instance, process, screen)
+        {
+            let _ = self.external_editor.abort(pane_id);
+            let _ = fs::remove_dir_all(&artifact_session_directory);
             return Err(error);
         }
+        self.set_pane_readiness(pane_id, PaneReadinessState::Busy);
         Ok(ExternalEditorSessionStart {
             session_id,
             completion_nonce,
@@ -277,6 +210,219 @@ impl RuntimeSessionService {
             .find(|client| client.id.as_str() == initiating_client_id)
             .and_then(|client| client.terminal.as_ref())?;
         Size::new(terminal.columns, terminal.rows).ok()
+    }
+
+    fn external_editor_terminal_size_for_client(
+        &self,
+        client_id: &mez_core::ids::ClientId,
+    ) -> Result<Size> {
+        let terminal = self
+            .session
+            .clients()
+            .iter()
+            .find(|client| client.id == *client_id)
+            .and_then(|client| client.terminal.as_ref())
+            .ok_or_else(|| {
+                MezError::invalid_state("external-editor client terminal is unavailable")
+            })?;
+        Ok(Size::new(terminal.columns, terminal.rows)?)
+    }
+
+    /// Returns the terminal state owned exclusively by an active editor.
+    pub(crate) fn external_editor_screen(&self, pane_id: &str) -> Option<&TerminalScreen> {
+        self.external_editor.screen(pane_id)
+    }
+
+    /// Returns mutable editor terminal state for focused runtime tests.
+    #[cfg(test)]
+    pub(crate) fn external_editor_screen_mut_for_tests(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<&mut TerminalScreen> {
+        self.external_editor.screen_mut(pane_id)
+    }
+
+    /// Returns the active editor's exact completion identities for tests.
+    #[cfg(test)]
+    pub(crate) fn external_editor_identities_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> Option<(String, String, String)> {
+        self.external_editor.active(pane_id).map(|session| {
+            (
+                session.marker.clone(),
+                session.session_id.clone(),
+                session.completion_nonce.clone(),
+            )
+        })
+    }
+
+    /// Moves pending direct editor processes to the async PTY supervisor.
+    pub(in crate::runtime) fn take_pending_external_editor_processes(
+        &mut self,
+        limit: usize,
+    ) -> Vec<(PaneProcessInstance, PaneProcess)> {
+        self.external_editor.take_pending_processes(limit)
+    }
+
+    /// Reports whether one async process identity is the active direct editor.
+    pub(crate) fn external_editor_process_instance_is_current(
+        &self,
+        instance: &PaneProcessInstance,
+    ) -> bool {
+        self.external_editor.process_instance_is_current(instance)
+    }
+
+    /// Builds opaque input delivery for the dedicated editor PTY.
+    pub(crate) fn deferred_external_editor_input_effect(
+        &self,
+        pane_id: &str,
+        bytes: Vec<u8>,
+    ) -> Result<RuntimeSideEffect> {
+        let instance = self
+            .external_editor
+            .process_instance(pane_id)
+            .ok_or_else(|| MezError::invalid_state("external-editor process is unavailable"))?;
+        Ok(RuntimeSideEffect::PaneProcessIo {
+            instance,
+            effect: PaneProcessIoEffect::WriteInput { bytes },
+        })
+    }
+
+    /// Writes editor input before async handoff, or queues it for the worker.
+    pub(crate) fn write_external_editor_input(
+        &mut self,
+        pane_id: &str,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let instance = self
+            .external_editor
+            .process_instance(pane_id)
+            .ok_or_else(|| MezError::invalid_state("external-editor process is unavailable"))?;
+        if self
+            .external_editor
+            .write_pending_process_input(&instance, bytes)?
+        {
+            return Ok(());
+        }
+        self.persistence
+            .queue_pane_input(RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect: PaneProcessIoEffect::WriteInput {
+                    bytes: bytes.to_vec(),
+                },
+            });
+        Ok(())
+    }
+
+    /// Synchronizes the dedicated editor PTY and screen to the owning client.
+    pub(crate) fn sync_external_editor_size(&mut self, pane_id: &str) -> Result<()> {
+        let Some(size) = self.external_editor_terminal_size(pane_id) else {
+            return Ok(());
+        };
+        let Some(instance) = self.external_editor.process_instance(pane_id) else {
+            return Ok(());
+        };
+        if !self
+            .external_editor
+            .resize_pending_process(&instance, size)?
+        {
+            self.persistence.queue_pane_resize(
+                instance.pane_id.clone(),
+                RuntimeSideEffect::PaneProcessIo {
+                    instance,
+                    effect: PaneProcessIoEffect::Resize { size },
+                },
+            );
+        }
+        if let Some(screen) = self.external_editor.screen_mut(pane_id) {
+            screen.resize(size);
+        }
+        Ok(())
+    }
+
+    /// Applies one event from a server-local editor PTY worker.
+    pub(crate) fn apply_external_editor_process_event(
+        &mut self,
+        instance: PaneProcessInstance,
+        event: PaneProcessEvent,
+    ) -> Result<RuntimeTransition> {
+        let Some(pane_id) = self
+            .external_editor
+            .pane_for_process_instance(&instance)
+            .map(str::to_string)
+        else {
+            return Ok(RuntimeTransition::default());
+        };
+        match event {
+            PaneProcessEvent::Pane(crate::runtime::PaneEvent::Output { bytes, .. }) => {
+                let screen = self.external_editor.screen_mut(&pane_id).ok_or_else(|| {
+                    MezError::invalid_state("external-editor screen is unavailable")
+                })?;
+                screen.feed(&bytes);
+                Ok(RuntimeTransition {
+                    applied: true,
+                    side_effects: self.render_effects_for_clients_projecting_pane(
+                        &pane_id,
+                        RenderInvalidationReason::PaneOutput,
+                    ),
+                })
+            }
+            PaneProcessEvent::Pane(crate::runtime::PaneEvent::Resized { size, .. }) => {
+                if let Some(screen) = self.external_editor.screen_mut(&pane_id) {
+                    screen.resize(size);
+                }
+                Ok(RuntimeTransition::default())
+            }
+            PaneProcessEvent::Pane(crate::runtime::PaneEvent::WriteFailed { error, .. })
+            | PaneProcessEvent::Process(ProcessEvent::Failed { error, .. }) => {
+                self.abort_external_editor_session(&pane_id)?;
+                self.show_primary_error_overlay(vec![format!(
+                    "mez error: external editor failed: {error}"
+                )])?;
+                Ok(RuntimeTransition {
+                    applied: true,
+                    side_effects: self.render_effects_for_clients_projecting_pane(
+                        &pane_id,
+                        RenderInvalidationReason::FullRedraw,
+                    ),
+                })
+            }
+            PaneProcessEvent::Process(ProcessEvent::Exited {
+                exit_code, signal, ..
+            }) => {
+                let active = self.external_editor.active(&pane_id).ok_or_else(|| {
+                    MezError::invalid_state("external-editor lease is unavailable")
+                })?;
+                let session_id = active.session_id.clone();
+                let completion_nonce = active.completion_nonce.clone();
+                let marker = active.marker.clone();
+                let code = exit_code.unwrap_or_else(|| {
+                    signal
+                        .as_deref()
+                        .and_then(|value| value.parse::<i32>().ok())
+                        .map_or(1, |signal| 128_i32.saturating_add(signal))
+                });
+                let applied = self.complete_external_editor_session(
+                    &pane_id,
+                    &session_id,
+                    &completion_nonce,
+                    &marker,
+                    code,
+                )? > 0;
+                Ok(RuntimeTransition {
+                    applied,
+                    side_effects: self.render_effects_for_clients_projecting_pane(
+                        &pane_id,
+                        RenderInvalidationReason::FullRedraw,
+                    ),
+                })
+            }
+            PaneProcessEvent::Pane(crate::runtime::PaneEvent::InputWritten { .. })
+            | PaneProcessEvent::Pane(crate::runtime::PaneEvent::ForegroundProcess { .. })
+            | PaneProcessEvent::Process(ProcessEvent::Spawned { .. })
+            | PaneProcessEvent::ForegroundProcessObservation(_) => Ok(RuntimeTransition::default()),
+        }
     }
 
     /// Restores normal pane geometry and invalidates every projection after takeover.
@@ -368,8 +514,19 @@ impl RuntimeSessionService {
         let Some(session) = self.external_editor.abort(pane_id) else {
             return Ok(false);
         };
-        self.remove_running_shell_transaction(&session.marker);
-        self.clear_shell_transaction_protocol_state(&session.marker);
+        let pending = self
+            .external_editor
+            .process_is_pending(&session.process_instance);
+        if !pending {
+            self.persistence.queue_pane_termination(
+                session.process_instance.pane_id.clone(),
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: session.process_instance.clone(),
+                    effect: PaneProcessIoEffect::Terminate { force: false },
+                },
+            );
+        }
+        self.external_editor.remove_process_state(&session);
         let _ = write_recovery_manifest(&session.artifacts, &session.recovery_manifest);
         let completion = ExternalEditorCompletion {
             session_id: session.session_id.clone(),
@@ -415,8 +572,8 @@ impl RuntimeSessionService {
         Ok(aborted)
     }
 
-    /// Settles one editor transaction only for its exact retained identities.
-    pub(in crate::runtime) fn observe_external_editor_transaction_end(
+    /// Settles one direct editor process only for its exact retained identities.
+    pub(in crate::runtime) fn complete_external_editor_session(
         &mut self,
         pane_id: &str,
         session_id: &str,
@@ -440,12 +597,14 @@ impl RuntimeSessionService {
         }
         let active_manifest = active.recovery_manifest.clone();
         let active_artifacts = active.artifacts.clone();
+        let active_session = active.clone();
         let Some(mut completion) =
             self.external_editor
                 .complete(pane_id, session_id, completion_nonce, marker, exit_code)
         else {
             return Ok(0);
         };
+        self.external_editor.remove_process_state(&active_session);
         self.restore_external_editor_terminal_presentation(pane_id)?;
         let mut recovery_manifest = active_manifest.clone();
         let validation = super::artifacts::validate_external_editor_draft(
@@ -781,4 +940,26 @@ impl RuntimeSessionService {
         }
         Ok((record, manifest))
     }
+}
+
+/// Creates the owner-only inert manifest consumed by the internal runner.
+fn write_external_editor_runner_manifest(path: &Path, content: &[u8]) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o400);
+    }
+    let mut file = options.open(path).map_err(|error| {
+        MezError::invalid_state(format!(
+            "failed to create external-editor manifest: {error}"
+        ))
+    })?;
+    file.write_all(content).map_err(|error| {
+        MezError::invalid_state(format!("failed to write external-editor manifest: {error}"))
+    })?;
+    file.sync_all().map_err(|error| {
+        MezError::invalid_state(format!("failed to sync external-editor manifest: {error}"))
+    })
 }

@@ -90,12 +90,6 @@ impl RuntimeSessionService {
                 "external prompt editing is unavailable while an agent turn is active",
             ));
         }
-        if self.pane_readiness_state(pane_id) == crate::runtime::PaneReadinessState::PromptCandidate
-        {
-            self.dispatch_agent_prompt_editor_readiness_probe(primary_client_id, pane_id)?;
-            return Ok(true);
-        }
-
         let prompt_input = self
             .agent_prompt_input_for_client(primary_client_id, pane_id)
             .unwrap_or_else(super::default_runtime_agent_prompt_input);

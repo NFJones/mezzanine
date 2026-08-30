@@ -3,24 +3,19 @@
 use super::*;
 use crate::runtime::{PaneSurfaceKind, RenderInvalidationReason};
 
-/// Returns the live editor transaction identities created by the prompt binding.
+/// Returns the live direct-editor identities created by the prompt binding.
 fn editor_transaction(service: &RuntimeSessionService) -> (String, String, String, String) {
     service
-        .running_shell_transactions_for_tests()
-        .iter()
-        .find_map(|(marker, transaction)| match &transaction.kind {
-            RunningShellTransactionKind::ExternalEditor {
+        .external_editor_identities_for_tests("%1")
+        .map(|(marker, session_id, completion_nonce)| {
+            (
+                marker,
+                "direct-editor".to_string(),
                 session_id,
                 completion_nonce,
-            } => Some((
-                marker.clone(),
-                transaction.turn_id.clone(),
-                session_id.clone(),
-                completion_nonce.clone(),
-            )),
-            _ => None,
+            )
         })
-        .expect("prompt binding should create an editor transaction")
+        .expect("prompt binding should create a direct editor process")
 }
 
 /// Builds a visible editable prompt backed by a live pane process.
@@ -54,7 +49,7 @@ fn prompt_editor_fixture(name: &str) -> (RuntimeSessionService, mez_core::ids::C
     (service, primary, root)
 }
 
-/// Invokes the semantic binding and returns its correlated transaction identities.
+/// Invokes the semantic binding and returns its correlated editor identities.
 fn start_prompt_editor(
     service: &mut RuntimeSessionService,
     primary: &mez_core::ids::ClientId,
@@ -96,7 +91,7 @@ fn runtime_prompt_editor_takes_over_complete_terminal_projection() {
     let _identities = start_prompt_editor(&mut service, &primary);
     let takeover_size = Size::new(40, 16).unwrap();
     service
-        .process_pane_screen_mut("%1")
+        .external_editor_screen_mut_for_tests("%1")
         .unwrap()
         .feed(b"\x1b[2J\x1b[HEDITOR FULL SCREEN");
 
@@ -111,10 +106,10 @@ fn runtime_prompt_editor_takes_over_complete_terminal_projection() {
             .find(|descriptor| descriptor.pane_id.as_str() == "%1")
             .unwrap()
             .size,
-        takeover_size
+        Size::new(40, 14).unwrap()
     );
     assert_eq!(
-        service.process_pane_screen("%1").unwrap().size(),
+        service.external_editor_screen("%1").unwrap().size(),
         takeover_size
     );
 
@@ -161,7 +156,11 @@ fn runtime_prompt_editor_takes_over_complete_terminal_projection() {
     assert_eq!(input_effects.len(), 1);
     assert_eq!(
         input_effects[0].pane_input_parts(),
-        ("%1", b"editor input".as_slice(), false)
+        (
+            format!("@external-editor:{}", _identities.2).as_str(),
+            b"editor input".as_slice(),
+            false
+        )
     );
     assert!(service.primary_error_status_overlay().is_some());
 
@@ -169,7 +168,7 @@ fn runtime_prompt_editor_takes_over_complete_terminal_projection() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Completes the correlated shell transaction after replacing its private draft.
+/// Completes the correlated direct editor after replacing its private draft.
 fn complete_prompt_editor(
     service: &mut RuntimeSessionService,
     root: &Path,
@@ -177,17 +176,14 @@ fn complete_prompt_editor(
     draft: &[u8],
     exit_code: i32,
 ) {
-    let (marker, turn_id, session_id, _) = identities;
+    let (marker, _, session_id, completion_nonce) = identities;
     let draft_path = root
         .join("runtime/editor-sessions")
         .join(session_id)
         .join("draft.md");
     fs::write(draft_path, draft).unwrap();
     service
-        .observe_agent_shell_transaction_start("%1", marker, turn_id, "mez-ui", "%1")
-        .unwrap();
-    service
-        .observe_agent_shell_transaction_end("%1", marker, turn_id, "mez-ui", "%1", exit_code)
+        .complete_external_editor_session("%1", session_id, completion_nonce, marker, exit_code)
         .unwrap();
 }
 
@@ -273,12 +269,12 @@ fn runtime_prompt_editor_pane_mode_bash_does_not_require_private_receiver() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies Bash without a private receiver still rejects a dirty process prompt.
+/// Verifies a dirty Bash prompt is untouched by direct editor launch.
 ///
-/// The POSIX editor fallback must remain unavailable when user-originated input
-/// may be an unsubmitted shell draft, regardless of the configured shell mode.
+/// The editor runs on its own server-local PTY, so an unsubmitted pane-shell
+/// draft neither blocks editor startup nor receives generated wrapper input.
 #[test]
-fn runtime_prompt_editor_bash_without_receiver_rejects_unsubmitted_process_input() {
+fn runtime_prompt_editor_bash_without_receiver_preserves_unsubmitted_process_input() {
     let Some(bash_path) = bash_path_for_tests() else {
         eprintln!("skipping dirty Bash editor regression because bash is unavailable");
         return;
@@ -294,9 +290,20 @@ fn runtime_prompt_editor_bash_without_receiver_rejects_unsubmitted_process_input
         .unwrap();
     service.start_initial_pane_process(Some("cat")).unwrap();
     mark_test_pane_ready(&mut service, "%1");
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "dirty-bash-direct-editor-test".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[external_editor]\ncommand = [\"/bin/sh\", \"-c\", \"exit 0\", \"{file}\"]\nfallback = []\n"
+                .to_string(),
+        }])
+        .unwrap();
     service.record_user_process_input("%1", b"unsubmitted command");
 
-    let error = service
+    let started = service
         .start_external_editor_session(
             &primary,
             "%1",
@@ -305,15 +312,16 @@ fn runtime_prompt_editor_bash_without_receiver_rejects_unsubmitted_process_input
             String::new(),
             true,
         )
-        .expect_err("dirty Bash process input must prevent the POSIX editor fallback");
+        .expect("dirty pane-shell input is independent from the editor PTY");
 
-    assert!(
-        error
-            .message()
-            .contains("managed Bash private receiver is unavailable"),
-        "{error:?}"
+    assert!(service.external_editor_session_is_active("%1"));
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    assert_eq!(
+        service
+            .external_editor_identities_for_tests("%1")
+            .map(|(_, session_id, _)| session_id),
+        Some(started.session_id)
     );
-    assert!(!service.external_editor_session_is_active("%1"));
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(root);
 }
@@ -374,8 +382,8 @@ fn runtime_prompt_editor_native_bash_does_not_require_private_receiver() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies a prompt-candidate native Bash pane can run the editor-owned
-/// readiness probe without a private receiver and then launch the editor.
+/// Verifies a prompt-candidate native Bash pane launches the direct editor
+/// without requiring a private receiver or pane-shell readiness probe.
 #[test]
 fn runtime_prompt_editor_native_bash_resumes_after_readiness_probe() {
     let Some(bash_path) = bash_path_for_tests() else {
@@ -426,33 +434,15 @@ fn runtime_prompt_editor_native_bash_resumes_after_readiness_probe() {
         )
         .unwrap();
     assert_eq!(report.mux_actions_applied, 1);
-    let (marker, turn_id) = service
-        .running_shell_transactions_for_tests()
-        .iter()
-        .find_map(|(marker, transaction)| {
-            matches!(
-                transaction.kind,
-                RunningShellTransactionKind::AgentPromptEditorReadinessProbe { .. }
-            )
-            .then(|| (marker.clone(), transaction.turn_id.clone()))
-        })
-        .expect("native Bash prompt candidate should dispatch a readiness probe");
-
-    service
-        .observe_agent_shell_transaction_start("%1", &marker, &turn_id, "mez-ui", "%1")
-        .unwrap();
-    service
-        .observe_agent_shell_transaction_end("%1", &marker, &turn_id, "mez-ui", "%1", 0)
-        .unwrap();
-
     assert!(service.external_editor_session_is_active("%1"));
     assert!(service.bash_receiver_token_for_pane("%1").is_none());
+    assert!(service.running_shell_transactions_for_tests().is_empty());
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies a prompt-candidate pane is certified before the external editor
-/// wrapper is injected and that the original binding resumes automatically.
+/// Verifies a prompt-candidate pane starts the server-local editor immediately
+/// without injecting a readiness probe or editor wrapper into the pane shell.
 #[test]
 fn runtime_prompt_editor_binding_resumes_after_prompt_candidate_probe() {
     let (mut service, primary, root) = prompt_editor_fixture("prompt-editor-readiness");
@@ -475,37 +465,9 @@ fn runtime_prompt_editor_binding_resumes_after_prompt_candidate_probe() {
         .unwrap();
 
     assert_eq!(report.mux_actions_applied, 1);
-    assert!(!service.external_editor_session_is_active("%1"));
-    let (marker, turn_id) = service
-        .running_shell_transactions_for_tests()
-        .iter()
-        .find_map(|(marker, transaction)| {
-            matches!(
-                transaction.kind,
-                RunningShellTransactionKind::AgentPromptEditorReadinessProbe { .. }
-            )
-            .then(|| (marker.clone(), transaction.turn_id.clone()))
-        })
-        .expect("prompt-candidate editor request should dispatch a readiness probe");
-
-    service
-        .observe_agent_shell_transaction_start("%1", &marker, &turn_id, "mez-ui", "%1")
-        .unwrap();
-    service
-        .observe_agent_shell_transaction_end("%1", &marker, &turn_id, "mez-ui", "%1", 0)
-        .unwrap();
-
     assert_eq!(service.pane_readiness_state("%1"), PaneReadinessState::Busy);
     assert!(service.external_editor_session_is_active("%1"));
-    assert!(
-        service
-            .running_shell_transactions_for_tests()
-            .values()
-            .any(|transaction| matches!(
-                transaction.kind,
-                RunningShellTransactionKind::ExternalEditor { .. }
-            ))
-    );
+    assert!(service.running_shell_transactions_for_tests().is_empty());
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(root);
 }
@@ -614,7 +576,7 @@ fn runtime_prompt_editor_recovery_write_failure_restores_usable_pane_state() {
         .unwrap();
     let expected = service.agent_prompt_inputs_for_tests()["%1"].clone();
     let identities = start_prompt_editor(&mut service, &primary);
-    let (marker, turn_id, session_id, _) = &identities;
+    let (marker, _, session_id, completion_nonce) = &identities;
     fs::write(
         root.join("runtime/editor-sessions")
             .join(session_id)
@@ -622,13 +584,10 @@ fn runtime_prompt_editor_recovery_write_failure_restores_usable_pane_state() {
         b"changed but not durably settled",
     )
     .unwrap();
-    service
-        .observe_agent_shell_transaction_start("%1", marker, turn_id, "mez-ui", "%1")
-        .unwrap();
     service.fail_next_external_editor_completion_recovery_write_for_tests();
 
     let error = service
-        .observe_agent_shell_transaction_end("%1", marker, turn_id, "mez-ui", "%1", 0)
+        .complete_external_editor_session("%1", session_id, completion_nonce, marker, 0)
         .expect_err("injected completion recovery write should fail");
 
     assert!(error.message().contains("injected external-editor"));
@@ -1343,7 +1302,7 @@ fn runtime_issue_external_editor_applies_only_selected_text_field() {
     assert!(response.contains("editor_started=true"), "{response}");
     let identities = editor_transaction(&service);
     assert_eq!(
-        service.process_pane_screen("%1").unwrap().size(),
+        service.external_editor_screen("%1").unwrap().size(),
         Size::new(40, 16).unwrap()
     );
     assert_eq!(

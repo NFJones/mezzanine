@@ -355,7 +355,7 @@ impl RuntimeSessionService {
         if !self.external_editor_session_is_active(pane_id) {
             return None;
         }
-        let screen = self.process_pane_screen(pane_id)?;
+        let screen = self.external_editor_screen(pane_id)?;
         let styled_lines = screen.presentation_visible_styled_lines();
         let cursor = screen.presentation_cursor_state();
         Some(RenderedClientView {
