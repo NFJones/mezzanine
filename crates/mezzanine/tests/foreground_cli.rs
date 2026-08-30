@@ -65,6 +65,20 @@ struct ForegroundProcess {
 /// Owns a detached test service and guarantees cleanup after assertion panic.
 struct DetachedServeProcess(ProcessChild);
 
+/// Panic-safe cleanup for one signal-resistant editor fixture process.
+struct FixtureProcessGuard(i32);
+
+impl Drop for FixtureProcessGuard {
+    /// Ensures a failed lifecycle assertion cannot leak the fixture child.
+    fn drop(&mut self) {
+        // SAFETY: the pid comes from the fixture process itself. A direct pid
+        // targets only that process and cleanup is best effort.
+        unsafe {
+            libc::kill(self.0, libc::SIGKILL);
+        }
+    }
+}
+
 impl Deref for DetachedServeProcess {
     type Target = ProcessChild;
 
@@ -862,6 +876,21 @@ fn wait_for_process_exit(child: &mut ProcessChild, timeout: Duration) -> Result<
     Err("detached serve child did not exit before timeout".to_string())
 }
 
+/// Waits until one raw process id no longer names a live or zombie process.
+fn wait_for_raw_process_exit(process_id: i32, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        // SAFETY: signal zero performs existence/permission probing without
+        // changing process state.
+        let result = unsafe { libc::kill(process_id, 0) };
+        if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Err(format!("process {process_id} did not exit before timeout"))
+}
+
 /// Runs the test root operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -888,6 +917,54 @@ fn output_excerpt(output: &[u8]) -> String {
     } else {
         format!("{}...", &escaped[..2000])
     }
+}
+
+/// Verifies interrupting the hidden editor runner terminates and reaps a
+/// signal-resistant editor instead of orphaning it under the system reaper.
+#[test]
+fn external_editor_runner_interrupt_reaps_signal_resistant_child() {
+    let root = test_root("external-editor-runner-interrupt");
+    fs::create_dir_all(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let manifest_path = root.join("manifest.json");
+    let editor_pid_path = root.join("editor.pid");
+    let script = "trap '' INT TERM HUP; printf '%s' \"$$\" > \"$1\"; while :; do sleep 1; done";
+    let manifest = serde_json::json!({
+        "version": 1,
+        "candidates": [[
+            "/bin/sh",
+            "-c",
+            script,
+            "external-editor-fixture",
+            editor_pid_path.to_string_lossy(),
+        ]],
+    });
+    fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let mut runner = Command::new(env!("CARGO_BIN_EXE_mez"))
+        .arg("--mez-internal-external-editor")
+        .arg(&manifest_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for_path(&editor_pid_path, Duration::from_secs(5)).unwrap();
+    let editor_pid = fs::read_to_string(&editor_pid_path)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
+    let editor_guard = FixtureProcessGuard(editor_pid);
+    let runner_pid = i32::try_from(runner.id()).unwrap();
+
+    // SAFETY: the runner pid was returned by the successful spawn above.
+    assert_eq!(unsafe { libc::kill(runner_pid, libc::SIGINT) }, 0);
+    wait_for_process_exit(&mut runner, Duration::from_secs(5)).unwrap();
+    wait_for_raw_process_exit(editor_pid, Duration::from_secs(5)).unwrap();
+
+    std::mem::forget(editor_guard);
+    let _ = fs::remove_dir_all(root);
 }
 
 /// Verifies the real product binary proves the complete code-owned Seatbelt
