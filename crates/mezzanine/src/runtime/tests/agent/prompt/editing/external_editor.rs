@@ -260,3 +260,227 @@ fn runtime_prompt_editor_binding_rejects_inactive_prompt() {
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(root);
 }
+
+/// Verifies failed changed drafts remain private and recoverable, observers
+/// cannot inspect or mutate them, explicit apply is conflict-safe, and discard
+/// remains idempotent after a successful apply consumes the recovery.
+#[test]
+fn runtime_prompt_editor_recovery_is_primary_authorized_and_conflict_safe() {
+    let (mut service, primary, root) = prompt_editor_fixture("prompt-editor-recovery-apply");
+    service
+        .apply_attached_agent_prompt_input_for_pane(&primary, "%1", b"original prompt")
+        .unwrap();
+    let identities = start_prompt_editor(&mut service, &primary);
+    let session_id = identities.2.clone();
+    complete_prompt_editor(
+        &mut service,
+        &root,
+        &identities,
+        b"retained private draft\n",
+        7,
+    );
+
+    assert_eq!(
+        service.agent_prompt_inputs_for_tests()["%1"]
+            .prompt
+            .buffer
+            .line(),
+        "original prompt"
+    );
+    let observer = service
+        .session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    assert!(service.list_external_editor_recoveries(&observer).is_err());
+    assert!(
+        service
+            .apply_external_editor_recovery(&observer, "%1", &session_id)
+            .is_err()
+    );
+    assert!(
+        service
+            .discard_external_editor_recovery(&observer, "%1", &session_id)
+            .is_err()
+    );
+
+    let listing = service.list_external_editor_recoveries(&primary).unwrap();
+    assert!(listing.contains(&session_id), "{listing}");
+    assert!(listing.contains("nonzero_exit"), "{listing}");
+    assert!(!listing.contains("retained private draft"), "{listing}");
+
+    service
+        .apply_attached_agent_prompt_input_for_pane(&primary, "%1", b" changed")
+        .unwrap();
+    assert!(
+        service
+            .apply_external_editor_recovery(&primary, "%1", &session_id)
+            .is_err()
+    );
+    let listing = service.list_external_editor_recoveries(&primary).unwrap();
+    assert!(listing.contains("conflicted"), "{listing}");
+
+    service
+        .agent_prompt_inputs_mut_for_tests()
+        .get_mut("%1")
+        .unwrap()
+        .prompt
+        .buffer
+        .set_line(String::new());
+    assert!(
+        service
+            .apply_external_editor_recovery(&primary, "%1", &session_id)
+            .is_err()
+    );
+
+    service
+        .agent_prompt_inputs_mut_for_tests()
+        .get_mut("%1")
+        .unwrap()
+        .prompt
+        .buffer
+        .set_line("original prompt".to_string());
+    service
+        .apply_external_editor_recovery(&primary, "%1", &session_id)
+        .unwrap();
+    assert_eq!(
+        service.agent_prompt_inputs_for_tests()["%1"]
+            .prompt
+            .buffer
+            .line(),
+        "retained private draft"
+    );
+    assert!(
+        !service
+            .discard_external_editor_recovery(&primary, "%1", &session_id)
+            .unwrap()
+    );
+    assert!(
+        !root
+            .join("runtime/editor-sessions")
+            .join(&session_id)
+            .exists()
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies reopen seeds a fresh editor from retained content without applying
+/// it, and even a successful reopened editor remains pending until explicit
+/// apply consumes the fresh recovery.
+#[test]
+fn runtime_prompt_editor_reopen_never_auto_applies_recovered_content() {
+    let (mut service, primary, root) = prompt_editor_fixture("prompt-editor-recovery-reopen");
+    service
+        .apply_attached_agent_prompt_input_for_pane(&primary, "%1", b"original prompt")
+        .unwrap();
+    let first = start_prompt_editor(&mut service, &primary);
+    let first_session_id = first.2.clone();
+    complete_prompt_editor(&mut service, &root, &first, b"retained draft", 9);
+
+    service
+        .reopen_external_editor_recovery(&primary, "%1", &first_session_id)
+        .unwrap();
+    let reopened = editor_transaction(&service);
+    assert_ne!(reopened.2, first_session_id);
+    assert_eq!(
+        fs::read_to_string(
+            root.join("runtime/editor-sessions")
+                .join(&reopened.2)
+                .join("draft.md")
+        )
+        .unwrap(),
+        "retained draft"
+    );
+    assert!(
+        !root
+            .join("runtime/editor-sessions")
+            .join(&first_session_id)
+            .exists()
+    );
+    assert_eq!(
+        service.agent_prompt_inputs_for_tests()["%1"]
+            .prompt
+            .buffer
+            .line(),
+        "original prompt"
+    );
+
+    complete_prompt_editor(&mut service, &root, &reopened, b"edited again\n", 0);
+    assert_eq!(
+        service.agent_prompt_inputs_for_tests()["%1"]
+            .prompt
+            .buffer
+            .line(),
+        "original prompt"
+    );
+    let listing = service.list_external_editor_recoveries(&primary).unwrap();
+    assert!(listing.contains(&reopened.2), "{listing}");
+    assert!(listing.contains("changed_unapplied"), "{listing}");
+
+    service
+        .apply_external_editor_recovery(&primary, "%1", &reopened.2)
+        .unwrap();
+    assert_eq!(
+        service.agent_prompt_inputs_for_tests()["%1"]
+            .prompt
+            .buffer
+            .line(),
+        "edited again"
+    );
+    assert!(
+        !root
+            .join("runtime/editor-sessions")
+            .join(&reopened.2)
+            .exists()
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies interrupted sessions are rediscovered for the same runtime session
+/// after reconstruction, are never auto-applied, and can be discarded once.
+#[test]
+fn runtime_prompt_editor_recovery_is_discovered_after_restart_without_auto_apply() {
+    let (mut service, primary, root) = prompt_editor_fixture("prompt-editor-recovery-restart");
+    service
+        .apply_attached_agent_prompt_input_for_pane(&primary, "%1", b"original prompt")
+        .unwrap();
+    let identities = start_prompt_editor(&mut service, &primary);
+    let session_id = identities.2.clone();
+    fs::write(
+        root.join("runtime/editor-sessions")
+            .join(&session_id)
+            .join("draft.md"),
+        b"orphaned private draft",
+    )
+    .unwrap();
+    assert!(service.abort_external_editor_session("%1"));
+    let restarted_session = (*service.session).clone();
+    service.terminate_all_pane_processes().unwrap();
+    drop(service);
+
+    let mut restarted = RuntimeServiceFixture::new()
+        .control_socket(root.join("runtime/default.sock"))
+        .build_with_session(restarted_session);
+    let listing = restarted.list_external_editor_recoveries(&primary).unwrap();
+    assert!(listing.contains(&session_id), "{listing}");
+    assert!(listing.contains("interrupted"), "{listing}");
+    assert!(!listing.contains("orphaned private draft"), "{listing}");
+    assert!(
+        restarted
+            .agent_prompt_inputs_for_tests()
+            .get("%1")
+            .is_none_or(|prompt| prompt.prompt.buffer.line().is_empty())
+    );
+    assert!(
+        restarted
+            .discard_external_editor_recovery(&primary, "%1", &session_id)
+            .unwrap()
+    );
+    assert!(
+        !restarted
+            .discard_external_editor_recovery(&primary, "%1", &session_id)
+            .unwrap()
+    );
+    let _ = fs::remove_dir_all(root);
+}

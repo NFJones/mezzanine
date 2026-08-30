@@ -47,6 +47,15 @@ without submitting it. External editing is also non-submitting: after a
 successful editor close, the edited text returns to the in-pane prompt for
 review and normal submission.
 
+Changed drafts that cannot be safely applied after an editor failure,
+interruption, restart, or conflict remain in private host-owned recovery
+storage. Run `/editor-recovery list` from the attached primary client to view
+only bounded metadata, then use `/editor-recovery reopen <id>`,
+`/editor-recovery apply <id>`, or `/editor-recovery discard <id>`. Reopening
+never applies content automatically, applying revalidates the draft and target
+snapshot, and successful apply or discard removes the retained artifacts.
+Observers cannot list or mutate recoveries.
+
 Command-output pagers use `/` to search, and an empty search repeats the last
 query. Record browsers use arrow keys to select stable identifiers, Enter to
 open them, and Esc to close a prompt, return to a list, or exit the browser.

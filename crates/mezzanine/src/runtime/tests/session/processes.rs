@@ -2400,6 +2400,7 @@ fn runtime_external_editor_session_routes_input_and_retains_completion() {
             "%1",
             crate::runtime::ExternalEditTarget::AgentPrompt,
             "draft before editor\n".to_string(),
+            "draft before editor\n".to_string(),
         )
         .unwrap();
     assert!(service.external_editor_session_is_active("%1"));
@@ -2413,6 +2414,7 @@ fn runtime_external_editor_session_routes_input_and_retains_completion() {
                 &primary,
                 "%1",
                 crate::runtime::ExternalEditTarget::AgentPrompt,
+                String::new(),
                 String::new(),
             )
             .is_err()
@@ -2458,9 +2460,10 @@ fn runtime_external_editor_session_routes_input_and_retains_completion() {
     assert_eq!(completion.exit_code, 0);
     assert_eq!(completion.original_content, "draft before editor\n");
     assert_eq!(
-        fs::read_to_string(&completion.draft_path).unwrap(),
-        completion.original_content
+        completion.validated_content.as_deref(),
+        Some(completion.original_content.as_str())
     );
+    assert!(!completion.draft_path.exists());
     assert!(matches!(
         completion.target,
         crate::runtime::ExternalEditTarget::AgentPrompt

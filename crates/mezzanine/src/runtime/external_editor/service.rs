@@ -8,16 +8,26 @@ use std::fs;
 
 use super::artifacts::create_external_editor_artifacts;
 use super::command::resolve_external_editor_commands;
+use super::recovery::{
+    ExternalEditorRecoveryManifest, ExternalEditorRecoveryState, discard_recovery_artifacts,
+    read_recovery_manifest, write_recovery_manifest,
+};
 use super::runner::{INTERNAL_EDITOR_ARGUMENT, external_editor_runner_manifest};
 use super::session::{
     ExternalEditTarget, ExternalEditorCompletion, ExternalEditorPaneIdentity,
     ExternalEditorSession, ExternalEditorSessionStart,
 };
 use crate::error::{MezError, Result};
-use crate::runtime::{
-    PaneReadinessState, RunningShellTransactionKind, RunningShellTransactionRef,
-    RuntimeSessionService, current_unix_millis, runtime_random_marker_token,
+use crate::runtime::render::{
+    ExternalPromptEditSettlement, default_runtime_agent_prompt_input,
+    normalize_external_agent_prompt,
 };
+use crate::runtime::{
+    AgentShellVisibility, PaneReadinessState, RenderInvalidationReason,
+    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService,
+    current_unix_millis, runtime_pane_by_id, runtime_random_marker_token,
+};
+use crate::ui::readline::ReadlineInputDecoder;
 use mez_agent::{
     ShellChildArgument, ShellChildLaunch, ShellLaunchArtifact, ShellLaunchArtifactId,
     ShellTransaction,
@@ -31,6 +41,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         target: ExternalEditTarget,
         original_content: String,
+        initial_draft_content: String,
     ) -> Result<ExternalEditorSessionStart> {
         self.require_live()?;
         if !self.session.is_attached_primary(primary_client_id) {
@@ -86,7 +97,18 @@ impl RuntimeSessionService {
             .parent()
             .ok_or_else(|| MezError::invalid_state("runtime socket has no parent directory"))?;
         let artifacts =
-            create_external_editor_artifacts(runtime_root, &session_id, &original_content)?;
+            create_external_editor_artifacts(runtime_root, &session_id, &initial_draft_content)?;
+        let recovery_manifest = ExternalEditorRecoveryManifest::new(
+            session_id.clone(),
+            self.session.id.to_string(),
+            pane_id.to_string(),
+            target.clone(),
+            &original_content,
+        );
+        if let Err(error) = write_recovery_manifest(&artifacts, &recovery_manifest) {
+            let _ = fs::remove_dir_all(&artifacts.session_directory);
+            return Err(error);
+        }
         let commands = match resolve_external_editor_commands(
             self.external_editor_config(),
             self.pane_environment_path(pane_id).as_deref(),
@@ -165,6 +187,7 @@ impl RuntimeSessionService {
             original_content,
             artifacts,
             commands,
+            recovery_manifest,
         })?;
         self.set_pane_readiness(pane_id, PaneReadinessState::Busy);
         self.register_running_shell_transaction(
@@ -201,9 +224,7 @@ impl RuntimeSessionService {
         if let Err(error) = self.write_runtime_pane_shell_input(pane_id, wrapper.as_bytes()) {
             self.remove_running_shell_transaction(&marker_id);
             self.clear_shell_transaction_protocol_state(&marker_id);
-            if let Some(session) = self.external_editor.abort(pane_id) {
-                let _ = fs::remove_dir_all(session.artifacts.session_directory);
-            }
+            self.abort_external_editor_session(pane_id);
             self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
             return Err(error);
         }
@@ -222,7 +243,13 @@ impl RuntimeSessionService {
 
     /// Aborts one active editor lease while retaining its private artifacts.
     pub(in crate::runtime) fn abort_external_editor_session(&mut self, pane_id: &str) -> bool {
-        self.external_editor.abort(pane_id).is_some()
+        let Some(session) = self.external_editor.abort(pane_id) else {
+            return false;
+        };
+        let _ = write_recovery_manifest(&session.artifacts, &session.recovery_manifest);
+        self.external_editor
+            .retain_recovery(session.recovery_manifest.into_record(session.artifacts));
+        true
     }
 
     /// Settles one editor transaction only for its exact retained identities.
@@ -248,19 +275,61 @@ impl RuntimeSessionService {
             self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
             return Ok(0);
         }
-        let Some(completion) =
+        let active_manifest = active.recovery_manifest.clone();
+        let active_artifacts = active.artifacts.clone();
+        let Some(mut completion) =
             self.external_editor
                 .complete(pane_id, session_id, completion_nonce, marker, exit_code)
         else {
             return Ok(0);
         };
+        let mut recovery_manifest = active_manifest;
+        let validation = super::artifacts::validate_external_editor_draft(
+            &active_artifacts,
+            super::recovery::RECOVERY_DRAFT_MAX_BYTES,
+            super::recovery::RECOVERY_DRAFT_MAX_LINES,
+        );
+        match validation {
+            Ok(draft) => {
+                let changed = recovery_manifest.content_changed(&draft.content);
+                completion.validated_content = Some(draft.content);
+                completion.recovery_state = match (exit_code == 0, changed) {
+                    (true, true) => Some(ExternalEditorRecoveryState::ChangedUnapplied),
+                    (false, true) => Some(ExternalEditorRecoveryState::NonzeroExit),
+                    _ => None,
+                };
+            }
+            Err(_) => {
+                completion.recovery_state = Some(ExternalEditorRecoveryState::Invalid);
+            }
+        }
+        if let Some(state) = completion.recovery_state {
+            recovery_manifest.set_state(state, Some(exit_code));
+            write_recovery_manifest(&active_artifacts, &recovery_manifest)?;
+            self.external_editor.retain_recovery(
+                recovery_manifest
+                    .clone()
+                    .into_record(active_artifacts.clone()),
+            );
+        }
+        self.external_editor.update_completion(completion.clone());
         self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
-        if self.settle_agent_prompt_external_edit(&completion)? {
+        let prompt_settlement = self.settle_agent_prompt_external_edit(&completion)?;
+        if prompt_settlement != ExternalPromptEditSettlement::Unhandled {
             let _ = self.external_editor.take_completion(
                 pane_id,
                 &completion.session_id,
                 &completion.completion_nonce,
             );
+        }
+        let changed_prompt_applied = prompt_settlement == ExternalPromptEditSettlement::Applied
+            && completion.exit_code == 0
+            && completion.validated_content.is_some()
+            && completion.recovery_state == Some(ExternalEditorRecoveryState::ChangedUnapplied);
+        if completion.recovery_state.is_none() || changed_prompt_applied {
+            let record = recovery_manifest.into_record(active_artifacts);
+            discard_recovery_artifacts(&record)?;
+            self.external_editor.remove_recovery(&completion.session_id);
         }
         Ok(usize::from(completion.session_id == session_id))
     }
@@ -285,5 +354,203 @@ impl RuntimeSessionService {
     ) -> Option<ExternalEditorCompletion> {
         self.external_editor
             .take_completion(pane_id, session_id, completion_nonce)
+    }
+
+    /// Lists retained recovery metadata for an attached primary without exposing content.
+    pub(crate) fn list_external_editor_recoveries(
+        &self,
+        primary_client_id: &mez_core::ids::ClientId,
+    ) -> Result<String> {
+        self.require_live()?;
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "external-editor recovery requires an attached primary client",
+            ));
+        }
+        let records = self.external_editor.recoveries();
+        if records.is_empty() {
+            return Ok("No retained external-editor recoveries.".to_string());
+        }
+        let mut display =
+            String::from("| Recovery | Pane | Target | State | Exit |\n|---|---|---|---|---:|\n");
+        for record in records {
+            display.push_str(&format!(
+                "| `{}` | `{}` | `{}` | `{}` | {} |\n",
+                record.session_id,
+                record.pane_id,
+                record.target.as_str(),
+                record.state.as_str(),
+                record
+                    .exit_code
+                    .map_or_else(|| "-".to_string(), |code| code.to_string())
+            ));
+        }
+        Ok(display)
+    }
+
+    /// Applies one validated prompt recovery only to its exact pane and primary projection.
+    pub(crate) fn apply_external_editor_recovery(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        session_id: &str,
+    ) -> Result<()> {
+        self.require_live()?;
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "external-editor recovery requires an attached primary client",
+            ));
+        }
+        runtime_pane_by_id(&self.session, pane_id)?;
+        let (record, mut manifest) =
+            self.revalidated_external_editor_recovery(pane_id, session_id)?;
+        if !matches!(record.target, ExternalEditTarget::AgentPrompt) {
+            return Err(MezError::invalid_args(
+                "unsupported external-editor recovery target",
+            ));
+        }
+        let visible = self
+            .agent_shell_store()
+            .get(pane_id)
+            .is_some_and(|session| session.visibility == AgentShellVisibility::Visible);
+        if !visible {
+            return Err(MezError::conflict(
+                "recovered agent prompt requires a visible agent shell",
+            ));
+        }
+        if self.agent_shell_pane_has_active_turn(pane_id) {
+            return Err(MezError::conflict(
+                "recovered agent prompt cannot be applied while an agent turn is active",
+            ));
+        }
+        let draft = super::artifacts::validate_external_editor_draft(
+            &record.artifacts,
+            super::recovery::RECOVERY_DRAFT_MAX_BYTES,
+            super::recovery::RECOVERY_DRAFT_MAX_LINES,
+        )?;
+        let existing_prompt_input = self.agent_prompt_input_for_client(primary_client_id, pane_id);
+        let mut prompt_input = existing_prompt_input
+            .clone()
+            .unwrap_or_else(default_runtime_agent_prompt_input);
+        let current = mez_mux::readline::ReadlineBuffer::expanded_draft(
+            &prompt_input.prompt.buffer.draft_snapshot(),
+        );
+        if existing_prompt_input.is_some() && !manifest.original_content_matches(&current) {
+            manifest.set_state(ExternalEditorRecoveryState::Conflicted, record.exit_code);
+            write_recovery_manifest(&record.artifacts, &manifest)?;
+            self.external_editor
+                .retain_recovery(manifest.into_record(record.artifacts));
+            return Err(MezError::conflict(
+                "current agent prompt changed since the retained editor session",
+            ));
+        }
+        prompt_input.prompt.clear_transient_editing_state();
+        prompt_input
+            .prompt
+            .buffer
+            .set_line(normalize_external_agent_prompt(draft.content));
+        prompt_input.decoder = ReadlineInputDecoder::new();
+        prompt_input.pending_ctrl_c_exit_at_unix_ms = None;
+        self.set_agent_prompt_input_for_client(primary_client_id, pane_id, prompt_input);
+        self.sync_tracked_pty_sizes()?;
+        let render_effects = self.render_effects_for_primary_projection(
+            primary_client_id,
+            RenderInvalidationReason::FullRedraw,
+        );
+        self.presentation.defer_render_effects(render_effects);
+        discard_recovery_artifacts(&record)?;
+        self.external_editor.remove_recovery(session_id);
+        Ok(())
+    }
+
+    /// Explicitly discards one exact retained recovery; repeating a discard is harmless.
+    pub(crate) fn discard_external_editor_recovery(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        session_id: &str,
+    ) -> Result<bool> {
+        self.require_live()?;
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "external-editor recovery requires an attached primary client",
+            ));
+        }
+        let Some(_) = self.external_editor.recovery(session_id) else {
+            return Ok(false);
+        };
+        let (record, _) = self.revalidated_external_editor_recovery(pane_id, session_id)?;
+        discard_recovery_artifacts(&record)?;
+        self.external_editor.remove_recovery(session_id);
+        Ok(true)
+    }
+
+    /// Reopens one retained draft in a fresh editor session without applying it.
+    pub(crate) fn reopen_external_editor_recovery(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        session_id: &str,
+    ) -> Result<()> {
+        self.require_live()?;
+        if !self.session.is_attached_primary(primary_client_id) {
+            return Err(MezError::forbidden(
+                "external-editor recovery requires an attached primary client",
+            ));
+        }
+        runtime_pane_by_id(&self.session, pane_id)?;
+        let (record, _) = self.revalidated_external_editor_recovery(pane_id, session_id)?;
+        if !matches!(record.target, ExternalEditTarget::AgentPrompt) {
+            return Err(MezError::invalid_args(
+                "unsupported external-editor recovery target",
+            ));
+        }
+        let draft = super::artifacts::validate_external_editor_draft(
+            &record.artifacts,
+            super::recovery::RECOVERY_DRAFT_MAX_BYTES,
+            super::recovery::RECOVERY_DRAFT_MAX_LINES,
+        )?;
+        self.reopen_agent_prompt_external_edit(primary_client_id, pane_id, draft.content)?;
+        discard_recovery_artifacts(&record)?;
+        self.external_editor.remove_recovery(session_id);
+        Ok(())
+    }
+
+    fn revalidated_external_editor_recovery(
+        &self,
+        pane_id: &str,
+        session_id: &str,
+    ) -> Result<(
+        super::recovery::ExternalEditorRecoveryRecord,
+        ExternalEditorRecoveryManifest,
+    )> {
+        let record = self
+            .external_editor
+            .recovery(session_id)
+            .cloned()
+            .ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "external-editor recovery not found",
+                )
+            })?;
+        if record.runtime_session_id != self.session.id.as_str() || record.pane_id != pane_id {
+            return Err(MezError::forbidden(
+                "external-editor recovery does not belong to this runtime pane",
+            ));
+        }
+        let manifest = read_recovery_manifest(&record.artifacts)?;
+        if manifest.session_id != record.session_id
+            || manifest.runtime_session_id != record.runtime_session_id
+            || manifest.pane_id != record.pane_id
+            || manifest.target != record.target
+            || manifest.state != record.state
+            || manifest.exit_code != record.exit_code
+        {
+            return Err(MezError::conflict(
+                "external-editor recovery metadata changed since discovery",
+            ));
+        }
+        Ok((record, manifest))
     }
 }

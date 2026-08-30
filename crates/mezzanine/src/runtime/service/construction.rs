@@ -122,6 +122,11 @@ impl RuntimeSessionService {
         crate::host::terminal::set_agent_wrap_column_cap(
             crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
         );
+        let runtime_root = socket_path
+            .parent()
+            .ok_or_else(|| MezError::invalid_state("runtime socket has no parent directory"))?;
+        let external_editor =
+            RuntimeExternalEditorComponent::discover(runtime_root, session.id.as_str())?;
         Ok(Self {
             presentation: RuntimePresentationComponent::default(),
             process: RuntimeProcessComponent::with_pane_processes(pane_processes),
@@ -139,7 +144,7 @@ impl RuntimeSessionService {
                 runtime_provider_registry_from_config(&Value::Object(serde_json::Map::new()))?,
                 builtin_subagent_profiles(),
             ),
-            external_editor: RuntimeExternalEditorComponent::default(),
+            external_editor,
             session: RuntimeSessionComponent::new(
                 session,
                 window_created_at_unix_seconds,

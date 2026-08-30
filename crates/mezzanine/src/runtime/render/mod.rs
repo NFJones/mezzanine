@@ -2033,6 +2033,9 @@ mod attached_step;
 mod client_view;
 mod copy_mode;
 mod external_prompt;
+pub(in crate::runtime) use external_prompt::{
+    ExternalPromptEditSettlement, normalize_external_agent_prompt,
+};
 mod harness_status;
 pub(crate) use harness_status::RuntimePaneHarnessStatus;
 mod input;
@@ -2058,13 +2061,13 @@ use mez_mux::render::{
 };
 #[cfg(test)]
 pub(crate) use overlay::RuntimeCommandDisplayOverlayContent;
+pub(in crate::runtime) use overlay::default_runtime_agent_prompt_input;
 use overlay::{
     RuntimeAgentShellDisplayOutput, agent_command_link_at_line_column,
-    agent_shell_mcp_display_state_name, default_runtime_agent_prompt_input,
-    runtime_agent_shell_display_output, runtime_agent_shell_visibility,
-    runtime_command_display_overlay_content, runtime_command_display_should_open_overlay,
-    runtime_pane_agent_selector_rendition, runtime_pane_agent_status_selector_layout,
-    runtime_primary_prompt_input, runtime_selector_line,
+    agent_shell_mcp_display_state_name, runtime_agent_shell_display_output,
+    runtime_agent_shell_visibility, runtime_command_display_overlay_content,
+    runtime_command_display_should_open_overlay, runtime_pane_agent_selector_rendition,
+    runtime_pane_agent_status_selector_layout, runtime_primary_prompt_input, runtime_selector_line,
 };
 #[cfg(test)]
 use overlay::{runtime_agent_shell_markdown_overlay_content, runtime_human_readable_display_lines};

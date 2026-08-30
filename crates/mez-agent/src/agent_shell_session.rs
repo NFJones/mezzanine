@@ -927,6 +927,9 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "refresh-provider-info" => "refresh cached provider model and quota information.",
         "list-mcp" => "list configured MCP servers and tools.",
         "issue" => "create, inspect, update, or delete project issue records.",
+        "editor-recovery" => {
+            "list, reopen, apply, or discard retained external-editor drafts without displaying their content."
+        }
         "show-approvals" => "browse and decide pending approvals for the live session.",
         "show-context" => "browse and delete entries in the current pane conversation.",
         "show-issues" => "browse project issue records and open issue details.",

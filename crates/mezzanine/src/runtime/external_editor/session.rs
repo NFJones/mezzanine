@@ -4,10 +4,15 @@ use std::collections::BTreeMap;
 
 use super::artifacts::ExternalEditorArtifacts;
 use super::command::ResolvedExternalEditorCommand;
+use super::recovery::{
+    ExternalEditorRecoveryManifest, ExternalEditorRecoveryRecord, ExternalEditorRecoveryState,
+    discover_external_editor_recoveries,
+};
 use crate::error::{MezError, Result};
 
 /// Typed artifact being edited by one external-editor session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum ExternalEditTarget {
     /// Pane-local agent prompt text.
     AgentPrompt,
@@ -19,6 +24,19 @@ pub(crate) enum ExternalEditTarget {
     MemoryContent { memory_id: String },
     /// Persisted user-owned context document content.
     ContextDocument { document_id: String },
+}
+
+impl ExternalEditTarget {
+    /// Returns the bounded display label used by recovery listings.
+    pub(super) const fn as_str(&self) -> &'static str {
+        match self {
+            Self::AgentPrompt => "agent_prompt",
+            Self::IssueBody { .. } => "issue_body",
+            Self::IssueNotes { .. } => "issue_notes",
+            Self::MemoryContent { .. } => "memory_content",
+            Self::ContextDocument { .. } => "context_document",
+        }
+    }
 }
 
 /// Process identity fenced when an editor session starts.
@@ -43,6 +61,7 @@ pub(super) struct ExternalEditorSession {
     pub(super) original_content: String,
     pub(super) artifacts: ExternalEditorArtifacts,
     pub(super) commands: Vec<ResolvedExternalEditorCommand>,
+    pub(super) recovery_manifest: ExternalEditorRecoveryManifest,
 }
 
 /// Non-secret launch facts returned to target-specific UI code.
@@ -75,6 +94,10 @@ pub(crate) struct ExternalEditorCompletion {
     pub(crate) draft_path: std::path::PathBuf,
     /// Blocking editor process exit code.
     pub(crate) exit_code: i32,
+    /// Valid UTF-8 content reopened through the hardened final-path validator.
+    pub(crate) validated_content: Option<String>,
+    /// Durable reason this artifact remains recoverable, when any.
+    pub(crate) recovery_state: Option<ExternalEditorRecoveryState>,
 }
 
 /// Editor-session state owned independently from prompt or durable targets.
@@ -82,9 +105,26 @@ pub(crate) struct ExternalEditorCompletion {
 pub(crate) struct RuntimeExternalEditorComponent {
     pub(super) active_by_pane: BTreeMap<String, ExternalEditorSession>,
     pub(super) completed_by_pane: BTreeMap<String, ExternalEditorCompletion>,
+    pub(super) recoveries_by_id: BTreeMap<String, ExternalEditorRecoveryRecord>,
 }
 
 impl RuntimeExternalEditorComponent {
+    /// Discovers retained recovery records for one exact runtime session.
+    pub(crate) fn discover(
+        runtime_root: &std::path::Path,
+        runtime_session_id: &str,
+    ) -> Result<Self> {
+        let recoveries_by_id =
+            discover_external_editor_recoveries(runtime_root, runtime_session_id)?
+                .into_iter()
+                .map(|record| (record.session_id.clone(), record))
+                .collect();
+        Ok(Self {
+            recoveries_by_id,
+            ..Self::default()
+        })
+    }
+
     /// Reports whether one pane currently leases its PTY to an editor.
     pub(super) fn is_active(&self, pane_id: &str) -> bool {
         self.active_by_pane.contains_key(pane_id)
@@ -133,15 +173,57 @@ impl RuntimeExternalEditorComponent {
             original_content: session.original_content,
             draft_path: session.artifacts.draft_path,
             exit_code,
+            validated_content: None,
+            recovery_state: None,
         };
         self.completed_by_pane
             .insert(session.pane_id, completion.clone());
         Some(completion)
     }
 
+    /// Replaces one retained completion only when its fenced identities match.
+    pub(super) fn update_completion(&mut self, completion: ExternalEditorCompletion) -> bool {
+        let matches = self
+            .completed_by_pane
+            .get(&completion.pane_id)
+            .is_some_and(|retained| {
+                retained.session_id == completion.session_id
+                    && retained.completion_nonce == completion.completion_nonce
+            });
+        if matches {
+            self.completed_by_pane
+                .insert(completion.pane_id.clone(), completion);
+        }
+        matches
+    }
+
     /// Removes an active lease without fabricating a successful completion.
     pub(super) fn abort(&mut self, pane_id: &str) -> Option<ExternalEditorSession> {
         self.active_by_pane.remove(pane_id)
+    }
+
+    /// Inserts or replaces one validated recovery record by opaque id.
+    pub(super) fn retain_recovery(&mut self, record: ExternalEditorRecoveryRecord) {
+        self.recoveries_by_id
+            .insert(record.session_id.clone(), record);
+    }
+
+    /// Lists retained recovery records in stable identity order.
+    pub(crate) fn recoveries(&self) -> Vec<ExternalEditorRecoveryRecord> {
+        self.recoveries_by_id.values().cloned().collect()
+    }
+
+    /// Returns one retained recovery record by opaque id.
+    pub(super) fn recovery(&self, session_id: &str) -> Option<&ExternalEditorRecoveryRecord> {
+        self.recoveries_by_id.get(session_id)
+    }
+
+    /// Removes one retained recovery record by opaque id.
+    pub(super) fn remove_recovery(
+        &mut self,
+        session_id: &str,
+    ) -> Option<ExternalEditorRecoveryRecord> {
+        self.recoveries_by_id.remove(session_id)
     }
 
     /// Takes one completion only when all supplied identities match.
@@ -190,6 +272,13 @@ mod tests {
                 executable: "/usr/bin/editor".to_string(),
                 arguments: vec!["/private/session-a/draft.md".to_string()],
             }],
+            recovery_manifest: ExternalEditorRecoveryManifest::new(
+                "session-a".to_string(),
+                "runtime-session".to_string(),
+                "%1".to_string(),
+                ExternalEditTarget::AgentPrompt,
+                "before",
+            ),
         }
     }
 

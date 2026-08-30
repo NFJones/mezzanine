@@ -762,6 +762,20 @@ impl RuntimeSessionService {
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&issue_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "editor-recovery"
+                {
+                    let recovery_outcome = self.execute_agent_shell_editor_recovery_command(
+                        primary_client_id,
+                        &pane_id,
+                        input,
+                    )?;
+                    runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        Some(&recovery_outcome),
+                    )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "show-approvals"
                 {
                     let show_outcome =
@@ -893,6 +907,53 @@ impl RuntimeSessionService {
         }
         self.checkpoint_agent_session_metadata()?;
         Ok(response)
+    }
+
+    /// Executes explicit external-editor recovery operations for the active pane.
+    fn execute_agent_shell_editor_recovery_command(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let invocation = parse_slash_command(input)?.ok_or_else(|| {
+            MezError::invalid_args("editor-recovery command must be a slash command")
+        })?;
+        let arguments = invocation.args.split_whitespace().collect::<Vec<_>>();
+        match arguments.as_slice() {
+            [] | ["list"] => Ok(AgentShellCommandOutcome::Display {
+                command: "editor-recovery".to_string(),
+                body: self.list_external_editor_recoveries(primary_client_id)?,
+            }),
+            ["apply", session_id] => {
+                self.apply_external_editor_recovery(primary_client_id, pane_id, session_id)?;
+                Ok(AgentShellCommandOutcome::Mutated {
+                    command: "editor-recovery".to_string(),
+                    body: format!("recovery={} action=apply changed=true", session_id),
+                    visibility: self.agent_shell_visibility_for_pane(pane_id)?,
+                })
+            }
+            ["reopen", session_id] => {
+                self.reopen_external_editor_recovery(primary_client_id, pane_id, session_id)?;
+                Ok(AgentShellCommandOutcome::Mutated {
+                    command: "editor-recovery".to_string(),
+                    body: format!("recovery={} action=reopen changed=true", session_id),
+                    visibility: self.agent_shell_visibility_for_pane(pane_id)?,
+                })
+            }
+            ["discard", session_id] => {
+                let changed =
+                    self.discard_external_editor_recovery(primary_client_id, pane_id, session_id)?;
+                Ok(AgentShellCommandOutcome::Mutated {
+                    command: "editor-recovery".to_string(),
+                    body: format!("recovery={} action=discard changed={changed}", session_id),
+                    visibility: self.agent_shell_visibility_for_pane(pane_id)?,
+                })
+            }
+            _ => Err(MezError::invalid_args(
+                "editor-recovery expects list, apply <id>, reopen <id>, or discard <id>",
+            )),
+        }
     }
 
     /// Starts any configured MCP servers before a synchronous `/list-mcp`.
