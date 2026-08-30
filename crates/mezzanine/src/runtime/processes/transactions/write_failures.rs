@@ -60,7 +60,8 @@ impl RuntimeSessionService {
                 )
             }
             RunningShellTransactionKind::ExternalEditor { .. } => {
-                self.abort_external_editor_session(&transaction.pane_id);
+                self.abort_external_editor_session(&transaction.pane_id)?;
+                self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Degraded);
                 Ok(1)
             }
             RunningShellTransactionKind::AgentPromptEditorReadinessProbe { .. } => {
@@ -249,7 +250,8 @@ impl RuntimeSessionService {
                     )?;
                 }
                 RunningShellTransactionKind::ExternalEditor { .. } => {
-                    self.abort_external_editor_session(pane_id);
+                    self.abort_external_editor_session(pane_id)?;
+                    self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
                 }
                 RunningShellTransactionKind::AgentPromptEditorReadinessProbe { .. } => {
                     self.fail_agent_prompt_editor_readiness_probe(&marker, &transaction, error)?;

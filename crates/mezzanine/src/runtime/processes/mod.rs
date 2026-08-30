@@ -4996,7 +4996,7 @@ impl RuntimeSessionService {
                 "pane removed from session layout",
             )?;
         }
-        self.abort_external_editor_session(pane_id);
+        self.abort_external_editor_session(pane_id)?;
         self.presentation.remove_completion_attention(pane_id);
         self.presentation.remove_agent_presentation_state(pane_id);
         self.discard_agent_loop_parent_projections_for_pane(pane_id);

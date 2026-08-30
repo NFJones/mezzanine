@@ -1,7 +1,7 @@
 //! External editor integration for pane-local agent prompts.
 
 use super::*;
-use crate::runtime::PaneSurfaceKind;
+use crate::runtime::{PaneSurfaceKind, RenderInvalidationReason};
 
 /// Returns the live editor transaction identities created by the prompt binding.
 fn editor_transaction(service: &RuntimeSessionService) -> (String, String, String, String) {
@@ -563,7 +563,7 @@ fn runtime_prompt_editor_recovery_is_discovered_after_restart_without_auto_apply
         b"orphaned private draft",
     )
     .unwrap();
-    assert!(service.abort_external_editor_session("%1"));
+    assert!(service.abort_external_editor_session("%1").unwrap());
     let restarted_session = (*service.session).clone();
     service.terminate_all_pane_processes().unwrap();
     drop(service);
@@ -591,6 +591,68 @@ fn runtime_prompt_editor_recovery_is_discovered_after_restart_without_auto_apply
             .discard_external_editor_recovery(&primary, "%1", &session_id)
             .unwrap()
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an explicit editor abort restores the captured prompt and terminal
+/// geometry while retaining the private draft as interrupted recovery.
+///
+/// Abort settlement must also request a full redraw and remain idempotent so
+/// timeout, write-failure, detach, and teardown callers share one safe path.
+#[test]
+fn runtime_prompt_editor_abort_settles_prompt_geometry_and_redraw() {
+    let (mut service, primary, root) = prompt_editor_fixture("prompt-editor-abort-settlement");
+    service
+        .apply_attached_agent_prompt_input_for_pane(&primary, "%1", b"original prompt")
+        .unwrap();
+    let expected = service.agent_prompt_inputs_for_tests()["%1"].clone();
+    let identities = start_prompt_editor(&mut service, &primary);
+    let session_id = identities.2.clone();
+    fs::write(
+        root.join("runtime/editor-sessions")
+            .join(&session_id)
+            .join("draft.md"),
+        b"interrupted draft",
+    )
+    .unwrap();
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(52, 18).unwrap())
+        .unwrap();
+
+    assert!(service.abort_external_editor_session("%1").unwrap());
+
+    assert!(!service.external_editor_session_is_active("%1"));
+    assert_eq!(service.agent_prompt_inputs_for_tests()["%1"], expected);
+    assert_eq!(service.presented_pane_surface("%1"), PaneSurfaceKind::Agent);
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::PromptCandidate
+    );
+    assert_eq!(
+        service
+            .tracked_pane_descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.pane_id.as_str() == "%1")
+            .unwrap()
+            .size,
+        service
+            .pane_process_size_for(service.session().active_window().unwrap(), "%1")
+            .unwrap()
+    );
+    let effects = service.drain_deferred_effects_transition().side_effects;
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::RenderClient {
+            reason: RenderInvalidationReason::FullRedraw,
+            ..
+        }
+    )));
+    let recoveries = service.list_external_editor_recoveries(&primary).unwrap();
+    assert!(recoveries.contains(&session_id), "{recoveries}");
+    assert!(recoveries.contains("interrupted"), "{recoveries}");
+    assert!(!service.abort_external_editor_session("%1").unwrap());
+
+    service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(root);
 }
 

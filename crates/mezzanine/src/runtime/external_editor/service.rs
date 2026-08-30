@@ -227,7 +227,7 @@ impl RuntimeSessionService {
         if let Err(error) = self.write_runtime_pane_shell_input(pane_id, wrapper.as_bytes()) {
             self.remove_running_shell_transaction(&marker_id);
             self.clear_shell_transaction_protocol_state(&marker_id);
-            self.abort_external_editor_session(pane_id);
+            let _ = self.abort_external_editor_session(pane_id);
             self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
             return Err(error);
         }
@@ -300,15 +300,51 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Aborts one active editor lease while retaining its private artifacts.
-    pub(in crate::runtime) fn abort_external_editor_session(&mut self, pane_id: &str) -> bool {
+    /// Aborts one active editor lease and settles all presentation ownership.
+    ///
+    /// The original interrupted recovery remains authoritative and the draft
+    /// is never applied. Repeated calls are harmless after the first lease is
+    /// consumed.
+    pub(in crate::runtime) fn abort_external_editor_session(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<bool> {
         let Some(session) = self.external_editor.abort(pane_id) else {
-            return false;
+            return Ok(false);
         };
+        let window_id = self
+            .find_pane_descriptor(pane_id)
+            .map(|descriptor| descriptor.window_id.to_string());
+        self.remove_running_shell_transaction(&session.marker);
+        self.clear_shell_transaction_protocol_state(&session.marker);
         let _ = write_recovery_manifest(&session.artifacts, &session.recovery_manifest);
+        let completion = ExternalEditorCompletion {
+            session_id: session.session_id.clone(),
+            completion_nonce: session.completion_nonce.clone(),
+            pane_id: session.pane_id.clone(),
+            target: session.target.clone(),
+            original_content: session.original_content.clone(),
+            apply_on_success: session.apply_on_success,
+            draft_path: session.artifacts.draft_path.clone(),
+            exit_code: 130,
+            validated_content: None,
+            recovery_state: Some(ExternalEditorRecoveryState::Interrupted),
+        };
         self.external_editor
             .retain_recovery(session.recovery_manifest.into_record(session.artifacts));
-        true
+        self.settle_agent_prompt_external_edit_abort(&completion)?;
+        if self.find_pane_descriptor(pane_id).is_some() {
+            self.set_pane_readiness(pane_id, PaneReadinessState::PromptCandidate);
+            self.sync_tracked_pty_sizes()?;
+            if let Some(window_id) = window_id {
+                let render_effects = self.render_effects_for_clients_projecting_windows(
+                    &[window_id],
+                    RenderInvalidationReason::FullRedraw,
+                );
+                self.presentation.defer_render_effects(render_effects);
+            }
+        }
+        Ok(true)
     }
 
     /// Aborts every editor lease owned by one detaching primary client.
@@ -325,44 +361,10 @@ impl RuntimeSessionService {
             .external_editor
             .active_targets_for_client(primary_client_id.as_str());
         let mut aborted = 0usize;
-        for (pane_id, marker) in targets {
-            let Some(active) = self.external_editor.active(&pane_id).cloned() else {
-                continue;
-            };
-            self.remove_running_shell_transaction(&marker);
-            self.clear_shell_transaction_protocol_state(&marker);
-            self.discard_agent_prompt_external_edit(
-                primary_client_id,
-                &pane_id,
-                &active.session_id,
-                &active.completion_nonce,
-            );
-            if self.abort_external_editor_session(&pane_id) {
-                self.set_pane_readiness(&pane_id, PaneReadinessState::PromptCandidate);
+        for (pane_id, _marker) in targets {
+            if self.abort_external_editor_session(&pane_id)? {
                 aborted = aborted.saturating_add(1);
             }
-        }
-        if aborted > 0 {
-            self.sync_tracked_pty_sizes()?;
-            let window_ids = self
-                .session
-                .windows()
-                .iter()
-                .filter(|window| {
-                    window.panes().iter().any(|pane| {
-                        self.external_editor
-                            .recoveries()
-                            .iter()
-                            .any(|record| record.pane_id == pane.id.as_str())
-                    })
-                })
-                .map(|window| window.id.to_string())
-                .collect::<Vec<_>>();
-            let render_effects = self.render_effects_for_clients_projecting_windows(
-                &window_ids,
-                RenderInvalidationReason::FullRedraw,
-            );
-            self.presentation.defer_render_effects(render_effects);
         }
         Ok(aborted)
     }
@@ -386,7 +388,7 @@ impl RuntimeSessionService {
         if current_primary_pid != Some(active.pane_identity.primary_pid)
             || current_generation != active.pane_identity.generation
         {
-            self.abort_external_editor_session(pane_id);
+            self.abort_external_editor_session(pane_id)?;
             self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
             return Ok(0);
         }

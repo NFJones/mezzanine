@@ -129,31 +129,42 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
-    /// Removes one detached client's exact prompt-editor snapshot without applying its draft.
-    pub(in crate::runtime) fn discard_agent_prompt_external_edit(
+    /// Restores one exact prompt snapshot after its editor lease aborts.
+    ///
+    /// Draft content is never applied on this path. Detached clients lose
+    /// their obsolete snapshot, while an attached owner regains the complete
+    /// prompt state captured before editor launch.
+    pub(in crate::runtime) fn settle_agent_prompt_external_edit_abort(
         &mut self,
-        primary_client_id: &mez_core::ids::ClientId,
-        pane_id: &str,
-        session_id: &str,
-        completion_nonce: &str,
-    ) -> bool {
+        completion: &ExternalEditorCompletion,
+    ) -> Result<bool> {
+        if !matches!(completion.target, ExternalEditTarget::AgentPrompt) {
+            return Ok(false);
+        }
         let matches = self
             .presentation
             .external_agent_prompt_edits
-            .get(pane_id)
+            .get(&completion.pane_id)
             .is_some_and(|snapshot| {
-                snapshot.client_id == *primary_client_id
-                    && snapshot.session_id == session_id
-                    && snapshot.completion_nonce == completion_nonce
+                snapshot.session_id == completion.session_id
+                    && snapshot.completion_nonce == completion.completion_nonce
             });
-        matches
-            .then(|| {
-                self.presentation
-                    .external_agent_prompt_edits
-                    .remove(pane_id)
-            })
-            .flatten()
-            .is_some()
+        if !matches {
+            return Ok(false);
+        }
+        let snapshot = self
+            .presentation
+            .external_agent_prompt_edits
+            .remove(&completion.pane_id)
+            .expect("matching prompt edit snapshot was checked above");
+        if self.session.is_attached_primary(&snapshot.client_id) {
+            self.set_agent_prompt_input_for_client(
+                &snapshot.client_id,
+                &completion.pane_id,
+                snapshot.prompt_input,
+            );
+        }
+        Ok(true)
     }
 
     /// Applies one matching prompt completion or restores the exact snapshot.
