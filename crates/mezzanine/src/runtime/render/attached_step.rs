@@ -365,19 +365,22 @@ impl RuntimeSessionService {
         else {
             return Ok(RuntimeTransition::default());
         };
+        self.presentation.activate_client_state(client_id);
+        self.session.activate_client_navigation(client_id)?;
         let pane_id = self.active_pane_id()?;
         if self.external_editor_session_is_active(&pane_id) {
             if !self.external_editor_session_owned_by(&pane_id, client_id) {
+                self.presentation.capture_projected_client_state();
                 return Ok(RuntimeTransition::default());
             }
             self.clear_copy_state_for_surface(&pane_id, crate::runtime::PaneSurfaceKind::Process);
-            return Ok(RuntimeTransition {
+            let transition = RuntimeTransition {
                 applied: true,
                 side_effects: vec![self.deferred_pane_input_effect(pane_id, bytes.to_vec())],
-            });
+            };
+            self.presentation.capture_projected_client_state();
+            return Ok(transition);
         }
-        self.presentation.activate_client_state(client_id);
-        self.session.activate_client_navigation(client_id)?;
         let size = Size::new(terminal.columns, terminal.rows)?;
         let config = self.terminal_client_loop_config(TerminalClientLoopConfig::default())?;
         let view =

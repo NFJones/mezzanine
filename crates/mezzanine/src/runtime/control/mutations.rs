@@ -661,6 +661,8 @@ impl RuntimeSessionService {
         if client_size != self.session.authoritative_size {
             self.resize_attached_primary_terminal(primary_client_id, client_size)?;
         }
+        self.presentation.activate_client_state(primary_client_id);
+        self.session.activate_client_navigation(primary_client_id)?;
         let terminal_config =
             self.terminal_client_loop_config(TerminalClientLoopConfig::default())?;
         let editor_actions = if input.is_empty() {

@@ -682,6 +682,122 @@ fn runtime_prompt_editor_framed_input_forwards_exact_bytes_and_resize() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies local raw input resolves the sending primary's pane before
+/// inspecting an editor lease owned by another primary on a different pane.
+#[test]
+fn runtime_external_editor_local_input_uses_sending_client_pane() {
+    let (mut service, editor_primary, root) =
+        prompt_editor_fixture("prompt-editor-multi-primary-local-input");
+    let sending_primary = service
+        .attach_primary("sending-primary", true, Size::new(40, 16).unwrap(), 121)
+        .unwrap();
+    assert!(
+        service
+            .apply_attached_mux_action(&editor_primary, MuxAction::SplitPaneVertical)
+            .unwrap()
+    );
+    service.agent_shell_store_mut().request_exit("%1").unwrap();
+    mark_test_pane_ready(&mut service, "%2");
+    service
+        .start_external_editor_session(
+            &editor_primary,
+            "%2",
+            crate::runtime::ExternalEditTarget::AgentPrompt,
+            String::new(),
+            String::new(),
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .session
+            .active_pane_for(&sending_primary)
+            .unwrap()
+            .id
+            .as_str(),
+        "%1"
+    );
+    assert_eq!(service.active_pane_id().unwrap(), "%2");
+
+    let transition = service
+        .apply_client_input_transition(&sending_primary, b"local-client-input")
+        .unwrap();
+
+    assert!(transition.applied);
+    assert_eq!(transition.side_effects.len(), 1);
+    assert!(matches!(
+        &transition.side_effects[0],
+        RuntimeSideEffect::WritePaneInput { pane_id, bytes }
+            if pane_id == "%1" && bytes == b"local-client-input"
+    ));
+    assert!(service.external_editor_session_is_active("%2"));
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies control `terminal/step` input resolves the sending primary's pane
+/// before inspecting an editor lease owned by another primary.
+#[test]
+fn runtime_external_editor_control_input_uses_sending_client_pane() {
+    let (mut service, editor_primary, root) =
+        prompt_editor_fixture("prompt-editor-multi-primary-control-input");
+    let sending_primary = service
+        .attach_primary("sending-primary", true, Size::new(40, 16).unwrap(), 121)
+        .unwrap();
+    assert!(
+        service
+            .apply_attached_mux_action(&editor_primary, MuxAction::SplitPaneVertical)
+            .unwrap()
+    );
+    service.agent_shell_store_mut().request_exit("%1").unwrap();
+    mark_test_pane_ready(&mut service, "%2");
+    service
+        .start_external_editor_session(
+            &editor_primary,
+            "%2",
+            crate::runtime::ExternalEditTarget::AgentPrompt,
+            String::new(),
+            String::new(),
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .session
+            .active_pane_for(&sending_primary)
+            .unwrap()
+            .id
+            .as_str(),
+        "%1"
+    );
+    assert_eq!(service.active_pane_id().unwrap(), "%2");
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "multi-primary-editor-input",
+        "method": "terminal/step",
+        "params": {
+            "idempotency_key": "multi-primary-editor-input",
+            "client_size": {"columns": 40, "rows": 16},
+            "render": false,
+            "input_bytes": b"control-client-input",
+        }
+    })
+    .to_string();
+
+    let response = service.dispatch_runtime_control_body(&request, &sending_primary);
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+    assert!(response.get("error").is_none(), "{response}");
+    assert_eq!(
+        response["result"]["application"]["forwarded_bytes"],
+        b"control-client-input".len()
+    );
+    assert_eq!(service.active_pane_id().unwrap(), "%1");
+    assert!(service.external_editor_session_is_active("%2"));
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Builds the persistent stores and project identity used by durable editor tests.
 fn durable_editor_stores(
     service: &mut RuntimeSessionService,
