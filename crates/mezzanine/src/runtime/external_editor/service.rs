@@ -244,6 +244,62 @@ impl RuntimeSessionService {
         self.external_editor.is_active(pane_id)
     }
 
+    /// Arms one completion-time recovery persistence failure for integration tests.
+    #[cfg(test)]
+    pub(crate) fn fail_next_external_editor_completion_recovery_write_for_tests(&mut self) {
+        self.external_editor
+            .fail_next_completion_recovery_write_for_tests();
+    }
+
+    /// Persists completion recovery metadata through the fault-injectable boundary.
+    fn write_external_editor_completion_recovery_manifest(
+        &mut self,
+        artifacts: &super::artifacts::ExternalEditorArtifacts,
+        manifest: &ExternalEditorRecoveryManifest,
+    ) -> Result<()> {
+        #[cfg(test)]
+        if self
+            .external_editor
+            .take_completion_recovery_write_failure_for_tests()
+        {
+            return Err(MezError::invalid_state(
+                "injected external-editor completion recovery write failure",
+            ));
+        }
+        write_recovery_manifest(artifacts, manifest)
+    }
+
+    /// Restores usable pane state after completion metadata cannot be persisted.
+    ///
+    /// The initial interrupted manifest remains authoritative on disk. The
+    /// consumed lease is therefore converted into an explicit recovery record,
+    /// while prompt ownership, readiness, and completion bookkeeping are
+    /// settled exactly once before the original persistence error is returned.
+    fn settle_external_editor_completion_persistence_failure(
+        &mut self,
+        pane_id: &str,
+        mut completion: ExternalEditorCompletion,
+        recovery_manifest: ExternalEditorRecoveryManifest,
+        artifacts: super::artifacts::ExternalEditorArtifacts,
+    ) -> Result<()> {
+        completion.validated_content = None;
+        completion.recovery_state = Some(ExternalEditorRecoveryState::Interrupted);
+        self.external_editor.update_completion(completion.clone());
+        self.external_editor
+            .retain_recovery(recovery_manifest.into_record(artifacts));
+        self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
+        let prompt_settlement = self.settle_agent_prompt_external_edit(&completion);
+        let durable_settlement = self.settle_durable_external_edit(&completion);
+        let _ = self.external_editor.take_completion(
+            pane_id,
+            &completion.session_id,
+            &completion.completion_nonce,
+        );
+        prompt_settlement?;
+        durable_settlement?;
+        Ok(())
+    }
+
     /// Aborts one active editor lease while retaining its private artifacts.
     pub(in crate::runtime) fn abort_external_editor_session(&mut self, pane_id: &str) -> bool {
         let Some(session) = self.external_editor.abort(pane_id) else {
@@ -286,7 +342,7 @@ impl RuntimeSessionService {
         else {
             return Ok(0);
         };
-        let mut recovery_manifest = active_manifest;
+        let mut recovery_manifest = active_manifest.clone();
         let validation = super::artifacts::validate_external_editor_draft(
             &active_artifacts,
             super::recovery::RECOVERY_DRAFT_MAX_BYTES,
@@ -309,7 +365,18 @@ impl RuntimeSessionService {
         }
         if let Some(state) = completion.recovery_state {
             recovery_manifest.set_state(state, Some(exit_code));
-            write_recovery_manifest(&active_artifacts, &recovery_manifest)?;
+            if let Err(error) = self.write_external_editor_completion_recovery_manifest(
+                &active_artifacts,
+                &recovery_manifest,
+            ) {
+                self.settle_external_editor_completion_persistence_failure(
+                    pane_id,
+                    completion,
+                    active_manifest,
+                    active_artifacts,
+                )?;
+                return Err(error);
+            }
             self.external_editor.retain_recovery(
                 recovery_manifest
                     .clone()

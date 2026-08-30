@@ -276,6 +276,56 @@ fn runtime_prompt_editor_invalid_utf8_restores_exact_snapshot() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies a completion-time recovery persistence failure cannot consume the
+/// editor lease while leaving pane readiness and prompt ownership wedged.
+///
+/// The interrupted-safe manifest must remain discoverable, the original prompt
+/// must be restored, and a subsequent edit must be able to start immediately.
+#[test]
+fn runtime_prompt_editor_recovery_write_failure_restores_usable_pane_state() {
+    let (mut service, primary, root) =
+        prompt_editor_fixture("prompt-editor-completion-recovery-write-failure");
+    service
+        .apply_attached_agent_prompt_input_for_pane(&primary, "%1", b"original prompt")
+        .unwrap();
+    let expected = service.agent_prompt_inputs_for_tests()["%1"].clone();
+    let identities = start_prompt_editor(&mut service, &primary);
+    let (marker, turn_id, session_id, _) = &identities;
+    fs::write(
+        root.join("runtime/editor-sessions")
+            .join(session_id)
+            .join("draft.md"),
+        b"changed but not durably settled",
+    )
+    .unwrap();
+    service
+        .observe_agent_shell_transaction_start("%1", marker, turn_id, "mez-ui", "%1")
+        .unwrap();
+    service.fail_next_external_editor_completion_recovery_write_for_tests();
+
+    let error = service
+        .observe_agent_shell_transaction_end("%1", marker, turn_id, "mez-ui", "%1", 0)
+        .expect_err("injected completion recovery write should fail");
+
+    assert!(error.message().contains("injected external-editor"));
+    assert!(!service.external_editor_session_is_active("%1"));
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Ready
+    );
+    assert_eq!(service.agent_prompt_inputs_for_tests()["%1"], expected);
+    assert_eq!(service.presented_pane_surface("%1"), PaneSurfaceKind::Agent);
+    let recoveries = service.list_external_editor_recoveries(&primary).unwrap();
+    assert!(recoveries.contains(session_id), "{recoveries}");
+    assert!(recoveries.contains("interrupted"), "{recoveries}");
+
+    let restarted = start_prompt_editor(&mut service, &primary);
+    assert_ne!(restarted.2, *session_id);
+    assert!(service.external_editor_session_is_active("%1"));
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies the semantic binding is rejected when no visible agent prompt owns
 /// the focused pane and never opens an editor transaction or inserts text.
 #[test]

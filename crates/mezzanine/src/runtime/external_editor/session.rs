@@ -124,6 +124,9 @@ pub(crate) struct RuntimeExternalEditorComponent {
     pub(super) active_by_pane: BTreeMap<String, ExternalEditorSession>,
     pub(super) completed_by_pane: BTreeMap<String, ExternalEditorCompletion>,
     pub(super) recoveries_by_id: BTreeMap<String, ExternalEditorRecoveryRecord>,
+    /// Test-only one-shot failure for completion-time recovery persistence.
+    #[cfg(test)]
+    fail_next_completion_recovery_write: bool,
 }
 
 impl RuntimeExternalEditorComponent {
@@ -219,6 +222,18 @@ impl RuntimeExternalEditorComponent {
     /// Removes an active lease without fabricating a successful completion.
     pub(super) fn abort(&mut self, pane_id: &str) -> Option<ExternalEditorSession> {
         self.active_by_pane.remove(pane_id)
+    }
+
+    /// Arms one deterministic completion-manifest persistence failure.
+    #[cfg(test)]
+    pub(super) fn fail_next_completion_recovery_write_for_tests(&mut self) {
+        self.fail_next_completion_recovery_write = true;
+    }
+
+    /// Consumes the deterministic completion-manifest persistence failure.
+    #[cfg(test)]
+    pub(super) fn take_completion_recovery_write_failure_for_tests(&mut self) -> bool {
+        std::mem::take(&mut self.fail_next_completion_recovery_write)
     }
 
     /// Inserts or replaces one validated recovery record by opaque id.
