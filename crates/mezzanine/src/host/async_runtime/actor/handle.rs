@@ -817,6 +817,17 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Captures the newest coalesced presentation-resize generation.
+    pub async fn take_agent_presentation_resize_work(
+        &self,
+        pane_id: String,
+    ) -> Result<Option<crate::runtime::RuntimeAgentPresentationResizeWork>> {
+        self.request(
+            |reply| AsyncRuntimeRequest::TakeAgentPresentationResizeWork { pane_id, reply },
+        )
+        .await?
+    }
+
     /// Installs an atomic projection only when its captured generation is current.
     pub async fn apply_streaming_say_projection(
         &self,
@@ -824,6 +835,18 @@ impl AsyncRuntimeSessionHandle {
     ) -> Result<bool> {
         self.request(|reply| AsyncRuntimeRequest::ApplyStreamingSayProjection { result, reply })
             .await?
+    }
+
+    /// Installs one canonical resize projection only while its inputs remain current.
+    pub async fn apply_agent_presentation_resize(
+        &self,
+        result: crate::runtime::RuntimeAgentPresentationResizeResult,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::ApplyAgentPresentationResize {
+            result: Box::new(result),
+            reply,
+        })
+        .await?
     }
 
     /// Runs the submit runtime events operation for this subsystem.

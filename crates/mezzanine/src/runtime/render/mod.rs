@@ -60,7 +60,7 @@ const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 /// Parsing builds a complete value before the live component changes, so an
 /// invalid option cannot leave cursor, frame-status, or render pacing policy
 /// partially updated.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimePresentationSettings {
     /// Whether window frame rows are rendered.
     window_frames_enabled: bool,
@@ -407,6 +407,8 @@ pub(crate) struct RuntimePresentationComponent {
     agent_presentation_replay_panes: std::collections::BTreeSet<String>,
     /// Newest pane size awaiting source-backed agent presentation replay.
     pending_agent_presentation_resize_sizes: std::collections::BTreeMap<String, Size>,
+    /// Panes whose newest resize generation still needs one worker dispatch.
+    pending_agent_presentation_resize_dispatches: std::collections::BTreeSet<String>,
     /// Installed source-backed presentation projections keyed by pane id.
     agent_presentation_projection_cache: std::collections::BTreeMap<String, (String, Size)>,
     /// Submitted command-prompt history retained across prompt openings.
@@ -684,6 +686,66 @@ pub(crate) struct RuntimeStreamingSayProjectionResult {
     pub(crate) projected_rationale: Option<RuntimeStreamingSayProjectedRationale>,
     /// Fully rendered candidate published only as one state replacement.
     pub(crate) screen: TerminalScreen,
+}
+
+/// Immutable actor snapshot used to rebuild one resized agent presentation.
+#[derive(Debug)]
+pub(crate) struct RuntimeAgentPresentationResizeWork {
+    /// Pane that owns the source-backed presentation.
+    pub(crate) pane_id: String,
+    /// Conversation binding captured before worker execution.
+    conversation_id: String,
+    /// Exact resized screen lineage that the candidate may replace.
+    captured_lineage: u64,
+    /// Exact terminal geometry represented by the candidate.
+    size: Size,
+    /// Durable presentation repository read only by the blocking worker.
+    transcript_store: crate::storage::transcript::AgentTranscriptStore,
+    /// Clone of the mux layout used by the canonical presentation renderer.
+    session: mez_mux::session::Session,
+    /// Runtime socket identity needed to construct an isolated renderer.
+    socket_path: std::path::PathBuf,
+    /// Runtime creation timestamp retained by the isolated renderer.
+    created_at_unix_seconds: u64,
+    /// Exact pane conversation state captured with the resize generation.
+    agent_session: mez_agent::AgentShellSession,
+    /// Immutable presentation settings captured with the resize generation.
+    presentation_settings: RuntimePresentationSettings,
+    /// Maximum history retained by the rebuilt terminal screen.
+    history_limit: usize,
+    /// History rotation batch retained by the rebuilt terminal screen.
+    history_rotate_lines: usize,
+    /// Provisionally resized screen used to preserve current terminal state.
+    screen: TerminalScreen,
+    /// Current transient shell previews to composite over durable replay.
+    shell_output_previews: Option<RuntimeAgentShellPreviewPresentation>,
+    /// Current streamed provider presentation to composite over durable replay.
+    streaming_say_presentation: Option<RuntimeStreamingSayPresentation>,
+}
+
+/// Complete canonical resize candidate built outside the serialized actor.
+#[derive(Debug)]
+pub(crate) struct RuntimeAgentPresentationResizeResult {
+    /// Pane that owns the candidate screen.
+    pane_id: String,
+    /// Conversation binding captured by the worker input.
+    conversation_id: String,
+    /// Exact resized screen lineage that the candidate may replace.
+    captured_lineage: u64,
+    /// Exact terminal geometry represented by the candidate.
+    size: Size,
+    /// Presentation settings that determined semantic rendering.
+    presentation_settings: RuntimePresentationSettings,
+    /// History policy that determined retained canonical rows.
+    history_limit: usize,
+    /// History rotation policy that determined retained canonical rows.
+    history_rotate_lines: usize,
+    /// Fully rendered candidate published only as one state replacement.
+    screen: TerminalScreen,
+    /// Worker-reconciled shell preview state accompanying the candidate.
+    shell_output_previews: Option<RuntimeAgentShellPreviewPresentation>,
+    /// Worker-reconciled streaming state accompanying the candidate.
+    streaming_say_presentation: Option<RuntimeStreamingSayPresentation>,
 }
 
 /// Pane-local presentation state restored when conversation resume fails.
@@ -976,6 +1038,8 @@ impl RuntimePresentationComponent {
             .retain(|(candidate_pane_id, _turn_id), _indices| candidate_pane_id != pane_id);
         self.agent_presentation_replay_panes.remove(pane_id);
         self.pending_agent_presentation_resize_sizes.remove(pane_id);
+        self.pending_agent_presentation_resize_dispatches
+            .remove(pane_id);
         self.agent_presentation_projection_cache.remove(pane_id);
         self.pane_harness_statuses.remove(pane_id);
     }
@@ -1042,6 +1106,16 @@ impl RuntimePresentationComponent {
         invalidation_reason
     }
 
+    /// Installs immutable settings on an isolated projection worker.
+    ///
+    /// Worker-local renderers must not mutate process-global terminal policy;
+    /// the live runtime already installed the captured policy before the work
+    /// item was created.
+    pub(crate) fn apply_projection_settings(&mut self, settings: RuntimePresentationSettings) {
+        self.settings = settings;
+        self.agent_presentation_projection_cache.clear();
+    }
+
     /// Queues the strongest pending render effect per client after config succeeds.
     pub(crate) fn defer_render_effects(
         &mut self,
@@ -1100,10 +1174,51 @@ impl RuntimePresentationComponent {
         self.mouse_resize_drag_state.is_some()
     }
 
+    /// Rebinds transient projections to one cheap provisional screen resize.
+    ///
+    /// Baseline screens are resized with the same bounded terminal operation
+    /// as the live screen. Canonical semantic replay remains deferred, while
+    /// streaming and shell-preview updates retain authority over the interim
+    /// generation.
+    pub(crate) fn rebase_agent_presentations_after_provisional_resize(
+        &mut self,
+        pane_id: &str,
+        previous_lineage: u64,
+        resized_lineage: u64,
+        size: Size,
+    ) {
+        if let Some(preview) = self.agent_shell_output_previews.get_mut(pane_id)
+            && preview.installed_lineage == previous_lineage
+        {
+            let mut baseline = preview.baseline_screen.as_ref().clone();
+            baseline.resize(size);
+            preview.baseline_screen = std::sync::Arc::new(baseline);
+            preview.installed_lineage = resized_lineage;
+        }
+        if let Some(streaming) = self.agent_streaming_say_presentations.get_mut(pane_id)
+            && streaming.installed_lineage == previous_lineage
+        {
+            let mut baseline = streaming.baseline_screen.as_ref().clone();
+            baseline.resize(size);
+            let mut provider = streaming.provider_screen.as_ref().clone();
+            provider.resize(size);
+            streaming.baseline_screen = std::sync::Arc::new(baseline);
+            streaming.provider_screen = std::sync::Arc::new(provider);
+            streaming.installed_lineage = resized_lineage;
+            streaming.projected_revision = None;
+            streaming.projected_context = None;
+            streaming.projected_actions = None;
+            streaming.projected_rationale = None;
+            streaming.projected_lineage = None;
+        }
+    }
+
     /// Coalesces source-backed agent presentation replay to one final pane size.
     pub(crate) fn defer_agent_presentation_resize(&mut self, pane_id: &str, size: Size) {
         self.pending_agent_presentation_resize_sizes
             .insert(pane_id.to_string(), size);
+        self.pending_agent_presentation_resize_dispatches
+            .insert(pane_id.to_string());
     }
 
     /// Reports whether one pane has deferred agent presentation replay.
@@ -1113,16 +1228,26 @@ impl RuntimePresentationComponent {
             .contains_key(pane_id)
     }
 
-    /// Clears deferred agent presentation replay superseded by an immediate resize.
-    pub(crate) fn clear_deferred_agent_presentation_resize(&mut self, pane_id: &str) {
-        self.pending_agent_presentation_resize_sizes.remove(pane_id);
+    /// Drains one coalesced worker dispatch per pane while retaining its newest size.
+    pub(crate) fn take_agent_presentation_resize_dispatch_effects(
+        &mut self,
+    ) -> Vec<RuntimeSideEffect> {
+        let debounce_ms = self.settings.terminal_resize_debounce_ms.max(1);
+        std::mem::take(&mut self.pending_agent_presentation_resize_dispatches)
+            .into_iter()
+            .map(
+                |pane_id| RuntimeSideEffect::DispatchAgentPresentationResize {
+                    pane_id,
+                    debounce_ms,
+                },
+            )
+            .collect()
     }
 
-    /// Drains the newest deferred agent presentation size for each pane.
-    pub(crate) fn take_deferred_agent_presentation_resizes(&mut self) -> Vec<(String, Size)> {
-        std::mem::take(&mut self.pending_agent_presentation_resize_sizes)
-            .into_iter()
-            .collect()
+    /// Requests another worker dispatch for every resize retained during a drag.
+    pub(crate) fn redispatch_pending_agent_presentation_resizes(&mut self) {
+        self.pending_agent_presentation_resize_dispatches
+            .extend(self.pending_agent_presentation_resize_sizes.keys().cloned());
     }
 }
 

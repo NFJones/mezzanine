@@ -527,7 +527,8 @@ impl RuntimeSessionService {
             }
             MouseAction::FinishResizePane => {
                 self.presentation.mouse_resize_drag_state = None;
-                self.replay_deferred_agent_presentation_resizes()?;
+                self.presentation
+                    .redispatch_pending_agent_presentation_resizes();
                 Ok(true)
             }
             MouseAction::ScrollHistory { lines, position } => {

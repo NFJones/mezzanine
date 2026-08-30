@@ -852,6 +852,13 @@ pub enum RuntimeSideEffect {
         /// Pane whose active context should be memorized.
         pane_id: String,
     },
+    /// Rebuild one resized source-backed agent presentation outside the actor.
+    DispatchAgentPresentationResize {
+        /// Pane whose newest coalesced target geometry should be projected.
+        pane_id: String,
+        /// Delay used to coalesce rapid geometry changes before work capture.
+        debounce_ms: u64,
+    },
     /// Append one provider token-usage event through the persistence worker.
     PersistTokenUsage {
         /// Cloneable token-accounting repository handle.

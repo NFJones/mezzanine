@@ -848,10 +848,24 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Returns generation-stamped worker input when projection is ready.
         reply: oneshot::Sender<Result<Option<crate::runtime::RuntimeStreamingSayProjectionWork>>>,
     },
+    /// Captures the newest coalesced agent-presentation resize generation.
+    TakeAgentPresentationResizeWork {
+        /// Pane whose durable presentation should be rebuilt.
+        pane_id: String,
+        /// Returns immutable worker input without reading presentation history.
+        reply: oneshot::Sender<Result<Option<crate::runtime::RuntimeAgentPresentationResizeWork>>>,
+    },
     /// Atomically installs one worker-rendered streaming generation.
     ApplyStreamingSayProjection {
         /// Generation-stamped atomic candidate returned by the worker.
         result: crate::runtime::RuntimeStreamingSayProjectionResult,
+        /// Reports whether current actor-owned state accepted the candidate.
+        reply: oneshot::Sender<Result<bool>>,
+    },
+    /// Atomically installs one worker-rendered presentation resize generation.
+    ApplyAgentPresentationResize {
+        /// Generation-stamped canonical resize candidate returned by the worker.
+        result: Box<crate::runtime::RuntimeAgentPresentationResizeResult>,
         /// Reports whether current actor-owned state accepted the candidate.
         reply: oneshot::Sender<Result<bool>>,
     },
@@ -1193,7 +1207,9 @@ impl AsyncRuntimeRequest {
             | Self::ClaimAgentCompactionTask { .. }
             | Self::ClaimAgentRememberTask { .. }
             | Self::TakeStreamingSayProjectionWork { .. }
-            | Self::ApplyStreamingSayProjection { .. } => Family::Provider,
+            | Self::TakeAgentPresentationResizeWork { .. }
+            | Self::ApplyStreamingSayProjection { .. }
+            | Self::ApplyAgentPresentationResize { .. } => Family::Provider,
             Self::SubmitRuntimeEvents { .. } => Family::Event,
             Self::DrainRuntimeSideEffects { .. }
             | Self::QueueRuntimeSideEffects { .. }

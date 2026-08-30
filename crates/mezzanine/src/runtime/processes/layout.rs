@@ -796,22 +796,32 @@ impl RuntimeSessionService {
                         session.visibility != crate::runtime::AgentShellVisibility::Hidden
                     })
                     || process_presentation_geometry_changed;
-            let defer_agent_presentation = agent_geometry_should_update
-                && agent_screen_width_changed
-                && self.presentation.mouse_resize_drag_active();
-            if defer_agent_presentation {
+            if agent_geometry_should_update && agent_screen_width_changed {
                 self.presentation
                     .defer_agent_presentation_resize(pane_id, process_size);
+                let agent_session_id = self
+                    .agent_shell_store()
+                    .get(pane_id)
+                    .map(|session| session.session_id.clone());
+                let previous_lineage = agent_session_id
+                    .as_deref()
+                    .and_then(|session_id| self.agent_pane_screen_lineage(pane_id, session_id));
                 if let Some(screen) = self.agent_pane_screen_mut(pane_id) {
                     screen.resize(process_size);
                 }
-            } else if agent_geometry_should_update && agent_screen_width_changed {
-                self.presentation
-                    .clear_deferred_agent_presentation_resize(pane_id);
-                if self.rebuild_agent_presentation_after_resize(pane_id, process_size)? {
-                    // Source-backed agent output was atomically rebuilt at the new width.
-                } else if let Some(screen) = self.agent_pane_screen_mut(pane_id) {
-                    screen.resize(process_size);
+                let resized_lineage = agent_session_id
+                    .as_deref()
+                    .and_then(|session_id| self.agent_pane_screen_lineage(pane_id, session_id));
+                if let (Some(previous_lineage), Some(resized_lineage)) =
+                    (previous_lineage, resized_lineage)
+                {
+                    self.presentation
+                        .rebase_agent_presentations_after_provisional_resize(
+                            pane_id,
+                            previous_lineage,
+                            resized_lineage,
+                            process_size,
+                        );
                 }
             } else if agent_geometry_should_update
                 && agent_screen_geometry_changed

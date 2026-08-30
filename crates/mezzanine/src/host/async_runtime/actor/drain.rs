@@ -92,6 +92,7 @@ impl AsyncRuntimeSessionActor {
                         | RuntimeSideEffect::DispatchNativeShellAction { .. }
                         | RuntimeSideEffect::DispatchAgentCompaction { .. }
                         | RuntimeSideEffect::DispatchAgentRemember { .. }
+                        | RuntimeSideEffect::DispatchAgentPresentationResize { .. }
                 )
             {
                 drained.push(effect);

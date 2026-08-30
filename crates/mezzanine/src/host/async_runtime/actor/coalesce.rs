@@ -389,6 +389,9 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::DispatchNativeShellAction { .. } => "dispatch-native-shell-action",
         RuntimeSideEffect::DispatchAgentCompaction { .. } => "dispatch-agent-compaction",
         RuntimeSideEffect::DispatchAgentRemember { .. } => "dispatch-agent-remember",
+        RuntimeSideEffect::DispatchAgentPresentationResize { .. } => {
+            "dispatch-agent-presentation-resize"
+        }
         RuntimeSideEffect::RunProgramHook { .. } => "run-program-hook",
         RuntimeSideEffect::Persist { .. } => "persist",
         RuntimeSideEffect::PersistAuditLog { .. } => "persist-audit-log",

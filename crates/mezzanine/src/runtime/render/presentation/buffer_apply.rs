@@ -740,6 +740,234 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Captures the newest eligible resize generation without reading durable history.
+    pub(crate) fn take_agent_presentation_resize_work(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<Option<crate::runtime::RuntimeAgentPresentationResizeWork>> {
+        if self.presentation.mouse_resize_drag_active() {
+            return Ok(None);
+        }
+        let Some(size) = self
+            .presentation
+            .pending_agent_presentation_resize_sizes
+            .get(pane_id)
+            .copied()
+        else {
+            return Ok(None);
+        };
+        let Some(agent_session) = self.agent_shell_store().get(pane_id).cloned() else {
+            self.presentation
+                .pending_agent_presentation_resize_sizes
+                .remove(pane_id);
+            return Ok(None);
+        };
+        let conversation_id = agent_session.session_id.clone();
+        let eligible = agent_session.visibility == AgentShellVisibility::Visible
+            && !agent_session.ephemeral
+            && self.agent_pane_screen(pane_id).is_some_and(|screen| {
+                screen.size() == size && !screen.normal_viewport_detached_from_history()
+            })
+            && !self
+                .presentation
+                .agent_presentation_projection_cache
+                .get(pane_id)
+                .is_some_and(|(cached_conversation_id, cached_size)| {
+                    cached_conversation_id == &conversation_id && *cached_size == size
+                });
+        let Some(transcript_store) = self.persistence.cloned_transcript_store() else {
+            self.presentation
+                .pending_agent_presentation_resize_sizes
+                .remove(pane_id);
+            return Ok(None);
+        };
+        if !eligible {
+            self.presentation
+                .pending_agent_presentation_resize_sizes
+                .remove(pane_id);
+            return Ok(None);
+        }
+        let captured_lineage = self
+            .agent_pane_screen_lineage(pane_id, &conversation_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("resized agent presentation lost its lineage")
+            })?;
+        let screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
+            MezError::invalid_state("resized agent presentation screen disappeared")
+        })?;
+        self.presentation
+            .pending_agent_presentation_resize_sizes
+            .remove(pane_id);
+        Ok(Some(crate::runtime::RuntimeAgentPresentationResizeWork {
+            pane_id: pane_id.to_string(),
+            conversation_id,
+            captured_lineage,
+            size,
+            transcript_store,
+            session: self.session().clone(),
+            socket_path: self.session.socket_path().to_path_buf(),
+            created_at_unix_seconds: self.session.created_at_unix_seconds(),
+            agent_session,
+            presentation_settings: self.presentation.settings.clone(),
+            history_limit: self.terminal_history_limit(),
+            history_rotate_lines: self.terminal_history_rotate_lines(),
+            screen,
+            shell_output_previews: self
+                .presentation
+                .agent_shell_output_previews
+                .get(pane_id)
+                .cloned(),
+            streaming_say_presentation: self
+                .presentation
+                .agent_streaming_say_presentations
+                .get(pane_id)
+                .cloned(),
+        }))
+    }
+
+    /// Builds one complete canonical resize candidate on a blocking worker.
+    pub(crate) fn build_agent_presentation_resize(
+        work: crate::runtime::RuntimeAgentPresentationResizeWork,
+    ) -> Result<Option<crate::runtime::RuntimeAgentPresentationResizeResult>> {
+        let mut projection = RuntimeSessionService::for_agent_presentation_projection(
+            work.session,
+            work.socket_path,
+            work.created_at_unix_seconds,
+            work.presentation_settings.clone(),
+            work.history_limit,
+            work.history_rotate_lines,
+        )?;
+        projection
+            .agent_shell_store_mut()
+            .restore_session(&work.pane_id, work.agent_session)?;
+        projection
+            .persistence
+            .set_transcript_store(work.transcript_store);
+        projection.set_agent_pane_screen(
+            work.pane_id.clone(),
+            work.conversation_id.clone(),
+            work.screen,
+        );
+        let projection_lineage = projection
+            .agent_pane_screen_lineage(&work.pane_id, &work.conversation_id)
+            .ok_or_else(|| MezError::invalid_state("resize projection screen lost its lineage"))?;
+        if let Some(mut preview) = work.shell_output_previews {
+            preview.installed_lineage = projection_lineage;
+            projection
+                .presentation
+                .agent_shell_output_previews
+                .insert(work.pane_id.clone(), preview);
+        }
+        if let Some(mut streaming) = work.streaming_say_presentation {
+            streaming.installed_lineage = projection_lineage;
+            projection
+                .presentation
+                .agent_streaming_say_presentations
+                .insert(work.pane_id.clone(), streaming);
+        }
+        if !projection.rebuild_agent_presentation_after_resize(&work.pane_id, work.size)? {
+            return Ok(None);
+        }
+        let screen = projection
+            .agent_pane_screen(&work.pane_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("resize projection candidate disappeared"))?;
+        Ok(Some(crate::runtime::RuntimeAgentPresentationResizeResult {
+            pane_id: work.pane_id.clone(),
+            conversation_id: work.conversation_id,
+            captured_lineage: work.captured_lineage,
+            size: work.size,
+            presentation_settings: work.presentation_settings,
+            history_limit: work.history_limit,
+            history_rotate_lines: work.history_rotate_lines,
+            screen,
+            shell_output_previews: projection
+                .presentation
+                .agent_shell_output_previews
+                .remove(&work.pane_id),
+            streaming_say_presentation: projection
+                .presentation
+                .agent_streaming_say_presentations
+                .remove(&work.pane_id),
+        }))
+    }
+
+    /// Installs a worker candidate only while every captured input is current.
+    pub(crate) fn apply_agent_presentation_resize_result(
+        &mut self,
+        mut result: crate::runtime::RuntimeAgentPresentationResizeResult,
+    ) -> Result<bool> {
+        let current = self
+            .agent_shell_store()
+            .get(&result.pane_id)
+            .is_some_and(|session| {
+                session.session_id == result.conversation_id
+                    && session.visibility == AgentShellVisibility::Visible
+                    && !session.ephemeral
+            })
+            && self.agent_pane_screen_lineage(&result.pane_id, &result.conversation_id)
+                == Some(result.captured_lineage)
+            && self
+                .agent_pane_screen(&result.pane_id)
+                .is_some_and(|screen| {
+                    screen.size() == result.size && !screen.normal_viewport_detached_from_history()
+                })
+            && self.presentation.settings == result.presentation_settings
+            && self.terminal_history_limit() == result.history_limit
+            && self.terminal_history_rotate_lines() == result.history_rotate_lines;
+        if !current {
+            let retry_size = self
+                .agent_shell_store()
+                .get(&result.pane_id)
+                .filter(|session| {
+                    session.visibility == AgentShellVisibility::Visible && !session.ephemeral
+                })
+                .and_then(|_session| self.agent_pane_screen(&result.pane_id))
+                .filter(|screen| !screen.normal_viewport_detached_from_history())
+                .map(TerminalScreen::size);
+            if self.find_pane_descriptor(&result.pane_id).is_some()
+                && self.persistence.transcript_store().is_some()
+                && let Some(size) = retry_size
+            {
+                self.presentation
+                    .defer_agent_presentation_resize(&result.pane_id, size);
+            }
+            return Ok(false);
+        }
+        let Some(installed_lineage) = self.update_agent_pane_screen_preserving_interaction(
+            &result.pane_id,
+            &result.conversation_id,
+            result.screen,
+        ) else {
+            return Ok(false);
+        };
+        self.presentation
+            .agent_shell_output_previews
+            .remove(&result.pane_id);
+        self.presentation
+            .agent_streaming_say_presentations
+            .remove(&result.pane_id);
+        if let Some(mut preview) = result.shell_output_previews.take() {
+            preview.installed_lineage = installed_lineage;
+            self.presentation
+                .agent_shell_output_previews
+                .insert(result.pane_id.clone(), preview);
+        }
+        if let Some(mut streaming) = result.streaming_say_presentation.take() {
+            streaming.installed_lineage = installed_lineage;
+            if streaming.projected_lineage.is_some() {
+                streaming.projected_lineage = Some(installed_lineage);
+            }
+            self.presentation
+                .agent_streaming_say_presentations
+                .insert(result.pane_id.clone(), streaming);
+        }
+        self.presentation
+            .agent_presentation_projection_cache
+            .insert(result.pane_id, (result.conversation_id, result.size));
+        Ok(true)
+    }
+
     /// Appends markdown assistant output as styled presentation lines.
     fn append_agent_assistant_markdown_to_terminal_buffer(
         &mut self,

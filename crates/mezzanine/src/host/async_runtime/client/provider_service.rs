@@ -469,6 +469,28 @@ async fn dispatch_agent_provider_side_effects(
                     dispatch,
                 ));
             }
+            RuntimeSideEffect::DispatchAgentPresentationResize {
+                pane_id,
+                debounce_ms,
+            } => {
+                let handle = handle.clone();
+                workers.spawn(async move {
+                    sleep(Duration::from_millis(debounce_ms.max(1))).await;
+                    let Ok(Some(work)) = handle.take_agent_presentation_resize_work(pane_id).await
+                    else {
+                        return Ok(None);
+                    };
+                    let Ok(Ok(Some(result))) = tokio::task::spawn_blocking(move || {
+                        crate::runtime::RuntimeSessionService::build_agent_presentation_resize(work)
+                    })
+                    .await
+                    else {
+                        return Ok(None);
+                    };
+                    let _ = handle.apply_agent_presentation_resize(result).await;
+                    Ok(None)
+                });
+            }
             _ => {}
         }
     }

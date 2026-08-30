@@ -1849,6 +1849,18 @@ impl RuntimeSessionService {
         self.process.settings.terminal_history_rotate_lines
     }
 
+    /// Installs history policy on an isolated presentation projection service.
+    pub(crate) fn configure_agent_projection_history_policy(
+        &mut self,
+        history_limit: usize,
+        history_rotate_lines: usize,
+    ) -> Result<()> {
+        self.configure_pane_screen_history(history_limit, history_rotate_lines)?;
+        self.process.settings.terminal_history_limit = history_limit;
+        self.process.settings.terminal_history_rotate_lines = history_rotate_lines;
+        Ok(())
+    }
+
     /// Returns the TERM value exported to pane processes and clients.
     pub(crate) fn terminal_term(&self) -> &str {
         &self.process.settings.terminal_term
@@ -4074,11 +4086,43 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        if !self.rebuild_agent_presentation_after_resize(&pane_id, size)?
-            && let Some(screen) = self
-                .process
-                .process_pane_screens
-                .get_mut(descriptor.pane_id.as_str())
+        if let Some(screen) = self
+            .process
+            .process_pane_screens
+            .get_mut(descriptor.pane_id.as_str())
+        {
+            screen.resize(size);
+        }
+        let agent_session_id = self
+            .agent_shell_store()
+            .get(&pane_id)
+            .map(|session| session.session_id.clone());
+        let agent_screen_size = self.agent_pane_screen(&pane_id).map(TerminalScreen::size);
+        if agent_screen_size.is_some_and(|current| current.columns != size.columns) {
+            self.presentation
+                .defer_agent_presentation_resize(&pane_id, size);
+            let previous_lineage = agent_session_id
+                .as_deref()
+                .and_then(|session_id| self.agent_pane_screen_lineage(&pane_id, session_id));
+            if let Some(screen) = self.agent_pane_screen_mut(&pane_id) {
+                screen.resize(size);
+            }
+            let resized_lineage = agent_session_id
+                .as_deref()
+                .and_then(|session_id| self.agent_pane_screen_lineage(&pane_id, session_id));
+            if let (Some(previous_lineage), Some(resized_lineage)) =
+                (previous_lineage, resized_lineage)
+            {
+                self.presentation
+                    .rebase_agent_presentations_after_provisional_resize(
+                        &pane_id,
+                        previous_lineage,
+                        resized_lineage,
+                        size,
+                    );
+            }
+        } else if agent_screen_size.is_some_and(|current| current != size)
+            && let Some(screen) = self.agent_pane_screen_mut(&pane_id)
         {
             screen.resize(size);
         }

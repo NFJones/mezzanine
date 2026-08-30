@@ -345,6 +345,7 @@ pub(crate) use processes::{
 /// declaration makes the boundary available to the crate.
 mod render;
 pub(crate) use render::{
+    RuntimeAgentPresentationResizeResult, RuntimeAgentPresentationResizeWork,
     RuntimePaneHarnessStatus, RuntimePresentationComponent, RuntimePresentationSettings,
     RuntimeStreamingSayProjectionResult, RuntimeStreamingSayProjectionWork,
 };
