@@ -524,6 +524,28 @@ pub enum PersistenceEvent {
         /// Human-readable write failure.
         error: String,
     },
+    /// One ordered durable presentation append completed.
+    PresentationCompleted {
+        /// Durable conversation receiving the presentation entries.
+        conversation_id: String,
+        /// Destination path written by the worker.
+        path: PathBuf,
+        /// Number of presentation entries settled by this append.
+        entries: usize,
+        /// Number of payload bytes written.
+        bytes: usize,
+    },
+    /// One ordered durable presentation append failed.
+    PresentationFailed {
+        /// Durable conversation whose presentation append failed.
+        conversation_id: String,
+        /// Destination path the worker attempted to write.
+        path: PathBuf,
+        /// Number of presentation entries settled by this failure.
+        entries: usize,
+        /// Human-readable write failure.
+        error: String,
+    },
     /// One saved-session archive lifecycle operation completed.
     SessionArchiveCompleted {
         /// Durable conversation identity.

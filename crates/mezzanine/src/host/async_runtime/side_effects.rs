@@ -970,23 +970,34 @@ where
                         };
                         entries.extend(next_entries);
                     }
+                    let conversation_id = entries
+                        .first()
+                        .map(|entry| entry.conversation_id.clone())
+                        .unwrap_or_default();
+                    let entry_count = entries.len();
                     match store.append_presentation_many_async(&entries).await {
                         Ok(bytes) => {
                             report.completed = report.completed.saturating_add(1);
                             report.bytes_written = report.bytes_written.saturating_add(bytes);
-                            batch.push(RuntimeEvent::Persistence(PersistenceEvent::Completed {
-                                target: PersistenceTarget::Transcript,
-                                path,
-                                bytes,
-                            }));
+                            batch.push(RuntimeEvent::Persistence(
+                                PersistenceEvent::PresentationCompleted {
+                                    conversation_id,
+                                    path,
+                                    entries: entry_count,
+                                    bytes,
+                                },
+                            ));
                         }
                         Err(error) => {
                             report.failed = report.failed.saturating_add(1);
-                            batch.push(RuntimeEvent::Persistence(PersistenceEvent::Failed {
-                                target: PersistenceTarget::Transcript,
-                                path,
-                                error: error.message().to_string(),
-                            }));
+                            batch.push(RuntimeEvent::Persistence(
+                                PersistenceEvent::PresentationFailed {
+                                    conversation_id,
+                                    path,
+                                    entries: entry_count,
+                                    error: error.message().to_string(),
+                                },
+                            ));
                         }
                     }
                 }

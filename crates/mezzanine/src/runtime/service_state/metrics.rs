@@ -116,6 +116,18 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub(crate) agent_streaming_projection_rejections: u64,
     /// Number of rejected streaming projections whose pane lineage changed.
     pub(crate) agent_streaming_projection_lineage_rejections: u64,
+    /// Number of resize workers that reused actor-cached decoded entries.
+    pub(crate) agent_presentation_decoded_cache_hits: u64,
+    /// Number of resize workers that decoded durable presentation storage.
+    pub(crate) agent_presentation_decoded_cache_misses: u64,
+    /// Number of resize workers that reused an exact canonical width snapshot.
+    pub(crate) agent_presentation_snapshot_cache_hits: u64,
+    /// Number of resize workers that semantically rebuilt a canonical snapshot.
+    pub(crate) agent_presentation_snapshot_cache_misses: u64,
+    /// Number of durable entries semantically replayed by resize workers.
+    pub(crate) agent_presentation_replayed_entries: u64,
+    /// Number of decoded or snapshot entries evicted by cache bounds.
+    pub(crate) agent_presentation_cache_evictions: u64,
     /// Histogram of provider request message counts.
     pub(crate) provider_request_message_counts: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of total provider request message bytes.
@@ -491,6 +503,39 @@ impl RuntimeMetricsSnapshot {
                     .saturating_add(1);
             }
         }
+    }
+
+    /// Records one completed background presentation resize cache outcome.
+    pub(crate) fn record_agent_presentation_resize_cache(
+        &mut self,
+        decoded_hit: bool,
+        snapshot_hit: bool,
+        replayed_entries: usize,
+        evictions: u64,
+    ) {
+        if decoded_hit {
+            self.agent_presentation_decoded_cache_hits =
+                self.agent_presentation_decoded_cache_hits.saturating_add(1);
+        } else {
+            self.agent_presentation_decoded_cache_misses = self
+                .agent_presentation_decoded_cache_misses
+                .saturating_add(1);
+        }
+        if snapshot_hit {
+            self.agent_presentation_snapshot_cache_hits = self
+                .agent_presentation_snapshot_cache_hits
+                .saturating_add(1);
+        } else {
+            self.agent_presentation_snapshot_cache_misses = self
+                .agent_presentation_snapshot_cache_misses
+                .saturating_add(1);
+        }
+        self.agent_presentation_replayed_entries = self
+            .agent_presentation_replayed_entries
+            .saturating_add(u64::try_from(replayed_entries).unwrap_or(u64::MAX));
+        self.agent_presentation_cache_evictions = self
+            .agent_presentation_cache_evictions
+            .saturating_add(evictions);
     }
 }
 

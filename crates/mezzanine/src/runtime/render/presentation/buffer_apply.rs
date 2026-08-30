@@ -359,12 +359,22 @@ impl RuntimeSessionService {
         self.presentation
             .agent_presentation_projection_cache
             .remove(pane_id);
-        let Some(session) = self.agent_shell_store().get(pane_id) else {
+        let Some((conversation_id, running_turn_id, ephemeral)) =
+            self.agent_shell_store().get(pane_id).map(|session| {
+                (
+                    session.session_id.clone(),
+                    session.running_turn_id.clone(),
+                    session.ephemeral,
+                )
+            })
+        else {
             return;
         };
-        if session.ephemeral {
+        if ephemeral {
             return;
         }
+        self.presentation
+            .invalidate_agent_presentation_replay_cache(&conversation_id);
         let Some(store) = self.persistence.cloned_transcript_store() else {
             return;
         };
@@ -372,11 +382,11 @@ impl RuntimeSessionService {
             return;
         };
         let mut entry = AgentPresentationEntry {
-            conversation_id: session.session_id.clone(),
+            conversation_id,
             sequence: 0,
             created_at_unix_seconds: current_unix_seconds().max(1),
             pane_id: pane_id.to_string(),
-            turn_id: session.running_turn_id.clone(),
+            turn_id: running_turn_id,
             terminal_width,
             style_names,
             display_lines,
@@ -580,6 +590,7 @@ impl RuntimeSessionService {
     /// The rebuild is intentionally limited to histories that contain semantic
     /// source. Snapshot-only histories retain ordinary terminal resize behavior
     /// because their saved rows cannot reproduce renderer-level layout.
+    #[cfg(test)]
     pub(crate) fn rebuild_agent_presentation_after_resize(
         &mut self,
         pane_id: &str,
@@ -615,6 +626,23 @@ impl RuntimeSessionService {
             return Ok(false);
         };
         let entries = store.inspect_presentation(&session_id)?;
+        self.rebuild_agent_presentation_after_resize_from_entries(pane_id, size, &entries)
+    }
+
+    /// Rebuilds a resized agent pane from already-decoded durable presentation source.
+    fn rebuild_agent_presentation_after_resize_from_entries(
+        &mut self,
+        pane_id: &str,
+        size: Size,
+        entries: &[AgentPresentationEntry],
+    ) -> Result<bool> {
+        let Some(session_id) = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone())
+        else {
+            return Ok(false);
+        };
         if !entries.iter().any(|entry| entry.source_text.is_some()) {
             return Ok(false);
         }
@@ -643,7 +671,7 @@ impl RuntimeSessionService {
                 self.terminal_history_rotate_lines(),
             )?;
             self.set_agent_pane_screen(pane_id.to_string(), session_id.clone(), rebuilt);
-            self.replay_agent_presentation_entries_to_terminal_buffer(pane_id, &entries)?;
+            self.replay_agent_presentation_entries_to_terminal_buffer(pane_id, entries)?;
             let durable_screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
                 MezError::invalid_state("resized agent presentation screen disappeared")
             })?;
@@ -787,6 +815,12 @@ impl RuntimeSessionService {
                 .remove(pane_id);
             return Ok(None);
         }
+        if self
+            .persistence
+            .presentation_write_pending(&conversation_id)
+        {
+            return Ok(None);
+        }
         let captured_lineage = self
             .agent_pane_screen_lineage(pane_id, &conversation_id)
             .ok_or_else(|| {
@@ -795,6 +829,43 @@ impl RuntimeSessionService {
         let screen = self.agent_pane_screen(pane_id).cloned().ok_or_else(|| {
             MezError::invalid_state("resized agent presentation screen disappeared")
         })?;
+        let source_revision = self
+            .presentation
+            .agent_presentation_source_revision(&conversation_id);
+        let presentation_settings = self.presentation.settings.clone();
+        let history_limit = self.terminal_history_limit();
+        let history_rotate_lines = self.terminal_history_rotate_lines();
+        let has_transient_projection = self
+            .presentation
+            .agent_shell_output_previews
+            .contains_key(pane_id)
+            || self
+                .presentation
+                .agent_streaming_say_presentations
+                .contains_key(pane_id);
+        let (cached_entries, cached_latest_sequence) = self
+            .presentation
+            .agent_presentation_replay_cache
+            .decoded(&conversation_id, source_revision)
+            .map_or((None, 0), |(entries, latest_sequence)| {
+                (Some(entries), latest_sequence)
+            });
+        let cached_snapshot = if has_transient_projection || cached_entries.is_none() {
+            None
+        } else {
+            let key = crate::runtime::render::RuntimeAgentPresentationSnapshotKey {
+                conversation_id: conversation_id.clone(),
+                source_revision,
+                latest_sequence: cached_latest_sequence,
+                size,
+                presentation_settings: presentation_settings.clone(),
+                history_limit,
+                history_rotate_lines,
+            };
+            self.presentation
+                .agent_presentation_replay_cache
+                .snapshot(&key)
+        };
         self.presentation
             .pending_agent_presentation_resize_sizes
             .remove(pane_id);
@@ -802,15 +873,19 @@ impl RuntimeSessionService {
             pane_id: pane_id.to_string(),
             conversation_id,
             captured_lineage,
+            source_revision,
             size,
             transcript_store,
+            cached_entries,
+            cached_latest_sequence,
+            cached_snapshot,
             session: self.session().clone(),
             socket_path: self.session.socket_path().to_path_buf(),
             created_at_unix_seconds: self.session.created_at_unix_seconds(),
             agent_session,
-            presentation_settings: self.presentation.settings.clone(),
-            history_limit: self.terminal_history_limit(),
-            history_rotate_lines: self.terminal_history_rotate_lines(),
+            presentation_settings,
+            history_limit,
+            history_rotate_lines,
             screen,
             shell_output_previews: self
                 .presentation
@@ -827,8 +902,59 @@ impl RuntimeSessionService {
 
     /// Builds one complete canonical resize candidate on a blocking worker.
     pub(crate) fn build_agent_presentation_resize(
-        work: crate::runtime::RuntimeAgentPresentationResizeWork,
+        mut work: crate::runtime::RuntimeAgentPresentationResizeWork,
     ) -> Result<Option<crate::runtime::RuntimeAgentPresentationResizeResult>> {
+        if work.cached_entries.is_some() {
+            let durable_latest_sequence = work
+                .transcript_store
+                .next_presentation_sequence(&work.conversation_id)?
+                .saturating_sub(1);
+            if durable_latest_sequence != work.cached_latest_sequence {
+                work.cached_entries = None;
+                work.cached_snapshot = None;
+                work.cached_latest_sequence = 0;
+            }
+        }
+        if let Some(snapshot) = work.cached_snapshot.as_ref()
+            && work.shell_output_previews.is_none()
+            && work.streaming_say_presentation.is_none()
+        {
+            return Ok(Some(crate::runtime::RuntimeAgentPresentationResizeResult {
+                pane_id: work.pane_id,
+                conversation_id: work.conversation_id,
+                captured_lineage: work.captured_lineage,
+                source_revision: work.source_revision,
+                latest_sequence: work.cached_latest_sequence,
+                size: work.size,
+                presentation_settings: work.presentation_settings,
+                history_limit: work.history_limit,
+                history_rotate_lines: work.history_rotate_lines,
+                screen: snapshot.as_ref().clone(),
+                decoded_entries: None,
+                decoded_cache_hit: true,
+                snapshot_cache_hit: true,
+                replayed_entries: 0,
+                cacheable_snapshot: true,
+                shell_output_previews: None,
+                streaming_say_presentation: None,
+            }));
+        }
+        let decoded_cache_hit = work.cached_entries.is_some();
+        let entries = match work.cached_entries.as_ref() {
+            Some(entries) => entries.clone(),
+            None => std::sync::Arc::from(
+                work.transcript_store
+                    .inspect_presentation(&work.conversation_id)?,
+            ),
+        };
+        let latest_sequence = entries
+            .iter()
+            .map(|entry| entry.sequence)
+            .max()
+            .unwrap_or_default();
+        let decoded_entries = (!decoded_cache_hit).then(|| entries.clone());
+        let cacheable_snapshot =
+            work.shell_output_previews.is_none() && work.streaming_say_presentation.is_none();
         let mut projection = RuntimeSessionService::for_agent_presentation_projection(
             work.session,
             work.socket_path,
@@ -865,7 +991,11 @@ impl RuntimeSessionService {
                 .agent_streaming_say_presentations
                 .insert(work.pane_id.clone(), streaming);
         }
-        if !projection.rebuild_agent_presentation_after_resize(&work.pane_id, work.size)? {
+        if !projection.rebuild_agent_presentation_after_resize_from_entries(
+            &work.pane_id,
+            work.size,
+            &entries,
+        )? {
             return Ok(None);
         }
         let screen = projection
@@ -876,11 +1006,18 @@ impl RuntimeSessionService {
             pane_id: work.pane_id.clone(),
             conversation_id: work.conversation_id,
             captured_lineage: work.captured_lineage,
+            source_revision: work.source_revision,
+            latest_sequence,
             size: work.size,
             presentation_settings: work.presentation_settings,
             history_limit: work.history_limit,
             history_rotate_lines: work.history_rotate_lines,
             screen,
+            decoded_entries,
+            decoded_cache_hit,
+            snapshot_cache_hit: false,
+            replayed_entries: entries.len(),
+            cacheable_snapshot,
             shell_output_previews: projection
                 .presentation
                 .agent_shell_output_previews
@@ -897,6 +1034,9 @@ impl RuntimeSessionService {
         &mut self,
         mut result: crate::runtime::RuntimeAgentPresentationResizeResult,
     ) -> Result<bool> {
+        let current_source_revision = self
+            .presentation
+            .agent_presentation_source_revision(&result.conversation_id);
         let current = self
             .agent_shell_store()
             .get(&result.pane_id)
@@ -914,7 +1054,8 @@ impl RuntimeSessionService {
                 })
             && self.presentation.settings == result.presentation_settings
             && self.terminal_history_limit() == result.history_limit
-            && self.terminal_history_rotate_lines() == result.history_rotate_lines;
+            && self.terminal_history_rotate_lines() == result.history_rotate_lines
+            && current_source_revision == result.source_revision;
         if !current {
             let retry_size = self
                 .agent_shell_store()
@@ -934,6 +1075,9 @@ impl RuntimeSessionService {
             }
             return Ok(false);
         }
+        let snapshot = result
+            .cacheable_snapshot
+            .then(|| std::sync::Arc::new(result.screen.clone()));
         let Some(installed_lineage) = self.update_agent_pane_screen_preserving_interaction(
             &result.pane_id,
             &result.conversation_id,
@@ -964,8 +1108,68 @@ impl RuntimeSessionService {
         }
         self.presentation
             .agent_presentation_projection_cache
-            .insert(result.pane_id, (result.conversation_id, result.size));
+            .insert(
+                result.pane_id.clone(),
+                (result.conversation_id.clone(), result.size),
+            );
+        let mut evictions = 0u64;
+        if let Some(entries) = result.decoded_entries.take() {
+            evictions = evictions.saturating_add(
+                self.presentation
+                    .agent_presentation_replay_cache
+                    .insert_decoded(
+                        result.conversation_id.clone(),
+                        result.source_revision,
+                        result.latest_sequence,
+                        entries,
+                    ),
+            );
+        }
+        if let Some(screen) = snapshot {
+            evictions = evictions.saturating_add(
+                self.presentation
+                    .agent_presentation_replay_cache
+                    .insert_snapshot(
+                        crate::runtime::render::RuntimeAgentPresentationSnapshotKey {
+                            conversation_id: result.conversation_id,
+                            source_revision: result.source_revision,
+                            latest_sequence: result.latest_sequence,
+                            size: result.size,
+                            presentation_settings: result.presentation_settings,
+                            history_limit: result.history_limit,
+                            history_rotate_lines: result.history_rotate_lines,
+                        },
+                        screen,
+                    ),
+            );
+        }
+        self.integration
+            .runtime_metrics_mut()
+            .record_agent_presentation_resize_cache(
+                result.decoded_cache_hit,
+                result.snapshot_cache_hit,
+                result.replayed_entries,
+                evictions,
+            );
         Ok(true)
+    }
+
+    /// Returns bounded replay-cache occupancy for focused regression coverage.
+    #[cfg(test)]
+    pub(crate) fn agent_presentation_replay_cache_stats_for_tests(&self) -> (usize, usize, usize) {
+        (
+            self.presentation
+                .agent_presentation_replay_cache
+                .decoded
+                .len(),
+            self.presentation
+                .agent_presentation_replay_cache
+                .snapshots
+                .len(),
+            self.presentation
+                .agent_presentation_replay_cache
+                .estimated_bytes,
+        )
     }
 
     /// Appends markdown assistant output as styled presentation lines.

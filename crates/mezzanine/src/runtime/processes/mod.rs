@@ -1882,6 +1882,8 @@ impl RuntimeSessionService {
         shell_output_preview_lines: usize,
     ) -> Result<()> {
         self.configure_pane_screen_history(history_limit, history_rotate_lines)?;
+        self.presentation
+            .clear_agent_presentation_replay_cache_entries();
         let emoji_width_changed =
             self.process.settings.terminal_emoji_width != terminal_emoji_width;
         self.process.settings = RuntimeProcessSettings {

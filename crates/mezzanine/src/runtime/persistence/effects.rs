@@ -309,7 +309,40 @@ impl RuntimePersistenceComponent {
 
     /// Queues one presentation append in transcript/archive ordering.
     pub(crate) fn queue_presentation(&mut self, effect: RuntimeSideEffect) {
+        if let RuntimeSideEffect::PersistPresentationEntries { entries, .. } = &effect
+            && let Some(conversation_id) = entries.first().map(|entry| &entry.conversation_id)
+        {
+            let pending = self
+                .pending_presentation_entries
+                .entry(conversation_id.clone())
+                .or_default();
+            *pending = pending.saturating_add(entries.len());
+        }
         self.queued_transcript_effects.push(effect);
+    }
+
+    /// Reports whether one conversation has presentation entries awaiting settlement.
+    pub(crate) fn presentation_write_pending(&self, conversation_id: &str) -> bool {
+        self.pending_presentation_entries
+            .get(conversation_id)
+            .is_some_and(|pending| *pending > 0)
+    }
+
+    /// Settles persisted presentation entries and reports when the conversation is clear.
+    pub(crate) fn finish_presentation_write(
+        &mut self,
+        conversation_id: &str,
+        entries: usize,
+    ) -> bool {
+        let Some(pending) = self.pending_presentation_entries.get_mut(conversation_id) else {
+            return false;
+        };
+        if *pending > entries {
+            *pending -= entries;
+            return false;
+        }
+        self.pending_presentation_entries.remove(conversation_id);
+        true
     }
 
     /// Drains queued transcript and prompt-history effects.

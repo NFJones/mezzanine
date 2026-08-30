@@ -104,6 +104,7 @@ impl RuntimeSessionService {
     ) -> Result<crate::runtime::RuntimeTransition> {
         let mut schedule_next_retention = false;
         let mut queued_retention_rerun = false;
+        let mut redispatch_presentation_resizes = false;
         let mut render_overlay = true;
         let payload = match event {
             crate::runtime::PersistenceEvent::Completed {
@@ -142,6 +143,80 @@ impl RuntimeSessionService {
                     "target": target.as_str(),
                     "path": path.to_string_lossy(),
                     "state": "failed",
+                    "error": error,
+                })
+                .to_string()
+            }
+            crate::runtime::PersistenceEvent::PresentationCompleted {
+                conversation_id,
+                path,
+                entries,
+                bytes,
+            } => {
+                if self
+                    .persistence
+                    .finish_presentation_write(&conversation_id, entries)
+                {
+                    self.presentation
+                        .invalidate_agent_presentation_replay_cache(&conversation_id);
+                    let pane_ids = self
+                        .agent_shell_store()
+                        .sessions()
+                        .filter(|session| {
+                            !session.ephemeral && session.session_id == conversation_id
+                        })
+                        .map(|session| session.pane_id.clone())
+                        .collect::<Vec<_>>();
+                    for pane_id in pane_ids {
+                        self.presentation
+                            .redispatch_pending_agent_presentation_resize(&pane_id);
+                    }
+                    redispatch_presentation_resizes = true;
+                }
+                serde_json::json!({
+                    "worker": "async-persistence",
+                    "target": "transcript",
+                    "conversation_id": conversation_id,
+                    "path": path.to_string_lossy(),
+                    "state": "completed",
+                    "entries": entries,
+                    "bytes": bytes,
+                })
+                .to_string()
+            }
+            crate::runtime::PersistenceEvent::PresentationFailed {
+                conversation_id,
+                path,
+                entries,
+                error,
+            } => {
+                if self
+                    .persistence
+                    .finish_presentation_write(&conversation_id, entries)
+                {
+                    self.presentation
+                        .invalidate_agent_presentation_replay_cache(&conversation_id);
+                    let pane_ids = self
+                        .agent_shell_store()
+                        .sessions()
+                        .filter(|session| {
+                            !session.ephemeral && session.session_id == conversation_id
+                        })
+                        .map(|session| session.pane_id.clone())
+                        .collect::<Vec<_>>();
+                    for pane_id in pane_ids {
+                        self.presentation
+                            .redispatch_pending_agent_presentation_resize(&pane_id);
+                    }
+                    redispatch_presentation_resizes = true;
+                }
+                serde_json::json!({
+                    "worker": "async-persistence",
+                    "target": "transcript",
+                    "conversation_id": conversation_id,
+                    "path": path.to_string_lossy(),
+                    "state": "failed",
+                    "entries": entries,
                     "error": error,
                 })
                 .to_string()
@@ -277,6 +352,12 @@ impl RuntimeSessionService {
             transition
                 .side_effects
                 .extend(self.drain_transcript_persistence_transition().side_effects);
+        }
+        if redispatch_presentation_resizes {
+            transition.side_effects.extend(
+                self.presentation
+                    .take_agent_presentation_resize_dispatch_effects(),
+            );
         }
         Ok(transition)
     }

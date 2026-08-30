@@ -48,6 +48,7 @@ pub(crate) struct RuntimePersistenceComponent {
     queued_config_effects: Vec<RuntimeSideEffect>,
     queued_program_hook_effects: Vec<RuntimeSideEffect>,
     deferred_transcript_next_sequences: BTreeMap<String, u64>,
+    pending_presentation_entries: BTreeMap<String, usize>,
     pane_transcript_refs: BTreeMap<String, Vec<String>>,
     audit_effects_use_adapter: bool,
     pane_pipe_effects_use_adapter: bool,

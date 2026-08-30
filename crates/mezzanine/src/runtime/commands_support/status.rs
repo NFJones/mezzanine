@@ -334,6 +334,30 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
             "agent_streaming_projection_lineage_rejections = {}",
             runtime_metrics.agent_streaming_projection_lineage_rejections
         ),
+        format!(
+            "agent_presentation_decoded_cache_hits = {}",
+            runtime_metrics.agent_presentation_decoded_cache_hits
+        ),
+        format!(
+            "agent_presentation_decoded_cache_misses = {}",
+            runtime_metrics.agent_presentation_decoded_cache_misses
+        ),
+        format!(
+            "agent_presentation_snapshot_cache_hits = {}",
+            runtime_metrics.agent_presentation_snapshot_cache_hits
+        ),
+        format!(
+            "agent_presentation_snapshot_cache_misses = {}",
+            runtime_metrics.agent_presentation_snapshot_cache_misses
+        ),
+        format!(
+            "agent_presentation_replayed_entries = {}",
+            runtime_metrics.agent_presentation_replayed_entries
+        ),
+        format!(
+            "agent_presentation_cache_evictions = {}",
+            runtime_metrics.agent_presentation_cache_evictions
+        ),
         "".to_string(),
         "[runtime latest]".to_string(),
         format!(

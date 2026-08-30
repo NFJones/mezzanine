@@ -138,6 +138,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn set_agent_transcript_store(&mut self, store: AgentTranscriptStore) {
         self.persistence.set_transcript_store(store);
+        self.presentation.clear_agent_presentation_replay_cache();
         self.invalidate_agent_prompt_selector_extra_candidates();
     }
 

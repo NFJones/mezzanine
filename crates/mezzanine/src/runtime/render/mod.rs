@@ -411,6 +411,8 @@ pub(crate) struct RuntimePresentationComponent {
     pending_agent_presentation_resize_dispatches: std::collections::BTreeSet<String>,
     /// Installed source-backed presentation projections keyed by pane id.
     agent_presentation_projection_cache: std::collections::BTreeMap<String, (String, Size)>,
+    /// Bounded decoded-source and canonical-width cache for background replay.
+    agent_presentation_replay_cache: RuntimeAgentPresentationReplayCache,
     /// Submitted command-prompt history retained across prompt openings.
     primary_command_prompt_history: Vec<mez_mux::readline::ReadlineHistoryEntry>,
     /// Active primary-client readline prompt, when one is open.
@@ -688,6 +690,261 @@ pub(crate) struct RuntimeStreamingSayProjectionResult {
     pub(crate) screen: TerminalScreen,
 }
 
+/// Maximum decoded presentation conversations retained for resize replay.
+const AGENT_PRESENTATION_DECODED_CACHE_LIMIT: usize = 4;
+/// Maximum canonical width snapshots retained across resize cycles.
+const AGENT_PRESENTATION_SNAPSHOT_CACHE_LIMIT: usize = 6;
+/// Maximum conversation source generations retained for stale-work fencing.
+const AGENT_PRESENTATION_SOURCE_REVISION_LIMIT: usize = 64;
+/// Conservative combined memory budget for decoded entries and terminal snapshots.
+const AGENT_PRESENTATION_REPLAY_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// One generation-compatible decoded durable presentation stream.
+#[derive(Debug, Clone)]
+struct RuntimeAgentPresentationDecodedCacheEntry {
+    conversation_id: String,
+    source_revision: u64,
+    latest_sequence: u64,
+    entries: std::sync::Arc<[crate::storage::transcript::AgentPresentationEntry]>,
+    estimated_bytes: usize,
+    last_used: u64,
+}
+
+/// Exact renderer inputs that authorize one reusable canonical screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeAgentPresentationSnapshotKey {
+    conversation_id: String,
+    source_revision: u64,
+    latest_sequence: u64,
+    size: Size,
+    presentation_settings: RuntimePresentationSettings,
+    history_limit: usize,
+    history_rotate_lines: usize,
+}
+
+/// One canonical durable presentation snapshot at an exact cache key.
+#[derive(Debug, Clone)]
+struct RuntimeAgentPresentationSnapshotCacheEntry {
+    key: RuntimeAgentPresentationSnapshotKey,
+    screen: std::sync::Arc<TerminalScreen>,
+    estimated_bytes: usize,
+    last_used: u64,
+}
+
+/// Bounded actor-owned cache for decoded source and canonical width snapshots.
+#[derive(Debug, Default)]
+struct RuntimeAgentPresentationReplayCache {
+    source_revisions: std::collections::BTreeMap<String, u64>,
+    decoded: std::collections::VecDeque<RuntimeAgentPresentationDecodedCacheEntry>,
+    snapshots: std::collections::VecDeque<RuntimeAgentPresentationSnapshotCacheEntry>,
+    next_source_revision: u64,
+    next_use: u64,
+    estimated_bytes: usize,
+}
+
+impl RuntimeAgentPresentationReplayCache {
+    fn source_revision(&mut self, conversation_id: &str) -> u64 {
+        if let Some(revision) = self.source_revisions.get(conversation_id).copied() {
+            return revision;
+        }
+        let revision = self.next_source_revision();
+        self.source_revisions
+            .insert(conversation_id.to_string(), revision);
+        self.prune_source_revisions();
+        revision
+    }
+
+    fn invalidate_conversation(&mut self, conversation_id: &str) {
+        let revision = self.next_source_revision();
+        self.source_revisions
+            .insert(conversation_id.to_string(), revision);
+        self.decoded
+            .retain(|entry| entry.conversation_id != conversation_id);
+        self.snapshots
+            .retain(|entry| entry.key.conversation_id != conversation_id);
+        self.recompute_estimated_bytes();
+        self.prune_source_revisions();
+    }
+
+    fn clear_entries(&mut self) {
+        self.decoded.clear();
+        self.snapshots.clear();
+        self.estimated_bytes = 0;
+    }
+
+    fn clear_all(&mut self) {
+        self.clear_entries();
+        self.source_revisions.clear();
+    }
+
+    fn next_source_revision(&mut self) -> u64 {
+        self.next_source_revision = self.next_source_revision.saturating_add(1).max(1);
+        self.next_source_revision
+    }
+
+    fn prune_source_revisions(&mut self) {
+        while self.source_revisions.len() > AGENT_PRESENTATION_SOURCE_REVISION_LIMIT {
+            let Some(conversation_id) = self.source_revisions.keys().next().cloned() else {
+                break;
+            };
+            self.source_revisions.remove(&conversation_id);
+            self.decoded
+                .retain(|entry| entry.conversation_id != conversation_id);
+            self.snapshots
+                .retain(|entry| entry.key.conversation_id != conversation_id);
+        }
+        self.recompute_estimated_bytes();
+    }
+
+    fn decoded(
+        &mut self,
+        conversation_id: &str,
+        source_revision: u64,
+    ) -> Option<(
+        std::sync::Arc<[crate::storage::transcript::AgentPresentationEntry]>,
+        u64,
+    )> {
+        let index = self.decoded.iter().position(|entry| {
+            entry.conversation_id == conversation_id && entry.source_revision == source_revision
+        })?;
+        let mut entry = self.decoded.remove(index)?;
+        entry.last_used = self.next_use();
+        let result = (entry.entries.clone(), entry.latest_sequence);
+        self.decoded.push_back(entry);
+        Some(result)
+    }
+
+    fn snapshot(
+        &mut self,
+        key: &RuntimeAgentPresentationSnapshotKey,
+    ) -> Option<std::sync::Arc<TerminalScreen>> {
+        let index = self.snapshots.iter().position(|entry| &entry.key == key)?;
+        let mut entry = self.snapshots.remove(index)?;
+        entry.last_used = self.next_use();
+        let screen = entry.screen.clone();
+        self.snapshots.push_back(entry);
+        Some(screen)
+    }
+
+    fn insert_decoded(
+        &mut self,
+        conversation_id: String,
+        source_revision: u64,
+        latest_sequence: u64,
+        entries: std::sync::Arc<[crate::storage::transcript::AgentPresentationEntry]>,
+    ) -> u64 {
+        self.decoded.retain(|entry| {
+            entry.conversation_id != conversation_id || entry.source_revision != source_revision
+        });
+        let estimated_bytes = estimate_agent_presentation_entries_bytes(&entries);
+        let last_used = self.next_use();
+        self.decoded
+            .push_back(RuntimeAgentPresentationDecodedCacheEntry {
+                conversation_id,
+                source_revision,
+                latest_sequence,
+                entries,
+                estimated_bytes,
+                last_used,
+            });
+        self.recompute_estimated_bytes();
+        self.prune()
+    }
+
+    fn insert_snapshot(
+        &mut self,
+        key: RuntimeAgentPresentationSnapshotKey,
+        screen: std::sync::Arc<TerminalScreen>,
+    ) -> u64 {
+        self.snapshots.retain(|entry| entry.key != key);
+        let estimated_bytes = estimate_agent_presentation_screen_bytes(screen.as_ref());
+        let last_used = self.next_use();
+        self.snapshots
+            .push_back(RuntimeAgentPresentationSnapshotCacheEntry {
+                key,
+                screen,
+                estimated_bytes,
+                last_used,
+            });
+        self.recompute_estimated_bytes();
+        self.prune()
+    }
+
+    fn next_use(&mut self) -> u64 {
+        self.next_use = self.next_use.saturating_add(1).max(1);
+        self.next_use
+    }
+
+    fn prune(&mut self) -> u64 {
+        let mut evicted = 0u64;
+        while self.decoded.len() > AGENT_PRESENTATION_DECODED_CACHE_LIMIT {
+            self.decoded.pop_front();
+            evicted = evicted.saturating_add(1);
+        }
+        while self.snapshots.len() > AGENT_PRESENTATION_SNAPSHOT_CACHE_LIMIT {
+            self.snapshots.pop_front();
+            evicted = evicted.saturating_add(1);
+        }
+        self.recompute_estimated_bytes();
+        while self.estimated_bytes > AGENT_PRESENTATION_REPLAY_CACHE_MAX_BYTES {
+            let decoded_use = self.decoded.front().map(|entry| entry.last_used);
+            let snapshot_use = self.snapshots.front().map(|entry| entry.last_used);
+            match (decoded_use, snapshot_use) {
+                (Some(decoded), Some(snapshot)) if decoded <= snapshot => {
+                    self.decoded.pop_front();
+                }
+                (Some(_), Some(_)) | (None, Some(_)) => {
+                    self.snapshots.pop_front();
+                }
+                (Some(_), None) => {
+                    self.decoded.pop_front();
+                }
+                (None, None) => break,
+            }
+            evicted = evicted.saturating_add(1);
+            self.recompute_estimated_bytes();
+        }
+        evicted
+    }
+
+    fn recompute_estimated_bytes(&mut self) {
+        self.estimated_bytes = self
+            .decoded
+            .iter()
+            .map(|entry| entry.estimated_bytes)
+            .chain(self.snapshots.iter().map(|entry| entry.estimated_bytes))
+            .sum();
+    }
+}
+
+fn estimate_agent_presentation_entries_bytes(
+    entries: &[crate::storage::transcript::AgentPresentationEntry],
+) -> usize {
+    entries
+        .iter()
+        .map(|entry| {
+            entry.conversation_id.len()
+                + entry.pane_id.len()
+                + entry.turn_id.as_ref().map_or(0, String::len)
+                + entry.style_names.iter().map(String::len).sum::<usize>()
+                + entry.display_lines.iter().map(String::len).sum::<usize>()
+                + entry.copy_lines.iter().map(String::len).sum::<usize>()
+                + entry.ansi_text.as_ref().map_or(0, String::len)
+                + entry.source_text.as_ref().map_or(0, String::len)
+                + entry.source_content_type.as_ref().map_or(0, String::len)
+        })
+        .sum()
+}
+
+fn estimate_agent_presentation_screen_bytes(screen: &TerminalScreen) -> usize {
+    let rows = screen
+        .history()
+        .len()
+        .saturating_add(usize::from(screen.size().rows));
+    rows.saturating_mul(usize::from(screen.size().columns))
+        .saturating_mul(16)
+}
+
 /// Immutable actor snapshot used to rebuild one resized agent presentation.
 #[derive(Debug)]
 pub(crate) struct RuntimeAgentPresentationResizeWork {
@@ -697,10 +954,18 @@ pub(crate) struct RuntimeAgentPresentationResizeWork {
     conversation_id: String,
     /// Exact resized screen lineage that the candidate may replace.
     captured_lineage: u64,
+    /// Actor-local durable presentation generation captured for cache authority.
+    source_revision: u64,
     /// Exact terminal geometry represented by the candidate.
     size: Size,
     /// Durable presentation repository read only by the blocking worker.
     transcript_store: crate::storage::transcript::AgentTranscriptStore,
+    /// Generation-compatible decoded entries supplied by the actor cache.
+    cached_entries: Option<std::sync::Arc<[crate::storage::transcript::AgentPresentationEntry]>>,
+    /// Latest durable sequence represented by `cached_entries`.
+    cached_latest_sequence: u64,
+    /// Exact canonical durable snapshot for this width and renderer generation.
+    cached_snapshot: Option<std::sync::Arc<TerminalScreen>>,
     /// Clone of the mux layout used by the canonical presentation renderer.
     session: mez_mux::session::Session,
     /// Runtime socket identity needed to construct an isolated renderer.
@@ -732,6 +997,10 @@ pub(crate) struct RuntimeAgentPresentationResizeResult {
     conversation_id: String,
     /// Exact resized screen lineage that the candidate may replace.
     captured_lineage: u64,
+    /// Actor-local durable presentation generation captured by the work item.
+    source_revision: u64,
+    /// Latest durable sequence represented by the canonical candidate.
+    latest_sequence: u64,
     /// Exact terminal geometry represented by the candidate.
     size: Size,
     /// Presentation settings that determined semantic rendering.
@@ -742,6 +1011,16 @@ pub(crate) struct RuntimeAgentPresentationResizeResult {
     history_rotate_lines: usize,
     /// Fully rendered candidate published only as one state replacement.
     screen: TerminalScreen,
+    /// Decoded durable entries returned after a worker-side storage miss.
+    decoded_entries: Option<std::sync::Arc<[crate::storage::transcript::AgentPresentationEntry]>>,
+    /// Whether actor-owned decoded entries avoided durable storage decoding.
+    decoded_cache_hit: bool,
+    /// Whether an exact canonical terminal snapshot avoided semantic replay.
+    snapshot_cache_hit: bool,
+    /// Number of durable entries semantically replayed by this worker.
+    replayed_entries: usize,
+    /// Whether the final screen contains only canonical durable presentation.
+    cacheable_snapshot: bool,
     /// Worker-reconciled shell preview state accompanying the candidate.
     shell_output_previews: Option<RuntimeAgentShellPreviewPresentation>,
     /// Worker-reconciled streaming state accompanying the candidate.
@@ -806,6 +1085,28 @@ fn presentation_render_invalidation_priority(reason: RenderInvalidationReason) -
 }
 
 impl RuntimePresentationComponent {
+    /// Returns the actor-local durable source generation for one conversation.
+    pub(crate) fn agent_presentation_source_revision(&mut self, conversation_id: &str) -> u64 {
+        self.agent_presentation_replay_cache
+            .source_revision(conversation_id)
+    }
+
+    /// Invalidates every decoded and rendered cache entry for one source mutation.
+    pub(crate) fn invalidate_agent_presentation_replay_cache(&mut self, conversation_id: &str) {
+        self.agent_presentation_replay_cache
+            .invalidate_conversation(conversation_id);
+    }
+
+    /// Clears cache entries after renderer or history-policy replacement.
+    pub(crate) fn clear_agent_presentation_replay_cache_entries(&mut self) {
+        self.agent_presentation_replay_cache.clear_entries();
+    }
+
+    /// Clears cache entries and source generations after transcript-store replacement.
+    pub(crate) fn clear_agent_presentation_replay_cache(&mut self) {
+        self.agent_presentation_replay_cache.clear_all();
+    }
+
     /// Returns the next live-overlay refresh deadline for one exact client.
     pub(crate) fn client_live_overlay_next_due_ms(
         &mut self,
@@ -1103,6 +1404,7 @@ impl RuntimePresentationComponent {
         crate::host::terminal::set_agent_wrap_column_cap(settings.terminal_agent_wrap_column_cap);
         self.settings = settings;
         self.agent_presentation_projection_cache.clear();
+        self.agent_presentation_replay_cache.clear_entries();
         invalidation_reason
     }
 
@@ -1248,6 +1550,17 @@ impl RuntimePresentationComponent {
     pub(crate) fn redispatch_pending_agent_presentation_resizes(&mut self) {
         self.pending_agent_presentation_resize_dispatches
             .extend(self.pending_agent_presentation_resize_sizes.keys().cloned());
+    }
+
+    /// Requests another worker dispatch when one pane still has deferred replay.
+    pub(crate) fn redispatch_pending_agent_presentation_resize(&mut self, pane_id: &str) {
+        if self
+            .pending_agent_presentation_resize_sizes
+            .contains_key(pane_id)
+        {
+            self.pending_agent_presentation_resize_dispatches
+                .insert(pane_id.to_string());
+        }
     }
 }
 
