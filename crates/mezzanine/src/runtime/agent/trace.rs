@@ -332,6 +332,7 @@ pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'s
         ContextSourceKind::RuntimeHint => "runtime_hint",
         ContextSourceKind::ProjectGuidance => "project_guidance",
         ContextSourceKind::Memory => "memory",
+        ContextSourceKind::PersistedContextDocument => "persisted_context_document",
         ContextSourceKind::Transcript => "transcript",
         ContextSourceKind::TranscriptUser => "transcript_user",
         ContextSourceKind::TranscriptAssistant => "transcript_assistant",

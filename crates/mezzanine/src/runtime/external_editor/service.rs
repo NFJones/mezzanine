@@ -557,18 +557,14 @@ impl RuntimeSessionService {
             }
             ExternalEditTarget::IssueBody { .. }
             | ExternalEditTarget::IssueNotes { .. }
-            | ExternalEditTarget::MemoryContent { .. } => {
+            | ExternalEditTarget::MemoryContent { .. }
+            | ExternalEditTarget::ContextDocument { .. } => {
                 self.reopen_durable_external_edit(
                     primary_client_id,
                     pane_id,
                     record.target.clone(),
                     draft.content,
                 )?;
-            }
-            ExternalEditTarget::ContextDocument { .. } => {
-                return Err(MezError::invalid_args(
-                    "unsupported external-editor recovery target",
-                ));
             }
         }
         discard_recovery_artifacts(&record)?;

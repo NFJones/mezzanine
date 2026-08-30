@@ -34,7 +34,11 @@ pub(crate) enum ExternalEditTarget {
         expected_revision: String,
     },
     /// Persisted user-owned context document content.
-    ContextDocument { document_id: String },
+    ContextDocument {
+        document_id: String,
+        project: Option<String>,
+        expected_revision: String,
+    },
 }
 
 impl ExternalEditTarget {

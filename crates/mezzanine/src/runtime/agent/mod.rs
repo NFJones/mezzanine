@@ -142,6 +142,7 @@ mod approvals;
 mod audit;
 mod bookkeeping;
 mod config_change;
+mod context_documents;
 mod failures;
 mod issues;
 mod lifecycle;

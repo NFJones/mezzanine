@@ -4,6 +4,9 @@ use super::session::{ExternalEditTarget, ExternalEditorCompletion};
 use crate::error::{MezError, Result};
 use crate::runtime::commands::{runtime_issue_database_path, runtime_issues_enabled};
 use crate::runtime::{RuntimeSessionService, current_unix_seconds};
+use crate::storage::context_documents::{
+    CompareAndSwapContextDocumentResult, ContextDocumentScope, ContextDocumentStore,
+};
 use crate::storage::issues::{CompareAndSwapIssueTextResult, IssueStore, IssueTextField};
 use crate::storage::memory::{CompareAndSwapMemoryContentResult, PersistentMemoryStore};
 
@@ -95,6 +98,49 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Opens one authorized persisted context document in the configured editor.
+    pub(crate) fn start_context_document_external_edit(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        document_id: &str,
+    ) -> Result<()> {
+        let config_root = self.external_editor_config_root()?;
+        let project = self.context_document_project_for_pane(pane_id, &config_root);
+        let store = ContextDocumentStore::under_config_root(&config_root);
+        let document = store.inspect(document_id)?.ok_or_else(|| {
+            MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "context document not found",
+            )
+        })?;
+        if !document.visible_to_project(&project) {
+            return Err(MezError::forbidden(
+                "context document does not belong to the active project",
+            ));
+        }
+        let expected_revision = store.revision(&document)?;
+        let target_project = match &document.scope {
+            ContextDocumentScope::Global => None,
+            ContextDocumentScope::Project { root } => Some(root.clone()),
+        };
+        let original_content = document.content;
+        self.start_external_editor_session(
+            primary_client_id,
+            pane_id,
+            ExternalEditTarget::ContextDocument {
+                document_id: document.id,
+                project: target_project,
+                expected_revision,
+            },
+            original_content.clone(),
+            original_content,
+            true,
+        )?;
+        self.sync_tracked_pty_sizes()?;
+        Ok(())
+    }
+
     /// Applies or retains one normal durable completion through its CAS owner.
     pub(super) fn settle_durable_external_edit(
         &mut self,
@@ -105,6 +151,7 @@ impl RuntimeSessionService {
             ExternalEditTarget::IssueBody { .. }
                 | ExternalEditTarget::IssueNotes { .. }
                 | ExternalEditTarget::MemoryContent { .. }
+                | ExternalEditTarget::ContextDocument { .. }
         ) {
             return Ok(DurableExternalEditSettlement::Unhandled);
         }
@@ -187,6 +234,41 @@ impl RuntimeSessionService {
                     }
                     CompareAndSwapMemoryContentResult::Stale { .. }
                     | CompareAndSwapMemoryContentResult::Deleted => {
+                        Ok(DurableExternalEditSettlement::Conflicted)
+                    }
+                }
+            }
+            ExternalEditTarget::ContextDocument {
+                document_id,
+                project,
+                expected_revision,
+            } => {
+                let config_root = self.external_editor_config_root()?;
+                let current_project = self.context_document_project_for_pane(pane_id, &config_root);
+                if project
+                    .as_ref()
+                    .is_some_and(|expected_project| expected_project != &current_project)
+                {
+                    return Ok(DurableExternalEditSettlement::Conflicted);
+                }
+                let store = ContextDocumentStore::under_config_root(&config_root);
+                let Some(document) = store.inspect(document_id)? else {
+                    return Ok(DurableExternalEditSettlement::Conflicted);
+                };
+                if !document.visible_to_project(&current_project) {
+                    return Ok(DurableExternalEditSettlement::Conflicted);
+                }
+                match store.compare_and_swap_content(
+                    document_id,
+                    expected_revision,
+                    content.to_string(),
+                    current_unix_seconds().max(1),
+                )? {
+                    CompareAndSwapContextDocumentResult::Updated(_) => {
+                        Ok(DurableExternalEditSettlement::Applied)
+                    }
+                    CompareAndSwapContextDocumentResult::Stale { .. }
+                    | CompareAndSwapContextDocumentResult::Deleted => {
                         Ok(DurableExternalEditSettlement::Conflicted)
                     }
                 }

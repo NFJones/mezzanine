@@ -125,6 +125,12 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("list-mcp", &[], SlashCommandEffect::ReadOnly, true),
         slash("issue", &[], SlashCommandEffect::SessionMutation, true),
         slash(
+            "context-doc",
+            &[],
+            SlashCommandEffect::SessionMutation,
+            false,
+        ),
+        slash(
             "editor-recovery",
             &[],
             SlashCommandEffect::SessionMutation,

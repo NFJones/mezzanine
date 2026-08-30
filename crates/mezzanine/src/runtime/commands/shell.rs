@@ -769,6 +769,21 @@ impl RuntimeSessionService {
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&issue_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "context-doc"
+                {
+                    let context_document_outcome = self
+                        .execute_agent_shell_context_document_command(
+                            primary_client_id,
+                            &pane_id,
+                            input,
+                        )?;
+                    runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        Some(&context_document_outcome),
+                    )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "editor-recovery"
                 {
                     let recovery_outcome = self.execute_agent_shell_editor_recovery_command(

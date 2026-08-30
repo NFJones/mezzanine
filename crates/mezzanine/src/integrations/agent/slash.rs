@@ -419,6 +419,10 @@ fn execute_agent_shell_command_with_context_inner(
             command,
             reason: "local issue tracking requires the live runtime".to_string(),
         },
+        "context-doc" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason: "persisted context documents require the live runtime".to_string(),
+        },
         "editor-recovery" => AgentShellCommandOutcome::RequiresRuntime {
             command,
             reason: "external-editor recovery requires the live runtime".to_string(),

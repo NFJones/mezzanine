@@ -23,6 +23,23 @@ reattaching the client, and ordinary session persistence. A forked or routed
 conversation uses its captured source boundary and does not absorb later parent
 history.
 
+Persisted context documents are user-owned source artifacts, not the assembled
+context of a live request. Use `/context-doc create --scope global|project
+--title <title>` to create a disabled empty document, `/context-doc edit <id>`
+to edit only its content, and `/context-doc enable <id>` after it contains the
+text that future turns should receive. `/context-doc list|show|disable|delete`
+manage selection and lifecycle separately. Enabled global documents and enabled
+documents for the active project are added deterministically when a new turn is
+created, with stable document ID provenance. Editing, disabling, or deleting a
+source document never rewrites a queued, running, or completed turn; it affects
+only later turn assembly.
+
+Document edits use full-record compare-and-swap checks. Concurrent metadata or
+content changes and deletion retain the private editor draft for explicit
+`/editor-recovery` handling instead of overwriting or recreating the source.
+`/show-context` continues to browse transient conversation entries and does not
+edit these persisted source documents.
+
 Saved-conversation discovery uses a private SQLite metadata catalog so a large
 session collection does not require reconstructing every summary during normal
 startup. Conversation transcripts and presentation history remain in their

@@ -870,6 +870,7 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "latency"
         | "log-level"
         | "memory"
+        | "context-doc"
         | "directive"
         | "model"
         | "permissions"
@@ -928,6 +929,9 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "list-mcp" => "list configured MCP servers and tools.",
         "issue" => {
             "create, inspect, externally edit body/notes, update, or delete project issue records."
+        }
+        "context-doc" => {
+            "create, list, inspect, externally edit, enable, disable, or delete persisted context documents."
         }
         "editor-recovery" => {
             "list, reopen, apply, or discard retained external-editor drafts without displaying their content."

@@ -180,6 +180,8 @@ fn role_for_context_semantic(
         crate::ContextSemanticKind::AmbientInstruction => {
             if block.source == ContextSourceKind::System {
                 ModelMessageRole::System
+            } else if block.source == ContextSourceKind::PersistedContextDocument {
+                ModelMessageRole::Context
             } else {
                 ModelMessageRole::Developer
             }

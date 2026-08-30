@@ -63,6 +63,7 @@ use mez_agent::{
 mod approval;
 mod artifacts;
 mod compaction;
+mod context_documents;
 mod issues;
 mod lists;
 mod model;
@@ -1258,6 +1259,7 @@ impl RuntimeSessionService {
         let (context, delivered_message_sequence) =
             self.agent_context_for_pane_prompt_with_message_delivery(pane_id, prompt, 100, true)?;
         let context = self.apply_agent_shell_preference_context(pane_id, context)?;
+        let context = self.apply_persisted_context_documents(pane_id, context)?;
         context.validate_placement_order()?;
         let turn_id = self.next_agent_turn_id();
         let agent_id = format!("agent-{pane_id}");

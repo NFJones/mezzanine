@@ -3,6 +3,7 @@
 //! The modules below own SQLite and filesystem layouts, compatibility data,
 //! private-file posture, repositories, and cross-crate snapshot persistence.
 
+pub(crate) mod context_documents;
 pub(crate) mod issues;
 #[allow(
     dead_code,

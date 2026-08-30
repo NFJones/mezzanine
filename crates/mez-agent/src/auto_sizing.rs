@@ -673,6 +673,7 @@ fn auto_sizing_includes_conversation_source(source: ContextSourceKind) -> bool {
             | ContextSourceKind::TranscriptUser
             | ContextSourceKind::TranscriptAssistant
             | ContextSourceKind::Memory
+            | ContextSourceKind::PersistedContextDocument
     )
 }
 
@@ -682,7 +683,9 @@ fn auto_sizing_role_for_source(source: ContextSourceKind) -> ModelMessageRole {
         ContextSourceKind::UserInstruction | ContextSourceKind::TranscriptUser => {
             ModelMessageRole::User
         }
-        ContextSourceKind::Memory => ModelMessageRole::Context,
+        ContextSourceKind::Memory | ContextSourceKind::PersistedContextDocument => {
+            ModelMessageRole::Context
+        }
         _ => ModelMessageRole::Context,
     }
 }
@@ -693,6 +696,7 @@ fn auto_sizing_source_name(source: ContextSourceKind) -> &'static str {
         ContextSourceKind::TranscriptUser => "transcript_user",
         ContextSourceKind::TranscriptAssistant => "transcript_assistant",
         ContextSourceKind::Memory => "memory",
+        ContextSourceKind::PersistedContextDocument => "persisted_context_document",
         _ => "context",
     }
 }

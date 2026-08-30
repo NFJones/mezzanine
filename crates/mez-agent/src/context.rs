@@ -56,6 +56,8 @@ pub enum ContextSourceKind {
     ProjectGuidance,
     /// Retrieved durable memory context.
     Memory,
+    /// Explicitly included user-owned persisted context document.
+    PersistedContextDocument,
     /// A legacy or role-neutral transcript entry.
     Transcript,
     /// A prior user-authored transcript entry.
@@ -100,7 +102,9 @@ impl TrustDomain {
                 Self::ProjectFile
             }
             ContextSourceKind::RuntimeHint => Self::Configuration,
-            ContextSourceKind::Memory | ContextSourceKind::TranscriptUser => Self::UserInput,
+            ContextSourceKind::Memory
+            | ContextSourceKind::PersistedContextDocument
+            | ContextSourceKind::TranscriptUser => Self::UserInput,
             ContextSourceKind::Transcript
             | ContextSourceKind::TranscriptAssistant
             | ContextSourceKind::TranscriptTool
@@ -715,7 +719,8 @@ impl ContextBlock {
             | ContextSourceKind::RoutedHandoff => ContextSemanticKind::ReferenceEvent,
             ContextSourceKind::System
             | ContextSourceKind::DeveloperInstruction
-            | ContextSourceKind::ProjectGuidance => {
+            | ContextSourceKind::ProjectGuidance
+            | ContextSourceKind::PersistedContextDocument => {
                 if self.placement == ContextPlacement::StablePrefix {
                     ContextSemanticKind::AmbientInstruction
                 } else {
@@ -746,6 +751,7 @@ impl ContextBlock {
             | ContextSourceKind::Policy
             | ContextSourceKind::Configuration
             | ContextSourceKind::ProjectGuidance
+            | ContextSourceKind::PersistedContextDocument
             | ContextSourceKind::RuntimeHint
             | ContextSourceKind::RoutedHandoff => ContextRetention::Exact,
             ContextSourceKind::TranscriptAssistant

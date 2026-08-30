@@ -32,7 +32,7 @@ turning the command into an ordinary model request:
 | --- | --- |
 | Inspect or change authority and execution mode | `/status`, `/permissions`, `/approval`, `/approve`, `/show-approvals`, `/sandbox`, and `/shell-mode` |
 | Control the current task | `/plan`, `/directive`, `/loop`, `/stop`, `/new`, `/fork`, `/resume`, and `/name-session` |
-| Inspect or preserve context | `/compact`, `/show-context`, `/copy`, `/copy-context`, `/copy-patches`, `/copy-trace-log`, and `/list-modified-files` |
+| Inspect or preserve context | `/compact`, `/context-doc`, `/show-context`, `/copy`, `/copy-context`, `/copy-patches`, `/copy-trace-log`, and `/list-modified-files` |
 | Select model behavior | `/model`, `/routing`, `/latency`, `/thinking`, `/personality`, and `/list-personalities` |
 | Work with local stores | `/memory`, `/remember`, `/show-memories`, `/issue`, and `/show-issues` |
 

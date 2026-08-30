@@ -3160,3 +3160,83 @@ fn runtime_nested_joined_children_close_after_each_successful_handoff() {
                 .any(|block| block.content.contains("child done")))
     );
 }
+
+/// Verifies enabled persisted documents are snapshotted only when a new turn
+/// is created. Editing the source artifact cannot rewrite an already queued or
+/// running turn, while a later turn receives the new content and provenance.
+#[test]
+fn runtime_persisted_context_documents_affect_only_future_turns() {
+    let root = temp_root("persisted-context-future-turns");
+    let config_root = root.join("config");
+    fs::create_dir_all(&config_root).unwrap();
+    let mut service = test_runtime_service();
+    service.set_config_root(config_root.clone());
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let store =
+        crate::storage::context_documents::ContextDocumentStore::under_config_root(&config_root);
+    let document = store
+        .create(
+            crate::storage::context_documents::ContextDocumentScope::Global,
+            "Future turns".to_string(),
+            "document before".to_string(),
+            true,
+            10,
+        )
+        .unwrap();
+
+    let first = service
+        .start_agent_prompt_turn("%1", "first prompt")
+        .unwrap();
+    let first_context = service
+        .agent_turn_contexts()
+        .get(&first.turn_id)
+        .unwrap()
+        .clone();
+    let first_document = first_context
+        .blocks()
+        .iter()
+        .find(|block| block.source == ContextSourceKind::PersistedContextDocument)
+        .expect("enabled document should be present in the first turn");
+    assert_eq!(first_document.content, "document before");
+    assert!(first_document.label.contains(&document.id));
+    assert_eq!(
+        mez_agent::role_for_context_block(first_document),
+        mez_agent::ModelMessageRole::Context
+    );
+
+    let revision = store.revision(&document).unwrap();
+    store
+        .compare_and_swap_content(&document.id, &revision, "document after".to_string(), 11)
+        .unwrap();
+    assert_eq!(
+        first_context
+            .blocks()
+            .iter()
+            .find(|block| block.source == ContextSourceKind::PersistedContextDocument)
+            .unwrap()
+            .content,
+        "document before"
+    );
+
+    service.stop_agent_turn_for_pane("%1").unwrap();
+    let second = service
+        .start_agent_prompt_turn("%1", "second prompt")
+        .unwrap();
+    let second_document = service
+        .agent_turn_contexts()
+        .get(&second.turn_id)
+        .unwrap()
+        .blocks()
+        .iter()
+        .find(|block| block.source == ContextSourceKind::PersistedContextDocument)
+        .expect("updated document should be present in the later turn");
+    assert_eq!(second_document.content, "document after");
+    assert!(second_document.label.contains(&document.id));
+    let _ = fs::remove_dir_all(root);
+}

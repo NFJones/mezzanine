@@ -920,3 +920,222 @@ fn runtime_issue_external_editor_reopen_remains_explicit_apply() {
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(root);
 }
+
+/// Verifies a context-document edit exports only source content and commits
+/// through the document CAS boundary without changing inclusion metadata.
+#[test]
+fn runtime_context_document_external_editor_applies_content_only() {
+    let (mut service, primary, root) = prompt_editor_fixture("context-document-editor-success");
+    let (_issues, _memories, project) = durable_editor_stores(&mut service, &root);
+    let store = crate::storage::context_documents::ContextDocumentStore::under_config_root(
+        root.join("config"),
+    );
+    let document = store
+        .create(
+            crate::storage::context_documents::ContextDocumentScope::Project { root: project },
+            "Editable Runbook".to_string(),
+            "document before".to_string(),
+            true,
+            10,
+        )
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, &format!("/context-doc edit {}", document.id))
+        .unwrap();
+    assert!(response.contains("editor_started=true"), "{response}");
+    let identities = editor_transaction(&service);
+    assert_eq!(
+        fs::read_to_string(
+            root.join("runtime/editor-sessions")
+                .join(&identities.2)
+                .join("draft.md")
+        )
+        .unwrap(),
+        "document before"
+    );
+    complete_prompt_editor(&mut service, &root, &identities, b"document after", 0);
+
+    let updated = store.inspect(&document.id).unwrap().unwrap();
+    assert_eq!(updated.content, "document after");
+    assert_eq!(updated.title, "Editable Runbook");
+    assert!(updated.enabled);
+    assert!(
+        service
+            .list_external_editor_recoveries(&primary)
+            .unwrap()
+            .contains("No retained")
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a concurrent inclusion change cannot be overwritten by document
+/// prose completion and leaves a primary-authorized conflicted recovery.
+#[test]
+fn runtime_context_document_external_editor_retains_stale_conflict() {
+    let (mut service, primary, root) = prompt_editor_fixture("context-document-editor-conflict");
+    let (_issues, _memories, _project) = durable_editor_stores(&mut service, &root);
+    let store = crate::storage::context_documents::ContextDocumentStore::under_config_root(
+        root.join("config"),
+    );
+    let document = store
+        .create(
+            crate::storage::context_documents::ContextDocumentScope::Global,
+            "Concurrent Runbook".to_string(),
+            "document before".to_string(),
+            true,
+            10,
+        )
+        .unwrap();
+    service
+        .start_context_document_external_edit(&primary, "%1", &document.id)
+        .unwrap();
+    let identities = editor_transaction(&service);
+    store.set_enabled(&document.id, false, 10).unwrap();
+
+    complete_prompt_editor(&mut service, &root, &identities, b"must not overwrite", 0);
+    let current = store.inspect(&document.id).unwrap().unwrap();
+    assert_eq!(current.content, "document before");
+    assert!(!current.enabled);
+    let listing = service.list_external_editor_recoveries(&primary).unwrap();
+    assert!(listing.contains(&identities.2), "{listing}");
+    assert!(listing.contains("conflicted"), "{listing}");
+    assert!(
+        service
+            .apply_external_editor_recovery(&primary, "%1", &identities.2)
+            .is_err()
+    );
+    assert!(
+        service
+            .discard_external_editor_recovery(&primary, "%1", &identities.2)
+            .unwrap()
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies typed context-document commands keep inclusion separate from prose
+/// editing and do not expose disabled documents to future-turn selection.
+#[test]
+fn runtime_context_document_commands_manage_explicit_inclusion_lifecycle() {
+    let (mut service, primary, root) = prompt_editor_fixture("context-document-commands");
+    let (_issues, _memories, project) = durable_editor_stores(&mut service, &root);
+    let store = crate::storage::context_documents::ContextDocumentStore::under_config_root(
+        root.join("config"),
+    );
+
+    let created = service
+        .execute_agent_shell_command(
+            &primary,
+            "/context-doc create --scope project --title 'Project Runbook'",
+        )
+        .unwrap();
+    assert!(created.contains("enabled=false"), "{created}");
+    let document = store.list().unwrap().into_iter().next().unwrap();
+    assert_eq!(
+        document.scope,
+        crate::storage::context_documents::ContextDocumentScope::Project {
+            root: project.clone()
+        }
+    );
+    assert!(!document.enabled);
+    assert!(
+        store
+            .select_enabled_for_project(&project)
+            .unwrap()
+            .documents
+            .is_empty()
+    );
+
+    let revision = store.revision(&document).unwrap();
+    store
+        .compare_and_swap_content(
+            &document.id,
+            &revision,
+            "project context".to_string(),
+            document.updated_at_unix_seconds,
+        )
+        .unwrap();
+    let enabled = service
+        .execute_agent_shell_command(&primary, &format!("/context-doc enable {}", document.id))
+        .unwrap();
+    assert!(enabled.contains("enabled=true"), "{enabled}");
+    assert_eq!(
+        store
+            .select_enabled_for_project(&project)
+            .unwrap()
+            .documents
+            .len(),
+        1
+    );
+
+    let listed = service
+        .execute_agent_shell_command(&primary, "/context-doc list")
+        .unwrap();
+    assert!(listed.contains(&document.id), "{listed}");
+    assert!(!listed.contains("project context"), "{listed}");
+    let shown = service
+        .execute_agent_shell_command(&primary, &format!("/context-doc show {}", document.id))
+        .unwrap();
+    assert!(shown.contains("project context"), "{shown}");
+
+    let disabled = service
+        .execute_agent_shell_command(&primary, &format!("/context-doc disable {}", document.id))
+        .unwrap();
+    assert!(disabled.contains("enabled=false"), "{disabled}");
+    let deleted = service
+        .execute_agent_shell_command(&primary, &format!("/context-doc delete {}", document.id))
+        .unwrap();
+    assert!(deleted.contains("deleted=true"), "{deleted}");
+    assert!(store.inspect(&document.id).unwrap().is_none());
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies deleting a context source while its editor is open cannot recreate
+/// it and keeps the changed draft behind primary-authorized recovery controls.
+#[test]
+fn runtime_context_document_external_editor_retains_deleted_conflict() {
+    let (mut service, primary, root) = prompt_editor_fixture("context-document-editor-deleted");
+    let (_issues, _memories, _project) = durable_editor_stores(&mut service, &root);
+    let store = crate::storage::context_documents::ContextDocumentStore::under_config_root(
+        root.join("config"),
+    );
+    let document = store
+        .create(
+            crate::storage::context_documents::ContextDocumentScope::Global,
+            "Deleted Runbook".to_string(),
+            "document before".to_string(),
+            true,
+            10,
+        )
+        .unwrap();
+    service
+        .start_context_document_external_edit(&primary, "%1", &document.id)
+        .unwrap();
+    let identities = editor_transaction(&service);
+    assert!(store.delete(&document.id).unwrap());
+
+    complete_prompt_editor(&mut service, &root, &identities, b"must not recreate", 0);
+    assert!(store.inspect(&document.id).unwrap().is_none());
+    let listing = service.list_external_editor_recoveries(&primary).unwrap();
+    assert!(listing.contains(&identities.2), "{listing}");
+    assert!(listing.contains("conflicted"), "{listing}");
+    let observer = service
+        .session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    assert!(
+        service
+            .apply_external_editor_recovery(&observer, "%1", &identities.2)
+            .is_err()
+    );
+    assert!(
+        service
+            .discard_external_editor_recovery(&primary, "%1", &identities.2)
+            .unwrap()
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
