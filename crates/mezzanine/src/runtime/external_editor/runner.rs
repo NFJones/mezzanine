@@ -482,11 +482,11 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// Verifies the final editor stays in the foreground process group owned
-    /// by the shell-launched runner, can read from the controlling PTY, and
-    /// still starts after a prior candidate fails during process launch.
+    /// Verifies an interactive shell launches the runner as a foreground job,
+    /// the final editor can read from the controlling PTY, and the shell
+    /// resumes after a prior editor candidate fails during process launch.
     #[test]
-    fn runner_keeps_editor_in_the_foreground_process_group() {
+    fn interactive_shell_keeps_editor_in_the_foreground_process_group() {
         let root =
             std::env::temp_dir().join(format!("mez-editor-runner-pty-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -513,10 +513,11 @@ mod tests {
                 pixel_height: 0,
             })
             .unwrap();
-        let mut command = CommandBuilder::new(current_executable);
-        command.arg(PTY_RUNNER_HELPER_FILTER);
-        command.arg("--ignored");
-        command.arg("--nocapture");
+        let mut command = CommandBuilder::new("/bin/bash");
+        command.arg("--noprofile");
+        command.arg("--norc");
+        command.arg("-i");
+        command.env("PS1", "mez-shell-ready> ");
         command.env(PTY_MANIFEST_ENV, manifest.as_os_str());
         let mut child = pair.slave.spawn_command(command).unwrap();
         let mut reader = pair.master.try_clone_reader().unwrap();
@@ -538,10 +539,23 @@ mod tests {
         });
 
         let mut output = Vec::new();
+        writer
+            .write_all(
+                format!(
+                    "'{}' {PTY_RUNNER_HELPER_FILTER} --ignored --nocapture\n",
+                    current_executable.display()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        writer.flush().unwrap();
         wait_for_pty_output(&output_rx, &mut output, PTY_EDITOR_READY);
         writer.write_all(b"x\n").unwrap();
         writer.flush().unwrap();
         wait_for_pty_output(&output_rx, &mut output, PTY_EDITOR_INPUT);
+        wait_for_pty_output(&output_rx, &mut output, "mez-shell-ready> ");
+        writer.write_all(b"exit\n").unwrap();
+        writer.flush().unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(5);
         let status = loop {

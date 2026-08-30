@@ -2392,6 +2392,7 @@ fn runtime_external_editor_session_routes_input_and_retains_completion() {
     service
         .ensure_agent_pane_screen("%1", &conversation_id, Size::new(80, 24).unwrap())
         .unwrap();
+    service.enter_agent_subshell("%1");
     assert_eq!(service.presented_pane_surface("%1"), PaneSurfaceKind::Agent);
 
     let started = service
@@ -2408,6 +2409,11 @@ fn runtime_external_editor_session_routes_input_and_retains_completion() {
     assert_eq!(
         service.presented_pane_surface("%1"),
         PaneSurfaceKind::Process
+    );
+    assert_eq!(
+        service.renderable_pane_output_bytes("%1", b"editor-visible"),
+        b"editor-visible",
+        "external-editor output must override hidden agent-subshell rendering"
     );
     assert!(
         service
