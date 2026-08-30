@@ -12,10 +12,170 @@ use super::{
     ShellTransaction, TerminalClipboardOperation, TerminalClipboardRequest, TerminalOscEvent,
     current_unix_millis, json_escape, plan_terminal_clipboard_request,
     readiness_probe_command_for_classification, runtime_execution_ready_for_provider_continuation,
-    runtime_marker_for_action, runtime_pane_readiness_state_name,
+    runtime_marker_for_action, runtime_pane_readiness_state_name, runtime_random_marker_token,
 };
 
+/// Maximum time an editor-owned readiness probe may run before it is abandoned.
+const AGENT_PROMPT_EDITOR_READINESS_PROBE_TIMEOUT_MS: u64 = 5_000;
+
 impl RuntimeSessionService {
+    /// Probes a prompt-candidate pane and retains the primary client whose
+    /// external prompt-editor request should resume after certification.
+    pub(crate) fn dispatch_agent_prompt_editor_readiness_probe(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+    ) -> Result<()> {
+        if self.pane_has_running_shell_transaction(pane_id) {
+            return Err(MezError::conflict("pane has an active shell transaction"));
+        }
+        let previous_readiness = self.pane_readiness_state(pane_id);
+        if previous_readiness != PaneReadinessState::PromptCandidate {
+            return self.require_pane_ready_for_agent_command(pane_id);
+        }
+        let marker = runtime_random_marker_token(&format!(
+            "agent-prompt-editor-readiness\0{}\0{pane_id}\0{}",
+            self.session.id,
+            current_unix_millis()
+        ))?;
+        let marker_id = marker.as_str().to_string();
+        let turn_id = format!("agent-prompt-editor-readiness-{marker_id}");
+        let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;
+        let classification = shell_identity.classification();
+        let probe_command = readiness_probe_command_for_classification(classification);
+        let transaction = self.configure_shell_transaction_for_pane(
+            pane_id,
+            ShellTransaction::new(
+                marker,
+                &turn_id,
+                "mez-ui",
+                pane_id,
+                shell_identity.shell_path(),
+                probe_command,
+            )?,
+        );
+        let transaction_input = transaction.render_for_classification_input(classification);
+        self.require_generated_shell_input(&transaction_input)?;
+        let receiver_payload = (!transaction_input.receiver_payload.is_empty()).then(|| {
+            mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                transaction_input.receiver_payload.clone().into_bytes(),
+                marker_id.clone(),
+                true,
+            )
+        });
+        let mut wrapper = transaction_input.wrapper;
+        if !wrapper.ends_with('\n') {
+            wrapper.push('\n');
+        }
+        let requires_payload_receiver_ready =
+            classification == ShellClassification::Fish && !transaction_input.payload.is_empty();
+        self.process
+            .pane_readiness_overrides
+            .record_pending_probe(pane_id, &marker_id)?;
+        self.set_pane_readiness(pane_id, PaneReadinessState::Probing);
+        self.register_running_shell_transaction(
+            marker_id.clone(),
+            RunningShellTransactionRef {
+                turn_id: turn_id.clone(),
+                kind: RunningShellTransactionKind::AgentPromptEditorReadinessProbe {
+                    primary_client_id: primary_client_id.as_str().to_string(),
+                },
+                pane_id: pane_id.to_string(),
+                command: probe_command.to_string(),
+                started_at_unix_ms: current_unix_millis(),
+                timeout_ms: Some(AGENT_PROMPT_EDITOR_READINESS_PROBE_TIMEOUT_MS),
+                pending_input_payload: (!transaction_input.payload.is_empty()).then(|| {
+                    mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                        transaction_input.payload.into_bytes(),
+                        marker_id.clone(),
+                        transaction_input.payload_receiver_acknowledgements,
+                    )
+                }),
+                observed_output_bytes: 0,
+                observed_output_preview: String::new(),
+                observed_output_truncated: false,
+            },
+            true,
+        );
+        if requires_payload_receiver_ready {
+            self.require_shell_transaction_payload_receiver_ready(&marker_id);
+        }
+        if let Some(receiver_payload) = receiver_payload {
+            self.register_shell_receiver_payload(&marker_id, receiver_payload);
+        }
+        if let Err(error) = self.write_runtime_pane_shell_input(pane_id, wrapper.as_bytes()) {
+            self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
+            return Err(error);
+        }
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","state":"probing","agent_prompt_editor":"waiting_for_readiness","marker":"{}"}}"#,
+                json_escape(pane_id),
+                json_escape(&marker_id)
+            ),
+        )?;
+        Ok(())
+    }
+
+    /// Resumes one retained prompt-editor request after its exact readiness
+    /// probe succeeds, or reports the bounded probe failure to the primary.
+    pub(crate) fn observe_agent_prompt_editor_readiness_probe_end(
+        &mut self,
+        marker: &str,
+        primary_client_id: &str,
+        pane_id: &str,
+        exit_code: i32,
+    ) -> Result<usize> {
+        if !self
+            .process
+            .pane_readiness_overrides
+            .clear_pending_probe_if_matches(pane_id, marker)
+        {
+            return Ok(0);
+        }
+        if exit_code != 0 {
+            self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+            self.show_primary_error_overlay(vec![format!(
+                "mez error: shell readiness probe failed before opening the prompt editor (exit {exit_code})"
+            )])?;
+            return Ok(1);
+        }
+        self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
+        let Some(primary_client_id) =
+            mez_core::ids::ClientId::opaque(primary_client_id.to_string())
+        else {
+            return Ok(1);
+        };
+        if let Err(error) =
+            self.start_agent_prompt_external_edit_for_pane(&primary_client_id, pane_id, None, true)
+        {
+            self.show_primary_error_overlay(vec![format!("mez error: {error}")])?;
+        }
+        Ok(1)
+    }
+
+    /// Clears an editor-owned readiness continuation after a write, protocol,
+    /// or timeout failure and leaves the pane safely degraded.
+    pub(super) fn fail_agent_prompt_editor_readiness_probe(
+        &mut self,
+        marker: &str,
+        transaction: &RunningShellTransactionRef,
+        message: &str,
+    ) -> Result<()> {
+        if self
+            .process
+            .pane_readiness_overrides
+            .clear_pending_probe_if_matches(&transaction.pane_id, marker)
+        {
+            self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Degraded);
+            self.show_primary_error_overlay(vec![format!(
+                "mez error: shell readiness probe failed before opening the prompt editor: {message}"
+            )])?;
+        }
+        Ok(())
+    }
+
     /// Runs the apply terminal osc events operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

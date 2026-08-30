@@ -350,6 +350,7 @@ impl RuntimeSessionService {
                     }
                     RunningShellTransactionKind::ExternalEditor { .. } => Vec::new(),
                     RunningShellTransactionKind::FocusedShellHook
+                    | RunningShellTransactionKind::AgentPromptEditorReadinessProbe { .. }
                     | RunningShellTransactionKind::ReadinessProbe
                     | RunningShellTransactionKind::Bootstrap
                     | RunningShellTransactionKind::ShellIdentityProbe { .. }

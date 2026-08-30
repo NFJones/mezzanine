@@ -4033,6 +4033,7 @@ impl RuntimeSessionService {
                 }
                 RunningShellTransactionKind::FocusedShellHook
                 | RunningShellTransactionKind::ExternalEditor { .. }
+                | RunningShellTransactionKind::AgentPromptEditorReadinessProbe { .. }
                 | RunningShellTransactionKind::ReadinessProbe
                 | RunningShellTransactionKind::Bootstrap
                 | RunningShellTransactionKind::ShellIdentityProbe { .. }

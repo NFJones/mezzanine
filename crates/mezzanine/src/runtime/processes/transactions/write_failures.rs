@@ -63,6 +63,14 @@ impl RuntimeSessionService {
                 self.abort_external_editor_session(&transaction.pane_id);
                 Ok(1)
             }
+            RunningShellTransactionKind::AgentPromptEditorReadinessProbe { .. } => {
+                self.fail_agent_prompt_editor_readiness_probe(
+                    marker,
+                    &transaction,
+                    &format!("shell transaction protocol violation: {message}"),
+                )?;
+                Ok(1)
+            }
             RunningShellTransactionKind::FocusedShellHook => self
                 .observe_focused_shell_hook_transaction_end(
                     &transaction.pane_id,
@@ -242,6 +250,9 @@ impl RuntimeSessionService {
                 }
                 RunningShellTransactionKind::ExternalEditor { .. } => {
                     self.abort_external_editor_session(pane_id);
+                }
+                RunningShellTransactionKind::AgentPromptEditorReadinessProbe { .. } => {
+                    self.fail_agent_prompt_editor_readiness_probe(&marker, &transaction, error)?;
                 }
                 RunningShellTransactionKind::FocusedShellHook => {
                     let _ = self

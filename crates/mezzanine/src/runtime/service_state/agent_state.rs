@@ -393,6 +393,11 @@ pub(crate) enum RunningShellTransactionKind {
         /// Completion nonce retained outside pane output.
         completion_nonce: String,
     },
+    /// Readiness probe that resumes one primary client's prompt-editor request.
+    AgentPromptEditorReadinessProbe {
+        /// Attached primary client that requested external prompt editing.
+        primary_client_id: String,
+    },
     /// Stateful configured hook executed in the focused pane shell.
     FocusedShellHook,
     /// Represents the Readiness Probe case for this enumeration.

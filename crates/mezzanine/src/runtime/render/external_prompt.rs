@@ -63,7 +63,7 @@ impl RuntimeSessionService {
         )
     }
 
-    fn start_agent_prompt_external_edit_for_pane(
+    pub(in crate::runtime) fn start_agent_prompt_external_edit_for_pane(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
@@ -89,6 +89,11 @@ impl RuntimeSessionService {
             return Err(MezError::conflict(
                 "external prompt editing is unavailable while an agent turn is active",
             ));
+        }
+        if self.pane_readiness_state(pane_id) == crate::runtime::PaneReadinessState::PromptCandidate
+        {
+            self.dispatch_agent_prompt_editor_readiness_probe(primary_client_id, pane_id)?;
+            return Ok(true);
         }
 
         let prompt_input = self

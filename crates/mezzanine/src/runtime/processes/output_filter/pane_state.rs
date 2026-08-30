@@ -516,6 +516,7 @@ impl RuntimeSessionService {
                 }
                 RunningShellTransactionKind::ExternalEditor { .. } => {}
                 RunningShellTransactionKind::FocusedShellHook
+                | RunningShellTransactionKind::AgentPromptEditorReadinessProbe { .. }
                 | RunningShellTransactionKind::ReadinessProbe
                 | RunningShellTransactionKind::Bootstrap
                 | RunningShellTransactionKind::ShellIdentityProbe { .. }

@@ -127,6 +127,65 @@ fn runtime_prompt_editor_binding_restores_changed_text_without_submitting() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies a prompt-candidate pane is certified before the external editor
+/// wrapper is injected and that the original binding resumes automatically.
+#[test]
+fn runtime_prompt_editor_binding_resumes_after_prompt_candidate_probe() {
+    let (mut service, primary, root) = prompt_editor_fixture("prompt-editor-readiness");
+    service.set_pane_readiness("%1", PaneReadinessState::PromptCandidate);
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ExecuteMux(
+                    MuxAction::EditAgentPrompt,
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.mux_actions_applied, 1);
+    assert!(!service.external_editor_session_is_active("%1"));
+    let (marker, turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::AgentPromptEditorReadinessProbe { .. }
+            )
+            .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("prompt-candidate editor request should dispatch a readiness probe");
+
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, &turn_id, "mez-ui", "%1")
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", &marker, &turn_id, "mez-ui", "%1", 0)
+        .unwrap();
+
+    assert_eq!(service.pane_readiness_state("%1"), PaneReadinessState::Busy);
+    assert!(service.external_editor_session_is_active("%1"));
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ExternalEditor { .. }
+            ))
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies empty successful output is a valid empty prompt and still does not submit.
 #[test]
 fn runtime_prompt_editor_accepts_empty_output_without_submitting() {

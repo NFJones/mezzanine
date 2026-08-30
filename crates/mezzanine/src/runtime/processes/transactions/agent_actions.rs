@@ -1796,6 +1796,16 @@ impl RuntimeSessionService {
                 exit_code,
             );
         }
+        if let RunningShellTransactionKind::AgentPromptEditorReadinessProbe { primary_client_id } =
+            transaction_ref.kind.clone()
+        {
+            return self.observe_agent_prompt_editor_readiness_probe_end(
+                marker,
+                &primary_client_id,
+                pane_id,
+                exit_code,
+            );
+        }
         if transaction_ref.kind == RunningShellTransactionKind::FocusedShellHook {
             return self.observe_focused_shell_hook_transaction_end(
                 output_pane_id,
