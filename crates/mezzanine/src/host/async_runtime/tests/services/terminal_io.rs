@@ -553,6 +553,35 @@ async fn async_fd_attached_terminal_io_prioritizes_input_over_writable_output() 
     );
 }
 
+/// Verifies that consuming one reported input byte clears Tokio readiness.
+///
+/// A stale readiness bit makes the foreground attach loop start a second
+/// blocking input read, starving editor redraw notifications until another key
+/// arrives even though the editor process continues accepting input.
+#[tokio::test]
+async fn async_fd_attached_terminal_input_readiness_clears_after_read() {
+    let (driver, mut peer) = StdUnixStream::pair().unwrap();
+    let driver_output = driver.try_clone().unwrap();
+    peer.write_all(b"x").unwrap();
+
+    let mut io =
+        AsyncAttachedTerminalFdLoopIo::new(driver.as_raw_fd(), driver_output.as_raw_fd(), None)
+            .unwrap();
+    let readiness = io.poll_input_readiness().await.unwrap();
+    assert!(
+        readiness
+            .iter()
+            .any(|ready| { ready.role == AttachedTerminalFdRole::Input && ready.readable })
+    );
+    assert_eq!(io.read_input(1).await.unwrap(), b"x");
+
+    let stale = tokio::time::timeout(Duration::from_millis(20), io.poll_input_readiness()).await;
+    assert!(
+        stale.is_err(),
+        "drained input must not leave stale readiness"
+    );
+}
+
 /// Verifies that the native async terminal endpoint's input-focused readiness
 /// wait does not wake merely because stdout is writable. This is the attach
 /// service idle-CPU guard: redraws should come from actor render notifications

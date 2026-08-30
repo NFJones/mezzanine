@@ -920,7 +920,11 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
             loop {
                 let mut guard = self.input.readable().await?;
                 match guard.try_io(|inner| read_nonblocking_fd(inner.get_ref().fd, max_bytes)) {
-                    Ok(result) => return Ok(result?),
+                    Ok(result) => {
+                        let bytes = result?;
+                        guard.clear_ready();
+                        return Ok(bytes);
+                    }
                     Err(_would_block) => continue,
                 }
             }
