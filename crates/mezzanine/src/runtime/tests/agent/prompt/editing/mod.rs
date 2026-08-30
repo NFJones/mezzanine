@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod external_editor;
 mod input;
 mod interrupt;
 mod layout;

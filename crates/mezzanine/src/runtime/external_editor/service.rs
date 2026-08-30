@@ -255,6 +255,13 @@ impl RuntimeSessionService {
             return Ok(0);
         };
         self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
+        if self.settle_agent_prompt_external_edit(&completion)? {
+            let _ = self.external_editor.take_completion(
+                pane_id,
+                &completion.session_id,
+                &completion.completion_nonce,
+            );
+        }
         Ok(usize::from(completion.session_id == session_id))
     }
 

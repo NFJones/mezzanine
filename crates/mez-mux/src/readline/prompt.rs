@@ -65,6 +65,16 @@ impl ReadlinePromptState {
         self.reverse_search.is_some()
     }
 
+    /// Clears incremental reverse-search ownership without restoring its saved draft.
+    ///
+    /// Callers use this after replacing the entire prompt from an external
+    /// source, where restoring the pre-search draft would overwrite the new
+    /// text. Ordinary Escape handling continues to use the restoring cancel
+    /// path.
+    pub fn clear_reverse_search(&mut self) {
+        self.reverse_search = None;
+    }
+
     /// Renders the active reverse-search line, if any.
     pub fn rendered_reverse_search(&self) -> Option<String> {
         let search = self.reverse_search.as_ref()?;

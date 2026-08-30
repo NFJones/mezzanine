@@ -194,6 +194,12 @@ impl ReadlinePrompt {
         self.state.reverse_search_active()
     }
 
+    /// Clears selector and reverse-search state after whole-buffer replacement.
+    pub fn clear_transient_editing_state(&mut self) {
+        self.selector = None;
+        self.state.clear_reverse_search();
+    }
+
     fn filesystem_selector_snapshot(&self) -> AsyncFilesystemSelectorSnapshot {
         let Some(surface) = self.selector_surface() else {
             return AsyncFilesystemSelectorSnapshot::default();

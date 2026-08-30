@@ -837,6 +837,7 @@ impl RuntimeSessionService {
                 | MuxAction::BreakPaneToNewWindow
                 | MuxAction::SwapPanePrevious
                 | MuxAction::SwapPaneNext
+                | MuxAction::EditAgentPrompt
         )
     }
 

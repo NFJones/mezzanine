@@ -705,7 +705,7 @@ impl RuntimeSessionService {
         width: usize,
         body_rows: usize,
     ) -> usize {
-        if width == 0 || body_rows == 0 {
+        if width == 0 || body_rows == 0 || self.external_editor_session_is_active(pane_id) {
             return 0;
         }
         let Some(agent_session) = self.agent_shell_store().get(pane_id) else {

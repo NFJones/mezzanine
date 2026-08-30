@@ -384,6 +384,9 @@ pub(crate) struct RuntimePresentationComponent {
     copy: RuntimeCopyPresentationState,
     /// Active agent prompt editor state keyed by pane id.
     agent_prompt_inputs: std::collections::BTreeMap<String, RuntimeAgentPromptInput>,
+    /// Exact prompt snapshots retained while an external editor owns a pane.
+    external_agent_prompt_edits:
+        std::collections::BTreeMap<String, external_prompt::RuntimeAgentPromptEditSnapshot>,
     /// Provider refreshes submitted from agent prompts awaiting actor dispatch.
     pending_agent_prompt_provider_info_refreshes: Vec<RuntimeAgentPromptProviderInfoRefresh>,
     /// Background selector discoveries keyed by exact client and pane owner.
@@ -964,6 +967,7 @@ impl RuntimePresentationComponent {
     /// Removes every pane-keyed agent presentation artifact during teardown.
     pub(crate) fn remove_agent_presentation_state(&mut self, pane_id: &str) {
         self.agent_prompt_inputs.remove(pane_id);
+        self.external_agent_prompt_edits.remove(pane_id);
         self.agent_prompt_selector_refreshes
             .retain(|(_, candidate), _| candidate != pane_id);
         self.agent_shell_output_previews.remove(pane_id);
@@ -1735,6 +1739,49 @@ impl RuntimeSessionService {
         self.presentation.agent_prompt_inputs.get_mut(pane_id)
     }
 
+    /// Clones one pane prompt from the exact client's transient presentation.
+    pub(crate) fn agent_prompt_input_for_client(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+    ) -> Option<RuntimeAgentPromptInput> {
+        self.presentation.capture_projected_client_state();
+        self.presentation
+            .client_states
+            .get(client_id)
+            .and_then(|state| state.agent_prompt_inputs.get(pane_id))
+            .cloned()
+    }
+
+    /// Replaces one pane prompt in the exact client's transient presentation.
+    pub(crate) fn set_agent_prompt_input_for_client(
+        &mut self,
+        client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        prompt_input: RuntimeAgentPromptInput,
+    ) {
+        self.presentation.capture_projected_client_state();
+        self.presentation
+            .agent_prompt_selector_refreshes
+            .remove(&(client_id.clone(), pane_id.to_string()));
+        if self.presentation.projected_client_id.as_ref() == Some(client_id) {
+            self.presentation
+                .agent_prompt_inputs
+                .insert(pane_id.to_string(), prompt_input);
+            self.presentation.capture_projected_client_state();
+            return;
+        }
+        let state = self
+            .presentation
+            .client_states
+            .entry(client_id.clone())
+            .or_default();
+        state
+            .agent_prompt_inputs
+            .insert(pane_id.to_string(), prompt_input);
+        state.presentation_revision = state.presentation_revision.saturating_add(1);
+    }
+
     /// Marks runtime-provided agent selector candidates stale for every prompt.
     ///
     /// The next input batch starts a nonblocking refresh after the durable
@@ -1763,6 +1810,7 @@ impl RuntimeSessionService {
     pub(crate) fn clear_agent_prompt_inputs(&mut self) {
         self.presentation.agent_prompt_inputs.clear();
         self.presentation.agent_prompt_selector_refreshes.clear();
+        self.presentation.external_agent_prompt_edits.clear();
     }
 
     /// Drains command-backed status pill refreshes scheduled during rendering.
@@ -1984,6 +2032,7 @@ use mez_terminal::{
 mod attached_step;
 mod client_view;
 mod copy_mode;
+mod external_prompt;
 mod harness_status;
 pub(crate) use harness_status::RuntimePaneHarnessStatus;
 mod input;

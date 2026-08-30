@@ -170,7 +170,7 @@ impl RuntimeSessionService {
                 self.toggle_active_agent_shell()?;
             }
             MuxAction::EditAgentPrompt => {
-                return Ok(false);
+                return self.start_agent_prompt_external_edit(primary_client_id);
             }
             MuxAction::ShowMessages => {
                 self.execute_attached_display_command(primary_client_id, "show-messages")?;
