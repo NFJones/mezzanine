@@ -93,12 +93,18 @@ fn runtime_prompt_editor_takes_over_complete_terminal_projection() {
     service
         .external_editor_screen_mut_for_tests("%1")
         .unwrap()
-        .feed(b"\x1b[2J\x1b[HEDITOR FULL SCREEN");
+        .feed(b"\x1b[2J\x1b[H\x1b[?1h\x1b=\x1b[?1000h\x1b[?1006h\x1b[?2004hEDITOR FULL SCREEN");
 
     let config = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
         .unwrap();
     assert!(config.external_editor_takeover_active);
+    assert!(config.mouse_policy.enabled);
+    assert!(config.mouse_policy.pane_application_mouse_mode);
+    assert!(config.mouse_policy.pane_sgr_mouse_mode);
+    assert!(config.mouse_policy.pane_application_cursor_mode);
+    assert!(config.mouse_policy.pane_application_keypad_mode);
+    assert!(config.pane_bracketed_paste_mode);
     assert_eq!(
         service
             .tracked_pane_descriptors()

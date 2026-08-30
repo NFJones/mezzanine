@@ -969,9 +969,19 @@ impl RuntimeSessionService {
                 true
             };
             if config.external_editor_takeover_active {
-                config.mouse_policy.enabled = self
-                    .process_pane_screen(pane_id.as_str())
-                    .is_some_and(TerminalScreen::application_mouse_enabled);
+                let editor_screen = self.external_editor_screen(pane_id.as_str());
+                config.mouse_policy.enabled =
+                    editor_screen.is_some_and(TerminalScreen::application_mouse_enabled);
+                config.mouse_policy.pane_application_mouse_mode =
+                    editor_screen.is_some_and(TerminalScreen::application_mouse_enabled);
+                config.mouse_policy.pane_sgr_mouse_mode =
+                    editor_screen.is_some_and(TerminalScreen::application_sgr_mouse_enabled);
+                config.mouse_policy.pane_application_cursor_mode =
+                    editor_screen.is_some_and(TerminalScreen::application_cursor_enabled);
+                config.mouse_policy.pane_application_keypad_mode =
+                    editor_screen.is_some_and(TerminalScreen::application_keypad_enabled);
+                config.pane_bracketed_paste_mode =
+                    editor_screen.is_some_and(TerminalScreen::bracketed_paste_enabled);
                 config.primary_display_overlay_active = false;
                 config.primary_prompt_active = false;
             }

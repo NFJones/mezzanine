@@ -2410,10 +2410,26 @@ fn runtime_external_editor_session_routes_input_and_retains_completion() {
         service.presented_pane_surface("%1"),
         PaneSurfaceKind::Process
     );
-    service
-        .external_editor_screen_mut_for_tests("%1")
-        .unwrap()
-        .feed(b"editor-visible");
+    let editor_instance = service
+        .external_editor_process_instance_for_tests("%1")
+        .unwrap();
+    let editor_output = service
+        .apply_external_editor_process_event(
+            editor_instance.clone(),
+            crate::runtime::PaneProcessEvent::Pane(crate::runtime::PaneEvent::Output {
+                pane_id: editor_instance.pane_id.clone(),
+                bytes: b"editor-visible\x1b[6n".to_vec(),
+            }),
+        )
+        .unwrap();
+    assert!(editor_output.applied);
+    assert!(editor_output.side_effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::PaneProcessIo {
+            instance,
+            effect: crate::runtime::PaneProcessIoEffect::WriteInputPriority { bytes },
+        } if instance == &editor_instance && bytes == b"\x1b[1;15R"
+    )));
     assert!(
         service
             .external_editor_screen("%1")

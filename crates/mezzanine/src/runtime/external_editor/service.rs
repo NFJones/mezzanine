@@ -257,6 +257,15 @@ impl RuntimeSessionService {
         })
     }
 
+    /// Returns the active editor process identity for focused event tests.
+    #[cfg(test)]
+    pub(crate) fn external_editor_process_instance_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> Option<PaneProcessInstance> {
+        self.external_editor.process_instance(pane_id)
+    }
+
     /// Moves pending direct editor processes to the async PTY supervisor.
     pub(in crate::runtime) fn take_pending_external_editor_processes(
         &mut self,
@@ -360,12 +369,23 @@ impl RuntimeSessionService {
                     MezError::invalid_state("external-editor screen is unavailable")
                 })?;
                 screen.feed(&bytes);
+                let terminal_response_bytes = screen.drain_terminal_response_bytes();
+                let mut side_effects = Vec::new();
+                if !terminal_response_bytes.is_empty() {
+                    side_effects.push(RuntimeSideEffect::PaneProcessIo {
+                        instance,
+                        effect: PaneProcessIoEffect::WriteInputPriority {
+                            bytes: terminal_response_bytes,
+                        },
+                    });
+                }
+                side_effects.extend(self.render_effects_for_clients_projecting_pane(
+                    &pane_id,
+                    RenderInvalidationReason::PaneOutput,
+                ));
                 Ok(RuntimeTransition {
                     applied: true,
-                    side_effects: self.render_effects_for_clients_projecting_pane(
-                        &pane_id,
-                        RenderInvalidationReason::PaneOutput,
-                    ),
+                    side_effects,
                 })
             }
             PaneProcessEvent::Pane(crate::runtime::PaneEvent::Resized { size, .. }) => {
