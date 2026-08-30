@@ -311,6 +311,62 @@ impl RuntimeSessionService {
         true
     }
 
+    /// Aborts every editor lease owned by one detaching primary client.
+    ///
+    /// The original interrupted manifest remains authoritative. Prompt
+    /// snapshots and shell-transaction identities are removed before the
+    /// client's presentation state disappears, so late editor completion is
+    /// harmless and a replacement primary can explicitly recover the draft.
+    pub(in crate::runtime) fn abort_external_editor_sessions_for_client_detach(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+    ) -> Result<usize> {
+        let targets = self
+            .external_editor
+            .active_targets_for_client(primary_client_id.as_str());
+        let mut aborted = 0usize;
+        for (pane_id, marker) in targets {
+            let Some(active) = self.external_editor.active(&pane_id).cloned() else {
+                continue;
+            };
+            self.remove_running_shell_transaction(&marker);
+            self.clear_shell_transaction_protocol_state(&marker);
+            self.discard_agent_prompt_external_edit(
+                primary_client_id,
+                &pane_id,
+                &active.session_id,
+                &active.completion_nonce,
+            );
+            if self.abort_external_editor_session(&pane_id) {
+                self.set_pane_readiness(&pane_id, PaneReadinessState::PromptCandidate);
+                aborted = aborted.saturating_add(1);
+            }
+        }
+        if aborted > 0 {
+            self.sync_tracked_pty_sizes()?;
+            let window_ids = self
+                .session
+                .windows()
+                .iter()
+                .filter(|window| {
+                    window.panes().iter().any(|pane| {
+                        self.external_editor
+                            .recoveries()
+                            .iter()
+                            .any(|record| record.pane_id == pane.id.as_str())
+                    })
+                })
+                .map(|window| window.id.to_string())
+                .collect::<Vec<_>>();
+            let render_effects = self.render_effects_for_clients_projecting_windows(
+                &window_ids,
+                RenderInvalidationReason::FullRedraw,
+            );
+            self.presentation.defer_render_effects(render_effects);
+        }
+        Ok(aborted)
+    }
+
     /// Settles one editor transaction only for its exact retained identities.
     pub(in crate::runtime) fn observe_external_editor_transaction_end(
         &mut self,

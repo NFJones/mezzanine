@@ -156,6 +156,15 @@ impl RuntimeExternalEditorComponent {
         self.active_by_pane.get(pane_id)
     }
 
+    /// Returns exact pane and transaction identities owned by one primary client.
+    pub(super) fn active_targets_for_client(&self, client_id: &str) -> Vec<(String, String)> {
+        self.active_by_pane
+            .values()
+            .filter(|session| session.initiating_client_id == client_id)
+            .map(|session| (session.pane_id.clone(), session.marker.clone()))
+            .collect()
+    }
+
     /// Installs one pane-scoped lease, rejecting duplicate ownership.
     pub(super) fn start(&mut self, session: ExternalEditorSession) -> Result<()> {
         if self.active_by_pane.contains_key(&session.pane_id) {

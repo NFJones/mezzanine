@@ -161,6 +161,7 @@ impl RuntimeSessionService {
         self.session = staged_session;
         self.control.replace_event_log(staged_event_log);
         self.persistence.replace_audit_log(staged_audit_log);
+        self.abort_external_editor_sessions_for_client_detach(primary_client_id)?;
         self.sync_pane_resize_effects(&terminal_resize_effects)?;
         self.sync_pane_resize_effects(&transition.resize_effects)?;
         self.presentation.remove_client_state(primary_client_id);

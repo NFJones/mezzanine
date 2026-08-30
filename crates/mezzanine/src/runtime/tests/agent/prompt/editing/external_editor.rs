@@ -594,6 +594,74 @@ fn runtime_prompt_editor_recovery_is_discovered_after_restart_without_auto_apply
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies detaching an editor's initiating primary aborts obsolete client
+/// ownership while preserving an interrupted draft for a replacement primary.
+///
+/// Reattach may occur before the old editor process reports its exit. That late
+/// completion must remain identity-fenced and cannot apply or discard recovery.
+#[test]
+fn runtime_prompt_editor_detach_preserves_recovery_for_replacement_primary() {
+    let (mut service, primary, root) = prompt_editor_fixture("prompt-editor-detach-recovery");
+    service
+        .apply_attached_agent_prompt_input_for_pane(&primary, "%1", b"original prompt")
+        .unwrap();
+    let identities = start_prompt_editor(&mut service, &primary);
+    let (marker, turn_id, session_id, _) = &identities;
+    fs::write(
+        root.join("runtime/editor-sessions")
+            .join(session_id)
+            .join("draft.md"),
+        b"draft retained across detach",
+    )
+    .unwrap();
+
+    service
+        .detach_primary(&primary, Size::new(40, 16).unwrap())
+        .unwrap();
+
+    assert!(!service.external_editor_session_is_active("%1"));
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::PromptCandidate
+    );
+    let replacement = service
+        .attach_primary("replacement", true, Size::new(40, 16).unwrap(), 122)
+        .unwrap();
+    let before_exit = service
+        .list_external_editor_recoveries(&replacement)
+        .unwrap();
+    assert!(before_exit.contains(session_id), "{before_exit}");
+    assert!(before_exit.contains("interrupted"), "{before_exit}");
+
+    service
+        .observe_agent_shell_transaction_start("%1", marker, turn_id, "mez-ui", "%1")
+        .unwrap();
+    assert_eq!(
+        service
+            .observe_agent_shell_transaction_end("%1", marker, turn_id, "mez-ui", "%1", 0)
+            .unwrap(),
+        0
+    );
+    let after_exit = service
+        .list_external_editor_recoveries(&replacement)
+        .unwrap();
+    assert!(after_exit.contains(session_id), "{after_exit}");
+    assert!(after_exit.contains("interrupted"), "{after_exit}");
+
+    service
+        .apply_external_editor_recovery(&replacement, "%1", session_id)
+        .unwrap();
+    assert_eq!(
+        service.agent_prompt_inputs_for_tests()["%1"]
+            .prompt
+            .buffer
+            .line(),
+        "draft retained across detach"
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies the framed terminal-step path used by Iroh bypasses prefix,
 /// keybinding, and bracketed-paste decoding while the initiating primary owns
 /// an editor lease. The same request also carries authoritative resize state.

@@ -129,6 +129,33 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Removes one detached client's exact prompt-editor snapshot without applying its draft.
+    pub(in crate::runtime) fn discard_agent_prompt_external_edit(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        session_id: &str,
+        completion_nonce: &str,
+    ) -> bool {
+        let matches = self
+            .presentation
+            .external_agent_prompt_edits
+            .get(pane_id)
+            .is_some_and(|snapshot| {
+                snapshot.client_id == *primary_client_id
+                    && snapshot.session_id == session_id
+                    && snapshot.completion_nonce == completion_nonce
+            });
+        matches
+            .then(|| {
+                self.presentation
+                    .external_agent_prompt_edits
+                    .remove(pane_id)
+            })
+            .flatten()
+            .is_some()
+    }
+
     /// Applies one matching prompt completion or restores the exact snapshot.
     pub(in crate::runtime) fn settle_agent_prompt_external_edit(
         &mut self,
