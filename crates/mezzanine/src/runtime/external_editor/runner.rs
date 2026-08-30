@@ -40,27 +40,36 @@ struct ExternalEditorRunnerManifest {
 
 /// Thread-local lifecycle signal mask restored when runner work completes.
 struct RunnerSignalMask {
-    blocked: libc::sigset_t,
+    lifecycle: libc::sigset_t,
     previous: libc::sigset_t,
 }
 
 impl RunnerSignalMask {
-    /// Blocks signals that must be forwarded to the managed editor process group.
+    /// Blocks signals used by runner forwarding and terminal handoff.
     fn block() -> std::result::Result<Self, &'static str> {
         // SAFETY: both signal sets are initialized before use, and
         // `pthread_sigmask` changes only the calling runner thread.
         unsafe {
+            let mut lifecycle = std::mem::zeroed::<libc::sigset_t>();
             let mut blocked = std::mem::zeroed::<libc::sigset_t>();
             let mut previous = std::mem::zeroed::<libc::sigset_t>();
-            if libc::sigemptyset(&mut blocked) != 0
+            if libc::sigemptyset(&mut lifecycle) != 0
+                || libc::sigaddset(&mut lifecycle, libc::SIGHUP) != 0
+                || libc::sigaddset(&mut lifecycle, libc::SIGINT) != 0
+                || libc::sigaddset(&mut lifecycle, libc::SIGTERM) != 0
+                || libc::sigemptyset(&mut blocked) != 0
                 || libc::sigaddset(&mut blocked, libc::SIGHUP) != 0
                 || libc::sigaddset(&mut blocked, libc::SIGINT) != 0
                 || libc::sigaddset(&mut blocked, libc::SIGTERM) != 0
+                || libc::sigaddset(&mut blocked, libc::SIGTTOU) != 0
                 || libc::pthread_sigmask(libc::SIG_BLOCK, &blocked, &mut previous) != 0
             {
                 return Err("signal-mask");
             }
-            Ok(Self { blocked, previous })
+            Ok(Self {
+                lifecycle,
+                previous,
+            })
         }
     }
 
@@ -82,7 +91,7 @@ impl RunnerSignalMask {
                 return Ok(None);
             }
             let mut signal = 0;
-            if libc::sigwait(&self.blocked, &mut signal) != 0 {
+            if libc::sigwait(&self.lifecycle, &mut signal) != 0 {
                 return Err("signal-wait");
             }
             Ok(Some(signal))
@@ -102,6 +111,68 @@ impl Drop for RunnerSignalMask {
         unsafe {
             libc::pthread_sigmask(libc::SIG_SETMASK, &self.previous, std::ptr::null_mut());
         }
+    }
+}
+
+/// Restores the runner's process group as the controlling terminal foreground
+/// owner after one private editor process group finishes or fails to exec.
+struct RunnerTerminalForeground {
+    original_process_group_id: Option<i32>,
+    restored: bool,
+}
+
+impl RunnerTerminalForeground {
+    /// Captures the current foreground group when standard input is a terminal.
+    fn capture() -> std::result::Result<Self, &'static str> {
+        // SAFETY: `tcgetpgrp` only inspects the controlling terminal associated
+        // with the inherited standard-input descriptor.
+        let process_group_id = unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) };
+        if process_group_id >= 0 {
+            // SAFETY: `getpgrp` only inspects the calling runner process.
+            if process_group_id != unsafe { libc::getpgrp() } {
+                return Err("terminal-foreground-owner");
+            }
+            return Ok(Self {
+                original_process_group_id: Some(process_group_id),
+                restored: false,
+            });
+        }
+        if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOTTY) {
+            return Ok(Self {
+                original_process_group_id: None,
+                restored: true,
+            });
+        }
+        Err("terminal-foreground-query")
+    }
+
+    /// Returns whether the editor child must claim the controlling terminal.
+    fn requires_child_handoff(&self) -> bool {
+        self.original_process_group_id.is_some()
+    }
+
+    /// Restores the process group that owned the terminal before editor spawn.
+    fn restore(&mut self) -> std::result::Result<(), &'static str> {
+        if self.restored {
+            return Ok(());
+        }
+        let Some(process_group_id) = self.original_process_group_id else {
+            self.restored = true;
+            return Ok(());
+        };
+        // SAFETY: the process group was returned by `tcgetpgrp` for this same
+        // descriptor, and SIGTTOU remains blocked in the runner during restore.
+        if unsafe { libc::tcsetpgrp(libc::STDIN_FILENO, process_group_id) } != 0 {
+            return Err("terminal-foreground-restore");
+        }
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for RunnerTerminalForeground {
+    fn drop(&mut self) {
+        let _ = self.restore();
     }
 }
 
@@ -225,6 +296,7 @@ fn run_manifest(path: &Path) -> std::result::Result<u8, &'static str> {
 
     for candidate in manifest.candidates {
         let signal_mask = RunnerSignalMask::block()?;
+        let mut terminal_foreground = RunnerTerminalForeground::capture()?;
         let mut command = Command::new(&candidate[0]);
         command
             .args(&candidate[1..])
@@ -233,11 +305,17 @@ fn run_manifest(path: &Path) -> std::result::Result<u8, &'static str> {
             .stderr(Stdio::inherit());
         command.process_group(0);
         let child_signal_mask = signal_mask.previous();
+        let requires_terminal_handoff = terminal_foreground.requires_child_handoff();
         // SAFETY: this closure runs after fork and before exec. It performs
-        // only the async-signal-safe `pthread_sigmask` operation using a fully
-        // initialized mask captured by value.
+        // only async-signal-safe terminal and signal-mask operations using
+        // values captured before the fork.
         unsafe {
             command.pre_exec(move || {
+                if requires_terminal_handoff
+                    && libc::tcsetpgrp(libc::STDIN_FILENO, libc::getpgrp()) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
                 let result = libc::pthread_sigmask(
                     libc::SIG_SETMASK,
                     &child_signal_mask,
@@ -255,6 +333,7 @@ fn run_manifest(path: &Path) -> std::result::Result<u8, &'static str> {
         };
         let mut process_group = EditorProcessGroup::new(&child)?;
         let status = wait_for_editor(&mut child, &process_group, &signal_mask)?;
+        terminal_foreground.restore()?;
         process_group.disarm();
         if let Some(code) = status.code() {
             return Ok(u8::try_from(code).unwrap_or(1));
@@ -336,6 +415,16 @@ fn validate_manifest(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::sync::mpsc;
+
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+    const PTY_RUNNER_HELPER_FILTER: &str = "external_editor_runner_pty_helper";
+    const PTY_EDITOR_HELPER_FILTER: &str = "external_editor_child_pty_helper";
+    const PTY_MANIFEST_ENV: &str = "MEZ_TEST_EXTERNAL_EDITOR_MANIFEST";
+    const PTY_EDITOR_READY: &str = "mez-editor-foreground-ready";
+    const PTY_EDITOR_INPUT: &str = "mez-editor-input-received";
 
     fn write_manifest(root: &Path, candidates: Vec<Vec<String>>) -> std::path::PathBuf {
         fs::create_dir_all(root).unwrap();
@@ -391,5 +480,147 @@ mod tests {
         );
         assert_eq!(run_manifest(&manifest), Ok(7));
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies the final editor stays in the foreground process group owned
+    /// by the shell-launched runner, can read from the controlling PTY, and
+    /// still starts after a prior candidate fails during process launch.
+    #[test]
+    fn runner_keeps_editor_in_the_foreground_process_group() {
+        let root =
+            std::env::temp_dir().join(format!("mez-editor-runner-pty-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let current_executable = std::env::current_exe().unwrap();
+        let manifest = write_manifest(
+            &root,
+            vec![
+                vec![root.join("missing-editor").to_string_lossy().into_owned()],
+                vec![
+                    current_executable.to_string_lossy().into_owned(),
+                    PTY_EDITOR_HELPER_FILTER.to_string(),
+                    "--ignored".to_string(),
+                    "--nocapture".to_string(),
+                ],
+            ],
+        );
+
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut command = CommandBuilder::new(current_executable);
+        command.arg(PTY_RUNNER_HELPER_FILTER);
+        command.arg("--ignored");
+        command.arg("--nocapture");
+        command.env(PTY_MANIFEST_ENV, manifest.as_os_str());
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        drop(pair.slave);
+        let (output_tx, output_rx) = mpsc::channel();
+        let reader_thread = thread::spawn(move || {
+            let mut buffer = [0u8; 4096];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => {
+                        if output_tx.send(buffer[..read].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        let mut output = Vec::new();
+        wait_for_pty_output(&output_rx, &mut output, PTY_EDITOR_READY);
+        writer.write_all(b"x\n").unwrap();
+        writer.flush().unwrap();
+        wait_for_pty_output(&output_rx, &mut output, PTY_EDITOR_INPUT);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "external-editor runner did not exit: {}",
+                String::from_utf8_lossy(&output)
+            );
+            thread::sleep(Duration::from_millis(20));
+        };
+        drop(writer);
+        drop(pair.master);
+        reader_thread.join().unwrap();
+        assert!(
+            status.success(),
+            "status={status:?} output={}",
+            String::from_utf8_lossy(&output)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn wait_for_pty_output(
+        output_rx: &mpsc::Receiver<Vec<u8>>,
+        output: &mut Vec<u8>,
+        marker: &str,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if String::from_utf8_lossy(output).contains(marker) {
+                return;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for {marker}: {}",
+                String::from_utf8_lossy(output)
+            );
+            match output_rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
+                Ok(chunk) => output.extend_from_slice(&chunk),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
+                    "PTY closed before {marker}: {}",
+                    String::from_utf8_lossy(output)
+                ),
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "subprocess helper for the external-editor PTY regression"]
+    fn external_editor_runner_pty_helper() {
+        let Some(manifest) = std::env::var_os(PTY_MANIFEST_ENV) else {
+            return;
+        };
+        assert_eq!(run_manifest(Path::new(&manifest)), Ok(0));
+        // SAFETY: this helper runs under the controlling PTY created by the
+        // parent regression test and only inspects process-group identifiers.
+        let (runner_group, foreground_group) =
+            unsafe { (libc::getpgrp(), libc::tcgetpgrp(libc::STDIN_FILENO)) };
+        assert_eq!(runner_group, foreground_group);
+    }
+
+    #[test]
+    #[ignore = "subprocess helper for the external-editor PTY regression"]
+    fn external_editor_child_pty_helper() {
+        // SAFETY: these calls only inspect this subprocess and its controlling
+        // terminal; the PTY parent keeps standard input open for the test.
+        let (editor_group, foreground_group) =
+            unsafe { (libc::getpgrp(), libc::tcgetpgrp(libc::STDIN_FILENO)) };
+        assert_eq!(editor_group, foreground_group);
+        println!("{PTY_EDITOR_READY}");
+        std::io::stdout().flush().unwrap();
+        let mut input = [0u8; 1];
+        std::io::stdin().read_exact(&mut input).unwrap();
+        assert_eq!(input, [b'x']);
+        println!("{PTY_EDITOR_INPUT}");
+        std::io::stdout().flush().unwrap();
     }
 }
