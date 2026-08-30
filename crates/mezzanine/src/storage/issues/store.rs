@@ -6,7 +6,8 @@
 
 use std::collections::BTreeSet;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
 
 #[cfg(test)]
 use mez_agent::issues::DEFAULT_ISSUE_PRIORITY;
@@ -14,9 +15,10 @@ use mez_agent::issues::DEFAULT_ISSUE_PRIORITY;
 #[cfg(test)]
 use super::Path;
 use super::{
-    DeleteIssueResult, IssueBrowserQuery, IssueDatabasePath, IssueKind, IssueQuery, IssueRecord,
-    IssueState, IssueUpdate, MezError, NewIssueRecord, PathBuf, Result, UpdateIssueResult,
-    ensure_private_parent, generate_issue_id, set_private_issue_file_permissions,
+    CompareAndSwapIssueTextResult, DeleteIssueResult, IssueBrowserQuery, IssueDatabasePath,
+    IssueKind, IssueQuery, IssueRecord, IssueState, IssueTextField, IssueUpdate, MezError,
+    NewIssueRecord, PathBuf, Result, UpdateIssueResult, ensure_private_parent, generate_issue_id,
+    set_private_issue_file_permissions,
 };
 
 /// SQLite-backed local issue store.
@@ -340,6 +342,49 @@ impl IssueStore {
         select_issue(&connection, &project, &id)
     }
 
+    /// Returns a canonical SHA-256 revision covering every persisted issue field.
+    pub fn issue_revision(&self, record: &IssueRecord) -> Result<String> {
+        record.validate()?;
+        Ok(issue_record_revision(record))
+    }
+
+    /// Updates one free-form issue field only when the full record is unchanged.
+    pub fn compare_and_swap_issue_text(
+        &self,
+        project: &str,
+        id: &str,
+        field: IssueTextField,
+        expected_revision: &str,
+        content: Option<String>,
+        now_unix_seconds: u64,
+    ) -> Result<CompareAndSwapIssueTextResult> {
+        super::validate_project_key(project)?;
+        if id.trim().is_empty() {
+            return Err(MezError::invalid_args("issue id must not be empty"));
+        }
+        validate_revision_token(expected_revision, "issue revision")?;
+        let mut connection = self.open()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(mut record) = select_issue(&transaction, project, id)? else {
+            transaction.commit()?;
+            return Ok(CompareAndSwapIssueTextResult::Deleted);
+        };
+        let current_revision = issue_record_revision(&record);
+        if current_revision != expected_revision {
+            transaction.commit()?;
+            return Ok(CompareAndSwapIssueTextResult::Stale { current_revision });
+        }
+        match field {
+            IssueTextField::Body => record.body = content,
+            IssueTextField::Notes => record.notes = content,
+        }
+        record.updated_at_unix_seconds = now_unix_seconds;
+        record.validate()?;
+        update_issue_row(&transaction, &record)?;
+        transaction.commit()?;
+        Ok(CompareAndSwapIssueTextResult::Updated(record))
+    }
+
     /// Updates one issue by project and id and returns the updated record.
     pub fn update_issue(
         &self,
@@ -615,6 +660,59 @@ fn select_issue(connection: &Connection, project: &str, id: &str) -> Result<Opti
         record.depends_on = issue_dependencies_for_record(connection, project, &record.id)?;
     }
     Ok(record)
+}
+
+fn issue_record_revision(record: &IssueRecord) -> String {
+    let mut hasher = Sha256::new();
+    hash_revision_field(&mut hasher, &record.id);
+    hash_revision_field(&mut hasher, &record.project);
+    hash_revision_field(&mut hasher, record.kind.as_str());
+    hash_revision_field(&mut hasher, record.state.as_str());
+    hash_revision_field(&mut hasher, &record.priority.to_string());
+    hash_revision_field(&mut hasher, &record.title);
+    hash_optional_revision_field(&mut hasher, record.body.as_deref());
+    hash_optional_revision_field(&mut hasher, record.notes.as_deref());
+    let mut dependencies = record.depends_on.iter().collect::<Vec<_>>();
+    dependencies.sort();
+    hash_revision_field(&mut hasher, &dependencies.len().to_string());
+    for dependency in dependencies {
+        hash_revision_field(&mut hasher, dependency);
+    }
+    hash_revision_field(&mut hasher, &record.created_at_unix_seconds.to_string());
+    hash_revision_field(&mut hasher, &record.updated_at_unix_seconds.to_string());
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn hash_revision_field(hasher: &mut Sha256, value: &str) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value.as_bytes());
+}
+
+fn hash_optional_revision_field(hasher: &mut Sha256, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            hash_revision_field(hasher, value);
+        }
+        None => hasher.update([0]),
+    }
+}
+
+fn validate_revision_token(value: &str, name: &str) -> Result<()> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(MezError::invalid_args(format!(
+            "{name} must be a lowercase SHA-256 digest"
+        )));
+    }
+    Ok(())
 }
 
 fn load_issue_dependencies(

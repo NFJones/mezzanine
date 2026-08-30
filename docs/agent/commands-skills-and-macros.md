@@ -65,9 +65,14 @@ it only when repeated autonomous work is appropriate; see
 [Subagents and messaging](subagents-and-messaging.md#use-routed-loops-sparingly)
 for its stopping rules and conversation modes.
 
-`/memory` controls persistent-memory availability, while `/issue` manages
-runtime-owned project issues rather than an external tracker. `/init` creates a
-project instruction scaffold. `/auth-status`, `/refresh-provider-info`,
+`/memory` controls persistent-memory availability; `/memory edit <uuid>` opens
+only one memory's content in the configured external editor. `/issue` manages
+runtime-owned project issues rather than an external tracker, and `/issue edit
+<id> body|notes` externally edits only the selected prose field. Structured
+metadata remains in typed commands. Durable edits use full-record
+compare-and-swap checks, so concurrent changes or deletion retain the private
+draft for `/editor-recovery` instead of overwriting the record. `/init` creates
+a project instruction scaffold. `/auth-status`, `/refresh-provider-info`,
 `/debug-config`, `/reset-status`, and `/log-level` provide non-secret
 authentication, provider, configuration, token-accounting, and verbosity
 diagnostics. Use `/exit` to hide the agent shell after active work stops.

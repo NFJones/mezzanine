@@ -10,13 +10,14 @@ use mez_agent::memory::{
     MemoryState, canonical_memory_uuid, compare_memory_search_results, decode_scope, encode_scope,
     is_memory_uuid, kind_name, parse_kind, parse_source, parse_state, source_name, state_name,
 };
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
 
 #[cfg(test)]
 use super::Path;
 use super::{
-    MezError, PathBuf, PersistentMemoryStore, Result, fs, set_private_dir_permissions,
-    set_private_file_permissions,
+    CompareAndSwapMemoryContentResult, MezError, PathBuf, PersistentMemoryStore, Result, fs,
+    set_private_dir_permissions, set_private_file_permissions,
 };
 
 const SCHEMA_VERSION: i64 = 5;
@@ -95,17 +96,42 @@ impl PersistentMemoryStore {
     pub fn inspect(&self, id: &str) -> Result<MemoryRecord> {
         let connection = self.open()?;
         let id = canonical_memory_uuid(id);
-        let mut statement = connection.prepare(
-            "SELECT id, scope, created_at, updated_at, source, priority, kind, state,
-                    last_used_at, use_count, confirmed_count, last_confirmed_at,
-                    supersedes_id, expires_at, expiration_duration_seconds, content
-             FROM memory_records
-             WHERE id = ?1",
-        )?;
-        statement
-            .query_row(params![id], row_to_record)
-            .optional()?
+        select_memory_record(&connection, &id)?
             .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "memory not found"))
+    }
+
+    /// Returns a canonical SHA-256 revision covering every persisted memory field.
+    pub fn memory_revision(&self, record: &MemoryRecord) -> Result<String> {
+        memory_record_revision(record)
+    }
+
+    /// Updates memory content only when the complete persisted record is unchanged.
+    pub fn compare_and_swap_content(
+        &self,
+        id: &str,
+        expected_revision: &str,
+        content: impl Into<String>,
+        updated_at_unix_seconds: u64,
+    ) -> Result<CompareAndSwapMemoryContentResult> {
+        validate_revision_token(expected_revision, "memory revision")?;
+        let id = canonical_memory_uuid(id);
+        let mut connection = self.open()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(mut record) = select_memory_record(&transaction, &id)? else {
+            transaction.commit()?;
+            return Ok(CompareAndSwapMemoryContentResult::Deleted);
+        };
+        let current_revision = memory_record_revision(&record)?;
+        if current_revision != expected_revision {
+            transaction.commit()?;
+            return Ok(CompareAndSwapMemoryContentResult::Stale { current_revision });
+        }
+        record.content = content.into();
+        record.updated_at_unix_seconds = updated_at_unix_seconds;
+        record.validate_for_persistence()?;
+        upsert_record(&transaction, &record)?;
+        transaction.commit()?;
+        Ok(CompareAndSwapMemoryContentResult::Updated(Box::new(record)))
     }
 
     /// Runs the upsert operation for this subsystem.
@@ -685,6 +711,42 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryRecord> {
         )?,
         content: row.get(15)?,
     })
+}
+
+fn select_memory_record(connection: &Connection, id: &str) -> Result<Option<MemoryRecord>> {
+    connection
+        .query_row(
+            "SELECT id, scope, created_at, updated_at, source, priority, kind, state,
+                    last_used_at, use_count, confirmed_count, last_confirmed_at,
+                    supersedes_id, expires_at, expiration_duration_seconds, content
+             FROM memory_records
+             WHERE id = ?1",
+            params![id],
+            row_to_record,
+        )
+        .optional()
+        .map_err(MezError::from)
+}
+
+fn memory_record_revision(record: &MemoryRecord) -> Result<String> {
+    let encoded = record.encode()?;
+    Ok(Sha256::digest(encoded.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn validate_revision_token(value: &str, name: &str) -> Result<()> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(MezError::invalid_args(format!(
+            "{name} must be a lowercase SHA-256 digest"
+        )));
+    }
+    Ok(())
 }
 
 /// Converts one unsigned integer into a SQLite-compatible signed integer.

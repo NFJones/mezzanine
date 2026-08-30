@@ -101,7 +101,9 @@ fn agent_shell_executes_builtin_slash_command_effects() {
     assert!(!body.contains("/agent"), "{body}");
     assert!(body.contains("| `/memory` |"), "{body}");
     assert!(
-        body.contains("inspect or change persistent memory enablement."),
+        body.contains(
+            "inspect or change persistent memory enablement, or externally edit memory content."
+        ),
         "{body}"
     );
     assert!(!body.contains("/mention"), "{body}");

@@ -12,6 +12,7 @@
 
 mod artifacts;
 mod command;
+mod durable;
 mod recovery;
 mod runner;
 mod service;

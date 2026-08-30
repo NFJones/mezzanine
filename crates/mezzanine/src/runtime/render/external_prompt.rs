@@ -107,6 +107,7 @@ impl RuntimeSessionService {
             ExternalEditTarget::AgentPrompt,
             original_content.clone(),
             initial_draft_content.unwrap_or_else(|| original_content.clone()),
+            apply_on_success,
         )?;
         self.presentation.external_agent_prompt_edits.insert(
             pane_id.to_string(),

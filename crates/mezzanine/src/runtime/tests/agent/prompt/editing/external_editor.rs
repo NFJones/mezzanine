@@ -572,3 +572,351 @@ fn runtime_prompt_editor_framed_input_forwards_exact_bytes_and_resize() {
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(root);
 }
+
+/// Builds the persistent stores and project identity used by durable editor tests.
+fn durable_editor_stores(
+    service: &mut RuntimeSessionService,
+    root: &Path,
+) -> (
+    crate::storage::issues::IssueStore,
+    crate::storage::memory::PersistentMemoryStore,
+    String,
+) {
+    let config_root = root.join("config");
+    fs::create_dir_all(&config_root).unwrap();
+    service.set_config_root(config_root.clone());
+    let project = crate::storage::issues::project_key_for_working_directory(
+        service
+            .pane_current_working_directory("%1")
+            .unwrap_or_else(|| config_root.clone()),
+    );
+    (
+        crate::storage::issues::IssueStore::under_config_root(&config_root),
+        crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root),
+        project,
+    )
+}
+
+/// Verifies issue body and notes editing exports only the selected prose field,
+/// applies through the full-record CAS boundary, and preserves structured data.
+#[test]
+fn runtime_issue_external_editor_applies_only_selected_text_field() {
+    let (mut service, primary, root) = prompt_editor_fixture("issue-editor-success");
+    let (issues, _memories, project) = durable_editor_stores(&mut service, &root);
+    let issue = issues
+        .add_issue(
+            project.clone(),
+            mez_agent::issues::IssueKind::Task,
+            "Structured title".to_string(),
+            Some("body before".to_string()),
+            Some("notes retained".to_string()),
+            10,
+        )
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, &format!("/issue edit {} body", issue.id))
+        .unwrap();
+    assert!(response.contains("editor_started=true"), "{response}");
+    let identities = editor_transaction(&service);
+    assert_eq!(
+        fs::read_to_string(
+            root.join("runtime/editor-sessions")
+                .join(&identities.2)
+                .join("draft.md")
+        )
+        .unwrap(),
+        "body before"
+    );
+
+    complete_prompt_editor(&mut service, &root, &identities, b"body after\n", 0);
+    let updated = issues
+        .get_issue(project, issue.id)
+        .unwrap()
+        .expect("edited issue should remain present");
+    assert_eq!(updated.body.as_deref(), Some("body after\n"));
+    assert_eq!(updated.notes.as_deref(), Some("notes retained"));
+    assert_eq!(updated.title, "Structured title");
+    assert!(
+        service
+            .list_external_editor_recoveries(&primary)
+            .unwrap()
+            .contains("No retained")
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an issue changed after editor launch is never overwritten and its
+/// private draft remains explicitly recoverable until the primary discards it.
+#[test]
+fn runtime_issue_external_editor_retains_stale_conflict() {
+    let (mut service, primary, root) = prompt_editor_fixture("issue-editor-conflict");
+    let (issues, _memories, project) = durable_editor_stores(&mut service, &root);
+    let issue = issues
+        .add_issue(
+            project.clone(),
+            mez_agent::issues::IssueKind::Task,
+            "Concurrent issue".to_string(),
+            None,
+            Some("notes before".to_string()),
+            10,
+        )
+        .unwrap();
+    service
+        .start_issue_external_edit(
+            &primary,
+            "%1",
+            &issue.id,
+            crate::storage::issues::IssueTextField::Notes,
+        )
+        .unwrap();
+    let identities = editor_transaction(&service);
+    issues
+        .update_issue(
+            project.clone(),
+            issue.id.clone(),
+            mez_agent::issues::IssueUpdate {
+                priority: Some(90),
+                ..mez_agent::issues::IssueUpdate::default()
+            },
+            10,
+        )
+        .unwrap();
+
+    complete_prompt_editor(&mut service, &root, &identities, b"notes from editor", 0);
+    let current = issues
+        .get_issue(project, issue.id)
+        .unwrap()
+        .expect("conflicted issue should remain present");
+    assert_eq!(current.notes.as_deref(), Some("notes before"));
+    assert_eq!(current.priority, 90);
+    let listing = service.list_external_editor_recoveries(&primary).unwrap();
+    assert!(listing.contains(&identities.2), "{listing}");
+    assert!(listing.contains("conflicted"), "{listing}");
+    assert!(
+        service
+            .apply_external_editor_recovery(&primary, "%1", &identities.2)
+            .is_err()
+    );
+    assert!(
+        service
+            .discard_external_editor_recovery(&primary, "%1", &identities.2)
+            .unwrap()
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies persistent-memory content editing applies through CAS without
+/// changing metadata or leaking structured fields into the editor draft.
+#[test]
+fn runtime_memory_external_editor_applies_only_content() {
+    let (mut service, primary, root) = prompt_editor_fixture("memory-editor-success");
+    let (_issues, memories, _project) = durable_editor_stores(&mut service, &root);
+    let record = MemoryRecord::new_with_defaults(
+        "external-memory",
+        mez_agent::memory::MemoryScope::Global,
+        10,
+        10,
+        mez_agent::memory::MemorySource::User,
+        75,
+        "memory before",
+    );
+    let memory_id = record.id.clone();
+    memories.upsert(record).unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, &format!("/memory edit {memory_id}"))
+        .unwrap();
+    assert!(response.contains("editor_started=true"), "{response}");
+    let identities = editor_transaction(&service);
+    assert_eq!(
+        fs::read_to_string(
+            root.join("runtime/editor-sessions")
+                .join(&identities.2)
+                .join("draft.md")
+        )
+        .unwrap(),
+        "memory before"
+    );
+    complete_prompt_editor(&mut service, &root, &identities, b"memory after", 0);
+
+    let updated = memories.inspect(&memory_id).unwrap();
+    assert_eq!(updated.content, "memory after");
+    assert_eq!(updated.priority, 75);
+    assert_eq!(updated.source, mez_agent::memory::MemorySource::User);
+    assert!(
+        service
+            .list_external_editor_recoveries(&primary)
+            .unwrap()
+            .contains("No retained")
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies deleting a memory during editing cannot recreate it and the changed
+/// draft remains primary-authorized recovery data until explicit discard.
+#[test]
+fn runtime_memory_external_editor_retains_deleted_conflict() {
+    let (mut service, primary, root) = prompt_editor_fixture("memory-editor-deleted");
+    let (_issues, memories, _project) = durable_editor_stores(&mut service, &root);
+    let record = MemoryRecord::new_with_defaults(
+        "deleted-memory",
+        mez_agent::memory::MemoryScope::Global,
+        10,
+        10,
+        mez_agent::memory::MemorySource::User,
+        50,
+        "memory before",
+    );
+    let memory_id = record.id.clone();
+    memories.upsert(record).unwrap();
+    service
+        .start_memory_external_edit(&primary, "%1", &memory_id)
+        .unwrap();
+    let identities = editor_transaction(&service);
+    assert!(memories.delete(&memory_id).unwrap());
+
+    complete_prompt_editor(&mut service, &root, &identities, b"must not recreate", 0);
+    assert!(memories.inspect(&memory_id).is_err());
+    let listing = service.list_external_editor_recoveries(&primary).unwrap();
+    assert!(listing.contains(&identities.2), "{listing}");
+    assert!(listing.contains("conflicted"), "{listing}");
+    let observer = service
+        .session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    assert!(
+        service
+            .apply_external_editor_recovery(&observer, "%1", &identities.2)
+            .is_err()
+    );
+    assert!(
+        service
+            .discard_external_editor_recovery(&primary, "%1", &identities.2)
+            .unwrap()
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a valid nonzero memory draft remains unapplied until the primary
+/// explicitly applies the recovery through the original CAS token.
+#[test]
+fn runtime_memory_external_editor_recovery_applies_explicitly() {
+    let (mut service, primary, root) = prompt_editor_fixture("memory-editor-recovery-apply");
+    let (_issues, memories, _project) = durable_editor_stores(&mut service, &root);
+    let record = MemoryRecord::new_with_defaults(
+        "recover-memory",
+        mez_agent::memory::MemoryScope::Global,
+        10,
+        10,
+        mez_agent::memory::MemorySource::User,
+        60,
+        "memory before",
+    );
+    let memory_id = record.id.clone();
+    memories.upsert(record).unwrap();
+    service
+        .start_memory_external_edit(&primary, "%1", &memory_id)
+        .unwrap();
+    let identities = editor_transaction(&service);
+
+    complete_prompt_editor(&mut service, &root, &identities, b"recovered memory", 7);
+    assert_eq!(
+        memories.inspect(&memory_id).unwrap().content,
+        "memory before"
+    );
+    let listing = service.list_external_editor_recoveries(&primary).unwrap();
+    assert!(listing.contains(&identities.2), "{listing}");
+    assert!(listing.contains("nonzero_exit"), "{listing}");
+
+    service
+        .apply_external_editor_recovery(&primary, "%1", &identities.2)
+        .unwrap();
+    assert_eq!(
+        memories.inspect(&memory_id).unwrap().content,
+        "recovered memory"
+    );
+    assert!(
+        !root
+            .join("runtime/editor-sessions")
+            .join(&identities.2)
+            .exists()
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies reopening retained issue prose seeds a fresh editor without
+/// applying on close; only a later explicit recovery apply mutates the issue.
+#[test]
+fn runtime_issue_external_editor_reopen_remains_explicit_apply() {
+    let (mut service, primary, root) = prompt_editor_fixture("issue-editor-recovery-reopen");
+    let (issues, _memories, project) = durable_editor_stores(&mut service, &root);
+    let issue = issues
+        .add_issue(
+            project.clone(),
+            mez_agent::issues::IssueKind::Task,
+            "Recover issue prose".to_string(),
+            Some("body before".to_string()),
+            None,
+            10,
+        )
+        .unwrap();
+    service
+        .start_issue_external_edit(
+            &primary,
+            "%1",
+            &issue.id,
+            crate::storage::issues::IssueTextField::Body,
+        )
+        .unwrap();
+    let first = editor_transaction(&service);
+    complete_prompt_editor(&mut service, &root, &first, b"retained issue body", 9);
+
+    service
+        .reopen_external_editor_recovery(&primary, "%1", &first.2)
+        .unwrap();
+    let reopened = editor_transaction(&service);
+    assert_ne!(reopened.2, first.2);
+    assert_eq!(
+        fs::read_to_string(
+            root.join("runtime/editor-sessions")
+                .join(&reopened.2)
+                .join("draft.md")
+        )
+        .unwrap(),
+        "retained issue body"
+    );
+    complete_prompt_editor(&mut service, &root, &reopened, b"edited after reopen", 0);
+    assert_eq!(
+        issues
+            .get_issue(project.clone(), issue.id.clone())
+            .unwrap()
+            .unwrap()
+            .body
+            .as_deref(),
+        Some("body before")
+    );
+    let listing = service.list_external_editor_recoveries(&primary).unwrap();
+    assert!(listing.contains(&reopened.2), "{listing}");
+    assert!(listing.contains("changed_unapplied"), "{listing}");
+
+    service
+        .apply_external_editor_recovery(&primary, "%1", &reopened.2)
+        .unwrap();
+    assert_eq!(
+        issues
+            .get_issue(project, issue.id)
+            .unwrap()
+            .unwrap()
+            .body
+            .as_deref(),
+        Some("edited after reopen")
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}

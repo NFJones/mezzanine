@@ -746,8 +746,11 @@ impl RuntimeSessionService {
                     outcome.as_ref()
                     && command == "memory"
                 {
-                    let memory_outcome =
-                        self.execute_agent_shell_memory_command(&pane_id, input)?;
+                    let memory_outcome = self.execute_agent_shell_memory_command(
+                        primary_client_id,
+                        &pane_id,
+                        input,
+                    )?;
                     runtime_agent_shell_command_response_json(
                         &pane_id,
                         input,
@@ -757,8 +760,12 @@ impl RuntimeSessionService {
                     outcome.as_ref()
                     && command == "issue"
                 {
-                    let issue_outcome =
-                        issues::execute_agent_shell_issue_command(self, &pane_id, input)?;
+                    let issue_outcome = issues::execute_agent_shell_issue_command(
+                        self,
+                        primary_client_id,
+                        &pane_id,
+                        input,
+                    )?;
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&issue_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()

@@ -17,11 +17,22 @@ pub(crate) enum ExternalEditTarget {
     /// Pane-local agent prompt text.
     AgentPrompt,
     /// Free-form issue body content.
-    IssueBody { issue_id: String },
+    IssueBody {
+        project: String,
+        issue_id: String,
+        expected_revision: String,
+    },
     /// Free-form issue notes content.
-    IssueNotes { issue_id: String },
+    IssueNotes {
+        project: String,
+        issue_id: String,
+        expected_revision: String,
+    },
     /// Durable memory content.
-    MemoryContent { memory_id: String },
+    MemoryContent {
+        memory_id: String,
+        expected_revision: String,
+    },
     /// Persisted user-owned context document content.
     ContextDocument { document_id: String },
 }
@@ -59,6 +70,7 @@ pub(super) struct ExternalEditorSession {
     pub(super) pane_identity: ExternalEditorPaneIdentity,
     pub(super) target: ExternalEditTarget,
     pub(super) original_content: String,
+    pub(super) apply_on_success: bool,
     pub(super) artifacts: ExternalEditorArtifacts,
     pub(super) commands: Vec<ResolvedExternalEditorCommand>,
     pub(super) recovery_manifest: ExternalEditorRecoveryManifest,
@@ -90,6 +102,8 @@ pub(crate) struct ExternalEditorCompletion {
     pub(crate) target: ExternalEditTarget,
     /// Original target text retained for unchanged and rollback decisions.
     pub(crate) original_content: String,
+    /// Whether a successful changed draft may be applied automatically.
+    pub(crate) apply_on_success: bool,
     /// Private draft path retained until target-specific settlement.
     pub(crate) draft_path: std::path::PathBuf,
     /// Blocking editor process exit code.
@@ -171,6 +185,7 @@ impl RuntimeExternalEditorComponent {
             pane_id: session.pane_id.clone(),
             target: session.target,
             original_content: session.original_content,
+            apply_on_success: session.apply_on_success,
             draft_path: session.artifacts.draft_path,
             exit_code,
             validated_content: None,
@@ -264,6 +279,7 @@ mod tests {
             },
             target: ExternalEditTarget::AgentPrompt,
             original_content: "before".to_string(),
+            apply_on_success: true,
             artifacts: ExternalEditorArtifacts {
                 session_directory: PathBuf::from("/private/session-a"),
                 draft_path: PathBuf::from("/private/session-a/draft.md"),

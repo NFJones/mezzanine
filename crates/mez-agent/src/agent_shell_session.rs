@@ -926,14 +926,18 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "auth-status" => "show non-secret provider authentication status.",
         "refresh-provider-info" => "refresh cached provider model and quota information.",
         "list-mcp" => "list configured MCP servers and tools.",
-        "issue" => "create, inspect, update, or delete project issue records.",
+        "issue" => {
+            "create, inspect, externally edit body/notes, update, or delete project issue records."
+        }
         "editor-recovery" => {
             "list, reopen, apply, or discard retained external-editor drafts without displaying their content."
         }
         "show-approvals" => "browse and decide pending approvals for the live session.",
         "show-context" => "browse and delete entries in the current pane conversation.",
         "show-issues" => "browse project issue records and open issue details.",
-        "memory" => "inspect or change persistent memory enablement.",
+        "memory" => {
+            "inspect or change persistent memory enablement, or externally edit memory content."
+        }
         "show-memories" => "browse durable memory records and open memory details.",
         "remember" => "generate durable memories from the current context or a statement.",
         "plan" => "toggle pane-local plan-only mode and remove write sandbox scopes.",

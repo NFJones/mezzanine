@@ -12,6 +12,7 @@ use super::{
 /// Executes one `/issue` slash command for the active pane project.
 pub(super) fn execute_agent_shell_issue_command(
     service: &mut RuntimeSessionService,
+    primary_client_id: &mez_core::ids::ClientId,
     pane_id: &str,
     input: &str,
 ) -> Result<AgentShellCommandOutcome> {
@@ -83,6 +84,21 @@ pub(super) fn execute_agent_shell_issue_command(
                 body: runtime_issue_record_detail_display(record.as_ref()),
             })
         }
+        RuntimeIssueArgs::Edit { id, field } => {
+            service.start_issue_external_edit(primary_client_id, pane_id, &id, field)?;
+            Ok(AgentShellCommandOutcome::Mutated {
+                command: "issue".to_string(),
+                body: format!(
+                    "issue edit id={} field={} editor_started=true",
+                    id,
+                    match field {
+                        crate::storage::issues::IssueTextField::Body => "body",
+                        crate::storage::issues::IssueTextField::Notes => "notes",
+                    }
+                ),
+                visibility,
+            })
+        }
         RuntimeIssueArgs::Update { id, update } => {
             let result = store.update_issue(project, id, update, current_unix_seconds())?;
             if result.updated {
@@ -151,6 +167,10 @@ enum RuntimeIssueArgs {
     Show {
         id: String,
     },
+    Edit {
+        id: String,
+        field: crate::storage::issues::IssueTextField,
+    },
     Update {
         id: String,
         update: mez_agent::issues::IssueUpdate,
@@ -174,17 +194,18 @@ fn parse_issue_args(args: &str) -> Result<RuntimeIssueArgs> {
     };
     let Some(command) = tokens.first().map(String::as_str) else {
         return Err(MezError::invalid_args(
-            "/issue expects add, show, update, query, or delete",
+            "/issue expects add, show, edit, update, query, or delete",
         ));
     };
     match command {
         "add" => parse_issue_add_args(&tokens[1..]),
         "show" => parse_issue_show_args(&tokens[1..]),
+        "edit" => parse_issue_edit_args(&tokens[1..]),
         "update" => parse_issue_update_args(&tokens[1..]),
         "query" | "list" => parse_issue_query_args(&tokens[1..]),
         "delete" | "remove" => parse_issue_delete_args(&tokens[1..]),
         _ => Err(MezError::invalid_args(
-            "/issue expects add, show, update, query, or delete",
+            "/issue expects add, show, edit, update, query, or delete",
         )),
     }
 }
@@ -257,6 +278,27 @@ fn parse_issue_show_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
     }
     Ok(RuntimeIssueArgs::Show {
         id: tokens[0].clone(),
+    })
+}
+
+fn parse_issue_edit_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
+    if tokens.len() != 2 {
+        return Err(MezError::invalid_args(
+            "issue edit expects one issue id and body or notes",
+        ));
+    }
+    let field = match tokens[1].as_str() {
+        "body" => crate::storage::issues::IssueTextField::Body,
+        "notes" => crate::storage::issues::IssueTextField::Notes,
+        _ => {
+            return Err(MezError::invalid_args(
+                "issue edit field must be body or notes",
+            ));
+        }
+    };
+    Ok(RuntimeIssueArgs::Edit {
+        id: tokens[0].clone(),
+        field,
     })
 }
 

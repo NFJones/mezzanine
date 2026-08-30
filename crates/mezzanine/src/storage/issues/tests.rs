@@ -5,8 +5,8 @@
 //! same persistence contract.
 
 use super::{
-    IssueBrowserQuery, IssueKind, IssueQuery, IssueState, IssueStore, IssueUpdate, NewIssueRecord,
-    fs, issue_database_location,
+    CompareAndSwapIssueTextResult, IssueBrowserQuery, IssueKind, IssueQuery, IssueState,
+    IssueStore, IssueTextField, IssueUpdate, NewIssueRecord, fs, issue_database_location,
 };
 use rusqlite::Connection;
 
@@ -484,6 +484,92 @@ fn issue_store_persists_and_updates_notes() {
         .unwrap();
     assert_eq!(cleared.notes, None);
     assert_eq!(cleared.updated_at_unix_seconds, 30);
+}
+
+/// Verifies issue prose compare-and-swap uses a full-record token rather than
+/// second-resolution timestamps and distinguishes stale and deleted targets.
+#[test]
+fn issue_store_compare_and_swap_text_rejects_same_timestamp_changes_and_deletion() {
+    let store = temp_store("text-cas");
+    let issue = store
+        .add_issue(
+            "/repo".to_string(),
+            IssueKind::Task,
+            "Edit durable prose".to_string(),
+            Some("body before".to_string()),
+            Some("notes before".to_string()),
+            10,
+        )
+        .unwrap();
+    let revision = store.issue_revision(&issue).unwrap();
+
+    let structured_change = store
+        .update_issue(
+            "/repo".to_string(),
+            issue.id.clone(),
+            IssueUpdate {
+                priority: Some(90),
+                ..IssueUpdate::default()
+            },
+            10,
+        )
+        .unwrap()
+        .record
+        .unwrap();
+    assert_eq!(structured_change.updated_at_unix_seconds, 10);
+    let stale = store
+        .compare_and_swap_issue_text(
+            "/repo",
+            &issue.id,
+            IssueTextField::Body,
+            &revision,
+            Some("body after".to_string()),
+            10,
+        )
+        .unwrap();
+    assert!(matches!(stale, CompareAndSwapIssueTextResult::Stale { .. }));
+    assert_eq!(
+        store
+            .get_issue("/repo".to_string(), issue.id.clone())
+            .unwrap()
+            .unwrap()
+            .body
+            .as_deref(),
+        Some("body before")
+    );
+
+    let current_revision = store.issue_revision(&structured_change).unwrap();
+    let updated = store
+        .compare_and_swap_issue_text(
+            "/repo",
+            &issue.id,
+            IssueTextField::Notes,
+            &current_revision,
+            Some("notes after".to_string()),
+            11,
+        )
+        .unwrap();
+    let CompareAndSwapIssueTextResult::Updated(updated) = updated else {
+        panic!("current revision should update issue notes");
+    };
+    assert_eq!(updated.body.as_deref(), Some("body before"));
+    assert_eq!(updated.notes.as_deref(), Some("notes after"));
+    assert_eq!(updated.priority, 90);
+
+    store
+        .delete_issue("/repo".to_string(), issue.id.clone())
+        .unwrap();
+    let deleted = store
+        .compare_and_swap_issue_text(
+            "/repo",
+            &issue.id,
+            IssueTextField::Body,
+            &store.issue_revision(&updated).unwrap(),
+            Some("must not recreate".to_string()),
+            12,
+        )
+        .unwrap();
+    assert_eq!(deleted, CompareAndSwapIssueTextResult::Deleted);
 }
 
 /// Verifies issue dependencies persist, query with records, and reject cycles.

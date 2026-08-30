@@ -5,7 +5,9 @@ use mez_agent::memory::{
     MemorySearchRequest, MemorySource, MemoryState, canonical_memory_uuid, is_memory_uuid,
 };
 
-use super::{PersistentMemoryStore, fs, retrieve_persistent_memory};
+use super::{
+    CompareAndSwapMemoryContentResult, PersistentMemoryStore, fs, retrieve_persistent_memory,
+};
 /// Runs the record operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -49,6 +51,55 @@ fn persistent_memory_can_inspect_edit_export_and_delete() {
     assert!(store.delete("m1").unwrap());
     assert!(store.inspect("m1").is_err());
 
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies memory content compare-and-swap uses a full-record token rather
+/// than second-resolution timestamps and distinguishes stale and deleted targets.
+#[test]
+fn persistent_memory_compare_and_swap_content_rejects_same_timestamp_changes_and_deletion() {
+    let root = std::env::temp_dir().join(format!("mez-memory-content-cas-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let store = PersistentMemoryStore::under_config_root(&root);
+    store
+        .upsert(record("cas", MemoryScope::Global, "content before"))
+        .unwrap();
+    let original = store.inspect("cas").unwrap();
+    let revision = store.memory_revision(&original).unwrap();
+
+    let mut structured_change = original.clone();
+    structured_change.priority = 90;
+    store.upsert(structured_change.clone()).unwrap();
+    assert_eq!(structured_change.updated_at_unix_seconds, 10);
+    let stale = store
+        .compare_and_swap_content("cas", &revision, "content after", 10)
+        .unwrap();
+    assert!(matches!(
+        stale,
+        CompareAndSwapMemoryContentResult::Stale { .. }
+    ));
+    assert_eq!(store.inspect("cas").unwrap().content, "content before");
+
+    let current_revision = store.memory_revision(&structured_change).unwrap();
+    let updated = store
+        .compare_and_swap_content("cas", &current_revision, "content after", 11)
+        .unwrap();
+    let CompareAndSwapMemoryContentResult::Updated(updated) = updated else {
+        panic!("current revision should update memory content");
+    };
+    assert_eq!(updated.content, "content after");
+    assert_eq!(updated.priority, 90);
+
+    assert!(store.delete("cas").unwrap());
+    let deleted = store
+        .compare_and_swap_content(
+            "cas",
+            &store.memory_revision(&updated).unwrap(),
+            "must not recreate",
+            12,
+        )
+        .unwrap();
+    assert_eq!(deleted, CompareAndSwapMemoryContentResult::Deleted);
     let _ = fs::remove_dir_all(root);
 }
 

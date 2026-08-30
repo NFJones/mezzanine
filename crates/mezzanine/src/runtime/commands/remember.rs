@@ -307,11 +307,21 @@ impl RuntimeSessionService {
     /// Executes `/memory` against the persisted persistent-memory enablement flag.
     pub(super) fn execute_agent_shell_memory_command(
         &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {
         let invocation = parse_slash_command(input)?
             .ok_or_else(|| MezError::invalid_args("memory command must be a slash command"))?;
+        let arguments = invocation.args.split_whitespace().collect::<Vec<_>>();
+        if let ["edit", memory_id] = arguments.as_slice() {
+            self.start_memory_external_edit(primary_client_id, pane_id, memory_id)?;
+            return Ok(AgentShellCommandOutcome::Mutated {
+                command: "memory".to_string(),
+                body: format!("memory edit id={memory_id} editor_started=true"),
+                visibility: self.agent_shell_visibility_for_pane(pane_id)?,
+            });
+        }
         let mode = runtime_single_mode_arg(&invocation.args, "memory", "status")?;
         let enabled_before = self.runtime_persistent_memory_enabled();
         if matches!(mode.as_str(), "status" | "show") {
@@ -330,7 +340,7 @@ impl RuntimeSessionService {
             "toggle" => !enabled_before,
             _ => {
                 return Err(MezError::invalid_args(
-                    "memory slash command expects on, off, toggle, status, or no argument",
+                    "memory slash command expects on, off, toggle, status, edit <id>, or no argument",
                 ));
             }
         };

@@ -17,6 +17,29 @@ mod store;
 
 pub use store::IssueStore;
 
+/// Free-form issue field eligible for conflict-safe external editing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueTextField {
+    /// Optional issue description body.
+    Body,
+    /// Optional mutable progress and handoff notes.
+    Notes,
+}
+
+/// Result of one transactionally fenced issue-text update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompareAndSwapIssueTextResult {
+    /// The expected full-record revision matched and the field was updated.
+    Updated(IssueRecord),
+    /// The issue still exists but any persisted field changed since inspection.
+    Stale {
+        /// Current full-record revision for bounded conflict diagnostics.
+        current_revision: String,
+    },
+    /// The issue was deleted before the attempted update.
+    Deleted,
+}
+
 /// Returns the canonical SQLite database path under a Mezzanine config root.
 pub fn default_issue_database_path(config_root: impl AsRef<Path>) -> PathBuf {
     config_root.as_ref().join("issues.sqlite")

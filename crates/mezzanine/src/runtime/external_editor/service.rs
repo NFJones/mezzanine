@@ -8,6 +8,7 @@ use std::fs;
 
 use super::artifacts::create_external_editor_artifacts;
 use super::command::resolve_external_editor_commands;
+use super::durable::DurableExternalEditSettlement;
 use super::recovery::{
     ExternalEditorRecoveryManifest, ExternalEditorRecoveryState, discard_recovery_artifacts,
     read_recovery_manifest, write_recovery_manifest,
@@ -42,6 +43,7 @@ impl RuntimeSessionService {
         target: ExternalEditTarget,
         original_content: String,
         initial_draft_content: String,
+        apply_on_success: bool,
     ) -> Result<ExternalEditorSessionStart> {
         self.require_live()?;
         if !self.session.is_attached_primary(primary_client_id) {
@@ -185,6 +187,7 @@ impl RuntimeSessionService {
             },
             target,
             original_content,
+            apply_on_success,
             artifacts,
             commands,
             recovery_manifest,
@@ -293,11 +296,12 @@ impl RuntimeSessionService {
             Ok(draft) => {
                 let changed = recovery_manifest.content_changed(&draft.content);
                 completion.validated_content = Some(draft.content);
-                completion.recovery_state = match (exit_code == 0, changed) {
-                    (true, true) => Some(ExternalEditorRecoveryState::ChangedUnapplied),
-                    (false, true) => Some(ExternalEditorRecoveryState::NonzeroExit),
-                    _ => None,
-                };
+                completion.recovery_state =
+                    match (exit_code == 0, changed || !completion.apply_on_success) {
+                        (true, true) => Some(ExternalEditorRecoveryState::ChangedUnapplied),
+                        (false, true) => Some(ExternalEditorRecoveryState::NonzeroExit),
+                        _ => None,
+                    };
             }
             Err(_) => {
                 completion.recovery_state = Some(ExternalEditorRecoveryState::Invalid);
@@ -315,7 +319,21 @@ impl RuntimeSessionService {
         self.external_editor.update_completion(completion.clone());
         self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
         let prompt_settlement = self.settle_agent_prompt_external_edit(&completion)?;
-        if prompt_settlement != ExternalPromptEditSettlement::Unhandled {
+        let durable_settlement = self.settle_durable_external_edit(&completion)?;
+        if durable_settlement == DurableExternalEditSettlement::Conflicted {
+            completion.recovery_state = Some(ExternalEditorRecoveryState::Conflicted);
+            recovery_manifest.set_state(ExternalEditorRecoveryState::Conflicted, Some(exit_code));
+            write_recovery_manifest(&active_artifacts, &recovery_manifest)?;
+            self.external_editor.retain_recovery(
+                recovery_manifest
+                    .clone()
+                    .into_record(active_artifacts.clone()),
+            );
+            self.external_editor.update_completion(completion.clone());
+        }
+        if prompt_settlement != ExternalPromptEditSettlement::Unhandled
+            || durable_settlement != DurableExternalEditSettlement::Unhandled
+        {
             let _ = self.external_editor.take_completion(
                 pane_id,
                 &completion.session_id,
@@ -326,7 +344,9 @@ impl RuntimeSessionService {
             && completion.exit_code == 0
             && completion.validated_content.is_some()
             && completion.recovery_state == Some(ExternalEditorRecoveryState::ChangedUnapplied);
-        if completion.recovery_state.is_none() || changed_prompt_applied {
+        let changed_durable_applied = durable_settlement == DurableExternalEditSettlement::Applied;
+        if completion.recovery_state.is_none() || changed_prompt_applied || changed_durable_applied
+        {
             let record = recovery_manifest.into_record(active_artifacts);
             discard_recovery_artifacts(&record)?;
             self.external_editor.remove_recovery(&completion.session_id);
@@ -405,9 +425,35 @@ impl RuntimeSessionService {
         let (record, mut manifest) =
             self.revalidated_external_editor_recovery(pane_id, session_id)?;
         if !matches!(record.target, ExternalEditTarget::AgentPrompt) {
-            return Err(MezError::invalid_args(
-                "unsupported external-editor recovery target",
-            ));
+            let draft = super::artifacts::validate_external_editor_draft(
+                &record.artifacts,
+                super::recovery::RECOVERY_DRAFT_MAX_BYTES,
+                super::recovery::RECOVERY_DRAFT_MAX_LINES,
+            )?;
+            return match self.apply_durable_external_edit_target(
+                pane_id,
+                &record.target,
+                &draft.content,
+            )? {
+                DurableExternalEditSettlement::Applied => {
+                    discard_recovery_artifacts(&record)?;
+                    self.external_editor.remove_recovery(session_id);
+                    Ok(())
+                }
+                DurableExternalEditSettlement::Conflicted => {
+                    manifest.set_state(ExternalEditorRecoveryState::Conflicted, record.exit_code);
+                    write_recovery_manifest(&record.artifacts, &manifest)?;
+                    self.external_editor
+                        .retain_recovery(manifest.into_record(record.artifacts));
+                    Err(MezError::conflict(
+                        "durable external-editor recovery target changed or was deleted",
+                    ))
+                }
+                DurableExternalEditSettlement::Retained
+                | DurableExternalEditSettlement::Unhandled => Err(MezError::invalid_args(
+                    "unsupported external-editor recovery target",
+                )),
+            };
         }
         let visible = self
             .agent_shell_store()
@@ -500,17 +546,31 @@ impl RuntimeSessionService {
         }
         runtime_pane_by_id(&self.session, pane_id)?;
         let (record, _) = self.revalidated_external_editor_recovery(pane_id, session_id)?;
-        if !matches!(record.target, ExternalEditTarget::AgentPrompt) {
-            return Err(MezError::invalid_args(
-                "unsupported external-editor recovery target",
-            ));
-        }
         let draft = super::artifacts::validate_external_editor_draft(
             &record.artifacts,
             super::recovery::RECOVERY_DRAFT_MAX_BYTES,
             super::recovery::RECOVERY_DRAFT_MAX_LINES,
         )?;
-        self.reopen_agent_prompt_external_edit(primary_client_id, pane_id, draft.content)?;
+        match &record.target {
+            ExternalEditTarget::AgentPrompt => {
+                self.reopen_agent_prompt_external_edit(primary_client_id, pane_id, draft.content)?;
+            }
+            ExternalEditTarget::IssueBody { .. }
+            | ExternalEditTarget::IssueNotes { .. }
+            | ExternalEditTarget::MemoryContent { .. } => {
+                self.reopen_durable_external_edit(
+                    primary_client_id,
+                    pane_id,
+                    record.target.clone(),
+                    draft.content,
+                )?;
+            }
+            ExternalEditTarget::ContextDocument { .. } => {
+                return Err(MezError::invalid_args(
+                    "unsupported external-editor recovery target",
+                ));
+            }
+        }
         discard_recovery_artifacts(&record)?;
         self.external_editor.remove_recovery(session_id);
         Ok(())
