@@ -2535,7 +2535,7 @@ dependencies = [
 
 [[package]]
 name = "mez-agent"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "httpdate",
@@ -2552,11 +2552,11 @@ dependencies = [
 
 [[package]]
 name = "mez-core"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "mez-mux"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "mez-core",
@@ -2573,7 +2573,7 @@ dependencies = [
 
 [[package]]
 name = "mez-terminal"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "unicode-segmentation",
  "unicode-width",
@@ -2581,7 +2581,7 @@ dependencies = [
 
 [[package]]
 name = "mezzanine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "chrono",
