@@ -1114,7 +1114,8 @@ fn poll_until_exit(service: &mut RuntimeSessionService) -> Vec<PaneExitUpdate> {
 /// - `service`: The runtime service whose pane process metadata is queried.
 /// - `pane_id`: The pane expected to have an idle foreground shell.
 fn wait_until_primary_shell_foreground(service: &mut RuntimeSessionService, pane_id: &str) {
-    for _ in 0..50 {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
         if service.pane_foreground_certified_shell_state(pane_id) == Some(true) {
             return;
         }
