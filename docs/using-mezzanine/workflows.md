@@ -36,8 +36,11 @@ provider behavior.
 
 Use `/status` to inspect the current pane's model, policy, context, and token
 state. Use `/stop` to interrupt work, `/new` to start a fresh conversation, and
-`/resume` to return to a saved one. Detach and reattach sessions when the client
-must leave; use operations guidance for service, diagnostic, or recovery issues.
+`/resume` to return to a saved one. The first non-slash prompt after `/stop`
+continues from the interrupted turn's retained model context and can either
+resume its direction or redirect it; cancelled actions and processes are not
+restarted. Detach and reattach sessions when the client must leave; use
+operations guidance for service, diagnostic, or recovery issues.
 
 ## Related pages
 

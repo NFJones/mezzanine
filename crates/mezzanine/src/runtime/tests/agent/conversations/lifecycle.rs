@@ -683,9 +683,9 @@ fn runtime_agent_shell_status_pane_tokens_survive_conversation_switch() {
     );
 }
 
-/// Verifies stopping an active turn durably records its prompt before cleanup,
-/// so a later continuation sees the interrupted task rather than only older
-/// completed conversation history.
+/// Verifies stopping an active turn retains its exact canonical chronology so
+/// the next prompt continues after the interrupted prompt, assistant response,
+/// and settled evidence instead of receiving only a synthetic summary.
 #[test]
 fn runtime_interrupted_turn_prompt_is_persisted_for_continuation_context() {
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-interrupted-turn"));
@@ -707,6 +707,28 @@ fn runtime_interrupted_turn_prompt_is_persisted_for_continuation_context() {
 
     let interrupted = service
         .start_agent_prompt_turn("%1", "repair the interrupted defect")
+        .unwrap();
+    let group = mez_agent::ContextExecutionGroupId::new("interrupted-root-execution").unwrap();
+    let interrupted_context = service
+        .agent_turn_contexts_mut()
+        .get_mut(&interrupted.turn_id)
+        .unwrap();
+    interrupted_context
+        .append_assistant_event(
+            "assistant response before interruption",
+            "inspection found the owning context assembly path",
+            group.clone(),
+        )
+        .unwrap();
+    interrupted_context
+        .append_evidence_event(
+            ContextSourceKind::ActionResult,
+            "action result before interruption",
+            "the focused inspection completed",
+            group,
+            None,
+            true,
+        )
         .unwrap();
     service.stop_agent_turn_for_pane("%1").unwrap();
 
@@ -734,25 +756,47 @@ fn runtime_interrupted_turn_prompt_is_persisted_for_continuation_context() {
         .agent_turn_contexts()
         .get(&continuation.turn_id)
         .unwrap();
-    let interrupted_context = context
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.label != "interrupted turn context"),
+        "{:#?}",
+        context.blocks()
+    );
+    let retained = context
         .blocks()
         .iter()
-        .find(|block| block.label == "interrupted turn context")
-        .unwrap();
-    assert_eq!(interrupted_context.source, ContextSourceKind::RuntimeHint);
-    assert!(
-        interrupted_context
-            .content
-            .contains("repair the interrupted defect"),
-        "{}",
-        interrupted_context.content
-    );
-    assert!(
-        interrupted_context
-            .content
-            .contains("must not be resumed as active execution"),
-        "{}",
-        interrupted_context.content
+        .filter(|block| {
+            [
+                "repair the interrupted defect",
+                "inspection found the owning context assembly path",
+                "the focused inspection completed",
+                "Continue",
+            ]
+            .contains(&block.content.as_str())
+        })
+        .map(|block| (block.source, block.content.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        retained,
+        vec![
+            (
+                ContextSourceKind::TranscriptUser,
+                "repair the interrupted defect"
+            ),
+            (
+                ContextSourceKind::TranscriptAssistant,
+                "inspection found the owning context assembly path"
+            ),
+            (
+                ContextSourceKind::ActionResult,
+                "the focused inspection completed"
+            ),
+            (ContextSourceKind::UserInstruction, "Continue"),
+        ],
+        "{:#?}",
+        context.blocks()
     );
     service.terminate_all_pane_processes().unwrap();
 }
@@ -795,25 +839,25 @@ fn runtime_interrupted_turn_pending_transcript_is_visible_to_immediate_continuat
         .agent_turn_contexts()
         .get(&continuation.turn_id)
         .unwrap();
-    let interrupted_context = context
+    let retained = context
         .blocks()
         .iter()
-        .find(|block| block.label == "interrupted turn context")
-        .unwrap();
-
-    assert!(
-        interrupted_context
-            .content
-            .contains("repair the interrupted deferred defect"),
-        "{}",
-        interrupted_context.content
-    );
-    assert!(
-        interrupted_context
-            .content
-            .contains("no action result was available when the turn stopped"),
-        "{}",
-        interrupted_context.content
+        .filter(|block| {
+            ["repair the interrupted deferred defect", "Continue"].contains(&block.content.as_str())
+        })
+        .map(|block| (block.source, block.content.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        retained,
+        vec![
+            (
+                ContextSourceKind::TranscriptUser,
+                "repair the interrupted deferred defect"
+            ),
+            (ContextSourceKind::UserInstruction, "Continue"),
+        ],
+        "{:#?}",
+        context.blocks()
     );
     let side_effects = service
         .drain_transcript_persistence_transition()

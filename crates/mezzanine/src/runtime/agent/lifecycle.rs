@@ -164,6 +164,7 @@ impl RuntimeSessionService {
         }
         if state == AgentTurnState::Interrupted {
             self.persist_interrupted_agent_turn_transcript(&turn, "agent turn stopped")?;
+            self.retain_interrupted_agent_continuation(&turn);
         }
         if !suppress_exit_output {
             self.append_agent_trace_turn_transition(
@@ -334,6 +335,7 @@ impl RuntimeSessionService {
         )?;
         if state == AgentTurnState::Interrupted {
             self.persist_interrupted_agent_turn_transcript(turn, "agent turn stopped")?;
+            self.retain_interrupted_agent_continuation(turn);
         }
         self.clear_terminal_agent_turn_runtime_state(&turn.turn_id);
         let session = if pane_present {

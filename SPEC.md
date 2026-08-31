@@ -1951,10 +1951,14 @@ When no pane-local agent task is active, `Ctrl+C` MUST require a second
 leave the prompt visible and display a pane-local status message that explains
 the confirmation requirement. While a pane-local agent task is active,
 `Ctrl+C` MUST still request interruption immediately. Before an active turn is
-cleared after interruption, Mezzanine MUST durably retain its original user
-prompt, interruption reason, and safely serializable action observations for
-later conversation context. A subsequent `Continue` MUST receive that
-interrupted-task context, but MUST NOT resume cancelled execution.
+cleared after interruption, Mezzanine MUST retain its canonical model context,
+including the original user prompt, assistant responses, steering, provider
+continuity events, and settled action observations. The next pane-local prompt
+MUST be appended to that retained chronology as the new active user event so it
+can continue or redirect the interrupted work. Mezzanine MUST also durably
+retain the original user prompt, interruption reason, and safely serializable
+action observations as fallback conversation context across runtime recovery.
+Context continuation MUST NOT restart cancelled actions or processes.
 When the interrupted turn belongs to a managed routed-worker workflow, the
 runtime MUST keep the child pane and parent workflow open for pane-local user
 guidance. The next prompt in that child pane MUST transfer managed-child

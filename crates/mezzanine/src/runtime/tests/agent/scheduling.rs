@@ -2883,6 +2883,18 @@ fn runtime_interrupted_subagent_redirects_without_premature_parent_handoff() {
         .unwrap()
         .session_id
         .clone();
+    let child_group =
+        mez_agent::ContextExecutionGroupId::new("interrupted-child-execution").unwrap();
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&child.turn_id)
+        .unwrap()
+        .append_assistant_event(
+            "child response before interruption",
+            "child retained the inspected implementation details",
+            child_group,
+        )
+        .unwrap();
 
     service
         .stop_agent_turn_for_pane(child_pane.as_str())
@@ -2929,6 +2941,36 @@ fn runtime_interrupted_subagent_redirects_without_premature_parent_handoff() {
     );
     assert!(!service.has_joined_subagent_dependency(&child.turn_id));
     assert!(service.has_joined_subagent_dependency(&redirected.turn_id));
+    let redirected_context = service
+        .agent_turn_contexts()
+        .get(&redirected.turn_id)
+        .unwrap();
+    let retained = redirected_context
+        .blocks()
+        .iter()
+        .filter(|block| {
+            [
+                "initial child task",
+                "child retained the inspected implementation details",
+                "redirected child task",
+            ]
+            .contains(&block.content.as_str())
+        })
+        .map(|block| (block.source, block.content.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        retained,
+        vec![
+            (ContextSourceKind::TranscriptUser, "initial child task"),
+            (
+                ContextSourceKind::TranscriptAssistant,
+                "child retained the inspected implementation details"
+            ),
+            (ContextSourceKind::UserInstruction, "redirected child task"),
+        ],
+        "{:#?}",
+        redirected_context.blocks()
+    );
 
     service
         .stop_agent_turn_for_pane(child_pane.as_str())

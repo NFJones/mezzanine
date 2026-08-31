@@ -1256,18 +1256,25 @@ impl RuntimeSessionService {
                 block.hook_id, block.message
             )));
         }
-        let (context, delivered_message_sequence) =
+        let (context, delivered_message_sequence, imported_history_events) =
             self.agent_context_for_pane_prompt_with_message_delivery(pane_id, prompt, 100, true)?;
         let context = self.apply_agent_shell_preference_context(pane_id, context)?;
-        let context = self.apply_persisted_context_documents(pane_id, context)?;
-        context.validate_placement_order()?;
-        let turn_id = self.next_agent_turn_id();
+        let fresh_context = self.apply_persisted_context_documents(pane_id, context)?;
         let agent_id = format!("agent-{pane_id}");
         let conversation_id = self
             .agent_shell_store()
             .get(pane_id)
             .map(|session| session.session_id.clone())
             .ok_or_else(|| MezError::invalid_state("agent turn conversation is unavailable"))?;
+        let (context, continued_interrupted_turn) = self
+            .prepare_interrupted_agent_continuation_context(
+                &agent_id,
+                &conversation_id,
+                fresh_context,
+                imported_history_events,
+            )?;
+        context.validate_placement_order()?;
+        let turn_id = self.next_agent_turn_id();
         let context_blocks = context.blocks().len();
         let created_at_unix_seconds = current_unix_seconds();
         let prompt_preview = prompt.chars().take(160).collect::<String>();
@@ -1326,6 +1333,14 @@ impl RuntimeSessionService {
             pane_id: Some(pane_id.to_string()),
             kind: ScheduledWorkKind::ShellCapable,
         })?;
+        self.consume_interrupted_agent_continuation(&agent_id);
+        if continued_interrupted_turn {
+            self.append_agent_trace_turn_event(
+                pane_id,
+                &turn_id,
+                "interrupted canonical context transferred to follow-up turn",
+            )?;
+        }
         if self.transfer_interrupted_subagent_redirection(&agent_id, &conversation_id, &turn_id) {
             self.append_agent_trace_turn_event(
                 pane_id,

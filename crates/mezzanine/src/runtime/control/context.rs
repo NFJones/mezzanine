@@ -49,7 +49,7 @@ pub(super) fn runtime_agent_transcript_context_blocks(
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "interrupted turn context".to_string(),
                 content: format!(
-                    "The prior turn was interrupted and must not be resumed as active execution. Its original user intent was:\n{prompt}\n\nreason={reason}\nobserved action state:\n{evidence}"
+                    "The prior turn was interrupted before completion. Continue or redirect that work using its original user intent:\n{prompt}\n\nreason={reason}\nobserved action state:\n{evidence}"
                 ),
             });
             continue;

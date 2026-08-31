@@ -1064,6 +1064,64 @@ impl AgentContext {
         Ok(())
     }
 
+    /// Archives an active prompt as prior user-authored transcript while
+    /// preserving its chronological identity.
+    ///
+    /// Interrupted-turn continuation uses this before appending the correcting
+    /// prompt. The prior prompt remains a user-role event, but no longer owns
+    /// the unique active `UserInstruction` slot for the resumed context. Routed
+    /// worker contexts may contain no active prompt because their task is a
+    /// controller-authored reference event; that case is an exact no-op.
+    pub fn archive_active_user_prompt(&mut self) -> AgentContextResult<bool> {
+        let mut candidate = self.clone();
+        let matching = candidate
+            .chronology
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| {
+                event.block.source == ContextSourceKind::UserInstruction
+                    && event.block.label == "user prompt"
+                    && event.semantic_kind == ContextSemanticKind::UserEvent
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if matching.is_empty() {
+            return Ok(false);
+        }
+        if matching.len() > 1 {
+            return Err(AgentContextError::new(format!(
+                "active prompt archival accepts at most one match; found {}",
+                matching.len()
+            )));
+        }
+        let event = &mut candidate.chronology[matching[0]];
+        event.block.source = ContextSourceKind::TranscriptUser;
+        event.block.label = "interrupted user prompt".to_string();
+        candidate.rebuild_projections();
+        candidate.validate_stored_metadata()?;
+        *self = candidate;
+        Ok(true)
+    }
+
+    /// Replaces the complete reusable prefix without changing chronology.
+    ///
+    /// Turn continuation uses the freshly assembled prefix so repository,
+    /// preference, and persisted-document authority can refresh while the
+    /// interrupted conversation events remain byte-for-byte intact.
+    pub fn replace_stable_slots(
+        &mut self,
+        slots: Vec<StableContextBlock>,
+    ) -> AgentContextResult<()> {
+        let mut candidate = self.clone();
+        candidate.stable_slots = slots;
+        candidate.rebuild_projections();
+        candidate.validate_stored_metadata()?;
+        validate_context_placement_order(&candidate.blocks)?;
+        validate_context_semantics(&candidate.blocks)?;
+        *self = candidate;
+        Ok(())
+    }
+
     /// Applies one already isolated user-event reclassification candidate.
     fn reclassify_user_event_as_reference_candidate(
         &mut self,

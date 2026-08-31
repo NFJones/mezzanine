@@ -110,7 +110,7 @@ impl RuntimeSessionService {
             max_history_lines,
             false,
         )
-        .map(|(context, _)| context)
+        .map(|(context, _, _)| context)
     }
 
     /// Builds prompt context and optionally includes the unread local-message
@@ -121,13 +121,18 @@ impl RuntimeSessionService {
         prompt: &str,
         _max_history_lines: usize,
         include_unread_messages: bool,
-    ) -> Result<(AgentContext, Option<mez_agent::messaging::MessageSequence>)> {
+    ) -> Result<(
+        AgentContext,
+        Option<mez_agent::messaging::MessageSequence>,
+        usize,
+    )> {
         if prompt.trim().is_empty() {
             return Err(MezError::invalid_args("agent prompt must not be empty"));
         }
         self.refresh_project_config_layers_for_pane(pane_id)?;
         self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
         let mut blocks = self.runtime_agent_history_epoch_context_blocks(pane_id)?;
+        let imported_history_events = blocks.len();
         let mut delivered_message_sequence = None;
         if include_unread_messages {
             let now_ms = super::current_unix_seconds().saturating_mul(1000);
@@ -306,7 +311,7 @@ impl RuntimeSessionService {
         if let Some(instruction_files) = instruction_files.as_deref() {
             context = set_project_guidance_context(context, instruction_files, 2)?;
         }
-        Ok((context, delivered_message_sequence))
+        Ok((context, delivered_message_sequence, imported_history_events))
     }
 
     /// Formats immutable skill context for one invocation.

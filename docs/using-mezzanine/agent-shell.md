@@ -45,7 +45,11 @@ Press `Esc` to clear a draft without hiding the prompt. `Ctrl+D` on an empty
 prompt hides it. When no task is running, press `Ctrl+C` twice within three
 seconds to hide the prompt; when a task is running, `Ctrl+C` requests an
 immediate interruption. Non-slash text submitted while a task runs is steering
-for that task rather than a separate turn.
+for that task rather than a separate turn. After an interruption, the next
+non-slash prompt continues from the retained user, assistant, tool, and steering
+context: Mezzanine appends the new text as guidance without restarting the
+cancelled action or process. Use `/new` instead when the next prompt should
+start a separate conversation.
 
 Common controls are `/help`, `/status`, `/model`, `/approval`, `/new`,
 `/resume`, and `/stop`. Use `/plan on` to enable pane-local plan-only mode;

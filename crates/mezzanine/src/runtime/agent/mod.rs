@@ -123,6 +123,15 @@ struct RuntimeInterruptedSubagentRedirection {
     routed_loop_turn: Option<RuntimeAgentLoopTurn>,
 }
 
+/// Canonical context retained while an interrupted agent awaits correction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeInterruptedAgentContinuation {
+    /// Conversation that must still own the next pane-local prompt.
+    conversation_id: String,
+    /// Exact durable context assembled when the interrupted turn stopped.
+    context: AgentContext,
+}
+
 /// Turn-keyed routed metadata retained while a managed child awaits guidance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeInterruptedRoutedOwnership {
@@ -477,6 +486,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_ledger: AgentTurnLedger,
     /// Assembled provider context keyed by turn id.
     agent_turn_contexts: BTreeMap<String, AgentContext>,
+    /// Interrupted canonical contexts awaiting one pane-local continuation.
+    interrupted_agent_continuations: BTreeMap<String, RuntimeInterruptedAgentContinuation>,
     /// Terminal execution transcript groups already accepted for persistence.
     agent_persisted_execution_transcripts: BTreeSet<(String, String)>,
     /// Action execution state keyed by turn id.
@@ -993,6 +1004,86 @@ impl RuntimeSessionService {
     /// Returns the parent-agent route for one spawned child turn.
     pub(crate) fn subagent_task_parent(&self, turn_id: &str) -> Option<String> {
         self.agent.subagent_task_routes.get(turn_id).cloned()
+    }
+
+    /// Retains the exact durable context before interrupted-turn cleanup.
+    pub(crate) fn retain_interrupted_agent_continuation(&mut self, turn: &AgentTurnRecord) {
+        let Some(context) = self.agent.agent_turn_contexts.get(&turn.turn_id).cloned() else {
+            return;
+        };
+        self.agent.interrupted_agent_continuations.insert(
+            turn.agent_id.clone(),
+            RuntimeInterruptedAgentContinuation {
+                conversation_id: turn.conversation_id.clone(),
+                context,
+            },
+        );
+    }
+
+    /// Replaces fresh transcript replay with an exact interrupted chronology.
+    ///
+    /// `imported_history_events` identifies the historical prefix in the fresh
+    /// context. Only task-local events assembled for the correcting prompt are
+    /// appended after the retained assistant/tool chronology.
+    pub(crate) fn prepare_interrupted_agent_continuation_context(
+        &self,
+        agent_id: &str,
+        conversation_id: &str,
+        fresh: AgentContext,
+        imported_history_events: usize,
+    ) -> Result<(AgentContext, bool)> {
+        let Some(continuation) = self
+            .agent
+            .interrupted_agent_continuations
+            .get(agent_id)
+            .filter(|continuation| continuation.conversation_id == conversation_id)
+        else {
+            return Ok((fresh, false));
+        };
+
+        let mut resumed = continuation.context.clone();
+        resumed.archive_active_user_prompt()?;
+        resumed.replace_stable_slots(fresh.stable_slots().to_vec())?;
+        resumed.set_metadata(fresh.metadata().clone());
+        for event in fresh.chronology().iter().skip(imported_history_events) {
+            let block = event.block();
+            match event.semantic_kind() {
+                mez_agent::ContextSemanticKind::TaskPrelude => {
+                    resumed.append_task_prelude(
+                        block.source,
+                        block.label.clone(),
+                        block.content.clone(),
+                        event.retention(),
+                    )?;
+                }
+                mez_agent::ContextSemanticKind::ReferenceEvent => {
+                    resumed.append_reference_event(
+                        block.source,
+                        block.label.clone(),
+                        block.content.clone(),
+                    )?;
+                }
+                mez_agent::ContextSemanticKind::UserEvent
+                    if block.source == ContextSourceKind::UserInstruction
+                        && block.label == "user prompt" =>
+                {
+                    resumed.append_user_event(block.label.clone(), block.content.clone())?;
+                }
+                semantic => {
+                    return Err(MezError::invalid_state(format!(
+                        "fresh interrupted continuation contains unsupported {semantic:?} event `{}`",
+                        block.label
+                    )));
+                }
+            }
+        }
+        resumed.validate_durable()?;
+        Ok((resumed, true))
+    }
+
+    /// Consumes any prior interruption handoff after a new turn is enqueued.
+    pub(crate) fn consume_interrupted_agent_continuation(&mut self, agent_id: &str) {
+        self.agent.interrupted_agent_continuations.remove(agent_id);
     }
 
     /// Retains a child route across a user interruption boundary.
