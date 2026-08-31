@@ -37,7 +37,7 @@ pub struct TranscriptEntry {
 }
 
 impl TranscriptEntry {
-    /// Validates identifiers, sequence metadata, and required text fields.
+    /// Validates identifiers, sequence metadata, required identities, and content bytes.
     ///
     /// Returns a contract error when the entry cannot be persisted safely.
     pub fn validate(&self) -> Result<(), TranscriptContractError> {
@@ -50,7 +50,11 @@ impl TranscriptEntry {
         validate_required("turn id", &self.turn_id)?;
         validate_required("agent id", &self.agent_id)?;
         validate_required("pane id", &self.pane_id)?;
-        validate_required("transcript content", &self.content)?;
+        if self.content.bytes().any(|byte| byte == 0) {
+            return Err(TranscriptContractError::new(
+                "transcript content must not contain NUL bytes",
+            ));
+        }
         Ok(())
     }
 }

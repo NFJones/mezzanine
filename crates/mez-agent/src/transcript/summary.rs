@@ -41,12 +41,12 @@ pub fn summarize_conversation(entries: Vec<TranscriptEntry>) -> Option<Conversat
     let directory = conversation_directory(&entries);
     let initial_prompt = entries
         .iter()
-        .find(|entry| entry.role == TranscriptRole::User)
+        .find(|entry| entry.role == TranscriptRole::User && !entry.content.trim().is_empty())
         .map(|entry| bounded_summary_text(&entry.content, 120));
     let latest_user_prompt = entries
         .iter()
         .rev()
-        .find(|entry| entry.role == TranscriptRole::User)
+        .find(|entry| entry.role == TranscriptRole::User && !entry.content.trim().is_empty())
         .map(|entry| bounded_summary_text(&entry.content, 120));
     Some(ConversationSummary {
         conversation_id: first.conversation_id.clone(),

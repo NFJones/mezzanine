@@ -84,7 +84,10 @@ and compaction can legitimately create a cold request. Consult operations
 diagnostics for cache and continuity interpretation.
 
 Use `/show-context` to browse the current pane's conversation entries and, when
-appropriate, delete an entry. Use `/copy-context` only to export the current
+appropriate, edit the selected entry with `e` or delete it with `d`. External
+editing preserves the entry's role and identity and uses conflict detection;
+cleared entries remain durable but are omitted from later model replay. Use
+`/copy-context` only to export the current
 model request context for diagnostics; its contents can include sensitive task
 material even though credentials and hidden runtime policy are excluded.
 

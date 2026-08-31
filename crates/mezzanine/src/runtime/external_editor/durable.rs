@@ -9,6 +9,7 @@ use crate::storage::context_documents::{
 };
 use crate::storage::issues::{CompareAndSwapIssueTextResult, IssueStore, IssueTextField};
 use crate::storage::memory::{CompareAndSwapMemoryContentResult, PersistentMemoryStore};
+use crate::storage::transcript::CompareAndSwapTranscriptEntryResult;
 
 /// Target-specific durable settlement used by lifecycle retention policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +30,7 @@ impl RuntimeSessionService {
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
+        project: Option<&str>,
         issue_id: &str,
         field: IssueTextField,
     ) -> Result<()> {
@@ -37,7 +39,8 @@ impl RuntimeSessionService {
                 "external issue editing requires issues to be enabled",
             ));
         }
-        let (store, project) = self.external_editor_issue_store(pane_id)?;
+        let (store, pane_project) = self.external_editor_issue_store(pane_id)?;
+        let project = project.unwrap_or(&pane_project).to_string();
         let record = store
             .get_issue(project.clone(), issue_id.to_string())?
             .ok_or_else(|| {
@@ -88,6 +91,51 @@ impl RuntimeSessionService {
             pane_id,
             ExternalEditTarget::MemoryContent {
                 memory_id: record.id,
+                expected_revision,
+            },
+            original_content.clone(),
+            original_content,
+            true,
+        )?;
+        self.sync_tracked_pty_sizes()?;
+        Ok(())
+    }
+
+    /// Opens one pane-owned transcript entry content field in the configured editor.
+    pub(crate) fn start_transcript_entry_external_edit(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        conversation_id: &str,
+        sequence: u64,
+    ) -> Result<()> {
+        let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
+            MezError::invalid_state("external transcript editing requires transcript storage")
+        })?;
+        let entry = store
+            .inspect(conversation_id)?
+            .into_iter()
+            .find(|entry| entry.sequence == sequence)
+            .ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "transcript entry not found",
+                )
+            })?;
+        if entry.pane_id != pane_id {
+            return Err(MezError::forbidden(
+                "transcript entry does not belong to the active pane",
+            ));
+        }
+        let expected_revision = store.transcript_entry_revision(&entry)?;
+        let original_content = entry.content;
+        self.start_external_editor_session(
+            primary_client_id,
+            pane_id,
+            ExternalEditTarget::TranscriptEntry {
+                conversation_id: conversation_id.to_string(),
+                sequence,
+                pane_id: pane_id.to_string(),
                 expected_revision,
             },
             original_content.clone(),
@@ -151,6 +199,7 @@ impl RuntimeSessionService {
             ExternalEditTarget::IssueBody { .. }
                 | ExternalEditTarget::IssueNotes { .. }
                 | ExternalEditTarget::MemoryContent { .. }
+                | ExternalEditTarget::TranscriptEntry { .. }
                 | ExternalEditTarget::ContextDocument { .. }
         ) {
             return Ok(DurableExternalEditSettlement::Unhandled);
@@ -189,10 +238,7 @@ impl RuntimeSessionService {
                 issue_id,
                 expected_revision,
             } => {
-                let (store, current_project) = self.external_editor_issue_store(pane_id)?;
-                if current_project != *project {
-                    return Ok(DurableExternalEditSettlement::Conflicted);
-                }
+                let store = self.external_editor_issue_store(pane_id)?.0;
                 let field = if matches!(target, ExternalEditTarget::IssueBody { .. }) {
                     IssueTextField::Body
                 } else {
@@ -234,6 +280,37 @@ impl RuntimeSessionService {
                     }
                     CompareAndSwapMemoryContentResult::Stale { .. }
                     | CompareAndSwapMemoryContentResult::Deleted => {
+                        Ok(DurableExternalEditSettlement::Conflicted)
+                    }
+                }
+            }
+            ExternalEditTarget::TranscriptEntry {
+                conversation_id,
+                sequence,
+                pane_id: target_pane_id,
+                expected_revision,
+            } => {
+                if target_pane_id != pane_id {
+                    return Ok(DurableExternalEditSettlement::Conflicted);
+                }
+                let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
+                    MezError::invalid_state(
+                        "external transcript editing requires transcript storage",
+                    )
+                })?;
+                match store.compare_and_swap_entry_content(
+                    conversation_id,
+                    *sequence,
+                    target_pane_id,
+                    expected_revision,
+                    content.to_string(),
+                )? {
+                    CompareAndSwapTranscriptEntryResult::Updated(_) => {
+                        Ok(DurableExternalEditSettlement::Applied)
+                    }
+                    CompareAndSwapTranscriptEntryResult::Stale { .. }
+                    | CompareAndSwapTranscriptEntryResult::Deleted
+                    | CompareAndSwapTranscriptEntryResult::WrongPane => {
                         Ok(DurableExternalEditSettlement::Conflicted)
                     }
                 }

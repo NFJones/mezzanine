@@ -12,9 +12,11 @@ use tokio::fs::{self as tokio_fs, OpenOptions as TokioOpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use rustix::fs::{FlockOperation, flock};
+use sha2::{Digest, Sha256};
 
 use crate::error::{MezError, MezErrorKind, Result};
 
+use super::CompareAndSwapTranscriptEntryResult;
 use super::archive::{
     archived_catalog_candidate, archived_catalog_candidates, archived_payloads_exist,
 };
@@ -847,6 +849,63 @@ impl AgentTranscriptStore {
             .collect()
     }
 
+    /// Returns a canonical SHA-256 revision covering every persisted entry field.
+    pub(crate) fn transcript_entry_revision(&self, entry: &TranscriptEntry) -> Result<String> {
+        let encoded = encode_transcript_entry(entry)?;
+        Ok(Sha256::digest(encoded.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect())
+    }
+
+    /// Replaces only one transcript entry's content when its full revision and
+    /// pane identity still match, then atomically rebuilds derived metadata.
+    pub(crate) fn compare_and_swap_entry_content(
+        &self,
+        conversation_id: &str,
+        sequence: u64,
+        pane_id: &str,
+        expected_revision: &str,
+        content: String,
+    ) -> Result<CompareAndSwapTranscriptEntryResult> {
+        validate_conversation_id(conversation_id)?;
+        if sequence == 0 {
+            return Err(MezError::invalid_args(
+                "transcript entry sequence must be non-zero",
+            ));
+        }
+        if expected_revision.len() != 64
+            || !expected_revision
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(MezError::invalid_args(
+                "transcript entry revision must be a lowercase SHA-256 digest",
+            ));
+        }
+        let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        let existing_path = self.existing_transcript_path_for(conversation_id)?;
+        if !existing_path.exists() {
+            return Ok(CompareAndSwapTranscriptEntryResult::Deleted);
+        }
+        let mut entries = self.inspect(conversation_id)?;
+        let Some(entry) = entries.iter_mut().find(|entry| entry.sequence == sequence) else {
+            return Ok(CompareAndSwapTranscriptEntryResult::Deleted);
+        };
+        if entry.pane_id != pane_id {
+            return Ok(CompareAndSwapTranscriptEntryResult::WrongPane);
+        }
+        let current_revision = self.transcript_entry_revision(entry)?;
+        if current_revision != expected_revision {
+            return Ok(CompareAndSwapTranscriptEntryResult::Stale { current_revision });
+        }
+        entry.content = content;
+        entry.validate()?;
+        let updated = entry.clone();
+        self.rewrite_transcript_locked(conversation_id, &existing_path, &entries)?;
+        Ok(CompareAndSwapTranscriptEntryResult::Updated(updated))
+    }
+
     /// Deletes one transcript entry identified by its current sequence number.
     ///
     /// Surviving entries retain transcript order and are renumbered contiguously
@@ -872,6 +931,18 @@ impl AgentTranscriptStore {
             entry.validate()?;
         }
 
+        self.rewrite_transcript_locked(conversation_id, &existing_path, &entries)?;
+        Ok(true)
+    }
+
+    /// Atomically replaces one transcript while its conversation lock is held,
+    /// then rebuilds the summary sidecar and saved-session catalog row.
+    fn rewrite_transcript_locked(
+        &self,
+        conversation_id: &str,
+        existing_path: &Path,
+        entries: &[TranscriptEntry],
+    ) -> Result<()> {
         let session_dir = self.ensure_session_dir(conversation_id)?;
         let path = self.transcript_path_for(conversation_id)?;
         let temp_path = session_dir.join("history.tsv.tmp");
@@ -881,7 +952,7 @@ impl AgentTranscriptStore {
                 .write(true)
                 .truncate(true)
                 .open(&temp_path)?;
-            for entry in &entries {
+            for entry in entries {
                 file.write_all(encode_transcript_entry(entry)?.as_bytes())?;
                 file.write_all(b"\n")?;
             }
@@ -894,7 +965,7 @@ impl AgentTranscriptStore {
             std_fs::remove_file(existing_path)?;
         }
 
-        if let Some(summary) = summarize_conversation(entries) {
+        if let Some(summary) = summarize_conversation(entries.to_vec()) {
             self.write_summary_sidecar(&summary)?;
         } else {
             let summary_path = session_dir.join(SESSION_SUMMARY_FILE_NAME);
@@ -903,7 +974,7 @@ impl AgentTranscriptStore {
             }
         }
         self.upsert_catalog_from_files(conversation_id, None)?;
-        Ok(true)
+        Ok(())
     }
 
     /// Reads and decodes the latest entries for one conversation without

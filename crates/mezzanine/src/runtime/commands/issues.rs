@@ -85,7 +85,7 @@ pub(super) fn execute_agent_shell_issue_command(
             })
         }
         RuntimeIssueArgs::Edit { id, field } => {
-            service.start_issue_external_edit(primary_client_id, pane_id, &id, field)?;
+            service.start_issue_external_edit(primary_client_id, pane_id, None, &id, field)?;
             Ok(AgentShellCommandOutcome::Mutated {
                 command: "issue".to_string(),
                 body: format!(

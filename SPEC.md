@@ -7715,10 +7715,17 @@ The baseline command capabilities are:
 - `/show-context`: Browse durable transcript entries for the current pane conversation
   in transcript order. Its list MUST be a table with one selectable stable
   sequence-id link in the left-most column for each entry. It MUST support
-  arrow-key selection, `Enter` for entry details, `/` search, and `d` to delete
+  arrow-key selection, `Enter` for entry details, `/` search, `e` to edit the
+  selected entry content in the configured external editor, and `d` to delete
   the selected entry from durable context.
   Deletion MUST remain scoped to the active pane conversation and refresh the
-  browser while preserving a valid selection.
+  browser while preserving a valid selection. Editing MUST capture the exact
+  conversation, sequence, pane, and full-entry revision; settlement MUST
+  atomically replace only content, preserve all other entry fields, rebuild
+  summary and catalog metadata, and retain a recoverable draft on stale,
+  deleted, renumbered, or wrong-pane conflicts. Intentionally cleared content
+  MUST remain durable but MUST be omitted from later model replay and prompt
+  summaries.
 - `/show-issues`: Browse local issue records in a pager-backed record browser.
   It MUST default to open issues for the active pane project, support optional
   project glob, kind, state, full-text, and limit filters, preselect a supplied
@@ -7728,6 +7735,8 @@ The baseline command capabilities are:
   issue-id link in the left-most column for each record; those links MUST open
   issue details. The table columns MUST be `Issue`, `Summary`, `Project`,
   `Kind`, `State`, `Priority`, and `Updated` in that order. It MUST allow
+  editing the selected issue body with `e` and notes with `E`, including exact
+  project targeting in all-projects views. It MUST allow
   deleting the selected issue with
   `d` only when no open issue depends on it, and allow saving the rendered raw
   Markdown view to a user-supplied file path, overwriting the destination. Save prompts
@@ -7739,8 +7748,8 @@ The baseline command capabilities are:
   state, full-text, and limit filters, and preselect a supplied `--kind` value
   in the browser kind picker. Its list MUST be a table with one
   selectable stable memory-UUID link in the left-most column for each record;
-  those links MUST open memory details. It MUST allow deleting the selected
-  memory with `d`, and allow
+  those links MUST open memory details. It MUST allow editing the selected
+  memory content with `e`, deleting the selected memory with `d`, and allow
   saving the rendered raw Markdown view to a user-supplied file path,
   overwriting the destination.
   The shared record browser MUST preserve the generic `/` in-page pager search,

@@ -705,6 +705,28 @@ impl RuntimeSessionService {
             && completion.validated_content.is_some()
             && completion.recovery_state == Some(ExternalEditorRecoveryState::ChangedUnapplied);
         let changed_durable_applied = durable_settlement == DurableExternalEditSettlement::Applied;
+        if durable_settlement != DurableExternalEditSettlement::Unhandled {
+            let status = match durable_settlement {
+                DurableExternalEditSettlement::Applied => "External edit applied.".to_string(),
+                DurableExternalEditSettlement::Conflicted => {
+                    "External edit conflicted; draft retained for recovery.".to_string()
+                }
+                DurableExternalEditSettlement::Retained if completion.recovery_state.is_none() => {
+                    "External edit unchanged.".to_string()
+                }
+                DurableExternalEditSettlement::Retained => format!(
+                    "External edit not applied ({}); draft retained for recovery.",
+                    completion
+                        .recovery_state
+                        .map(ExternalEditorRecoveryState::as_str)
+                        .unwrap_or("unknown")
+                ),
+                DurableExternalEditSettlement::Unhandled => {
+                    unreachable!("unhandled durable settlements are filtered above")
+                }
+            };
+            self.refresh_record_browser_after_external_edit(pane_id, &completion.target, status)?;
+        }
         if completion.recovery_state.is_none() || changed_prompt_applied || changed_durable_applied
         {
             let record = recovery_manifest.into_record(active_artifacts);
@@ -918,6 +940,7 @@ impl RuntimeSessionService {
             ExternalEditTarget::IssueBody { .. }
             | ExternalEditTarget::IssueNotes { .. }
             | ExternalEditTarget::MemoryContent { .. }
+            | ExternalEditTarget::TranscriptEntry { .. }
             | ExternalEditTarget::ContextDocument { .. } => {
                 self.reopen_durable_external_edit(
                     primary_client_id,

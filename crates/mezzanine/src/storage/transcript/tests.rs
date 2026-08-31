@@ -17,8 +17,8 @@ use super::encoding::{
 };
 use super::store::{PRESENTATION_CLEAR_TAIL_COMPACT_BYTES, PROMPT_HISTORY_COMPACTION_BYTES};
 use super::{
-    AgentPresentationEntry, AgentTranscriptStore, SavedSessionCursor, SavedSessionLifecycleFilter,
-    SavedSessionPageAnchor, SavedSessionQuery,
+    AgentPresentationEntry, AgentTranscriptStore, CompareAndSwapTranscriptEntryResult,
+    SavedSessionCursor, SavedSessionLifecycleFilter, SavedSessionPageAnchor, SavedSessionQuery,
 };
 use mez_agent::transcript::{AgentSessionMetadata, TranscriptEntry, TranscriptRole};
 use mez_mux::readline::{ReadlineHistoryEntry, ReadlinePasteRange};
@@ -427,6 +427,135 @@ fn transcript_store_deletes_one_entry_and_rebuilds_summary() {
     let summary = store.summary("conv1").unwrap().unwrap();
     assert_eq!(summary.entries, 2);
     assert_eq!(summary.last_turn_id, "turn-3");
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies transcript content CAS preserves every non-content field, accepts
+/// empty content, and refreshes private payload, summary, and catalog state.
+#[test]
+fn transcript_store_compare_and_swap_entry_content_is_atomic_and_derived_safe() {
+    let root = temp_root("entry-content-cas");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store.initialize(100).unwrap();
+    let original = entry("conv1", 1, TranscriptRole::User);
+    store.append(&original).unwrap();
+    let revision = store.transcript_entry_revision(&original).unwrap();
+
+    let result = store
+        .compare_and_swap_entry_content("conv1", 1, "%1", &revision, String::new())
+        .unwrap();
+    let CompareAndSwapTranscriptEntryResult::Updated(updated) = result else {
+        panic!("expected transcript entry update, got {result:?}");
+    };
+    let mut expected = original.clone();
+    expected.content.clear();
+    assert_eq!(updated, expected);
+    assert_eq!(store.inspect("conv1").unwrap(), vec![expected]);
+    assert_eq!(store.summary("conv1").unwrap().unwrap().entries, 1);
+    assert_eq!(
+        store
+            .catalog_saved_session("conv1")
+            .unwrap()
+            .unwrap()
+            .summary
+            .entries,
+        1
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        assert_eq!(
+            fs::metadata(root.join("conv1").join("history.tsv"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies stale, deleted, renumbered, and wrong-pane edit targets are
+/// rejected without changing the currently persisted transcript entry.
+#[test]
+fn transcript_store_compare_and_swap_entry_content_fences_conflicts() {
+    let root = temp_root("entry-content-cas-conflicts");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = entry("conv1", 1, TranscriptRole::User);
+    let mut second = entry("conv1", 2, TranscriptRole::Assistant);
+    second.pane_id = "%2".to_string();
+    store.append_many(&[first.clone(), second.clone()]).unwrap();
+    let first_revision = store.transcript_entry_revision(&first).unwrap();
+
+    assert_eq!(
+        store
+            .compare_and_swap_entry_content(
+                "conv1",
+                2,
+                "%1",
+                &store.transcript_entry_revision(&second).unwrap(),
+                "wrong pane".to_string(),
+            )
+            .unwrap(),
+        CompareAndSwapTranscriptEntryResult::WrongPane
+    );
+
+    let CompareAndSwapTranscriptEntryResult::Updated(changed) = store
+        .compare_and_swap_entry_content(
+            "conv1",
+            1,
+            "%1",
+            &first_revision,
+            "changed once".to_string(),
+        )
+        .unwrap()
+    else {
+        panic!("initial transcript CAS should update");
+    };
+    assert!(matches!(
+        store
+            .compare_and_swap_entry_content(
+                "conv1",
+                1,
+                "%1",
+                &first_revision,
+                "stale overwrite".to_string(),
+            )
+            .unwrap(),
+        CompareAndSwapTranscriptEntryResult::Stale { .. }
+    ));
+    assert_eq!(store.inspect("conv1").unwrap()[0], changed);
+
+    assert!(store.delete_entry("conv1", 1).unwrap());
+    assert!(matches!(
+        store
+            .compare_and_swap_entry_content(
+                "conv1",
+                1,
+                "%2",
+                &store.transcript_entry_revision(&second).unwrap(),
+                "renumbered overwrite".to_string(),
+            )
+            .unwrap(),
+        CompareAndSwapTranscriptEntryResult::Stale { .. }
+    ));
+    assert_eq!(
+        store
+            .compare_and_swap_entry_content(
+                "conv1",
+                9,
+                "%1",
+                &first_revision,
+                "deleted".to_string(),
+            )
+            .unwrap(),
+        CompareAndSwapTranscriptEntryResult::Deleted
+    );
+    assert_eq!(store.inspect("conv1").unwrap()[0].content, second.content);
     let _ = fs::remove_dir_all(root);
 }
 

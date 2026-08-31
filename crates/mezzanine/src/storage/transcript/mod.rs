@@ -37,6 +37,22 @@ mod store;
 /// declaration makes the boundary available to the crate.
 mod types;
 
+/// Result of one conflict-fenced transcript-entry content update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CompareAndSwapTranscriptEntryResult {
+    /// The exact entry revision matched and only its content was replaced.
+    Updated(mez_agent::transcript::TranscriptEntry),
+    /// The sequence still exists but the entry changed since inspection.
+    Stale {
+        /// Current full-entry revision for bounded conflict diagnostics.
+        current_revision: String,
+    },
+    /// No entry currently has the requested sequence.
+    Deleted,
+    /// The sequence belongs to a different pane than the edit target.
+    WrongPane,
+}
+
 #[cfg(test)]
 pub use types::SavedSessionRetentionFailure;
 pub use types::{

@@ -1072,8 +1072,8 @@ mod tests {
     #[test]
     /// Verifies empty provider text still produces a durable assistant entry.
     ///
-    /// Transcript validation forbids empty content, so projection synthesizes a
-    /// bounded placeholder when no visible text or MAAP batch exists.
+    /// Execution projection synthesizes a bounded placeholder when no visible
+    /// text or MAAP batch exists so ordinary generated turns remain explicit.
     fn turn_execution_transcript_synthesizes_placeholder_for_empty_assistant_response() {
         let execution = execution(
             vec![message(

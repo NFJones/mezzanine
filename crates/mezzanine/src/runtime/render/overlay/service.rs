@@ -259,6 +259,102 @@ impl RuntimeSessionService {
         changed
     }
 
+    /// Refreshes the retained browser that owns one completed durable edit.
+    ///
+    /// Selection, detail/list mode, browser and overlay scroll, and parent
+    /// stack state remain intact. If filtering removes the edited record, the
+    /// nearest bounded row becomes active instead.
+    pub(crate) fn refresh_record_browser_after_external_edit(
+        &mut self,
+        pane_id: &str,
+        target: &crate::runtime::ExternalEditTarget,
+        status: String,
+    ) -> Result<bool> {
+        let Some((source, active_id, active_index, detail_view, browser_scroll, overlay_scroll)) =
+            self.presentation
+                .primary_display_overlay
+                .as_ref()
+                .and_then(|overlay| {
+                    let record_browser = overlay.record_browser.as_ref()?;
+                    if record_browser.pane_id != pane_id {
+                        return None;
+                    }
+                    let source = record_browser.source.as_ref()?;
+                    let matches_target = matches!(
+                        (source, target),
+                        (
+                            RuntimeRecordBrowserOverlaySource::Issues { .. },
+                            crate::runtime::ExternalEditTarget::IssueBody { .. }
+                                | crate::runtime::ExternalEditTarget::IssueNotes { .. }
+                        ) | (
+                            RuntimeRecordBrowserOverlaySource::Memories { .. },
+                            crate::runtime::ExternalEditTarget::MemoryContent { .. }
+                        ) | (
+                            RuntimeRecordBrowserOverlaySource::Context { .. },
+                            crate::runtime::ExternalEditTarget::TranscriptEntry { .. }
+                        )
+                    );
+                    matches_target.then(|| {
+                        (
+                            source.clone(),
+                            record_browser
+                                .browser
+                                .active_record_id()
+                                .map(str::to_string),
+                            record_browser.browser.active_index(),
+                            record_browser.browser.is_detail_view(),
+                            record_browser.browser.scroll_offset(),
+                            overlay.scroll_offset,
+                        )
+                    })
+                })
+        else {
+            return Ok(false);
+        };
+
+        let refreshed = self.refresh_record_browser_overlay_source(&source);
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+            return Ok(false);
+        };
+        let Some(record_browser) = overlay.record_browser.as_mut() else {
+            return Ok(false);
+        };
+        match refreshed {
+            Ok(mut browser) => {
+                if !active_id
+                    .as_deref()
+                    .is_some_and(|record_id| browser.set_active_record_id(record_id))
+                {
+                    browser.set_active_index(active_index);
+                }
+                browser.set_scroll_offset(browser_scroll);
+                if detail_view && !browser.records().is_empty() {
+                    browser
+                        .apply_action(mez_mux::record_browser::RecordBrowserAction::OpenActive)?;
+                }
+                browser.set_error(Some(status));
+                record_browser.browser = browser;
+            }
+            Err(error) => record_browser.browser.set_error(Some(format!(
+                "{status}; refresh failed: {}",
+                error.message()
+            ))),
+        }
+        let terminal_width = usize::from(self.session.authoritative_size.columns).max(1);
+        let prose_width = terminal_width
+            .min(self.presentation.settings.terminal_agent_wrap_column_cap)
+            .max(1);
+        render_record_browser_overlay(
+            overlay,
+            &self.presentation.settings.ui_theme,
+            terminal_width,
+            prose_width,
+        );
+        overlay.scroll_offset = overlay_scroll;
+        clamp_overlay_scroll(overlay, self.session.authoritative_size);
+        Ok(true)
+    }
+
     /// Executes one command selected from the primary display overlay.
     pub(crate) fn execute_primary_display_overlay_selection_command(
         &mut self,
@@ -644,6 +740,123 @@ impl RuntimeSessionService {
                 terminal_width,
                 prose_width,
             )));
+        }
+        if matches!(input, b"e" | b"E") {
+            let field = if input == b"E" {
+                mez_mux::record_browser::RecordBrowserEditField::Secondary
+            } else {
+                mez_mux::record_browser::RecordBrowserEditField::Primary
+            };
+            if record_browser.browser.edit_enabled(field) {
+                let active_index =
+                    record_browser_active_index(overlay, record_browser.browser.active_index());
+                let pane_id = record_browser.pane_id.clone();
+                let source = record_browser.source.clone();
+                let outcome = {
+                    let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                        return Ok(Some(false));
+                    };
+                    let Some(record_browser) = overlay.record_browser.as_mut() else {
+                        return Ok(None);
+                    };
+                    record_browser.browser.set_active_index(active_index);
+                    record_browser.browser.apply_action(
+                        mez_mux::record_browser::RecordBrowserAction::EditActive(field),
+                    )?
+                };
+                let mez_mux::record_browser::RecordBrowserOutcome::EditSubmitted { id, field } =
+                    outcome
+                else {
+                    return Ok(Some(false));
+                };
+                let launch = if self.agent_shell_pane_has_active_turn(&pane_id) {
+                    Err(MezError::conflict(
+                        "pane agent is busy; wait for its active turn to finish before editing this record",
+                    ))
+                } else {
+                    match source.as_ref() {
+                        Some(RuntimeRecordBrowserOverlaySource::Issues { .. }) => {
+                            let project = self
+                                .presentation
+                                .primary_display_overlay
+                                .as_ref()
+                                .and_then(|overlay| overlay.record_browser.as_ref())
+                                .and_then(|record_browser| {
+                                    record_browser.browser.records().get(active_index)
+                                })
+                                .and_then(|record| {
+                                    record
+                                        .metadata
+                                        .iter()
+                                        .find(|(key, _)| key == "project")
+                                        .map(|(_, value)| value.clone())
+                                })
+                                .ok_or_else(|| {
+                                    MezError::invalid_state(
+                                        "selected issue is missing its exact project identity",
+                                    )
+                                });
+                            project.and_then(|project| {
+                                let issue_field = match field {
+                                    mez_mux::record_browser::RecordBrowserEditField::Primary => {
+                                        crate::storage::issues::IssueTextField::Body
+                                    }
+                                    mez_mux::record_browser::RecordBrowserEditField::Secondary => {
+                                        crate::storage::issues::IssueTextField::Notes
+                                    }
+                                };
+                                self.start_issue_external_edit(
+                                    primary_client_id,
+                                    &pane_id,
+                                    Some(&project),
+                                    &id,
+                                    issue_field,
+                                )
+                            })
+                        }
+                        Some(RuntimeRecordBrowserOverlaySource::Memories { .. }) => {
+                            self.start_memory_external_edit(primary_client_id, &pane_id, &id)
+                        }
+                        Some(RuntimeRecordBrowserOverlaySource::Context {
+                            conversation_id,
+                            pane_id: source_pane_id,
+                        }) => id
+                            .parse::<u64>()
+                            .map_err(|_| {
+                                MezError::invalid_state("selected transcript sequence is invalid")
+                            })
+                            .and_then(|sequence| {
+                                self.start_transcript_entry_external_edit(
+                                    primary_client_id,
+                                    source_pane_id,
+                                    conversation_id,
+                                    sequence,
+                                )
+                            }),
+                        _ => Err(MezError::invalid_state(
+                            "record browser source does not support external editing",
+                        )),
+                    }
+                };
+                if let Err(error) = launch {
+                    let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                        return Ok(Some(false));
+                    };
+                    let Some(record_browser) = overlay.record_browser.as_mut() else {
+                        return Ok(None);
+                    };
+                    record_browser
+                        .browser
+                        .set_error(Some(error.message().to_string()));
+                    return Ok(Some(render_record_browser_overlay(
+                        overlay,
+                        &self.presentation.settings.ui_theme,
+                        terminal_width,
+                        prose_width,
+                    )));
+                }
+                return Ok(Some(true));
+            }
         }
         if input == b"c"
             && matches!(

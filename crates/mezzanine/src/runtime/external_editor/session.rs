@@ -37,6 +37,13 @@ pub(crate) enum ExternalEditTarget {
         memory_id: String,
         expected_revision: String,
     },
+    /// One content field in the durable transcript owned by a pane.
+    TranscriptEntry {
+        conversation_id: String,
+        sequence: u64,
+        pane_id: String,
+        expected_revision: String,
+    },
     /// Persisted user-owned context document content.
     ContextDocument {
         document_id: String,
@@ -53,6 +60,7 @@ impl ExternalEditTarget {
             Self::IssueBody { .. } => "issue_body",
             Self::IssueNotes { .. } => "issue_notes",
             Self::MemoryContent { .. } => "memory_content",
+            Self::TranscriptEntry { .. } => "transcript_entry",
             Self::ContextDocument { .. } => "context_document",
         }
     }

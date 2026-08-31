@@ -113,6 +113,9 @@ fn runtime_transcript_context_source_kind(entry: &TranscriptEntry) -> ContextSou
 /// Returns model-facing transcript content after removing protocol scaffolding
 /// that is useful for durable audit but harmful as future prompt context.
 fn runtime_transcript_entry_context_content(entry: &TranscriptEntry) -> Option<String> {
+    if entry.content.trim().is_empty() {
+        return None;
+    }
     match entry.role {
         TranscriptRole::System => ProviderTranscriptEvent::from_transcript_content(&entry.content)
             .and_then(|event| event.sanitized_for_historical_replay())

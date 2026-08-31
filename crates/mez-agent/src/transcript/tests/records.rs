@@ -26,8 +26,9 @@ fn transcript_entry_validation_accepts_complete_records() {
 
 /// Verifies malformed transcript identity and required fields are rejected.
 ///
-/// Zero sequence metadata, empty content, and path-like conversation ids must
-/// fail at the dependency-neutral agent boundary.
+/// Zero sequence metadata, NUL content, and path-like conversation ids must
+/// fail at the dependency-neutral agent boundary, while user-cleared content
+/// remains a valid durable record.
 #[test]
 fn transcript_entry_validation_rejects_invalid_records() {
     let mut entry = valid_entry();
@@ -36,6 +37,9 @@ fn transcript_entry_validation_rejects_invalid_records() {
 
     entry.sequence = 1;
     entry.content.clear();
+    entry.validate().unwrap();
+
+    entry.content = "invalid\0content".to_string();
     assert!(entry.validate().is_err());
 
     entry.content = "done".to_string();

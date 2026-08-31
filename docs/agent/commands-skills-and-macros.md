@@ -53,8 +53,10 @@ Shell mode selects the transport, not its authority—approval and the configure
 with a branch copied from the current or selected conversation, and `/resume`
 returns to a saved conversation. `/clear` clears the visible conversation and
 terminal view; `/compact` summarizes older closed work and is intentionally
-lossy. `/show-context` can browse or delete entries in the current pane
-conversation. Use `/copy-context` or `/copy-trace-log` only when the resulting
+lossy. `/show-context` can browse entries in the current pane conversation,
+edit the selected content with `e`, or delete it with `d`. `/show-issues` uses
+`e` for the selected body and `E` for notes; `/show-memories` uses `e` for
+content. Use `/copy-context` or `/copy-trace-log` only when the resulting
 diagnostic material can be handled safely. `/copy-patches` exports retained
 `apply_patch` payloads and statuses, while `/list-modified-files` reports files
 changed by the current conversation.
@@ -72,8 +74,9 @@ runtime-owned project issues rather than an external tracker, and `/issue edit
 metadata remains in typed commands. Durable edits use full-record
 compare-and-swap checks, so concurrent changes or deletion retain the private
 draft for `/editor-recovery` instead of overwriting the record. External editors
-run directly on the Mez server with a dedicated PTY and never through the pane
-shell, regardless of agent shell mode. `/init` creates
+launched from commands or retained record browsers run directly on the Mez
+server with a dedicated PTY and never through the pane shell, regardless of
+agent shell mode. `/init` creates
 a project instruction scaffold. `/auth-status`, `/refresh-provider-info`,
 `/debug-config`, `/reset-status`, and `/log-level` provide non-secret
 authentication, provider, configuration, token-accounting, and verbosity

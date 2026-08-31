@@ -1285,6 +1285,200 @@ fn durable_editor_stores(
     )
 }
 
+/// Verifies a retained all-projects issue browser launches the exact selected
+/// issue body editor and refreshes its preserved detail state after settlement.
+#[test]
+fn runtime_issue_browser_external_editor_targets_exact_project_and_refreshes() {
+    let (mut service, primary, root) = prompt_editor_fixture("issue-browser-editor");
+    let (issues, _memories, pane_project) = durable_editor_stores(&mut service, &root);
+    let selected_project = format!("{pane_project}/other-project");
+    let issue = issues
+        .add_issue(
+            selected_project.clone(),
+            mez_agent::issues::IssueKind::Task,
+            "Browser edited issue".to_string(),
+            Some("body before".to_string()),
+            Some("notes retained".to_string()),
+            10,
+        )
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let mut browser = mez_mux::record_browser::RecordBrowser::new(
+        "Issues",
+        vec![mez_mux::record_browser::RecordBrowserRecord {
+            id: issue.id.clone(),
+            open_command: Some(format!("/show-issues {}", issue.id)),
+            title: issue.title.clone(),
+            metadata: vec![("project".to_string(), selected_project.clone())],
+            markdown: "body before\n\n## Notes\nnotes retained".to_string(),
+        }],
+        Vec::new(),
+    )
+    .unwrap();
+    browser.enable_primary_edit();
+    browser.enable_secondary_edit();
+    browser.show_first_record_detail();
+    browser.set_scroll_offset(3);
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(
+        &pane_id,
+        "show-issues",
+        browser,
+        Some(
+            crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::Issues {
+                project_glob: Some(selected_project.clone()),
+                default_project_glob: Some(selected_project.clone()),
+                kind: None,
+                state: None,
+                active_only: true,
+                text: None,
+                limit: 100,
+            },
+        ),
+    );
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues --all-projects",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    assert!(
+        service
+            .apply_primary_display_overlay_input(&primary, b"e")
+            .unwrap()
+    );
+    assert!(service.external_editor_session_is_active(&pane_id));
+    assert!(service.primary_display_overlay().is_some());
+    let identities = editor_transaction(&service);
+    assert_eq!(
+        fs::read_to_string(
+            root.join("runtime/editor-sessions")
+                .join(&identities.2)
+                .join("draft.md")
+        )
+        .unwrap(),
+        "body before"
+    );
+
+    complete_prompt_editor(&mut service, &root, &identities, b"body after", 0);
+
+    let updated = issues
+        .get_issue(selected_project, issue.id.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.body.as_deref(), Some("body after"));
+    assert_eq!(updated.notes.as_deref(), Some("notes retained"));
+    let overlay = service.primary_display_overlay().unwrap();
+    let retained = overlay.record_browser.as_ref().unwrap();
+    assert_eq!(retained.browser.active_record_id(), Some(issue.id.as_str()));
+    assert!(retained.browser.is_detail_view());
+    assert_eq!(retained.browser.scroll_offset(), 3);
+    assert!(
+        retained
+            .browser
+            .render_page()
+            .markdown
+            .contains("External edit applied.")
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a retained context browser edits the selected pane-owned transcript
+/// entry and refreshes the preserved list selection after durable settlement.
+#[test]
+fn runtime_context_browser_external_editor_targets_selected_entry_and_refreshes() {
+    let (mut service, primary, root) = prompt_editor_fixture("context-browser-editor");
+    let transcript_store = AgentTranscriptStore::new(root.join("agent-sessions"));
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let conversation_id = "context-browser-conversation";
+    let entry = TranscriptEntry {
+        conversation_id: conversation_id.to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 10,
+        role: TranscriptRole::User,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: pane_id.clone(),
+        content: "context before".to_string(),
+    };
+    transcript_store.append(&entry).unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let mut browser = mez_mux::record_browser::RecordBrowser::new(
+        "Context",
+        vec![mez_mux::record_browser::RecordBrowserRecord {
+            id: "1".to_string(),
+            open_command: Some("/show-context 1".to_string()),
+            title: "user · context before".to_string(),
+            metadata: vec![("pane_id".to_string(), pane_id.clone())],
+            markdown: entry.content.clone(),
+        }],
+        Vec::new(),
+    )
+    .unwrap();
+    browser.enable_primary_edit();
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(
+        &pane_id,
+        "show-context",
+        browser,
+        Some(
+            crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::Context {
+                conversation_id: conversation_id.to_string(),
+                pane_id: pane_id.clone(),
+            },
+        ),
+    );
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-context",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-context".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    assert!(
+        service
+            .apply_primary_display_overlay_input(&primary, b"e")
+            .unwrap()
+    );
+    assert!(service.external_editor_session_is_active(&pane_id));
+    let identities = editor_transaction(&service);
+    complete_prompt_editor(&mut service, &root, &identities, b"context after", 0);
+
+    let updated = transcript_store.inspect(conversation_id).unwrap();
+    assert_eq!(updated.len(), 1);
+    assert_eq!(updated[0].content, "context after");
+    assert_eq!(updated[0].turn_id, entry.turn_id);
+    assert_eq!(updated[0].role, entry.role);
+    let retained = service
+        .primary_display_overlay()
+        .unwrap()
+        .record_browser
+        .as_ref()
+        .unwrap();
+    assert_eq!(retained.browser.active_record_id(), Some("1"));
+    assert!(
+        retained
+            .browser
+            .render_page()
+            .markdown
+            .contains("External edit applied.")
+    );
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies issue body and notes editing exports only the selected prose field,
 /// applies through the full-record CAS boundary, and preserves structured data.
 #[test]
@@ -1385,6 +1579,7 @@ fn runtime_issue_external_editor_retains_stale_conflict() {
         .start_issue_external_edit(
             &primary,
             "%1",
+            None,
             &issue.id,
             crate::storage::issues::IssueTextField::Notes,
         )
@@ -1588,6 +1783,7 @@ fn runtime_issue_external_editor_reopen_remains_explicit_apply() {
         .start_issue_external_edit(
             &primary,
             "%1",
+            None,
             &issue.id,
             crate::storage::issues::IssueTextField::Body,
         )

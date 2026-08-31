@@ -55,6 +55,15 @@ pub enum RecordBrowserFilterField {
     Text,
 }
 
+/// Editable text slots exposed by a record browser's owning backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordBrowserEditField {
+    /// Primary record content, such as an issue body or memory content.
+    Primary,
+    /// Optional secondary record content, such as issue notes.
+    Secondary,
+}
+
 /// Active modal prompt inside a record browser.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordBrowserPrompt {
@@ -95,6 +104,8 @@ pub enum RecordBrowserAction {
     StartSave,
     /// Request deletion of the active record through the owning backend.
     DeleteActive,
+    /// Request external editing of one supported field on the active record.
+    EditActive(RecordBrowserEditField),
     /// Move the active selector row inside the open kind prompt.
     MovePromptSelection(isize),
     /// Jump to the first selector row inside the open kind prompt.
@@ -147,6 +158,13 @@ pub enum RecordBrowserOutcome {
         /// Stable backend record id selected for deletion.
         id: String,
     },
+    /// The caller should edit one field on the selected stable record id.
+    EditSubmitted {
+        /// Stable backend record id selected by the user.
+        id: String,
+        /// Backend-defined text slot selected by the user.
+        field: RecordBrowserEditField,
+    },
     /// The action had no effect in the current state.
     Ignored,
 }
@@ -169,6 +187,8 @@ pub struct RecordBrowser {
     detail_help: Option<String>,
     empty_message: Option<String>,
     deletion_enabled: bool,
+    primary_edit_enabled: bool,
+    secondary_edit_enabled: bool,
     active_index: usize,
     scroll_offset: usize,
     detail_index: Option<usize>,
@@ -215,6 +235,8 @@ impl RecordBrowser {
             detail_help: None,
             empty_message: None,
             deletion_enabled: false,
+            primary_edit_enabled: false,
+            secondary_edit_enabled: false,
             active_index: 0,
             scroll_offset: 0,
             detail_index: None,
@@ -400,6 +422,24 @@ impl RecordBrowser {
         self.deletion_enabled
     }
 
+    /// Enables external editing of the browser's primary record content.
+    pub fn enable_primary_edit(&mut self) {
+        self.primary_edit_enabled = true;
+    }
+
+    /// Enables external editing of the browser's secondary record content.
+    pub fn enable_secondary_edit(&mut self) {
+        self.secondary_edit_enabled = true;
+    }
+
+    /// Reports whether the requested external-edit slot is available.
+    pub fn edit_enabled(&self, field: RecordBrowserEditField) -> bool {
+        match field {
+            RecordBrowserEditField::Primary => self.primary_edit_enabled,
+            RecordBrowserEditField::Secondary => self.secondary_edit_enabled,
+        }
+    }
+
     /// Returns the retained list scroll offset.
     pub fn scroll_offset(&self) -> usize {
         self.scroll_offset
@@ -490,6 +530,18 @@ impl RecordBrowser {
                 };
                 Ok(RecordBrowserOutcome::DeleteSubmitted {
                     id: record.id.clone(),
+                })
+            }
+            RecordBrowserAction::EditActive(field) => {
+                if !self.edit_enabled(field) {
+                    return Ok(RecordBrowserOutcome::Ignored);
+                }
+                let Some(record) = self.records.get(self.active_index) else {
+                    return Ok(RecordBrowserOutcome::Ignored);
+                };
+                Ok(RecordBrowserOutcome::EditSubmitted {
+                    id: record.id.clone(),
+                    field,
                 })
             }
             RecordBrowserAction::MovePromptSelection(delta) => {
@@ -1256,6 +1308,67 @@ mod tests {
         assert_eq!(
             empty
                 .apply_action(RecordBrowserAction::DeleteActive)
+                .unwrap(),
+            RecordBrowserOutcome::Ignored
+        );
+    }
+
+    /// Verifies edit intent is conditional, identifies the selected record and
+    /// field, and remains inert when the browser has no records.
+    #[test]
+    fn record_browser_edit_intent_is_typed_and_conditional() {
+        let mut browser = RecordBrowser::new(
+            "Issues",
+            vec![
+                browser_record("issue-1", "First"),
+                browser_record("issue-2", "Second"),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+        browser.set_active_index(1);
+
+        assert_eq!(
+            browser
+                .apply_action(RecordBrowserAction::EditActive(
+                    RecordBrowserEditField::Primary,
+                ))
+                .unwrap(),
+            RecordBrowserOutcome::Ignored
+        );
+
+        browser.enable_primary_edit();
+        browser.enable_secondary_edit();
+        assert_eq!(
+            browser
+                .apply_action(RecordBrowserAction::EditActive(
+                    RecordBrowserEditField::Primary,
+                ))
+                .unwrap(),
+            RecordBrowserOutcome::EditSubmitted {
+                id: "issue-2".to_string(),
+                field: RecordBrowserEditField::Primary,
+            }
+        );
+        assert_eq!(
+            browser
+                .apply_action(RecordBrowserAction::EditActive(
+                    RecordBrowserEditField::Secondary,
+                ))
+                .unwrap(),
+            RecordBrowserOutcome::EditSubmitted {
+                id: "issue-2".to_string(),
+                field: RecordBrowserEditField::Secondary,
+            }
+        );
+
+        let mut empty = RecordBrowser::new("Context", Vec::new(), Vec::new()).unwrap();
+        empty.enable_primary_edit();
+        assert_eq!(
+            empty
+                .apply_action(RecordBrowserAction::EditActive(
+                    RecordBrowserEditField::Primary,
+                ))
                 .unwrap(),
             RecordBrowserOutcome::Ignored
         );
