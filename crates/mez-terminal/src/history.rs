@@ -8,6 +8,9 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
+#[cfg(test)]
+use std::cell::Cell;
+
 use crate::TerminalStyledLine;
 
 /// Default maximum number of terminal history lines.
@@ -29,7 +32,7 @@ struct HistoryRecord {
 impl Clone for HistoryRecord {
     fn clone(&self) -> Self {
         #[cfg(test)]
-        HISTORY_RECORD_CLONES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        HISTORY_RECORD_CLONES.with(|count| count.set(count.get().saturating_add(1)));
         Self {
             line: self.line.clone(),
             wraps: self.wraps,
@@ -38,8 +41,9 @@ impl Clone for HistoryRecord {
 }
 
 #[cfg(test)]
-static HISTORY_RECORD_CLONES: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+thread_local! {
+    static HISTORY_RECORD_CLONES: Cell<usize> = const { Cell::new(0) };
+}
 
 /// Reports an invalid bounded-history configuration value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -357,13 +361,13 @@ impl HistoryBuffer {
     /// Resets the test-only count of copied history records.
     #[cfg(test)]
     pub(crate) fn reset_copied_record_count() {
-        HISTORY_RECORD_CLONES.store(0, std::sync::atomic::Ordering::Relaxed);
+        HISTORY_RECORD_CLONES.with(|count| count.set(0));
     }
 
     /// Returns the test-only count of copied history records.
     #[cfg(test)]
     pub(crate) fn copied_record_count() -> usize {
-        HISTORY_RECORD_CLONES.load(std::sync::atomic::Ordering::Relaxed)
+        HISTORY_RECORD_CLONES.with(Cell::get)
     }
 }
 
