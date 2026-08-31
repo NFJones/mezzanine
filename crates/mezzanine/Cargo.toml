@@ -17,10 +17,10 @@ name = "mez"
 path = "src/main.rs"
 
 [dependencies]
-mez-agent = { path = "../mez-agent", version = "0.1.0" }
-mez-core = { path = "../mez-core", version = "0.1.0" }
-mez-mux = { path = "../mez-mux", version = "0.1.0" }
-mez-terminal = { path = "../mez-terminal", version = "0.1.0" }
+mez-agent = { path = "../mez-agent", version = "0.2.0" }
+mez-core = { path = "../mez-core", version = "0.2.0" }
+mez-mux = { path = "../mez-mux", version = "0.2.0" }
+mez-terminal = { path = "../mez-terminal", version = "0.2.0" }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "derive"] }

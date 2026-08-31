@@ -16,8 +16,8 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-mez-core = { path = "../mez-core", version = "0.1.0" }
-mez-terminal = { path = "../mez-terminal", version = "0.1.0" }
+mez-core = { path = "../mez-core", version = "0.2.0" }
+mez-terminal = { path = "../mez-terminal", version = "0.2.0" }
 portable-pty = "0.9"
 pulldown-cmark = "0.13"
 rustix = { version = "1.1", features = ["event", "fs", "process", "termios"] }
