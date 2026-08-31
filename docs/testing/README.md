@@ -22,6 +22,9 @@ these workloads.
 - [Iroh pushed-render rollout evidence](iroh-pushed-render-rollout-evidence.md):
   distinguish integrated repository-local results from outstanding network,
   platform, packaging, and production gates.
+- [Iroh production-readiness review packet](iroh-production-readiness-review.md):
+  assign release owners, inventory immutable evidence, record exceptions, and
+  capture the production rollout decision.
 - [Cross-platform release load checks](release-load-checks.md): collect and
   interpret report-only responsiveness evidence on Linux and macOS.
 
