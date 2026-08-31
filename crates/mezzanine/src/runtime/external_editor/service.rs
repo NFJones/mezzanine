@@ -26,10 +26,10 @@ use crate::runtime::render::{
     normalize_external_agent_prompt,
 };
 use crate::runtime::{
-    AgentShellVisibility, PaneProcessEvent, PaneProcessInstance, PaneProcessIoEffect,
+    AgentShellVisibility, EventKind, PaneProcessEvent, PaneProcessInstance, PaneProcessIoEffect,
     PaneReadinessState, ProcessEvent, RenderInvalidationReason, RuntimeSessionService,
-    RuntimeSideEffect, RuntimeTransition, Size, current_unix_millis, runtime_pane_by_id,
-    runtime_random_marker_token,
+    RuntimeSideEffect, RuntimeTransition, Size, current_unix_millis, json_escape,
+    runtime_pane_by_id, runtime_random_marker_token,
 };
 use crate::ui::readline::ReadlineInputDecoder;
 use mez_mux::process::{PaneProcess, spawn_argv_pty_process};
@@ -365,6 +365,7 @@ impl RuntimeSessionService {
         };
         match event {
             PaneProcessEvent::Pane(crate::runtime::PaneEvent::Output { bytes, .. }) => {
+                let output_bytes = bytes.len();
                 let screen = self.external_editor.screen_mut(&pane_id).ok_or_else(|| {
                     MezError::invalid_state("external-editor screen is unavailable")
                 })?;
@@ -379,6 +380,14 @@ impl RuntimeSessionService {
                         },
                     });
                 }
+                self.append_lifecycle_event(
+                    EventKind::PaneChanged,
+                    format!(
+                        r#"{{"pane_id":"{}","external_editor_output_bytes":{}}}"#,
+                        json_escape(&pane_id),
+                        output_bytes
+                    ),
+                )?;
                 side_effects.extend(self.render_effects_for_clients_projecting_pane(
                     &pane_id,
                     RenderInvalidationReason::PaneOutput,

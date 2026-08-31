@@ -2413,6 +2413,7 @@ fn runtime_external_editor_session_routes_input_and_retains_completion() {
     let editor_instance = service
         .external_editor_process_instance_for_tests("%1")
         .unwrap();
+    let event_cutoff = service.event_log().unwrap().latest_event_id();
     let editor_output = service
         .apply_external_editor_process_event(
             editor_instance.clone(),
@@ -2438,6 +2439,18 @@ fn runtime_external_editor_session_routes_input_and_retains_completion() {
             .contains("editor-visible"),
         "external-editor output must use its independent terminal screen"
     );
+    let editor_events = service.event_log().unwrap().replay_after_for(
+        &EventAudience::AllPrimaries,
+        event_cutoff,
+        16,
+    );
+    assert!(editor_events.iter().any(|event| {
+        event.kind == EventKind::PaneChanged
+            && event.payload.contains(r#""pane_id":"%1""#)
+            && event
+                .payload
+                .contains(r#""external_editor_output_bytes":18"#)
+    }));
     assert!(
         service
             .start_external_editor_session(
