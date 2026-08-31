@@ -183,6 +183,114 @@ fn runtime_dependency_free_identity_failure_dispatches_no_loader() {
     }
 }
 
+/// Verifies a Nushell identity result settles pane mode with an actionable
+/// visible error rather than proceeding into the POSIX-only child bootstrap.
+/// The probe itself is the last dialect-independent boundary, so no loader or
+/// bootstrap transaction may be created after it identifies an unsupported shell.
+#[test]
+fn runtime_dependency_free_nushell_identity_reports_native_mode_error() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let primary_pid = service.pane_processes().primary_pid(&pane_id).unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&pane_id, None);
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    service
+        .apply_pane_foreground_process_event(&pane_id, "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service.drain_pane_io_transition();
+
+    let (identity_marker, identity_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )
+            .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("dependency-free identity probe should be registered");
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+        )
+        .unwrap();
+    let identity_output = format!(
+        "\u{1e}mez_shell_identity_begin={identity_marker}\n\
+         \u{1e}mez_shell_path=/usr/bin/nu\n\
+         \u{1e}mez_shell_version=0.103.0\n\
+         \u{1e}mez_shell_identity_end={identity_marker}\n"
+    );
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&identity_marker)
+        .unwrap();
+    transaction.observed_output_bytes = identity_output.len();
+    transaction.observed_output_preview = identity_output;
+
+    service
+        .observe_agent_shell_transaction_end(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+            0,
+        )
+        .unwrap();
+
+    assert_eq!(
+        service.foreign_shell_bootstrap_phase_for_tests(&pane_id),
+        Some("failed")
+    );
+    assert_eq!(
+        service.pane_environment_authority(&pane_id),
+        crate::runtime::processes::RuntimePaneEnvironmentAuthority::Unavailable(
+            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::UnsupportedShell,
+        )
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| transaction.pane_id != pane_id),
+        "unsupported shell identity must not retain bootstrap work"
+    );
+    assert!(
+        service
+            .agent_pane_screen(&pane_id)
+            .unwrap()
+            .normal_content_lines()
+            .iter()
+            .any(|line| line.contains(
+                "pane shell mode does not support /usr/bin/nu; select native shell mode"
+            ))
+    );
+    assert!(pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty());
+    process.terminate(Duration::from_millis(100)).unwrap();
+}
+
 /// Verifies a shell-interaction generation change invalidates completed
 /// identity evidence before loader launch. Recovery may issue a fresh identity
 /// probe for the new epoch, but it must never dispatch a loader rendered from

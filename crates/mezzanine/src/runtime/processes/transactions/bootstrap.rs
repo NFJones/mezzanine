@@ -440,6 +440,41 @@ impl RuntimeSessionService {
             return Ok(1);
         };
 
+        if probe.shell_classification == ShellClassification::UnknownUnix {
+            self.process.pane_probed_shell_identities.remove(pane_id);
+            self.process.pane_bootstrap_pending.remove(pane_id);
+            self.process.pane_certified_shell_identities.remove(pane_id);
+            if let Some(boundary) = self.process.pane_foreign_shell_boundaries.get_mut(pane_id) {
+                boundary.phase = RuntimeForeignShellBootstrapPhase::Failed;
+                boundary.phase_started_at_unix_ms = current_unix_millis();
+                boundary.identity_marker = None;
+                boundary.loader_payload = None;
+                boundary.loader_ready = false;
+            }
+            self.mark_pane_environment_authority_unavailable(
+                pane_id,
+                RuntimePaneEnvironmentAuthorityUnavailableReason::UnsupportedShell,
+            );
+            self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+            self.append_agent_error_text_to_terminal_buffer(
+                pane_id,
+                &format!(
+                    "agent: pane shell mode does not support {}; select native shell mode",
+                    probe.shell_path
+                ),
+            )?;
+            self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                format!(
+                    r#"{{"pane_id":"{}","shell_identity_probe":"unsupported","marker":"{}","shell_path":"{}"}}"#,
+                    json_escape(pane_id),
+                    json_escape(marker),
+                    json_escape(&probe.shell_path)
+                ),
+            )?;
+            return Ok(1);
+        }
+
         let execution_identity = RuntimePaneShellExecutionIdentity {
             shell_path: PathBuf::from(probe.shell_path),
             classification: probe.shell_classification,

@@ -236,6 +236,8 @@ pub(crate) enum RuntimePaneEnvironmentAuthorityUnavailableReason {
     BootstrapProtocolViolation,
     /// Syntax-neutral shell identity discovery failed before bootstrap.
     ShellIdentityProbeFailed,
+    /// The discovered pane shell has no pane-mode bootstrap adapter.
+    UnsupportedShell,
     /// A foreign environment did not complete managed adapter admission.
     ForeignBootstrapTimedOut,
     /// Agent-subshell certification rejected the discovered environment.
@@ -266,6 +268,10 @@ impl RuntimePaneEnvironmentAuthorityUnavailableReason {
             }
             Self::ShellIdentityProbeFailed => {
                 "pane shell identity probe failed before environment certification".to_string()
+            }
+            Self::UnsupportedShell => {
+                "pane-mode agent startup does not support the discovered shell; select native shell mode"
+                    .to_string()
             }
             Self::ForeignBootstrapTimedOut => {
                 "foreign shell bootstrap timed out; return to an empty prompt in the foreign environment and retry"
