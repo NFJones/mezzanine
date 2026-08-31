@@ -369,6 +369,18 @@ fn foreground_serve_attach_primary_exits_cleanly_without_broken_pipe_error() {
         })
         .unwrap();
 
+    // The first pane frame can precede the interactive shell prompt on a
+    // loaded macOS runner. Wait for command output rather than prompt text so
+    // the fixture proves the shell has consumed input before testing teardown.
+    process
+        .write_input(b"printf 'mez-%s\\n' shell-ready\n")
+        .unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("mez-shell-ready")
+        })
+        .unwrap();
+
     process.write_input(b"exit\n").unwrap();
     process
         .read_until_exit(&mut output, Duration::from_secs(10))
