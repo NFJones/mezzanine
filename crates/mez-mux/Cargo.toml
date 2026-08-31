@@ -8,7 +8,6 @@ description = "Multiplexer domain, PTY, layout, input, and presentation engine f
 documentation.workspace = true
 homepage.workspace = true
 license.workspace = true
-license-file.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 

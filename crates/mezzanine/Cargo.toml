@@ -8,7 +8,6 @@ description = "A terminal multiplexer with a built-in pane-local agent"
 documentation.workspace = true
 homepage.workspace = true
 license.workspace = true
-license-file.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 

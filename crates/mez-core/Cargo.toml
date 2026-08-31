@@ -8,7 +8,6 @@ description = "Stable low-dependency contracts shared by Mezzanine crates"
 documentation.workspace = true
 homepage.workspace = true
 license.workspace = true
-license-file.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
