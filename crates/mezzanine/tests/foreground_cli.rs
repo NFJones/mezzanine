@@ -65,16 +65,17 @@ struct ForegroundProcess {
 /// Owns a detached test service and guarantees cleanup after assertion panic.
 struct DetachedServeProcess(ProcessChild);
 
-/// Panic-safe cleanup for one signal-resistant editor fixture process.
+/// Panic-safe cleanup for one signal-resistant editor fixture process group.
 struct FixtureProcessGuard(i32);
 
 impl Drop for FixtureProcessGuard {
-    /// Ensures a failed lifecycle assertion cannot leak the fixture child.
+    /// Ensures a failed lifecycle assertion cannot leak fixture descendants.
     fn drop(&mut self) {
-        // SAFETY: the pid comes from the fixture process itself. A direct pid
-        // targets only that process and cleanup is best effort.
+        // SAFETY: the pid comes from the fixture process itself and is also
+        // the private process-group id assigned by the editor runner. A
+        // negative pid targets that group, and cleanup is best effort.
         unsafe {
-            libc::kill(self.0, libc::SIGKILL);
+            libc::kill(-self.0, libc::SIGKILL);
         }
     }
 }
@@ -866,6 +867,30 @@ fn wait_for_path(path: &Path, timeout: Duration) -> Result<(), String> {
     Err(format!("timed out waiting for {}", path.display()))
 }
 
+/// Waits until a fixture has published one complete positive process id.
+///
+/// File existence alone is not a readiness boundary because shell redirection
+/// creates the file before `printf` writes its contents. Retrying reads and
+/// parsing together prevents consumers from observing an empty or partial id.
+fn wait_for_process_id(path: &Path, timeout: Duration) -> Result<i32, String> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Ok(process_id) = fs::read_to_string(path).and_then(|contents| {
+            contents
+                .parse::<i32>()
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+        }) && process_id > 0
+        {
+            return Ok(process_id);
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Err(format!(
+        "timed out waiting for a valid process id in {}",
+        path.display()
+    ))
+}
+
 /// Runs the wait for process exit operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -962,11 +987,7 @@ fn external_editor_runner_interrupt_reaps_signal_resistant_child() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    wait_for_path(&editor_pid_path, Duration::from_secs(5)).unwrap();
-    let editor_pid = fs::read_to_string(&editor_pid_path)
-        .unwrap()
-        .parse::<i32>()
-        .unwrap();
+    let editor_pid = wait_for_process_id(&editor_pid_path, Duration::from_secs(5)).unwrap();
     let editor_guard = FixtureProcessGuard(editor_pid);
     let runner_pid = i32::try_from(runner.id()).unwrap();
 
