@@ -145,10 +145,8 @@ just iroh-compression-bench
 ```
 
 It writes `target/iroh-compression-bench.json` by default; override the path
-with `MEZ_IROH_COMPRESSION_BENCH_REPORT`. See [Iroh compression
-benchmarks](../testing/iroh-compression-benchmarks.md) for fixtures, budgets,
-and interpretation. Keep point-in-time measurements in generated reports
-rather than this operational runbook.
+with `MEZ_IROH_COMPRESSION_BENCH_REPORT`. Keep point-in-time measurements in
+generated reports rather than this operational runbook.
 
 ### Reproduce render-update measurements
 
@@ -162,10 +160,7 @@ It writes `target/iroh-render-bench.json` by default; override the path with
 `MEZ_IROH_RENDER_BENCH_REPORT`. The report measures snapshot/delta selection,
 changed rows, selected and candidate bytes, codec cadence, and a clearly
 labelled serialized-request RTT model. It does not claim to measure a real
-direct or relay path. Follow [Iroh render-update
-benchmarks](../testing/iroh-render-update-benchmarks.md) for the controlled
-0/25/75/150 ms direct and relay matrix, separate jitter/loss runs, workloads,
-sample counts, and interpretation limits.
+direct or relay path.
 
 ## Enable and verify
 
