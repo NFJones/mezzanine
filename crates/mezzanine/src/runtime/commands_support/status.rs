@@ -169,6 +169,7 @@ fn runtime_provider_token_usage_by_model_lines(
 pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> String {
     let runtime_metrics = service.runtime_metrics();
     let iroh_metrics = service.integration.remote_iroh_diagnostics();
+    let x11_metrics = service.runtime_x11_proxy_diagnostics();
     let mut lines = vec![
         "metrics source=runtime-service status=available".to_string(),
         "".to_string(),
@@ -204,6 +205,25 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
         format!("relay_connections = {}", iroh_metrics.relay_connections),
         format!("custom_connections = {}", iroh_metrics.custom_connections),
         format!("unknown_connections = {}", iroh_metrics.unknown_connections),
+        "".to_string(),
+        "[x11 forwarding]".to_string(),
+        format!("route_active = {}", x11_metrics.route_active),
+        format!("active_streams = {}", x11_metrics.active_streams),
+        format!("route_activations = {}", x11_metrics.route_activations),
+        format!("route_deactivations = {}", x11_metrics.route_deactivations),
+        format!("route_takeovers = {}", x11_metrics.route_takeovers),
+        format!("sockets_accepted = {}", x11_metrics.sockets_accepted),
+        format!(
+            "sockets_rejected_no_route = {}",
+            x11_metrics.sockets_rejected_no_route
+        ),
+        format!(
+            "sockets_rejected_capacity = {}",
+            x11_metrics.sockets_rejected_capacity
+        ),
+        format!("streams_started = {}", x11_metrics.streams_started),
+        format!("streams_completed = {}", x11_metrics.streams_completed),
+        format!("streams_failed = {}", x11_metrics.streams_failed),
         "".to_string(),
         "[runtime counts]".to_string(),
         format!(

@@ -172,6 +172,10 @@ fn runtime_show_metrics_reports_privacy_safe_iroh_diagnostics() {
         "connections_rejected = 0",
         "setup_latency_average_millis = 0",
         "last_connection_path = unknown",
+        "[x11 forwarding]",
+        "route_active = false",
+        "active_streams = 0",
+        "streams_failed = 0",
     ] {
         assert!(body.contains(expected), "missing {expected:?} in {body}");
     }

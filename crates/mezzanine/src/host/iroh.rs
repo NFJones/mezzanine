@@ -1138,6 +1138,7 @@ async fn serve_routed_initialize_inner(
             authority_cancelled,
         )
         .await;
+    let x11_route_result = connection_state.deactivate_x11_route();
     sample_task.abort();
     let _ = (&mut sample_task).await;
     let _ = event_stop_tx.send(true);
@@ -1150,6 +1151,7 @@ async fn serve_routed_initialize_inner(
         let _ = task.await;
     }
     control_result?;
+    x11_route_result?;
     Ok(())
 }
 

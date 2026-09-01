@@ -339,6 +339,15 @@ impl ControlConnectionState {
         Some(lease)
     }
 
+    /// Immediately invalidates and releases this connection's exact X11 route.
+    pub(crate) fn deactivate_x11_route(&mut self) -> Result<bool> {
+        let Some(lease) = self.x11_route_lease.take() else {
+            return Ok(false);
+        };
+        self.x11_route_start_taken = true;
+        lease.deactivate()
+    }
+
     /// Sets the first runtime event that a newly attached observer may receive.
     pub(crate) fn set_observer_visible_from_event_id(&mut self, event_id: Option<u64>) {
         self.observer_visible_from_event_id = event_id;

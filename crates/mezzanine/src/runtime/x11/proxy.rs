@@ -11,6 +11,7 @@ use std::fs;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rand::Rng;
@@ -134,6 +135,98 @@ pub(crate) struct RuntimeX11ProxyHandle {
     inner: Arc<RuntimeX11ProxyState>,
 }
 
+/// Copyable aggregate X11 lifecycle counters containing no route identities or secrets.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RuntimeX11ProxyDiagnosticsSnapshot {
+    pub(crate) route_active: bool,
+    pub(crate) active_streams: usize,
+    pub(crate) route_activations: u64,
+    pub(crate) route_deactivations: u64,
+    pub(crate) route_takeovers: u64,
+    pub(crate) sockets_accepted: u64,
+    pub(crate) sockets_rejected_no_route: u64,
+    pub(crate) sockets_rejected_capacity: u64,
+    pub(crate) streams_started: u64,
+    pub(crate) streams_completed: u64,
+    pub(crate) streams_failed: u64,
+}
+
+/// Shared atomic counters for one stable session proxy.
+#[derive(Debug, Default)]
+struct RuntimeX11ProxyDiagnostics {
+    route_active: AtomicBool,
+    active_streams: AtomicUsize,
+    route_activations: AtomicU64,
+    route_deactivations: AtomicU64,
+    route_takeovers: AtomicU64,
+    sockets_accepted: AtomicU64,
+    sockets_rejected_no_route: AtomicU64,
+    sockets_rejected_capacity: AtomicU64,
+    streams_started: AtomicU64,
+    streams_completed: AtomicU64,
+    streams_failed: AtomicU64,
+}
+
+impl RuntimeX11ProxyDiagnostics {
+    fn snapshot(&self) -> RuntimeX11ProxyDiagnosticsSnapshot {
+        RuntimeX11ProxyDiagnosticsSnapshot {
+            route_active: self.route_active.load(Ordering::Relaxed),
+            active_streams: self.active_streams.load(Ordering::Relaxed),
+            route_activations: self.route_activations.load(Ordering::Relaxed),
+            route_deactivations: self.route_deactivations.load(Ordering::Relaxed),
+            route_takeovers: self.route_takeovers.load(Ordering::Relaxed),
+            sockets_accepted: self.sockets_accepted.load(Ordering::Relaxed),
+            sockets_rejected_no_route: self.sockets_rejected_no_route.load(Ordering::Relaxed),
+            sockets_rejected_capacity: self.sockets_rejected_capacity.load(Ordering::Relaxed),
+            streams_started: self.streams_started.load(Ordering::Relaxed),
+            streams_completed: self.streams_completed.load(Ordering::Relaxed),
+            streams_failed: self.streams_failed.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Drop-safe accounting for one accepted setup-pending or active stream.
+struct RuntimeX11StreamDiagnosticsGuard {
+    diagnostics: Arc<RuntimeX11ProxyDiagnostics>,
+    finished: bool,
+}
+
+impl RuntimeX11StreamDiagnosticsGuard {
+    fn started(diagnostics: Arc<RuntimeX11ProxyDiagnostics>) -> Self {
+        diagnostics.streams_started.fetch_add(1, Ordering::Relaxed);
+        diagnostics.active_streams.fetch_add(1, Ordering::Relaxed);
+        Self {
+            diagnostics,
+            finished: false,
+        }
+    }
+
+    fn finish(&mut self, succeeded: bool) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        self.diagnostics
+            .active_streams
+            .fetch_sub(1, Ordering::Relaxed);
+        if succeeded {
+            self.diagnostics
+                .streams_completed
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.diagnostics
+                .streams_failed
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+impl Drop for RuntimeX11StreamDiagnosticsGuard {
+    fn drop(&mut self) {
+        self.finish(false);
+    }
+}
+
 impl PartialEq for RuntimeX11ProxyHandle {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
@@ -166,6 +259,11 @@ impl RuntimeX11ProxyHandle {
     /// Display number represented by this proxy's TCP listener.
     pub(crate) fn display_number(&self) -> u16 {
         self.inner.display_number
+    }
+
+    /// Returns the latest privacy-safe aggregate lifecycle counters.
+    pub(crate) fn diagnostics(&self) -> RuntimeX11ProxyDiagnosticsSnapshot {
+        self.inner.diagnostics.snapshot()
     }
 
     /// Reserves one route generation without publishing its credential yet.
@@ -205,6 +303,14 @@ impl RuntimeX11ProxyHandle {
         if let Some(current) = routes.current.as_ref() {
             write_empty_private_xauthority(&self.inner.authority_path)?;
             current.cancellation.send_replace(true);
+            self.inner
+                .diagnostics
+                .route_takeovers
+                .fetch_add(1, Ordering::Relaxed);
+            self.inner
+                .diagnostics
+                .route_active
+                .store(false, Ordering::Relaxed);
         }
         routes.next_generation = routes
             .next_generation
@@ -270,6 +376,14 @@ impl RuntimeX11ProxyHandle {
         )?;
         route.connection = connection;
         route.active = true;
+        self.inner
+            .diagnostics
+            .route_activations
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .diagnostics
+            .route_active
+            .store(true, Ordering::Relaxed);
         Ok(())
     }
 
@@ -286,10 +400,21 @@ impl RuntimeX11ProxyHandle {
         if !matches {
             return Ok(false);
         }
+        let was_active = routes.current.as_ref().is_some_and(|route| route.active);
         write_empty_private_xauthority(&self.inner.authority_path)?;
         if let Some(route) = routes.current.take() {
             route.cancellation.send_replace(true);
         }
+        if was_active {
+            self.inner
+                .diagnostics
+                .route_deactivations
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        self.inner
+            .diagnostics
+            .route_active
+            .store(false, Ordering::Relaxed);
         Ok(true)
     }
 
@@ -308,6 +433,7 @@ impl RuntimeX11ProxyHandle {
             setup_timeout: self.inner.policy.setup_timeout,
             permits: route.permits.clone(),
             cancellation: route.cancellation.subscribe(),
+            diagnostics: self.inner.diagnostics.clone(),
         })
     }
 
@@ -329,6 +455,7 @@ struct RuntimeX11ProxyState {
     authority_path: PathBuf,
     policy: RuntimeIrohX11Policy,
     routes: Mutex<RuntimeX11RouteRegistry>,
+    diagnostics: Arc<RuntimeX11ProxyDiagnostics>,
 }
 
 /// Session-local generation counter and optional current owner.
@@ -360,6 +487,7 @@ struct RuntimeX11ActiveRoute {
     setup_timeout: std::time::Duration,
     permits: Arc<Semaphore>,
     cancellation: watch::Receiver<bool>,
+    diagnostics: Arc<RuntimeX11ProxyDiagnostics>,
 }
 
 /// Listener and generated-artifact owner for one session proxy.
@@ -420,6 +548,7 @@ impl RuntimeX11Proxy {
                 authority_path,
                 policy,
                 routes: Mutex::new(RuntimeX11RouteRegistry::default()),
+                diagnostics: Arc::new(RuntimeX11ProxyDiagnostics::default()),
             }),
         };
         Ok(Self {
@@ -444,16 +573,35 @@ impl RuntimeX11Proxy {
                 accepted = self.listener.accept() => match accepted {
                     Ok((stream, _peer)) => {
                         handled = handled.saturating_add(1);
+                        self.handle
+                            .inner
+                            .diagnostics
+                            .sockets_accepted
+                            .fetch_add(1, Ordering::Relaxed);
                         let Some(route) = self.handle.active_route() else {
+                            self.handle
+                                .inner
+                                .diagnostics
+                                .sockets_rejected_no_route
+                                .fetch_add(1, Ordering::Relaxed);
                             drop(stream);
                             continue;
                         };
                         let Ok(permit) = route.permits.clone().try_acquire_owned() else {
+                            route
+                                .diagnostics
+                                .sockets_rejected_capacity
+                                .fetch_add(1, Ordering::Relaxed);
                             drop(stream);
                             continue;
                         };
+                        let diagnostics = RuntimeX11StreamDiagnosticsGuard::started(
+                            route.diagnostics.clone(),
+                        );
                         workers.spawn(async move {
-                            let _ = relay_server_x11_socket(stream, route, permit).await;
+                            let mut diagnostics = diagnostics;
+                            let result = relay_server_x11_socket(stream, route, permit).await;
+                            diagnostics.finish(result.is_ok());
                         });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -713,6 +861,14 @@ mod tests {
         first_lease.activate_without_transport().unwrap();
         assert!(handle.route_is_active(&first_owner, first_result.generation));
         assert!(!fs::read(handle.authority_path()).unwrap().is_empty());
+        assert_eq!(
+            handle.diagnostics(),
+            RuntimeX11ProxyDiagnosticsSnapshot {
+                route_active: true,
+                route_activations: 1,
+                ..RuntimeX11ProxyDiagnosticsSnapshot::default()
+            }
+        );
 
         let conflict = handle
             .reserve_route(second_owner.clone(), route_offer([0x22; 16], false))
@@ -724,15 +880,21 @@ mod tests {
             .unwrap();
         assert!(second_result.generation > first_result.generation);
         assert_eq!(fs::read(handle.authority_path()).unwrap(), Vec::<u8>::new());
+        assert_eq!(handle.diagnostics().route_takeovers, 1);
+        assert!(!handle.diagnostics().route_active);
         assert!(!first_lease.deactivate().unwrap());
         second_lease.activate_without_transport().unwrap();
         assert!(handle.route_is_active(&second_owner, second_result.generation));
+        assert_eq!(handle.diagnostics().route_activations, 2);
+        assert_eq!(handle.diagnostics().route_deactivations, 0);
 
         let retained = second_lease.clone();
         drop(second_lease);
         assert!(handle.route_is_active(&second_owner, second_result.generation));
         drop(retained);
         assert_eq!(fs::read(handle.authority_path()).unwrap(), Vec::<u8>::new());
+        assert_eq!(handle.diagnostics().route_deactivations, 1);
+        assert!(!handle.diagnostics().route_active);
 
         drop(first_lease);
         drop(proxy);
@@ -844,6 +1006,151 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// An established idle relay has no application-idle timeout, but exact
+    /// route deactivation closes it promptly and rejects subsequent sockets.
+    #[tokio::test]
+    async fn idle_stream_survives_setup_timeout_and_closes_on_deactivation() {
+        const TEST_ALPN: &[u8] = b"mezzanine/x11-idle-test/1";
+        let (server_endpoint, client_endpoint, server_connection, client_connection) =
+            test_connection_pair(TEST_ALPN, 2).await;
+        let root = test_root("idle-deactivation");
+        let policy = RuntimeIrohX11Policy {
+            enabled: true,
+            max_connections_per_route: 2,
+            setup_timeout: Duration::from_millis(100),
+            ..RuntimeIrohX11Policy::default()
+        };
+        let proxy = RuntimeX11Proxy::prepare_with_policy(&root, policy).unwrap();
+        let handle = proxy.handle();
+        let owner = route_owner(
+            "client-idle",
+            &format!("iroh-{}", server_connection.stable_id()),
+        );
+        let (route, lease) = handle
+            .reserve_route(owner, route_offer([0x71; 16], false))
+            .unwrap();
+        lease.activate(server_connection).unwrap();
+        let proxy_task = tokio::spawn(proxy.serve());
+
+        let mut local = connect_proxy(&handle).await;
+        local
+            .write_all(&setup_packet(b'l', &[0x71; 16]))
+            .await
+            .unwrap();
+        let (_send, _recv) = accept_proxy_stream(&client_connection, &route, [0x71; 16]).await;
+        wait_for_proxy_metrics(&handle, |metrics| metrics.active_streams == 1).await;
+
+        let mut byte = [0u8; 1];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(250), local.read(&mut byte))
+                .await
+                .is_err(),
+            "an established idle X11 stream must outlive the setup deadline"
+        );
+        assert!(lease.deactivate().unwrap());
+        let read = tokio::time::timeout(Duration::from_secs(2), local.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read, 0);
+        wait_for_proxy_metrics(&handle, |metrics| metrics.active_streams == 0).await;
+
+        let mut rejected = connect_proxy(&handle).await;
+        let read = tokio::time::timeout(Duration::from_secs(2), rejected.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read, 0);
+        let metrics = handle.diagnostics();
+        assert!(!metrics.route_active);
+        assert_eq!(metrics.route_deactivations, 1);
+        assert_eq!(metrics.streams_completed, 1);
+        assert_eq!(metrics.sockets_rejected_no_route, 1);
+
+        drop(client_connection);
+        proxy_task.abort();
+        let _ = proxy_task.await;
+        client_endpoint.close().await;
+        server_endpoint.close().await;
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A stalled setup consumes only one permit, does not block a healthy
+    /// sibling, rejects excess load, and releases its permit after timeout.
+    #[tokio::test]
+    async fn stalled_setup_isolated_and_capacity_recovers_after_timeout() {
+        const TEST_ALPN: &[u8] = b"mezzanine/x11-capacity-test/1";
+        let (server_endpoint, client_endpoint, server_connection, client_connection) =
+            test_connection_pair(TEST_ALPN, 3).await;
+        let root = test_root("capacity-recovery");
+        let policy = RuntimeIrohX11Policy {
+            enabled: true,
+            max_connections_per_route: 2,
+            setup_timeout: Duration::from_millis(150),
+            ..RuntimeIrohX11Policy::default()
+        };
+        let proxy = RuntimeX11Proxy::prepare_with_policy(&root, policy).unwrap();
+        let handle = proxy.handle();
+        let owner = route_owner(
+            "client-capacity",
+            &format!("iroh-{}", server_connection.stable_id()),
+        );
+        let (route, lease) = handle
+            .reserve_route(owner, route_offer([0x72; 16], false))
+            .unwrap();
+        lease.activate(server_connection).unwrap();
+        let proxy_task = tokio::spawn(proxy.serve());
+
+        let _stalled = connect_proxy(&handle).await;
+        wait_for_proxy_metrics(&handle, |metrics| metrics.active_streams == 1).await;
+
+        let mut healthy = connect_proxy(&handle).await;
+        healthy
+            .write_all(&setup_packet(b'B', &[0x72; 16]))
+            .await
+            .unwrap();
+        let (mut healthy_send, _healthy_recv) =
+            accept_proxy_stream(&client_connection, &route, [0x72; 16]).await;
+        healthy_send.write_all(b"ok").await.unwrap();
+        let mut reply = [0u8; 2];
+        healthy.read_exact(&mut reply).await.unwrap();
+        assert_eq!(&reply, b"ok");
+
+        let mut excess = connect_proxy(&handle).await;
+        let mut byte = [0u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(2), excess.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read, 0);
+        assert_eq!(handle.diagnostics().sockets_rejected_capacity, 1);
+
+        drop(healthy);
+        drop(healthy_send);
+        wait_for_proxy_metrics(&handle, |metrics| {
+            metrics.active_streams == 0 && metrics.streams_failed >= 1
+        })
+        .await;
+
+        let mut recovered = connect_proxy(&handle).await;
+        recovered
+            .write_all(&setup_packet(b'l', &[0x72; 16]))
+            .await
+            .unwrap();
+        let (_recovered_send, _recovered_recv) =
+            accept_proxy_stream(&client_connection, &route, [0x72; 16]).await;
+        assert_eq!(handle.diagnostics().streams_started, 3);
+
+        assert!(lease.deactivate().unwrap());
+        wait_for_proxy_metrics(&handle, |metrics| metrics.active_streams == 0).await;
+        drop(client_connection);
+        proxy_task.abort();
+        let _ = proxy_task.await;
+        client_endpoint.close().await;
+        server_endpoint.close().await;
+        let _ = fs::remove_dir_all(root);
+    }
+
     /// Builds one exact route owner for focused registry tests.
     fn route_owner(client_id: &str, connection_id: &str) -> RuntimeX11RouteOwner {
         RuntimeX11RouteOwner {
@@ -884,6 +1191,94 @@ mod tests {
         setup[12..30].copy_from_slice(b"MIT-MAGIC-COOKIE-1");
         setup[32..48].copy_from_slice(cookie);
         setup
+    }
+
+    /// Creates one direct test connection with server-opened bidi credit.
+    async fn test_connection_pair(
+        alpn: &'static [u8],
+        incoming_bidi_streams: u32,
+    ) -> (
+        Endpoint,
+        Endpoint,
+        iroh::endpoint::Connection,
+        iroh::endpoint::Connection,
+    ) {
+        let server = Endpoint::builder(presets::Minimal)
+            .alpns(vec![alpn.to_vec()])
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let client = Endpoint::builder(presets::Minimal)
+            .transport_config(
+                QuicTransportConfig::builder()
+                    .max_concurrent_bidi_streams(VarInt::from_u32(incoming_bidi_streams))
+                    .build(),
+            )
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let server_addr = server.addr();
+        let client_side = async { client.connect(server_addr, alpn).await.unwrap() };
+        let server_side = async {
+            let incoming = server.accept().await.unwrap();
+            incoming.accept().unwrap().await.unwrap()
+        };
+        let (client_connection, server_connection) = tokio::join!(client_side, server_side);
+        (server, client, server_connection, client_connection)
+    }
+
+    /// Connects one loopback X client to the stable session proxy.
+    async fn connect_proxy(handle: &RuntimeX11ProxyHandle) -> tokio::net::TcpStream {
+        tokio::net::TcpStream::connect((
+            Ipv4Addr::LOCALHOST,
+            X11_TCP_BASE_PORT + handle.display_number(),
+        ))
+        .await
+        .unwrap()
+    }
+
+    /// Accepts and authenticates one proxy-opened Iroh stream through setup.
+    async fn accept_proxy_stream(
+        connection: &iroh::endpoint::Connection,
+        route: &X11ForwardingResult,
+        cookie: [u8; 16],
+    ) -> (iroh::endpoint::SendStream, iroh::endpoint::RecvStream) {
+        let (send, mut recv) = tokio::time::timeout(Duration::from_secs(2), connection.accept_bi())
+            .await
+            .unwrap()
+            .unwrap();
+        let mut encoded = [0u8; super::super::X11_STREAM_PREFACE_BYTES];
+        recv.read_exact(&mut encoded).await.unwrap();
+        let preface = X11StreamPreface::decode(&encoded).unwrap();
+        assert_eq!(preface.generation, route.generation);
+        assert_eq!(preface.route_token, route.route_token);
+        let mut setup = [0u8; 48];
+        recv.read_exact(&mut setup).await.unwrap();
+        validate_x11_setup_cookie(&setup, &X11Cookie::new(cookie)).unwrap();
+        (send, recv)
+    }
+
+    /// Waits boundedly for an aggregate diagnostics condition.
+    async fn wait_for_proxy_metrics(
+        handle: &RuntimeX11ProxyHandle,
+        predicate: impl Fn(RuntimeX11ProxyDiagnosticsSnapshot) -> bool,
+    ) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if predicate(handle.diagnostics()) {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
 
     /// Allocates one owner-private root for proxy tests.

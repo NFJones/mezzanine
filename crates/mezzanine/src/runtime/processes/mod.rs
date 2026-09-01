@@ -1038,6 +1038,17 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Returns aggregate session X11 lifecycle counters without route identity or secrets.
+    pub(crate) fn runtime_x11_proxy_diagnostics(
+        &self,
+    ) -> crate::runtime::x11::RuntimeX11ProxyDiagnosticsSnapshot {
+        self.process
+            .x11_proxy
+            .as_ref()
+            .map(crate::runtime::x11::RuntimeX11ProxyHandle::diagnostics)
+            .unwrap_or_default()
+    }
+
     /// Returns the number of active pane output pipes.
     pub(crate) fn active_pane_pipe_count(&self) -> usize {
         self.process.active_pane_pipes.len()

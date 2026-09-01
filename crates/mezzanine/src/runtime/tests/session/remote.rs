@@ -723,6 +723,18 @@ fn runtime_remote_device_proof_rejects_escalation_revocation_and_unsupported_rol
     assert_eq!(result.get("setup_failures"), Some(&serde_json::json!(0)));
     assert_eq!(result.get("shutdown_aborts"), Some(&serde_json::json!(0)));
     assert_eq!(
+        result.pointer("/x11/route_active"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        result.pointer("/x11/active_streams"),
+        Some(&serde_json::json!(0))
+    );
+    assert_eq!(
+        result.pointer("/x11/streams_failed"),
+        Some(&serde_json::json!(0))
+    );
+    assert_eq!(
         result.get("last_connection_path"),
         Some(&serde_json::json!("unknown"))
     );

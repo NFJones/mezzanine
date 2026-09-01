@@ -1568,6 +1568,7 @@ async fn serve_runtime_iroh_control_connection(
             },
         )
         .await;
+    let x11_route_result = connection_state.deactivate_x11_route();
     sample_task.abort();
     let _ = (&mut sample_task).await;
     let _ = event_stop_tx.send(true);
@@ -1588,6 +1589,7 @@ async fn serve_runtime_iroh_control_connection(
         },
     );
     let served = result?;
+    x11_route_result?;
     bridge_result?;
     Ok(served)
 }

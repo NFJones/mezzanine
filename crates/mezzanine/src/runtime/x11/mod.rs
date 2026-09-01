@@ -28,5 +28,6 @@ pub(crate) use protocol::{
     validate_x11_setup_cookie,
 };
 pub(crate) use proxy::{
-    RuntimeX11Proxy, RuntimeX11ProxyHandle, RuntimeX11RouteLease, RuntimeX11RouteOwner,
+    RuntimeX11Proxy, RuntimeX11ProxyDiagnosticsSnapshot, RuntimeX11ProxyHandle,
+    RuntimeX11RouteLease, RuntimeX11RouteOwner,
 };

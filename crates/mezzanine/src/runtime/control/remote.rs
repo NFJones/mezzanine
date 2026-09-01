@@ -464,6 +464,7 @@ impl RuntimeSessionService {
                 let policy =
                     crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
                 let diagnostics = self.integration.remote_iroh_diagnostics();
+                let x11 = self.runtime_x11_proxy_diagnostics();
                 Ok(serde_json::json!({
                     "enabled": policy.enabled,
                     "listener_active": diagnostics.listener_active,
@@ -491,6 +492,20 @@ impl RuntimeSessionService {
                         "relay": diagnostics.relay_connections,
                         "custom": diagnostics.custom_connections,
                         "unknown": diagnostics.unknown_connections,
+                    },
+                    "x11": {
+                        "enabled": policy.x11.enabled,
+                        "route_active": x11.route_active,
+                        "active_streams": x11.active_streams,
+                        "route_activations": x11.route_activations,
+                        "route_deactivations": x11.route_deactivations,
+                        "route_takeovers": x11.route_takeovers,
+                        "sockets_accepted": x11.sockets_accepted,
+                        "sockets_rejected_no_route": x11.sockets_rejected_no_route,
+                        "sockets_rejected_capacity": x11.sockets_rejected_capacity,
+                        "streams_started": x11.streams_started,
+                        "streams_completed": x11.streams_completed,
+                        "streams_failed": x11.streams_failed,
                     },
                 })
                 .to_string())
