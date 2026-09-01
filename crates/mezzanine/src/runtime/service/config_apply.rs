@@ -245,6 +245,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn reload_config_layers_from_disk(&mut self) -> Result<RuntimeConfigApplyReport> {
+        let previous_structured = runtime_effective_config_value(self.integration.config_layers())?;
         for layer in self.integration.config_layers_mut() {
             let Some(path) = layer.path.as_ref() else {
                 continue;
@@ -252,7 +253,10 @@ impl RuntimeSessionService {
             layer.format = ConfigFormat::from_path(path)?;
             layer.text = fs::read_to_string(path)?;
         }
-        self.apply_runtime_config_layers()
+        let effective = compose_effective_config(self.integration.config_layers())?;
+        let structured = runtime_effective_config_value(self.integration.config_layers())?;
+        let affected = RuntimeConfigAffectedSubsystems::between(&previous_structured, &structured);
+        self.apply_prepared_runtime_config(effective, structured, affected)
     }
 
     /// Runs the reload config layers from disk async operation for this subsystem.
@@ -612,6 +616,7 @@ impl RuntimeSessionService {
             self.presentation.defer_render_effects(render_effects);
         }
         Ok(RuntimeConfigApplyReport {
+            restart_required: affected.transport,
             applied_layers: effective.applied_layers().to_vec(),
             skipped_layers: effective.skipped_layers().to_vec(),
             terminal_history_limit: self.terminal_history_limit(),

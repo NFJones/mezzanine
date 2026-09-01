@@ -753,6 +753,8 @@ const RUNTIME_FOREIGN_SHELL_BOOTSTRAP_ABSOLUTE_TIMEOUT_MS: u64 = 120_000;
 pub(crate) struct RuntimeProcessComponent {
     /// Live terminal and shell settings applied to process state.
     settings: RuntimeProcessSettings,
+    /// Restart-fenced X11 policy applied when this session started.
+    applied_x11_policy: crate::runtime::RuntimeIrohX11Policy,
     /// Stable protected X11 environment and route-facing proxy handle.
     x11_proxy: Option<crate::runtime::x11::RuntimeX11ProxyHandle>,
     /// Test-only opt-in for historical startup-adapter protocol fixtures.
@@ -1019,11 +1021,25 @@ pub(crate) fn terminal_features_with_progress(
 }
 
 impl RuntimeSessionService {
+    /// Retains the X11 policy applied for this session lifetime.
+    pub(crate) fn set_applied_runtime_x11_policy(
+        &mut self,
+        policy: crate::runtime::RuntimeIrohX11Policy,
+    ) {
+        self.process.applied_x11_policy = policy;
+    }
+
+    /// Returns the restart-fenced X11 policy governing live admission.
+    pub(crate) fn applied_runtime_x11_policy(&self) -> &crate::runtime::RuntimeIrohX11Policy {
+        &self.process.applied_x11_policy
+    }
+
     /// Installs the session-local X11 proxy before any pane process starts.
     pub(crate) fn set_runtime_x11_proxy(
         &mut self,
         proxy: crate::runtime::x11::RuntimeX11ProxyHandle,
     ) {
+        self.process.applied_x11_policy = proxy.policy().clone();
         self.process.x11_proxy = Some(proxy);
     }
 

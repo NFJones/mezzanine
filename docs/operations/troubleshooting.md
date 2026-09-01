@@ -120,6 +120,10 @@ been revoked but the private Xauthority file could not be atomically replaced;
 repair the session Xauthority directory or storage. A later successful route
 publication clears the flag, while `authority_publication_failures` retains the
 aggregate failure count.
+If `x11.restart_pending` is true, compare `x11.applied` with
+`x11.configured`; the applied values govern current route admission. Restart
+the daemon to converge them. Reload never enables, disables, or weakens an
+existing session proxy in place.
 
 X11/Xwayland socket applications are in scope. Native Wayland, audio, D-Bus,
 portals, device forwarding, network-transparent MIT-SHM, and dependable direct

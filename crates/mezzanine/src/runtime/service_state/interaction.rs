@@ -152,6 +152,8 @@ pub(crate) struct RuntimeCommandBinding {
 /// avoid rebuilding unrelated runtime state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeConfigAffectedSubsystems {
+    /// Restart-required transport policy changed.
+    pub(crate) transport: bool,
     /// Process-terminal and history settings changed.
     pub(crate) terminal: bool,
     /// Attached-client presentation, keys, frames, or theme settings changed.
@@ -174,6 +176,7 @@ impl RuntimeConfigAffectedSubsystems {
     /// Marks every projected subsystem for complete startup or rollback application.
     pub(crate) const fn all() -> Self {
         Self {
+            transport: false,
             terminal: true,
             presentation: true,
             audit: true,
@@ -189,6 +192,7 @@ impl RuntimeConfigAffectedSubsystems {
     pub(crate) fn between(previous: &serde_json::Value, next: &serde_json::Value) -> Self {
         let changed = |keys: &[&str]| keys.iter().any(|key| previous.get(key) != next.get(key));
         Self {
+            transport: changed(&["transport"]),
             terminal: changed(&["terminal", "history"]),
             presentation: changed(&[
                 "terminal",
@@ -221,6 +225,8 @@ impl RuntimeConfigAffectedSubsystems {
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeConfigApplyReport {
+    /// Whether changed restart-required policy awaits daemon restart.
+    pub restart_required: bool,
     /// Stores the applied layers value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

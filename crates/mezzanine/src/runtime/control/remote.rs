@@ -458,6 +458,8 @@ impl RuntimeSessionService {
                     crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
                 let diagnostics = self.integration.remote_iroh_diagnostics();
                 let x11 = self.runtime_x11_proxy_diagnostics();
+                let applied_x11 = self.applied_runtime_x11_policy();
+                let configured_x11 = &policy.x11;
                 Ok(serde_json::json!({
                     "enabled": policy.enabled,
                     "listener_active": diagnostics.listener_active,
@@ -487,7 +489,20 @@ impl RuntimeSessionService {
                         "unknown": diagnostics.unknown_connections,
                     },
                     "x11": {
-                        "enabled": policy.x11.enabled,
+                        "enabled": applied_x11.enabled,
+                        "restart_pending": applied_x11 != configured_x11,
+                        "applied": {
+                            "enabled": applied_x11.enabled,
+                            "allow_trusted": applied_x11.allow_trusted,
+                            "max_connections_per_route": applied_x11.max_connections_per_route,
+                            "setup_timeout_ms": applied_x11.setup_timeout.as_millis(),
+                        },
+                        "configured": {
+                            "enabled": configured_x11.enabled,
+                            "allow_trusted": configured_x11.allow_trusted,
+                            "max_connections_per_route": configured_x11.max_connections_per_route,
+                            "setup_timeout_ms": configured_x11.setup_timeout.as_millis(),
+                        },
                         "route_active": x11.route_active,
                         "authority_repair_pending": x11.authority_repair_pending,
                         "active_streams": x11.active_streams,

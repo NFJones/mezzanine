@@ -743,6 +743,187 @@ async fn runtime_x11_route_ends_on_interactive_detach_step() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Reloaded X11 policy must remain visibly separate from the startup-applied
+/// policy, and route admission must continue to follow only the applied value
+/// until daemon restart reconstructs the session.
+#[tokio::test]
+async fn runtime_x11_status_distinguishes_applied_policy_after_reload() {
+    let root = temp_root("x11-applied-policy-reload");
+    let enabled_path = root.join("enabled.toml");
+    fs::write(
+        &enabled_path,
+        "[transport.iroh.x11]\nenabled = true\nallow_trusted = true\nmax_connections_per_route = 3\nsetup_timeout_ms = 700\n",
+    )
+    .unwrap();
+    let mut enabled_service = test_runtime_service();
+    enabled_service.set_config_root(root.clone());
+    enabled_service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(enabled_path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: fs::read_to_string(&enabled_path).unwrap(),
+        }])
+        .unwrap();
+    let enabled_policy = enabled_service
+        .configured_iroh_transport_policy()
+        .unwrap()
+        .x11;
+    enabled_service.set_applied_runtime_x11_policy(enabled_policy.clone());
+    let proxy =
+        crate::runtime::x11::RuntimeX11Proxy::prepare_with_policy(&root, enabled_policy).unwrap();
+    let proxy_handle = proxy.handle();
+    enabled_service.set_runtime_x11_proxy(proxy_handle.clone());
+    let mut enabled_local = local_owner_connection(&mut enabled_service);
+
+    fs::write(
+        &enabled_path,
+        "[transport.iroh.x11]\nenabled = false\nallow_trusted = false\nmax_connections_per_route = 4\nsetup_timeout_ms = 800\n",
+    )
+    .unwrap();
+    let disabled_report = enabled_service.reload_config_layers_from_disk().unwrap();
+    assert!(disabled_report.restart_required);
+    let disabled_status = request(
+        &mut enabled_service,
+        &mut enabled_local,
+        r#"{"jsonrpc":"2.0","id":"status-disabled","method":"remote/status","params":{}}"#,
+    );
+    assert_eq!(
+        disabled_status.pointer("/result/x11/enabled"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        disabled_status.pointer("/result/x11/restart_pending"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        disabled_status.pointer("/result/x11/applied/enabled"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        disabled_status.pointer("/result/x11/applied/allow_trusted"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        disabled_status.pointer("/result/x11/applied/max_connections_per_route"),
+        Some(&serde_json::json!(3))
+    );
+    assert_eq!(
+        disabled_status.pointer("/result/x11/applied/setup_timeout_ms"),
+        Some(&serde_json::json!(700))
+    );
+    assert_eq!(
+        disabled_status.pointer("/result/x11/configured/enabled"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        disabled_status.pointer("/result/x11/configured/max_connections_per_route"),
+        Some(&serde_json::json!(4))
+    );
+    let mut still_admitted = initialized_x11_primary(
+        &mut enabled_service,
+        "endpoint-applied-enabled",
+        "applied-enabled",
+        false,
+    );
+    assert!(proxy_handle.diagnostics().route_active);
+    assert!(still_admitted.deactivate_x11_route().unwrap());
+    drop(proxy);
+    drop(enabled_local);
+    drop(enabled_service);
+
+    let disabled_path = root.join("disabled.toml");
+    fs::write(
+        &disabled_path,
+        "[transport.iroh.x11]\nenabled = false\nallow_trusted = false\nmax_connections_per_route = 6\nsetup_timeout_ms = 900\n",
+    )
+    .unwrap();
+    let mut disabled_service = test_runtime_service();
+    disabled_service.set_config_root(root.clone());
+    disabled_service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(disabled_path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: fs::read_to_string(&disabled_path).unwrap(),
+        }])
+        .unwrap();
+    let disabled_policy = disabled_service
+        .configured_iroh_transport_policy()
+        .unwrap()
+        .x11;
+    disabled_service.set_applied_runtime_x11_policy(disabled_policy);
+    let mut disabled_local = local_owner_connection(&mut disabled_service);
+
+    fs::write(
+        &disabled_path,
+        "[transport.iroh.x11]\nenabled = true\nallow_trusted = true\nmax_connections_per_route = 7\nsetup_timeout_ms = 1000\n",
+    )
+    .unwrap();
+    let enabled_report = disabled_service.reload_config_layers_from_disk().unwrap();
+    assert!(enabled_report.restart_required);
+    let enabled_status = request(
+        &mut disabled_service,
+        &mut disabled_local,
+        r#"{"jsonrpc":"2.0","id":"status-enabled","method":"remote/status","params":{}}"#,
+    );
+    assert_eq!(
+        enabled_status.pointer("/result/x11/enabled"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        enabled_status.pointer("/result/x11/restart_pending"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        enabled_status.pointer("/result/x11/applied/enabled"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        enabled_status.pointer("/result/x11/configured/enabled"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        enabled_status.pointer("/result/x11/configured/allow_trusted"),
+        Some(&serde_json::json!(true))
+    );
+
+    let mut unavailable = ControlConnectionState::new(false, false);
+    unavailable
+        .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint(
+            "endpoint-applied-disabled",
+        ))
+        .unwrap();
+    unavailable
+        .bind_remote_principal(RemotePrincipal {
+            trust_record_id: "trust-applied-disabled".to_string(),
+            endpoint_id: "endpoint-applied-disabled".to_string(),
+            role_ceiling: RemoteRoleCeiling::Primary,
+            host_routing: RemoteHostRoutingAuthority::default(),
+            requested_role: RequestedRole::Primary,
+        })
+        .unwrap();
+    unavailable
+        .bind_x11_connection_id("connection-applied-disabled".to_string())
+        .unwrap();
+    let rejected = request(
+        &mut disabled_service,
+        &mut unavailable,
+        r#"{"jsonrpc":"2.0","id":"x11-disabled","method":"control/initialize","params":{"requested_role":"primary","requested_version":2,"client_name":"applied-disabled","x11_forwarding":{"version":1,"mode":"untrusted","auth_protocol":"MIT-MAGIC-COOKIE-1","fake_cookie_base64":"EREREREREREREREREREREQ==","takeover":false},"client":{"name":"applied-disabled","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+    );
+    assert_eq!(
+        rejected.pointer("/error/data/mezzanine_code"),
+        Some(&serde_json::json!("forbidden"))
+    );
+    assert!(!unavailable.initialized());
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies durable remote proof stays endpoint-bound and role-limited, while
 /// local Unix administration remains available after revocation.
 #[test]

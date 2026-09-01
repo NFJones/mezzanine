@@ -205,6 +205,11 @@ The table is primary-user-only and forwarding remains disabled unless the host
 policy and an authenticated Iroh primary attach both opt in. Unix and observer
 attachments cannot activate it.
 
+Reloading this table updates configured values but does not change any live
+session proxy. Local `remote/status` reports both `x11.applied` and
+`x11.configured`; `x11.enabled` continues to describe live enforcement and
+`x11.restart_pending` is true until a daemon restart applies the new policy.
+
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
 | `transport.iroh.x11.enabled` | boolean | `false` | Prepare session-local X11 proxying for explicit authenticated Iroh primary requests. |

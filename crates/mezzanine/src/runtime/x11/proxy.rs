@@ -271,6 +271,11 @@ impl RuntimeX11ProxyHandle {
         self.inner.display_number
     }
 
+    /// Returns the restart-fenced policy enforced by this proxy.
+    pub(crate) fn policy(&self) -> &RuntimeIrohX11Policy {
+        &self.inner.policy
+    }
+
     /// Returns the latest privacy-safe aggregate lifecycle counters.
     pub(crate) fn diagnostics(&self) -> RuntimeX11ProxyDiagnosticsSnapshot {
         self.inner.diagnostics.snapshot()

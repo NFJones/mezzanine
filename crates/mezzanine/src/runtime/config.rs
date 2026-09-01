@@ -192,8 +192,9 @@ pub(super) fn runtime_config_apply_event_payload(
     report: &RuntimeConfigApplyReport,
 ) -> String {
     format!(
-        r#"{{"method":"{}","applied_layers":{},"skipped_layers":{},"terminal_history_limit":{},"terminal_history_rotate_lines":{},"terminal_term":"{}","ui_theme":"{}","window_frames_enabled":{},"pane_frames_enabled":{},"max_concurrent_agents":{},"permission_policy_applied":{},"mcp_servers_configured":{},"mcp_servers_blacklisted":{},"project_trust_prompts_announced":{}}}"#,
+        r#"{{"method":"{}","restart_required":{},"applied_layers":{},"skipped_layers":{},"terminal_history_limit":{},"terminal_history_rotate_lines":{},"terminal_term":"{}","ui_theme":"{}","window_frames_enabled":{},"pane_frames_enabled":{},"max_concurrent_agents":{},"permission_policy_applied":{},"mcp_servers_configured":{},"mcp_servers_blacklisted":{},"project_trust_prompts_announced":{}}}"#,
         json_escape(method),
+        report.restart_required,
         runtime_string_array_json(&report.applied_layers),
         runtime_string_array_json(&report.skipped_layers),
         report.terminal_history_limit,
