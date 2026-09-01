@@ -201,6 +201,13 @@ impl RuntimeSessionService {
     /// and retained execution context cannot outlive any terminal ledger path.
     fn clear_terminal_agent_turn_runtime_state(&mut self, turn_id: &str) {
         self.agent_turn_contexts_mut().remove(turn_id);
+        self.agent
+            .agent_turn_imported_history_events
+            .remove(turn_id);
+        self.agent.agent_turn_environment_snapshots.remove(turn_id);
+        self.agent
+            .agent_turn_current_environment_snapshots
+            .remove(turn_id);
         self.agent_turn_executions_mut().remove(turn_id);
         self.agent.sandbox_failure_assessments.remove(turn_id);
         self.clear_agent_failure_feedback_attempts_for_turn(turn_id);

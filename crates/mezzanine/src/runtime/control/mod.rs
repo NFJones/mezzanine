@@ -72,10 +72,8 @@ use crate::control::{
 };
 use crate::integrations::skills::{BUILTIN_MEZ_REFERENCE_SKILL_NAME, load_skill_document};
 pub(crate) use component::RuntimeControlComponent;
+use context::runtime_agent_transcript_context_blocks;
 pub(crate) use context::runtime_local_message_context_content;
-use context::{
-    runtime_agent_transcript_context_blocks, runtime_context_block_is_compaction_refresh_owned,
-};
 use mez_agent::{
     SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,
     parse_skill_prompt_invocation, set_project_guidance_context, skill_context_text,
@@ -92,6 +90,21 @@ use protocol::{
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const RUNTIME_CONTROL_LIVE_OVERRIDE_LAYER: &str = "runtime-control-live-override";
+
+/// Prompt-boundary context plus the runtime ownership facts derived with it.
+pub(super) struct RuntimeAgentPromptContext {
+    /// Complete durable context assembled for the new turn.
+    pub(super) context: AgentContext,
+    /// Highest unread local-message sequence included in the context.
+    pub(super) delivered_message_sequence: Option<mez_agent::messaging::MessageSequence>,
+    /// Number of replayed history events at the front of the context.
+    pub(super) imported_history_events: usize,
+    /// Environment projection frozen for this prompt, when available.
+    pub(super) current_environment_snapshot: Option<String>,
+    /// Environment transition newly appended for durable persistence, when any.
+    pub(super) new_environment_snapshot: Option<String>,
+}
+
 impl RuntimeSessionService {
     /// Runs the agent context for pane prompt operation for this subsystem.
     ///
@@ -110,7 +123,7 @@ impl RuntimeSessionService {
             max_history_lines,
             false,
         )
-        .map(|(context, _, _)| context)
+        .map(|prepared| prepared.context)
     }
 
     /// Builds prompt context and optionally includes the unread local-message
@@ -121,11 +134,7 @@ impl RuntimeSessionService {
         prompt: &str,
         _max_history_lines: usize,
         include_unread_messages: bool,
-    ) -> Result<(
-        AgentContext,
-        Option<mez_agent::messaging::MessageSequence>,
-        usize,
-    )> {
+    ) -> Result<RuntimeAgentPromptContext> {
         if prompt.trim().is_empty() {
             return Err(MezError::invalid_args("agent prompt must not be empty"));
         }
@@ -173,43 +182,28 @@ impl RuntimeSessionService {
                 delivered_message_sequence = Some(message.sequence);
             }
         }
-        if let Some(signature) = self.pane_environment_signature(pane_id) {
-            let mut env_lines = vec![
-                format!("shell={}", signature.shell_classification.as_str()),
-                format!("shell_path={}", signature.shell_path),
-                format!("git_repo={}", if signature.git_repo { "1" } else { "0" }),
-            ];
-            if let Some(project_root) = &signature.project_root {
-                env_lines.push(format!("project_root={project_root}"));
-            }
-            if let Some(container) = &signature.container {
-                env_lines.push(format!("container={container}"));
-            }
-            if !signature.environment_managers.is_empty() {
-                env_lines.push(format!(
-                    "environment_managers={}",
-                    signature.environment_managers.join(",")
-                ));
-            }
-            if let Some(inventory) = self.agent_tool_inventory(signature) {
-                env_lines.push(format!(
-                    "available_tools={} sed={} grep={} rg={}",
-                    inventory.tools.len(),
-                    inventory.sed,
-                    inventory.grep,
-                    inventory.rg
-                ));
-                if !inventory.modern_tools.is_empty() {
-                    env_lines.push(format!("tools={}", inventory.modern_tools.join(",")));
-                }
-            }
+        let previous_environment_snapshot = blocks
+            .iter()
+            .rev()
+            .find(|block| {
+                block.source == ContextSourceKind::Configuration
+                    && block.label == "task environment snapshot"
+            })
+            .map(|block| block.content.as_str());
+        let current_environment_snapshot =
+            self.runtime_agent_environment_snapshot_content(pane_id, previous_environment_snapshot);
+        let new_environment_snapshot = current_environment_snapshot
+            .as_ref()
+            .filter(|content| previous_environment_snapshot != Some(content.as_str()));
+        let new_environment_snapshot = new_environment_snapshot.cloned();
+        if let Some(content) = new_environment_snapshot.as_ref() {
             insert_context_block_by_placement(
                 &mut blocks,
                 ContextBlock {
                     source: ContextSourceKind::Configuration,
                     placement: mez_agent::ContextPlacement::ConversationAppend,
-                    label: "task environment".to_string(),
-                    content: env_lines.join("\n"),
+                    label: "task environment snapshot".to_string(),
+                    content: content.clone(),
                 },
             );
         }
@@ -311,7 +305,50 @@ impl RuntimeSessionService {
         if let Some(instruction_files) = instruction_files.as_deref() {
             context = set_project_guidance_context(context, instruction_files, 2)?;
         }
-        Ok((context, delivered_message_sequence, imported_history_events))
+        Ok(RuntimeAgentPromptContext {
+            context,
+            delivered_message_sequence,
+            imported_history_events,
+            current_environment_snapshot,
+            new_environment_snapshot,
+        })
+    }
+
+    /// Builds the canonical bounded pane-environment projection for one prompt.
+    ///
+    /// A missing first signature preserves historical behavior and emits no
+    /// speculative state. Losing a previously known signature appends an
+    /// explicit unavailable transition so the model cannot treat stale facts
+    /// as current.
+    fn runtime_agent_environment_snapshot_content(
+        &self,
+        pane_id: &str,
+        previous: Option<&str>,
+    ) -> Option<String> {
+        let Some(signature) = self.pane_environment_signature(pane_id) else {
+            return previous.map(|_| {
+                "environment_state=unavailable\nreason=pane_environment_signature_unavailable"
+                    .to_string()
+            });
+        };
+        let mut fields = vec!["environment_state=known".to_string()];
+        fields.extend(signature.model_context_fields());
+        if let Some(inventory) = self.agent_tool_inventory(signature) {
+            fields.push(format!(
+                "available_tools={} sed={} grep={} rg={}",
+                inventory.tools.len(),
+                inventory.sed,
+                inventory.grep,
+                inventory.rg
+            ));
+            if !inventory.modern_tools.is_empty() {
+                let mut modern_tools = inventory.modern_tools.clone();
+                modern_tools.sort();
+                modern_tools.dedup();
+                fields.push(format!("tools={}", modern_tools.join(",")));
+            }
+        }
+        Some(fields.join("\n"))
     }
 
     /// Formats immutable skill context for one invocation.
@@ -465,18 +502,50 @@ impl RuntimeSessionService {
             return Ok(false);
         }
 
-        let refreshed_blocks = self.runtime_agent_history_epoch_context_blocks(&turn.pane_id)?;
+        let mut refreshed_blocks =
+            self.runtime_agent_history_epoch_context_blocks(&turn.pane_id)?;
+        let imported_history_events = self.agent_turn_imported_history_events(turn_id);
+
+        if !self.agent_turn_has_new_environment_snapshot(turn_id)
+            && let Some(current_environment_snapshot) = self
+                .agent_turn_current_environment_snapshot(turn_id)
+                .map(str::to_string)
+            && refreshed_blocks
+                .iter()
+                .rev()
+                .find(|block| {
+                    block.source == ContextSourceKind::Configuration
+                        && block.label == "task environment snapshot"
+                })
+                .is_none_or(|block| block.content != current_environment_snapshot)
+        {
+            refreshed_blocks.push(ContextBlock {
+                source: ContextSourceKind::Configuration,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "task environment snapshot".to_string(),
+                content: current_environment_snapshot,
+            });
+        }
 
         let Some(mut refreshed_context) = self.agent_turn_contexts().get(turn_id).cloned() else {
             return Ok(false);
         };
-        refreshed_context.replace_imported_history_prefix(
-            runtime_context_block_is_compaction_refresh_owned,
+        if imported_history_events == 0 {
+            return Ok(false);
+        }
+        let mut remaining_imported_events = imported_history_events;
+        let replacement_count = refreshed_context.replace_imported_history_prefix(
+            |_| {
+                let owned = remaining_imported_events > 0;
+                remaining_imported_events = remaining_imported_events.saturating_sub(1);
+                owned
+            },
             refreshed_blocks,
         )?;
         let refreshed_block_count = refreshed_context.blocks().len();
         self.agent_turn_contexts_mut()
             .insert(turn_id.to_string(), refreshed_context);
+        self.set_agent_turn_imported_history_events(turn_id.to_string(), replacement_count);
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,

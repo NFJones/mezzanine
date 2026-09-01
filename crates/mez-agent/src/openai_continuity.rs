@@ -39,6 +39,8 @@ pub struct OpenAiRequestContinuitySnapshot {
     pub request_control_sha256: String,
     /// Ordered digests of every provider-visible input message.
     pub messages: Vec<OpenAiRequestMessageDigest>,
+    /// Ordered digests of the provider-cache-eligible input prefix.
+    pub stable_messages: Vec<OpenAiRequestMessageDigest>,
 }
 
 /// First provider-visible divergence between two consecutive OpenAI requests.
@@ -54,6 +56,10 @@ pub struct OpenAiRequestContinuity {
     pub common_component_prefix: usize,
     /// Whether the current input messages only append to the previous sequence.
     pub messages_append_only: bool,
+    /// Number of identical cache-eligible input messages at the front.
+    pub common_stable_message_prefix: usize,
+    /// Whether cache-eligible input only appended after the previous prefix.
+    pub stable_messages_append_only: bool,
 }
 
 /// Compares two complete provider-visible OpenAI request snapshots.
@@ -69,6 +75,15 @@ pub fn compare_openai_request_continuity(
         .count();
     let messages_append_only = common_message_prefix == previous.messages.len()
         && current.messages.len() >= previous.messages.len();
+    let common_stable_message_prefix = previous
+        .stable_messages
+        .iter()
+        .zip(&current.stable_messages)
+        .take_while(|(previous, current)| previous.sha256 == current.sha256)
+        .count();
+    let stable_messages_append_only = common_stable_message_prefix
+        == previous.stable_messages.len()
+        && current.stable_messages.len() >= previous.stable_messages.len();
     let common_component_prefix = [
         (&previous.instructions_sha256, &current.instructions_sha256),
         (
@@ -112,6 +127,8 @@ pub fn compare_openai_request_continuity(
         common_message_prefix,
         common_component_prefix,
         messages_append_only,
+        common_stable_message_prefix,
+        stable_messages_append_only,
     }
 }
 
@@ -148,6 +165,16 @@ mod tests {
                         sha256: (*digest).to_string(),
                     })
                     .collect(),
+                stable_messages: messages
+                    .iter()
+                    .enumerate()
+                    .map(|(index, digest)| OpenAiRequestMessageDigest {
+                        index,
+                        role: "user".to_string(),
+                        bytes: digest.len(),
+                        sha256: (*digest).to_string(),
+                    })
+                    .collect(),
             };
         let initial = snapshot("instructions-a", "tools-a", &["message-a"]);
         let appended = snapshot("instructions-a", "tools-a", &["message-a", "message-b"]);
@@ -163,6 +190,8 @@ mod tests {
                 common_message_prefix: 1,
                 common_component_prefix: 6,
                 messages_append_only: true,
+                common_stable_message_prefix: 1,
+                stable_messages_append_only: true,
             }
         );
         assert_eq!(
@@ -173,6 +202,8 @@ mod tests {
                 common_message_prefix: 0,
                 common_component_prefix: 6,
                 messages_append_only: false,
+                common_stable_message_prefix: 0,
+                stable_messages_append_only: false,
             }
         );
         assert_eq!(

@@ -37,6 +37,13 @@ state, and a classification such as `new_turn`, `compaction`,
 The last classification indicates a settled-context consistency signal, not a
 provider cache decision.
 
+`Stable provider prefix` compares only cache-eligible OpenAI input. It can
+remain append-only even when complete-message continuity is false because a
+request-local state message is regenerated after newly settled chronology.
+Pane environment facts are frozen as typed prompt-boundary snapshots: an
+unchanged environment adds no message, while a changed or unavailable
+environment appends a new snapshot without rewriting the prior prefix.
+
 ## Escalate a diagnostic safely
 
 Check whether a compaction, model choice, project-guidance change, or requested

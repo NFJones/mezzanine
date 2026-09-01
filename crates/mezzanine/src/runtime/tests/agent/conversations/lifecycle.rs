@@ -698,6 +698,11 @@ fn runtime_interrupted_turn_prompt_is_persisted_for_continuation_context() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    let environment_root = temp_root("runtime-interrupted-turn-environment");
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        test_environment_signature(&environment_root),
+    );
     let conversation_id = service
         .agent_shell_store()
         .get("%1")
@@ -733,14 +738,22 @@ fn runtime_interrupted_turn_prompt_is_persisted_for_continuation_context() {
     service.stop_agent_turn_for_pane("%1").unwrap();
 
     let entries = transcript_store.inspect(&conversation_id).unwrap();
-    assert_eq!(entries.len(), 1, "{entries:#?}");
+    assert_eq!(entries.len(), 2, "{entries:#?}");
     assert_eq!(entries[0].role, TranscriptRole::System);
     assert_eq!(entries[0].turn_id, interrupted.turn_id);
     assert!(
-        entries[0].content.contains("interrupted_turn"),
+        matches!(
+            mez_agent::TranscriptContextEvent::from_transcript_content(&entries[0].content),
+            Some(mez_agent::TranscriptContextEvent::EnvironmentSnapshot { .. })
+        ),
         "{entries:#?}"
     );
-    assert!(entries[0].content.contains("repair the interrupted defect"));
+    assert_eq!(entries[1].role, TranscriptRole::System);
+    assert!(
+        entries[1].content.contains("interrupted_turn"),
+        "{entries:#?}"
+    );
+    assert!(entries[1].content.contains("repair the interrupted defect"));
     assert_eq!(
         service
             .agent_turn_ledger()
@@ -798,7 +811,18 @@ fn runtime_interrupted_turn_prompt_is_persisted_for_continuation_context() {
         "{:#?}",
         context.blocks()
     );
+    assert_eq!(
+        context
+            .blocks()
+            .iter()
+            .filter(|block| block.label == "task environment snapshot")
+            .count(),
+        1,
+        "{:#?}",
+        context.blocks()
+    );
     service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(environment_root);
 }
 
 /// Verifies immediate continuation context includes an interrupted prompt while

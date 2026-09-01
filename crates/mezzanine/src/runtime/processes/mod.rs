@@ -2559,6 +2559,11 @@ impl RuntimeSessionService {
             .insert(pane_id, signature);
     }
 
+    /// Removes one pane environment signature to exercise degraded transitions.
+    pub(crate) fn clear_pane_environment_signature_for_tests(&mut self, pane_id: &str) {
+        self.process.pane_environment_signatures.remove(pane_id);
+    }
+
     /// Installs one certification rejection for lifecycle and preflight tests.
     pub(crate) fn set_pane_agent_subshell_certification_rejection_for_tests(
         &mut self,

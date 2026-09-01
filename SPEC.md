@@ -4487,6 +4487,10 @@ OpenAI request diagnostics SHOULD record non-model-visible fingerprints for the
 front-loaded instructions, response-format schema, tool schema, stable input
 prefix, volatile input suffix, and complete observable cacheable prefix so cache
 misses can be diagnosed without inserting diagnostic text into model context.
+Diagnostics SHOULD compare the cache-eligible input sequence separately from
+the complete provider-visible message sequence, because a request-local
+volatile tail can legitimately move after newly settled chronology even when
+the reusable prefix remains append-only.
 Static invariant agent behavior SHOULD remain in the front-loaded OpenAI
 `instructions` field. Dynamic model-relevant facts such as compaction notices
 and current OpenAI action eligibility SHOULD be rendered as later
@@ -5084,6 +5088,18 @@ bounded tool availability summaries. Raw `PATH`, hostname, username, platform
 banner, and per-tool resolved paths or versions MUST remain internal cache,
 diagnostic, transcript, or audit data unless the model explicitly asks for them
 through a shell action.
+
+The model-facing environment projection MUST be sampled once at the
+user-prompt boundary and represented as an immutable typed chronological
+snapshot immediately before that prompt. The runtime MUST persist and replay
+the snapshot with byte-identical provenance, label, and content. If the exact
+projection is unchanged, the runtime MUST reuse the latest replayed snapshot
+without appending a duplicate. If the projection changes, or a previously
+known signature becomes unavailable, the runtime MUST append a new snapshot
+rather than replace or relocate any prior chronology. Same-turn provider
+continuations and compaction refresh MUST reuse the frozen prompt-boundary
+projection and MUST NOT recompute it from live pane state. Environment
+transitions MUST NOT rotate the conversation prompt-cache lineage.
 
 The harness MUST invalidate or bypass cached tool discovery results when the
 environment signature changes, when `PATH` changes, when the pane enters a

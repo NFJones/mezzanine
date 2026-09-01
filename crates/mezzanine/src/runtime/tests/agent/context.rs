@@ -13,6 +13,287 @@ fn project_instruction(content: &str) -> mez_agent::instructions::DiscoveredInst
     }
 }
 
+/// Verifies prompt-boundary environment snapshots are canonical, private, and
+/// appended only when their exact model projection changes.
+///
+/// Replaying an unchanged snapshot must not insert a fresh task prelude. A
+/// changed pane identity must append a second snapshot after prior chronology
+/// without rewriting the first snapshot's bytes.
+#[test]
+fn runtime_environment_snapshots_are_append_only_and_skip_unchanged_state() {
+    let mut service = test_runtime_service();
+    let transcript_root = temp_root("environment-snapshot-append-only");
+    let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let first_root = temp_root("environment-snapshot-first-root");
+    let first_signature = test_environment_signature(&first_root);
+    service.record_agent_tool_inventory(
+        first_signature.clone(),
+        mez_agent::ToolInventory::parse_bootstrap_output("sed=1\ngrep=1\nrg=1\nfd=1\n"),
+    );
+    service.set_pane_environment_signature_for_tests("%1", first_signature);
+
+    let first = service
+        .agent_context_for_pane_prompt("%1", "inspect the first environment", 0)
+        .unwrap();
+    let first_snapshot = first
+        .blocks()
+        .iter()
+        .find(|block| block.label == "task environment snapshot")
+        .expect("first known environment should append one snapshot")
+        .content
+        .clone();
+    let first_snapshot_index = first
+        .blocks()
+        .iter()
+        .position(|block| block.label == "task environment snapshot")
+        .unwrap();
+    let first_user_index = first
+        .blocks()
+        .iter()
+        .position(|block| block.label == "user prompt")
+        .unwrap();
+    assert!(first_snapshot_index < first_user_index);
+    assert!(first_snapshot.contains("environment_state=known"));
+    assert!(first_snapshot.contains("environment_managers=venv"));
+    assert!(first_snapshot.contains("available_tools=4 sed=true grep=true rg=true"));
+    assert!(first_snapshot.contains("tools=fd"));
+    for private_value in [
+        "private-test-host",
+        "private-test-user",
+        "/private/toolchain/bin",
+        "/private/virtual-environment",
+    ] {
+        assert!(!first_snapshot.contains(private_value), "{first_snapshot}");
+    }
+
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let event =
+        mez_agent::TranscriptContextEvent::environment_snapshot(first_snapshot.clone()).unwrap();
+    for entry in [
+        TranscriptEntry {
+            conversation_id: conversation_id.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::System,
+            turn_id: "historical-turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: event.to_transcript_content(),
+        },
+        TranscriptEntry {
+            conversation_id: conversation_id.clone(),
+            sequence: 2,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "historical-turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "inspect the first environment".to_string(),
+        },
+        TranscriptEntry {
+            conversation_id: conversation_id.clone(),
+            sequence: 3,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::Assistant,
+            turn_id: "historical-turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "first environment inspected".to_string(),
+        },
+    ] {
+        transcript_store.append(&entry).unwrap();
+    }
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 3)
+        .unwrap();
+
+    let unchanged = service
+        .agent_context_for_pane_prompt("%1", "inspect it again", 0)
+        .unwrap();
+    let unchanged_snapshots = unchanged
+        .blocks()
+        .iter()
+        .filter(|block| block.label == "task environment snapshot")
+        .collect::<Vec<_>>();
+    assert_eq!(unchanged_snapshots.len(), 1, "{:#?}", unchanged.blocks());
+    assert_eq!(unchanged_snapshots[0].content, first_snapshot);
+
+    let second_root = temp_root("environment-snapshot-second-root");
+    service
+        .set_pane_environment_signature_for_tests("%1", test_environment_signature(&second_root));
+    let changed = service
+        .agent_context_for_pane_prompt("%1", "inspect the changed environment", 0)
+        .unwrap();
+    let changed_snapshots = changed
+        .blocks()
+        .iter()
+        .filter(|block| block.label == "task environment snapshot")
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(changed_snapshots.len(), 2, "{:#?}", changed.blocks());
+    assert_eq!(changed_snapshots[0], first_snapshot);
+    assert_ne!(changed_snapshots[1], first_snapshot);
+    assert!(changed_snapshots[1].contains(&second_root.to_string_lossy().to_string()));
+
+    service.clear_pane_environment_signature_for_tests("%1");
+    let unavailable = service
+        .agent_context_for_pane_prompt("%1", "continue without a signature", 0)
+        .unwrap();
+    let unavailable_snapshots = unavailable
+        .blocks()
+        .iter()
+        .filter(|block| block.label == "task environment snapshot")
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        unavailable_snapshots.len(),
+        2,
+        "{:#?}",
+        unavailable.blocks()
+    );
+    assert_eq!(unavailable_snapshots[0], first_snapshot);
+    assert_eq!(
+        unavailable_snapshots[1],
+        "environment_state=unavailable\nreason=pane_environment_signature_unavailable"
+    );
+
+    let _ = fs::remove_dir_all(transcript_root);
+    let _ = fs::remove_dir_all(first_root);
+    let _ = fs::remove_dir_all(second_root);
+}
+
+/// Verifies same-turn compaction refresh preserves the environment sampled at
+/// the prompt boundary even when the retained raw transcript drops its event.
+///
+/// Refresh must use the frozen turn value rather than re-probing the pane or
+/// leaving later retained transcript chronology without an environment baseline.
+#[test]
+fn runtime_compaction_refresh_reintroduces_frozen_environment_snapshot() {
+    let mut service = test_runtime_service();
+    let transcript_root = temp_root("environment-snapshot-compaction");
+    let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let environment_root = temp_root("environment-snapshot-compaction-root");
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        test_environment_signature(&environment_root),
+    );
+    let baseline = service
+        .agent_context_for_pane_prompt("%1", "capture the baseline", 0)
+        .unwrap()
+        .blocks()
+        .iter()
+        .find(|block| block.label == "task environment snapshot")
+        .unwrap()
+        .content
+        .clone();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let historical = [
+        (
+            TranscriptRole::System,
+            mez_agent::TranscriptContextEvent::environment_snapshot(baseline.clone())
+                .unwrap()
+                .to_transcript_content(),
+            "historical-turn-1",
+        ),
+        (
+            TranscriptRole::User,
+            "first prompt".to_string(),
+            "historical-turn-1",
+        ),
+        (
+            TranscriptRole::Assistant,
+            "first answer".to_string(),
+            "historical-turn-1",
+        ),
+        (
+            TranscriptRole::User,
+            "second prompt".to_string(),
+            "historical-turn-2",
+        ),
+        (
+            TranscriptRole::Assistant,
+            "second answer".to_string(),
+            "historical-turn-2",
+        ),
+    ];
+    for (index, (role, content, turn_id)) in historical.into_iter().enumerate() {
+        transcript_store
+            .append(&TranscriptEntry {
+                conversation_id: conversation_id.clone(),
+                sequence: u64::try_from(index + 1).unwrap(),
+                created_at_unix_seconds: 1,
+                role,
+                turn_id: turn_id.to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content,
+            })
+            .unwrap();
+    }
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 5)
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "continue after compaction")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .retain_recent_transcript_entries("%1", 2)
+        .unwrap();
+
+    assert!(
+        service
+            .refresh_running_turn_context_after_conversation_compaction(&started.turn_id)
+            .unwrap()
+    );
+    let refreshed = service.agent_turn_contexts().get(&started.turn_id).unwrap();
+    let snapshots = refreshed
+        .blocks()
+        .iter()
+        .filter(|block| block.label == "task environment snapshot")
+        .collect::<Vec<_>>();
+    assert_eq!(snapshots.len(), 1, "{:#?}", refreshed.blocks());
+    assert_eq!(snapshots[0].content, baseline);
+    let snapshot_index = refreshed
+        .blocks()
+        .iter()
+        .position(|block| block.label == "task environment snapshot")
+        .unwrap();
+    let active_user_index = refreshed
+        .blocks()
+        .iter()
+        .position(|block| {
+            block.source == ContextSourceKind::UserInstruction && block.label == "user prompt"
+        })
+        .unwrap();
+    assert!(snapshot_index < active_user_index);
+
+    let _ = fs::remove_dir_all(transcript_root);
+    let _ = fs::remove_dir_all(environment_root);
+}
+
 /// Verifies pane plan mode adds a plan-only tag immediately before the newest
 /// user prompt without changing the stored user content or another pane.
 #[test]
@@ -518,6 +799,10 @@ fn runtime_status_reports_provider_context_continuity_diagnostics() {
         "{trace}"
     );
     assert!(trace.contains("\"immutable_token_estimate\""), "{trace}");
+    assert!(
+        status.contains("| Stable provider prefix | common_messages=1 append_only=true |"),
+        "{status}"
+    );
 }
 
 /// Verifies the pane frame retains same-model provider context usage across an

@@ -130,6 +130,8 @@ struct RuntimeInterruptedAgentContinuation {
     conversation_id: String,
     /// Exact durable context assembled when the interrupted turn stopped.
     context: AgentContext,
+    /// Replayed history prefix retained inside the exact interrupted context.
+    imported_history_events: usize,
 }
 
 /// Turn-keyed routed metadata retained while a managed child awaits guidance.
@@ -486,6 +488,22 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_ledger: AgentTurnLedger,
     /// Assembled provider context keyed by turn id.
     agent_turn_contexts: BTreeMap<String, AgentContext>,
+    /// Number of replayed history events at the front of each active turn.
+    ///
+    /// Compaction refresh replaces exactly this prefix so prompt-boundary
+    /// environment transitions and other task-local events remain immutable.
+    agent_turn_imported_history_events: BTreeMap<String, usize>,
+    /// Newly appended environment snapshot content keyed by owning turn id.
+    ///
+    /// Historical snapshots already present in replay are deliberately absent;
+    /// only prompt-boundary transitions need a new durable transcript record.
+    agent_turn_environment_snapshots: BTreeMap<String, String>,
+    /// Frozen current environment projection keyed by owning turn id.
+    ///
+    /// Compaction refresh uses this prompt-boundary value rather than probing
+    /// live pane state when the retained raw transcript no longer has a
+    /// snapshot baseline.
+    agent_turn_current_environment_snapshots: BTreeMap<String, String>,
     /// Interrupted canonical contexts awaiting one pane-local continuation.
     interrupted_agent_continuations: BTreeMap<String, RuntimeInterruptedAgentContinuation>,
     /// Terminal execution transcript groups already accepted for persistence.
@@ -1011,11 +1029,13 @@ impl RuntimeSessionService {
         let Some(context) = self.agent.agent_turn_contexts.get(&turn.turn_id).cloned() else {
             return;
         };
+        let imported_history_events = self.agent_turn_imported_history_events(&turn.turn_id);
         self.agent.interrupted_agent_continuations.insert(
             turn.agent_id.clone(),
             RuntimeInterruptedAgentContinuation {
                 conversation_id: turn.conversation_id.clone(),
                 context,
+                imported_history_events,
             },
         );
     }
@@ -1031,14 +1051,14 @@ impl RuntimeSessionService {
         conversation_id: &str,
         fresh: AgentContext,
         imported_history_events: usize,
-    ) -> Result<(AgentContext, bool)> {
+    ) -> Result<(AgentContext, bool, usize)> {
         let Some(continuation) = self
             .agent
             .interrupted_agent_continuations
             .get(agent_id)
             .filter(|continuation| continuation.conversation_id == conversation_id)
         else {
-            return Ok((fresh, false));
+            return Ok((fresh, false, imported_history_events));
         };
 
         let mut resumed = continuation.context.clone();
@@ -1078,7 +1098,7 @@ impl RuntimeSessionService {
             }
         }
         resumed.validate_durable()?;
-        Ok((resumed, true))
+        Ok((resumed, true, continuation.imported_history_events))
     }
 
     /// Consumes any prior interruption handoff after a new turn is enqueued.

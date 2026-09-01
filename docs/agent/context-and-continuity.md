@@ -83,6 +83,14 @@ provider observation, not proof that context is correct: provider/model changes
 and compaction can legitimately create a cold request. Consult operations
 diagnostics for cache and continuity interpretation.
 
+The pane environment summary is sampled once before each user prompt. Mez
+stores it as an immutable chronological snapshot only when its exact bounded
+projection changes. Later turns replay the same bytes, and same-turn provider
+continuations keep the frozen value, so shell, project, container, manager, and
+tool changes extend history instead of rewriting its reusable prefix. Raw
+`PATH`, host/user identity, manager paths, and per-tool paths or versions remain
+outside the model-visible snapshot.
+
 Use `/show-context` to browse the current pane's conversation entries and, when
 appropriate, edit the selected entry with `e` or delete it with `d`. External
 editing preserves the entry's role and identity and uses conflict detection;

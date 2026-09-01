@@ -21,6 +21,18 @@ pub(super) fn runtime_agent_transcript_context_blocks(
     let mut blocks = Vec::new();
     for entry in entries {
         if entry.role == TranscriptRole::System
+            && let Some(TranscriptContextEvent::EnvironmentSnapshot { content, .. }) =
+                TranscriptContextEvent::from_transcript_content(&entry.content)
+        {
+            blocks.push(ContextBlock {
+                source: ContextSourceKind::Configuration,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "task environment snapshot".to_string(),
+                content,
+            });
+            continue;
+        }
+        if entry.role == TranscriptRole::System
             && let Some(TranscriptContextEvent::RoutedHandoff { content }) =
                 TranscriptContextEvent::from_transcript_content(&entry.content)
         {
@@ -68,27 +80,6 @@ pub(super) fn runtime_agent_transcript_context_blocks(
         });
     }
     blocks
-}
-
-/// Returns true for context blocks owned by transcript replay or compact memory.
-pub(super) fn runtime_context_block_is_compaction_refresh_owned(block: &ContextBlock) -> bool {
-    match block.source {
-        ContextSourceKind::Transcript
-        | ContextSourceKind::TranscriptUser
-        | ContextSourceKind::TranscriptTool => true,
-        ContextSourceKind::ActionResult => {
-            block.label.starts_with("previous tool message for pane ")
-        }
-        ContextSourceKind::TranscriptAssistant => block
-            .label
-            .starts_with("previous assistant message for pane "),
-        ContextSourceKind::RoutedHandoff => block.label == "routed worker handoff context",
-        ContextSourceKind::Memory => {
-            block.label == "conversation compaction notice"
-                || block.label.starts_with("memory compact-")
-        }
-        _ => false,
-    }
 }
 
 /// Maps a stored transcript role to a model-context source that preserves the

@@ -191,9 +191,13 @@ impl RuntimeSessionService {
             next_transcript_sequence(&store, &turn.conversation_id)?
         };
         let first_persistence = first_sequence == 1;
-        let entry = TranscriptEntry {
+        let interrupted_entry = TranscriptEntry {
             conversation_id: turn.conversation_id.clone(),
-            sequence: first_sequence,
+            sequence: first_sequence.saturating_add(u64::from(
+                self.agent
+                    .agent_turn_environment_snapshots
+                    .contains_key(&turn.turn_id),
+            )),
             created_at_unix_seconds,
             role: TranscriptRole::System,
             turn_id: turn.turn_id.clone(),
@@ -206,23 +210,47 @@ impl RuntimeSessionService {
             }
             .to_transcript_content(),
         };
-        entry.validate()?;
+        interrupted_entry.validate()?;
+        let mut entries = Vec::new();
+        if let Some(content) = self
+            .agent
+            .agent_turn_environment_snapshots
+            .get(&turn.turn_id)
+            .cloned()
+        {
+            let event = TranscriptContextEvent::environment_snapshot(content).ok_or_else(|| {
+                MezError::invalid_state("turn environment snapshot is empty or oversized")
+            })?;
+            let entry = TranscriptEntry {
+                conversation_id: turn.conversation_id.clone(),
+                sequence: first_sequence,
+                created_at_unix_seconds,
+                role: TranscriptRole::System,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                pane_id: turn.pane_id.clone(),
+                content: event.to_transcript_content(),
+            };
+            entry.validate()?;
+            entries.push(entry);
+        }
+        entries.push(interrupted_entry);
         if self.persistence.transcript_uses_adapter() {
             self.persistence.set_deferred_transcript_next_sequence(
                 turn.conversation_id.clone(),
-                first_sequence.saturating_add(1),
+                first_sequence.saturating_add(entries.len() as u64),
             );
             self.persistence
                 .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                     path: store.transcript_path(&turn.conversation_id)?,
                     store,
-                    entries: vec![entry],
+                    entries: entries.clone(),
                 });
             if first_persistence {
                 self.queue_saved_session_retention_operation(created_at_unix_seconds, false)?;
             }
         } else {
-            store.append_many(&[entry])?;
+            store.append_many(&entries)?;
         }
         self.agent
             .agent_persisted_execution_transcripts
@@ -233,12 +261,12 @@ impl RuntimeSessionService {
             let _ = self.agent.agent_persisted_execution_transcripts.pop_first();
         }
         self.agent_shell_store_mut()
-            .record_transcript_entries(&turn.pane_id, 1)?;
+            .record_transcript_entries(&turn.pane_id, entries.len())?;
         self.record_pane_transcript_ref(
             &turn.pane_id,
             format!("transcript:{}:{}", turn.pane_id, turn.conversation_id),
         )?;
-        Ok(1)
+        Ok(entries.len())
     }
 
     /// Retains exact `apply_patch` payloads and observed outcomes for export.
@@ -374,6 +402,20 @@ impl RuntimeSessionService {
             turn,
             execution,
         )?;
+        if let Some(content) = self
+            .agent
+            .agent_turn_environment_snapshots
+            .get(&turn.turn_id)
+            .cloned()
+        {
+            Self::insert_environment_snapshot_transcript_event(
+                &mut execution_entries,
+                conversation_id,
+                created_at_unix_seconds,
+                turn,
+                content,
+            )?;
+        }
         if execution.terminal_state == mez_agent::AgentTurnState::Completed
             && self.routed_presentation_turn(&turn.turn_id)
             && let Some(content) = self.routed_handoff_transcript_content(&turn.turn_id)
@@ -388,6 +430,42 @@ impl RuntimeSessionService {
         }
         entries.extend(execution_entries);
         Ok(entries)
+    }
+
+    /// Inserts one typed environment snapshot immediately before its user turn.
+    fn insert_environment_snapshot_transcript_event(
+        entries: &mut Vec<TranscriptEntry>,
+        conversation_id: &str,
+        created_at_unix_seconds: u64,
+        turn: &AgentTurnRecord,
+        content: String,
+    ) -> Result<()> {
+        let insertion_index = entries
+            .iter()
+            .position(|entry| entry.role == TranscriptRole::User)
+            .unwrap_or(0);
+        let sequence = entries
+            .get(insertion_index)
+            .map_or(1, |entry| entry.sequence);
+        for entry in &mut entries[insertion_index..] {
+            entry.sequence = entry.sequence.saturating_add(1);
+        }
+        let event = TranscriptContextEvent::environment_snapshot(content).ok_or_else(|| {
+            MezError::invalid_state("turn environment snapshot is empty or oversized")
+        })?;
+        let entry = TranscriptEntry {
+            conversation_id: conversation_id.to_string(),
+            sequence,
+            created_at_unix_seconds,
+            role: TranscriptRole::System,
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            pane_id: turn.pane_id.clone(),
+            content: event.to_transcript_content(),
+        };
+        entry.validate()?;
+        entries.insert(insertion_index, entry);
+        Ok(())
     }
 
     /// Returns the summarized routed handoff selected for durable replay.

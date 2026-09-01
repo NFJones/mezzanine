@@ -1006,6 +1006,14 @@ pub(super) fn runtime_openai_prompt_cache_diagnostics_trace_json(
                     "bytes": message.bytes,
                     "sha256": message.sha256
                 })
+            }).collect::<Vec<_>>(),
+            "stable_messages": diagnostics.continuity_snapshot.stable_messages.into_iter().map(|message| {
+                serde_json::json!({
+                    "index": message.index,
+                    "role": message.role,
+                    "bytes": message.bytes,
+                    "sha256": message.sha256
+                })
             }).collect::<Vec<_>>()
         }
     })

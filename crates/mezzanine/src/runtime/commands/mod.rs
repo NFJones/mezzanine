@@ -1256,8 +1256,13 @@ impl RuntimeSessionService {
                 block.hook_id, block.message
             )));
         }
-        let (context, delivered_message_sequence, imported_history_events) =
-            self.agent_context_for_pane_prompt_with_message_delivery(pane_id, prompt, 100, true)?;
+        let crate::runtime::control::RuntimeAgentPromptContext {
+            context,
+            delivered_message_sequence,
+            imported_history_events,
+            current_environment_snapshot,
+            new_environment_snapshot,
+        } = self.agent_context_for_pane_prompt_with_message_delivery(pane_id, prompt, 100, true)?;
         let context = self.apply_agent_shell_preference_context(pane_id, context)?;
         let fresh_context = self.apply_persisted_context_documents(pane_id, context)?;
         let agent_id = format!("agent-{pane_id}");
@@ -1266,7 +1271,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .map(|session| session.session_id.clone())
             .ok_or_else(|| MezError::invalid_state("agent turn conversation is unavailable"))?;
-        let (context, continued_interrupted_turn) = self
+        let (context, continued_interrupted_turn, active_imported_history_events) = self
             .prepare_interrupted_agent_continuation_context(
                 &agent_id,
                 &conversation_id,
@@ -1318,6 +1323,16 @@ impl RuntimeSessionService {
         )?;
         self.agent_turn_contexts_mut()
             .insert(turn_id.clone(), context);
+        self.set_agent_turn_imported_history_events(
+            turn_id.clone(),
+            active_imported_history_events,
+        );
+        if let Some(content) = current_environment_snapshot {
+            self.set_agent_turn_current_environment_snapshot(turn_id.clone(), content);
+        }
+        if let Some(content) = new_environment_snapshot {
+            self.set_agent_turn_environment_snapshot(turn_id.clone(), content);
+        }
         if let Some(sequence) = delivered_message_sequence {
             let recipient = AgentId::opaque(agent_id.clone())
                 .ok_or_else(|| MezError::invalid_state("runtime agent id is invalid for MMP"))?;

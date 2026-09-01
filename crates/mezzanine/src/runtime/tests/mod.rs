@@ -440,6 +440,31 @@ fn mark_test_pane_ready(service: &mut RuntimeSessionService, pane_id: &str) {
     service.set_pane_readiness(pane_id, PaneReadinessState::Ready);
 }
 
+/// Builds one privacy-sensitive environment fixture for model-context tests.
+///
+/// Host, user, raw PATH, and manager paths must influence the internal digest
+/// without entering the model-visible projection as clear text.
+fn test_environment_signature(working_directory: &Path) -> mez_agent::EnvironmentSignature {
+    mez_agent::EnvironmentSignature::new(
+        "linux",
+        "x86_64",
+        None,
+        "private-test-host",
+        "private-test-user",
+        None,
+        "/bin/sh",
+        mez_agent::ShellClassification::PosixSh,
+        None,
+        Some("/private/toolchain/bin:/usr/bin".to_string()),
+        working_directory.to_string_lossy(),
+        Some(working_directory.to_string_lossy().into_owned()),
+        true,
+        None,
+        vec!["venv:/private/virtual-environment".to_string()],
+    )
+    .unwrap()
+}
+
 /// Runs the temp root operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

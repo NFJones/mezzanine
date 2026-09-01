@@ -180,6 +180,8 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
     assert_eq!(continuity.message_index, Some(1));
     assert_eq!(continuity.common_message_prefix, 1);
     assert!(!continuity.messages_append_only);
+    assert_eq!(continuity.common_stable_message_prefix, 1);
+    assert!(continuity.stable_messages_append_only);
 }
 
 #[test]

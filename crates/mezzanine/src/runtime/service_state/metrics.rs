@@ -198,6 +198,10 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub(crate) last_provider_request_common_component_prefix: Option<usize>,
     /// Whether provider input messages only appended after the previous request.
     pub(crate) last_provider_request_messages_append_only: Option<bool>,
+    /// Number of unchanged cache-eligible input messages at the request front.
+    pub(crate) last_provider_request_common_stable_message_prefix: Option<usize>,
+    /// Whether cache-eligible input only appended after the previous prefix.
+    pub(crate) last_provider_request_stable_messages_append_only: Option<bool>,
     /// Previous OpenAI request snapshot retained only for continuity comparison.
     pub(crate) last_openai_request_continuity_snapshot:
         Option<mez_agent::OpenAiRequestContinuitySnapshot>,
@@ -342,6 +346,12 @@ impl RuntimeMetricsSnapshot {
                 .map(|value| value.common_component_prefix);
             self.last_provider_request_messages_append_only =
                 continuity.as_ref().map(|value| value.messages_append_only);
+            self.last_provider_request_common_stable_message_prefix = continuity
+                .as_ref()
+                .map(|value| value.common_stable_message_prefix);
+            self.last_provider_request_stable_messages_append_only = continuity
+                .as_ref()
+                .map(|value| value.stable_messages_append_only);
             self.last_openai_request_continuity_snapshot =
                 Some(diagnostics.continuity_snapshot.clone());
         } else if diagnostics_failed {

@@ -1394,6 +1394,11 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    let environment_root = temp_root("runtime-terminal-transcript-environment");
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        test_environment_signature(&environment_root),
+    );
     let conversation_id = service
         .agent_shell_store()
         .get("%1")
@@ -1463,6 +1468,35 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
     assert_eq!(second, 0);
     assert_eq!(entries.len(), first);
     assert!(entries.iter().all(|entry| entry.turn_id == turn.turn_id));
+    let environment_index = entries
+        .iter()
+        .position(|entry| {
+            matches!(
+                mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(mez_agent::TranscriptContextEvent::EnvironmentSnapshot { .. })
+            )
+        })
+        .expect("environment transition should be persisted");
+    let user_index = entries
+        .iter()
+        .position(|entry| entry.role == TranscriptRole::User)
+        .expect("user prompt should be persisted");
+    let assistant_index = entries
+        .iter()
+        .position(|entry| entry.role == TranscriptRole::Assistant)
+        .expect("assistant response should be persisted");
+    assert!(environment_index < user_index);
+    assert!(user_index < assistant_index);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(
+                mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                Some(mez_agent::TranscriptContextEvent::EnvironmentSnapshot { .. })
+            ))
+            .count(),
+        1
+    );
     assert_eq!(
         service
             .agent_shell_store()
@@ -1472,6 +1506,7 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
         u64::try_from(first).unwrap()
     );
     let _ = std::fs::remove_dir_all(transcript_root);
+    let _ = std::fs::remove_dir_all(environment_root);
 }
 
 /// Verifies a routed presentation persists exactly one typed handoff summary

@@ -366,27 +366,33 @@ fn openai_request_continuity_snapshot(
     request_control: &str,
     complete_request: &serde_json::Value,
 ) -> ProviderRequestAssemblyResult<OpenAiRequestContinuitySnapshot> {
-    let messages = rendered
-        .input
-        .iter()
-        .enumerate()
-        .map(|(index, message)| {
-            let text = openai_diagnostic_json(
-                message,
-                "OpenAI request-message continuity diagnostics failed",
-            )?;
-            Ok(OpenAiRequestMessageDigest {
-                index,
-                role: message
-                    .get("role")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string(),
-                bytes: text.len(),
-                sha256: sha256_hex(text.as_bytes()),
+    let message_digests = |messages: &[serde_json::Value], failure: &str| {
+        messages
+            .iter()
+            .enumerate()
+            .map(|(index, message)| {
+                let text = openai_diagnostic_json(message, failure)?;
+                Ok(OpenAiRequestMessageDigest {
+                    index,
+                    role: message
+                        .get("role")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    bytes: text.len(),
+                    sha256: sha256_hex(text.as_bytes()),
+                })
             })
-        })
-        .collect::<ProviderRequestAssemblyResult<Vec<_>>>()?;
+            .collect::<ProviderRequestAssemblyResult<Vec<_>>>()
+    };
+    let messages = message_digests(
+        &rendered.input,
+        "OpenAI request-message continuity diagnostics failed",
+    )?;
+    let stable_messages = message_digests(
+        &rendered.stable_input,
+        "OpenAI stable-message continuity diagnostics failed",
+    )?;
     let request_text = openai_diagnostic_json(
         complete_request,
         "OpenAI complete-request continuity diagnostics failed",
@@ -404,6 +410,7 @@ fn openai_request_continuity_snapshot(
             .map_or_else(|| sha256_hex(b"null"), |value| sha256_hex(value.as_bytes())),
         request_control_sha256: sha256_hex(request_control.as_bytes()),
         messages,
+        stable_messages,
     })
 }
 

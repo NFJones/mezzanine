@@ -372,6 +372,22 @@ impl RuntimeSessionService {
                 ),
             ],
             vec![
+                "Stable provider prefix".to_string(),
+                self.runtime_metrics()
+                    .last_provider_request_stable_messages_append_only
+                    .map_or_else(
+                        || "unknown".to_string(),
+                        |append_only| {
+                            format!(
+                                "common_messages={} append_only={append_only}",
+                                self.runtime_metrics()
+                                    .last_provider_request_common_stable_message_prefix
+                                    .unwrap_or(0),
+                            )
+                        },
+                    ),
+            ],
+            vec![
                 "Latest turn".to_string(),
                 format!("{latest_turn_id} ({latest_turn_state})"),
             ],
