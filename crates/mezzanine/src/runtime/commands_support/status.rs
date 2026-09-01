@@ -208,10 +208,18 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
         "".to_string(),
         "[x11 forwarding]".to_string(),
         format!("route_active = {}", x11_metrics.route_active),
+        format!(
+            "authority_repair_pending = {}",
+            x11_metrics.authority_repair_pending
+        ),
         format!("active_streams = {}", x11_metrics.active_streams),
         format!("route_activations = {}", x11_metrics.route_activations),
         format!("route_deactivations = {}", x11_metrics.route_deactivations),
         format!("route_takeovers = {}", x11_metrics.route_takeovers),
+        format!(
+            "authority_publication_failures = {}",
+            x11_metrics.authority_publication_failures
+        ),
         format!("sockets_accepted = {}", x11_metrics.sockets_accepted),
         format!(
             "sockets_rejected_no_route = {}",

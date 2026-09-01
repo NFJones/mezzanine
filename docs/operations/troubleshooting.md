@@ -115,6 +115,11 @@ sockets, active streams, and stream outcomes. A rising
 `streams_failed` covers malformed credentials, setup/connect timeout, route
 cancellation, and transport failures. These diagnostics intentionally omit
 cookies, route tokens, local display targets, authority paths, and X11 bytes.
+`authority_repair_pending = true` means logical route ownership has already
+been revoked but the private Xauthority file could not be atomically replaced;
+repair the session Xauthority directory or storage. A later successful route
+publication clears the flag, while `authority_publication_failures` retains the
+aggregate failure count.
 
 X11/Xwayland socket applications are in scope. Native Wayland, audio, D-Bus,
 portals, device forwarding, network-transparent MIT-SHM, and dependable direct

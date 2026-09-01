@@ -489,10 +489,12 @@ impl RuntimeSessionService {
                     "x11": {
                         "enabled": policy.x11.enabled,
                         "route_active": x11.route_active,
+                        "authority_repair_pending": x11.authority_repair_pending,
                         "active_streams": x11.active_streams,
                         "route_activations": x11.route_activations,
                         "route_deactivations": x11.route_deactivations,
                         "route_takeovers": x11.route_takeovers,
+                        "authority_publication_failures": x11.authority_publication_failures,
                         "sockets_accepted": x11.sockets_accepted,
                         "sockets_rejected_no_route": x11.sockets_rejected_no_route,
                         "sockets_rejected_capacity": x11.sockets_rejected_capacity,

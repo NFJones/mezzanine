@@ -139,10 +139,12 @@ pub(crate) struct RuntimeX11ProxyHandle {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct RuntimeX11ProxyDiagnosticsSnapshot {
     pub(crate) route_active: bool,
+    pub(crate) authority_repair_pending: bool,
     pub(crate) active_streams: usize,
     pub(crate) route_activations: u64,
     pub(crate) route_deactivations: u64,
     pub(crate) route_takeovers: u64,
+    pub(crate) authority_publication_failures: u64,
     pub(crate) sockets_accepted: u64,
     pub(crate) sockets_rejected_no_route: u64,
     pub(crate) sockets_rejected_capacity: u64,
@@ -155,10 +157,12 @@ pub(crate) struct RuntimeX11ProxyDiagnosticsSnapshot {
 #[derive(Debug, Default)]
 struct RuntimeX11ProxyDiagnostics {
     route_active: AtomicBool,
+    authority_repair_pending: AtomicBool,
     active_streams: AtomicUsize,
     route_activations: AtomicU64,
     route_deactivations: AtomicU64,
     route_takeovers: AtomicU64,
+    authority_publication_failures: AtomicU64,
     sockets_accepted: AtomicU64,
     sockets_rejected_no_route: AtomicU64,
     sockets_rejected_capacity: AtomicU64,
@@ -171,10 +175,14 @@ impl RuntimeX11ProxyDiagnostics {
     fn snapshot(&self) -> RuntimeX11ProxyDiagnosticsSnapshot {
         RuntimeX11ProxyDiagnosticsSnapshot {
             route_active: self.route_active.load(Ordering::Relaxed),
+            authority_repair_pending: self.authority_repair_pending.load(Ordering::Relaxed),
             active_streams: self.active_streams.load(Ordering::Relaxed),
             route_activations: self.route_activations.load(Ordering::Relaxed),
             route_deactivations: self.route_deactivations.load(Ordering::Relaxed),
             route_takeovers: self.route_takeovers.load(Ordering::Relaxed),
+            authority_publication_failures: self
+                .authority_publication_failures
+                .load(Ordering::Relaxed),
             sockets_accepted: self.sockets_accepted.load(Ordering::Relaxed),
             sockets_rejected_no_route: self.sockets_rejected_no_route.load(Ordering::Relaxed),
             sockets_rejected_capacity: self.sockets_rejected_capacity.load(Ordering::Relaxed),
@@ -300,8 +308,7 @@ impl RuntimeX11ProxyHandle {
                 "the session already has an active X11 route owner",
             ));
         }
-        if let Some(current) = routes.current.as_ref() {
-            write_empty_private_xauthority(&self.inner.authority_path)?;
+        if let Some(current) = routes.current.take() {
             current.cancellation.send_replace(true);
             self.inner
                 .diagnostics
@@ -311,6 +318,8 @@ impl RuntimeX11ProxyHandle {
                 .diagnostics
                 .route_active
                 .store(false, Ordering::Relaxed);
+            drop(current);
+            self.publish_empty_authority()?;
         }
         routes.next_generation = routes
             .next_generation
@@ -369,11 +378,7 @@ impl RuntimeX11ProxyHandle {
         if route.active {
             return Ok(());
         }
-        write_private_xauthority(
-            &self.inner.authority_path,
-            self.inner.display_number,
-            &route.fake_cookie,
-        )?;
+        self.publish_route_authority(&route.fake_cookie)?;
         route.connection = connection;
         route.active = true;
         self.inner
@@ -400,11 +405,12 @@ impl RuntimeX11ProxyHandle {
         if !matches {
             return Ok(false);
         }
-        let was_active = routes.current.as_ref().is_some_and(|route| route.active);
-        write_empty_private_xauthority(&self.inner.authority_path)?;
-        if let Some(route) = routes.current.take() {
-            route.cancellation.send_replace(true);
-        }
+        let route = routes
+            .current
+            .take()
+            .ok_or_else(|| MezError::invalid_state("session X11 route disappeared"))?;
+        let was_active = route.active;
+        route.cancellation.send_replace(true);
         if was_active {
             self.inner
                 .diagnostics
@@ -415,7 +421,42 @@ impl RuntimeX11ProxyHandle {
             .diagnostics
             .route_active
             .store(false, Ordering::Relaxed);
+        drop(route);
+        self.publish_empty_authority()?;
         Ok(true)
+    }
+
+    /// Publishes an empty authority database and records whether repair is needed.
+    fn publish_empty_authority(&self) -> Result<()> {
+        let result = write_empty_private_xauthority(&self.inner.authority_path);
+        self.record_authority_publication(&result);
+        result
+    }
+
+    /// Publishes one active route credential and records whether repair is needed.
+    fn publish_route_authority(&self, cookie: &X11Cookie) -> Result<()> {
+        let result = write_private_xauthority(
+            &self.inner.authority_path,
+            self.inner.display_number,
+            cookie,
+        );
+        self.record_authority_publication(&result);
+        result
+    }
+
+    /// Updates privacy-safe publication health without retaining error details.
+    fn record_authority_publication(&self, result: &Result<()>) {
+        let failed = result.is_err();
+        self.inner
+            .diagnostics
+            .authority_repair_pending
+            .store(failed, Ordering::Relaxed);
+        if failed {
+            self.inner
+                .diagnostics
+                .authority_publication_failures
+                .fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Snapshots one currently published route for a single accepted socket.
@@ -897,6 +938,93 @@ mod tests {
         assert!(!handle.diagnostics().route_active);
 
         drop(first_lease);
+        drop(proxy);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Authority publication failure must not retain logical ownership during
+    /// ordinary deactivation, and a repaired target must accept a fresh route.
+    #[tokio::test]
+    async fn deactivation_revokes_route_before_authority_publication_failure() {
+        let root = test_root("deactivation-publication-failure");
+        let proxy = RuntimeX11Proxy::prepare(&root).unwrap();
+        let handle = proxy.handle();
+        let first_owner = route_owner("client-failure", "connection-failure");
+        let (_first_result, first_lease) = handle
+            .reserve_route(first_owner, route_offer([0x31; 16], false))
+            .unwrap();
+        first_lease.activate_without_transport().unwrap();
+        let mut cancellation = handle
+            .inner
+            .routes
+            .lock()
+            .unwrap()
+            .current
+            .as_ref()
+            .unwrap()
+            .cancellation
+            .subscribe();
+
+        fs::remove_file(handle.authority_path()).unwrap();
+        fs::create_dir(handle.authority_path()).unwrap();
+        let error = first_lease.deactivate().unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+        assert!(*cancellation.borrow_and_update());
+        assert!(!handle.diagnostics().route_active);
+        assert!(handle.diagnostics().authority_repair_pending);
+        assert_eq!(handle.diagnostics().authority_publication_failures, 1);
+        assert!(handle.inner.routes.lock().unwrap().current.is_none());
+
+        fs::remove_dir(handle.authority_path()).unwrap();
+        let replacement_owner = route_owner("client-repaired", "connection-repaired");
+        let (_replacement_result, replacement_lease) = handle
+            .reserve_route(replacement_owner, route_offer([0x32; 16], false))
+            .unwrap();
+        replacement_lease.activate_without_transport().unwrap();
+        assert!(handle.diagnostics().route_active);
+        assert!(!handle.diagnostics().authority_repair_pending);
+        assert!(!fs::read(handle.authority_path()).unwrap().is_empty());
+        replacement_lease.deactivate().unwrap();
+
+        drop(proxy);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Failed takeover publication must leave the old generation cancelled
+    /// and no replacement owner registered until storage has been repaired.
+    #[tokio::test]
+    async fn takeover_failure_leaves_no_owner_and_recovers_after_repair() {
+        let root = test_root("takeover-publication-failure");
+        let proxy = RuntimeX11Proxy::prepare(&root).unwrap();
+        let handle = proxy.handle();
+        let first_owner = route_owner("client-first", "connection-first");
+        let second_owner = route_owner("client-second", "connection-second");
+        let (_first_result, first_lease) = handle
+            .reserve_route(first_owner, route_offer([0x41; 16], false))
+            .unwrap();
+        first_lease.activate_without_transport().unwrap();
+
+        fs::remove_file(handle.authority_path()).unwrap();
+        fs::create_dir(handle.authority_path()).unwrap();
+        let error = handle
+            .reserve_route(second_owner.clone(), route_offer([0x42; 16], true))
+            .unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+        assert!(!handle.diagnostics().route_active);
+        assert_eq!(handle.diagnostics().route_takeovers, 1);
+        assert!(handle.diagnostics().authority_repair_pending);
+        assert!(handle.inner.routes.lock().unwrap().current.is_none());
+        assert!(!first_lease.deactivate().unwrap());
+
+        fs::remove_dir(handle.authority_path()).unwrap();
+        let (_second_result, second_lease) = handle
+            .reserve_route(second_owner, route_offer([0x42; 16], false))
+            .unwrap();
+        second_lease.activate_without_transport().unwrap();
+        assert!(handle.diagnostics().route_active);
+        assert!(!handle.diagnostics().authority_repair_pending);
+        second_lease.deactivate().unwrap();
+
         drop(proxy);
         let _ = fs::remove_dir_all(root);
     }
