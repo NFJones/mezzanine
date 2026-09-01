@@ -1226,6 +1226,14 @@ async fn bind_policy_iroh_endpoint(
 }
 
 impl super::RuntimeSessionService {
+    /// Returns the effective Iroh policy currently applied to this session.
+    pub(crate) fn configured_iroh_transport_policy(
+        &self,
+    ) -> Result<super::RuntimeIrohTransportPolicy> {
+        let structured = super::runtime_effective_config_value(self.integration.config_layers())?;
+        super::runtime_iroh_transport_policy_from_config(&structured)
+    }
+
     /// Installs the diagnostics registry owned by a host-routed Iroh transport.
     pub(crate) fn set_host_routed_iroh_diagnostics(&mut self, diagnostics: RuntimeIrohDiagnostics) {
         self.integration
@@ -1236,8 +1244,7 @@ impl super::RuntimeSessionService {
     pub(crate) async fn bind_configured_iroh_endpoint(
         &mut self,
     ) -> Result<Option<RuntimeIrohEndpoint>> {
-        let structured = super::runtime_effective_config_value(self.integration.config_layers())?;
-        let policy = super::runtime_iroh_transport_policy_from_config(&structured)?;
+        let policy = self.configured_iroh_transport_policy()?;
         if !policy.enabled {
             self.integration.set_remote_endpoint_addr(None);
             self.integration.set_remote_iroh_diagnostics(None);

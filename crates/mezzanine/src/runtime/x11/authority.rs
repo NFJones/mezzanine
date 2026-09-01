@@ -96,7 +96,7 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 /// Creates or validates the user-private authority directory.
-fn ensure_private_directory(path: &Path) -> Result<()> {
+pub(super) fn ensure_private_directory(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => validate_private_directory(path, &metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

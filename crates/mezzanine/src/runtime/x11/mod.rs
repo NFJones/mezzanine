@@ -12,6 +12,7 @@
 mod authority;
 mod contracts;
 mod protocol;
+mod proxy;
 
 pub(crate) use authority::{
     encode_xauthority_record, write_empty_private_xauthority, write_private_xauthority,
@@ -26,3 +27,4 @@ pub(crate) use protocol::{
     X11SetupPacket, X11SetupProgress, parse_x11_setup, rewrite_x11_setup_cookie,
     validate_x11_setup_cookie,
 };
+pub(crate) use proxy::{RuntimeX11Proxy, RuntimeX11ProxyHandle};

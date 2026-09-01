@@ -753,6 +753,8 @@ const RUNTIME_FOREIGN_SHELL_BOOTSTRAP_ABSOLUTE_TIMEOUT_MS: u64 = 120_000;
 pub(crate) struct RuntimeProcessComponent {
     /// Live terminal and shell settings applied to process state.
     settings: RuntimeProcessSettings,
+    /// Stable protected X11 environment and route-facing proxy handle.
+    x11_proxy: Option<crate::runtime::x11::RuntimeX11ProxyHandle>,
     /// Test-only opt-in for historical startup-adapter protocol fixtures.
     #[cfg(test)]
     legacy_managed_startup_for_tests: bool,
@@ -1017,6 +1019,14 @@ pub(crate) fn terminal_features_with_progress(
 }
 
 impl RuntimeSessionService {
+    /// Installs the session-local X11 proxy before any pane process starts.
+    pub(crate) fn set_runtime_x11_proxy(
+        &mut self,
+        proxy: crate::runtime::x11::RuntimeX11ProxyHandle,
+    ) {
+        self.process.x11_proxy = Some(proxy);
+    }
+
     /// Returns the number of active pane output pipes.
     pub(crate) fn active_pane_pipe_count(&self) -> usize {
         self.process.active_pane_pipes.len()
@@ -4430,6 +4440,11 @@ impl RuntimeSessionService {
             for (key, value) in environment_overrides {
                 launch = launch.with_environment_variable(key, value);
             }
+        }
+        if let Some(x11_proxy) = self.process.x11_proxy.as_ref() {
+            launch = launch
+                .with_environment_variable("DISPLAY", x11_proxy.display())
+                .with_environment_variable("XAUTHORITY", x11_proxy.authority_path().as_os_str());
         }
         let primary_pid = self
             .process

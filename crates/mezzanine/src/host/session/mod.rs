@@ -27,6 +27,7 @@ use crate::host::async_runtime::{
     build_async_runtime_daemon_services, build_async_runtime_session_services,
     supervise_async_runtime_services,
 };
+use crate::runtime::x11::RuntimeX11Proxy;
 use crate::runtime::{
     RuntimeEvent, RuntimeEventBatch, RuntimeIrohShutdownHandle, RuntimeLifecycleState,
     RuntimeSessionService, ShutdownEvent, bind_control_socket, build_runtime_iroh_control_service,
@@ -191,12 +192,20 @@ impl SessionFactory {
         if let Some(registry) = registry.clone() {
             service.set_session_registry(registry);
         }
+        let config_root = request.config.root.clone();
         let snapshots = initialize_session_dependencies(
             &mut service,
             request.config,
             request.created_at_unix_seconds,
         )
         .await?;
+        let x11_proxy = if service.configured_iroh_transport_policy()?.x11.enabled {
+            let proxy = RuntimeX11Proxy::prepare(&config_root)?;
+            service.set_runtime_x11_proxy(proxy.handle());
+            Some(proxy)
+        } else {
+            None
+        };
         let iroh_endpoint = service.bind_configured_iroh_endpoint().await?;
         spawn_auth_refresh_if_needed(&service);
         let daemon_config = AsyncRuntimeDaemonConfig {
@@ -255,6 +264,9 @@ impl SessionFactory {
                 return Err(error);
             }
         };
+        if let Some(proxy) = x11_proxy {
+            services.push(build_runtime_x11_proxy_service(proxy));
+        }
         let iroh_shutdown = iroh_endpoint
             .as_ref()
             .map(|endpoint| endpoint.shutdown_handle());
@@ -620,6 +632,13 @@ fn build_provider_refresh_service(handle: AsyncRuntimeSessionHandle) -> AsyncRun
     })
 }
 
+fn build_runtime_x11_proxy_service(proxy: RuntimeX11Proxy) -> AsyncRuntimeService {
+    AsyncRuntimeService::new("x11-proxy", async move {
+        let rejected = proxy.serve_no_route().await?;
+        Ok(AsyncRuntimeServiceExit::completed(rejected))
+    })
+}
+
 fn build_actor_lifetime_service(handle: AsyncRuntimeSessionHandle) -> AsyncRuntimeService {
     AsyncRuntimeService::new("session-lifetime", async move {
         let mut lifecycle = handle.lifecycle_state_watcher();
@@ -789,6 +808,109 @@ mod tests {
         assert_eq!(lines[1], root.to_string_lossy());
         assert_eq!(lines[2..], ["101", "37", "unset"]);
 
+        drop(runtime);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// X11 policy must prepare the loopback proxy before the first pane starts,
+    /// protect its environment from caller overrides, and remove private state
+    /// when a ready runtime is dropped before supervision begins.
+    #[tokio::test(flavor = "current_thread")]
+    async fn session_factory_prepares_protected_x11_environment_before_initial_pane() {
+        let root = test_root("x11-initial-environment");
+        let observed = root.join("observed-x11.txt");
+        let mut request = test_request(
+            "x11-initial-environment",
+            root.clone(),
+            root.join("control.sock"),
+        );
+        request.config.layers[0].text.push_str(
+            "\n[transport.iroh.x11]\nenabled = true\nallow_trusted = false\nmax_connections_per_route = 16\nsetup_timeout_ms = 5000\n",
+        );
+        request.startup = SessionRuntimeStartup::Initial {
+            explicit_command: Some(format!(
+                "printf '%s\\n%s\\n' \"$DISPLAY\" \"$XAUTHORITY\" > {}; sleep 30",
+                observed.to_string_lossy()
+            )),
+            start_directory: None,
+            environment: Some(vec![
+                ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+                ("HOME".to_string(), root.to_string_lossy().into_owned()),
+                ("DISPLAY".to_string(), "remote.invalid:99".to_string()),
+                (
+                    "XAUTHORITY".to_string(),
+                    "/tmp/unsafe-authority".to_string(),
+                ),
+            ]),
+        };
+
+        let runtime = SessionFactory::create(request).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while fs::read_to_string(&observed).map_or(true, |value| value.lines().count() < 2) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let observed = fs::read_to_string(&observed).unwrap();
+        let values = observed.lines().collect::<Vec<_>>();
+        assert_eq!(values.len(), 2);
+        assert!(values[0].starts_with("127.0.0.1:"), "{observed}");
+        assert_ne!(values[0], "remote.invalid:99");
+        let authority_path = PathBuf::from(values[1]);
+        assert_ne!(authority_path, PathBuf::from("/tmp/unsafe-authority"));
+        assert!(authority_path.starts_with(root.join("x11-sessions")));
+        assert_eq!(fs::read(&authority_path).unwrap(), Vec::<u8>::new());
+        assert_eq!(
+            fs::metadata(authority_path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&authority_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        drop(runtime);
+        assert!(!authority_path.exists());
+        assert!(!root.join("x11-sessions").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Omitted X11 policy must not allocate proxy artifacts or change the
+    /// pane environment of an otherwise ordinary session.
+    #[tokio::test(flavor = "current_thread")]
+    async fn session_factory_keeps_x11_disabled_sessions_unchanged() {
+        let root = test_root("x11-disabled");
+        let observed = root.join("observed-x11.txt");
+        let mut request = test_request("x11-disabled", root.clone(), root.join("control.sock"));
+        request.startup = SessionRuntimeStartup::Initial {
+            explicit_command: Some(format!(
+                "printf '%s\\n%s\\n' \"${{DISPLAY-unset}}\" \"${{XAUTHORITY-unset}}\" > {}; sleep 30",
+                observed.to_string_lossy()
+            )),
+            start_directory: None,
+            environment: Some(vec![
+                ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+                ("HOME".to_string(), root.to_string_lossy().into_owned()),
+            ]),
+        };
+
+        let runtime = SessionFactory::create(request).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while fs::read_to_string(&observed).map_or(true, |value| value.lines().count() < 2) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&observed).unwrap(), "unset\nunset\n");
+        assert!(!root.join("x11-sessions").exists());
         drop(runtime);
         let _ = fs::remove_dir_all(root);
     }

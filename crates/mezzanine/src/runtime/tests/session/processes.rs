@@ -1799,6 +1799,126 @@ fn runtime_service_restarts_restored_panes_from_home_when_saved_cwd_fails() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Protected X11 environment values must reach every later window and split
+/// through the same centralized pane-start boundary as the initial process.
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_x11_environment_reaches_later_windows_and_splits() {
+    let root = temp_root("x11-later-pane-environment");
+    let window_output = root.join("window-x11.txt");
+    let split_output = root.join("split-x11.txt");
+    let proxy = crate::runtime::x11::RuntimeX11Proxy::prepare(&root).unwrap();
+    let proxy_handle = proxy.handle();
+    let expected_display = proxy_handle.display().to_string();
+    let expected_authority = proxy_handle.authority_path().to_path_buf();
+    let mut service = test_runtime_service();
+    service.set_runtime_x11_proxy(proxy_handle);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    service
+        .create_window_with_pane_process(
+            &primary,
+            "x11-window",
+            true,
+            Some(&format!(
+                "printf '%s\\n%s\\n' \"$DISPLAY\" \"$XAUTHORITY\" > {}; sleep 30",
+                window_output.to_string_lossy()
+            )),
+        )
+        .unwrap();
+    service
+        .split_pane_with_process(
+            &primary,
+            SplitDirection::Vertical,
+            Some(&format!(
+                "printf '%s\\n%s\\n' \"$DISPLAY\" \"$XAUTHORITY\" > {}; sleep 30",
+                split_output.to_string_lossy()
+            )),
+        )
+        .unwrap();
+
+    for output in [&window_output, &split_output] {
+        let observed = wait_for_x11_environment_file(output);
+        let values = observed.lines().collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            [
+                expected_display.as_str(),
+                expected_authority.to_string_lossy().as_ref()
+            ]
+        );
+    }
+
+    service.terminate_all_pane_processes().unwrap();
+    drop(proxy);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Snapshot-restored panes must inherit the same stable X11 environment as
+/// fresh panes instead of restarting without the session proxy contract.
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_x11_environment_reaches_restored_panes() {
+    let root = temp_root("x11-restored-pane-environment");
+    let output = root.join("restored-x11.txt");
+    let original = test_session();
+    let payload = crate::storage::snapshot::SessionSnapshotPayload::from_session(&original);
+    let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
+    let restored = Session::from_restore_input(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        restore_input,
+    )
+    .unwrap();
+    let mut service =
+        RuntimeSessionService::with_event_log(restored, root.join("restored.sock"), 100, 10, 1024)
+            .unwrap();
+    let proxy = crate::runtime::x11::RuntimeX11Proxy::prepare(&root).unwrap();
+    let proxy_handle = proxy.handle();
+    let expected_display = proxy_handle.display().to_string();
+    let expected_authority = proxy_handle.authority_path().to_path_buf();
+    service.set_runtime_x11_proxy(proxy_handle);
+
+    let starts = service
+        .restart_restored_pane_processes(Some(&format!(
+            "printf '%s\\n%s\\n' \"$DISPLAY\" \"$XAUTHORITY\" > {}; sleep 30",
+            output.to_string_lossy()
+        )))
+        .unwrap();
+
+    assert_eq!(starts.len(), 1);
+    let observed = wait_for_x11_environment_file(&output);
+    let values = observed.lines().collect::<Vec<_>>();
+    assert_eq!(
+        values,
+        [
+            expected_display.as_str(),
+            expected_authority.to_string_lossy().as_ref()
+        ]
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    drop(proxy);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Waits boundedly for one pane command to publish its two-line X11
+/// environment observation.
+fn wait_for_x11_environment_file(path: &Path) -> String {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Ok(value) = fs::read_to_string(path)
+            && value.lines().count() >= 2
+        {
+            return value;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for X11 environment observation"
+        );
+        thread::yield_now();
+    }
+}
+
 /// Verifies runtime service starts processes for created windows and panes.
 ///
 /// This regression scenario documents the behavior being protected so a
