@@ -27,4 +27,6 @@ pub(crate) use protocol::{
     X11SetupPacket, X11SetupProgress, parse_x11_setup, rewrite_x11_setup_cookie,
     validate_x11_setup_cookie,
 };
-pub(crate) use proxy::{RuntimeX11Proxy, RuntimeX11ProxyHandle};
+pub(crate) use proxy::{
+    RuntimeX11Proxy, RuntimeX11ProxyHandle, RuntimeX11RouteLease, RuntimeX11RouteOwner,
+};

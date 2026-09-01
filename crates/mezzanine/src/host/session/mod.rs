@@ -199,8 +199,9 @@ impl SessionFactory {
             request.created_at_unix_seconds,
         )
         .await?;
-        let x11_proxy = if service.configured_iroh_transport_policy()?.x11.enabled {
-            let proxy = RuntimeX11Proxy::prepare(&config_root)?;
+        let x11_policy = service.configured_iroh_transport_policy()?.x11;
+        let x11_proxy = if x11_policy.enabled {
+            let proxy = RuntimeX11Proxy::prepare_with_policy(&config_root, x11_policy)?;
             service.set_runtime_x11_proxy(proxy.handle());
             Some(proxy)
         } else {

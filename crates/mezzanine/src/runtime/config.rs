@@ -73,7 +73,8 @@ pub(super) use hooks::{
 };
 pub(crate) use iroh::{
     RuntimeIrohAddressLookupPolicy, RuntimeIrohCompressionCodec, RuntimeIrohIdentityPolicy,
-    RuntimeIrohRelayPolicy, RuntimeIrohTransportPolicy, runtime_iroh_transport_policy_from_config,
+    RuntimeIrohRelayPolicy, RuntimeIrohTransportPolicy, RuntimeIrohX11Policy,
+    runtime_iroh_transport_policy_from_config,
 };
 pub(super) use key_preset::{runtime_active_key_preset, runtime_key_preset_definition_from_value};
 pub(super) use mcp::runtime_mcp_registry_from_config;

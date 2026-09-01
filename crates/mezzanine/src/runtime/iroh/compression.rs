@@ -840,7 +840,14 @@ fn json_contains_sensitive_transport_key(value: &serde_json::Value) -> bool {
         serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
             matches!(
                 key.as_str(),
-                "credential" | "device_credential" | "invitation" | "password" | "secret" | "token"
+                "credential"
+                    | "device_credential"
+                    | "invitation"
+                    | "password"
+                    | "secret"
+                    | "token"
+                    | "fake_cookie_base64"
+                    | "route_token_base64"
             ) || json_contains_sensitive_transport_key(value)
         }),
         serde_json::Value::Array(values) => {
@@ -2183,6 +2190,22 @@ mod tests {
             .encode_frame(&[1], IrohFrameCompressionMode::Eligible)
             .unwrap();
         assert!(!expansion.compressed());
+    }
+
+    /// X11 fake cookies and route tokens are credential material, so control
+    /// records containing either field must bypass reusable compression state.
+    #[test]
+    fn x11_negotiation_credentials_use_identity_only_framing() {
+        for body in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"x11_forwarding":{"fake_cookie_base64":"AQEBAQEBAQEBAQEBAQEBAQ=="}}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"x11_forwarding":{"route_token_base64":"MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM="}}}"#,
+        ] {
+            let frame = crate::control::encode_control_body(body);
+            assert_eq!(
+                control_stream_frame_mode(&frame, 1024 * 1024),
+                IrohFrameCompressionMode::IdentityOnly
+            );
+        }
     }
 
     /// Verifies the `none` codec preserves the existing version 1 frame bytes

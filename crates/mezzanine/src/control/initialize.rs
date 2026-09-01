@@ -45,6 +45,7 @@ pub fn initialize(
                 RequestedRole::Automation => GrantedRole::Automation,
             },
             capabilities: Capabilities::unauthenticated(),
+            x11_forwarding: None,
         });
     }
 
@@ -65,6 +66,7 @@ pub fn initialize(
                 client: None,
                 granted_role: GrantedRole::Primary,
                 capabilities: Capabilities::primary(),
+                x11_forwarding: None,
             })
         }
         RequestedRole::Observer => Ok(InitializeResult {
@@ -74,6 +76,7 @@ pub fn initialize(
             client: None,
             granted_role: GrantedRole::Observer,
             capabilities: Capabilities::observer(),
+            x11_forwarding: None,
         }),
         RequestedRole::Agent => Ok(InitializeResult {
             selected_version,
@@ -82,6 +85,7 @@ pub fn initialize(
             client: None,
             granted_role: GrantedRole::Agent,
             capabilities: Capabilities::agent(),
+            x11_forwarding: None,
         }),
         RequestedRole::Automation => Ok(InitializeResult {
             selected_version,
@@ -90,6 +94,7 @@ pub fn initialize(
             client: None,
             granted_role: GrantedRole::Automation,
             capabilities: Capabilities::automation(),
+            x11_forwarding: None,
         }),
     }
 }
@@ -127,6 +132,7 @@ pub(crate) fn initialize_params_from_json(params: &str) -> Result<InitializePara
             "session_target",
             "detach_primary_on_disconnect",
             "event_stream_version",
+            "x11_forwarding",
             "client",
             "authentication",
         ],
@@ -181,6 +187,14 @@ pub(crate) fn initialize_params_from_json(params: &str) -> Result<InitializePara
             "event_stream_version",
             "control/initialize",
         )?,
+        x11_forwarding: optional_object_member_json(
+            &object,
+            "x11_forwarding",
+            "control/initialize",
+        )?
+        .as_deref()
+        .map(parse_x11_forwarding_offer)
+        .transpose()?,
         client,
         authentication: optional_object_member_json(
             &object,
@@ -190,6 +204,63 @@ pub(crate) fn initialize_params_from_json(params: &str) -> Result<InitializePara
         .as_deref()
         .map(authentication_from_json)
         .transpose()?,
+    })
+}
+
+/// Parses one strict versioned X11 forwarding offer.
+fn parse_x11_forwarding_offer(body: &str) -> Result<crate::runtime::x11::X11ForwardingOffer> {
+    use base64::Engine as _;
+
+    reject_unknown_json_fields(
+        body,
+        "X11 forwarding offer",
+        &[
+            "version",
+            "mode",
+            "auth_protocol",
+            "fake_cookie_base64",
+            "takeover",
+        ],
+    )?;
+    let object = parse_object(body, "X11 forwarding offer")?;
+    let version = u8::try_from(required_u16_member(
+        &object,
+        "version",
+        "X11 forwarding offer",
+    )?)
+    .map_err(|_| MezError::invalid_args("X11 forwarding offer version is invalid"))?;
+    let mode = match required_string_member(&object, "mode", "X11 forwarding offer")?.as_str() {
+        "untrusted" => crate::runtime::x11::X11ForwardingMode::Untrusted,
+        "trusted" => crate::runtime::x11::X11ForwardingMode::Trusted,
+        _ => {
+            return Err(MezError::invalid_args(
+                "X11 forwarding offer mode must be untrusted or trusted",
+            ));
+        }
+    };
+    if required_string_member(&object, "auth_protocol", "X11 forwarding offer")?
+        != crate::runtime::x11::X11_AUTH_PROTOCOL_NAME
+    {
+        return Err(MezError::invalid_args(
+            "X11 forwarding offer requires MIT-MAGIC-COOKIE-1",
+        ));
+    }
+    let encoded_cookie =
+        required_string_member(&object, "fake_cookie_base64", "X11 forwarding offer")?;
+    let decoded_cookie = base64::engine::general_purpose::STANDARD
+        .decode(encoded_cookie)
+        .map_err(|_| MezError::invalid_args("X11 forwarding fake cookie is invalid"))?;
+    let fake_cookie = decoded_cookie
+        .try_into()
+        .map(crate::runtime::x11::X11Cookie::new)
+        .map_err(|_| MezError::invalid_args("X11 forwarding fake cookie must be 16 bytes"))?;
+    Ok(crate::runtime::x11::X11ForwardingOffer {
+        version,
+        mode,
+        auth_protocol: crate::runtime::x11::X11AuthProtocol::MitMagicCookie1,
+        fake_cookie,
+        takeover: optional_bool_member(&object, "takeover", "X11 forwarding offer")?
+            .unwrap_or(false),
     })
 }
 
@@ -776,13 +847,30 @@ pub(super) fn authentication_from_json(body: &str) -> Result<AuthenticationMater
 /// on duplicated control-flow logic.
 pub(super) fn initialize_result_json(result: &InitializeResult) -> String {
     format!(
-        r#"{{"selected_version":{},"server":{},"session":{},"client":{},"granted_role":"{}","capabilities":{}}}"#,
+        r#"{{"selected_version":{},"server":{},"session":{},"client":{},"granted_role":"{}","capabilities":{},"x11_forwarding":{}}}"#,
         result.selected_version,
         server_identity_json(&result.server),
         result.session.as_deref().unwrap_or("null"),
         result.client.as_deref().unwrap_or("null"),
         granted_role_name(result.granted_role),
-        capabilities_json(&result.capabilities)
+        capabilities_json(&result.capabilities),
+        x11_forwarding_result_json(result.x11_forwarding.as_ref())
+    )
+}
+
+/// Encodes negotiated X11 route metadata without any client-local credential.
+fn x11_forwarding_result_json(result: Option<&crate::runtime::x11::X11ForwardingResult>) -> String {
+    use base64::Engine as _;
+
+    let Some(result) = result else {
+        return "null".to_string();
+    };
+    format!(
+        r#"{{"version":{},"mode":"{}","generation":{},"route_token_base64":"{}"}}"#,
+        result.version,
+        result.mode.as_str(),
+        result.generation,
+        base64::engine::general_purpose::STANDARD.encode(result.route_token.as_bytes())
     )
 }
 
@@ -828,7 +916,7 @@ pub(super) fn server_identity_json(server: &ServerIdentity) -> String {
 /// on duplicated control-flow logic.
 pub(super) fn capabilities_json(capabilities: &Capabilities) -> String {
     format!(
-        r#"{{"protocol_version":{},"methods":{},"event_types":{},"roles":{},"transports":{},"limits":{{"max_frame_size":{},"max_request_size":{},"max_event_replay_retention":{},"max_capture_payload_size":{},"max_attached_primaries":{}}},"features":{{"tcp":{},"event_replay":{},"observers":{},"mcp":{},"snapshots":{},"audit":{},"approval_bypass":{},"multiple_primaries":{},"client_local_focus":{},"layout_owner":{},"client_bound_events":{},"pushed_render_updates":{},"client_clipboard_write":{}}}}}"#,
+        r#"{{"protocol_version":{},"methods":{},"event_types":{},"roles":{},"transports":{},"limits":{{"max_frame_size":{},"max_request_size":{},"max_event_replay_retention":{},"max_capture_payload_size":{},"max_attached_primaries":{}}},"features":{{"tcp":{},"event_replay":{},"observers":{},"mcp":{},"snapshots":{},"audit":{},"approval_bypass":{},"multiple_primaries":{},"client_local_focus":{},"layout_owner":{},"client_bound_events":{},"pushed_render_updates":{},"client_clipboard_write":{},"x11_forwarding":{}}}}}"#,
         capabilities.protocol_version,
         static_str_array_json(&capabilities.methods),
         static_str_array_json(&capabilities.event_types),
@@ -851,7 +939,8 @@ pub(super) fn capabilities_json(capabilities: &Capabilities) -> String {
         capabilities.features.layout_owner,
         capabilities.features.client_bound_events,
         capabilities.features.pushed_render_updates,
-        capabilities.features.client_clipboard_write
+        capabilities.features.client_clipboard_write,
+        capabilities.features.x11_forwarding
     )
 }
 

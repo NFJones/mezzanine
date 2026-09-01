@@ -1027,6 +1027,17 @@ impl RuntimeSessionService {
         self.process.x11_proxy = Some(proxy);
     }
 
+    /// Binds the actor-owned X11 proxy to one concrete Iroh connection state.
+    pub(crate) fn bind_runtime_x11_proxy_for_connection(
+        &self,
+        connection: &mut crate::control::ControlConnectionState,
+    ) -> Result<()> {
+        if let Some(proxy) = self.process.x11_proxy.as_ref() {
+            connection.bind_runtime_x11_proxy(self.session.id.to_string(), proxy.clone())?;
+        }
+        Ok(())
+    }
+
     /// Returns the number of active pane output pipes.
     pub(crate) fn active_pane_pipe_count(&self) -> usize {
         self.process.active_pane_pipes.len()

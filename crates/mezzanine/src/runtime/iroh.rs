@@ -1498,6 +1498,7 @@ async fn serve_runtime_iroh_control_connection(
         control_config.max_content_length,
     )?;
     let mut connection_state = ControlConnectionState::new(false, false);
+    connection_state.bind_x11_connection_id(format!("iroh-{}", connection.stable_id()))?;
     let (event_start_tx, event_start_rx) =
         tokio::sync::oneshot::channel::<(ClientId, u32, bool, bool)>();
     let mut event_start_tx = Some(event_start_tx);
@@ -1559,6 +1560,9 @@ async fn serve_runtime_iroh_control_connection(
                     && let Some(sender) = event_start_tx.take()
                 {
                     let _ = sender.send(start);
+                }
+                if let Some(route) = connection_state.take_x11_route_start() {
+                    route.activate()?;
                 }
                 Ok(())
             },

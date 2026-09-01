@@ -7,6 +7,7 @@
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::Engine as _;
 use iroh::EndpointAddr;
 use secrecy::{ExposeSecret, SecretString};
 
@@ -567,6 +568,8 @@ pub(super) struct PersistentIrohControlChannel {
     endpoint: iroh::Endpoint,
     connection: iroh::endpoint::Connection,
     bridge: IrohCompressionBridge,
+    x11_client: Option<super::x11::PreparedX11Client>,
+    x11_route: Option<crate::runtime::x11::X11ForwardingResult>,
     event_receiver:
         Option<tokio::sync::mpsc::Receiver<Result<super::attach::IrohAttachRenderWakeup>>>,
     event_task: tokio::task::JoinHandle<()>,
@@ -590,6 +593,11 @@ impl PersistentIrohControlChannel {
         self.pushed_render_owner
     }
 
+    /// Returns the negotiated X11 route metadata retained for the relay worker.
+    pub(super) fn x11_route(&self) -> Option<&crate::runtime::x11::X11ForwardingResult> {
+        self.x11_route.as_ref()
+    }
+
     /// Takes the negotiated event receiver exactly once for the attach loop.
     pub(super) fn take_event_receiver(
         &mut self,
@@ -606,6 +614,8 @@ impl PersistentIrohControlChannel {
             endpoint,
             connection,
             bridge,
+            mut x11_client,
+            x11_route: _,
             event_receiver,
             mut event_task,
             pushed_render_owner: _,
@@ -622,10 +632,17 @@ impl PersistentIrohControlChannel {
             let _ = event_task.await;
         }
         let _ = tokio::time::timeout(setup_timeout, endpoint.close()).await;
+        if let Some(client) = x11_client.take() {
+            let _ = client.close().await;
+        }
     }
 }
 
 /// Opens and initializes one persistent Iroh control stream for interactive attach.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "remote target, environment, role, routing, terminal geometry, terminal identity, and optional X11 negotiation are independent attach inputs"
+)]
 pub(super) async fn open_persistent_iroh_control_channel(
     control_target: &super::ControlTargetSelection,
     env: &super::CliEnv,
@@ -634,12 +651,22 @@ pub(super) async fn open_persistent_iroh_control_channel(
     columns: u16,
     rows: u16,
     term: &str,
+    x11_request: Option<(crate::runtime::x11::X11ForwardingMode, bool)>,
 ) -> Result<(PersistentIrohControlChannel, String)> {
     let paths = env.config_paths()?;
     let layers = super::load_runtime_config_layers(&paths)?;
     let structured = crate::runtime::runtime_effective_config_value(&layers)?;
     let configured_policy = crate::runtime::runtime_iroh_transport_policy_from_config(&structured)?;
     let client_clipboard = crate::runtime::runtime_client_host_clipboard_from_config(&structured)?;
+    if x11_request.is_some() && requested_role != "primary" {
+        return Err(MezError::forbidden(
+            "X11 forwarding requires a primary attachment",
+        ));
+    }
+    let x11_client = match x11_request {
+        Some((mode, _takeover)) => Some(super::x11::prepare_x11_client(mode).await?),
+        None => None,
+    };
     let mut target = resolve_iroh_control_target(control_target, paths.root())?;
     ensure_iroh_attach_role_allowed(target.role(), requested_role)?;
     if let IrohControlTarget::Invitation {
@@ -740,6 +767,17 @@ pub(super) async fn open_persistent_iroh_control_channel(
             params["idempotency_key"] = serde_json::Value::String(idempotency_key.to_string());
         }
     }
+    if let Some(prepared) = x11_client.as_ref() {
+        let offer = prepared.offer(x11_request.is_some_and(|(_mode, takeover)| takeover));
+        params["x11_forwarding"] = serde_json::json!({
+            "version": offer.version,
+            "mode": offer.mode.as_str(),
+            "auth_protocol": offer.auth_protocol.as_str(),
+            "fake_cookie_base64": base64::engine::general_purpose::STANDARD
+                .encode(offer.fake_cookie.as_bytes()),
+            "takeover": offer.takeover,
+        });
+    }
     let mut initialize = serde_json::json!({
         "jsonrpc": "2.0",
         "id": "cli-init",
@@ -765,6 +803,8 @@ pub(super) async fn open_persistent_iroh_control_channel(
         }
     }
     let issued_credential = validate_iroh_initialize_response(&response, requested_role)?;
+    let x11_route =
+        validate_iroh_x11_initialize_response(&response, x11_request.map(|(mode, _)| mode))?;
     let client_clipboard_negotiated = iroh_client_clipboard_negotiated(
         &response,
         requested_role,
@@ -810,6 +850,8 @@ pub(super) async fn open_persistent_iroh_control_channel(
             endpoint,
             connection,
             bridge,
+            x11_client,
+            x11_route,
             event_receiver: Some(event_receiver),
             event_task,
             pushed_render_owner,
@@ -1460,6 +1502,7 @@ mod outbound_policy_tests {
                 80,
                 24,
                 "xterm-256color",
+                None,
             )
             .await
             .unwrap();
@@ -1517,6 +1560,7 @@ mod outbound_policy_tests {
                 80,
                 24,
                 "xterm-256color",
+                None,
             )
             .await
             .unwrap();
@@ -2074,6 +2118,91 @@ fn validate_iroh_initialize_response(
         .map(|credential| SecretString::from(credential.to_string())))
 }
 
+/// Validates exact X11 capability and route metadata when forwarding was requested.
+fn validate_iroh_x11_initialize_response(
+    body: &str,
+    requested_mode: Option<crate::runtime::x11::X11ForwardingMode>,
+) -> Result<Option<crate::runtime::x11::X11ForwardingResult>> {
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_state("invalid Iroh initialize response"))?;
+    let result = value
+        .get("result")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| MezError::invalid_state("Iroh initialize response omitted result"))?;
+    let capable = result
+        .get("capabilities")
+        .and_then(|capabilities| capabilities.get("features"))
+        .and_then(|features| features.get("x11_forwarding"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let negotiated = result.get("x11_forwarding");
+    let Some(requested_mode) = requested_mode else {
+        if capable || negotiated.is_some_and(|value| !value.is_null()) {
+            return Err(MezError::invalid_state(
+                "Iroh server returned unrequested X11 forwarding authority",
+            ));
+        }
+        return Ok(None);
+    };
+    if !capable {
+        return Err(MezError::not_implemented(
+            "Iroh server does not support requested X11 forwarding",
+        ));
+    }
+    let negotiated = negotiated
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| MezError::invalid_state("Iroh X11 negotiation omitted route metadata"))?;
+    let version = negotiated
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok())
+        .filter(|version| *version == crate::runtime::x11::X11_FORWARDING_VERSION)
+        .ok_or_else(|| {
+            MezError::invalid_state("Iroh X11 negotiation returned an unsupported version")
+        })?;
+    let mode = match negotiated.get("mode").and_then(serde_json::Value::as_str) {
+        Some("untrusted") => crate::runtime::x11::X11ForwardingMode::Untrusted,
+        Some("trusted") => crate::runtime::x11::X11ForwardingMode::Trusted,
+        _ => {
+            return Err(MezError::invalid_state(
+                "Iroh X11 negotiation returned an invalid mode",
+            ));
+        }
+    };
+    if mode != requested_mode {
+        return Err(MezError::forbidden(
+            "Iroh X11 negotiation changed the requested trust mode",
+        ));
+    }
+    let generation = negotiated
+        .get("generation")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|generation| *generation > 0)
+        .ok_or_else(|| {
+            MezError::invalid_state("Iroh X11 negotiation returned an invalid generation")
+        })?;
+    let token = negotiated
+        .get("route_token_base64")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| MezError::invalid_state("Iroh X11 negotiation omitted its route token"))?;
+    let token: [u8; crate::runtime::x11::X11_ROUTE_TOKEN_BYTES] =
+        base64::engine::general_purpose::STANDARD
+            .decode(token)
+            .map_err(|_| {
+                MezError::invalid_state("Iroh X11 negotiation returned an invalid route token")
+            })?
+            .try_into()
+            .map_err(|_| {
+                MezError::invalid_state("Iroh X11 negotiation returned an invalid route token")
+            })?;
+    Ok(Some(crate::runtime::x11::X11ForwardingResult {
+        version,
+        mode,
+        generation,
+        route_token: crate::runtime::x11::X11RouteToken::new(token),
+    }))
+}
+
 /// Returns the role-limited event-stream versions attempted by Iroh attach.
 fn iroh_event_stream_version_candidates(requested_role: &str) -> Result<Vec<u32>> {
     match requested_role {
@@ -2319,7 +2448,7 @@ mod tests {
         RemoteRoleCeiling, ensure_iroh_attach_role_allowed, iroh_client_clipboard_negotiated,
         iroh_event_stream_version_candidates, iroh_initialize_rejected_event_stream_version,
         iroh_pushed_render_negotiated, validate_iroh_host_only_initialize_response,
-        validate_iroh_initialize_response,
+        validate_iroh_initialize_response, validate_iroh_x11_initialize_response,
     };
 
     #[test]
@@ -2354,6 +2483,44 @@ mod tests {
         assert!(
             error.message().contains("unexpected remote role"),
             "{error:?}"
+        );
+    }
+
+    /// Explicit X11 negotiation must retain exact version, mode, generation,
+    /// and token metadata while missing support and unrequested authority fail.
+    #[test]
+    fn iroh_x11_initialize_requires_exact_explicit_capability() {
+        let capable = r#"{"jsonrpc":"2.0","id":"cli-init","result":{"capabilities":{"features":{"x11_forwarding":true}},"x11_forwarding":{"version":1,"mode":"untrusted","generation":7,"route_token_base64":"MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM="}}}"#;
+        let route = validate_iroh_x11_initialize_response(
+            capable,
+            Some(crate::runtime::x11::X11ForwardingMode::Untrusted),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(route.version, 1);
+        assert_eq!(
+            route.mode,
+            crate::runtime::x11::X11ForwardingMode::Untrusted
+        );
+        assert_eq!(route.generation, 7);
+
+        let unsupported = r#"{"jsonrpc":"2.0","id":"cli-init","result":{"capabilities":{"features":{}},"x11_forwarding":null}}"#;
+        assert_eq!(
+            validate_iroh_x11_initialize_response(
+                unsupported,
+                Some(crate::runtime::x11::X11ForwardingMode::Untrusted),
+            )
+            .unwrap_err()
+            .kind(),
+            crate::error::MezErrorKind::NotImplemented
+        );
+        assert!(validate_iroh_x11_initialize_response(capable, None).is_err());
+        assert!(
+            validate_iroh_x11_initialize_response(
+                capable,
+                Some(crate::runtime::x11::X11ForwardingMode::Trusted),
+            )
+            .is_err()
         );
     }
 

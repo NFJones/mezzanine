@@ -625,6 +625,77 @@ fn invocation_parses_explicit_iroh_target_without_unix_fallback() {
     assert!(error.message().contains("cannot be used with"), "{error}");
 }
 
+/// X11 attach flags are explicit Iroh-primary options. Clap rejects conflicting
+/// trust modes, while runtime selection rejects Unix and observer requests
+/// before profile lookup or network initialization.
+#[test]
+fn x11_attach_flags_are_explicit_and_transport_scoped() {
+    let runtime = RuntimeEnv {
+        mez_tmpdir: Some(OsString::from("/tmp")),
+        xdg_runtime_dir: None,
+        tmpdir: None,
+        uid: 1000,
+    };
+    let parsed = CliInvocation::parse(
+        &[
+            "mez".to_string(),
+            "--iroh-profile".to_string(),
+            "workstation".to_string(),
+            "attach".to_string(),
+            "--x11".to_string(),
+            "--x11-takeover".to_string(),
+        ],
+        &runtime,
+        None,
+    )
+    .unwrap();
+    assert!(matches!(
+        parsed.command,
+        Some(CliCommand::Attach(ref args))
+            if args.x11 && !args.x11_trusted && args.x11_takeover && !args.observer
+    ));
+
+    let conflict = CliInvocation::parse(
+        &[
+            "mez".to_string(),
+            "attach".to_string(),
+            "--x11".to_string(),
+            "--x11-trusted".to_string(),
+        ],
+        &runtime,
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        conflict.message().contains("cannot be used with"),
+        "{conflict}"
+    );
+
+    let (env, home) = test_env("x11-transport-scope");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let unix = run_with(
+        vec![
+            "mez".to_string(),
+            "-S".to_string(),
+            "/tmp/x11-local.sock".to_string(),
+            "attach".to_string(),
+            "--x11".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap_err();
+    assert_eq!(unix.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(
+        unix.message().contains("explicit Iroh attach target"),
+        "{unix}"
+    );
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies explicit Iroh targets accept the host-routed session command surface.
 #[test]
 fn explicit_iroh_rejection_lists_every_supported_command() {

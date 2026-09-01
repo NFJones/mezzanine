@@ -11,13 +11,20 @@ use std::fs;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rand::Rng;
 
 use crate::error::{MezError, Result};
+use crate::runtime::RuntimeIrohX11Policy;
 
-use super::authority::{ensure_private_directory, write_empty_private_xauthority};
+use super::authority::{
+    ensure_private_directory, write_empty_private_xauthority, write_private_xauthority,
+};
+use super::contracts::{
+    X11_FORWARDING_VERSION, X11AuthProtocol, X11Cookie, X11ForwardingMode, X11ForwardingOffer,
+    X11ForwardingResult, X11RouteToken,
+};
 
 /// First display number considered for a session-local proxy.
 const X11_PROXY_MIN_DISPLAY: u16 = 10;
@@ -28,11 +35,92 @@ const X11_TCP_BASE_PORT: u16 = 6000;
 /// Attempts used to allocate a collision-resistant private directory.
 const X11_PROXY_DIRECTORY_ATTEMPTS: usize = 16;
 
+/// Exact application and transport identity allowed to own one X11 route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeX11RouteOwner {
+    /// Session whose stable proxy is being activated.
+    pub(crate) session_id: String,
+    /// Attached primary client created by this control connection.
+    pub(crate) client_id: String,
+    /// Authenticated Iroh endpoint identity.
+    pub(crate) endpoint_id: String,
+    /// Durable remote trust identity for host-routed connections.
+    pub(crate) principal_id: Option<String>,
+    /// Random connection-local identity assigned by the concrete Iroh adapter.
+    pub(crate) connection_id: String,
+}
+
+/// Clone-safe ownership lease for one reserved or active route generation.
+#[derive(Clone)]
+pub(crate) struct RuntimeX11RouteLease {
+    inner: Arc<RuntimeX11RouteLeaseInner>,
+}
+
+impl fmt::Debug for RuntimeX11RouteLease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeX11RouteLease")
+            .field("owner", &self.inner.owner)
+            .field("generation", &self.inner.generation)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for RuntimeX11RouteLease {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.generation == other.inner.generation && self.inner.owner == other.inner.owner
+    }
+}
+
+impl Eq for RuntimeX11RouteLease {}
+
+impl RuntimeX11RouteLease {
+    /// Publishes the reserved fake cookie only after initialization flushed.
+    pub(crate) fn activate(&self) -> Result<()> {
+        self.inner
+            .proxy
+            .activate_route(&self.inner.owner, self.inner.generation)
+    }
+
+    /// Explicitly invalidates this exact generation. Repeated or stale calls are harmless.
+    pub(crate) fn deactivate(&self) -> Result<bool> {
+        self.inner
+            .proxy
+            .deactivate_route(&self.inner.owner, self.inner.generation)
+    }
+
+    /// Returns the generation represented by this lease.
+    pub(crate) fn generation(&self) -> u64 {
+        self.inner.generation
+    }
+}
+
+/// Shared lease data whose final drop performs stale-safe cleanup once.
+struct RuntimeX11RouteLeaseInner {
+    proxy: RuntimeX11ProxyHandle,
+    owner: RuntimeX11RouteOwner,
+    generation: u64,
+}
+
+impl Drop for RuntimeX11RouteLeaseInner {
+    fn drop(&mut self) {
+        let _ = self.proxy.deactivate_route(&self.owner, self.generation);
+    }
+}
+
 /// Cloneable runtime view of one stable session X11 proxy.
 #[derive(Clone)]
 pub(crate) struct RuntimeX11ProxyHandle {
     inner: Arc<RuntimeX11ProxyState>,
 }
+
+impl PartialEq for RuntimeX11ProxyHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl Eq for RuntimeX11ProxyHandle {}
 
 impl fmt::Debug for RuntimeX11ProxyHandle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -59,6 +147,129 @@ impl RuntimeX11ProxyHandle {
     pub(crate) fn display_number(&self) -> u16 {
         self.inner.display_number
     }
+
+    /// Reserves one route generation without publishing its credential yet.
+    pub(crate) fn reserve_route(
+        &self,
+        owner: RuntimeX11RouteOwner,
+        offer: X11ForwardingOffer,
+    ) -> Result<(X11ForwardingResult, RuntimeX11RouteLease)> {
+        if !self.inner.policy.enabled {
+            return Err(MezError::forbidden(
+                "X11 forwarding is disabled by host policy",
+            ));
+        }
+        if offer.version != X11_FORWARDING_VERSION {
+            return Err(MezError::invalid_args("unsupported X11 forwarding version"));
+        }
+        if offer.auth_protocol != X11AuthProtocol::MitMagicCookie1 {
+            return Err(MezError::invalid_args(
+                "unsupported X11 authorization protocol",
+            ));
+        }
+        if offer.mode == X11ForwardingMode::Trusted && !self.inner.policy.allow_trusted {
+            return Err(MezError::forbidden(
+                "trusted X11 forwarding is disabled by host policy",
+            ));
+        }
+
+        let mut routes =
+            self.inner.routes.lock().map_err(|_| {
+                MezError::invalid_state("session X11 route registry is unavailable")
+            })?;
+        if routes.current.is_some() && !offer.takeover {
+            return Err(MezError::conflict(
+                "the session already has an active X11 route owner",
+            ));
+        }
+        if routes.current.is_some() {
+            write_empty_private_xauthority(&self.inner.authority_path)?;
+        }
+        routes.next_generation = routes
+            .next_generation
+            .checked_add(1)
+            .ok_or_else(|| MezError::invalid_state("session X11 route generation exhausted"))?;
+        let generation = routes.next_generation;
+        let route_token = X11RouteToken::random();
+        routes.current = Some(RuntimeX11RouteState {
+            owner: owner.clone(),
+            generation,
+            mode: offer.mode,
+            fake_cookie: offer.fake_cookie,
+            route_token: route_token.clone(),
+            active: false,
+        });
+        drop(routes);
+
+        let result = X11ForwardingResult {
+            version: X11_FORWARDING_VERSION,
+            mode: offer.mode,
+            generation,
+            route_token,
+        };
+        let lease = RuntimeX11RouteLease {
+            inner: Arc::new(RuntimeX11RouteLeaseInner {
+                proxy: self.clone(),
+                owner,
+                generation,
+            }),
+        };
+        Ok((result, lease))
+    }
+
+    /// Atomically publishes the fake cookie for one still-current reservation.
+    fn activate_route(&self, owner: &RuntimeX11RouteOwner, generation: u64) -> Result<()> {
+        let mut routes =
+            self.inner.routes.lock().map_err(|_| {
+                MezError::invalid_state("session X11 route registry is unavailable")
+            })?;
+        let route = routes.current.as_mut().ok_or_else(|| {
+            MezError::invalid_state("session X11 route reservation is no longer current")
+        })?;
+        if route.generation != generation || &route.owner != owner {
+            return Err(MezError::conflict(
+                "session X11 route ownership changed before activation",
+            ));
+        }
+        if route.active {
+            return Ok(());
+        }
+        write_private_xauthority(
+            &self.inner.authority_path,
+            self.inner.display_number,
+            &route.fake_cookie,
+        )?;
+        route.active = true;
+        Ok(())
+    }
+
+    /// Invalidates only the exact current route generation.
+    fn deactivate_route(&self, owner: &RuntimeX11RouteOwner, generation: u64) -> Result<bool> {
+        let mut routes =
+            self.inner.routes.lock().map_err(|_| {
+                MezError::invalid_state("session X11 route registry is unavailable")
+            })?;
+        let matches = routes
+            .current
+            .as_ref()
+            .is_some_and(|route| route.generation == generation && &route.owner == owner);
+        if !matches {
+            return Ok(false);
+        }
+        write_empty_private_xauthority(&self.inner.authority_path)?;
+        routes.current = None;
+        Ok(true)
+    }
+
+    /// Returns whether one exact route generation is currently published.
+    #[cfg(test)]
+    fn route_is_active(&self, owner: &RuntimeX11RouteOwner, generation: u64) -> bool {
+        self.inner.routes.lock().is_ok_and(|routes| {
+            routes.current.as_ref().is_some_and(|route| {
+                route.active && route.generation == generation && &route.owner == owner
+            })
+        })
+    }
 }
 
 /// Immutable state shared with the serialized runtime service.
@@ -66,6 +277,25 @@ struct RuntimeX11ProxyState {
     display: String,
     display_number: u16,
     authority_path: PathBuf,
+    policy: RuntimeIrohX11Policy,
+    routes: Mutex<RuntimeX11RouteRegistry>,
+}
+
+/// Session-local generation counter and optional current owner.
+#[derive(Default)]
+struct RuntimeX11RouteRegistry {
+    next_generation: u64,
+    current: Option<RuntimeX11RouteState>,
+}
+
+/// Reserved or active route state. Secret fields retain redacted `Debug` behavior.
+struct RuntimeX11RouteState {
+    owner: RuntimeX11RouteOwner,
+    generation: u64,
+    mode: X11ForwardingMode,
+    fake_cookie: X11Cookie,
+    route_token: X11RouteToken,
+    active: bool,
 }
 
 /// Listener and generated-artifact owner for one session proxy.
@@ -87,7 +317,25 @@ impl fmt::Debug for RuntimeX11Proxy {
 
 impl RuntimeX11Proxy {
     /// Reserves a loopback display and publishes an empty private authority file.
+    #[cfg(test)]
     pub(crate) fn prepare(config_root: &Path) -> Result<Self> {
+        let policy = RuntimeIrohX11Policy {
+            enabled: true,
+            ..RuntimeIrohX11Policy::default()
+        };
+        Self::prepare_with_policy(config_root, policy)
+    }
+
+    /// Reserves a loopback display under the exact effective host policy.
+    pub(crate) fn prepare_with_policy(
+        config_root: &Path,
+        policy: RuntimeIrohX11Policy,
+    ) -> Result<Self> {
+        if !policy.enabled {
+            return Err(MezError::invalid_args(
+                "session X11 proxy preparation requires enabled policy",
+            ));
+        }
         let listener = bind_display_listener()?;
         let display_number = listener_display_number(&listener)?;
         listener.set_nonblocking(true)?;
@@ -106,6 +354,8 @@ impl RuntimeX11Proxy {
                 display: format!("127.0.0.1:{display_number}.0"),
                 display_number,
                 authority_path,
+                policy,
+                routes: Mutex::new(RuntimeX11RouteRegistry::default()),
             }),
         };
         Ok(Self {
@@ -243,6 +493,77 @@ mod tests {
         let _ = task.await;
         assert!(!directory.exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Route reservation must remain unpublished until activation, require
+    /// explicit takeover, and make stale-generation cleanup harmless.
+    #[tokio::test]
+    async fn route_ownership_is_generation_fenced_and_takeover_is_explicit() {
+        let root = test_root("route-ownership");
+        let proxy = RuntimeX11Proxy::prepare(&root).unwrap();
+        let handle = proxy.handle();
+        let first_owner = route_owner("client-one", "connection-one");
+        let second_owner = route_owner("client-two", "connection-two");
+
+        let (_abandoned_result, abandoned_lease) = handle
+            .reserve_route(first_owner.clone(), route_offer([0x01; 16], false))
+            .unwrap();
+        drop(abandoned_lease);
+        assert_eq!(fs::read(handle.authority_path()).unwrap(), Vec::<u8>::new());
+
+        let (first_result, first_lease) = handle
+            .reserve_route(first_owner.clone(), route_offer([0x11; 16], false))
+            .unwrap();
+        assert_eq!(fs::read(handle.authority_path()).unwrap(), Vec::<u8>::new());
+        first_lease.activate().unwrap();
+        assert!(handle.route_is_active(&first_owner, first_result.generation));
+        assert!(!fs::read(handle.authority_path()).unwrap().is_empty());
+
+        let conflict = handle
+            .reserve_route(second_owner.clone(), route_offer([0x22; 16], false))
+            .unwrap_err();
+        assert_eq!(conflict.kind(), crate::error::MezErrorKind::Conflict);
+
+        let (second_result, second_lease) = handle
+            .reserve_route(second_owner.clone(), route_offer([0x22; 16], true))
+            .unwrap();
+        assert!(second_result.generation > first_result.generation);
+        assert_eq!(fs::read(handle.authority_path()).unwrap(), Vec::<u8>::new());
+        assert!(!first_lease.deactivate().unwrap());
+        second_lease.activate().unwrap();
+        assert!(handle.route_is_active(&second_owner, second_result.generation));
+
+        let retained = second_lease.clone();
+        drop(second_lease);
+        assert!(handle.route_is_active(&second_owner, second_result.generation));
+        drop(retained);
+        assert_eq!(fs::read(handle.authority_path()).unwrap(), Vec::<u8>::new());
+
+        drop(first_lease);
+        drop(proxy);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Builds one exact route owner for focused registry tests.
+    fn route_owner(client_id: &str, connection_id: &str) -> RuntimeX11RouteOwner {
+        RuntimeX11RouteOwner {
+            session_id: "$x11-test".to_string(),
+            client_id: client_id.to_string(),
+            endpoint_id: "endpoint-test".to_string(),
+            principal_id: Some("principal-test".to_string()),
+            connection_id: connection_id.to_string(),
+        }
+    }
+
+    /// Builds one version-1 untrusted route offer for focused registry tests.
+    fn route_offer(cookie: [u8; 16], takeover: bool) -> X11ForwardingOffer {
+        X11ForwardingOffer {
+            version: X11_FORWARDING_VERSION,
+            mode: X11ForwardingMode::Untrusted,
+            auth_protocol: X11AuthProtocol::MitMagicCookie1,
+            fake_cookie: X11Cookie::new(cookie),
+            takeover,
+        }
     }
 
     /// Allocates one owner-private root for proxy tests.

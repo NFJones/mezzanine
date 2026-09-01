@@ -188,6 +188,9 @@ async fn run_with_inner<W: Write, E: Write>(
                     &control_target,
                     super::attach::AttachCliArgs {
                         observer: false,
+                        x11: false,
+                        x11_trusted: false,
+                        x11_takeover: false,
                         default: false,
                         session_id: None,
                         create: false,
@@ -214,6 +217,9 @@ async fn run_with_inner<W: Write, E: Write>(
                     &control_target,
                     super::attach::AttachCliArgs {
                         observer: false,
+                        x11: false,
+                        x11_trusted: false,
+                        x11_takeover: false,
                         default: false,
                         session_id: None,
                         create: false,
@@ -268,6 +274,9 @@ async fn run_with_inner<W: Write, E: Write>(
                     &control_target,
                     super::attach::AttachCliArgs {
                         observer: false,
+                        x11: false,
+                        x11_trusted: false,
+                        x11_takeover: false,
                         default: false,
                         session_id: None,
                         create: true,
@@ -293,6 +302,9 @@ async fn run_with_inner<W: Write, E: Write>(
                     &control_target,
                     super::attach::AttachCliArgs {
                         observer: false,
+                        x11: false,
+                        x11_trusted: false,
+                        x11_takeover: false,
                         default: false,
                         session_id: None,
                         create: false,
@@ -358,6 +370,9 @@ async fn run_with_inner<W: Write, E: Write>(
                     &control_target,
                     super::attach::AttachCliArgs {
                         observer: args.observer,
+                        x11: args.x11,
+                        x11_trusted: args.x11_trusted,
+                        x11_takeover: args.x11_takeover,
                         default: false,
                         session_id: None,
                         create: false,

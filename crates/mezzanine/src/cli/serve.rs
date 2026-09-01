@@ -107,6 +107,9 @@ pub(super) async fn run_new<W: Write>(
             &super::ControlTargetSelection::Unix,
             super::attach::AttachCliArgs {
                 observer: false,
+                x11: false,
+                x11_trusted: false,
+                x11_takeover: false,
                 default: false,
                 session_id: None,
                 create: false,

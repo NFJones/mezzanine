@@ -70,6 +70,7 @@ impl RuntimeSessionService {
         connection: &mut ControlConnectionState,
     ) -> Result<(Vec<u8>, usize)> {
         self.require_live()?;
+        self.bind_runtime_x11_proxy_for_connection(connection)?;
         let mut offset = 0usize;
         let mut output = Vec::new();
         while offset < input.len() {
@@ -117,6 +118,7 @@ impl RuntimeSessionService {
         snapshots: &SnapshotRepository,
     ) -> Result<(Vec<u8>, usize)> {
         self.require_live()?;
+        self.bind_runtime_x11_proxy_for_connection(connection)?;
         let mut offset = 0usize;
         let mut output = Vec::new();
         while offset < input.len() {
@@ -148,6 +150,7 @@ impl RuntimeSessionService {
         snapshots: &SnapshotRepository,
     ) -> Result<(Vec<u8>, usize)> {
         self.require_live()?;
+        self.bind_runtime_x11_proxy_for_connection(connection)?;
         let mut offset = 0usize;
         let mut output = Vec::new();
         while offset < input.len() {

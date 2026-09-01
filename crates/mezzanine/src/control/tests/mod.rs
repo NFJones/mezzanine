@@ -73,6 +73,7 @@ fn primary_params() -> InitializeParams {
         session_target_json: None,
         detach_primary_on_disconnect: false,
         event_stream_version: None,
+        x11_forwarding: None,
         client: Some(ClientDescriptor {
             name: "test".to_string(),
             version: None,

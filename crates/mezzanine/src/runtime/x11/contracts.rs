@@ -125,7 +125,7 @@ impl X11RouteToken {
     }
 
     /// Borrows the token for preface encoding and validation.
-    pub(super) const fn as_bytes(&self) -> &[u8; X11_ROUTE_TOKEN_BYTES] {
+    pub(crate) const fn as_bytes(&self) -> &[u8; X11_ROUTE_TOKEN_BYTES] {
         &self.0
     }
 }

@@ -957,6 +957,7 @@ async fn serve_routed_initialize_inner(
     let mut connection_state = ControlConnectionState::new(false, false);
     connection_state.bind_authenticated_peer(peer.clone())?;
     connection_state.bind_remote_principal(principal.clone())?;
+    connection_state.bind_x11_connection_id(format!("iroh-{}", connection.stable_id()))?;
     let initialized = binding
         .runtime
         .actor()
@@ -1023,6 +1024,9 @@ async fn serve_routed_initialize_inner(
     }
 
     let mut connection_state = initialized.connection;
+    if let Some(route) = connection_state.take_x11_route_start() {
+        route.activate()?;
+    }
     let client_id = connection_state
         .caller_client_id()
         .cloned()

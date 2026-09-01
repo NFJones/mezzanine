@@ -375,6 +375,8 @@ pub struct InitializeParams {
     pub detach_primary_on_disconnect: bool,
     /// Version of the server-opened event stream requested by this client.
     pub event_stream_version: Option<u32>,
+    /// Optional versioned X11 forwarding offer for an authenticated Iroh primary.
+    pub(crate) x11_forwarding: Option<crate::runtime::x11::X11ForwardingOffer>,
     /// Stores the client value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -513,6 +515,8 @@ pub struct CapabilityFeatures {
     pub pushed_render_updates: bool,
     /// Whether this initialized connection may receive client-local clipboard writes.
     pub client_clipboard_write: bool,
+    /// Whether this connection negotiated an X11 forwarding route.
+    pub x11_forwarding: bool,
 }
 
 /// Defines the OBSERVER CONTROL METHODS const used by this subsystem.
@@ -842,6 +846,7 @@ impl Capabilities {
                 client_bound_events: true,
                 pushed_render_updates: false,
                 client_clipboard_write: false,
+                x11_forwarding: false,
             },
         }
     }
@@ -1008,6 +1013,8 @@ pub struct InitializeResult {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub capabilities: Capabilities,
+    /// Negotiated X11 route metadata, without any client-local credential.
+    pub(crate) x11_forwarding: Option<crate::runtime::x11::X11ForwardingResult>,
 }
 
 /// Carries Initialize Context state for this subsystem.

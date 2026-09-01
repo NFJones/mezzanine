@@ -797,6 +797,48 @@ fn unix_primary_cannot_negotiate_event_stream_version_two() {
     assert!(!connection.initialized());
 }
 
+/// X11 initialize offers are strict, Iroh-primary-only structures; malformed
+/// cookies and Unix transport claims fail before client authority is retained.
+#[test]
+fn x11_initialize_offer_is_strict_and_iroh_primary_only() {
+    let valid = initialize_params_from_json(
+        r#"{"client_name":"remote-x11","requested_version":2,"requested_role":"primary","x11_forwarding":{"version":1,"mode":"untrusted","auth_protocol":"MIT-MAGIC-COOKIE-1","fake_cookie_base64":"EREREREREREREREREREREQ==","takeover":false},"client":{"name":"remote-x11","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        valid.x11_forwarding.unwrap().mode,
+        crate::runtime::x11::X11ForwardingMode::Untrusted
+    );
+    assert!(initialize_params_from_json(
+        r#"{"client_name":"remote-x11","requested_version":2,"requested_role":"primary","x11_forwarding":{"version":1,"mode":"untrusted","auth_protocol":"MIT-MAGIC-COOKIE-1","fake_cookie_base64":"short","takeover":false},"client":{"name":"remote-x11","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}"#,
+    )
+    .is_err());
+
+    let mut session = Session::new_default(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        Size::new(80, 24).unwrap(),
+    );
+    let mut connection = ControlConnectionState::new(true, true);
+    connection
+        .bind_authenticated_peer(AuthenticatedPeer::unix_user(1000))
+        .unwrap();
+    let mut cache = ControlIdempotencyCache::default();
+    let input = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":1,"method":"control/initialize","params":{"client_name":"local-x11","requested_version":2,"requested_role":"primary","x11_forwarding":{"version":1,"mode":"untrusted","auth_protocol":"MIT-MAGIC-COOKIE-1","fake_cookie_base64":"EREREREREREREREREREREQ==","takeover":false},"client":{"name":"local-x11","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+    );
+    let (output, _) = handle_control_frames_for_connection(
+        &input,
+        4096,
+        &mut session,
+        &mut connection,
+        &mut cache,
+    )
+    .unwrap();
+    let (body, _) = decode_control_frame(&output, 4096).unwrap();
+    assert!(body.contains("authenticated Iroh primary"), "{body}");
+    assert!(!connection.initialized());
+}
+
 /// Verifies a forged primary request cannot turn an observer-only durable
 /// trust ceiling into primary-terminal authority.
 #[test]

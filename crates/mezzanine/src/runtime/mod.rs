@@ -545,9 +545,10 @@ use config::{
 pub(crate) use config::{
     EXTERNAL_EDITOR_MAX_CANDIDATES, RuntimeExternalEditorConfig, RuntimeIrohAddressLookupPolicy,
     RuntimeIrohCompressionCodec, RuntimeIrohIdentityPolicy, RuntimeIrohRelayPolicy,
-    RuntimeIrohTransportPolicy, external_editor_argument_contains_ascii_control,
-    runtime_audit_log_from_config, runtime_external_editor_config_from_config,
-    runtime_iroh_transport_policy_from_config, runtime_validate_key_binding_collisions,
+    RuntimeIrohTransportPolicy, RuntimeIrohX11Policy,
+    external_editor_argument_contains_ascii_control, runtime_audit_log_from_config,
+    runtime_external_editor_config_from_config, runtime_iroh_transport_policy_from_config,
+    runtime_validate_key_binding_collisions,
 };
 pub use config::{runtime_effective_config_value, runtime_ui_theme_from_config};
 

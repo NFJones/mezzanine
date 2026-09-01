@@ -51,6 +51,32 @@ pub(in crate::cli) async fn run_attach<W: Write>(
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
+    let x11_mode = match (parsed.x11, parsed.x11_trusted) {
+        (true, false) => Some(crate::runtime::x11::X11ForwardingMode::Untrusted),
+        (false, true) => Some(crate::runtime::x11::X11ForwardingMode::Trusted),
+        (false, false) => None,
+        (true, true) => {
+            return Err(MezError::invalid_args(
+                "--x11 and --x11-trusted cannot be used together",
+            ));
+        }
+    };
+    if parsed.x11_takeover && x11_mode.is_none() {
+        return Err(MezError::invalid_args(
+            "--x11-takeover requires --x11 or --x11-trusted",
+        ));
+    }
+    if x11_mode.is_some() && control_target.is_unix() {
+        return Err(MezError::invalid_args(
+            "X11 forwarding requires an explicit Iroh attach target",
+        ));
+    }
+    if x11_mode.is_some() && parsed.observer {
+        return Err(MezError::forbidden(
+            "X11 forwarding requires a primary attachment",
+        ));
+    }
+    let x11_request = x11_mode.map(|mode| (mode, parsed.x11_takeover));
     let requested_role = if parsed.observer {
         "observer"
     } else {
@@ -90,9 +116,15 @@ pub(in crate::cli) async fn run_attach<W: Write>(
             columns,
             rows,
             &term,
+            x11_request,
         )
         .await?;
         ensure_control_response_success(&initialize_body)?;
+        if x11_request.is_some() && channel.x11_route().is_none() {
+            return Err(MezError::invalid_state(
+                "Iroh X11 negotiation succeeded without retained route metadata",
+            ));
+        }
         let event_receiver = channel.take_event_receiver()?;
         let connection = channel.connection();
         let pushed_render_owner = channel.pushed_render_owner();
@@ -255,6 +287,15 @@ pub(in crate::cli) struct AttachCliArgs {
     /// Requests observer access instead of primary access.
     #[arg(long, alias = "observe")]
     pub(in crate::cli) observer: bool,
+    /// Requests untrusted X11 forwarding over an authenticated Iroh primary attach.
+    #[arg(long, conflicts_with = "x11_trusted")]
+    pub(in crate::cli) x11: bool,
+    /// Requests explicitly trusted X11 forwarding when host policy permits it.
+    #[arg(long, conflicts_with = "x11")]
+    pub(in crate::cli) x11_trusted: bool,
+    /// Explicitly replaces the current session X11 route owner.
+    #[arg(long)]
+    pub(in crate::cli) x11_takeover: bool,
     /// Selects an existing host default without creating a session.
     #[arg(long, conflicts_with = "session_id")]
     pub(in crate::cli) default: bool,
@@ -367,6 +408,9 @@ mod routing_tests {
     fn remote_bare_attach_reconnects_while_new_creates() {
         let bare_attach = remote_session_routing(&AttachCliArgs {
             observer: false,
+            x11: false,
+            x11_trusted: false,
+            x11_takeover: false,
             default: false,
             session_id: None,
             create: false,
@@ -374,6 +418,9 @@ mod routing_tests {
         });
         let remote_new = remote_session_routing(&AttachCliArgs {
             observer: false,
+            x11: false,
+            x11_trusted: false,
+            x11_takeover: false,
             default: false,
             session_id: None,
             create: true,

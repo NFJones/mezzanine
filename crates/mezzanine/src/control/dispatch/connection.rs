@@ -60,6 +60,16 @@ pub struct ControlConnectionState {
     pub(super) event_stream_client_clipboard_write: bool,
     /// Whether v3 rendering is owned by pushed snapshots for this connection.
     pub(super) event_stream_push_render: bool,
+    /// Random identity assigned by the concrete Iroh connection adapter.
+    x11_connection_id: Option<String>,
+    /// Session identity associated with the bound X11 proxy.
+    x11_route_session_id: Option<String>,
+    /// Session-local proxy available to this connection.
+    x11_route_proxy: Option<crate::runtime::x11::RuntimeX11ProxyHandle>,
+    /// Reserved or active route lease owned by this exact connection.
+    x11_route_lease: Option<crate::runtime::x11::RuntimeX11RouteLease>,
+    /// Whether post-flush activation was already taken.
+    x11_route_start_taken: bool,
     /// First runtime event visible to an observer initialized on this connection.
     pub(super) observer_visible_from_event_id: Option<u64>,
     /// Whether the negotiated event stream start was already consumed.
@@ -86,6 +96,11 @@ impl ControlConnectionState {
             event_stream_version: None,
             event_stream_client_clipboard_write: false,
             event_stream_push_render: false,
+            x11_connection_id: None,
+            x11_route_session_id: None,
+            x11_route_proxy: None,
+            x11_route_lease: None,
+            x11_route_start_taken: false,
             observer_visible_from_event_id: None,
             event_stream_started: false,
             disconnect_submitted: false,
@@ -109,6 +124,11 @@ impl ControlConnectionState {
             event_stream_version: None,
             event_stream_client_clipboard_write: false,
             event_stream_push_render: false,
+            x11_connection_id: None,
+            x11_route_session_id: None,
+            x11_route_proxy: None,
+            x11_route_lease: None,
+            x11_route_start_taken: false,
             observer_visible_from_event_id: None,
             event_stream_started: false,
             disconnect_submitted: false,
@@ -211,6 +231,112 @@ impl ControlConnectionState {
     /// on duplicated control-flow logic.
     pub fn initialized(&self) -> bool {
         self.initialized
+    }
+
+    /// Binds one non-empty connection identity assigned by an Iroh adapter.
+    pub(crate) fn bind_x11_connection_id(&mut self, connection_id: String) -> Result<()> {
+        if connection_id.trim().is_empty() {
+            return Err(MezError::invalid_args(
+                "X11 route connection identity must not be empty",
+            ));
+        }
+        match self.x11_connection_id.as_ref() {
+            Some(existing) if existing != &connection_id => Err(MezError::invalid_state(
+                "X11 route connection identity cannot change",
+            )),
+            Some(_) => Ok(()),
+            None => {
+                self.x11_connection_id = Some(connection_id);
+                Ok(())
+            }
+        }
+    }
+
+    /// Makes one actor-owned session proxy available to this connection.
+    pub(crate) fn bind_runtime_x11_proxy(
+        &mut self,
+        session_id: String,
+        proxy: crate::runtime::x11::RuntimeX11ProxyHandle,
+    ) -> Result<()> {
+        if session_id.trim().is_empty() {
+            return Err(MezError::invalid_args(
+                "X11 route session identity is empty",
+            ));
+        }
+        if let Some(existing) = self.x11_route_session_id.as_ref()
+            && existing != &session_id
+        {
+            return Err(MezError::invalid_state(
+                "X11 route session identity cannot change",
+            ));
+        }
+        if let Some(existing) = self.x11_route_proxy.as_ref()
+            && existing != &proxy
+        {
+            return Err(MezError::invalid_state("X11 route proxy cannot change"));
+        }
+        self.x11_route_session_id = Some(session_id);
+        self.x11_route_proxy = Some(proxy);
+        Ok(())
+    }
+
+    /// Builds exact route ownership from authenticated transport and client state.
+    fn x11_route_owner(
+        &self,
+        client_id: &ClientId,
+    ) -> Result<crate::runtime::x11::RuntimeX11RouteOwner> {
+        let endpoint_id = match self.authenticated_peer.as_ref() {
+            Some(AuthenticatedPeer::IrohEndpoint { endpoint_id }) => endpoint_id.clone(),
+            _ => {
+                return Err(MezError::forbidden(
+                    "X11 forwarding requires an authenticated Iroh connection",
+                ));
+            }
+        };
+        Ok(crate::runtime::x11::RuntimeX11RouteOwner {
+            session_id: self
+                .x11_route_session_id
+                .clone()
+                .ok_or_else(|| MezError::forbidden("X11 forwarding is disabled by host policy"))?,
+            client_id: client_id.to_string(),
+            endpoint_id,
+            principal_id: self
+                .remote_principal
+                .as_ref()
+                .map(|principal| principal.trust_record_id.clone()),
+            connection_id: self.x11_connection_id.clone().ok_or_else(|| {
+                MezError::invalid_state("Iroh connection omitted its X11 route identity")
+            })?,
+        })
+    }
+
+    /// Reserves one generation and retains its cleanup lease on this connection.
+    fn reserve_x11_route(
+        &mut self,
+        client_id: &ClientId,
+        offer: crate::runtime::x11::X11ForwardingOffer,
+    ) -> Result<crate::runtime::x11::X11ForwardingResult> {
+        let owner = self.x11_route_owner(client_id)?;
+        let proxy = self
+            .x11_route_proxy
+            .clone()
+            .ok_or_else(|| MezError::forbidden("X11 forwarding is disabled by host policy"))?;
+        let (result, lease) = proxy.reserve_route(owner, offer)?;
+        self.x11_route_lease = Some(lease);
+        self.x11_route_start_taken = false;
+        Ok(result)
+    }
+
+    /// Takes post-flush activation exactly once while retaining cleanup ownership.
+    pub(crate) fn take_x11_route_start(
+        &mut self,
+    ) -> Option<crate::runtime::x11::RuntimeX11RouteLease> {
+        if self.x11_route_start_taken || !self.initialized {
+            return None;
+        }
+        let lease = self.x11_route_lease.clone()?;
+        self.x11_route_start_taken = true;
+        Some(lease)
     }
 
     /// Sets the first runtime event that a newly attached observer may receive.
@@ -473,6 +599,21 @@ pub(super) fn initialize_control_connection(
             ));
         }
     }
+    if init.x11_forwarding.is_some() {
+        if init.requested_role != RequestedRole::Primary {
+            return Err(MezError::forbidden(
+                "X11 forwarding requires an authenticated Iroh primary",
+            ));
+        }
+        if !matches!(
+            connection.authenticated_peer(),
+            Some(AuthenticatedPeer::IrohEndpoint { .. })
+        ) {
+            return Err(MezError::forbidden(
+                "X11 forwarding requires an authenticated Iroh primary",
+            ));
+        }
+    }
     match init.requested_role {
         RequestedRole::Primary => {
             let client = init.client.as_ref().ok_or_else(|| {
@@ -494,14 +635,28 @@ pub(super) fn initialize_control_connection(
                 .find(|client| client.id == client_id)
                 .map(|client| client_json(session, client))
                 .ok_or_else(|| MezError::invalid_state("attached primary client is missing"))?;
-            connection.initialized = true;
-            connection.caller_client_id = Some(client_id);
-            connection.detach_client_on_disconnect = init.detach_primary_on_disconnect;
-            connection.event_stream_version = init.event_stream_version;
             let mut capabilities = Capabilities::primary();
             capabilities.features.client_clipboard_write =
                 matches!(init.event_stream_version, Some(2 | 3));
             capabilities.features.pushed_render_updates = init.event_stream_version == Some(3);
+            let x11_forwarding = if let Some(offer) = init.x11_forwarding {
+                match connection.reserve_x11_route(&client_id, offer) {
+                    Ok(result) => {
+                        capabilities.features.x11_forwarding = true;
+                        Some(result)
+                    }
+                    Err(error) => {
+                        let _ = session.detach_client_self(&client_id);
+                        return Err(error);
+                    }
+                }
+            } else {
+                None
+            };
+            connection.initialized = true;
+            connection.caller_client_id = Some(client_id.clone());
+            connection.detach_client_on_disconnect = init.detach_primary_on_disconnect;
+            connection.event_stream_version = init.event_stream_version;
             connection.event_stream_client_clipboard_write =
                 capabilities.features.client_clipboard_write;
             connection.event_stream_push_render = init.event_stream_version == Some(3);
@@ -512,6 +667,7 @@ pub(super) fn initialize_control_connection(
                 client: Some(client_json),
                 granted_role: GrantedRole::Primary,
                 capabilities,
+                x11_forwarding,
             })
         }
         RequestedRole::Observer => {
@@ -557,6 +713,7 @@ pub(super) fn initialize_control_connection(
                     .map(|client| client_json(session, client)),
                 granted_role: GrantedRole::Observer,
                 capabilities,
+                x11_forwarding: None,
             })
         }
         RequestedRole::Agent => {
@@ -581,6 +738,7 @@ pub(super) fn initialize_control_connection(
                     .map(|client| client_json(session, client)),
                 granted_role: GrantedRole::Agent,
                 capabilities: Capabilities::agent(),
+                x11_forwarding: None,
             })
         }
         RequestedRole::Automation => {
@@ -605,6 +763,7 @@ pub(super) fn initialize_control_connection(
                     .map(|client| client_json(session, client)),
                 granted_role: GrantedRole::Automation,
                 capabilities: Capabilities::automation(),
+                x11_forwarding: None,
             })
         }
     }
