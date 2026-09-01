@@ -10,6 +10,7 @@ use super::{
     ServerIdentity, SessionIntent, TerminalDescriptor, granted_role_name, json_escape,
     json_optional_string, json_string_field, reject_unknown_json_fields,
 };
+use zeroize::Zeroizing;
 
 // Control initialization parsing and serialization.
 
@@ -247,18 +248,22 @@ fn parse_x11_forwarding_offer(body: &str) -> Result<crate::runtime::x11::X11Forw
     }
     let encoded_cookie =
         required_string_member(&object, "fake_cookie_base64", "X11 forwarding offer")?;
-    let decoded_cookie = base64::engine::general_purpose::STANDARD
-        .decode(encoded_cookie)
-        .map_err(|_| MezError::invalid_args("X11 forwarding fake cookie is invalid"))?;
-    let fake_cookie = decoded_cookie
-        .try_into()
-        .map(crate::runtime::x11::X11Cookie::new)
-        .map_err(|_| MezError::invalid_args("X11 forwarding fake cookie must be 16 bytes"))?;
+    let decoded_cookie = Zeroizing::new(
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded_cookie)
+            .map_err(|_| MezError::invalid_args("X11 forwarding fake cookie is invalid"))?,
+    );
+    let fake_cookie: Zeroizing<[u8; crate::runtime::x11::X11_COOKIE_BYTES]> = Zeroizing::new(
+        decoded_cookie
+            .as_slice()
+            .try_into()
+            .map_err(|_| MezError::invalid_args("X11 forwarding fake cookie must be 16 bytes"))?,
+    );
     Ok(crate::runtime::x11::X11ForwardingOffer {
         version,
         mode,
         auth_protocol: crate::runtime::x11::X11AuthProtocol::MitMagicCookie1,
-        fake_cookie,
+        fake_cookie: crate::runtime::x11::X11Cookie::new(*fake_cookie),
         takeover: optional_bool_member(&object, "takeover", "X11 forwarding offer")?
             .unwrap_or(false),
     })

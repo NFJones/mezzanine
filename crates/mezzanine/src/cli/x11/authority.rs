@@ -18,6 +18,7 @@ use std::time::Duration;
 use rand::Rng;
 use rustix::fs::{Mode, OFlags, open};
 use rustix::process::geteuid;
+use zeroize::Zeroizing;
 
 use crate::error::{MezError, Result};
 use crate::runtime::x11::{X11_AUTH_PROTOCOL_NAME, X11_COOKIE_BYTES, X11Cookie};
@@ -219,7 +220,7 @@ async fn run_xauth(
 
 /// Reads a bounded owner-private regular authority file without following a
 /// symlink.
-fn read_private_authority(path: &Path) -> Result<Vec<u8>> {
+fn read_private_authority(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
     let descriptor = open(
         path,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -239,7 +240,7 @@ fn read_private_authority(path: &Path) -> Result<Vec<u8>> {
             "local Xauthority file must be an owner-private bounded regular file",
         ));
     }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    let mut bytes = Zeroizing::new(Vec::with_capacity(metadata.len() as usize));
     file.take(XAUTHORITY_MAX_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| MezError::invalid_state("local Xauthority file could not be read"))?;
@@ -321,9 +322,12 @@ fn invalid_authority_database() -> MezError {
 }
 
 /// Encodes the sole trusted selector needed by `xauth generate`.
-fn encode_seed_authority(display: &ResolvedX11Display, cookie: &X11Cookie) -> Result<Vec<u8>> {
+fn encode_seed_authority(
+    display: &ResolvedX11Display,
+    cookie: &X11Cookie,
+) -> Result<Zeroizing<Vec<u8>>> {
     let display_number = display.display_number().to_string();
-    let mut record = Vec::with_capacity(64);
+    let mut record = Zeroizing::new(Vec::with_capacity(64));
     record.extend_from_slice(&super::display::XAUTH_FAMILY_LOCAL.to_be_bytes());
     append_authority_field(&mut record, display.local_authority_address())?;
     append_authority_field(&mut record, display_number.as_bytes())?;

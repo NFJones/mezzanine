@@ -13,6 +13,7 @@ use std::path::Path;
 
 use rand::Rng;
 use rustix::process::geteuid;
+use zeroize::Zeroizing;
 
 use crate::error::{MezError, Result};
 
@@ -24,9 +25,12 @@ const XAUTH_FAMILY_INTERNET: u16 = 0;
 const XAUTH_LOOPBACK_ADDRESS: [u8; 4] = [127, 0, 0, 1];
 
 /// Encodes one loopback MIT-MAGIC-COOKIE-1 Xauthority record.
-pub(crate) fn encode_xauthority_record(display: u16, cookie: &X11Cookie) -> Result<Vec<u8>> {
+pub(crate) fn encode_xauthority_record(
+    display: u16,
+    cookie: &X11Cookie,
+) -> Result<Zeroizing<Vec<u8>>> {
     let display = display.to_string();
-    let mut record = Vec::with_capacity(64);
+    let mut record = Zeroizing::new(Vec::with_capacity(64));
     record.extend_from_slice(&XAUTH_FAMILY_INTERNET.to_be_bytes());
     append_counted(&mut record, &XAUTH_LOOPBACK_ADDRESS)?;
     append_counted(&mut record, display.as_bytes())?;
@@ -189,7 +193,7 @@ mod tests {
         expected.extend_from_slice(b"MIT-MAGIC-COOKIE-1");
         expected.extend_from_slice(&16u16.to_be_bytes());
         expected.extend_from_slice(&[0x66; 16]);
-        assert_eq!(encoded, expected);
+        assert_eq!(encoded.as_slice(), expected.as_slice());
     }
 
     /// Publishing and invalidating authority data must retain owner-only modes

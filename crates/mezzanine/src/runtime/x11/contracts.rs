@@ -7,7 +7,7 @@
 use std::fmt;
 
 use rand::Rng;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Initial X11-over-Iroh contract version.
 pub(crate) const X11_FORWARDING_VERSION: u8 = 1;
@@ -226,12 +226,14 @@ impl X11StreamPreface {
                 .try_into()
                 .map_err(|_| X11StreamPrefaceError::InvalidLength)?,
         );
-        let token = encoded[24..]
-            .try_into()
-            .map_err(|_| X11StreamPrefaceError::InvalidLength)?;
+        let token: Zeroizing<[u8; X11_ROUTE_TOKEN_BYTES]> = Zeroizing::new(
+            encoded[24..]
+                .try_into()
+                .map_err(|_| X11StreamPrefaceError::InvalidLength)?,
+        );
         Ok(Self {
             generation,
-            route_token: X11RouteToken::new(token),
+            route_token: X11RouteToken::new(*token),
         })
     }
 }

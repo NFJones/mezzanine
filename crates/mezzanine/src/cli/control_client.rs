@@ -11,6 +11,7 @@ use base64::Engine as _;
 use iroh::EndpointAddr;
 use secrecy::{ExposeSecret, SecretString};
 use tokio::io::AsyncWriteExt;
+use zeroize::Zeroizing;
 
 use super::{
     CliOutputFormat, MezError, Read, Result, SocketSelection, UnixStream, Write,
@@ -978,11 +979,11 @@ async fn relay_client_x11_stream(
     setup_timeout: std::time::Duration,
 ) -> Result<()> {
     let prepared = tokio::time::timeout(setup_timeout, async {
-        let mut encoded = [0u8; crate::runtime::x11::X11_STREAM_PREFACE_BYTES];
-        recv.read_exact(&mut encoded)
+        let mut encoded = Zeroizing::new([0u8; crate::runtime::x11::X11_STREAM_PREFACE_BYTES]);
+        recv.read_exact(&mut *encoded)
             .await
             .map_err(|_| MezError::forbidden("incomplete X11 stream preface"))?;
-        let preface = crate::runtime::x11::X11StreamPreface::decode(&encoded)
+        let preface = crate::runtime::x11::X11StreamPreface::decode(&*encoded)
             .map_err(|error| MezError::forbidden(error.to_string()))?;
         if preface.generation != route.generation || preface.route_token != route.route_token {
             return Err(MezError::forbidden(
@@ -1023,8 +1024,10 @@ async fn relay_client_x11_stream(
 }
 
 /// Reads exactly one bounded X11 setup request without consuming application bytes.
-async fn read_client_x11_setup(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
-    let mut setup = Vec::new();
+async fn read_client_x11_setup(
+    recv: &mut iroh::endpoint::RecvStream,
+) -> Result<Zeroizing<Vec<u8>>> {
+    let mut setup = Zeroizing::new(Vec::new());
     loop {
         match crate::runtime::x11::parse_x11_setup(&setup)
             .map_err(|error| MezError::forbidden(error.to_string()))?
@@ -2403,21 +2406,22 @@ fn validate_iroh_x11_initialize_response(
         .get("route_token_base64")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| MezError::invalid_state("Iroh X11 negotiation omitted its route token"))?;
-    let token: [u8; crate::runtime::x11::X11_ROUTE_TOKEN_BYTES] =
+    let decoded_token = Zeroizing::new(
         base64::engine::general_purpose::STANDARD
             .decode(token)
             .map_err(|_| {
                 MezError::invalid_state("Iroh X11 negotiation returned an invalid route token")
-            })?
-            .try_into()
-            .map_err(|_| {
-                MezError::invalid_state("Iroh X11 negotiation returned an invalid route token")
-            })?;
+            })?,
+    );
+    let token: Zeroizing<[u8; crate::runtime::x11::X11_ROUTE_TOKEN_BYTES]> =
+        Zeroizing::new(decoded_token.as_slice().try_into().map_err(|_| {
+            MezError::invalid_state("Iroh X11 negotiation returned an invalid route token")
+        })?);
     Ok(Some(crate::runtime::x11::X11ForwardingResult {
         version,
         mode,
         generation,
-        route_token: crate::runtime::x11::X11RouteToken::new(token),
+        route_token: crate::runtime::x11::X11RouteToken::new(*token),
     }))
 }
 

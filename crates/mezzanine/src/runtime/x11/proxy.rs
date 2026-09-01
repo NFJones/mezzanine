@@ -18,6 +18,7 @@ use rand::Rng;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio::task::JoinSet;
+use zeroize::Zeroizing;
 
 use crate::error::{MezError, Result};
 use crate::runtime::RuntimeIrohX11Policy;
@@ -701,13 +702,15 @@ async fn relay_server_x11_socket(
             .map_err(|_| MezError::invalid_state("X11 Iroh stream setup timed out"))?
             .map_err(|_| MezError::invalid_state("failed to open X11 Iroh stream"))?,
     };
-    let preface = X11StreamPreface {
-        generation: route.generation,
-        route_token: route.route_token,
-    }
-    .encode();
+    let preface = Zeroizing::new(
+        X11StreamPreface {
+            generation: route.generation,
+            route_token: route.route_token,
+        }
+        .encode(),
+    );
     let publish = tokio::time::timeout_at(setup_deadline, async {
-        send.write_all(&preface).await?;
+        send.write_all(&*preface).await?;
         send.write_all(&setup).await?;
         send.flush().await
     });
@@ -745,12 +748,12 @@ async fn read_validated_x11_setup<R>(
     stream: &mut R,
     expected_cookie: &X11Cookie,
     setup_deadline: tokio::time::Instant,
-) -> Result<Vec<u8>>
+) -> Result<Zeroizing<Vec<u8>>>
 where
     R: AsyncRead + Unpin,
 {
     tokio::time::timeout_at(setup_deadline, async {
-        let mut setup = Vec::new();
+        let mut setup = Zeroizing::new(Vec::new());
         loop {
             match parse_x11_setup(&setup).map_err(|error| MezError::forbidden(error.to_string()))? {
                 X11SetupProgress::Complete(_) => {
