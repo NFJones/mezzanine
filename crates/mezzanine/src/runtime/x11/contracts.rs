@@ -77,7 +77,7 @@ impl X11Cookie {
     }
 
     /// Borrows the credential for bounded protocol operations.
-    pub(super) const fn as_bytes(&self) -> &[u8; X11_COOKIE_BYTES] {
+    pub(crate) const fn as_bytes(&self) -> &[u8; X11_COOKIE_BYTES] {
         &self.0
     }
 }

@@ -150,6 +150,12 @@ mod session_catalog;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod snapshot;
+/// Owns client-local X11 display, credential, and forwarding preparation.
+///
+/// Control negotiation and stream ownership consume this staged boundary in
+/// their dedicated implementation phases.
+#[allow(dead_code, unused_imports)]
+pub(crate) mod x11;
 
 #[cfg(test)]
 pub use dispatch::run_with;
