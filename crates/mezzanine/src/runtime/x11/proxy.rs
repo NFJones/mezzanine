@@ -33,14 +33,16 @@ use super::protocol::{
     X11_MAX_SETUP_BYTES, X11SetupProgress, parse_x11_setup, validate_x11_setup_cookie,
 };
 
-/// First display number considered for a session-local proxy.
-const X11_PROXY_MIN_DISPLAY: u16 = 10;
-/// Last display number considered for a session-local proxy.
-const X11_PROXY_MAX_DISPLAY: u16 = 99;
 /// X11 TCP base port assigned to display zero.
 const X11_TCP_BASE_PORT: u16 = 6000;
+/// First unprivileged display number considered for a session-local proxy.
+const X11_PROXY_MIN_DISPLAY: u16 = 10;
+/// Last display whose TCP port fits in the platform port number type.
+const X11_PROXY_MAX_DISPLAY: u16 = u16::MAX - X11_TCP_BASE_PORT;
 /// Attempts used to allocate a collision-resistant private directory.
 const X11_PROXY_DIRECTORY_ATTEMPTS: usize = 16;
+/// Serializes process-local scans while kernel bind remains allocation authority.
+static X11_DISPLAY_ALLOCATION_LOCK: Mutex<()> = Mutex::new(());
 
 /// Exact application and transport identity allowed to own one X11 route.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -781,9 +783,17 @@ impl Drop for RuntimeX11Proxy {
     }
 }
 
-/// Binds the first available display in the fixed session-proxy range.
+/// Binds the first available display in the arithmetic-safe proxy range.
 fn bind_display_listener() -> Result<TcpListener> {
-    for display in X11_PROXY_MIN_DISPLAY..=X11_PROXY_MAX_DISPLAY {
+    let _allocation = X11_DISPLAY_ALLOCATION_LOCK
+        .lock()
+        .map_err(|_| MezError::invalid_state("X11 display allocation lock is unavailable"))?;
+    bind_display_listener_in_range(X11_PROXY_MIN_DISPLAY..=X11_PROXY_MAX_DISPLAY)
+}
+
+/// Binds the first available display in one caller-bounded inclusive range.
+fn bind_display_listener_in_range(displays: std::ops::RangeInclusive<u16>) -> Result<TcpListener> {
+    for display in displays {
         let port = X11_TCP_BASE_PORT
             .checked_add(display)
             .ok_or_else(|| MezError::invalid_state("X11 proxy display port overflowed"))?;
@@ -798,7 +808,7 @@ fn bind_display_listener() -> Result<TcpListener> {
         }
     }
     Err(MezError::conflict(
-        "no session X11 proxy display is available in the fixed range",
+        "no session X11 proxy display is available in the safe TCP range",
     ))
 }
 
@@ -878,6 +888,57 @@ mod tests {
         let _ = task.await;
         assert!(!directory.exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Display allocation must exceed the historical 90-port window, retain
+    /// unique loopback listeners, and reuse a released lowest display.
+    #[tokio::test]
+    async fn display_allocator_exceeds_old_ceiling_and_reuses_released_display() {
+        let root = test_root("display-capacity");
+        let mut proxies = Vec::new();
+        for _ in 0..91 {
+            proxies.push(RuntimeX11Proxy::prepare(&root).unwrap());
+        }
+        let mut displays = proxies
+            .iter()
+            .map(|proxy| proxy.handle().display_number())
+            .collect::<Vec<_>>();
+        displays.sort_unstable();
+        displays.dedup();
+        assert_eq!(displays.len(), 91);
+        assert!(displays.iter().any(|display| *display > 99));
+
+        let released = displays[0];
+        let released_index = proxies
+            .iter()
+            .position(|proxy| proxy.handle().display_number() == released)
+            .unwrap();
+        drop(proxies.swap_remove(released_index));
+        let replacement = RuntimeX11Proxy::prepare(&root).unwrap();
+        assert_eq!(replacement.handle().display_number(), released);
+
+        drop(replacement);
+        drop(proxies);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A bounded allocator skips occupied displays and reports a specific
+    /// conflict only when every display in the supplied range is occupied.
+    #[test]
+    fn bounded_display_allocator_skips_collisions_and_reports_exhaustion() {
+        let occupied = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let occupied_port = occupied.local_addr().unwrap().port();
+        let occupied_display = occupied_port.checked_sub(X11_TCP_BASE_PORT).unwrap();
+        let next_display = occupied_display.checked_add(1).unwrap();
+
+        let allocated = bind_display_listener_in_range(occupied_display..=next_display).unwrap();
+        assert_eq!(listener_display_number(&allocated).unwrap(), next_display);
+        drop(allocated);
+
+        let error = bind_display_listener_in_range(occupied_display..=occupied_display)
+            .expect_err("an occupied bounded range must report capacity exhaustion");
+        assert_eq!(error.kind(), crate::error::MezErrorKind::Conflict);
+        assert!(error.message().contains("safe TCP range"), "{error:?}");
     }
 
     /// Route reservation must remain unpublished until activation, require

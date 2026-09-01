@@ -218,7 +218,10 @@ route preface. The real local X cookie, local display target, and local
 authority path remain client-local. Raw X11 bytes do not use Mezzanine JSON,
 event, Content-Length, or application-compression framing. Detach, revocation,
 takeover, transport loss, and shutdown invalidate the old route and its
-streams; reattach retains the remote `DISPLAY` and `XAUTHORITY` paths while
+streams. Session proxies scan the full arithmetic-safe unprivileged TCP display
+range, skip occupied loopback ports, and report a capacity conflict only when
+that range is exhausted. Reattach retains the remote `DISPLAY` and
+`XAUTHORITY` paths while
 rotating route credentials.
 
 When `identity = "per_session"` is enabled, direct-session daemon startup binds
