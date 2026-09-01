@@ -672,6 +672,7 @@ async fn relay_server_x11_socket(
     mut route: RuntimeX11ActiveRoute,
     _permit: OwnedSemaphorePermit,
 ) -> Result<()> {
+    let setup_deadline = tokio::time::Instant::now() + route.setup_timeout;
     let setup = tokio::select! {
         biased;
         () = wait_for_route_cancellation(&mut route.cancellation) => {
@@ -680,10 +681,10 @@ async fn relay_server_x11_socket(
         result = read_validated_x11_setup(
             &mut local,
             &route.fake_cookie,
-            route.setup_timeout,
+            setup_deadline,
         ) => result?,
     };
-    let open = tokio::time::timeout(route.setup_timeout, route.connection.open_bi());
+    let open = tokio::time::timeout_at(setup_deadline, route.connection.open_bi());
     let (mut send, mut recv) = tokio::select! {
         biased;
         () = wait_for_route_cancellation(&mut route.cancellation) => {
@@ -698,7 +699,7 @@ async fn relay_server_x11_socket(
         route_token: route.route_token,
     }
     .encode();
-    let publish = tokio::time::timeout(route.setup_timeout, async {
+    let publish = tokio::time::timeout_at(setup_deadline, async {
         send.write_all(&preface).await?;
         send.write_all(&setup).await?;
         send.flush().await
@@ -736,12 +737,12 @@ async fn relay_server_x11_socket(
 async fn read_validated_x11_setup<R>(
     stream: &mut R,
     expected_cookie: &X11Cookie,
-    setup_timeout: std::time::Duration,
+    setup_deadline: tokio::time::Instant,
 ) -> Result<Vec<u8>>
 where
     R: AsyncRead + Unpin,
 {
-    tokio::time::timeout(setup_timeout, async {
+    tokio::time::timeout_at(setup_deadline, async {
         let mut setup = Vec::new();
         loop {
             match parse_x11_setup(&setup).map_err(|error| MezError::forbidden(error.to_string()))? {
@@ -1195,6 +1196,74 @@ mod tests {
         assert_eq!(metrics.streams_completed, 1);
         assert_eq!(metrics.sockets_rejected_no_route, 1);
 
+        drop(client_connection);
+        proxy_task.abort();
+        let _ = proxy_task.await;
+        client_endpoint.close().await;
+        server_endpoint.close().await;
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Setup parsing and server-opened stream credit must consume one shared
+    /// deadline, then release the route permit for a healthy follow-up socket.
+    #[tokio::test]
+    async fn setup_phases_share_one_deadline_and_release_capacity() {
+        const TEST_ALPN: &[u8] = b"mezzanine/x11-shared-deadline-test/1";
+        let (server_endpoint, client_endpoint, server_connection, client_connection) =
+            test_connection_pair(TEST_ALPN, 0).await;
+        let root = test_root("shared-setup-deadline");
+        let policy = RuntimeIrohX11Policy {
+            enabled: true,
+            max_connections_per_route: 1,
+            setup_timeout: Duration::from_millis(300),
+            ..RuntimeIrohX11Policy::default()
+        };
+        let proxy = RuntimeX11Proxy::prepare_with_policy(&root, policy).unwrap();
+        let handle = proxy.handle();
+        let owner = route_owner(
+            "client-deadline",
+            &format!("iroh-{}", server_connection.stable_id()),
+        );
+        let (route, lease) = handle
+            .reserve_route(owner, route_offer([0x73; 16], false))
+            .unwrap();
+        lease.activate(server_connection).unwrap();
+        let proxy_task = tokio::spawn(proxy.serve());
+
+        let mut stalled = connect_proxy(&handle).await;
+        let setup = setup_packet(b'l', &[0x73; 16]);
+        let started = tokio::time::Instant::now();
+        stalled.write_all(&setup[..12]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(220)).await;
+        stalled.write_all(&setup[12..]).await.unwrap();
+        stalled.flush().await.unwrap();
+        let mut byte = [0u8; 1];
+        let read = tokio::time::timeout(Duration::from_millis(250), stalled.read(&mut byte))
+            .await
+            .expect("one shared setup deadline should close the stalled socket")
+            .unwrap();
+        assert_eq!(read, 0);
+        assert!(
+            started.elapsed() < Duration::from_millis(450),
+            "setup phases restarted the configured deadline: {:?}",
+            started.elapsed()
+        );
+        wait_for_proxy_metrics(&handle, |metrics| metrics.active_streams == 0).await;
+
+        client_connection.set_max_concurrent_bi_streams(VarInt::from_u32(1));
+        let mut healthy = connect_proxy(&handle).await;
+        healthy
+            .write_all(&setup_packet(b'B', &[0x73; 16]))
+            .await
+            .unwrap();
+        let (mut healthy_send, _healthy_recv) =
+            accept_proxy_stream(&client_connection, &route, [0x73; 16]).await;
+        healthy_send.write_all(b"ok").await.unwrap();
+        let mut reply = [0u8; 2];
+        healthy.read_exact(&mut reply).await.unwrap();
+        assert_eq!(&reply, b"ok");
+
+        assert!(lease.deactivate().unwrap());
         drop(client_connection);
         proxy_task.abort();
         let _ = proxy_task.await;
