@@ -1141,7 +1141,18 @@ impl RuntimeSessionService {
                 self.control.idempotency_mut(),
             );
         }
-        self.dispatch_runtime_mutating_request(request, &caller_client_id)
+        let may_detach_caller =
+            matches!(request.method.as_str(), "client/detach" | "terminal/step");
+        let request_id = request.id.clone();
+        let response = self.dispatch_runtime_mutating_request(request, &caller_client_id);
+        if may_detach_caller
+            && response.contains(r#""result""#)
+            && !self.session.is_attached_primary(&caller_client_id)
+            && let Err(error) = connection.deactivate_x11_route()
+        {
+            return runtime_json_rpc_error(&request_id, error.kind(), error.message());
+        }
+        response
     }
 
     /// Runs the append lifecycle event operation for this subsystem.

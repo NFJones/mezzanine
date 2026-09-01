@@ -2,7 +2,8 @@
 
 use super::*;
 
-use crate::control::AuthenticatedPeer;
+use crate::control::{AuthenticatedPeer, RequestedRole};
+use crate::security::remote::{RemoteHostRoutingAuthority, RemotePrincipal, RemoteRoleCeiling};
 use iroh::SecretKey;
 
 /// Creates an initialized local-owner connection for remote administration.
@@ -42,6 +43,72 @@ fn request(
     let (body, frame_consumed) = decode_control_frame(&output, 1024 * 1024).unwrap();
     assert_eq!(frame_consumed, output.len());
     serde_json::from_str(&body).unwrap()
+}
+
+/// Initializes one host-routed-style primary with a connection-owned X11
+/// route and publishes that route through the same post-flush lease boundary
+/// used by the concrete Iroh adapters.
+fn initialized_x11_primary(
+    service: &mut RuntimeSessionService,
+    endpoint_id: &str,
+    client_name: &str,
+    takeover: bool,
+) -> ControlConnectionState {
+    let mut connection = ControlConnectionState::new(false, false);
+    connection
+        .bind_authenticated_peer(AuthenticatedPeer::iroh_endpoint(endpoint_id))
+        .unwrap();
+    connection
+        .bind_remote_principal(RemotePrincipal {
+            trust_record_id: format!("trust-{client_name}"),
+            endpoint_id: endpoint_id.to_string(),
+            role_ceiling: RemoteRoleCeiling::Primary,
+            host_routing: RemoteHostRoutingAuthority::default(),
+            requested_role: RequestedRole::Primary,
+        })
+        .unwrap();
+    connection
+        .bind_x11_connection_id(format!("connection-{client_name}"))
+        .unwrap();
+    let initialize = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": format!("initialize-{client_name}"),
+        "method": "control/initialize",
+        "params": {
+            "requested_role": "primary",
+            "requested_version": 2,
+            "client_name": client_name,
+            "detach_primary_on_disconnect": true,
+            "x11_forwarding": {
+                "version": 1,
+                "mode": "untrusted",
+                "auth_protocol": "MIT-MAGIC-COOKIE-1",
+                "fake_cookie_base64": "EREREREREREREREREREREQ==",
+                "takeover": takeover
+            },
+            "client": {
+                "name": client_name,
+                "interactive": true,
+                "terminal": {
+                    "columns": 80,
+                    "rows": 24,
+                    "term": "xterm-256color"
+                }
+            }
+        }
+    })
+    .to_string();
+    let initialized = request(service, &mut connection, &initialize);
+    assert_eq!(
+        initialized.pointer("/result/granted_role"),
+        Some(&serde_json::json!("primary")),
+        "{initialized}"
+    );
+    let route = connection
+        .take_x11_route_start()
+        .expect("successful X11 initialization should retain one route lease");
+    route.activate_without_transport().unwrap();
+    connection
 }
 
 /// Verifies invitation creation requires a current concrete transport route
@@ -569,6 +636,110 @@ fn runtime_remote_pairing_audit_records_rejection_and_redemption() {
     assert!(!audit.contains(device_credential), "{audit}");
     assert!(!audit.contains("credential_verifier"), "{audit}");
 
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Successful RPC self-detach must revoke only the exact connection-owned X11
+/// generation, while a targeted detach leaves the caller's route active. A
+/// replacement owner must then claim the proxy without explicit takeover, and
+/// delayed cleanup from the detached connection must not affect it.
+#[tokio::test]
+async fn runtime_x11_route_tracks_rpc_self_detach_not_targeted_detach() {
+    let root = temp_root("x11-rpc-detach-runtime");
+    let mut service = test_runtime_service();
+    let proxy = crate::runtime::x11::RuntimeX11Proxy::prepare(&root).unwrap();
+    let proxy_handle = proxy.handle();
+    let authority_path = proxy_handle.authority_path().to_path_buf();
+    service.set_runtime_x11_proxy(proxy_handle.clone());
+
+    let mut owner = initialized_x11_primary(
+        &mut service,
+        "endpoint-rpc-detach-owner",
+        "rpc-detach-owner",
+        false,
+    );
+    assert!(proxy_handle.diagnostics().route_active);
+    assert!(!fs::read(&authority_path).unwrap().is_empty());
+
+    let other = service
+        .attach_primary("targeted-primary", true, Size::new(80, 24).unwrap(), 121)
+        .unwrap();
+    let targeted = request(
+        &mut service,
+        &mut owner,
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"targeted-detach","method":"client/detach","params":{{"client_id":"{other}","idempotency_key":"targeted-detach"}}}}"#
+        ),
+    );
+    assert_eq!(
+        targeted.pointer("/result/detached"),
+        Some(&serde_json::json!(true))
+    );
+    assert!(proxy_handle.diagnostics().route_active);
+    assert!(!fs::read(&authority_path).unwrap().is_empty());
+
+    let detached = request(
+        &mut service,
+        &mut owner,
+        r#"{"jsonrpc":"2.0","id":"self-detach","method":"client/detach","params":{"idempotency_key":"self-detach"}}"#,
+    );
+    assert_eq!(
+        detached.pointer("/result/detached"),
+        Some(&serde_json::json!(true))
+    );
+    assert!(!proxy_handle.diagnostics().route_active);
+    assert_eq!(fs::read(&authority_path).unwrap(), Vec::<u8>::new());
+
+    let mut replacement = initialized_x11_primary(
+        &mut service,
+        "endpoint-rpc-detach-replacement",
+        "rpc-detach-replacement",
+        false,
+    );
+    assert!(proxy_handle.diagnostics().route_active);
+    assert!(!owner.deactivate_x11_route().unwrap());
+    assert!(proxy_handle.diagnostics().route_active);
+    assert!(replacement.deactivate_x11_route().unwrap());
+
+    drop(proxy);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The interactive prefix detach action follows the same exact connection
+/// ownership transition as the RPC method, even though the control transport
+/// remains open long enough to return the terminal-step acknowledgement.
+#[tokio::test]
+async fn runtime_x11_route_ends_on_interactive_detach_step() {
+    let root = temp_root("x11-interactive-detach-runtime");
+    let mut service = test_runtime_service();
+    let proxy = crate::runtime::x11::RuntimeX11Proxy::prepare(&root).unwrap();
+    let proxy_handle = proxy.handle();
+    let authority_path = proxy_handle.authority_path().to_path_buf();
+    service.set_runtime_x11_proxy(proxy_handle.clone());
+
+    let mut owner = initialized_x11_primary(
+        &mut service,
+        "endpoint-interactive-detach",
+        "interactive-detach-owner",
+        false,
+    );
+    assert!(proxy_handle.diagnostics().route_active);
+
+    let detached = request(
+        &mut service,
+        &mut owner,
+        r#"{"jsonrpc":"2.0","id":"interactive-detach","method":"terminal/step","params":{"idempotency_key":"interactive-detach","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[1,100]}}"#,
+    );
+    assert_eq!(
+        detached.pointer("/result/client_detached"),
+        Some(&serde_json::json!(true)),
+        "{detached}"
+    );
+    assert!(!proxy_handle.diagnostics().route_active);
+    assert_eq!(fs::read(&authority_path).unwrap(), Vec::<u8>::new());
+    assert!(!owner.deactivate_x11_route().unwrap());
+
+    drop(proxy);
     let _ = fs::remove_dir_all(root);
 }
 
