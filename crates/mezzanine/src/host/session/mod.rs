@@ -635,8 +635,8 @@ fn build_provider_refresh_service(handle: AsyncRuntimeSessionHandle) -> AsyncRun
 
 fn build_runtime_x11_proxy_service(proxy: RuntimeX11Proxy) -> AsyncRuntimeService {
     AsyncRuntimeService::new("x11-proxy", async move {
-        let rejected = proxy.serve_no_route().await?;
-        Ok(AsyncRuntimeServiceExit::completed(rejected))
+        let handled = proxy.serve().await?;
+        Ok(AsyncRuntimeServiceExit::completed(handled))
     })
 }
 

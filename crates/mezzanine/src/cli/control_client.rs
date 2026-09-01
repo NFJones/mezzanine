@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use iroh::EndpointAddr;
 use secrecy::{ExposeSecret, SecretString};
+use tokio::io::AsyncWriteExt;
 
 use super::{
     CliOutputFormat, MezError, Read, Result, SocketSelection, UnixStream, Write,
@@ -570,6 +571,7 @@ pub(super) struct PersistentIrohControlChannel {
     bridge: IrohCompressionBridge,
     x11_client: Option<super::x11::PreparedX11Client>,
     x11_route: Option<crate::runtime::x11::X11ForwardingResult>,
+    x11_task: Option<tokio::task::JoinHandle<()>>,
     event_receiver:
         Option<tokio::sync::mpsc::Receiver<Result<super::attach::IrohAttachRenderWakeup>>>,
     event_task: tokio::task::JoinHandle<()>,
@@ -616,6 +618,7 @@ impl PersistentIrohControlChannel {
             bridge,
             mut x11_client,
             x11_route: _,
+            mut x11_task,
             event_receiver,
             mut event_task,
             pushed_render_owner: _,
@@ -624,6 +627,14 @@ impl PersistentIrohControlChannel {
         drop(event_receiver);
         connection.close(iroh::endpoint::VarInt::from_u32(0), b"attach complete");
         let _ = bridge.shutdown(setup_timeout).await;
+        if let Some(mut task) = x11_task.take()
+            && tokio::time::timeout(setup_timeout, &mut task)
+                .await
+                .is_err()
+        {
+            task.abort();
+            let _ = task.await;
+        }
         if tokio::time::timeout(setup_timeout, &mut event_task)
             .await
             .is_err()
@@ -844,6 +855,27 @@ pub(super) async fn open_persistent_iroh_control_channel(
         pushed_render_owner.then(|| requested_role.to_string()),
         client_clipboard_negotiated.then_some(client_clipboard),
     );
+    let x11_task = match (x11_client.as_ref(), x11_route.as_ref()) {
+        (Some(client), Some(route)) => {
+            let incoming_streams = u32::try_from(policy.x11.max_connections_per_route)
+                .map_err(|_| MezError::invalid_state("X11 stream credit exceeds Iroh limits"))?;
+            connection
+                .set_max_concurrent_bi_streams(iroh::endpoint::VarInt::from_u32(incoming_streams));
+            let connection = connection.clone();
+            let route = route.clone();
+            let forwarder = client.forwarder();
+            let setup_timeout = policy.x11.setup_timeout;
+            Some(tokio::spawn(async move {
+                serve_client_x11_streams(connection, route, forwarder, setup_timeout).await;
+            }))
+        }
+        (None, None) => None,
+        _ => {
+            return Err(MezError::invalid_state(
+                "Iroh X11 negotiation and local preparation diverged",
+            ));
+        }
+    };
     Ok((
         PersistentIrohControlChannel {
             _identity: identity,
@@ -852,6 +884,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
             bridge,
             x11_client,
             x11_route,
+            x11_task,
             event_receiver: Some(event_receiver),
             event_task,
             pushed_render_owner,
@@ -859,6 +892,123 @@ pub(super) async fn open_persistent_iroh_control_channel(
         },
         response,
     ))
+}
+
+/// Accepts server-opened X11 streams independently from control and event framing.
+async fn serve_client_x11_streams(
+    connection: iroh::endpoint::Connection,
+    route: crate::runtime::x11::X11ForwardingResult,
+    forwarder: super::x11::X11ClientForwarder,
+    setup_timeout: std::time::Duration,
+) {
+    let mut workers = tokio::task::JoinSet::new();
+    loop {
+        tokio::select! {
+            accepted = connection.accept_bi() => match accepted {
+                Ok((send, recv)) => {
+                    let route = route.clone();
+                    let forwarder = forwarder.clone();
+                    workers.spawn(async move {
+                        let _ = relay_client_x11_stream(
+                            send,
+                            recv,
+                            route,
+                            forwarder,
+                            setup_timeout,
+                        )
+                        .await;
+                    });
+                }
+                Err(_) => break,
+            },
+            joined = workers.join_next(), if !workers.is_empty() => {
+                if let Some(Err(error)) = joined
+                    && !error.is_cancelled()
+                {
+                    break;
+                }
+            }
+        }
+    }
+    workers.abort_all();
+    while workers.join_next().await.is_some() {}
+}
+
+/// Authenticates one route preface, rewrites setup locally, and relays raw X11 bytes.
+async fn relay_client_x11_stream(
+    mut send: iroh::endpoint::SendStream,
+    mut recv: iroh::endpoint::RecvStream,
+    route: crate::runtime::x11::X11ForwardingResult,
+    forwarder: super::x11::X11ClientForwarder,
+    setup_timeout: std::time::Duration,
+) -> Result<()> {
+    let prepared = tokio::time::timeout(setup_timeout, async {
+        let mut encoded = [0u8; crate::runtime::x11::X11_STREAM_PREFACE_BYTES];
+        recv.read_exact(&mut encoded)
+            .await
+            .map_err(|_| MezError::forbidden("incomplete X11 stream preface"))?;
+        let preface = crate::runtime::x11::X11StreamPreface::decode(&encoded)
+            .map_err(|error| MezError::forbidden(error.to_string()))?;
+        if preface.generation != route.generation || preface.route_token != route.route_token {
+            return Err(MezError::forbidden(
+                "X11 stream does not authenticate the negotiated route",
+            ));
+        }
+        let mut setup = read_client_x11_setup(&mut recv).await?;
+        forwarder.rewrite_setup(&mut setup)?;
+        let mut local = forwarder.connect(setup_timeout).await?;
+        local.write_all(&setup).await?;
+        local.flush().await?;
+        Ok::<_, MezError>(local)
+    })
+    .await
+    .map_err(|_| MezError::invalid_state("X11 client stream setup timed out"))?;
+    let local = match prepared {
+        Ok(local) => local,
+        Err(error) => {
+            let code = iroh::endpoint::VarInt::from_u32(1);
+            let _ = send.reset(code);
+            let _ = recv.stop(code);
+            return Err(error);
+        }
+    };
+
+    let (mut local_read, mut local_write) = tokio::io::split(local);
+    let upstream = async {
+        tokio::io::copy(&mut local_read, &mut send).await?;
+        let _ = send.finish();
+        Ok::<(), std::io::Error>(())
+    };
+    let downstream = async {
+        tokio::io::copy(&mut recv, &mut local_write).await?;
+        local_write.shutdown().await
+    };
+    tokio::try_join!(upstream, downstream)?;
+    Ok(())
+}
+
+/// Reads exactly one bounded X11 setup request without consuming application bytes.
+async fn read_client_x11_setup(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
+    let mut setup = Vec::new();
+    loop {
+        match crate::runtime::x11::parse_x11_setup(&setup)
+            .map_err(|error| MezError::forbidden(error.to_string()))?
+        {
+            crate::runtime::x11::X11SetupProgress::Complete(_) => return Ok(setup),
+            crate::runtime::x11::X11SetupProgress::Incomplete { required_len } => {
+                if required_len > crate::runtime::x11::X11_MAX_SETUP_BYTES
+                    || required_len <= setup.len()
+                {
+                    return Err(MezError::forbidden("invalid X11 setup length"));
+                }
+                let start = setup.len();
+                setup.resize(required_len, 0);
+                recv.read_exact(&mut setup[start..])
+                    .await
+                    .map_err(|_| MezError::forbidden("incomplete X11 setup packet"))?;
+            }
+        }
+    }
 }
 
 fn resolve_iroh_control_target(
@@ -2447,9 +2597,13 @@ mod tests {
     use super::{
         RemoteRoleCeiling, ensure_iroh_attach_role_allowed, iroh_client_clipboard_negotiated,
         iroh_event_stream_version_candidates, iroh_initialize_rejected_event_stream_version,
-        iroh_pushed_render_negotiated, validate_iroh_host_only_initialize_response,
-        validate_iroh_initialize_response, validate_iroh_x11_initialize_response,
+        iroh_pushed_render_negotiated, relay_client_x11_stream,
+        validate_iroh_host_only_initialize_response, validate_iroh_initialize_response,
+        validate_iroh_x11_initialize_response,
     };
+    use iroh::endpoint::{PortmapperConfig, QuicTransportConfig, VarInt, presets};
+    use iroh::{Endpoint, RelayMode};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn iroh_attach_role_ceiling_allows_observer_and_blocks_primary_escalation() {
@@ -2522,6 +2676,140 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// One authenticated server-opened stream must rewrite only the setup
+    /// cookie, dial the frozen local target, and preserve later raw bytes.
+    #[tokio::test]
+    async fn iroh_x11_client_rewrites_setup_and_relays_raw_bytes() {
+        const TEST_ALPN: &[u8] = b"mezzanine/x11-client-test/1";
+        let local_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let local_port = local_listener.local_addr().unwrap().port();
+        let display = crate::cli::x11::resolve_local_x11_display(&format!(
+            "127.0.0.1:{}",
+            local_port.checked_sub(6000).unwrap()
+        ))
+        .unwrap();
+        let forwarder = crate::cli::x11::X11ClientForwarder::new_for_test(
+            display,
+            crate::runtime::x11::X11Cookie::new([0x41; 16]),
+            crate::runtime::x11::X11Cookie::new([0x52; 16]),
+        );
+        let route = crate::runtime::x11::X11ForwardingResult {
+            version: crate::runtime::x11::X11_FORWARDING_VERSION,
+            mode: crate::runtime::x11::X11ForwardingMode::Trusted,
+            generation: 9,
+            route_token: crate::runtime::x11::X11RouteToken::new([0x63; 32]),
+        };
+
+        let server_endpoint = Endpoint::builder(presets::Minimal)
+            .alpns(vec![TEST_ALPN.to_vec()])
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let client_endpoint = Endpoint::builder(presets::Minimal)
+            .transport_config(
+                QuicTransportConfig::builder()
+                    .max_concurrent_bidi_streams(VarInt::from_u32(1))
+                    .build(),
+            )
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let server_addr = server_endpoint.addr();
+        let client_side = async {
+            client_endpoint
+                .connect(server_addr, TEST_ALPN)
+                .await
+                .unwrap()
+        };
+        let server_side = async {
+            let incoming = server_endpoint.accept().await.unwrap();
+            incoming.accept().unwrap().await.unwrap()
+        };
+        let (client_connection, server_connection) = tokio::join!(client_side, server_side);
+
+        let server_route = route.clone();
+        let server = async move {
+            let (mut send, mut recv) = server_connection.open_bi().await.unwrap();
+            let preface = crate::runtime::x11::X11StreamPreface {
+                generation: server_route.generation,
+                route_token: server_route.route_token,
+            }
+            .encode();
+            send.write_all(&preface).await.unwrap();
+            send.write_all(&x11_setup_packet(b'B', &[0x41; 16]))
+                .await
+                .unwrap();
+            send.write_all(b"ping").await.unwrap();
+            send.finish().unwrap();
+            let mut reply = [0u8; 4];
+            recv.read_exact(&mut reply).await.unwrap();
+            assert_eq!(&reply, b"pong");
+        };
+        let relay_connection = client_connection.clone();
+        let client = async move {
+            let (send, recv) = relay_connection.accept_bi().await.unwrap();
+            relay_client_x11_stream(
+                send,
+                recv,
+                route,
+                forwarder,
+                std::time::Duration::from_secs(2),
+            )
+            .await
+            .unwrap();
+        };
+        let local = async {
+            let (mut stream, _) = local_listener.accept().await.unwrap();
+            let mut setup = [0u8; 48];
+            stream.read_exact(&mut setup).await.unwrap();
+            crate::runtime::x11::validate_x11_setup_cookie(
+                &setup,
+                &crate::runtime::x11::X11Cookie::new([0x52; 16]),
+            )
+            .unwrap();
+            let mut payload = [0u8; 4];
+            stream.read_exact(&mut payload).await.unwrap();
+            assert_eq!(&payload, b"ping");
+            stream.write_all(b"pong").await.unwrap();
+            stream.shutdown().await.unwrap();
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(server, client, local);
+        })
+        .await
+        .unwrap();
+
+        drop(client_connection);
+        client_endpoint.close().await;
+        server_endpoint.close().await;
+    }
+
+    /// Builds one exact little- or big-endian MIT setup request.
+    fn x11_setup_packet(byte_order: u8, cookie: &[u8; 16]) -> Vec<u8> {
+        let mut setup = vec![0u8; 48];
+        setup[0] = byte_order;
+        let encode = |value: u16| {
+            if byte_order == b'l' {
+                value.to_le_bytes()
+            } else {
+                value.to_be_bytes()
+            }
+        };
+        setup[2..4].copy_from_slice(&encode(11));
+        setup[4..6].copy_from_slice(&encode(0));
+        setup[6..8].copy_from_slice(&encode(18));
+        setup[8..10].copy_from_slice(&encode(16));
+        setup[12..30].copy_from_slice(b"MIT-MAGIC-COOKIE-1");
+        setup[32..48].copy_from_slice(cookie);
+        setup
     }
 
     /// Verifies host-scoped pairing retains the server's trust diagnostic so a

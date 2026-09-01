@@ -1562,7 +1562,7 @@ async fn serve_runtime_iroh_control_connection(
                     let _ = sender.send(start);
                 }
                 if let Some(route) = connection_state.take_x11_route_start() {
-                    route.activate()?;
+                    route.activate(sample_connection.clone())?;
                 }
                 Ok(())
             },

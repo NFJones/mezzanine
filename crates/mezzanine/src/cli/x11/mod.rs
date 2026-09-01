@@ -37,6 +37,54 @@ pub(crate) struct PreparedX11Client {
     lease: X11CredentialLease,
 }
 
+/// Cloneable credential boundary used by supervised X11 stream workers.
+#[derive(Clone)]
+pub(crate) struct X11ClientForwarder {
+    display: ResolvedX11Display,
+    fake_cookie: X11Cookie,
+    real_cookie: X11Cookie,
+}
+
+impl fmt::Debug for X11ClientForwarder {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("X11ClientForwarder")
+            .field("display", &"[LOCAL DISPLAY REDACTED]")
+            .field("fake_cookie", &"[REDACTED]")
+            .field("real_cookie", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl X11ClientForwarder {
+    /// Connects one forwarding stream only to the frozen local target.
+    pub(crate) async fn connect(&self, timeout: Duration) -> Result<X11LocalStream> {
+        connect_local_x11(&self.display, timeout).await
+    }
+
+    /// Revalidates and substitutes the setup cookie before local delivery.
+    pub(crate) fn rewrite_setup(
+        &self,
+        setup: &mut [u8],
+    ) -> Result<crate::runtime::x11::X11SetupPacket> {
+        rewrite_local_x11_setup(setup, &self.fake_cookie, &self.real_cookie)
+    }
+
+    /// Builds an explicit frozen forwarding boundary for relay tests.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        display: ResolvedX11Display,
+        fake_cookie: X11Cookie,
+        real_cookie: X11Cookie,
+    ) -> Self {
+        Self {
+            display,
+            fake_cookie,
+            real_cookie,
+        }
+    }
+}
+
 impl fmt::Debug for PreparedX11Client {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -61,9 +109,18 @@ impl PreparedX11Client {
         }
     }
 
+    /// Clones only the frozen local forwarding state, never the cleanup lease.
+    pub(crate) fn forwarder(&self) -> X11ClientForwarder {
+        X11ClientForwarder {
+            display: self.display.clone(),
+            fake_cookie: self.fake_cookie.clone(),
+            real_cookie: self.real_cookie.clone(),
+        }
+    }
+
     /// Connects one forwarding stream only to the frozen local target.
     pub(crate) async fn connect(&self, timeout: Duration) -> Result<X11LocalStream> {
-        connect_local_x11(&self.display, timeout).await
+        self.forwarder().connect(timeout).await
     }
 
     /// Revalidates and substitutes the setup cookie before local delivery.
@@ -71,7 +128,7 @@ impl PreparedX11Client {
         &self,
         setup: &mut [u8],
     ) -> Result<crate::runtime::x11::X11SetupPacket> {
-        rewrite_local_x11_setup(setup, &self.fake_cookie, &self.real_cookie)
+        self.forwarder().rewrite_setup(setup)
     }
 
     /// Performs bounded explicit credential cleanup.

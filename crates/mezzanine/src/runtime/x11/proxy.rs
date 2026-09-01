@@ -14,6 +14,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use rand::Rng;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
+use tokio::task::JoinSet;
 
 use crate::error::{MezError, Result};
 use crate::runtime::RuntimeIrohX11Policy;
@@ -23,7 +26,10 @@ use super::authority::{
 };
 use super::contracts::{
     X11_FORWARDING_VERSION, X11AuthProtocol, X11Cookie, X11ForwardingMode, X11ForwardingOffer,
-    X11ForwardingResult, X11RouteToken,
+    X11ForwardingResult, X11RouteToken, X11StreamPreface,
+};
+use super::protocol::{
+    X11_MAX_SETUP_BYTES, X11SetupProgress, parse_x11_setup, validate_x11_setup_cookie,
 };
 
 /// First display number considered for a session-local proxy.
@@ -75,11 +81,25 @@ impl PartialEq for RuntimeX11RouteLease {
 impl Eq for RuntimeX11RouteLease {}
 
 impl RuntimeX11RouteLease {
-    /// Publishes the reserved fake cookie only after initialization flushed.
-    pub(crate) fn activate(&self) -> Result<()> {
+    /// Publishes the reserved fake cookie and exact transport only after initialization flushed.
+    pub(crate) fn activate(&self, connection: iroh::endpoint::Connection) -> Result<()> {
+        let connection_id = format!("iroh-{}", connection.stable_id());
+        if connection_id != self.inner.owner.connection_id {
+            return Err(MezError::invalid_state(
+                "X11 route activation used a different Iroh connection",
+            ));
+        }
         self.inner
             .proxy
-            .activate_route(&self.inner.owner, self.inner.generation)
+            .activate_route(&self.inner.owner, self.inner.generation, Some(connection))
+    }
+
+    /// Publishes authority state without a transport for registry-only tests.
+    #[cfg(test)]
+    fn activate_without_transport(&self) -> Result<()> {
+        self.inner
+            .proxy
+            .activate_route(&self.inner.owner, self.inner.generation, None)
     }
 
     /// Explicitly invalidates this exact generation. Repeated or stale calls are harmless.
@@ -182,8 +202,9 @@ impl RuntimeX11ProxyHandle {
                 "the session already has an active X11 route owner",
             ));
         }
-        if routes.current.is_some() {
+        if let Some(current) = routes.current.as_ref() {
             write_empty_private_xauthority(&self.inner.authority_path)?;
+            current.cancellation.send_replace(true);
         }
         routes.next_generation = routes
             .next_generation
@@ -198,6 +219,9 @@ impl RuntimeX11ProxyHandle {
             fake_cookie: offer.fake_cookie,
             route_token: route_token.clone(),
             active: false,
+            connection: None,
+            permits: Arc::new(Semaphore::new(self.inner.policy.max_connections_per_route)),
+            cancellation: watch::channel(false).0,
         });
         drop(routes);
 
@@ -218,7 +242,12 @@ impl RuntimeX11ProxyHandle {
     }
 
     /// Atomically publishes the fake cookie for one still-current reservation.
-    fn activate_route(&self, owner: &RuntimeX11RouteOwner, generation: u64) -> Result<()> {
+    fn activate_route(
+        &self,
+        owner: &RuntimeX11RouteOwner,
+        generation: u64,
+        connection: Option<iroh::endpoint::Connection>,
+    ) -> Result<()> {
         let mut routes =
             self.inner.routes.lock().map_err(|_| {
                 MezError::invalid_state("session X11 route registry is unavailable")
@@ -239,6 +268,7 @@ impl RuntimeX11ProxyHandle {
             self.inner.display_number,
             &route.fake_cookie,
         )?;
+        route.connection = connection;
         route.active = true;
         Ok(())
     }
@@ -257,8 +287,28 @@ impl RuntimeX11ProxyHandle {
             return Ok(false);
         }
         write_empty_private_xauthority(&self.inner.authority_path)?;
-        routes.current = None;
+        if let Some(route) = routes.current.take() {
+            route.cancellation.send_replace(true);
+        }
         Ok(true)
+    }
+
+    /// Snapshots one currently published route for a single accepted socket.
+    fn active_route(&self) -> Option<RuntimeX11ActiveRoute> {
+        let routes = self.inner.routes.lock().ok()?;
+        let route = routes.current.as_ref()?;
+        if !route.active {
+            return None;
+        }
+        Some(RuntimeX11ActiveRoute {
+            generation: route.generation,
+            fake_cookie: route.fake_cookie.clone(),
+            route_token: route.route_token.clone(),
+            connection: route.connection.as_ref()?.clone(),
+            setup_timeout: self.inner.policy.setup_timeout,
+            permits: route.permits.clone(),
+            cancellation: route.cancellation.subscribe(),
+        })
     }
 
     /// Returns whether one exact route generation is currently published.
@@ -296,6 +346,20 @@ struct RuntimeX11RouteState {
     fake_cookie: X11Cookie,
     route_token: X11RouteToken,
     active: bool,
+    connection: Option<iroh::endpoint::Connection>,
+    permits: Arc<Semaphore>,
+    cancellation: watch::Sender<bool>,
+}
+
+/// Cloneable generation snapshot retained by exactly one proxy worker.
+struct RuntimeX11ActiveRoute {
+    generation: u64,
+    fake_cookie: X11Cookie,
+    route_token: X11RouteToken,
+    connection: iroh::endpoint::Connection,
+    setup_timeout: std::time::Duration,
+    permits: Arc<Semaphore>,
+    cancellation: watch::Receiver<bool>,
 }
 
 /// Listener and generated-artifact owner for one session proxy.
@@ -371,24 +435,153 @@ impl RuntimeX11Proxy {
         self.handle.clone()
     }
 
-    /// Rejects every socket until route negotiation supplies forwarding state.
-    pub(crate) async fn serve_no_route(self) -> Result<u64> {
-        let mut rejected = 0u64;
+    /// Serves active generation-fenced routes and rejects every other socket.
+    pub(crate) async fn serve(self) -> Result<u64> {
+        let mut handled = 0u64;
+        let mut workers = JoinSet::new();
         loop {
-            match self.listener.accept().await {
-                Ok((stream, _peer)) => {
-                    drop(stream);
-                    rejected = rejected.saturating_add(1);
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => {
-                    return Err(MezError::invalid_state(format!(
-                        "session X11 proxy accept failed after {rejected} rejected sockets: {error}"
-                    )));
+            tokio::select! {
+                accepted = self.listener.accept() => match accepted {
+                    Ok((stream, _peer)) => {
+                        handled = handled.saturating_add(1);
+                        let Some(route) = self.handle.active_route() else {
+                            drop(stream);
+                            continue;
+                        };
+                        let Ok(permit) = route.permits.clone().try_acquire_owned() else {
+                            drop(stream);
+                            continue;
+                        };
+                        workers.spawn(async move {
+                            let _ = relay_server_x11_socket(stream, route, permit).await;
+                        });
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => {
+                        return Err(MezError::invalid_state(format!(
+                            "session X11 proxy accept failed after {handled} sockets: {error}"
+                        )));
+                    }
+                },
+                joined = workers.join_next(), if !workers.is_empty() => {
+                    if let Some(Err(error)) = joined
+                        && !error.is_cancelled()
+                    {
+                        return Err(MezError::invalid_state(format!(
+                            "session X11 proxy worker failed: {error}"
+                        )));
+                    }
                 }
             }
         }
     }
+}
+
+/// Authenticates one local setup, opens one host-initiated stream, and relays raw bytes.
+async fn relay_server_x11_socket(
+    mut local: tokio::net::TcpStream,
+    mut route: RuntimeX11ActiveRoute,
+    _permit: OwnedSemaphorePermit,
+) -> Result<()> {
+    let setup = tokio::select! {
+        biased;
+        () = wait_for_route_cancellation(&mut route.cancellation) => {
+            return Err(MezError::invalid_state("X11 route was deactivated"));
+        }
+        result = read_validated_x11_setup(
+            &mut local,
+            &route.fake_cookie,
+            route.setup_timeout,
+        ) => result?,
+    };
+    let open = tokio::time::timeout(route.setup_timeout, route.connection.open_bi());
+    let (mut send, mut recv) = tokio::select! {
+        biased;
+        () = wait_for_route_cancellation(&mut route.cancellation) => {
+            return Err(MezError::invalid_state("X11 route was deactivated"));
+        }
+        result = open => result
+            .map_err(|_| MezError::invalid_state("X11 Iroh stream setup timed out"))?
+            .map_err(|_| MezError::invalid_state("failed to open X11 Iroh stream"))?,
+    };
+    let preface = X11StreamPreface {
+        generation: route.generation,
+        route_token: route.route_token,
+    }
+    .encode();
+    let publish = tokio::time::timeout(route.setup_timeout, async {
+        send.write_all(&preface).await?;
+        send.write_all(&setup).await?;
+        send.flush().await
+    });
+    tokio::select! {
+        biased;
+        () = wait_for_route_cancellation(&mut route.cancellation) => {
+            return Err(MezError::invalid_state("X11 route was deactivated"));
+        }
+        result = publish => result
+            .map_err(|_| MezError::invalid_state("X11 Iroh stream preface timed out"))??,
+    }
+
+    let (mut local_read, mut local_write) = local.into_split();
+    let relay = async move {
+        let upstream = async {
+            tokio::io::copy(&mut local_read, &mut send).await?;
+            let _ = send.finish();
+            Ok::<(), std::io::Error>(())
+        };
+        let downstream = async {
+            tokio::io::copy(&mut recv, &mut local_write).await?;
+            local_write.shutdown().await
+        };
+        tokio::try_join!(upstream, downstream)?;
+        Ok::<(), MezError>(())
+    };
+    tokio::select! {
+        result = relay => result,
+        () = wait_for_route_cancellation(&mut route.cancellation) => Ok(()),
+    }
+}
+
+/// Reads exactly one bounded setup packet and authenticates its fake credential.
+async fn read_validated_x11_setup<R>(
+    stream: &mut R,
+    expected_cookie: &X11Cookie,
+    setup_timeout: std::time::Duration,
+) -> Result<Vec<u8>>
+where
+    R: AsyncRead + Unpin,
+{
+    tokio::time::timeout(setup_timeout, async {
+        let mut setup = Vec::new();
+        loop {
+            match parse_x11_setup(&setup).map_err(|error| MezError::forbidden(error.to_string()))? {
+                X11SetupProgress::Complete(_) => {
+                    validate_x11_setup_cookie(&setup, expected_cookie)
+                        .map_err(|error| MezError::forbidden(error.to_string()))?;
+                    return Ok(setup);
+                }
+                X11SetupProgress::Incomplete { required_len } => {
+                    if required_len > X11_MAX_SETUP_BYTES || required_len <= setup.len() {
+                        return Err(MezError::forbidden("invalid X11 setup length"));
+                    }
+                    let start = setup.len();
+                    setup.resize(required_len, 0);
+                    stream.read_exact(&mut setup[start..]).await?;
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|_| MezError::invalid_state("X11 setup packet timed out"))?
+}
+
+/// Completes when one exact route generation has been invalidated.
+async fn wait_for_route_cancellation(cancellation: &mut watch::Receiver<bool>) {
+    if *cancellation.borrow() {
+        return;
+    }
+    let _ = cancellation.changed().await;
 }
 
 impl Drop for RuntimeX11Proxy {
@@ -452,7 +645,9 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
 
-    use tokio::io::AsyncReadExt;
+    use iroh::endpoint::{PortmapperConfig, QuicTransportConfig, VarInt, presets};
+    use iroh::{Endpoint, RelayMode};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
 
@@ -475,7 +670,7 @@ mod tests {
             0o600
         );
 
-        let task = tokio::spawn(proxy.serve_no_route());
+        let task = tokio::spawn(proxy.serve());
         let mut stream = tokio::net::TcpStream::connect((
             Ipv4Addr::LOCALHOST,
             X11_TCP_BASE_PORT + handle.display_number(),
@@ -515,7 +710,7 @@ mod tests {
             .reserve_route(first_owner.clone(), route_offer([0x11; 16], false))
             .unwrap();
         assert_eq!(fs::read(handle.authority_path()).unwrap(), Vec::<u8>::new());
-        first_lease.activate().unwrap();
+        first_lease.activate_without_transport().unwrap();
         assert!(handle.route_is_active(&first_owner, first_result.generation));
         assert!(!fs::read(handle.authority_path()).unwrap().is_empty());
 
@@ -530,7 +725,7 @@ mod tests {
         assert!(second_result.generation > first_result.generation);
         assert_eq!(fs::read(handle.authority_path()).unwrap(), Vec::<u8>::new());
         assert!(!first_lease.deactivate().unwrap());
-        second_lease.activate().unwrap();
+        second_lease.activate_without_transport().unwrap();
         assert!(handle.route_is_active(&second_owner, second_result.generation));
 
         let retained = second_lease.clone();
@@ -541,6 +736,111 @@ mod tests {
 
         drop(first_lease);
         drop(proxy);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// One authenticated proxy socket must map to one server-opened raw Iroh
+    /// stream with the exact generation preface, setup packet, and later data.
+    #[tokio::test]
+    async fn active_route_relays_one_raw_server_opened_stream() {
+        const TEST_ALPN: &[u8] = b"mezzanine/x11-proxy-test/1";
+        let server_endpoint = Endpoint::builder(presets::Minimal)
+            .alpns(vec![TEST_ALPN.to_vec()])
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let client_endpoint = Endpoint::builder(presets::Minimal)
+            .transport_config(
+                QuicTransportConfig::builder()
+                    .max_concurrent_bidi_streams(VarInt::from_u32(2))
+                    .build(),
+            )
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let server_addr = server_endpoint.addr();
+        let client_side = async {
+            client_endpoint
+                .connect(server_addr, TEST_ALPN)
+                .await
+                .unwrap()
+        };
+        let server_side = async {
+            let incoming = server_endpoint.accept().await.unwrap();
+            incoming.accept().unwrap().await.unwrap()
+        };
+        let (client_connection, server_connection) = tokio::join!(client_side, server_side);
+
+        let root = test_root("active-relay");
+        let proxy = RuntimeX11Proxy::prepare(&root).unwrap();
+        let handle = proxy.handle();
+        let owner = route_owner(
+            "client-relay",
+            &format!("iroh-{}", server_connection.stable_id()),
+        );
+        let (route, lease) = handle
+            .reserve_route(owner, route_offer([0x61; 16], false))
+            .unwrap();
+        lease.activate(server_connection).unwrap();
+        let proxy_task = tokio::spawn(proxy.serve());
+
+        let remote_route = route.clone();
+        let relay_connection = client_connection.clone();
+        let remote = async move {
+            let (mut send, mut recv) =
+                tokio::time::timeout(Duration::from_secs(2), relay_connection.accept_bi())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            let mut encoded = [0u8; super::super::X11_STREAM_PREFACE_BYTES];
+            recv.read_exact(&mut encoded).await.unwrap();
+            let preface = X11StreamPreface::decode(&encoded).unwrap();
+            assert_eq!(preface.generation, remote_route.generation);
+            assert_eq!(preface.route_token, remote_route.route_token);
+
+            let mut setup = [0u8; 48];
+            recv.read_exact(&mut setup).await.unwrap();
+            validate_x11_setup_cookie(&setup, &X11Cookie::new([0x61; 16])).unwrap();
+            let mut payload = [0u8; 4];
+            recv.read_exact(&mut payload).await.unwrap();
+            assert_eq!(&payload, b"ping");
+            send.write_all(b"pong").await.unwrap();
+            send.finish().unwrap();
+        };
+        let local = async {
+            let mut stream = tokio::net::TcpStream::connect((
+                Ipv4Addr::LOCALHOST,
+                X11_TCP_BASE_PORT + handle.display_number(),
+            ))
+            .await
+            .unwrap();
+            stream
+                .write_all(&setup_packet(b'l', &[0x61; 16]))
+                .await
+                .unwrap();
+            stream.write_all(b"ping").await.unwrap();
+            let mut reply = [0u8; 4];
+            stream.read_exact(&mut reply).await.unwrap();
+            assert_eq!(&reply, b"pong");
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(remote, local);
+        })
+        .await
+        .unwrap();
+
+        drop(client_connection);
+        lease.deactivate().unwrap();
+        proxy_task.abort();
+        let _ = proxy_task.await;
+        client_endpoint.close().await;
+        server_endpoint.close().await;
         let _ = fs::remove_dir_all(root);
     }
 
@@ -564,6 +864,26 @@ mod tests {
             fake_cookie: X11Cookie::new(cookie),
             takeover,
         }
+    }
+
+    /// Builds one exact little- or big-endian MIT setup request.
+    fn setup_packet(byte_order: u8, cookie: &[u8; 16]) -> Vec<u8> {
+        let mut setup = vec![0u8; 48];
+        setup[0] = byte_order;
+        let encode = |value: u16| {
+            if byte_order == b'l' {
+                value.to_le_bytes()
+            } else {
+                value.to_be_bytes()
+            }
+        };
+        setup[2..4].copy_from_slice(&encode(11));
+        setup[4..6].copy_from_slice(&encode(0));
+        setup[6..8].copy_from_slice(&encode(18));
+        setup[8..10].copy_from_slice(&encode(16));
+        setup[12..30].copy_from_slice(b"MIT-MAGIC-COOKIE-1");
+        setup[32..48].copy_from_slice(cookie);
+        setup
     }
 
     /// Allocates one owner-private root for proxy tests.
