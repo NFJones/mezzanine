@@ -3150,9 +3150,11 @@ four-byte padding arithmetic, and reject a complete setup prefix larger than
 of credential data is supported. Credential comparisons MUST be constant-time,
 and errors MUST identify only a reason class. The server proxy MUST validate
 the fake route cookie before opening a stream. The client MUST independently
-validate the setup, connect only to its pre-resolved local X endpoint, replace
-the fake cookie in place with the real local cookie, and preserve packet length
-and byte order.
+validate the setup, connect only to the user-selected, pre-resolved X endpoint,
+replace the fake cookie in place with the real client-side cookie, and preserve
+packet length and byte order. TCP display targets MUST NOT be restricted by a
+locality allowlist; numeric and hostname targets selected through `DISPLAY`
+MUST be accepted when they resolve to a valid X11 TCP endpoint.
 
 An X11-enabled session MUST prepare its loopback proxy and private authority
 path before any initial or restored pane process starts. It MUST expose a

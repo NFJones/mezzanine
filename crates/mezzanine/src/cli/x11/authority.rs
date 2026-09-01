@@ -327,9 +327,10 @@ fn encode_seed_authority(
     cookie: &X11Cookie,
 ) -> Result<Zeroizing<Vec<u8>>> {
     let display_number = display.display_number().to_string();
+    let (family, address) = display.seed_authority_selector();
     let mut record = Zeroizing::new(Vec::with_capacity(64));
-    record.extend_from_slice(&super::display::XAUTH_FAMILY_LOCAL.to_be_bytes());
-    append_authority_field(&mut record, display.local_authority_address())?;
+    record.extend_from_slice(&family.to_be_bytes());
+    append_authority_field(&mut record, address)?;
     append_authority_field(&mut record, display_number.as_bytes())?;
     append_authority_field(&mut record, X11_AUTH_PROTOCOL_NAME.as_bytes())?;
     append_authority_field(&mut record, cookie.as_bytes())?;
@@ -389,7 +390,7 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::x11::display::{XAUTH_FAMILY_LOCAL, resolve_local_x11_display};
+    use crate::cli::x11::display::{XAUTH_FAMILY_INTERNET, resolve_local_x11_display};
 
     /// Exact endpoint matching must select one 16-byte MIT credential while
     /// malformed, missing, and ambiguous databases fail without secret text.
@@ -426,6 +427,24 @@ mod tests {
 
             assert_eq!(selected, X11Cookie::new([0x33; X11_COOKIE_BYTES]));
         }
+    }
+
+    /// A user-selected non-loopback server must use its resolved Internet
+    /// selector rather than leaking a separate FamilyLocal credential.
+    #[test]
+    fn selects_and_seeds_nonlocal_tcp_authority_records() {
+        let display = resolve_local_x11_display("172.26.128.1:0").unwrap();
+        let database = authority_record(&display, [0x44; X11_COOKIE_BYTES]);
+
+        let selected = select_x11_cookie(&database, &display).unwrap();
+        let seed = encode_seed_authority(&display, &selected).unwrap();
+
+        assert_eq!(selected, X11Cookie::new([0x44; X11_COOKIE_BYTES]));
+        assert_eq!(
+            u16::from_be_bytes([seed[0], seed[1]]),
+            XAUTH_FAMILY_INTERNET
+        );
+        assert_eq!(&seed[4..8], &[172, 26, 128, 1]);
     }
 
     /// The untrusted adapter must use argv-only generation against a private
@@ -486,9 +505,10 @@ mod tests {
 
     /// Builds one exact endpoint-matching Xauthority record for tests.
     fn authority_record(display: &ResolvedX11Display, cookie: [u8; X11_COOKIE_BYTES]) -> Vec<u8> {
+        let (family, address) = display.seed_authority_selector();
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&XAUTH_FAMILY_LOCAL.to_be_bytes());
-        append_counted(&mut bytes, display.local_authority_address());
+        bytes.extend_from_slice(&family.to_be_bytes());
+        append_counted(&mut bytes, address);
         append_counted(&mut bytes, display.display_number().to_string().as_bytes());
         append_counted(&mut bytes, X11_AUTH_PROTOCOL_NAME.as_bytes());
         append_counted(&mut bytes, &cookie);

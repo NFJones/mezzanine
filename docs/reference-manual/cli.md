@@ -158,8 +158,10 @@ An explicit Iroh primary `attach` also accepts these X11 options:
 These flags require an authenticated Iroh primary and are rejected for
 observers and Unix targets. An unsupported peer or denied host policy is a
 visible initialization failure; the client does not reconnect without the
-requested forwarding. The attaching machine resolves `DISPLAY` and its real
-cookie before dialing, and neither value is sent to the server.
+requested forwarding. The attaching machine accepts the user-selected
+`DISPLAY`, including non-loopback TCP X servers, and resolves and freezes that
+target with its real cookie before dialing. Neither value is sent to the
+server.
 
 Direct control commands keep Unix as their default target. `--iroh-invite-file
 PATH` explicitly performs first-use pairing from an owner-only, bounded JSON

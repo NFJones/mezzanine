@@ -1,12 +1,12 @@
-//! Strict client-local X11 display parsing and target freezing.
+//! Client-selected X11 display parsing and target freezing.
 //!
-//! Only conventional local Unix displays, constrained XQuartz launchd
-//! sockets, and numeric loopback TCP endpoints are accepted. Parsing resolves
-//! the complete destination before any Iroh connection is attempted; no
-//! server-provided value can influence the local X target.
+//! Conventional Unix displays, constrained XQuartz launchd sockets, and TCP
+//! endpoints selected through `DISPLAY` are accepted. Parsing resolves the
+//! complete destination before any Iroh connection is attempted; no
+//! server-provided value can influence the X target.
 
 use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 
 use crate::error::{MezError, Result};
@@ -20,12 +20,12 @@ pub(super) const XAUTH_FAMILY_LOCAL: u16 = 256;
 /// Base TCP port assigned to X display zero.
 const X11_TCP_BASE_PORT: u16 = 6000;
 
-/// One frozen local socket destination.
+/// One frozen client-side socket destination.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum X11LocalTarget {
     /// Conventional or XQuartz Unix-domain socket.
     Unix(PathBuf),
-    /// Numeric loopback TCP endpoint.
+    /// Resolved TCP endpoint selected by the user.
     Tcp(SocketAddr),
 }
 
@@ -35,7 +35,7 @@ impl fmt::Debug for X11LocalTarget {
     }
 }
 
-/// Parsed local display with the exact Xauthority selector for its target.
+/// Parsed client display with the exact Xauthority selector for its target.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedX11Display {
     display_name: String,
@@ -44,7 +44,7 @@ pub(crate) struct ResolvedX11Display {
     target: X11LocalTarget,
     authority_family: u16,
     authority_address: Vec<u8>,
-    local_authority_address: Vec<u8>,
+    local_authority_address: Option<Vec<u8>>,
 }
 
 impl fmt::Debug for ResolvedX11Display {
@@ -69,9 +69,12 @@ impl ResolvedX11Display {
         &self.authority_address
     }
 
-    /// Borrows the canonical FamilyLocal hostname selector used by xauth.
-    pub(super) fn local_authority_address(&self) -> &[u8] {
-        &self.local_authority_address
+    /// Returns the selector used to seed an isolated authority database.
+    pub(super) fn seed_authority_selector(&self) -> (u16, &[u8]) {
+        match self.local_authority_address.as_deref() {
+            Some(address) => (XAUTH_FAMILY_LOCAL, address),
+            None => (self.authority_family, &self.authority_address),
+        }
     }
 
     /// Returns the parsed screen number without changing the socket target.
@@ -88,12 +91,15 @@ impl ResolvedX11Display {
     pub(super) fn matches_authority(&self, family: u16, address: &[u8], number: &[u8]) -> bool {
         let endpoint_matches = (family == self.authority_family
             && address == self.authority_address)
-            || (family == XAUTH_FAMILY_LOCAL && address == self.local_authority_address);
+            || self
+                .local_authority_address
+                .as_deref()
+                .is_some_and(|local| family == XAUTH_FAMILY_LOCAL && address == local);
         endpoint_matches && number == self.display_number.to_string().as_bytes()
     }
 }
 
-/// Parses and freezes one supported local DISPLAY value.
+/// Parses and freezes one supported DISPLAY value.
 pub(crate) fn resolve_local_x11_display(display: &str) -> Result<ResolvedX11Display> {
     if display.is_empty() || display.chars().any(char::is_control) {
         return Err(invalid_display());
@@ -105,28 +111,44 @@ pub(crate) fn resolve_local_x11_display(display: &str) -> Result<ResolvedX11Disp
         .ok_or_else(invalid_display)?;
     let local_authority_address = current_hostname()?;
 
-    let (target, authority_family, authority_address) = match host {
+    let (target, authority_family, authority_address, local_authority_address) = match host {
         "" | "unix" => (
             X11LocalTarget::Unix(PathBuf::from(format!("/tmp/.X11-unix/X{display_number}"))),
             XAUTH_FAMILY_LOCAL,
             local_authority_address.clone(),
+            Some(local_authority_address.clone()),
         ),
         "localhost" | "127.0.0.1" => (
             X11LocalTarget::Tcp(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)),
             XAUTH_FAMILY_INTERNET,
             Ipv4Addr::LOCALHOST.octets().to_vec(),
+            Some(local_authority_address.clone()),
         ),
         "::1" => (
             X11LocalTarget::Tcp(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), port)),
             XAUTH_FAMILY_INTERNET6,
             Ipv6Addr::LOCALHOST.octets().to_vec(),
+            Some(local_authority_address.clone()),
         ),
         path if path.starts_with('/') && valid_xquartz_socket_path(Path::new(path)) => (
             X11LocalTarget::Unix(PathBuf::from(path)),
             XAUTH_FAMILY_LOCAL,
             local_authority_address.clone(),
+            Some(local_authority_address.clone()),
         ),
-        _ => return Err(invalid_display()),
+        host => {
+            let address = resolve_tcp_address(host, port)?;
+            let (family, authority_address) = match address.ip() {
+                IpAddr::V4(address) => (XAUTH_FAMILY_INTERNET, address.octets().to_vec()),
+                IpAddr::V6(address) => (XAUTH_FAMILY_INTERNET6, address.octets().to_vec()),
+            };
+            (
+                X11LocalTarget::Tcp(address),
+                family,
+                authority_address,
+                None,
+            )
+        }
     };
 
     Ok(ResolvedX11Display {
@@ -140,11 +162,21 @@ pub(crate) fn resolve_local_x11_display(display: &str) -> Result<ResolvedX11Disp
     })
 }
 
+/// Resolves and freezes a user-selected TCP X server without applying a
+/// locality allowlist.
+fn resolve_tcp_address(host: &str, port: u16) -> Result<SocketAddr> {
+    (host, port)
+        .to_socket_addrs()
+        .map_err(|_| invalid_display())?
+        .next()
+        .ok_or_else(invalid_display)
+}
+
 /// Splits bracketed IPv6 and ordinary display forms at the display suffix.
 fn split_host_and_suffix(display: &str) -> Result<(&str, &str)> {
     if let Some(rest) = display.strip_prefix('[') {
         let (host, suffix) = rest.split_once("]:").ok_or_else(invalid_display)?;
-        if host != "::1" {
+        if host.is_empty() {
             return Err(invalid_display());
         }
         return Ok((host, suffix));
@@ -226,7 +258,7 @@ fn current_hostname() -> Result<Vec<u8>> {
 
 /// Returns one privacy-safe DISPLAY parse failure.
 fn invalid_display() -> MezError {
-    MezError::invalid_args("DISPLAY is not a supported local X11 endpoint")
+    MezError::invalid_args("DISPLAY is not a supported X11 endpoint")
 }
 
 #[cfg(test)]
@@ -234,7 +266,7 @@ mod tests {
     use super::*;
 
     /// Conventional Unix, loopback TCP, and constrained XQuartz display names
-    /// must resolve without retaining an arbitrary hostname or socket path.
+    /// must resolve without retaining an unfrozen hostname or socket path.
     #[test]
     fn resolves_supported_local_display_forms() {
         let unix = resolve_local_x11_display(":7.2").unwrap();
@@ -266,14 +298,27 @@ mod tests {
         assert!(!format!("{xquartz:?}").contains("launchd"));
     }
 
-    /// Remote hosts, arbitrary paths, malformed suffixes, and port overflow
-    /// must fail with a target-free diagnostic.
+    /// Numeric non-loopback TCP displays must be accepted without applying a
+    /// locality allowlist to the user-selected X server.
     #[test]
-    fn rejects_nonlocal_or_malformed_display_forms() {
+    fn resolves_user_selected_tcp_display_forms() {
+        let ipv4 = resolve_local_x11_display("172.26.128.1:0").unwrap();
+        assert!(
+            matches!(ipv4.target(), X11LocalTarget::Tcp(address) if *address == "172.26.128.1:6000".parse().unwrap())
+        );
+
+        let ipv6 = resolve_local_x11_display("[2001:db8::1]:3.1").unwrap();
+        assert_eq!(ipv6.screen_number(), 1);
+        assert!(
+            matches!(ipv6.target(), X11LocalTarget::Tcp(address) if *address == "[2001:db8::1]:6003".parse().unwrap())
+        );
+    }
+
+    /// Arbitrary paths, malformed suffixes, and port overflow must fail with
+    /// a target-free diagnostic.
+    #[test]
+    fn rejects_malformed_display_forms() {
         for display in [
-            "example.com:0",
-            "192.0.2.1:0",
-            "[2001:db8::1]:0",
             "/tmp/arbitrary:0",
             "/private/tmp/com.apple.launchd.ABC/other:0",
             ":",
@@ -287,11 +332,11 @@ mod tests {
             assert!(
                 error
                     .to_string()
-                    .ends_with("DISPLAY is not a supported local X11 endpoint")
+                    .ends_with("DISPLAY is not a supported X11 endpoint")
             );
             assert_eq!(
                 error.to_string(),
-                "InvalidArgs: DISPLAY is not a supported local X11 endpoint"
+                "InvalidArgs: DISPLAY is not a supported X11 endpoint"
             );
         }
     }
