@@ -719,6 +719,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
         ));
     }
 
+    let mut retained_identity = None;
     if matches!(
         &target,
         IrohControlTarget::Invitation {
@@ -726,8 +727,15 @@ pub(super) async fn open_persistent_iroh_control_channel(
             ..
         }
     ) {
+        let identity = RemoteClientIdentity::load_or_create(paths.root())?;
         let profile_name = target.profile_name().to_string();
-        exchange_iroh_host_only_initialize(paths.root(), &configured_policy, &target).await?;
+        exchange_iroh_host_only_initialize_with_identity(
+            paths.root(),
+            &configured_policy,
+            &target,
+            &identity,
+        )
+        .await?;
         let profile = RemoteClientProfileStore::under_config_root(paths.root())
             .load(&profile_name)?
             .ok_or_else(|| {
@@ -736,11 +744,15 @@ pub(super) async fn open_persistent_iroh_control_channel(
                 )
             })?;
         target = IrohControlTarget::Profile(profile);
+        retained_identity = Some(identity);
     }
 
     let policy = explicit_iroh_client_policy(&configured_policy, &target)?;
 
-    let identity = RemoteClientIdentity::load_or_create(paths.root())?;
+    let identity = match retained_identity {
+        Some(identity) => identity,
+        None => RemoteClientIdentity::load_or_create(paths.root())?,
+    };
     let endpoint =
         bind_runtime_iroh_client_endpoint(&policy, identity.secret_key().clone()).await?;
     let (connection, compression) =
@@ -1381,6 +1393,22 @@ async fn exchange_iroh_host_only_initialize(
     configured_policy: &RuntimeIrohTransportPolicy,
     target: &IrohControlTarget,
 ) -> Result<()> {
+    let identity = RemoteClientIdentity::load_or_create(config_root)?;
+    exchange_iroh_host_only_initialize_with_identity(
+        config_root,
+        configured_policy,
+        target,
+        &identity,
+    )
+    .await
+}
+
+async fn exchange_iroh_host_only_initialize_with_identity(
+    config_root: &Path,
+    configured_policy: &RuntimeIrohTransportPolicy,
+    target: &IrohControlTarget,
+    identity: &RemoteClientIdentity,
+) -> Result<()> {
     if target.scope() != RemoteClientProfileScope::Host {
         return Err(MezError::invalid_args(
             "host-only initialization requires a host-scoped Iroh target",
@@ -1397,7 +1425,6 @@ async fn exchange_iroh_host_only_initialize(
             "Iroh pairing invitation expired before connection setup",
         ));
     }
-    let identity = RemoteClientIdentity::load_or_create(config_root)?;
     let endpoint =
         bind_runtime_iroh_client_endpoint(&policy, identity.secret_key().clone()).await?;
     let result =
