@@ -91,9 +91,11 @@ persistent-host path, omitting `--expires` currently uses 600 seconds even when
 `transport.iroh.invitation_ttl_seconds` differs. Supply `--expires SECONDS` to
 select an explicit lifetime in the supported 30 through 86,400 second range.
 
-The direct-session compatibility path uses the configured invitation lifetime;
-the persistent-host behavior is a known implementation difference from that
-configuration contract.
+The direct-session compatibility path uses the configured invitation lifetime.
+The persistent-host behavior is a known security-policy nonconformance and a
+rollout blocker when the configured value is not 600 seconds: operators must
+supply `--expires` explicitly until the host runtime honors the configured
+default.
 
 ### Transfer and inspect the invitation
 

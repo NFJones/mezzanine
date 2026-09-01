@@ -81,14 +81,16 @@ working directories without starting a daemon; `resume-latest` selects the
 newest matching snapshot. Add `--serve` to either resume command to run the
 restored model as a live foreground daemon.
 
-A snapshot is not a frozen live session. Resume creates fresh pane shell
-processes with fresh process IDs; it does not restore process state, terminal
-history, attached clients, client-local presentation, approvals, agent
-conversations, or live integration state. Snapshot files contain metadata such
-as pane titles and working-directory paths, so treat them as sensitive when
-sharing or backing them up. See [Lifecycle, detach, and
-recovery](../operations/lifecycle-detach-and-recovery.md) for the full restore
-contract.
+A snapshot is not a frozen live session. Without `--serve`, resume returns a
+non-live reconstructed session model and resume plan; it does not leave a
+runtime or pane processes running. With `--serve`, Mez starts a new live
+runtime with fresh pane shell processes and fresh process IDs. Neither form
+restores process state, terminal history, attached clients, client-local
+presentation, approvals, agent conversations, or live integration state.
+Snapshot files contain metadata such as pane titles and working-directory
+paths, so treat them as sensitive when sharing or backing them up. See
+[Lifecycle, detach, and recovery](../operations/lifecycle-detach-and-recovery.md)
+for the full restore contract.
 
 ## Related pages
 

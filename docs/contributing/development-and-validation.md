@@ -62,6 +62,7 @@ suite:
 | Slow-test ownership or async responsiveness | `just profile-slow-tests` |
 | Release-mode load and latency | `just release-load-check` or `just release-load-sweep` |
 | Iroh compression behavior or performance | `just iroh-compression-bench` |
+| Iroh v3 pushed-render behavior or RTT modeling | `just iroh-render-bench` |
 
 Run platform-specific shell and PTY changes on both Linux and macOS when
 available. To reproduce the macOS CI shape, run the full test suite serially.

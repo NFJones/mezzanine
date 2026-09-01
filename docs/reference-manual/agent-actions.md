@@ -34,7 +34,7 @@ terminal state remain outside ordinary model context.
 | `apply_patch` | Semantic file-content add, update, move, or delete using `*** Begin Patch` format. | It is a MAAP action, never a shell executable. |
 | `web_search`, `fetch_url` | User-requested current web search or HTTP(S) retrieval. | They are runtime network actions, not local-path readers. |
 | `send_message`, `spawn_agent` | Local coordination and pane-backed delegation. | Scope and policy inherit from the parent. |
-| `config_change` | Supported scalar live configuration mutation. | Execution-boundary settings remain direct-user-only. |
+| `config_change` | Supported live leaf configuration mutation. | Set values accept strings, signed integers, booleans, or string arrays; execution-boundary settings remain direct-user-only. |
 | `mcp_call` | Call a currently available configured MCP tool. | External capability and approval policy still apply. |
 | `memory_search`, `memory_store` | Retrieve or retain runtime-owned durable memory when enabled. | Records must be safe, durable, and non-secret. |
 | `issue_add`, `issue_update`, `issue_query`, `issue_delete` | Manage runtime-owned local issues for the active project. | Issue records remain subject to the active action surface and project-store rules. |

@@ -34,10 +34,12 @@ provider behavior.
 
 ## Forward X11 applications from a remote session
 
-X11 forwarding is an explicit authenticated-Iroh-primary workflow. The host
-must enable `[transport.iroh.x11]`, and the attaching machine must already have
-a supported local `DISPLAY`, a matching `MIT-MAGIC-COOKIE-1` record, and
-`xauth`. Pair the client normally, then request untrusted forwarding:
+X11 forwarding is an explicit authenticated-Iroh-primary workflow. In
+primary-user configuration, the host must set both `transport.iroh.enabled =
+true` and `transport.iroh.x11.enabled = true`, then restart the owning daemon.
+The attaching machine must already have a supported `DISPLAY`, a matching
+`MIT-MAGIC-COOKIE-1` record, and `xauth`. Pair the client normally, then request
+untrusted forwarding:
 
 ```console
 mez --iroh-profile home-mez attach --x11
@@ -48,6 +50,17 @@ Programs launched in the remote panes inherit a stable session-local
 server selected on the attaching machine. `--x11` requests an X SECURITY
 untrusted credential and fails closed if the local X server or `xauth` cannot
 create one. It never falls back to trusted forwarding.
+
+Forwarded X11 traffic automatically uses the codec negotiated for the owning
+Iroh connection. There is no X11-specific compression option: `zstd`, `lz4`,
+and their streaming variants compress bounded X11 records, while
+`compression_codecs = ["none"]` keeps the X11 byte stream raw.
+
+Mez accepts conventional local displays, constrained XQuartz launchd sockets,
+and TCP X servers. A TCP hostname or address is resolved once on the attaching
+machine before the Iroh connection starts; it is not supplied by the remote
+server. Non-loopback targets can expose the forwarded application to another
+machine, so select one only when that X server and network path are trusted.
 
 Use `--x11-trusted` only when the application requires full X11 authority and
 the host explicitly sets `transport.iroh.x11.allow_trusted = true`. If another
@@ -83,6 +96,8 @@ operations guidance for service, diagnostic, or recovery issues.
 - [Agent and integrations](../agent/README.md)
 - [Operations and troubleshooting](../operations/README.md)
 - [Safety, trust, and security](../safety-and-trust/README.md)
+- [X11 configuration](../configuration/reference.md#transportirohx11)
+- [X11 troubleshooting](../operations/troubleshooting.md#a-remote-x11-application-does-not-open-locally)
 
 ## Next step
 

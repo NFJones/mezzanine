@@ -20,8 +20,10 @@ their tools.
 
 Keep tokens and static bearer credentials in the MCP authentication flow or
 environment references, not in ordinary configuration. A server that cannot
-start, authenticate, or connect is unavailable for the session; it degrades the
-tool catalog rather than preventing ordinary agent work.
+start, authenticate, or connect is marked unavailable and session-blacklisted,
+so ordinary agent work continues with a reduced tool catalog. `/list-mcp`
+shows the failure reason and whether retry is available; an explicit retry or
+re-enable can attempt discovery again.
 
 ## Expose tools for one task
 
@@ -30,11 +32,12 @@ tools and argument contracts for the current turn. Unknown, disabled,
 ambiguous, or unavailable identifiers expose no substitute tools. Configured
 always-exposed servers use the same validation rules.
 
-MCP calls are external actions. A tool that reaches the network, accesses
-credentials, executes processes, or changes files requires approval unless the
-active policy explicitly permits that external capability, and the call is
-audited. An MCP server can operate outside the pane shell, so treat its declared
-capabilities as a distinct boundary rather than assuming a shell sandbox contains it.
+MCP calls are external actions. A tool that reads or changes local files,
+reaches the network, accesses credentials, or executes processes requires
+approval unless the active policy explicitly permits that external capability,
+and the call is audited. An MCP server can operate outside the pane shell, so
+treat its declared capabilities as a distinct boundary rather than assuming a
+shell sandbox contains it.
 
 ## Related pages
 

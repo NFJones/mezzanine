@@ -2,15 +2,17 @@
 
 ## Purpose
 
-Provide implementer reference for Mezzanine's versioned local protocols. These
-pages describe wire contracts, authorization boundaries, and lifecycle rules.
+Provide implementer reference for Mezzanine's versioned integration protocols.
+These pages describe wire contracts, authorization boundaries, and lifecycle
+rules across local Unix, authenticated Iroh, model-to-runtime, and session-local
+message surfaces.
 [SPEC.md](../../../SPEC.md) remains the normative compatibility contract when
 this manual and the specification differ.
 
 ## Prerequisites
 
 Use the task-oriented manual chapters before implementing an integration. Know
-which local service the client needs to reach, and treat the capabilities
+which service and transport the client needs to reach, and treat the capabilities
 advertised by that live service as authoritative over this summary.
 
 ## Protocol map

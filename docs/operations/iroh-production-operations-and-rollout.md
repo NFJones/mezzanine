@@ -9,6 +9,15 @@ infrastructure as a production dependency.
 This page is an operator gate, not evidence that a production relay or lookup
 service has been selected. Iroh remains disabled by default.
 
+## Prerequisites
+
+- Deploy and verify the [persistent multi-session host](persistent-host.md)
+  with a working local Unix administration path.
+- Understand the pairing, identity, and revocation boundaries in [Remote
+  pairing and recovery](../safety-and-trust/remote-pairing-and-recovery.md).
+- Assign an operator who can approve infrastructure ownership, collect the
+  release evidence below, and perform a tested Unix-only rollback.
+
 ## Current production infrastructure decision
 
 No production relay or endpoint-address lookup service is approved by this
@@ -102,9 +111,12 @@ Schema v71 adds ordered `compression_codecs`, `compression_min_bytes`, and
 `compression_zstd_level` settings. Compression is applied to complete
 Mezzanine application frames, not by Iroh or QUIC. The v2 frame foundation
 supports bounded Zstandard and LZ4 payloads plus per-frame identity fallback.
-The runtime advertises and attempts configured codecs in order before opening
-an application stream, then keeps the selected codec fixed for control and
-event traffic until that connection closes.
+The runtime advertises and attempts streaming codecs first, preserving
+configured preference within the streaming and non-streaming classes. It does
+so only before opening an application stream, then keeps the selected codec
+fixed for control, event, and negotiated X11 traffic until that connection
+closes. An interleaved preference list is therefore intentionally reordered by
+codec class.
 
 Schema v75 additionally accepts `lz4-stream` and `zstd-stream` for opt-in
 low-latency trials. These v3 variants reuse bounded direction-local history and
@@ -214,9 +226,11 @@ The fields below belong to routed session-local diagnostics such as
 
 The client-local `show-iroh-status` codec and compression rows are not part of
 the process-lifetime aggregate table. They reset with each connection-local
-codec context. `insufficient sample` means no complete frame crossed during the
-latest interval; a ratio below 1.00× or an `expansion` label warrants workload
-review but does not change the route quality label.
+codec context. `insufficient sample` means no complete frame has crossed on the
+current connection; a ratio below 1.00× or an `expansion` label warrants
+workload review but does not change the route quality label. Compression and
+render counters cover the connection lifetime, while recent loss and
+congestion values are interval deltas.
 
 Counters are process-lifetime aggregates and can race with an in-flight state
 transition. Correlate them with lifecycle state and bounded audit events, not

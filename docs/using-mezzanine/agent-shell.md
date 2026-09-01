@@ -35,6 +35,7 @@ direct subprocess with its own PTY. It does not run a command through the pane
 shell, so opening an editor does not add to shell history or disturb a command
 draft already present there. This behavior is the same in `pane` and `native`
 agent shell modes.
+
 Large bracketed pastes are shown as compact `[Pasted …]` blocks, but typed text
 and smaller pastes remain visible literally. History recall and `Ctrl+R` restore
 the same pasted blocks shown when the prompt was entered, and submission still
@@ -72,17 +73,22 @@ boundary makes injection unsafe; return it to an empty prompt. Runtime-created
 agent panes use bounded startup and fail with a copyable diagnostic instead of
 remaining indefinitely in bootstrap.
 
-## Work inside SSH and container shells
+## Work inside SSH and container shells in pane mode
 
-When the pane enters SSH, a container shell, a chroot, or another nested
-interactive environment, Mezzanine treats that environment as a separate shell
-authority. Explicit agent entry asserts that the foreign shell is at an empty,
-interactive prompt. Mezzanine immediately issues a bounded syntax-neutral
-identity probe and, after resolving the shell, launches an ephemeral managed
-child through a one-command `/bin/sh` loader. No Mezzanine executable,
-startup-file modification, or preinstalled compatibility shim is required
-inside the nested environment, and host-side Bash, Fish, or Zsh tokens and
-startup files are never reused across this boundary.
+This workflow applies to `pane` mode. `native` mode runs actions in fresh
+shells derived from the pane's local root process; it does not inject them into
+an interactive SSH, container, chroot, or other nested shell. Select
+`/shell-mode pane` before using the foreign-shell workflow below.
+
+When a pane-mode shell enters SSH, a container shell, a chroot, or another
+nested interactive environment, Mezzanine treats that environment as a
+separate shell authority. Explicit agent entry asserts that the foreign shell
+is at an empty, interactive prompt. Mezzanine immediately issues a bounded
+syntax-neutral identity probe and, after resolving the shell, launches an
+ephemeral managed child through a one-command `/bin/sh` loader. No Mezzanine
+executable, startup-file modification, or preinstalled compatibility shim is
+required inside the nested environment, and host-side Bash, Fish, or Zsh
+tokens and startup files are never reused across this boundary.
 
 This explicit empty-prompt assertion applies only to an existing user-owned
 foreign environment. Runtime-created agent panes use their mode-specific

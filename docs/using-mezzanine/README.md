@@ -16,8 +16,8 @@ Complete [Getting started](../getting-started/README.md).
   the command prompt, copy mode, paste buffers, and retained pane history.
 - [Agent shell](agent-shell.md): open the pane-local prompt and understand its
   visible action boundary.
-- [Workflows](workflows.md): apply sessions and agents to bounded, reviewable
-  repository work.
+- [Workflows](workflows.md): apply sessions and agents to bounded repository
+  work, remote X11 forwarding, and recovery.
 
 ## Related pages
 

@@ -206,9 +206,11 @@ policy and an authenticated Iroh primary attach both opt in. Unix and observer
 attachments cannot activate it.
 
 Reloading this table updates configured values but does not change any live
-session proxy. Local `remote/status` reports both `x11.applied` and
-`x11.configured`; `x11.enabled` continues to describe live enforcement and
-`x11.restart_pending` is true until a daemon restart applies the new policy.
+session proxy. A session runtime's `remote/status` response reports both
+`x11.applied` and `x11.configured`; `x11.enabled` describes live enforcement,
+and `x11.restart_pending` is true until a daemon restart applies the new policy.
+The persistent-host front door's `remote/status` response reports only host
+Iroh enablement and endpoint identity, not session X11 policy or counters.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
@@ -217,16 +219,18 @@ session proxy. Local `remote/status` reports both `x11.applied` and
 | `transport.iroh.x11.max_connections_per_route` | integer | `16` | Maximum setup-pending and active X11 connections for one route; valid values are 1 through 1024. |
 | `transport.iroh.x11.setup_timeout_ms` | integer | `5000` | Deadline for one bounded X11 setup exchange; valid values are 100 through 120000 milliseconds. |
 
-X11 uses SSH-style socket forwarding rather than a new Iroh ALPN. Each remote
-X socket is carried on one server-opened raw bidirectional stream after a fixed
+X11 uses SSH-style socket forwarding rather than a new Iroh ALPN. Each remote X
+socket is carried on one server-opened bidirectional stream after a fixed raw
 route preface. The real local X cookie, local display target, and local
-authority path remain client-local. Raw X11 bytes do not use Mezzanine JSON,
-event, Content-Length, or application-compression framing. Detach, revocation,
-takeover, transport loss, and shutdown invalidate the old route and its
-streams. Session proxies scan the full arithmetic-safe unprivileged TCP display
-range, skip occupied loopback ports, and report a capacity conflict only when
-that range is exhausted. Reattach retains the remote `DISPLAY` and
-`XAUTHORITY` paths while
+authority path remain client-local. With codec `none`, post-preface X11 bytes
+remain raw. Version-2 and version-3 codecs carry them in bounded independent or
+streaming records with fresh state for each stream direction; the setup packet
+is an identity/reset record. X11 traffic uses neither Mezzanine JSON,
+Content-Length, nor event framing. Detach, revocation, takeover, transport
+loss, and shutdown invalidate the old route and its streams. Session proxies
+scan the full arithmetic-safe unprivileged TCP display range, skip occupied
+loopback ports, and report a capacity conflict only when that range is
+exhausted. Reattach retains the remote `DISPLAY` and `XAUTHORITY` paths while
 rotating route credentials.
 
 When `identity = "per_session"` is enabled, direct-session daemon startup binds
@@ -489,6 +493,18 @@ Default aliases:
 | `tertiary` | `"#d7ff5f"` | Tertiary accent. |
 | `thinking` | `"#c9d89a"` | Muted agent thinking/status accent. |
 | `danger` | `"#ff5c57"` | Destructive/error accent. |
+| `foreground` | `"#eef7d0"` | General foreground. |
+| `muted` | `"#6f7f3c"` | Muted surface accent. |
+| `surface` | `"#1b1f0a"` | General background surface. |
+| `danger_foreground` | `"#ff7b74"` | Foreground danger accent. |
+| `danger_text` | `"#140200"` | Text placed on the danger accent. |
+| `muted_text` | `"#0f1206"` | Text placed on the muted accent. |
+| `primary_foreground` | `"#d8ff5a"` | Foreground primary accent. |
+| `primary_text` | `"#111400"` | Text placed on the primary accent. |
+| `secondary_foreground` | `"#a8e85a"` | Foreground secondary accent. |
+| `secondary_text` | `"#111400"` | Text placed on the secondary accent. |
+| `tertiary_foreground` | `"#e6ff8a"` | Foreground tertiary accent. |
+| `tertiary_text` | `"#111400"` | Text placed on the tertiary accent. |
 
 Default color slots:
 
@@ -587,7 +603,7 @@ Default color slots:
 | `themes.<name>.colors.<slot>` | string | omitted | Custom named theme color slot. |
 
 Custom named themes may omit aliases and slots. Omitted values inherit from the
-documented built-in base for custom themes.
+built-in `deepforest` base.
 
 Built-in theme names include `deepforest`, `apprentice`, `gruvbox_dark`,
 `gruvbox_light`, `solarized_dark`, `solarized_light`, `monokai`, `dracula`, `nord`,
@@ -1258,15 +1274,15 @@ unsandboxed retry, and the grant is consumed exactly once.
 | `mcp_servers.<name>.cwd` | string | omitted | Server working directory. |
 | `mcp_servers.<name>.http_headers` | map | omitted | HTTP headers for streamable HTTP servers. |
 | `mcp_servers.<name>.bearer_token_env` | string | omitted | Environment variable containing a bearer token. |
-| `mcp_servers.<name>.enabled_tools` | string array | omitted | Tool allow-list. |
-| `mcp_servers.<name>.disabled_tools` | string array | omitted | Tool deny-list. |
-| `mcp_servers.<name>.startup_timeout_sec` | integer | omitted | Startup timeout in seconds. |
-| `mcp_servers.<name>.startup_timeout_ms` | integer | omitted | Startup timeout in milliseconds. |
-| `mcp_servers.<name>.tool_timeout_sec` | integer | omitted | Tool timeout in seconds. |
-| `mcp_servers.<name>.tool_timeout_ms` | integer | omitted | Tool timeout in milliseconds. |
-| `mcp_servers.<name>.enabled` | boolean | omitted | Whether the server is enabled. |
-| `mcp_servers.<name>.approval` | string | omitted | Server-level approval policy. |
-| `mcp_servers.<name>.tool_approvals` | map | omitted | Per-tool approval policy. |
+| `mcp_servers.<name>.enabled_tools` | string array | `[]` | Tool allow-list; empty permits all discovered tools not denied below. |
+| `mcp_servers.<name>.disabled_tools` | string array | `[]` | Tool deny-list. |
+| `mcp_servers.<name>.startup_timeout_sec` | integer | omitted; 10 seconds effective | Optional startup timeout in seconds; mutually exclusive with `startup_timeout_ms`. |
+| `mcp_servers.<name>.startup_timeout_ms` | integer | `10000` effective | Optional startup timeout in milliseconds; mutually exclusive with `startup_timeout_sec`. |
+| `mcp_servers.<name>.tool_timeout_sec` | integer | omitted; 60 seconds effective | Optional tool timeout in seconds; mutually exclusive with `tool_timeout_ms`. |
+| `mcp_servers.<name>.tool_timeout_ms` | integer | `60000` effective | Optional tool timeout in milliseconds; mutually exclusive with `tool_timeout_sec`. |
+| `mcp_servers.<name>.enabled` | boolean | `true` | Whether the server is enabled. |
+| `mcp_servers.<name>.approval` | string | `"inherit"` | Server-level approval policy. |
+| `mcp_servers.<name>.tool_approvals` | map | `{}` | Per-tool approval policy. |
 | `mcp_servers.<name>.external_capability` | table | omitted | Model-visible external capability metadata. The `purpose` field should be a short, non-secret description of when agents should use this server, and `usage_instructions` may provide non-secret user-authored guidance for how agents should use it. |
 | `mcp_servers.<name>.external_capability.purpose` | string | omitted | Concise, non-secret routing metadata describing when agents should use the server. |
 | `mcp_servers.<name>.external_capability.usage_instructions` | string | omitted | Concise, non-secret user guidance for preferred workflows, constraints, or when to avoid the server. |
@@ -1333,8 +1349,8 @@ credentials.
 | `hooks.<name>.program` | string | omitted | Program hook executable. |
 | `hooks.<name>.command` | string | omitted | Command or focused-shell hook text. |
 | `hooks.<name>.args` | string array | omitted | Program hook arguments. |
-| `hooks.<name>.shell` | string | omitted | Focused-shell hook command. |
-| `hooks.<name>.kind` | string | omitted | Hook kind. |
+| `hooks.<name>.shell` | string | omitted | Reserved compatibility field; accepted but not consumed by the current hook runtime. Use `command` with `kind = "focused_shell"`. |
+| `hooks.<name>.kind` | string | omitted | Invocation kind: `program`, `shell`, or `focused_shell`; omitted `kind` treats `command` as a focused-shell hook. |
 | `hooks.<name>.enabled` | boolean | omitted | Whether the hook is enabled. |
 | `hooks.<name>.required` | boolean | omitted | Whether hook failure blocks the triggering action. |
 | `hooks.<name>.agent_hook` | boolean | omitted | Whether the hook is agent-facing. |
@@ -1343,19 +1359,19 @@ credentials.
 | `hooks.<name>.on_failure` | string | omitted | Failure behavior. |
 | `hooks.<name>.match` | table | omitted | Single matcher definition. |
 | `hooks.<name>.matches` | array | omitted | Matcher group definitions. |
-| `hooks.<name>.env` | map | omitted | Extra hook environment. |
-| `hooks.<name>.working_directory` | string | omitted | Hook working directory. |
-| `hooks.<name>.cwd` | string | omitted | Compatibility working-directory field. |
+| `hooks.<name>.env` | map | omitted | Reserved compatibility field; accepted but not consumed by the current hook runtime. |
+| `hooks.<name>.working_directory` | string | omitted | Reserved compatibility field; accepted but not consumed by the current hook runtime. |
+| `hooks.<name>.cwd` | string | omitted | Reserved compatibility field; accepted but not consumed by the current hook runtime. |
 | `hooks.<name>.inject_instructions` | string | omitted | Reserved compatibility field; accepted by the schema but not consumed by the current hook runtime. |
-| `hooks.<name>.mutates_policy` | boolean | omitted | Declares that the hook can mutate policy. |
-| `hooks.<name>.alters_action` | boolean | omitted | Declares that the hook can alter an action. |
+| `hooks.<name>.mutates_policy` | boolean | omitted | Reserved declaration; accepted but not consumed by the current hook runtime. |
+| `hooks.<name>.alters_action` | boolean | omitted | Reserved declaration; accepted but not consumed by the current hook runtime. |
 
 Hook events include `session_start`, `session_stop`, `client_attach`,
 `client_detach`, `window_create`, `window_close`, `session_detach`,
 `pane_create`, `pane_close`, `user_prompt_submit`, `agent_turn_start`,
 `agent_turn_stop`, `pre_shell_command`, `post_shell_command`,
 `permission_request`, `permission_decision`, `pre_mcp_tool_use`,
-`post_mcp_tool_use`, `snapshot_create`, and `snapshot_resume`.
+`post_mcp_tool_use`, `layout_save`, and `layout_load`.
 
 ### `audit`
 

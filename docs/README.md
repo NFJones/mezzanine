@@ -20,7 +20,9 @@ normative behavior and compatibility contract.
   symptoms.
 - **Remote users:** use [Remote pairing and
   recovery](safety-and-trust/remote-pairing-and-recovery.md) for Iroh pairing,
-  reconnect profiles, revocation, and recovery boundaries.
+  reconnect profiles, revocation, and recovery boundaries. For graphical
+  applications, continue to the [X11 forwarding
+  workflow](using-mezzanine/workflows.md#forward-x11-applications-from-a-remote-session).
 - **Contributors:** use [Contributing](contributing/README.md), then consult
   [AGENTS.md](../AGENTS.md) for repository workflow requirements.
 

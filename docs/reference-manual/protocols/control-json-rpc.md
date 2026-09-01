@@ -125,7 +125,7 @@ stalled setup, and one failed connection are isolated from later clients and
 from the Unix listener.
 
 X11 forwarding is negotiated only by an authenticated Iroh primary through an
-optional version-1 `x11_forwarding` initialize offer. The offer contains the
+optional version-2 `x11_forwarding` initialize offer. The offer contains the
 requested `untrusted` or explicitly policy-gated `trusted` mode, exact
 `MIT-MAGIC-COOKIE-1` protocol name, a random 16-byte fake cookie encoded as
 base64, and an explicit takeover flag. Success advertises
@@ -136,16 +136,23 @@ policy denial, ownership conflict, malformed metadata, or trust-mode changes
 fail initialization visibly without retrying without X11 or falling back to
 trusted mode.
 
-Each accepted server proxy socket maps to one raw, server-opened bidirectional
-Iroh stream on the exact owning control connection. Its fixed 56-byte preface
-contains `MZX11STR`, version 1, seven zero reserved bytes, the generation as a
-big-endian `u64`, and the 32-byte route token. The ordinary bounded X11 11.0
-setup request follows immediately. The server validates the fake cookie; the
-client validates the preface, rewrites only that cookie to its client-local
-real value, connects only to the pre-resolved local X endpoint, and then relays
-bytes without JSON, Content-Length, event framing, message boundaries, or
-application compression. Fake-cookie and route-token control records use
-identity/reset compression framing and cannot seed reusable history.
+Each accepted server proxy socket maps to one server-opened bidirectional Iroh
+stream on the exact owning control connection. Its raw fixed 56-byte preface
+contains `MZX11STR`, version 2, seven zero reserved bytes, the generation as a
+big-endian `u64`, and the 32-byte route token. The preface is excluded from
+compression history and accounting. The server validates the fake cookie; the
+client validates the preface, decodes one identity/reset setup record, rewrites
+only that cookie to its client-local real value, and connects to the selected
+pre-resolved X endpoint.
+
+After the preface, `none` preserves raw X11 bytes, version-2 codecs use `MZC2`
+records, and version-3 codecs use compact streaming records. The setup request
+is one identity record that cannot seed reusable compression history. Later
+reads become immediately flushed records of at most 64 KiB. Each direction and
+X11 stream has independent codec state. X11 records use neither JSON,
+Content-Length, nor event framing, and malformed records fail only their X11
+stream. Successful X11 records are included in the owning connection's
+aggregate compression metrics.
 
 The server's one client-opened bidirectional control-stream limit remains
 unchanged. Only a successfully negotiated client grants bounded credit for
@@ -227,9 +234,12 @@ failure.
 Interactive Iroh attach retains that initialized stream instead of opening a
 stream per request. The client serializes each resize, `terminal/step`, and
 `terminal/view` operation behind exactly one response before sending the next
-operation. Its negotiated event stream carries only authorized `event/*`
-notifications and wakes the client to request a fresh rendered view; it never
-carries terminal input or control responses. Terminal input is non-replayable:
+operation. Legacy v1 and v2 event streams carry authorized `event/*`
+notifications that wake the client to request a fresh rendered view. Version 3
+additionally carries authoritative `render/snapshot` and `render/delta`
+notifications, which the client renders without steady-state view fetches. No
+event-stream version carries terminal input or control responses. Terminal
+input is non-replayable:
 after a write, read, timeout, reset, or connection failure that leaves its
 outcome ambiguous, the client must fail visibly, close the channel, and require
 reattach without retrying buffered input.
@@ -269,6 +279,7 @@ implemented; session-routing intents are completed by the host router:
 | `create` | Omit `session_target`; require a non-empty client-generated `idempotency_key`. |
 | `attach` | Require exactly one `session_target`; omit `idempotency_key`. |
 | `default` | Omit both fields and select an existing attachable default; never create. |
+| `resolve_or_create` | Omit `session_target`; require a non-empty client-generated `idempotency_key`; atomically select the principal's attachable default or create an authorized lease-backed session. |
 | `host_only` | Omit both fields and expose only authorized host methods; never resolve or create a session. |
 
 Every v3 initialize request includes one intent. V2 requests omit the v3
@@ -399,7 +410,7 @@ v2 removes those methods and adds `client/set_layout_owner`.
 | Pane | `pane/list`, `pane/create`, `pane/select`, `pane/resize`, `pane/move`, `pane/swap`, `pane/break`, `pane/join`, `pane/close`, `pane/rename`, `pane/zoom`, `pane/input-sync`, `pane/attention`, `pane/status`, `pane/notice`, `pane/capture` | Inspect panes, mutate layout and presentation, control synchronized input, completion attention, source-owned status, or bounded notices, or capture pane content. List is RO; capture is RO when policy permits. Status and notices are available to primary and automation clients; rename, zoom, and input synchronization are primary-only. |
 | Buffer | `buffer/list`, `buffer/create`, `buffer/read`, `buffer/delete` | Primary-only bounded internal paste-buffer inspection and mutation. List/read are RO; create requires explicit replacement for existing names. |
 | Frame | `frame/read` | Read rendered frame fields and text (RO). |
-| Terminal | `terminal/view`, `terminal/step`, `terminal/command` | Render a client view, submit bytes/resize, or invoke a terminal command. Primary-only mutation applies to step and command. |
+| Terminal | `terminal/view`, `terminal/step`, `terminal/resize`, `terminal/command` | Render a client view, submit bytes/primary size, update exact-client observer-v3 geometry, or invoke a terminal command. Primary-only mutation applies to step and command; resize is observer-v3-only and never changes primary or canonical geometry. |
 | Agent | `agent/list`, `agent/task/list`, `agent/spawn`, `agent/shell/show`, `agent/shell/hide`, `agent/shell/command` | Inspect agents/tasks (RO), manage an agent shell, start prompt work, or spawn an agent. |
 | Approval | `approval/list`, `approval/decide` | Inspect pending approvals (RO) or make a primary decision. |
 | Configuration | `config/get`, `config/set`, `config/unset`, `config/reload`, `config/validate` | Inspect or validate config (RO), or mutate/reload it. |

@@ -50,6 +50,7 @@ files first and then updates their catalog metadata. Exact `/resume <uuid>`,
 exact lookup can repair only the requested UUID from retained files. Active
 sessions are governed by the configured age and count limits; named sessions
 count toward those limits, while archived sessions are exempt.
+
 Resume completion is capped, and the interactive picker fetches viewport-sized
 keyset pages rather than loading the full catalog. Directory and subagent
 toggles plus picker search are applied by SQLite, while transcript detail is
@@ -94,10 +95,12 @@ outside the model-visible snapshot.
 Use `/show-context` to browse the current pane's conversation entries and, when
 appropriate, edit the selected entry with `e` or delete it with `d`. External
 editing preserves the entry's role and identity and uses conflict detection;
-cleared entries remain durable but are omitted from later model replay. Use
-`/copy-context` only to export the current
-model request context for diagnostics; its contents can include sensitive task
-material even though credentials and hidden runtime policy are excluded.
+cleared entries remain durable but are omitted from later model replay. During
+a running turn, `/copy-context` exports that turn's assembled provider request.
+When the pane is idle, it exports a synthetic preview of the next request with
+an explicit user-prompt placeholder; that preview was not sent to a provider.
+Both forms can include sensitive task material even though credentials and
+hidden runtime policy are excluded.
 
 ## Related pages
 

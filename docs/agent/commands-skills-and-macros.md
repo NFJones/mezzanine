@@ -49,17 +49,21 @@ pane; add `--global` to persist the fallback for panes without an override.
 Shell mode selects the transport, not its authority—approval and the configured
 [sandbox](../safety-and-trust/sandboxing.md) still apply.
 
-`/new` starts a conversation without prior context, `/fork` opens a new pane
-with a branch copied from the current or selected conversation, and `/resume`
-returns to a saved conversation. `/clear` clears the visible conversation and
-terminal view; `/compact` summarizes older closed work and is intentionally
+`/new` starts a fresh conversation without clearing the terminal view, `/fork`
+opens a new pane with a branch copied from the current or selected
+conversation, and `/resume` returns to a saved conversation. `/clear` also
+starts a fresh conversation and additionally clears the visible conversation
+and terminal view; `/compact` summarizes older closed work and is intentionally
 lossy. `/show-context` can browse entries in the current pane conversation,
 edit the selected content with `e`, or delete it with `d`. `/show-issues` uses
 `e` for the selected body and `E` for notes; `/show-memories` uses `e` for
-content. Use `/copy-context` or `/copy-trace-log` only when the resulting
-diagnostic material can be handled safely. `/copy-patches` exports retained
-`apply_patch` payloads and statuses, while `/list-modified-files` reports files
-changed by the current conversation.
+content. During a running turn, `/copy-context` exports that turn's assembled
+provider request. When idle, it exports a synthetic preview of the next request
+with an explicit user-prompt placeholder; that preview was not sent to a
+provider. Use it or `/copy-trace-log` only when the resulting diagnostic
+material can be handled safely. `/copy-patches` exports retained `apply_patch`
+payloads and statuses, while `/list-modified-files` reports files changed by
+the current conversation.
 
 `/loop [--fork|--new] [--limit <count>] [--goal <string>] <prompt>` repeats a
 bounded task until its completion condition or iteration limit is reached. Use

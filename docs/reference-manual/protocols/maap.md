@@ -45,7 +45,7 @@ surface; an absent action family must be requested, not emulated.
 | `fetch_url` | `url` | Runtime-owned HTTP(S) retrieval, never a local-path reader. |
 | `send_message` | `recipient`, `content_type`, `payload` | Requests local MMP delivery. |
 | `spawn_agent` | `role`, `task_prompt` | Requests pane-backed delegation; placement and scopes are runtime-controlled in compact schemas. |
-| `config_change` | `setting_path`, `operation`, `value` | Proposes supported scalar live configuration mutation. |
+| `config_change` | `setting_path`, `operation`, `value` | Proposes a supported live leaf configuration mutation. Set values accept strings, signed integers, booleans, or string arrays; objects, null set-values, floats, and mixed arrays are rejected. Provider schemas carry the value as a string containing a JSON scalar or string array, while plain non-JSON text is a string value. |
 | `mcp_call` | `server`, `tool`, `arguments` | Invokes one currently exposed MCP tool with JSON-object arguments. |
 | `memory_search` | `query` | Searches enabled runtime-owned durable memory; a memory UUID retrieves that record exactly. |
 | `memory_store` | `kind`, `keywords`, `content` | Stores safe, durable, non-secret memory; optional priority, scope, and retention apply. |
@@ -129,7 +129,8 @@ Succeeded and running results are non-errors with no error object. Blocked
 results are non-errors with pending approval data. All other terminal failure
 statuses are errors. Baseline error codes include `invalid_action`,
 `unavailable_capability`, `approval_required`, `approval_denied`,
-`policy_forbidden`, `command_failed`, `command_timeout`, `transport_error`,
+`policy_forbidden`, `permission_unknown`, `command_parse_unknown`,
+`command_failed`, `command_timeout`, `user_interrupted`, `transport_error`,
 `mcp_protocol_error`, `mcp_tool_error`, `spawn_failed`, and `internal_error`.
 
 Local-action results include summary, pane-shell transport, dispatched command

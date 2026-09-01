@@ -77,11 +77,11 @@ and a custom `--event-socket` path is not discovered by `mez attach`. Verify
 that the standard derived event socket exists and is owned by the same user as
 the control socket.
 
-Hosted sessions created by `mez host serve` currently do not publish that
-derived event socket. Direct Unix attachment to one of those session sockets
-therefore has this idle-redraw limitation; Iroh attachment uses its independent
-event stream. Until hosted event-socket publication is corrected, use Iroh or a
-regular `mez serve` session when event-driven idle redraws are required.
+Hosted sessions created by `mez host serve` also publish the standard derived
+event socket. If a direct Unix attachment to a hosted session refreshes only
+after input, verify that both the routed control socket and its derived event
+socket exist, are owner-private, and are reachable by the attaching user. Iroh
+attachments use their independently negotiated event stream instead.
 
 ## A remote X11 application does not open locally
 
@@ -91,14 +91,16 @@ or `--x11-trusted`. Unix and observer attachments cannot own an X11 route. A
 legacy peer that does not advertise `x11_forwarding` fails visibly rather than
 continuing without forwarding.
 
-On the attaching machine, check that `DISPLAY` names a local Unix socket,
-constrained XQuartz launchd socket, or numeric loopback TCP display; remote
-hostnames are rejected. Check that `XAUTHORITY` (or the default authority file)
-is owner-private, contains an exact `MIT-MAGIC-COOKIE-1` record for that
-display, and that `xauth` is installed. `--x11` additionally requires working
-X SECURITY untrusted-cookie generation. If that operation fails, fix the
-local X server or use no forwarding; do not expect or script a fallback to
-trusted mode. `--x11-trusted` also requires the host's explicit
+On the attaching machine, check that `DISPLAY` names a conventional Unix
+socket, constrained XQuartz launchd socket, or TCP X server. TCP hostnames and
+addresses, including non-loopback targets, are accepted: Mez resolves the
+selected endpoint once before dialing, so verify that it is the intended,
+trusted, and reachable X server. Check that `XAUTHORITY` (or the default
+authority file) is owner-private, contains an exact `MIT-MAGIC-COOKIE-1` record
+for that display, and that `xauth` is installed. `--x11` additionally requires
+working X SECURITY untrusted-cookie generation. If that operation fails, fix
+the selected X server or use no forwarding; do not expect or script a fallback
+to trusted mode. `--x11-trusted` also requires the host's explicit
 `allow_trusted` policy.
 
 Only one attachment owns a session's X11 route. A conflict means another
@@ -107,9 +109,13 @@ replacement. Takeover, detach, transport loss, trust or lease revocation, and
 session shutdown close existing streams. After reattach, restart or reconnect
 the GUI application so it opens against the new route credentials.
 
-Run local `mez remote status` or `show-metrics` and inspect only the aggregate
-`x11`/`[x11 forwarding]` counters: route activity, accepted or rejected
-sockets, active streams, and stream outcomes. A rising
+Run `show-metrics` in the affected attached session and inspect only the
+aggregate `[x11 forwarding]` counters: route activity, accepted or rejected
+sockets, active streams, and stream outcomes. A session runtime's local
+`remote/status` response contains the same `x11` diagnostics plus applied and
+configured policy. The persistent-host front door used by a bare `mez remote
+status` reports only host Iroh enablement and endpoint identity; it does not
+contain session X11 counters. A rising
 `sockets_rejected_no_route` count indicates no published owner;
 `sockets_rejected_capacity` indicates the configured per-route cap;
 `streams_cancelled` covers detach, takeover, revocation, and shutdown of an
@@ -122,6 +128,7 @@ been revoked but the private Xauthority file could not be atomically replaced;
 repair the session Xauthority directory or storage. A later successful route
 publication clears the flag, while `authority_publication_failures` retains the
 aggregate failure count.
+
 If `x11.restart_pending` is true, compare `x11.applied` with
 `x11.configured`; the applied values govern current route admission. Restart
 the daemon to converge them. Reload never enables, disables, or weakens an

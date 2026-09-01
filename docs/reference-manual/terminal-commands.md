@@ -78,7 +78,9 @@ Iroh path. It includes RTT, jitter, recent transfer rates, loss and congestion
 deltas, congestion window, MTU, sample freshness, negotiated codec, and
 connection-local session compression effectiveness. Compression reports the
 decoded-to-wire ratio, bytes saved or expanded, and compressed versus identity
-frame counts accumulated for the current connection and codec. Render-update diagnostics report snapshot and delta counts,
+record counts accumulated for the current connection and codec, including
+bounded X11 setup and application records but excluding the raw X11 stream
+preface. Render-update diagnostics report snapshot and delta counts,
 changed rows, selected wire/decoded bytes, full-snapshot candidate bytes,
 coalescing, suppression, snapshot fallback, maximum ready depth, and total and
 maximum write-and-flush wait. A new connection or codec context starts with an

@@ -42,6 +42,25 @@ apply to that pane's delegation subtree, not unrelated root panes. Persistent
 rule changes deserve the same review as source changes: prefer an exact command
 or digest rule over a broad prefix rule.
 
+### Use approval bypass only for an explicit emergency boundary
+
+Approval bypass is session-scoped and primary-user-only. Inspect it before and
+after any change:
+
+```text
+/permissions bypass
+/permissions bypass enable --confirm
+/permissions bypass disable
+```
+
+Enabling bypass requires explicit confirmation and produces visible and audit
+state. It disables Mezzanine's approval and action-policy gating for that
+session; it does not disable protocol validation, integrity checks, or an
+independently configured OS sandbox. It is distinct from `host-access`, which
+selects host execution for local shell actions, and from approving one exact
+sandbox-fallback request. Disable bypass as soon as the exceptional operation
+is complete.
+
 ## Do not confuse approval with isolation
 
 Approval determines whether Mezzanine permits an action. Sandboxing constrains

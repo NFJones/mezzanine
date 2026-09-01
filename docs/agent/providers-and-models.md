@@ -44,12 +44,13 @@ assuming Mez selected an equivalent replacement.
 When automatic sizing is enabled, Mez selects an ephemeral small, medium, or
 large profile and reasoning effort from the workload's scope and risk rather
 than prompt length alone. For a root turn, the `subagent` routing policy runs
-the work in one managed worker and returns its final presentation to the
-invoking conversation; `in-place` runs the selected profile in the current
-conversation. An already-spawned subagent always routes in place. After the
-turn, the pane's ordinary model selection remains unchanged. A `/loop`
-classifies its logical job once and pins one worker profile across its internal
-iterations.
+the selected profile in one managed worker. The worker's exact output and a
+bounded context summary return to the parent, whose normal profile produces
+the final presentation. The `in-place` policy applies the selected profile
+directly to the current root turn. An already-spawned subagent always routes in
+place. After the turn, the pane's ordinary model selection remains unchanged.
+A `/loop` classifies its logical job once and pins one worker profile across
+its internal iterations.
 
 Use `/routing` to inspect automatic sizing. `/routing policy subagent` or
 `/routing policy in-place` changes the current pane policy; put `--global`

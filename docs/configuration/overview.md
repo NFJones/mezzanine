@@ -18,6 +18,7 @@ one primary file there: `config.toml`, `config.yaml`, `config.yml`, or
 `config.json`. If none exists, starting a session creates the default TOML
 configuration. If more than one exists, Mez stops with a configuration error
 rather than choosing by filename precedence.
+
 Run `mez config init` first only when you want to create and inspect that
 baseline before starting a session. It creates the default only when no primary
 file exists, so it does not replace an existing configuration:
@@ -105,19 +106,20 @@ the decision.
 
 ## Schema versions and examples
 
-The current schema is version `77`. Older primary user configurations migrate
+The current schema is version `80`. Older primary user configurations migrate
 on launch; a configuration declaring a newer schema is rejected. Existing
 project overlays must declare the current schema version and are not migrated
 automatically. When `mez config set --scope project` creates or updates an
 eligible overlay, it writes the current version for that managed file.
 
 The checked-in [example configuration](../examples/config.toml) is the
-provider-free first-launch template for version 74. Actual generation adjusts
+provider-free first-launch template for version 80. Actual generation adjusts
 `permissions.approval_policy` and `permissions.sandbox` for the current
 platform and fixed Bubblewrap or Seatbelt executable presence, so those values
 can differ from the portable checked-in template. Presence is not capability,
-and migration does not auto-enable an existing configuration. Use `mez config default` when the complete
-code-owned provider and model catalog is needed for reference.
+and migration does not auto-enable an existing configuration. Use `mez config
+default` when the complete code-owned provider and model catalog is needed for
+reference.
 
 ## Related pages
 

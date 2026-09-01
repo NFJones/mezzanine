@@ -19,10 +19,15 @@ Unicode character counts.
 
 ## Identities and references
 
-Session, client, pane, agent, action, message, request, and event IDs are
-opaque stable strings within the scope defined by their protocol. Send an exact
-ID back unchanged; do not parse prefixes, rely on ordering, or create an ID on
-behalf of a runtime-owned identity.
+Session, client, pane, agent, action, and message IDs are opaque stable strings
+within the scope defined by their protocol. Send an exact domain ID back
+unchanged; do not parse prefixes, rely on ordering, or create an ID on behalf
+of a runtime-owned identity.
+
+JSON-RPC request IDs are non-null strings or integers, and responses return the
+same value unchanged. Ordered event IDs and event cutoffs are non-negative
+integers; replay semantics use their numeric ordering. Do not treat either
+category as a domain-object identity.
 
 Where a control method accepts a target object, exact IDs take precedence over
 names or indexes. Ambiguous targets fail rather than selecting an arbitrary

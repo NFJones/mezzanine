@@ -35,7 +35,7 @@ or `mez attach` to select an existing one.
 | `mez new [--dry-run] [--name NAME]` | Start a new background session and attach when interactive. `--name` assigns a session name. With `--dry-run`, validate session construction instead of starting a daemon. Alias: `new-session`. |
 | `mez serve` | Start a foreground session service; it does not attach a primary client unless `--attach-primary` is supplied from an interactive terminal. Alias: `daemon`. |
 | `mez list [--all]` | List resumable sessions known to the local client. With the persistent local host, `--all` adds visible remote durable leases to the same scope-tagged aggregate. Alias: `list-sessions`. |
-| `mez attach [SESSION_ID] [--observer\|--default]` | Attach a primary client, request read-only observer access, or select an existing host default without creating when `--default` is used. `--default` conflicts with an explicit target. Alias: `attach-session`. |
+| `mez attach [SESSION_ID] [--observer\|--default] [--x11\|--x11-trusted] [--x11-takeover]` | Attach a primary client, request read-only observer access, select an existing host default without creating, or request X11 forwarding for an authenticated Iroh primary. `--default` conflicts with an explicit target; X11 options are described below. Alias: `attach-session`. |
 | `mez detach [--client-id ID]` | Detach the selected client. From an interactive attachment, use `Ctrl+A d` to detach that invoking client; a separate administrative invocation needs the target client ID. Alias: `detach-client`. |
 | `mez kill [session-id] --force` | Terminate the selected live session through its control socket; the optional target accepts a registered session id or creation-order index. `--force` confirms the destructive operation. Alias: `kill-session`. |
 | `mez snapshot` | Manage persisted snapshots. With no subcommand it lists snapshots; see the snapshot forms below. |
@@ -151,17 +151,17 @@ An explicit Iroh primary `attach` also accepts these X11 options:
 
 | Option | Behavior |
 | --- | --- |
-| `--x11` | Request X SECURITY untrusted forwarding. This is the default trust mode and fails closed if a local untrusted credential cannot be prepared. |
+| `--x11` | Request X SECURITY untrusted forwarding. Forwarding remains off unless requested, and this mode fails closed if a local untrusted credential cannot be prepared. |
 | `--x11-trusted` | Request full trusted X11 forwarding. This conflicts with `--x11` and requires `transport.iroh.x11.allow_trusted = true` on the host. |
 | `--x11-takeover` | Explicitly replace another attachment's X11 route. It requires either `--x11` or `--x11-trusted`. |
 
 These flags require an authenticated Iroh primary and are rejected for
 observers and Unix targets. An unsupported peer or denied host policy is a
 visible initialization failure; the client does not reconnect without the
-requested forwarding. The attaching machine accepts the user-selected
-`DISPLAY`, including non-loopback TCP X servers, and resolves and freezes that
-target with its real cookie before dialing. Neither value is sent to the
-server.
+requested forwarding. The attaching machine accepts conventional Unix
+displays, constrained XQuartz launchd sockets, and TCP displays. A TCP hostname
+or address—including a non-loopback target—is resolved once and frozen with
+its real cookie before dialing. Neither value is sent to the server.
 
 Direct control commands keep Unix as their default target. `--iroh-invite-file
 PATH` explicitly performs first-use pairing from an owner-only, bounded JSON
@@ -199,6 +199,12 @@ v2 application-frame codecs, and `none` is the unchanged v1 compatibility route.
 client may try the next configured codec only before opening a stream. There is
 no hidden downgrade when `none` is absent, and
 `compression_codecs = ["none"]` is the restart-required rollback setting.
+
+X11 forwarding automatically uses that same negotiated connection codec; it
+has no separate compression flag or fallback. The authenticated X11 stream
+preface stays raw, while setup and application traffic follow the selected
+record format. Use `compression_codecs = ["none"]` when raw X11 transport is
+required for rollback or diagnosis.
 
 ### Persistent-host command contract
 
@@ -369,6 +375,8 @@ scripts should request `--json` and handle errors explicitly.
 - [Sessions and panes](../using-mezzanine/sessions-and-panes.md)
 - [Lifecycle, detach, and recovery](../operations/lifecycle-detach-and-recovery.md)
 - [Configuration overview](../configuration/overview.md)
+- [Remote pairing and recovery](../safety-and-trust/remote-pairing-and-recovery.md)
+- [X11 forwarding workflow](../using-mezzanine/workflows.md#forward-x11-applications-from-a-remote-session)
 
 ## Next step
 

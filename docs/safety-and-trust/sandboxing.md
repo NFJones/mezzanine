@@ -56,13 +56,6 @@ user read or write scope is configured, a pane in a trusted project is intended
 to receive that project's canonical root as read-write authority; a pane with
 neither source has no project filesystem authority.
 
-The current runtime folds the code-owned skills and macros paths into the same
-resource lists used to detect explicit scopes. Consequently, when those paths
-are present, the trusted-project fallback can be suppressed even though no user
-scope was configured. Treat `mez sandbox status --verbose` as the source of
-truth for effective authority until the runtime is aligned with the normative
-contract.
-
 Unavailable configured paths are excluded with a warning rather than silently
 broadening authority. The multi-user `/home` root is never usable as an
 authority scope. Effective scopes—not approval or project instructions—define
