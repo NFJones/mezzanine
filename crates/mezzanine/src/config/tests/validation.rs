@@ -1335,6 +1335,19 @@ fn iroh_transport_policy_is_validated_and_primary_only() {
             "compression_zstd_level = 23",
             "transport.iroh.compression_zstd_level",
         ),
+        ("x11 = true", "transport.iroh.x11"),
+        (
+            "[transport.iroh.x11]\nenabled = \"yes\"",
+            "transport.iroh.x11.enabled",
+        ),
+        (
+            "[transport.iroh.x11]\nmax_connections_per_route = 0",
+            "transport.iroh.x11.max_connections_per_route",
+        ),
+        (
+            "[transport.iroh.x11]\nsetup_timeout_ms = 99",
+            "transport.iroh.x11.setup_timeout_ms",
+        ),
     ] {
         let validation = validate_config_text(
             ConfigFormat::Toml,

@@ -8,12 +8,12 @@ use super::{
     AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, BTreeMap,
     BUBBLEWRAP_PERMISSION_KEYS, COMMAND_RULE_EFFECT_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS,
     ConfigDiagnostic, ConfigFormat, ConfigScope, EXTERNAL_EDITOR_KEYS, HISTORY_KEYS, HOOK_KEYS,
-    HOST_KEYS, HOST_LEASE_KEYS, INSTRUCTION_KEYS, IROH_TRANSPORT_KEYS, ISSUE_KEYS, JsonPathParser,
-    JsonValueParser, KEY_BINDING_KEYS, KEY_PRESET_KEYS, LAYOUT_KEYS, MCP_SERVER_KEYS, MEMORY_KEYS,
-    MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS, PANE_FRAME_KEYS, PERMISSION_KEYS,
-    PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, PROVIDER_MODEL_KEYS, RUNTIME_KEYS,
-    SEATBELT_PERMISSION_KEYS, SESSION_KEYS, SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS,
-    TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS, exact_command_sha256,
+    HOST_KEYS, HOST_LEASE_KEYS, INSTRUCTION_KEYS, IROH_TRANSPORT_KEYS, IROH_X11_KEYS, ISSUE_KEYS,
+    JsonPathParser, JsonValueParser, KEY_BINDING_KEYS, KEY_PRESET_KEYS, LAYOUT_KEYS,
+    MCP_SERVER_KEYS, MEMORY_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS,
+    PANE_FRAME_KEYS, PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, PROVIDER_MODEL_KEYS,
+    RUNTIME_KEYS, SEATBELT_PERMISSION_KEYS, SESSION_KEYS, SHELL_KEYS, SNAPSHOT_KEYS,
+    SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS, exact_command_sha256,
     normalize_exact_command_text, parse_config_json_value_best_effort,
 };
 use mez_mux::theme::{UI_COLOR_SLOT_NAMES, valid_color_alias_name};
@@ -373,6 +373,20 @@ fn validate_transport_path(segments: &[&str]) -> Option<String> {
     }
     if !IROH_TRANSPORT_KEYS.contains(&segments[2]) {
         return Some("unknown transport.iroh configuration key".to_string());
+    }
+    if segments[2] == "x11" {
+        if segments.len() == 3 {
+            return None;
+        }
+        if !IROH_X11_KEYS.contains(&segments[3]) {
+            return Some("unknown transport.iroh.x11 configuration key".to_string());
+        }
+        if segments.len() > 4 {
+            return Some(
+                "scalar transport.iroh.x11 setting must not contain nested keys".to_string(),
+            );
+        }
+        return None;
     }
     if segments.len() > 3 {
         return Some("scalar transport.iroh setting must not contain nested keys".to_string());

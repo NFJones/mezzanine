@@ -3101,6 +3101,70 @@ unique values drawn from `zstd-stream`, `lz4-stream`, `zstd`, `lz4`, and
 level MUST be from -5 through 22. Streaming codecs MUST remain opt-in by
 default.
 
+Schema v80 MUST add the nested primary-user-only `transport.iroh.x11` policy.
+It MUST default `enabled` and `allow_trusted` to false,
+`max_connections_per_route` to 16, and `setup_timeout_ms` to 5000. The v79 to
+v80 migration MUST materialize those values in TOML, JSON, and YAML without
+enabling X11 forwarding or changing the enclosing Iroh listener policy. The
+connection limit MUST be from 1 through 1024 and the setup timeout MUST be from
+100 through 120000 milliseconds. Changes MUST require a daemon restart. An
+omitted or disabled X11 policy MUST leave pane environments, Iroh stream
+credit, initialization results, and local display access unchanged.
+
+X11 forwarding MUST be an explicit feature of an authenticated Iroh primary
+attachment. Unix clients, observers, unauthenticated peers, and agent or
+automation roles MUST NOT activate it. Untrusted forwarding MUST be the
+default request mode. Trusted forwarding MUST require a separate explicit
+client request and `allow_trusted = true`; failure to prepare an untrusted X
+SECURITY credential MUST NOT fall back to trusted credentials. A session MUST
+have at most one exact X11 route owner. Ownership MUST be bound to the exact
+authenticated connection and a monotonic session-local generation. Replacing
+an owner MUST require explicit takeover, invalidate the old generation before
+publishing the new one, and ensure stale cleanup cannot deactivate a newer
+route.
+
+X11 capability and route setup MUST be negotiated through
+`control/initialize`; Mezzanine MUST NOT add an X11-specific ALPN family. A
+successful version-1 negotiation MUST bind the requested mode, exact
+`MIT-MAGIC-COOKIE-1` authorization protocol, a client-generated 16-byte fake
+cookie, route generation, and a random 32-byte route token. The client's real
+X cookie, local `DISPLAY` target, and local authority path MUST remain on the
+client and MUST NOT appear in control messages, stream metadata, server files,
+logs, snapshots, or diagnostics.
+
+Each accepted server-side X socket MUST map to one server-opened Iroh
+bidirectional stream on the exact owning connection. The stream MUST begin
+with the fixed version-1 `MZX11STR` preface, seven zero reserved bytes, an
+unsigned 64-bit big-endian route generation, and the 32-byte route token.
+After the preface, bytes MUST be the ordinary X11 setup and application byte
+stream. X11 bytes MUST NOT use Content-Length, JSON, event framing, the Iroh
+application compression envelope, or an application-idle timeout. Enabling
+X11 MUST NOT change the server's single client-opened control-stream limit;
+the client MAY grant separate bounded credit for host-opened X11 streams only
+after successful negotiation.
+
+Both forwarding endpoints MUST parse the X11 setup request incrementally,
+support byte-order markers `l` and `B`, require protocol 11.0, use checked
+four-byte padding arithmetic, and reject a complete setup prefix larger than
+4096 bytes. Only exact `MIT-MAGIC-COOKIE-1` authorization with exactly 16 bytes
+of credential data is supported. Credential comparisons MUST be constant-time,
+and errors MUST identify only a reason class. The server proxy MUST validate
+the fake route cookie before opening a stream. The client MUST independently
+validate the setup, connect only to its pre-resolved local X endpoint, replace
+the fake cookie in place with the real local cookie, and preserve packet length
+and byte order.
+
+An X11-enabled session MUST prepare its loopback proxy and private authority
+path before any initial or restored pane process starts. It MUST expose a
+stable TCP-loopback `DISPLAY` and stable `XAUTHORITY` path to every pane process
+for the session, with directory mode 0700 and file mode 0600. No-route state
+MUST publish no usable credential and reject new proxy sockets. Route changes
+MUST atomically replace the authority file. Detach, control or transport loss,
+trust or lease revocation, takeover, and session shutdown MUST immediately
+prevent new connections and close streams from the old generation. Reattach
+MUST preserve server paths but rotate fake credentials, generation, and token;
+established streams MUST NOT migrate.
+
 The version 2 Iroh application-frame foundation MUST map `zstd` to ALPN
 `mezzanine/transport/2/zstd`, `lz4` to
 `mezzanine/transport/2/lz4`, and `none` to the unchanged version 1 ALPN. Each

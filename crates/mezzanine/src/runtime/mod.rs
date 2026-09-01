@@ -312,6 +312,12 @@ mod iroh_compression;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod json;
+/// Owns the staged X11 forwarding contracts and security primitives.
+///
+/// The transport and session integration issues consume this foundation after
+/// its wire, parser, credential, and authority-file invariants are established.
+#[allow(dead_code, unused_imports)]
+pub(crate) mod x11;
 pub(crate) use integration::RuntimeIntegrationComponent;
 /// Exposes the lifecycle module boundary.
 ///

@@ -996,6 +996,42 @@ fn validate_iroh_transport_config(format: ConfigFormat, text: &str) -> Vec<Confi
             );
         }
     }
+    let x11 = match iroh.get("x11") {
+        None => None,
+        Some(value) => match value.as_object() {
+            Some(x11) => Some(x11),
+            None => {
+                reject("transport.iroh.x11", "transport.iroh.x11 must be a table");
+                None
+            }
+        },
+    };
+    if let Some(x11) = x11 {
+        for key in ["enabled", "allow_trusted"] {
+            if x11.get(key).is_some_and(|value| !value.is_boolean()) {
+                reject(
+                    &format!("transport.iroh.x11.{key}"),
+                    "X11 forwarding flag must be true or false",
+                );
+            }
+        }
+        for (key, minimum, maximum) in [
+            ("max_connections_per_route", 1, 1_024),
+            ("setup_timeout_ms", 100, 120_000),
+        ] {
+            if let Some(value) = x11.get(key) {
+                match value.as_u64() {
+                    Some(value) if (minimum..=maximum).contains(&value) => {}
+                    _ => reject(
+                        &format!("transport.iroh.x11.{key}"),
+                        &format!(
+                            "transport.iroh.x11.{key} must be an integer from {minimum} to {maximum}"
+                        ),
+                    ),
+                }
+            }
+        }
+    }
     if iroh
         .get("identity")
         .is_some_and(|value| !matches!(value.as_str(), Some("per_session" | "host")))

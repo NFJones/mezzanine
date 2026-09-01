@@ -88,6 +88,30 @@ impl RuntimeIrohRelayPolicy {
     }
 }
 
+/// Runtime policy for session-local X11 proxying over authenticated Iroh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeIrohX11Policy {
+    /// Whether sessions prepare the forwarding proxy and protected environment.
+    pub(crate) enabled: bool,
+    /// Whether a client may explicitly request trusted X11 credentials.
+    pub(crate) allow_trusted: bool,
+    /// Maximum setup-pending and active X11 connections owned by one route.
+    pub(crate) max_connections_per_route: usize,
+    /// Deadline for the bounded X11 setup packet exchange.
+    pub(crate) setup_timeout: Duration,
+}
+
+impl Default for RuntimeIrohX11Policy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow_trusted: false,
+            max_connections_per_route: 16,
+            setup_timeout: Duration::from_millis(5_000),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeIrohTransportPolicy {
     pub(crate) enabled: bool,
@@ -108,6 +132,7 @@ pub(crate) struct RuntimeIrohTransportPolicy {
     pub(crate) compression_codecs: Vec<RuntimeIrohCompressionCodec>,
     pub(crate) compression_min_bytes: usize,
     pub(crate) compression_zstd_level: i32,
+    pub(crate) x11: RuntimeIrohX11Policy,
 }
 
 impl Default for RuntimeIrohTransportPolicy {
@@ -135,6 +160,7 @@ impl Default for RuntimeIrohTransportPolicy {
             ],
             compression_min_bytes: 512,
             compression_zstd_level: 3,
+            x11: RuntimeIrohX11Policy::default(),
         }
     }
 }
@@ -273,6 +299,33 @@ pub(crate) fn runtime_iroh_transport_policy_from_config(
         }
         compression_codecs.push(codec);
     }
+    let x11_defaults = RuntimeIrohX11Policy::default();
+    let x11 = match iroh.get("x11") {
+        None => x11_defaults,
+        Some(value) => {
+            let object = value.as_object().ok_or_else(|| {
+                MezError::config("transport.iroh.x11 must be a configuration table")
+            })?;
+            RuntimeIrohX11Policy {
+                enabled: x11_bool_value(object, "enabled", x11_defaults.enabled)?,
+                allow_trusted: x11_bool_value(object, "allow_trusted", x11_defaults.allow_trusted)?,
+                max_connections_per_route: x11_bounded_usize_value(
+                    object,
+                    "max_connections_per_route",
+                    x11_defaults.max_connections_per_route,
+                    1,
+                    1_024,
+                )?,
+                setup_timeout: Duration::from_millis(x11_bounded_u64_value(
+                    object,
+                    "setup_timeout_ms",
+                    x11_defaults.setup_timeout.as_millis() as u64,
+                    100,
+                    120_000,
+                )?),
+            }
+        }
+    };
     Ok(RuntimeIrohTransportPolicy {
         enabled: bool_value(iroh, "enabled", defaults.enabled)?,
         outbound_enabled: bool_value(iroh, "outbound_enabled", defaults.outbound_enabled)?,
@@ -341,6 +394,7 @@ pub(crate) fn runtime_iroh_transport_policy_from_config(
             -5,
             22,
         )?,
+        x11,
     })
 }
 
@@ -363,6 +417,18 @@ fn bool_value(object: &serde_json::Map<String, Value>, key: &str, default: bool)
         None => Ok(default),
         value => runtime_json_bool(value)
             .ok_or_else(|| MezError::config(format!("transport.iroh.{key} must be a boolean"))),
+    }
+}
+
+fn x11_bool_value(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    default: bool,
+) -> Result<bool> {
+    match object.get(key) {
+        None => Ok(default),
+        value => runtime_json_bool(value)
+            .ok_or_else(|| MezError::config(format!("transport.iroh.x11.{key} must be a boolean"))),
     }
 }
 
@@ -389,6 +455,46 @@ fn bounded_u64_value(
         )));
     }
     Ok(value)
+}
+
+fn x11_bounded_u64_value(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    default: u64,
+    minimum: u64,
+    maximum: u64,
+) -> Result<u64> {
+    let value = match object.get(key) {
+        None => default,
+        value => runtime_json_u64(value).ok_or_else(|| {
+            MezError::config(format!(
+                "transport.iroh.x11.{key} must be a positive integer"
+            ))
+        })?,
+    };
+    if !(minimum..=maximum).contains(&value) {
+        return Err(MezError::config(format!(
+            "transport.iroh.x11.{key} must be an integer from {minimum} to {maximum}",
+        )));
+    }
+    Ok(value)
+}
+
+fn x11_bounded_usize_value(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    default: usize,
+    minimum: u64,
+    maximum: u64,
+) -> Result<usize> {
+    usize::try_from(x11_bounded_u64_value(
+        object,
+        key,
+        default as u64,
+        minimum,
+        maximum,
+    )?)
+    .map_err(|_| MezError::config(format!("transport.iroh.x11.{key} is too large")))
 }
 
 fn bounded_usize_value(
@@ -455,6 +561,7 @@ mod tests {
         );
         assert_eq!(defaults.compression_min_bytes, 512);
         assert_eq!(defaults.compression_zstd_level, 3);
+        assert_eq!(defaults.x11, RuntimeIrohX11Policy::default());
 
         let policy = runtime_iroh_transport_policy_from_config(&serde_json::json!({
             "transport": { "iroh": {
@@ -477,7 +584,13 @@ mod tests {
                 "idle_timeout_ms": 60000,
                 "compression_codecs": ["lz4-stream", "zstd-stream", "lz4", "none"],
                 "compression_min_bytes": 1024,
-                "compression_zstd_level": -2
+                "compression_zstd_level": -2,
+                "x11": {
+                    "enabled": true,
+                    "allow_trusted": true,
+                    "max_connections_per_route": 24,
+                    "setup_timeout_ms": 7000
+                }
             }}
         }))
         .unwrap();
@@ -515,6 +628,15 @@ mod tests {
         );
         assert_eq!(policy.compression_min_bytes, 1024);
         assert_eq!(policy.compression_zstd_level, -2);
+        assert_eq!(
+            policy.x11,
+            RuntimeIrohX11Policy {
+                enabled: true,
+                allow_trusted: true,
+                max_connections_per_route: 24,
+                setup_timeout: Duration::from_secs(7),
+            }
+        );
 
         let host = runtime_iroh_transport_policy_from_config(&serde_json::json!({
             "transport": { "iroh": { "enabled": false, "identity": "host" } }
@@ -549,6 +671,10 @@ mod tests {
             serde_json::json!({"transport":{"iroh":{"compression_codecs":["brotli"]}}}),
             serde_json::json!({"transport":{"iroh":{"compression_min_bytes":1048577}}}),
             serde_json::json!({"transport":{"iroh":{"compression_zstd_level":23}}}),
+            serde_json::json!({"transport":{"iroh":{"x11":true}}}),
+            serde_json::json!({"transport":{"iroh":{"x11":{"enabled":"yes"}}}}),
+            serde_json::json!({"transport":{"iroh":{"x11":{"max_connections_per_route":0}}}}),
+            serde_json::json!({"transport":{"iroh":{"x11":{"setup_timeout_ms":99}}}}),
         ] {
             assert!(
                 runtime_iroh_transport_policy_from_config(&value).is_err(),

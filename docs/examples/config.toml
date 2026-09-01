@@ -5,7 +5,7 @@
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 79
+version = 80
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -55,6 +55,14 @@ compression_codecs = ["zstd", "lz4", "none"]
 # Opt in to low-latency history reuse with "lz4-stream" or "zstd-stream".
 compression_min_bytes = 512
 compression_zstd_level = 3
+
+# X11 forwarding is separately opt-in and applies only to authenticated Iroh
+# primary attachments. Changes require a daemon restart.
+[transport.iroh.x11]
+enabled = false
+allow_trusted = false
+max_connections_per_route = 16
+setup_timeout_ms = 5000
 
 # Terminal emulation, pane startup, clipboard, rendering, and cursor behavior.
 [terminal]

@@ -198,6 +198,29 @@ changes require a daemon restart.
 | `transport.iroh.compression_min_bytes` | integer | `512` | Complete v2 frames below this decoded size use an identity envelope. Stateful v3 codecs process every frame to preserve synchronized history. Valid values are 0 through 1048576. |
 | `transport.iroh.compression_zstd_level` | integer | `3` | Zstandard level for eligible v2 frames and the v3 Zstandard stream. Valid values are -5 through 22. |
 
+#### `transport.iroh.x11`
+
+Schema v80 adds a separate restart-required host policy for X11 forwarding.
+The table is primary-user-only and forwarding remains disabled unless the host
+policy and an authenticated Iroh primary attach both opt in. Unix and observer
+attachments cannot activate it.
+
+| Field | Type | Default declaration | Description |
+| --- | --- | --- | --- |
+| `transport.iroh.x11.enabled` | boolean | `false` | Prepare session-local X11 proxying for explicit authenticated Iroh primary requests. |
+| `transport.iroh.x11.allow_trusted` | boolean | `false` | Permit a client to explicitly request trusted X11 credentials. Untrusted forwarding never falls back to this mode. |
+| `transport.iroh.x11.max_connections_per_route` | integer | `16` | Maximum setup-pending and active X11 connections for one route; valid values are 1 through 1024. |
+| `transport.iroh.x11.setup_timeout_ms` | integer | `5000` | Deadline for one bounded X11 setup exchange; valid values are 100 through 120000 milliseconds. |
+
+X11 uses SSH-style socket forwarding rather than a new Iroh ALPN. Each remote
+X socket is carried on one server-opened raw bidirectional stream after a fixed
+route preface. The real local X cookie, local display target, and local
+authority path remain client-local. Raw X11 bytes do not use Mezzanine JSON,
+event, Content-Length, or application-compression framing. Detach, revocation,
+takeover, transport loss, and shutdown invalidate the old route and its
+streams; reattach retains the remote `DISPLAY` and `XAUTHORITY` paths while
+rotating route credentials.
+
 When `identity = "per_session"` is enabled, direct-session daemon startup binds
 the protected per-session endpoint and runs Iroh control alongside Unix control.
 `identity = "host"` is owned by the persistent host and direct-session startup

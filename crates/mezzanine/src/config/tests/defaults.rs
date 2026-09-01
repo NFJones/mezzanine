@@ -107,6 +107,15 @@ fn default_config_disables_persistent_host_and_inbound_iroh() {
         iroh.get("identity").and_then(toml::Value::as_str),
         Some("host")
     );
+    let x11 = iroh.get("x11").and_then(toml::Value::as_table).unwrap();
+    assert_eq!(
+        x11.get("enabled").and_then(toml::Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        x11.get("allow_trusted").and_then(toml::Value::as_bool),
+        Some(false)
+    );
 }
 
 /// Verifies generated configuration selects native shell execution and

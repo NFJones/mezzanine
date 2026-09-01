@@ -501,7 +501,7 @@ pub(super) const HOST_LEASE_KEYS: &[&str] = &[
     "max_per_remote_client",
 ];
 
-/// Defines the schema-v71 Iroh transport keys.
+/// Defines the Iroh transport keys, including the schema-v80 X11 policy table.
 pub(super) const IROH_TRANSPORT_KEYS: &[&str] = &[
     "enabled",
     "outbound_enabled",
@@ -523,6 +523,15 @@ pub(super) const IROH_TRANSPORT_KEYS: &[&str] = &[
     "compression_codecs",
     "compression_min_bytes",
     "compression_zstd_level",
+    "x11",
+];
+
+/// Defines the schema-v80 X11 forwarding policy keys.
+pub(super) const IROH_X11_KEYS: &[&str] = &[
+    "enabled",
+    "allow_trusted",
+    "max_connections_per_route",
+    "setup_timeout_ms",
 ];
 
 /// Defines the TERMINAL KEYS const used by this subsystem.
