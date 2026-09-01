@@ -19,7 +19,7 @@ use crate::runtime::config::ConfiguredPermissions;
 use crate::runtime::{RuntimeIrohDiagnostics, RuntimeIrohDiagnosticsSnapshot};
 use crate::security::auth::AuthStore;
 use crate::security::project::{ProjectTrustRevision, ProjectTrustStore};
-use crate::security::remote::RemoteEndpointIdentity;
+use crate::security::remote::{RemoteEndpointIdentity, RemoteTrustStore};
 use mez_agent::ApprovalPolicy;
 use mez_agent::mcp::McpRegistry;
 use mez_agent::memory::SessionMemoryStore;
@@ -51,6 +51,7 @@ pub(crate) struct RuntimeIntegrationComponent {
     config_layers: Vec<ConfigLayer>,
     config_root: Option<PathBuf>,
     remote_endpoint_identity: Option<RemoteEndpointIdentity>,
+    remote_trust_store: Option<RemoteTrustStore>,
     remote_endpoint_addr: tokio::sync::watch::Sender<Option<iroh::EndpointAddr>>,
     remote_iroh_diagnostics: Option<RuntimeIrohDiagnostics>,
     #[cfg(test)]
@@ -76,6 +77,7 @@ impl RuntimeIntegrationComponent {
             config_layers: Vec::new(),
             config_root: None,
             remote_endpoint_identity: None,
+            remote_trust_store: None,
             remote_endpoint_addr,
             remote_iroh_diagnostics: None,
             #[cfg(test)]
@@ -159,6 +161,27 @@ impl RuntimeIntegrationComponent {
         self.remote_endpoint_identity
             .as_ref()
             .ok_or_else(|| MezError::invalid_state("remote endpoint identity is unavailable"))
+    }
+
+    /// Loads or creates the trust store shared by direct Iroh authentication,
+    /// live authority watchers, and local administrative mutations.
+    pub(crate) fn ensure_remote_trust_store(
+        &mut self,
+        session_id: &str,
+    ) -> Result<&RemoteTrustStore> {
+        if self.remote_trust_store.is_none() {
+            let config_root = self
+                .config_root
+                .as_deref()
+                .ok_or_else(|| MezError::invalid_state("remote trust requires a config root"))?;
+            self.remote_trust_store = Some(RemoteTrustStore::under_config_root(
+                config_root,
+                session_id,
+            )?);
+        }
+        self.remote_trust_store
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("remote trust store is unavailable"))
     }
 
     /// Publishes the currently bound Iroh endpoint address for local invitation creation.

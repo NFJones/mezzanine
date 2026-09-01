@@ -159,18 +159,16 @@ impl RuntimeSessionService {
         let mechanism = required_remote_string(authentication, "mechanism")?;
         let token =
             SecretString::from(required_remote_string(authentication, "token")?.to_string());
-        let config_root = self
-            .integration
-            .config_root()
-            .ok_or_else(|| MezError::invalid_state("remote trust requires a config root"))?
-            .to_path_buf();
         let session_id = self.session.id.to_string();
         let server_endpoint_id = self
             .integration
             .ensure_remote_endpoint_identity(&session_id)?
             .endpoint_id()
             .to_string();
-        let store = RemoteTrustStore::under_config_root(&config_root, &session_id)?;
+        let store = self
+            .integration
+            .ensure_remote_trust_store(&session_id)?
+            .clone();
         match mechanism {
             "extension:iroh_invitation" => {
                 let preparation = store.prepare_invitation(
@@ -426,11 +424,6 @@ impl RuntimeSessionService {
                 "remote trust administration requires the local Unix control transport",
             ));
         }
-        let config_root = self
-            .integration
-            .config_root()
-            .ok_or_else(|| MezError::invalid_state("remote trust requires a config root"))?
-            .to_path_buf();
         let session_id = self.session.id.to_string();
         let cache_key = if remote_administration_mutates(&request.method) {
             let params = remote_params(request)?;
@@ -558,7 +551,9 @@ impl RuntimeSessionService {
                     ));
                 }
                 let endpoint_addr = foreign_machine_invitation_addr(endpoint_addr, &policy)?;
-                let invitation = RemoteTrustStore::under_config_root(&config_root, &session_id)?
+                let invitation = self
+                    .integration
+                    .ensure_remote_trust_store(&session_id)?
                     .create_invitation(
                         &endpoint_id,
                         role,
@@ -578,7 +573,9 @@ impl RuntimeSessionService {
                 .to_string())
             }
             "remote/client/list" => {
-                let records = RemoteTrustStore::under_config_root(&config_root, &session_id)?
+                let records = self
+                    .integration
+                    .ensure_remote_trust_store(&session_id)?
                     .list_records()?;
                 let clients = records
                     .iter()
@@ -590,7 +587,9 @@ impl RuntimeSessionService {
                 let params = remote_params(request)?;
                 let record_id = required_remote_string(&params, "client_id")?;
                 let label = required_remote_string(&params, "label")?;
-                let record = RemoteTrustStore::under_config_root(&config_root, &session_id)?
+                let record = self
+                    .integration
+                    .ensure_remote_trust_store(&session_id)?
                     .rename_record(record_id, label)?;
                 Ok(remote_trust_record_json(&record).to_string())
             }
@@ -598,7 +597,9 @@ impl RuntimeSessionService {
                 let params = remote_params(request)?;
                 let record_id = required_remote_string(&params, "client_id")?;
                 let reason = params.get("reason").and_then(serde_json::Value::as_str);
-                let record = RemoteTrustStore::under_config_root(&config_root, &session_id)?
+                let record = self
+                    .integration
+                    .ensure_remote_trust_store(&session_id)?
                     .revoke_record(record_id, reason, super::current_unix_seconds())?;
                 Ok(remote_trust_record_json(&record).to_string())
             }

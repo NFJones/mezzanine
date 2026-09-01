@@ -20,9 +20,10 @@ use crate::error::{MezError, Result};
 use crate::host::async_runtime::{
     AsyncRuntimeControlConnectionConfig, AsyncRuntimeService, AsyncRuntimeServiceExit,
     AsyncRuntimeSessionHandle,
-    serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush,
+    serve_authenticated_async_runtime_control_connection_loop_with_snapshots_hooks_and_cancellation,
 };
 use crate::protocol::event::{EventKind, encode_event_notification};
+use crate::security::remote::{RemotePrincipal, RemoteTrustStore};
 use crate::storage::snapshot::SnapshotRepository;
 use mez_core::ids::ClientId;
 use tokio::io::AsyncWriteExt;
@@ -988,6 +989,14 @@ pub(crate) struct RuntimeIrohEndpoint {
     diagnostics: RuntimeIrohDiagnostics,
     intentional_close: Arc<AtomicBool>,
     endpoint_addr: tokio::sync::watch::Sender<Option<iroh::EndpointAddr>>,
+    authority: Option<RuntimeIrohAuthority>,
+}
+
+/// Shared direct-session authority used to revalidate a bound remote principal.
+#[derive(Debug, Clone)]
+struct RuntimeIrohAuthority {
+    trust: RemoteTrustStore,
+    server_endpoint_id: String,
 }
 
 /// Cloneable handle for bounded, intentional endpoint shutdown.
@@ -1101,6 +1110,7 @@ pub(crate) async fn bind_runtime_iroh_endpoint(
         diagnostics: RuntimeIrohDiagnostics::default(),
         intentional_close: Arc::new(AtomicBool::new(false)),
         endpoint_addr,
+        authority: None,
     }))
 }
 
@@ -1256,12 +1266,26 @@ impl super::RuntimeSessionService {
             ));
         }
         let session_id = self.session.id.to_string();
-        let secret_key = self
+        let (secret_key, server_endpoint_id) = {
+            let identity = self
+                .integration
+                .ensure_remote_endpoint_identity(&session_id)?;
+            (
+                identity.secret_key().clone(),
+                identity.endpoint_id().to_string(),
+            )
+        };
+        let trust = self
             .integration
-            .ensure_remote_endpoint_identity(&session_id)?
-            .secret_key()
+            .ensure_remote_trust_store(&session_id)?
             .clone();
-        let endpoint = bind_runtime_iroh_endpoint(policy, secret_key).await?;
+        let mut endpoint = bind_runtime_iroh_endpoint(policy, secret_key).await?;
+        if let Some(endpoint) = endpoint.as_mut() {
+            endpoint.authority = Some(RuntimeIrohAuthority {
+                trust,
+                server_endpoint_id,
+            });
+        }
         if let Some(endpoint) = endpoint.as_ref() {
             self.integration
                 .set_remote_endpoint_addr_publisher(endpoint.endpoint_addr.clone());
@@ -1338,6 +1362,7 @@ async fn serve_runtime_iroh_control_listener(
                 let connection_snapshots = snapshots.clone();
                 let diagnostics = endpoint.diagnostics.clone();
                 let policy = endpoint.policy.clone();
+                let authority = endpoint.authority.clone();
                 let accepted = accepted.clone();
                 let mut setup_lifecycle = handle.lifecycle_state_watcher();
                 tasks.spawn(async move {
@@ -1412,6 +1437,7 @@ async fn serve_runtime_iroh_control_listener(
                         &connection_handle,
                         control_config,
                         connection_snapshots.as_ref(),
+                        authority,
                         compression,
                         policy.setup_timeout,
                         policy.idle_timeout,
@@ -1478,6 +1504,7 @@ async fn serve_runtime_iroh_control_connection(
     handle: &AsyncRuntimeSessionHandle,
     control_config: AsyncRuntimeControlConnectionConfig,
     snapshots: Option<&SnapshotRepository>,
+    authority: Option<RuntimeIrohAuthority>,
     compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
     idle_timeout: std::time::Duration,
@@ -1541,8 +1568,42 @@ async fn serve_runtime_iroh_control_connection(
     });
     let sample_connection = connection.clone();
     let response_sampler = sampler.clone();
+    let request_authority = authority.clone();
+    let cancellation_authority = authority;
+    let (principal_tx, mut principal_rx) =
+        tokio::sync::watch::channel::<Option<RemotePrincipal>>(None);
+    let authority_cancelled = async move {
+        let Some(authority) = cancellation_authority else {
+            std::future::pending::<()>().await;
+            return;
+        };
+        let mut trust_changes = authority.trust.authority_changes();
+        loop {
+            let principal = principal_rx.borrow().clone();
+            if principal.as_ref().is_some_and(|principal| {
+                authority
+                    .trust
+                    .validate_bound_principal(&authority.server_endpoint_id, principal)
+                    .is_err()
+            }) {
+                return;
+            }
+            tokio::select! {
+                changed = trust_changes.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                }
+                changed = principal_rx.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    };
     let result =
-        serve_authenticated_async_runtime_control_connection_loop_with_snapshots_and_post_flush(
+        serve_authenticated_async_runtime_control_connection_loop_with_snapshots_hooks_and_cancellation(
             bridge.stream_mut(),
             AuthenticatedPeer::iroh_endpoint(endpoint_id),
             handle,
@@ -1551,6 +1612,18 @@ async fn serve_runtime_iroh_control_connection(
             snapshots,
             |_, state| terminal_daemon_state(state),
             move |connection_state| {
+                let Some(authority) = request_authority.as_ref() else {
+                    return Ok(());
+                };
+                let Some(principal) = connection_state.remote_principal() else {
+                    return Ok(());
+                };
+                authority
+                    .trust
+                    .validate_bound_principal(&authority.server_endpoint_id, principal)
+            },
+            move |connection_state| {
+                principal_tx.send_replace(connection_state.remote_principal().cloned());
                 if let Some(client_id) = connection_state.caller_client_id()
                     && let Ok(mut sampler) = response_sampler.lock()
                 {
@@ -1566,6 +1639,7 @@ async fn serve_runtime_iroh_control_connection(
                 }
                 Ok(())
             },
+            authority_cancelled,
         )
         .await;
     let x11_route_result = connection_state.deactivate_x11_route();
@@ -2948,6 +3022,7 @@ mod tests {
             diagnostics: diagnostics.clone(),
             intentional_close: Arc::new(AtomicBool::new(false)),
             endpoint_addr,
+            authority: None,
         };
         let listener_handle = handle.clone();
         let listener = tokio::spawn(async move {
@@ -4225,6 +4300,344 @@ mod tests {
         assert_eq!(listener.await.unwrap(), 3);
         actor_task.abort();
         let _ = actor_task.await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Verifies direct-session authority watches retain a connection across an
+    /// unrelated trust mutation, then promptly close its control and active
+    /// X11 route when the exact bound trust record is revoked over local Unix
+    /// control. A fresh connection from the revoked endpoint must also fail.
+    #[tokio::test(flavor = "current_thread")]
+    async fn direct_iroh_revocation_terminates_live_control_and_x11_route() {
+        use secrecy::ExposeSecret;
+
+        use crate::control::{decode_control_frame, encode_control_body};
+        use crate::host::async_runtime::{
+            AsyncRuntimeActorConfig, AsyncRuntimeSessionActor,
+            serve_async_runtime_control_listener_with_snapshots,
+        };
+        use crate::security::remote::RemoteRoleCeiling;
+        use crate::test_support::runtime::RuntimeServiceFixture;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-iroh-live-revocation-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let unix_path = root.join("control.sock");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut service = RuntimeServiceFixture::new().build();
+        service.set_config_root(root.clone());
+        let session_id = service.session().id.to_string();
+        let (server_secret, server_endpoint_id) = {
+            let identity = service
+                .integration
+                .ensure_remote_endpoint_identity(&session_id)
+                .unwrap();
+            (
+                identity.secret_key().clone(),
+                identity.endpoint_id().to_string(),
+            )
+        };
+        let trust = service
+            .integration
+            .ensure_remote_trust_store(&session_id)
+            .unwrap()
+            .clone();
+        let invitation = trust
+            .create_invitation(
+                &server_endpoint_id,
+                RemoteRoleCeiling::Primary,
+                600,
+                crate::runtime::current_unix_seconds(),
+            )
+            .unwrap();
+        let proxy = crate::runtime::x11::RuntimeX11Proxy::prepare(&root).unwrap();
+        let proxy_handle = proxy.handle();
+        let authority_path = proxy_handle.authority_path().to_path_buf();
+        service.set_runtime_x11_proxy(proxy_handle.clone());
+
+        let policy = RuntimeIrohTransportPolicy {
+            enabled: true,
+            max_connections: 2,
+            max_streams_per_connection: 1,
+            setup_timeout: IROH_ENDPOINT_TEST_SETUP_TIMEOUT,
+            idle_timeout: std::time::Duration::from_secs(5),
+            ..RuntimeIrohTransportPolicy::default()
+        };
+        let mut server = bind_runtime_iroh_endpoint(policy, server_secret)
+            .await
+            .unwrap()
+            .unwrap();
+        server.authority = Some(RuntimeIrohAuthority {
+            trust: trust.clone(),
+            server_endpoint_id: server_endpoint_id.clone(),
+        });
+        let server_addr = server.endpoint().addr();
+        let unix_listener = tokio::net::UnixListener::bind(&unix_path).unwrap();
+        let (handle, actor) =
+            AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        let actor_task = tokio::spawn(actor.run());
+        let proxy_task = tokio::spawn(proxy.serve());
+
+        let listener_handle = handle.clone();
+        let listener = tokio::spawn(async move {
+            let served = serve_runtime_iroh_control_listener(
+                &server,
+                &listener_handle,
+                AsyncRuntimeControlConnectionConfig::new(1024 * 1024, 0).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+            server.close().await;
+            served
+        });
+
+        let client_endpoint = Endpoint::builder(presets::Minimal)
+            .secret_key(SecretKey::generate())
+            .transport_config(
+                QuicTransportConfig::builder()
+                    .max_concurrent_bidi_streams(VarInt::from_u32(2))
+                    .build(),
+            )
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let connection = client_endpoint
+            .connect(server_addr.clone(), MEZZANINE_IROH_ALPN)
+            .await
+            .unwrap();
+        let (mut send, mut recv) = connection.open_bi().await.unwrap();
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "init",
+            "method": "control/initialize",
+            "params": {
+                "client_name": "revoked-primary",
+                "requested_version": 2,
+                "requested_role": "primary",
+                "x11_forwarding": {
+                    "version": 1,
+                    "mode": "untrusted",
+                    "auth_protocol": "MIT-MAGIC-COOKIE-1",
+                    "fake_cookie_base64": "EREREREREREREREREREREQ==",
+                    "takeover": false
+                },
+                "client": {
+                    "name": "revoked-primary",
+                    "interactive": true,
+                    "terminal": {
+                        "columns": 80,
+                        "rows": 24,
+                        "term": "xterm-256color"
+                    }
+                },
+                "authentication": {
+                    "mechanism": "extension:iroh_invitation",
+                    "token": invitation.token.expose_secret()
+                }
+            }
+        })
+        .to_string();
+        send.write_all(&encode_control_body(&initialize))
+            .await
+            .unwrap();
+        send.flush().await.unwrap();
+        let initialize_body = read_test_control_body(&mut recv).await;
+        let initialize_value: serde_json::Value = serde_json::from_str(&initialize_body).unwrap();
+        let device_credential = initialize_value["result"]["device_credential"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            initialize_value["result"]["capabilities"]["features"]["x11_forwarding"],
+            true
+        );
+        assert!(proxy_handle.diagnostics().route_active);
+        assert!(!std::fs::read(&authority_path).unwrap().is_empty());
+
+        trust
+            .create_invitation(
+                &server_endpoint_id,
+                RemoteRoleCeiling::Observer,
+                600,
+                crate::runtime::current_unix_seconds(),
+            )
+            .unwrap();
+        send.write_all(&encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"list","method":"window/list","params":{}}"#,
+        ))
+        .await
+        .unwrap();
+        send.flush().await.unwrap();
+        let list_body = read_test_control_body(&mut recv).await;
+        assert!(list_body.contains(r#""result""#), "{list_body}");
+
+        let mut setup = vec![0u8; 48];
+        setup[0] = b'l';
+        setup[2..4].copy_from_slice(&11u16.to_le_bytes());
+        setup[4..6].copy_from_slice(&0u16.to_le_bytes());
+        setup[6..8].copy_from_slice(&18u16.to_le_bytes());
+        setup[8..10].copy_from_slice(&16u16.to_le_bytes());
+        setup[12..30].copy_from_slice(b"MIT-MAGIC-COOKIE-1");
+        setup[32..48].copy_from_slice(&[0x11; 16]);
+        let mut remote_x = tokio::net::TcpStream::connect((
+            std::net::Ipv4Addr::LOCALHOST,
+            6000 + proxy_handle.display_number(),
+        ))
+        .await
+        .unwrap();
+        remote_x.write_all(&setup).await.unwrap();
+        remote_x.flush().await.unwrap();
+        let (_x11_send, mut x11_recv) =
+            tokio::time::timeout(std::time::Duration::from_secs(3), connection.accept_bi())
+                .await
+                .unwrap()
+                .unwrap();
+        let mut forwarded_setup = vec![0u8; crate::runtime::x11::X11_STREAM_PREFACE_BYTES + 48];
+        x11_recv.read_exact(&mut forwarded_setup).await.unwrap();
+        assert_eq!(
+            &forwarded_setup[crate::runtime::x11::X11_STREAM_PREFACE_BYTES..],
+            setup.as_slice()
+        );
+        assert_eq!(proxy_handle.diagnostics().active_streams, 1);
+
+        let records = trust.list_records().unwrap();
+        let record = records
+            .iter()
+            .find(|record| record.endpoint_id == client_endpoint.id().to_string())
+            .unwrap();
+        let local_initialize = r#"{"jsonrpc":"2.0","id":"unix-init","method":"control/initialize","params":{"client_name":"local-recovery","requested_version":2,"requested_role":"primary","detach_primary_on_disconnect":true,"client":{"name":"local-recovery","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#;
+        let revoke = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "revoke",
+            "method": "remote/client/revoke",
+            "params": {
+                "client_id": record.id,
+                "reason": "live revocation regression",
+                "idempotency_key": "live-revocation"
+            }
+        })
+        .to_string();
+        let unix_handle = handle.clone();
+        let unix_server = tokio::spawn(async move {
+            serve_async_runtime_control_listener_with_snapshots(
+                &unix_listener,
+                &unix_handle,
+                AsyncRuntimeControlConnectionConfig::new(
+                    1024 * 1024,
+                    crate::runtime::current_effective_uid(),
+                )
+                .unwrap(),
+                None,
+                1,
+                |accepted, _| accepted >= 1,
+            )
+            .await
+            .unwrap()
+        });
+        let mut unix = tokio::net::UnixStream::connect(&unix_path).await.unwrap();
+        unix.write_all(&encode_control_body(local_initialize))
+            .await
+            .unwrap();
+        unix.write_all(&encode_control_body(&revoke)).await.unwrap();
+        unix.shutdown().await.unwrap();
+        let mut unix_output = Vec::new();
+        unix.read_to_end(&mut unix_output).await.unwrap();
+        let (local_initialize_body, consumed) =
+            decode_control_frame(&unix_output, 1024 * 1024).unwrap();
+        let (revoke_body, _) = decode_control_frame(&unix_output[consumed..], 1024 * 1024).unwrap();
+        assert!(
+            local_initialize_body.contains(r#""granted_role":"primary""#),
+            "{local_initialize_body}"
+        );
+        assert!(
+            revoke_body.contains(r#""revoked_at_unix_seconds""#),
+            "{revoke_body}"
+        );
+        assert_eq!(unix_server.await.unwrap(), 1);
+
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let diagnostics = proxy_handle.diagnostics();
+                if !diagnostics.route_active && diagnostics.active_streams == 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("exact trust revocation should deactivate the direct X11 route");
+        assert_eq!(std::fs::read(&authority_path).unwrap(), Vec::<u8>::new());
+        let mut byte = [0u8; 1];
+        let x11_closed =
+            tokio::time::timeout(std::time::Duration::from_secs(3), remote_x.read(&mut byte))
+                .await
+                .expect("exact trust revocation should close an established X11 socket");
+        assert!(matches!(x11_closed, Ok(0) | Err(_)));
+        let control_closed =
+            tokio::time::timeout(std::time::Duration::from_secs(3), recv.read(&mut byte))
+                .await
+                .expect("exact trust revocation should close the direct control stream");
+        assert!(matches!(control_closed, Ok(None) | Err(_)));
+
+        let reconnect = client_endpoint
+            .connect(server_addr, MEZZANINE_IROH_ALPN)
+            .await
+            .unwrap();
+        let (mut reconnect_send, mut reconnect_recv) = reconnect.open_bi().await.unwrap();
+        let reconnect_initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "reconnect",
+            "method": "control/initialize",
+            "params": {
+                "client_name": "revoked-primary",
+                "requested_version": 2,
+                "requested_role": "primary",
+                "client": {
+                    "name": "revoked-primary",
+                    "interactive": true,
+                    "terminal": {
+                        "columns": 80,
+                        "rows": 24,
+                        "term": "xterm-256color"
+                    }
+                },
+                "authentication": {
+                    "mechanism": "extension:iroh_device",
+                    "token": device_credential
+                }
+            }
+        })
+        .to_string();
+        reconnect_send
+            .write_all(&encode_control_body(&reconnect_initialize))
+            .await
+            .unwrap();
+        reconnect_send.flush().await.unwrap();
+        let reconnect_body = read_test_control_body(&mut reconnect_recv).await;
+        assert!(reconnect_body.contains(r#""error""#), "{reconnect_body}");
+        assert!(
+            reconnect_body.contains(r#""mezzanine_code":"forbidden""#),
+            "{reconnect_body}"
+        );
+        reconnect.close(VarInt::from_u32(0), b"revoked reconnect rejected");
+
+        handle.shutdown().await.unwrap();
+        drop(handle);
+        assert_eq!(listener.await.unwrap(), 2);
+        proxy_task.abort();
+        let _ = proxy_task.await;
+        actor_task.abort();
+        let _ = actor_task.await;
+        client_endpoint.close().await;
         let _ = std::fs::remove_dir_all(root);
     }
 
