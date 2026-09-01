@@ -569,14 +569,46 @@ pub(super) struct PersistentIrohControlChannel {
     endpoint: iroh::Endpoint,
     connection: iroh::endpoint::Connection,
     bridge: IrohCompressionBridge,
+    attached_client_id: mez_core::ids::ClientId,
     x11_client: Option<super::x11::PreparedX11Client>,
     x11_route: Option<crate::runtime::x11::X11ForwardingResult>,
-    x11_task: Option<tokio::task::JoinHandle<()>>,
+    x11_task: Option<AbortOnDropTask<()>>,
     event_receiver:
         Option<tokio::sync::mpsc::Receiver<Result<super::attach::IrohAttachRenderWakeup>>>,
-    event_task: tokio::task::JoinHandle<()>,
+    event_task: AbortOnDropTask<()>,
     pushed_render_owner: bool,
     setup_timeout: std::time::Duration,
+}
+
+/// Tokio task ownership that aborts background work whenever its owner drops.
+struct AbortOnDropTask<T> {
+    task: Option<tokio::task::JoinHandle<T>>,
+}
+
+impl<T> AbortOnDropTask<T> {
+    /// Retains one task behind cancellation-safe ownership.
+    fn new(task: tokio::task::JoinHandle<T>) -> Self {
+        Self { task: Some(task) }
+    }
+
+    /// Waits boundedly for graceful completion and aborts a remaining task.
+    async fn join_bounded(mut self, timeout: std::time::Duration) {
+        let Some(mut task) = self.task.take() else {
+            return;
+        };
+        if tokio::time::timeout(timeout, &mut task).await.is_err() {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
+impl<T> Drop for AbortOnDropTask<T> {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
 }
 
 impl PersistentIrohControlChannel {
@@ -588,6 +620,11 @@ impl PersistentIrohControlChannel {
     /// Returns a clone of the retained connection for local attach health sampling.
     pub(super) fn connection(&self) -> iroh::endpoint::Connection {
         self.connection.clone()
+    }
+
+    /// Returns the client identity validated before background workers started.
+    pub(super) fn attached_client_id(&self) -> &mez_core::ids::ClientId {
+        &self.attached_client_id
     }
 
     /// Reports whether negotiated v3 owns this primary's rendered state.
@@ -616,32 +653,22 @@ impl PersistentIrohControlChannel {
             endpoint,
             connection,
             bridge,
+            attached_client_id: _,
             mut x11_client,
             x11_route: _,
-            mut x11_task,
+            x11_task,
             event_receiver,
-            mut event_task,
+            event_task,
             pushed_render_owner: _,
             setup_timeout,
         } = self;
         drop(event_receiver);
         connection.close(iroh::endpoint::VarInt::from_u32(0), b"attach complete");
         let _ = bridge.shutdown(setup_timeout).await;
-        if let Some(mut task) = x11_task.take()
-            && tokio::time::timeout(setup_timeout, &mut task)
-                .await
-                .is_err()
-        {
-            task.abort();
-            let _ = task.await;
+        if let Some(task) = x11_task {
+            task.join_bounded(setup_timeout).await;
         }
-        if tokio::time::timeout(setup_timeout, &mut event_task)
-            .await
-            .is_err()
-        {
-            event_task.abort();
-            let _ = event_task.await;
-        }
+        event_task.join_bounded(setup_timeout).await;
         let _ = tokio::time::timeout(setup_timeout, endpoint.close()).await;
         if let Some(client) = x11_client.take() {
             let _ = client.close().await;
@@ -813,16 +840,12 @@ pub(super) async fn open_persistent_iroh_control_channel(
             break;
         }
     }
-    let issued_credential = validate_iroh_initialize_response(&response, requested_role)?;
-    let x11_route =
-        validate_iroh_x11_initialize_response(&response, x11_request.map(|(mode, _)| mode))?;
-    let client_clipboard_negotiated = iroh_client_clipboard_negotiated(
+    let validated = validate_persistent_iroh_initialize_response(
         &response,
         requested_role,
         requested_event_stream_version,
+        x11_request.map(|(mode, _)| mode),
     )?;
-    let pushed_render_owner =
-        iroh_pushed_render_negotiated(&response, requested_role, requested_event_stream_version)?;
     if let IrohControlTarget::Invitation {
         profile_name,
         server_addr,
@@ -830,7 +853,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
         ..
     } = &target
     {
-        let issued_credential = issued_credential.ok_or_else(|| {
+        let issued_credential = validated.issued_credential.as_ref().ok_or_else(|| {
             MezError::invalid_state("successful Iroh pairing response omitted device credential")
         })?;
         let server_addr = authenticated_remote_addr(&endpoint, server_addr.id)
@@ -841,33 +864,22 @@ pub(super) async fn open_persistent_iroh_control_channel(
             server_addr,
             role: *role,
             scope: target.scope(),
-            device_credential: issued_credential,
+            device_credential: issued_credential.clone(),
         })?;
     } else {
         refresh_authenticated_profile_route(paths.root(), &endpoint, &target).await?;
     }
-    let (event_receiver, event_task) = super::attach::spawn_iroh_runtime_event_receiver(
-        connection.clone(),
-        compression,
-        policy.setup_timeout,
-        requested_event_stream_version,
-        pushed_render_owner,
-        pushed_render_owner.then(|| requested_role.to_string()),
-        client_clipboard_negotiated.then_some(client_clipboard),
-    );
-    let x11_task = match (x11_client.as_ref(), x11_route.as_ref()) {
+
+    let x11_worker = match (x11_client.as_ref(), validated.x11_route.as_ref()) {
         (Some(client), Some(route)) => {
             let incoming_streams = u32::try_from(policy.x11.max_connections_per_route)
                 .map_err(|_| MezError::invalid_state("X11 stream credit exceeds Iroh limits"))?;
-            connection
-                .set_max_concurrent_bi_streams(iroh::endpoint::VarInt::from_u32(incoming_streams));
-            let connection = connection.clone();
-            let route = route.clone();
-            let forwarder = client.forwarder();
-            let setup_timeout = policy.x11.setup_timeout;
-            Some(tokio::spawn(async move {
-                serve_client_x11_streams(connection, route, forwarder, setup_timeout).await;
-            }))
+            Some((
+                incoming_streams,
+                route.clone(),
+                client.forwarder(),
+                policy.x11.setup_timeout,
+            ))
         }
         (None, None) => None,
         _ => {
@@ -876,18 +888,41 @@ pub(super) async fn open_persistent_iroh_control_channel(
             ));
         }
     };
+    let (event_receiver, event_task) = super::attach::spawn_iroh_runtime_event_receiver(
+        connection.clone(),
+        compression,
+        policy.setup_timeout,
+        requested_event_stream_version,
+        validated.pushed_render_owner,
+        validated
+            .pushed_render_owner
+            .then(|| requested_role.to_string()),
+        validated
+            .client_clipboard_negotiated
+            .then_some(client_clipboard),
+    );
+    let event_task = AbortOnDropTask::new(event_task);
+    let x11_task = x11_worker.map(|(incoming_streams, route, forwarder, setup_timeout)| {
+        connection
+            .set_max_concurrent_bi_streams(iroh::endpoint::VarInt::from_u32(incoming_streams));
+        let connection = connection.clone();
+        AbortOnDropTask::new(tokio::spawn(async move {
+            serve_client_x11_streams(connection, route, forwarder, setup_timeout).await;
+        }))
+    });
     Ok((
         PersistentIrohControlChannel {
             _identity: identity,
             endpoint,
             connection,
             bridge,
+            attached_client_id: validated.attached_client_id,
             x11_client,
-            x11_route,
+            x11_route: validated.x11_route,
             x11_task,
             event_receiver: Some(event_receiver),
             event_task,
-            pushed_render_owner,
+            pushed_render_owner: validated.pushed_render_owner,
             setup_timeout: policy.setup_timeout,
         },
         response,
@@ -2268,6 +2303,39 @@ fn validate_iroh_initialize_response(
         .map(|credential| SecretString::from(credential.to_string())))
 }
 
+/// Fully validated initialize metadata required before attach workers may start.
+struct ValidatedPersistentIrohInitialize {
+    issued_credential: Option<SecretString>,
+    attached_client_id: mez_core::ids::ClientId,
+    x11_route: Option<crate::runtime::x11::X11ForwardingResult>,
+    client_clipboard_negotiated: bool,
+    pushed_render_owner: bool,
+}
+
+/// Validates every fallible initialize field consumed by a persistent attach.
+fn validate_persistent_iroh_initialize_response(
+    body: &str,
+    requested_role: &str,
+    requested_event_stream_version: u32,
+    requested_x11_mode: Option<crate::runtime::x11::X11ForwardingMode>,
+) -> Result<ValidatedPersistentIrohInitialize> {
+    Ok(ValidatedPersistentIrohInitialize {
+        issued_credential: validate_iroh_initialize_response(body, requested_role)?,
+        attached_client_id: super::attach::attached_client_id_from_initialize_response(body)?,
+        x11_route: validate_iroh_x11_initialize_response(body, requested_x11_mode)?,
+        client_clipboard_negotiated: iroh_client_clipboard_negotiated(
+            body,
+            requested_role,
+            requested_event_stream_version,
+        )?,
+        pushed_render_owner: iroh_pushed_render_negotiated(
+            body,
+            requested_role,
+            requested_event_stream_version,
+        )?,
+    })
+}
+
 /// Validates exact X11 capability and route metadata when forwarding was requested.
 fn validate_iroh_x11_initialize_response(
     body: &str,
@@ -2598,11 +2666,12 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::{
-        RemoteRoleCeiling, ensure_iroh_attach_role_allowed, iroh_client_clipboard_negotiated,
-        iroh_event_stream_version_candidates, iroh_initialize_rejected_event_stream_version,
-        iroh_pushed_render_negotiated, relay_client_x11_stream,
-        validate_iroh_host_only_initialize_response, validate_iroh_initialize_response,
-        validate_iroh_x11_initialize_response,
+        AbortOnDropTask, RemoteRoleCeiling, ensure_iroh_attach_role_allowed,
+        iroh_client_clipboard_negotiated, iroh_event_stream_version_candidates,
+        iroh_initialize_rejected_event_stream_version, iroh_pushed_render_negotiated,
+        relay_client_x11_stream, validate_iroh_host_only_initialize_response,
+        validate_iroh_initialize_response, validate_iroh_x11_initialize_response,
+        validate_persistent_iroh_initialize_response,
     };
     use iroh::endpoint::{PortmapperConfig, QuicTransportConfig, VarInt, presets};
     use iroh::{Endpoint, RelayMode};
@@ -2641,6 +2710,97 @@ mod tests {
             error.message().contains("unexpected remote role"),
             "{error:?}"
         );
+    }
+
+    /// Persistent attach validation must reject a missing or malformed client
+    /// identity at the same pre-worker boundary that validates role, event,
+    /// clipboard, and X11 negotiation metadata.
+    #[test]
+    fn persistent_iroh_initialize_validates_attached_client_before_workers() {
+        let valid = r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary","client":{"id":"c7"},"capabilities":{"features":{"pushed_render_updates":true,"client_clipboard_write":true,"x11_forwarding":true}},"x11_forwarding":{"version":1,"mode":"untrusted","generation":7,"route_token_base64":"MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM="}}}"#;
+        let validated = validate_persistent_iroh_initialize_response(
+            valid,
+            "primary",
+            3,
+            Some(crate::runtime::x11::X11ForwardingMode::Untrusted),
+        )
+        .unwrap();
+        assert_eq!(validated.attached_client_id.as_str(), "c7");
+        assert!(validated.pushed_render_owner);
+        assert!(validated.client_clipboard_negotiated);
+        assert_eq!(validated.x11_route.unwrap().generation, 7);
+
+        for malformed in [
+            r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary","capabilities":{"features":{}}}}"#,
+            r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary","client":{"id":"observer-7"},"capabilities":{"features":{}}}}"#,
+        ] {
+            let Err(error) =
+                validate_persistent_iroh_initialize_response(malformed, "primary", 1, None)
+            else {
+                panic!("persistent attach must reject invalid client identity before workers");
+            };
+            assert!(error.message().contains("client id"), "{error:?}");
+        }
+    }
+
+    /// Dropping a background-task owner must abort pending work instead of
+    /// detaching the Tokio task after an attach setup error.
+    #[tokio::test]
+    async fn abort_on_drop_task_cancels_pending_worker() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+            impl Drop for DropSignal {
+                fn drop(&mut self) {
+                    if let Some(sender) = self.0.take() {
+                        let _ = sender.send(());
+                    }
+                }
+            }
+
+            let _drop_signal = DropSignal(Some(dropped_tx));
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        let owner = AbortOnDropTask::new(task);
+        started_rx.await.unwrap();
+        drop(owner);
+        tokio::time::timeout(std::time::Duration::from_secs(1), dropped_rx)
+            .await
+            .expect("dropping the task owner should abort pending work")
+            .unwrap();
+    }
+
+    /// Graceful channel cleanup must remain bounded and abort a worker that
+    /// does not stop after connection closure.
+    #[tokio::test]
+    async fn abort_on_drop_task_bounded_join_aborts_pending_worker() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+            impl Drop for DropSignal {
+                fn drop(&mut self) {
+                    if let Some(sender) = self.0.take() {
+                        let _ = sender.send(());
+                    }
+                }
+            }
+
+            let _drop_signal = DropSignal(Some(dropped_tx));
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        let owner = AbortOnDropTask::new(task);
+        started_rx.await.unwrap();
+        owner
+            .join_bounded(std::time::Duration::from_millis(10))
+            .await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), dropped_rx)
+            .await
+            .expect("bounded join should abort a worker that remains pending")
+            .unwrap();
     }
 
     /// Explicit X11 negotiation must retain exact version, mode, generation,

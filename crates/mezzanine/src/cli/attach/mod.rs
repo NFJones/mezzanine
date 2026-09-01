@@ -317,6 +317,7 @@ pub(super) use primary::{
 pub(in crate::cli) use requests::read_async_control_response_frames;
 #[cfg(test)]
 pub(super) use requests::terminal_step_control_request;
+pub(in crate::cli) use responses::attached_client_id_from_initialize_response;
 #[cfg(test)]
 pub(super) use responses::{
     terminal_step_response_line_style_spans, terminal_step_response_output_modes,

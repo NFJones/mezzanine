@@ -43,7 +43,7 @@ pub(super) fn control_response_forbidden(body: &str) -> Result<bool> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn attached_client_id_from_initialize_response(body: &str) -> Result<ClientId> {
+pub(in crate::cli) fn attached_client_id_from_initialize_response(body: &str) -> Result<ClientId> {
     let parsed: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_args("control initialize response is not valid JSON"))?;
     let client_id = parsed

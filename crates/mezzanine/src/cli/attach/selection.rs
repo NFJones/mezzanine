@@ -128,7 +128,7 @@ pub(in crate::cli) async fn run_attach<W: Write>(
         let event_receiver = channel.take_event_receiver()?;
         let connection = channel.connection();
         let pushed_render_owner = channel.pushed_render_owner();
-        let attached_client_id = attached_client_id_from_initialize_response(&initialize_body)?;
+        let attached_client_id = channel.attached_client_id().clone();
         let run_result = if request.requested_role == "observer" {
             run_iroh_attached_observer_client(
                 channel.stream_mut(),
