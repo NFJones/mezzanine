@@ -97,7 +97,7 @@ impl RuntimeX11RouteLease {
 
     /// Publishes authority state without a transport for registry-only tests.
     #[cfg(test)]
-    fn activate_without_transport(&self) -> Result<()> {
+    pub(crate) fn activate_without_transport(&self) -> Result<()> {
         self.inner
             .proxy
             .activate_route(&self.inner.owner, self.inner.generation, None)

@@ -224,6 +224,12 @@ impl ControlConnectionState {
         self.caller_client_id = Some(caller_client_id);
     }
 
+    /// Makes one test connection own disconnect cleanup for its rebound client.
+    #[cfg(test)]
+    pub(crate) fn own_rebound_client_disconnect_for_test(&mut self) {
+        self.detach_client_on_disconnect = true;
+    }
+
     /// Runs the initialized operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -346,6 +352,16 @@ impl ControlConnectionState {
         };
         self.x11_route_start_taken = true;
         lease.deactivate()
+    }
+
+    /// Installs one active route lease for connection-lifecycle regression tests.
+    #[cfg(test)]
+    pub(crate) fn install_x11_route_lease_for_test(
+        &mut self,
+        lease: crate::runtime::x11::RuntimeX11RouteLease,
+    ) {
+        self.x11_route_lease = Some(lease);
+        self.x11_route_start_taken = true;
     }
 
     /// Sets the first runtime event that a newly attached observer may receive.

@@ -677,3 +677,98 @@ async fn authenticated_control_loop_times_out_blocked_response_write() {
 
     let ((), (), _exit) = tokio::join!(client, server, actor.run());
 }
+
+/// Verifies control EOF invalidates the exact X11 generation before waiting
+/// for an unavailable actor to apply the ordinary client-disconnect event.
+/// Resuming actor processing must complete delayed cleanup without reviving or
+/// double-removing the route.
+#[tokio::test(flavor = "current_thread")]
+async fn control_disconnect_invalidates_x11_before_stalled_actor_submission() {
+    use crate::control::AuthenticatedPeer;
+    use crate::runtime::x11::{
+        RuntimeX11Proxy, RuntimeX11RouteOwner, X11_FORWARDING_VERSION, X11AuthProtocol, X11Cookie,
+        X11ForwardingMode, X11ForwardingOffer,
+    };
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-x11-stalled-disconnect-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("x11-owner", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let proxy = RuntimeX11Proxy::prepare(&root).unwrap();
+    let proxy_handle = proxy.handle();
+    let authority_path = proxy_handle.authority_path().to_path_buf();
+    let (_route, lease) = proxy_handle
+        .reserve_route(
+            RuntimeX11RouteOwner {
+                session_id: "$stalled-disconnect".to_string(),
+                client_id: primary.to_string(),
+                endpoint_id: "endpoint-stalled-disconnect".to_string(),
+                principal_id: Some("principal-stalled-disconnect".to_string()),
+                connection_id: "connection-stalled-disconnect".to_string(),
+            },
+            X11ForwardingOffer {
+                version: X11_FORWARDING_VERSION,
+                mode: X11ForwardingMode::Untrusted,
+                auth_protocol: X11AuthProtocol::MitMagicCookie1,
+                fake_cookie: X11Cookie::new([0x51; 16]),
+                takeover: false,
+            },
+        )
+        .unwrap();
+    lease.activate_without_transport().unwrap();
+    assert!(proxy_handle.diagnostics().route_active);
+    assert!(!std::fs::read(&authority_path).unwrap().is_empty());
+
+    let mut connection = ControlConnectionState::new(false, false);
+    connection.rebind_caller_client(primary);
+    connection.own_rebound_client_disconnect_for_test();
+    connection.install_x11_route_lease_for_test(lease);
+    let (client_stream, mut server_stream) = tokio::io::duplex(64);
+    drop(client_stream);
+
+    let mut serving = Box::pin(
+        serve_authenticated_async_runtime_control_connection_loop_with_snapshots(
+            &mut server_stream,
+            AuthenticatedPeer::iroh_endpoint("endpoint-stalled-disconnect"),
+            &handle,
+            &mut connection,
+            AsyncRuntimeControlConnectionConfig::new(4096, current_effective_uid()).unwrap(),
+            None,
+            |_, _| false,
+        ),
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut serving)
+            .await
+            .is_err(),
+        "disconnect delivery should remain pending while the actor is unpolled"
+    );
+    assert!(!proxy_handle.diagnostics().route_active);
+    assert_eq!(std::fs::read(&authority_path).unwrap(), Vec::<u8>::new());
+
+    let actor_task = tokio::spawn(actor.run());
+    let served = tokio::time::timeout(Duration::from_secs(2), &mut serving)
+        .await
+        .expect("resumed actor should apply delayed disconnect cleanup")
+        .unwrap();
+    assert_eq!(served, 0);
+    drop(serving);
+    assert!(!connection.deactivate_x11_route().unwrap());
+
+    handle.shutdown().await.unwrap();
+    let _exit = actor_task.await.unwrap();
+    drop(proxy);
+    let _ = std::fs::remove_dir_all(root);
+}

@@ -374,6 +374,7 @@ async fn submit_control_connection_disconnect_event(
     handle: &AsyncRuntimeSessionHandle,
     connection: &mut ControlConnectionState,
 ) -> Result<()> {
+    connection.deactivate_x11_route()?;
     let Some(client_id) = connection.take_disconnect_client_id() else {
         return Ok(());
     };
