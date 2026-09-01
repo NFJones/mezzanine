@@ -34,7 +34,10 @@ umask 077
 : > "$authority"
 cookie="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 xauth -f "$authority" add ":$display_number" MIT-MAGIC-COOKIE-1 "$cookie"
-Xvfb ":$display_number" -screen 0 800x600x24 -nolisten tcp -auth "$authority" >"$log" 2>&1 &
+# Keep the otherwise-idle test server from resetting after the short-lived
+# `xauth generate` client disconnects and discarding its dynamic X SECURITY
+# authorization before the forwarding round trip can use it.
+Xvfb ":$display_number" -screen 0 800x600x24 -nolisten tcp -noreset -auth "$authority" >"$log" 2>&1 &
 xvfb_pid=$!
 
 attempt=0
