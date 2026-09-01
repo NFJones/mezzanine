@@ -83,6 +83,44 @@ therefore has this idle-redraw limitation; Iroh attachment uses its independent
 event stream. Until hosted event-socket publication is corrected, use Iroh or a
 regular `mez serve` session when event-driven idle redraws are required.
 
+## A remote X11 application does not open locally
+
+Confirm all three opt-ins: the host has `transport.iroh.x11.enabled = true`,
+the attachment is an authenticated Iroh primary, and the client used `--x11`
+or `--x11-trusted`. Unix and observer attachments cannot own an X11 route. A
+legacy peer that does not advertise `x11_forwarding` fails visibly rather than
+continuing without forwarding.
+
+On the attaching machine, check that `DISPLAY` names a local Unix socket,
+constrained XQuartz launchd socket, or numeric loopback TCP display; remote
+hostnames are rejected. Check that `XAUTHORITY` (or the default authority file)
+is owner-private, contains an exact `MIT-MAGIC-COOKIE-1` record for that
+display, and that `xauth` is installed. `--x11` additionally requires working
+X SECURITY untrusted-cookie generation. If that operation fails, fix the
+local X server or use no forwarding; do not expect or script a fallback to
+trusted mode. `--x11-trusted` also requires the host's explicit
+`allow_trusted` policy.
+
+Only one attachment owns a session's X11 route. A conflict means another
+primary currently owns it. Use `--x11-takeover` only for an intentional
+replacement. Takeover, detach, transport loss, trust or lease revocation, and
+session shutdown close existing streams. After reattach, restart or reconnect
+the GUI application so it opens against the new route credentials.
+
+Run local `mez remote status` or `show-metrics` and inspect only the aggregate
+`x11`/`[x11 forwarding]` counters: route activity, accepted or rejected
+sockets, active streams, and stream outcomes. A rising
+`sockets_rejected_no_route` count indicates no published owner;
+`sockets_rejected_capacity` indicates the configured per-route cap;
+`streams_failed` covers malformed credentials, setup/connect timeout, route
+cancellation, and transport failures. These diagnostics intentionally omit
+cookies, route tokens, local display targets, authority paths, and X11 bytes.
+
+X11/Xwayland socket applications are in scope. Native Wayland, audio, D-Bus,
+portals, device forwarding, network-transparent MIT-SHM, and dependable direct
+GLX/DRI acceleration are not. Prefer software rendering when an application's
+graphics path assumes local shared memory or devices.
+
 ## Iroh compression is unavailable or inefficient
 
 Run `show-iroh-status` from the affected remote client. `Codec unavailable`

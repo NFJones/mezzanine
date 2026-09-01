@@ -19,7 +19,7 @@ jobs:
       - name: Install Bubblewrap
         run: |
           sudo apt-get update
-          sudo apt-get install --yes bubblewrap
+          sudo apt-get install --yes bubblewrap xauth xvfb
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -35,6 +35,9 @@ jobs:
       - name: Test
         timeout-minutes: 15
         run: canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" cargo test --workspace --all-targets --all-features --no-fail-fast --quiet
+      - name: Validate X11 forwarding against Xvfb
+        timeout-minutes: 6
+        run: canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" sh scripts/test-x11-forwarding.sh
   macos-release-build:
     name: "Validate: macOS"
     runs-on: macos-latest

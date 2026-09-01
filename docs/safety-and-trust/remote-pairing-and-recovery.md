@@ -228,6 +228,23 @@ been written when the connection fails, the client reports an unknown outcome,
 does not replay the input or reconnect automatically, and requires a new
 explicit attach. Unix control remains available concurrently for recovery.
 
+X11 forwarding adds no authority to a paired role. It is available only when
+the durable role permits primary attachment, the host separately enables X11,
+and the client explicitly requests it. A session has one generation-fenced
+route owner bound to the exact authenticated Iroh connection; primary role by
+itself does not select that owner. Trusted forwarding is a separate explicit
+client request and host permission. Untrusted preparation failure never
+changes the request to trusted mode.
+
+The client keeps its real X cookie, authority path, and local display target
+local. The server receives only a random fake session cookie, while each raw
+host-opened X11 stream is authenticated by a generation and random route token.
+These secret-bearing initialize records use identity/reset framing and cannot
+seed reusable compression history. Operational status exposes only aggregate
+route and stream counters. Detach, takeover, trust or lease revocation,
+transport loss, and session shutdown invalidate the old fake authority before
+cancelling that generation's workers.
+
 Invitations, device credentials, private endpoint keys, and persisted verifiers
 are omitted from client lists, diagnostics, debug output, and audit records.
 Only the explicitly requested invitation response/file and successful or

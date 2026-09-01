@@ -124,6 +124,39 @@ and teardown are bounded; wrong ALPNs, excess streams, malformed frames,
 stalled setup, and one failed connection are isolated from later clients and
 from the Unix listener.
 
+X11 forwarding is negotiated only by an authenticated Iroh primary through an
+optional version-1 `x11_forwarding` initialize offer. The offer contains the
+requested `untrusted` or explicitly policy-gated `trusted` mode, exact
+`MIT-MAGIC-COOKIE-1` protocol name, a random 16-byte fake cookie encoded as
+base64, and an explicit takeover flag. Success advertises
+`capabilities.features.x11_forwarding` and returns the exact mode, a nonzero
+session-local generation, and a random route token. It never returns the real
+local cookie, local display target, or local authority path. Unsupported peers,
+policy denial, ownership conflict, malformed metadata, or trust-mode changes
+fail initialization visibly without retrying without X11 or falling back to
+trusted mode.
+
+Each accepted server proxy socket maps to one raw, server-opened bidirectional
+Iroh stream on the exact owning control connection. Its fixed 56-byte preface
+contains `MZX11STR`, version 1, seven zero reserved bytes, the generation as a
+big-endian `u64`, and the 32-byte route token. The ordinary bounded X11 11.0
+setup request follows immediately. The server validates the fake cookie; the
+client validates the preface, rewrites only that cookie to its client-local
+real value, connects only to the pre-resolved local X endpoint, and then relays
+bytes without JSON, Content-Length, event framing, message boundaries, or
+application compression. Fake-cookie and route-token control records use
+identity/reset compression framing and cannot seed reusable history.
+
+The server's one client-opened bidirectional control-stream limit remains
+unchanged. Only a successfully negotiated client grants bounded credit for
+host-opened X11 streams. One generation-fenced route owner is bound to the
+session, attached client, authenticated endpoint and principal, and exact Iroh
+connection. Explicit takeover invalidates the old authority and cancels its
+streams before publishing a new generation. Detach, transport loss, trust or
+lease revocation, and session shutdown perform the same exact-generation
+cleanup. Reattach preserves the remote `DISPLAY` and `XAUTHORITY` paths but
+rotates credentials and does not migrate existing X connections.
+
 Schema v71 defines two compressed application-framing ALPNs:
 `mezzanine/transport/2/zstd` and
 `mezzanine/transport/2/lz4`. This is not Iroh or QUIC compression. On either

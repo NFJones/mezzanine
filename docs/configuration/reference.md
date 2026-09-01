@@ -55,7 +55,7 @@ configuration error; remove or relocate all but the intended file. See
 [Configuration overview](overview.md) for mutation examples and the layer
 selection workflow.
 
-The current config schema version is `79`. On launch, Mezzanine migrates an
+The current config schema version is `80`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -114,7 +114,7 @@ shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `79` | Config schema version. Do not change this. |
+| `version` | integer | `80` | Config schema version. Do not change this. |
 | `host` | table | see below | Disabled-by-default persistent host, recovery, and durable-lease policy. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |

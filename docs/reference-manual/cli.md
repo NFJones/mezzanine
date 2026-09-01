@@ -147,6 +147,20 @@ prerequisites, route policy, role ceilings, revocation, and identity recovery.
 permits a primary device with creation authority to force-kill sessions it
 created.
 
+An explicit Iroh primary `attach` also accepts these X11 options:
+
+| Option | Behavior |
+| --- | --- |
+| `--x11` | Request X SECURITY untrusted forwarding. This is the default trust mode and fails closed if a local untrusted credential cannot be prepared. |
+| `--x11-trusted` | Request full trusted X11 forwarding. This conflicts with `--x11` and requires `transport.iroh.x11.allow_trusted = true` on the host. |
+| `--x11-takeover` | Explicitly replace another attachment's X11 route. It requires either `--x11` or `--x11-trusted`. |
+
+These flags require an authenticated Iroh primary and are rejected for
+observers and Unix targets. An unsupported peer or denied host policy is a
+visible initialization failure; the client does not reconnect without the
+requested forwarding. The attaching machine resolves `DISPLAY` and its real
+cookie before dialing, and neither value is sent to the server.
+
 Direct control commands keep Unix as their default target. `--iroh-invite-file
 PATH` explicitly performs first-use pairing from an owner-only, bounded JSON
 invitation file, while `--iroh-profile NAME` explicitly uses a protected paired

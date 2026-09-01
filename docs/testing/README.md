@@ -22,6 +22,9 @@ these workloads.
 - [Iroh pushed-render rollout evidence](iroh-pushed-render-rollout-evidence.md):
   distinguish integrated repository-local results from outstanding network,
   platform, packaging, and production gates.
+- [X11 forwarding validation](x11-forwarding-validation.md): run the composed
+  fake-server regression, Linux Xvfb acceptance test, and manual XQuartz
+  checklist without weakening untrusted-mode requirements.
 - [Iroh production-readiness review packet](iroh-production-readiness-review.md):
   assign release owners, inventory immutable evidence, record exceptions, and
   capture the production rollout decision.

@@ -2594,6 +2594,9 @@ pub(super) fn incomplete_control_response_error(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
     use super::{
         RemoteRoleCeiling, ensure_iroh_attach_role_allowed, iroh_client_clipboard_negotiated,
         iroh_event_stream_version_candidates, iroh_initialize_rejected_event_stream_version,
@@ -2792,6 +2795,189 @@ mod tests {
         server_endpoint.close().await;
     }
 
+    /// The complete data path must carry a remote setup through the session
+    /// proxy, one server-opened Iroh stream, client-local cookie rewrite, and
+    /// the frozen local X target without exposing either credential in Debug.
+    #[tokio::test]
+    async fn x11_proxy_iroh_client_and_fake_server_complete_one_round_trip() {
+        let local_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let local_port = local_listener.local_addr().unwrap().port();
+        let display = crate::cli::x11::resolve_local_x11_display(&format!(
+            "127.0.0.1:{}",
+            local_port.checked_sub(6000).unwrap()
+        ))
+        .unwrap();
+        let forwarder = crate::cli::x11::X11ClientForwarder::new_for_test(
+            display,
+            crate::runtime::x11::X11Cookie::new([0x41; 16]),
+            crate::runtime::x11::X11Cookie::new([0x52; 16]),
+        );
+        let offer = crate::runtime::x11::X11ForwardingOffer {
+            version: crate::runtime::x11::X11_FORWARDING_VERSION,
+            mode: crate::runtime::x11::X11ForwardingMode::Trusted,
+            auth_protocol: crate::runtime::x11::X11AuthProtocol::MitMagicCookie1,
+            fake_cookie: crate::runtime::x11::X11Cookie::new([0x41; 16]),
+            takeover: false,
+        };
+        let redacted = format!("{forwarder:?} {offer:?}");
+        assert!(!redacted.contains("41414141"), "{redacted}");
+        assert!(!redacted.contains("52525252"), "{redacted}");
+
+        let fake_server = tokio::spawn(async move {
+            let (mut stream, _) = local_listener.accept().await.unwrap();
+            let mut setup = [0u8; 48];
+            stream.read_exact(&mut setup).await.unwrap();
+            crate::runtime::x11::validate_x11_setup_cookie(
+                &setup,
+                &crate::runtime::x11::X11Cookie::new([0x52; 16]),
+            )
+            .unwrap();
+            let mut payload = [0u8; 4];
+            stream.read_exact(&mut payload).await.unwrap();
+            assert_eq!(&payload, b"ping");
+            stream.write_all(b"pong").await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+        let reply = run_complete_x11_round_trip(forwarder, offer, b"ping", 4).await;
+
+        assert_eq!(&reply, b"pong");
+        fake_server.await.unwrap();
+    }
+
+    /// Runs the complete forwarding path against a real Xvfb display in both
+    /// trusted and X SECURITY untrusted modes. The CI wrapper supplies DISPLAY,
+    /// XAUTHORITY, Xvfb, and xauth and never downgrades a failed untrusted run.
+    #[tokio::test]
+    #[ignore = "requires scripts/test-x11-forwarding.sh with Linux Xvfb and xauth"]
+    async fn x11_xvfb_trusted_and_untrusted_setup_round_trip() {
+        assert_eq!(std::env::var("MEZ_X11_XVFB_TEST").as_deref(), Ok("1"));
+        for mode in [
+            crate::runtime::x11::X11ForwardingMode::Trusted,
+            crate::runtime::x11::X11ForwardingMode::Untrusted,
+        ] {
+            let prepared = crate::cli::x11::prepare_x11_client(mode).await.unwrap();
+            let offer = prepared.offer(false);
+            let reply = run_complete_x11_round_trip(prepared.forwarder(), offer, &[], 8).await;
+            assert_eq!(reply[0], 1, "X11 setup failed for {mode:?}: {reply:?}");
+            prepared.close().await.unwrap();
+        }
+    }
+
+    /// Composes the stable proxy, exact route, host-opened Iroh stream, client
+    /// forwarder, frozen local target, and raw setup/application byte stream.
+    async fn run_complete_x11_round_trip(
+        forwarder: crate::cli::x11::X11ClientForwarder,
+        offer: crate::runtime::x11::X11ForwardingOffer,
+        application_bytes: &[u8],
+        reply_len: usize,
+    ) -> Vec<u8> {
+        const TEST_ALPN: &[u8] = b"mezzanine/x11-end-to-end-test/1";
+        let server_endpoint = Endpoint::builder(presets::Minimal)
+            .alpns(vec![TEST_ALPN.to_vec()])
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let client_endpoint = Endpoint::builder(presets::Minimal)
+            .transport_config(
+                QuicTransportConfig::builder()
+                    .max_concurrent_bidi_streams(VarInt::from_u32(1))
+                    .build(),
+            )
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let server_addr = server_endpoint.addr();
+        let client_side = async {
+            client_endpoint
+                .connect(server_addr, TEST_ALPN)
+                .await
+                .unwrap()
+        };
+        let server_side = async {
+            let incoming = server_endpoint.accept().await.unwrap();
+            incoming.accept().unwrap().await.unwrap()
+        };
+        let (client_connection, server_connection) = tokio::join!(client_side, server_side);
+
+        let root = x11_test_root("complete-round-trip");
+        let proxy = crate::runtime::x11::RuntimeX11Proxy::prepare_with_policy(
+            &root,
+            crate::runtime::RuntimeIrohX11Policy {
+                enabled: true,
+                allow_trusted: true,
+                max_connections_per_route: 1,
+                setup_timeout: std::time::Duration::from_secs(5),
+            },
+        )
+        .unwrap();
+        let handle = proxy.handle();
+        let setup = x11_setup_packet(b'B', offer.fake_cookie.as_bytes());
+        let owner = crate::runtime::x11::RuntimeX11RouteOwner {
+            session_id: "$x11-e2e".to_string(),
+            client_id: "client-x11-e2e".to_string(),
+            endpoint_id: "endpoint-x11-e2e".to_string(),
+            principal_id: Some("principal-x11-e2e".to_string()),
+            connection_id: format!("iroh-{}", server_connection.stable_id()),
+        };
+        let (route, lease) = handle.reserve_route(owner, offer).unwrap();
+        lease.activate(server_connection).unwrap();
+        let proxy_task = tokio::spawn(proxy.serve());
+
+        let relay_connection = client_connection.clone();
+        let relay_route = route.clone();
+        let mut relay_task = tokio::spawn(async move {
+            let (send, recv) = relay_connection.accept_bi().await.unwrap();
+            relay_client_x11_stream(
+                send,
+                recv,
+                relay_route,
+                forwarder,
+                std::time::Duration::from_secs(5),
+            )
+            .await
+        });
+        let mut remote = tokio::net::TcpStream::connect((
+            std::net::Ipv4Addr::LOCALHOST,
+            6000 + handle.display_number(),
+        ))
+        .await
+        .unwrap();
+        remote.write_all(&setup).await.unwrap();
+        remote.write_all(application_bytes).await.unwrap();
+        remote.flush().await.unwrap();
+        let mut reply = vec![0u8; reply_len];
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            remote.read_exact(&mut reply),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        drop(remote);
+
+        assert!(lease.deactivate().unwrap());
+        client_connection.close(iroh::endpoint::VarInt::from_u32(0), b"test complete");
+        if tokio::time::timeout(std::time::Duration::from_secs(2), &mut relay_task)
+            .await
+            .is_err()
+        {
+            relay_task.abort();
+            let _ = relay_task.await;
+        }
+        proxy_task.abort();
+        let _ = proxy_task.await;
+        client_endpoint.close().await;
+        server_endpoint.close().await;
+        let _ = fs::remove_dir_all(root);
+        reply
+    }
+
     /// Builds one exact little- or big-endian MIT setup request.
     fn x11_setup_packet(byte_order: u8, cookie: &[u8; 16]) -> Vec<u8> {
         let mut setup = vec![0u8; 48];
@@ -2810,6 +2996,18 @@ mod tests {
         setup[12..30].copy_from_slice(b"MIT-MAGIC-COOKIE-1");
         setup[32..48].copy_from_slice(cookie);
         setup
+    }
+
+    /// Allocates one owner-private root for composed X11 tests.
+    fn x11_test_root(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "mez-cli-x11-{name}-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        root
     }
 
     /// Verifies host-scoped pairing retains the server's trust diagnostic so a
