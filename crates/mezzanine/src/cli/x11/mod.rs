@@ -183,10 +183,23 @@ async fn prepare_x11_client_with(
     Ok(PreparedX11Client {
         mode,
         display,
-        fake_cookie: X11Cookie::random(),
+        fake_cookie: distinct_fake_cookie(&real_cookie, X11Cookie::random),
         real_cookie,
         lease,
     })
+}
+
+/// Generates a network-facing cookie that cannot equal the real local credential.
+fn distinct_fake_cookie(
+    real_cookie: &X11Cookie,
+    mut generate: impl FnMut() -> X11Cookie,
+) -> X11Cookie {
+    loop {
+        let candidate = generate();
+        if &candidate != real_cookie {
+            return candidate;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -243,6 +256,25 @@ mod tests {
         assert!(!debug.contains("5a"));
         prepared.close().await.unwrap();
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Fake-cookie generation must retry a deterministic collision before any
+    /// network offer can carry the real local credential.
+    #[test]
+    fn fake_cookie_generation_retries_until_distinct_from_real_cookie() {
+        let real_cookie = X11Cookie::new([0x5a; 16]);
+        let mut attempts = 0;
+        let fake_cookie = distinct_fake_cookie(&real_cookie, || {
+            attempts += 1;
+            if attempts == 1 {
+                real_cookie.clone()
+            } else {
+                X11Cookie::new([0x6b; 16])
+            }
+        });
+
+        assert_eq!(attempts, 2);
+        assert_ne!(fake_cookie, real_cookie);
     }
 
     /// Prepared state must independently validate and rewrite both X11 byte
