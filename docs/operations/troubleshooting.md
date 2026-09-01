@@ -112,8 +112,10 @@ Run local `mez remote status` or `show-metrics` and inspect only the aggregate
 sockets, active streams, and stream outcomes. A rising
 `sockets_rejected_no_route` count indicates no published owner;
 `sockets_rejected_capacity` indicates the configured per-route cap;
-`streams_failed` covers malformed credentials, setup/connect timeout, route
-cancellation, and transport failures. These diagnostics intentionally omit
+`streams_cancelled` covers detach, takeover, revocation, and shutdown of an
+owned route; `streams_failed` covers malformed credentials, setup/connect
+timeout, and transport failures. Every started stream contributes to exactly
+one of completed, cancelled, or failed. These diagnostics intentionally omit
 cookies, route tokens, local display targets, authority paths, and X11 bytes.
 `authority_repair_pending = true` means logical route ownership has already
 been revoked but the private Xauthority file could not be atomically replaced;

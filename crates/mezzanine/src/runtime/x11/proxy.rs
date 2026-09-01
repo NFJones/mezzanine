@@ -153,6 +153,7 @@ pub(crate) struct RuntimeX11ProxyDiagnosticsSnapshot {
     pub(crate) sockets_rejected_capacity: u64,
     pub(crate) streams_started: u64,
     pub(crate) streams_completed: u64,
+    pub(crate) streams_cancelled: u64,
     pub(crate) streams_failed: u64,
 }
 
@@ -171,6 +172,7 @@ struct RuntimeX11ProxyDiagnostics {
     sockets_rejected_capacity: AtomicU64,
     streams_started: AtomicU64,
     streams_completed: AtomicU64,
+    streams_cancelled: AtomicU64,
     streams_failed: AtomicU64,
 }
 
@@ -191,9 +193,18 @@ impl RuntimeX11ProxyDiagnostics {
             sockets_rejected_capacity: self.sockets_rejected_capacity.load(Ordering::Relaxed),
             streams_started: self.streams_started.load(Ordering::Relaxed),
             streams_completed: self.streams_completed.load(Ordering::Relaxed),
+            streams_cancelled: self.streams_cancelled.load(Ordering::Relaxed),
             streams_failed: self.streams_failed.load(Ordering::Relaxed),
         }
     }
+}
+
+/// Mutually exclusive terminal accounting outcome for one accepted X11 stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeX11StreamOutcome {
+    Completed,
+    Cancelled,
+    Failed,
 }
 
 /// Drop-safe accounting for one accepted setup-pending or active stream.
@@ -212,7 +223,7 @@ impl RuntimeX11StreamDiagnosticsGuard {
         }
     }
 
-    fn finish(&mut self, succeeded: bool) {
+    fn finish(&mut self, outcome: RuntimeX11StreamOutcome) {
         if self.finished {
             return;
         }
@@ -220,21 +231,29 @@ impl RuntimeX11StreamDiagnosticsGuard {
         self.diagnostics
             .active_streams
             .fetch_sub(1, Ordering::Relaxed);
-        if succeeded {
-            self.diagnostics
-                .streams_completed
-                .fetch_add(1, Ordering::Relaxed);
-        } else {
-            self.diagnostics
-                .streams_failed
-                .fetch_add(1, Ordering::Relaxed);
+        match outcome {
+            RuntimeX11StreamOutcome::Completed => {
+                self.diagnostics
+                    .streams_completed
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            RuntimeX11StreamOutcome::Cancelled => {
+                self.diagnostics
+                    .streams_cancelled
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            RuntimeX11StreamOutcome::Failed => {
+                self.diagnostics
+                    .streams_failed
+                    .fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 }
 
 impl Drop for RuntimeX11StreamDiagnosticsGuard {
     fn drop(&mut self) {
-        self.finish(false);
+        self.finish(RuntimeX11StreamOutcome::Failed);
     }
 }
 
@@ -650,7 +669,10 @@ impl RuntimeX11Proxy {
                         workers.spawn(async move {
                             let mut diagnostics = diagnostics;
                             let result = relay_server_x11_socket(stream, route, permit).await;
-                            diagnostics.finish(result.is_ok());
+                            diagnostics.finish(match result {
+                                Ok(outcome) => outcome,
+                                Err(_) => RuntimeX11StreamOutcome::Failed,
+                            });
                         });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -679,12 +701,12 @@ async fn relay_server_x11_socket(
     mut local: tokio::net::TcpStream,
     mut route: RuntimeX11ActiveRoute,
     _permit: OwnedSemaphorePermit,
-) -> Result<()> {
+) -> Result<RuntimeX11StreamOutcome> {
     let setup_deadline = tokio::time::Instant::now() + route.setup_timeout;
     let setup = tokio::select! {
         biased;
         () = wait_for_route_cancellation(&mut route.cancellation) => {
-            return Err(MezError::invalid_state("X11 route was deactivated"));
+            return Ok(RuntimeX11StreamOutcome::Cancelled);
         }
         result = read_validated_x11_setup(
             &mut local,
@@ -696,7 +718,7 @@ async fn relay_server_x11_socket(
     let (mut send, mut recv) = tokio::select! {
         biased;
         () = wait_for_route_cancellation(&mut route.cancellation) => {
-            return Err(MezError::invalid_state("X11 route was deactivated"));
+            return Ok(RuntimeX11StreamOutcome::Cancelled);
         }
         result = open => result
             .map_err(|_| MezError::invalid_state("X11 Iroh stream setup timed out"))?
@@ -717,7 +739,7 @@ async fn relay_server_x11_socket(
     tokio::select! {
         biased;
         () = wait_for_route_cancellation(&mut route.cancellation) => {
-            return Err(MezError::invalid_state("X11 route was deactivated"));
+            return Ok(RuntimeX11StreamOutcome::Cancelled);
         }
         result = publish => result
             .map_err(|_| MezError::invalid_state("X11 Iroh stream preface timed out"))??,
@@ -738,8 +760,10 @@ async fn relay_server_x11_socket(
         Ok::<(), MezError>(())
     };
     tokio::select! {
-        result = relay => result,
-        () = wait_for_route_cancellation(&mut route.cancellation) => Ok(()),
+        result = relay => result.map(|()| RuntimeX11StreamOutcome::Completed),
+        () = wait_for_route_cancellation(&mut route.cancellation) => {
+            Ok(RuntimeX11StreamOutcome::Cancelled)
+        },
     }
 }
 
@@ -1262,7 +1286,11 @@ mod tests {
         let metrics = handle.diagnostics();
         assert!(!metrics.route_active);
         assert_eq!(metrics.route_deactivations, 1);
-        assert_eq!(metrics.streams_completed, 1);
+        assert_eq!(metrics.streams_started, 1);
+        assert_eq!(metrics.active_streams, 0);
+        assert_eq!(metrics.streams_completed, 0);
+        assert_eq!(metrics.streams_cancelled, 1);
+        assert_eq!(metrics.streams_failed, 0);
         assert_eq!(metrics.sockets_rejected_no_route, 1);
 
         drop(client_connection);

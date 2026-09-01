@@ -515,6 +515,7 @@ impl RuntimeSessionService {
                         "sockets_rejected_capacity": x11.sockets_rejected_capacity,
                         "streams_started": x11.streams_started,
                         "streams_completed": x11.streams_completed,
+                        "streams_cancelled": x11.streams_cancelled,
                         "streams_failed": x11.streams_failed,
                     },
                 })
