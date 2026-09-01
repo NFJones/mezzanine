@@ -80,7 +80,7 @@ fn initialized_x11_primary(
             "client_name": client_name,
             "detach_primary_on_disconnect": true,
             "x11_forwarding": {
-                "version": 1,
+                "version": 2,
                 "mode": "untrusted",
                 "auth_protocol": "MIT-MAGIC-COOKIE-1",
                 "fake_cookie_base64": "EREREREREREREREREREREQ==",
@@ -913,7 +913,7 @@ async fn runtime_x11_status_distinguishes_applied_policy_after_reload() {
     let rejected = request(
         &mut disabled_service,
         &mut unavailable,
-        r#"{"jsonrpc":"2.0","id":"x11-disabled","method":"control/initialize","params":{"requested_role":"primary","requested_version":2,"client_name":"applied-disabled","x11_forwarding":{"version":1,"mode":"untrusted","auth_protocol":"MIT-MAGIC-COOKIE-1","fake_cookie_base64":"EREREREREREREREREREREQ==","takeover":false},"client":{"name":"applied-disabled","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
+        r#"{"jsonrpc":"2.0","id":"x11-disabled","method":"control/initialize","params":{"requested_role":"primary","requested_version":2,"client_name":"applied-disabled","x11_forwarding":{"version":2,"mode":"untrusted","auth_protocol":"MIT-MAGIC-COOKIE-1","fake_cookie_base64":"EREREREREREREREREREREQ==","takeover":false},"client":{"name":"applied-disabled","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}}}"#,
     );
     assert_eq!(
         rejected.pointer("/error/data/mezzanine_code"),

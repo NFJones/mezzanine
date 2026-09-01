@@ -5,14 +5,15 @@
 //! encoding. Session proxying, control negotiation, Iroh stream ownership, and
 //! client-local display dialing build on these primitives in later layers.
 //!
-//! Raw X11 bytes are never control frames and never use the Iroh application
-//! compression envelope. The fixed stream preface authenticates one
-//! server-opened bidirectional stream before the ordinary X11 setup packet.
+//! X11 bytes are never control frames. The fixed stream preface authenticates
+//! one server-opened bidirectional stream before the negotiated Iroh codec is
+//! applied to bounded X11 setup and application records.
 
 mod authority;
 mod contracts;
 mod protocol;
 mod proxy;
+mod transport;
 
 pub(crate) use authority::{
     encode_xauthority_record, write_empty_private_xauthority, write_private_xauthority,
@@ -31,3 +32,4 @@ pub(crate) use proxy::{
     RuntimeX11Proxy, RuntimeX11ProxyDiagnosticsSnapshot, RuntimeX11ProxyHandle,
     RuntimeX11RouteLease, RuntimeX11RouteOwner,
 };
+pub(crate) use transport::{X11IrohDecoder, X11IrohEncoder};

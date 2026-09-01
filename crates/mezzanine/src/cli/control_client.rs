@@ -891,6 +891,7 @@ pub(super) async fn open_persistent_iroh_control_channel(
                 incoming_streams,
                 route.clone(),
                 client.forwarder(),
+                compression,
                 policy.x11.setup_timeout,
             ))
         }
@@ -915,14 +916,17 @@ pub(super) async fn open_persistent_iroh_control_channel(
             .then_some(client_clipboard),
     );
     let event_task = AbortOnDropTask::new(event_task);
-    let x11_task = x11_worker.map(|(incoming_streams, route, forwarder, setup_timeout)| {
-        connection
-            .set_max_concurrent_bi_streams(iroh::endpoint::VarInt::from_u32(incoming_streams));
-        let connection = connection.clone();
-        AbortOnDropTask::new(tokio::spawn(async move {
-            serve_client_x11_streams(connection, route, forwarder, setup_timeout).await;
-        }))
-    });
+    let x11_task = x11_worker.map(
+        |(incoming_streams, route, forwarder, compression, setup_timeout)| {
+            connection
+                .set_max_concurrent_bi_streams(iroh::endpoint::VarInt::from_u32(incoming_streams));
+            let connection = connection.clone();
+            AbortOnDropTask::new(tokio::spawn(async move {
+                serve_client_x11_streams(connection, route, forwarder, compression, setup_timeout)
+                    .await;
+            }))
+        },
+    );
     Ok((
         PersistentIrohControlChannel {
             _identity: identity,
@@ -947,6 +951,7 @@ async fn serve_client_x11_streams(
     connection: iroh::endpoint::Connection,
     route: crate::runtime::x11::X11ForwardingResult,
     forwarder: super::x11::X11ClientForwarder,
+    compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
 ) {
     let mut workers = tokio::task::JoinSet::new();
@@ -962,6 +967,7 @@ async fn serve_client_x11_streams(
                             recv,
                             route,
                             forwarder,
+                            compression,
                             setup_timeout,
                         )
                         .await;
@@ -982,12 +988,13 @@ async fn serve_client_x11_streams(
     while workers.join_next().await.is_some() {}
 }
 
-/// Authenticates one route preface, rewrites setup locally, and relays raw X11 bytes.
+/// Authenticates one route preface, rewrites setup locally, and relays X11 records.
 async fn relay_client_x11_stream(
     mut send: iroh::endpoint::SendStream,
     mut recv: iroh::endpoint::RecvStream,
     route: crate::runtime::x11::X11ForwardingResult,
     forwarder: super::x11::X11ClientForwarder,
+    compression: IrohCompressionPolicy,
     setup_timeout: std::time::Duration,
 ) -> Result<()> {
     let prepared = tokio::time::timeout(setup_timeout, async {
@@ -1002,17 +1009,22 @@ async fn relay_client_x11_stream(
                 "X11 stream does not authenticate the negotiated route",
             ));
         }
-        let mut setup = read_client_x11_setup(&mut recv).await?;
+        let mut decoder = crate::runtime::x11::X11IrohDecoder::new(compression)?;
+        let mut setup = if decoder.is_raw() {
+            read_client_x11_setup(&mut recv).await?
+        } else {
+            decoder.read_setup(&mut recv).await?
+        };
         forwarder.rewrite_setup(&mut setup)?;
         let mut local = forwarder.connect(setup_timeout).await?;
         local.write_all(&setup).await?;
         local.flush().await?;
-        Ok::<_, MezError>(local)
+        Ok::<_, MezError>((local, decoder))
     })
     .await
     .map_err(|_| MezError::invalid_state("X11 client stream setup timed out"))?;
-    let local = match prepared {
-        Ok(local) => local,
+    let (local, mut downstream_decoder) = match prepared {
+        Ok(prepared) => prepared,
         Err(error) => {
             let code = iroh::endpoint::VarInt::from_u32(1);
             let _ = send.reset(code);
@@ -1022,14 +1034,26 @@ async fn relay_client_x11_stream(
     };
 
     let (mut local_read, mut local_write) = tokio::io::split(local);
+    let mut upstream_encoder = crate::runtime::x11::X11IrohEncoder::new(compression)?;
     let upstream = async {
-        tokio::io::copy(&mut local_read, &mut send).await?;
+        let result = upstream_encoder
+            .relay(&mut local_read, &mut send, None)
+            .await;
+        if result.is_err() {
+            let _ = send.reset(iroh::endpoint::VarInt::from_u32(1));
+        }
+        result?;
         let _ = send.finish();
-        Ok::<(), std::io::Error>(())
+        Ok::<(), MezError>(())
     };
     let downstream = async {
-        tokio::io::copy(&mut recv, &mut local_write).await?;
-        local_write.shutdown().await
+        let result = downstream_decoder
+            .relay(&mut recv, &mut local_write, None)
+            .await;
+        if result.is_err() {
+            let _ = recv.stop(iroh::endpoint::VarInt::from_u32(1));
+        }
+        result
     };
     tokio::try_join!(upstream, downstream)?;
     Ok(())
@@ -2748,7 +2772,7 @@ mod tests {
     /// clipboard, and X11 negotiation metadata.
     #[test]
     fn persistent_iroh_initialize_validates_attached_client_before_workers() {
-        let valid = r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary","client":{"id":"c7"},"capabilities":{"features":{"pushed_render_updates":true,"client_clipboard_write":true,"x11_forwarding":true}},"x11_forwarding":{"version":1,"mode":"untrusted","generation":7,"route_token_base64":"MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM="}}}"#;
+        let valid = r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary","client":{"id":"c7"},"capabilities":{"features":{"pushed_render_updates":true,"client_clipboard_write":true,"x11_forwarding":true}},"x11_forwarding":{"version":2,"mode":"untrusted","generation":7,"route_token_base64":"MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM="}}}"#;
         let validated = validate_persistent_iroh_initialize_response(
             valid,
             "primary",
@@ -2838,19 +2862,27 @@ mod tests {
     /// and token metadata while missing support and unrequested authority fail.
     #[test]
     fn iroh_x11_initialize_requires_exact_explicit_capability() {
-        let capable = r#"{"jsonrpc":"2.0","id":"cli-init","result":{"capabilities":{"features":{"x11_forwarding":true}},"x11_forwarding":{"version":1,"mode":"untrusted","generation":7,"route_token_base64":"MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM="}}}"#;
+        let capable = r#"{"jsonrpc":"2.0","id":"cli-init","result":{"capabilities":{"features":{"x11_forwarding":true}},"x11_forwarding":{"version":2,"mode":"untrusted","generation":7,"route_token_base64":"MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM="}}}"#;
         let route = validate_iroh_x11_initialize_response(
             capable,
             Some(crate::runtime::x11::X11ForwardingMode::Untrusted),
         )
         .unwrap()
         .unwrap();
-        assert_eq!(route.version, 1);
+        assert_eq!(route.version, 2);
         assert_eq!(
             route.mode,
             crate::runtime::x11::X11ForwardingMode::Untrusted
         );
         assert_eq!(route.generation, 7);
+
+        let legacy = r#"{"jsonrpc":"2.0","id":"cli-init","result":{"capabilities":{"features":{"x11_forwarding":true}},"x11_forwarding":{"version":1,"mode":"untrusted","generation":7,"route_token_base64":"MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM="}}}"#;
+        let error = validate_iroh_x11_initialize_response(
+            legacy,
+            Some(crate::runtime::x11::X11ForwardingMode::Untrusted),
+        )
+        .expect_err("X11 v1 must be rejected before a stream worker starts");
+        assert!(error.message().contains("unsupported version"), "{error:?}");
 
         let unsupported = r#"{"jsonrpc":"2.0","id":"cli-init","result":{"capabilities":{"features":{}},"x11_forwarding":null}}"#;
         assert_eq!(
@@ -2955,6 +2987,7 @@ mod tests {
                 recv,
                 route,
                 forwarder,
+                test_x11_compression(crate::runtime::RuntimeIrohCompressionCodec::None),
                 std::time::Duration::from_secs(2),
             )
             .await
@@ -2986,53 +3019,74 @@ mod tests {
         server_endpoint.close().await;
     }
 
-    /// The complete data path must carry a remote setup through the session
-    /// proxy, one server-opened Iroh stream, client-local cookie rewrite, and
-    /// the frozen local X target without exposing either credential in Debug.
+    /// The complete data path must carry setup and repetitive application data
+    /// through every negotiated codec while accounting both X11 directions.
     #[tokio::test]
-    async fn x11_proxy_iroh_client_and_fake_server_complete_one_round_trip() {
-        let local_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let local_port = local_listener.local_addr().unwrap().port();
-        let display = crate::cli::x11::resolve_local_x11_display(&format!(
-            "127.0.0.1:{}",
-            local_port.checked_sub(6000).unwrap()
-        ))
-        .unwrap();
-        let forwarder = crate::cli::x11::X11ClientForwarder::new_for_test(
-            display,
-            crate::runtime::x11::X11Cookie::new([0x41; 16]),
-            crate::runtime::x11::X11Cookie::new([0x52; 16]),
-        );
-        let offer = crate::runtime::x11::X11ForwardingOffer {
-            version: crate::runtime::x11::X11_FORWARDING_VERSION,
-            mode: crate::runtime::x11::X11ForwardingMode::Trusted,
-            auth_protocol: crate::runtime::x11::X11AuthProtocol::MitMagicCookie1,
-            fake_cookie: crate::runtime::x11::X11Cookie::new([0x41; 16]),
-            takeover: false,
-        };
-        let redacted = format!("{forwarder:?} {offer:?}");
-        assert!(!redacted.contains("41414141"), "{redacted}");
-        assert!(!redacted.contains("52525252"), "{redacted}");
-
-        let fake_server = tokio::spawn(async move {
-            let (mut stream, _) = local_listener.accept().await.unwrap();
-            let mut setup = [0u8; 48];
-            stream.read_exact(&mut setup).await.unwrap();
-            crate::runtime::x11::validate_x11_setup_cookie(
-                &setup,
-                &crate::runtime::x11::X11Cookie::new([0x52; 16]),
-            )
+    async fn x11_proxy_iroh_client_and_fake_server_round_trip_every_codec() {
+        for codec in [
+            crate::runtime::RuntimeIrohCompressionCodec::None,
+            crate::runtime::RuntimeIrohCompressionCodec::Zstd,
+            crate::runtime::RuntimeIrohCompressionCodec::Lz4,
+            crate::runtime::RuntimeIrohCompressionCodec::ZstdStream,
+            crate::runtime::RuntimeIrohCompressionCodec::Lz4Stream,
+        ] {
+            let local_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let local_port = local_listener.local_addr().unwrap().port();
+            let display = crate::cli::x11::resolve_local_x11_display(&format!(
+                "127.0.0.1:{}",
+                local_port.checked_sub(6000).unwrap()
+            ))
             .unwrap();
-            let mut payload = [0u8; 4];
-            stream.read_exact(&mut payload).await.unwrap();
-            assert_eq!(&payload, b"ping");
-            stream.write_all(b"pong").await.unwrap();
-            stream.shutdown().await.unwrap();
-        });
-        let reply = run_complete_x11_round_trip(forwarder, offer, b"ping", 4).await;
+            let forwarder = crate::cli::x11::X11ClientForwarder::new_for_test(
+                display,
+                crate::runtime::x11::X11Cookie::new([0x41; 16]),
+                crate::runtime::x11::X11Cookie::new([0x52; 16]),
+            );
+            let offer = crate::runtime::x11::X11ForwardingOffer {
+                version: crate::runtime::x11::X11_FORWARDING_VERSION,
+                mode: crate::runtime::x11::X11ForwardingMode::Trusted,
+                auth_protocol: crate::runtime::x11::X11AuthProtocol::MitMagicCookie1,
+                fake_cookie: crate::runtime::x11::X11Cookie::new([0x41; 16]),
+                takeover: false,
+            };
+            let redacted = format!("{forwarder:?} {offer:?}");
+            assert!(!redacted.contains("41414141"), "{redacted}");
+            assert!(!redacted.contains("52525252"), "{redacted}");
 
-        assert_eq!(&reply, b"pong");
-        fake_server.await.unwrap();
+            let request = vec![0x70; 16 * 1024];
+            let response = vec![0x71; 12 * 1024];
+            let expected_request = request.clone();
+            let expected_response = response.clone();
+            let fake_server = tokio::spawn(async move {
+                let (mut stream, _) = local_listener.accept().await.unwrap();
+                let mut setup = [0u8; 48];
+                stream.read_exact(&mut setup).await.unwrap();
+                crate::runtime::x11::validate_x11_setup_cookie(
+                    &setup,
+                    &crate::runtime::x11::X11Cookie::new([0x52; 16]),
+                )
+                .unwrap();
+                let mut payload = vec![0u8; expected_request.len()];
+                stream.read_exact(&mut payload).await.unwrap();
+                assert_eq!(payload, expected_request);
+                stream.write_all(&expected_response).await.unwrap();
+                stream.shutdown().await.unwrap();
+            });
+            let (reply, metrics) =
+                run_complete_x11_round_trip(forwarder, offer, codec, &request, response.len())
+                    .await;
+            let metrics = metrics.snapshot();
+
+            assert_eq!(reply, response, "{codec:?}");
+            assert!(metrics.identity_frames >= 1, "{codec:?}: {metrics:?}");
+            if codec == crate::runtime::RuntimeIrohCompressionCodec::None {
+                assert_eq!(metrics.compressed_frames, 0, "{metrics:?}");
+            } else {
+                assert!(metrics.compressed_frames >= 2, "{codec:?}: {metrics:?}");
+                assert!(metrics.wire_bytes < metrics.decoded_bytes, "{metrics:?}");
+            }
+            fake_server.await.unwrap();
+        }
     }
 
     /// Runs the complete forwarding path against a real Xvfb display in both
@@ -3048,20 +3102,32 @@ mod tests {
         ] {
             let prepared = crate::cli::x11::prepare_x11_client(mode).await.unwrap();
             let offer = prepared.offer(false);
-            let reply = run_complete_x11_round_trip(prepared.forwarder(), offer, &[], 8).await;
-            assert_eq!(reply[0], 1, "X11 setup failed for {mode:?}: {reply:?}");
+            for codec in [
+                crate::runtime::RuntimeIrohCompressionCodec::None,
+                crate::runtime::RuntimeIrohCompressionCodec::Zstd,
+                crate::runtime::RuntimeIrohCompressionCodec::ZstdStream,
+            ] {
+                let (reply, _) =
+                    run_complete_x11_round_trip(prepared.forwarder(), offer.clone(), codec, &[], 8)
+                        .await;
+                assert_eq!(
+                    reply[0], 1,
+                    "X11 setup failed for {mode:?} with {codec:?}: {reply:?}"
+                );
+            }
             prepared.close().await.unwrap();
         }
     }
 
     /// Composes the stable proxy, exact route, host-opened Iroh stream, client
-    /// forwarder, frozen local target, and raw setup/application byte stream.
+    /// forwarder, frozen local target, and selected compression policy.
     async fn run_complete_x11_round_trip(
         forwarder: crate::cli::x11::X11ClientForwarder,
         offer: crate::runtime::x11::X11ForwardingOffer,
+        codec: crate::runtime::RuntimeIrohCompressionCodec,
         application_bytes: &[u8],
         reply_len: usize,
-    ) -> Vec<u8> {
+    ) -> (Vec<u8>, crate::runtime::IrohCompressionMetrics) {
         const TEST_ALPN: &[u8] = b"mezzanine/x11-end-to-end-test/1";
         let server_endpoint = Endpoint::builder(presets::Minimal)
             .alpns(vec![TEST_ALPN.to_vec()])
@@ -3117,7 +3183,11 @@ mod tests {
             connection_id: format!("iroh-{}", server_connection.stable_id()),
         };
         let (route, lease) = handle.reserve_route(owner, offer).unwrap();
-        lease.activate(server_connection).unwrap();
+        let compression = test_x11_compression(codec);
+        let compression_metrics = crate::runtime::IrohCompressionMetrics::new(compression.codec());
+        lease
+            .activate(server_connection, compression, compression_metrics.clone())
+            .unwrap();
         let proxy_task = tokio::spawn(proxy.serve());
 
         let relay_connection = client_connection.clone();
@@ -3129,6 +3199,7 @@ mod tests {
                 recv,
                 relay_route,
                 forwarder,
+                compression,
                 std::time::Duration::from_secs(5),
             )
             .await
@@ -3166,7 +3237,7 @@ mod tests {
         client_endpoint.close().await;
         server_endpoint.close().await;
         let _ = fs::remove_dir_all(root);
-        reply
+        (reply, compression_metrics)
     }
 
     /// Builds one exact little- or big-endian MIT setup request.
@@ -3187,6 +3258,13 @@ mod tests {
         setup[12..30].copy_from_slice(b"MIT-MAGIC-COOKIE-1");
         setup[32..48].copy_from_slice(cookie);
         setup
+    }
+
+    /// Builds the uncompressed negotiated transport used by legacy X11 fixtures.
+    fn test_x11_compression(
+        codec: crate::runtime::RuntimeIrohCompressionCodec,
+    ) -> crate::runtime::IrohCompressionPolicy {
+        crate::runtime::IrohCompressionPolicy::new(codec, 1, 3, 64 * 1024).unwrap()
     }
 
     /// Allocates one owner-private root for composed X11 tests.

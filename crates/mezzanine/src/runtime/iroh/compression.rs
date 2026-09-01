@@ -75,7 +75,7 @@ impl RuntimeIrohCompressionCodec {
     }
 }
 
-/// Per-frame policy controlling whether compression is permitted.
+/// Per-record policy controlling whether compression is permitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IrohFrameCompressionMode {
     /// Apply the negotiated codec when the threshold and size benefit permit.
@@ -93,7 +93,7 @@ pub(crate) struct IrohCompressionPolicy {
     max_decoded_bytes: usize,
 }
 
-/// Privacy-safe aggregate application-frame counters for one Iroh connection.
+/// Privacy-safe aggregate application-record counters for one Iroh connection.
 #[derive(Debug, Clone)]
 pub(crate) struct IrohCompressionMetrics {
     codec: RuntimeIrohCompressionCodec,
@@ -277,7 +277,7 @@ impl IrohCompressionMetrics {
     }
 }
 
-/// Encoded frame plus non-sensitive accounting metadata.
+/// Encoded bounded application record plus non-sensitive accounting metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IrohEncodedFrame {
     bytes: Vec<u8>,
@@ -286,7 +286,7 @@ pub(crate) struct IrohEncodedFrame {
 }
 
 impl IrohEncodedFrame {
-    /// Returns the bytes to write to the negotiated Iroh stream.
+    /// Returns the record bytes to write to the negotiated Iroh stream.
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -296,7 +296,7 @@ impl IrohEncodedFrame {
         self.compressed
     }
 
-    /// Returns the complete existing frame size before envelope compression.
+    /// Returns the complete application record size before envelope compression.
     pub(crate) const fn decoded_bytes(&self) -> usize {
         self.decoded_bytes
     }
@@ -379,6 +379,23 @@ impl IrohCompressionPolicy {
         self.codec
     }
 
+    /// Derives a narrower decoded-record limit for a subordinate stream family.
+    ///
+    /// The configured compression threshold is retained even when it exceeds
+    /// the narrower limit; in that case independent codecs emit identity
+    /// records because no subordinate record can reach the threshold.
+    pub(crate) fn with_max_decoded_bytes(self, max_decoded_bytes: usize) -> Result<Self> {
+        if max_decoded_bytes == 0 || max_decoded_bytes > self.max_decoded_bytes {
+            return Err(MezError::invalid_args(
+                "derived Iroh compression record limit is invalid",
+            ));
+        }
+        Ok(Self {
+            max_decoded_bytes,
+            ..self
+        })
+    }
+
     /// Reports whether this policy selected a stateful version 3 codec.
     pub(crate) const fn is_streaming(self) -> bool {
         matches!(
@@ -404,7 +421,7 @@ impl IrohCompressionPolicy {
         }
     }
 
-    /// Encodes one complete existing frame according to the negotiated codec.
+    /// Encodes one complete bounded application record according to the negotiated codec.
     ///
     /// Version 1 `none` framing remains byte-for-byte unchanged. Version 2
     /// codecs use an identity envelope below the threshold, when explicitly
@@ -1108,7 +1125,7 @@ impl IrohStreamEncoder {
         Ok(Self { policy, state })
     }
 
-    /// Encodes and codec-flushes one complete inner Content-Length frame.
+    /// Encodes and codec-flushes one complete bounded application record.
     ///
     /// Identity-only records reset history before and after their payload so
     /// sensitive bytes neither reference nor seed reusable compression state.
@@ -1326,7 +1343,7 @@ impl IrohStreamDecoder {
     }
 }
 
-/// One decoded v3 record plus wire accounting metadata.
+/// One decoded v3 application record plus wire accounting metadata.
 pub(crate) struct IrohDecodedRecord {
     bytes: Vec<u8>,
     consumed: usize,
@@ -1334,7 +1351,7 @@ pub(crate) struct IrohDecodedRecord {
 }
 
 impl IrohDecodedRecord {
-    /// Returns the complete decoded inner Content-Length frame.
+    /// Returns the complete decoded application record.
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -1883,8 +1900,8 @@ mod tests {
     }
 
     /// Reports reproducible release-mode compression measurements for the
-    /// representative control, terminal, config, incompressible, and
-    /// bidirectional frame classes used by rollout review.
+    /// representative control, terminal, config, incompressible, X11, and
+    /// bidirectional record classes used by rollout review.
     #[test]
     #[ignore = "release-mode report; run with `just iroh-compression-bench`"]
     fn iroh_compression_release_benchmark() {
@@ -1924,54 +1941,132 @@ mod tests {
             })
             .collect::<String>();
         let incompressible = crate::control::encode_control_body(&incompressible_body);
-        let bidirectional = vec![
-            small_control.clone(),
-            repetitive_terminal.clone(),
-            crate::control::encode_control_body(
-                r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed"}}"#,
+        let x11_setup = vec![0x41; 48];
+        let x11_small_request = vec![0x12; 32];
+        let x11_small_reply = vec![0x21; 32];
+        let x11_repetitive_request = vec![0x52; 48 * 1024];
+        let x11_repetitive_reply = vec![0x63; 32 * 1024];
+        let x11_incompressible_request = incompressible_body.as_bytes().to_vec();
+        let x11_incompressible_reply = x11_incompressible_request.iter().rev().copied().collect();
+        let eligible = IrohFrameCompressionMode::Eligible;
+        let identity = IrohFrameCompressionMode::IdentityOnly;
+        let classes = vec![
+            ("small_control", vec![(false, eligible, small_control)]),
+            (
+                "repetitive_terminal",
+                vec![(false, eligible, repetitive_terminal)],
             ),
-        ];
-        let classes = [
-            ("small_control", vec![small_control]),
-            ("repetitive_terminal", vec![repetitive_terminal]),
-            ("json_config", vec![json_config]),
-            ("incompressible", vec![incompressible]),
-            ("bidirectional_attach_event", bidirectional),
+            ("json_config", vec![(false, eligible, json_config)]),
+            ("incompressible", vec![(false, eligible, incompressible)]),
+            (
+                "bidirectional_attach_event",
+                vec![
+                    (
+                        false,
+                        eligible,
+                        crate::control::encode_control_body(
+                            r#"{"jsonrpc":"2.0","id":1,"method":"session/get","params":{}}"#,
+                        ),
+                    ),
+                    (
+                        true,
+                        eligible,
+                        crate::control::encode_control_body(
+                            r#"{"jsonrpc":"2.0","method":"event/pane_changed","params":{"event_type":"pane_changed"}}"#,
+                        ),
+                    ),
+                ],
+            ),
+            (
+                "x11_small_interactive",
+                vec![
+                    (false, identity, x11_setup.clone()),
+                    (false, eligible, x11_small_request),
+                    (true, eligible, x11_small_reply),
+                ],
+            ),
+            (
+                "x11_repetitive_bidirectional",
+                vec![
+                    (false, identity, x11_setup.clone()),
+                    (false, eligible, x11_repetitive_request),
+                    (true, eligible, x11_repetitive_reply),
+                ],
+            ),
+            (
+                "x11_incompressible_bidirectional",
+                vec![
+                    (false, identity, x11_setup),
+                    (false, eligible, x11_incompressible_request),
+                    (true, eligible, x11_incompressible_reply),
+                ],
+            ),
         ];
         let mut results = Vec::new();
         for codec in [
             RuntimeIrohCompressionCodec::None,
             RuntimeIrohCompressionCodec::Zstd,
             RuntimeIrohCompressionCodec::Lz4,
+            RuntimeIrohCompressionCodec::ZstdStream,
+            RuntimeIrohCompressionCodec::Lz4Stream,
         ] {
-            for (class, frames) in &classes {
-                let max_decoded_bytes = (frames.iter().map(Vec::len).max().unwrap() + 1).max(512);
+            for (class, records) in &classes {
+                let max_decoded_bytes = records
+                    .iter()
+                    .map(|(_, _, record)| record.len())
+                    .max()
+                    .unwrap()
+                    .max(512);
                 let policy = IrohCompressionPolicy::new(codec, 512, 3, max_decoded_bytes).unwrap();
+                let mut encoders = policy.is_streaming().then(|| {
+                    (
+                        IrohStreamEncoder::new(policy).unwrap(),
+                        IrohStreamEncoder::new(policy).unwrap(),
+                    )
+                });
+                let mut decoders = policy.is_streaming().then(|| {
+                    (
+                        IrohStreamDecoder::new(policy).unwrap(),
+                        IrohStreamDecoder::new(policy).unwrap(),
+                    )
+                });
                 begin_allocation_count();
                 let started = std::time::Instant::now();
                 let mut wire_bytes = 0u64;
                 let mut decoded_bytes = 0u64;
                 for _ in 0..ITERATIONS {
-                    for frame in frames {
-                        let encoded = policy
-                            .encode_frame(frame, IrohFrameCompressionMode::Eligible)
-                            .unwrap();
+                    for (reverse_direction, mode, record) in records {
+                        let encoded = match (&mut encoders, reverse_direction) {
+                            (Some((_, encoder)), true) | (Some((encoder, _)), false) => {
+                                encoder.encode_frame(record, *mode).unwrap()
+                            }
+                            (None, _) => policy.encode_frame(record, *mode).unwrap(),
+                        };
                         wire_bytes = wire_bytes.saturating_add(encoded.as_bytes().len() as u64);
-                        decoded_bytes = decoded_bytes.saturating_add(frame.len() as u64);
-                        let decoded = policy.decode_frame(encoded.as_bytes()).unwrap();
-                        assert_eq!(decoded, *frame);
+                        decoded_bytes = decoded_bytes.saturating_add(record.len() as u64);
+                        let decoded = match (&mut decoders, reverse_direction) {
+                            (Some((_, decoder)), true) | (Some((decoder, _)), false) => {
+                                let decoded =
+                                    decoder.decode_record(encoded.as_bytes()).unwrap().unwrap();
+                                assert_eq!(decoded.consumed(), encoded.as_bytes().len());
+                                decoded.as_bytes().to_vec()
+                            }
+                            (None, _) => policy.decode_frame(encoded.as_bytes()).unwrap(),
+                        };
+                        assert_eq!(decoded, *record);
                         std::hint::black_box(decoded);
                     }
                 }
                 let elapsed = started.elapsed();
                 let (allocations, allocated_bytes) = finish_allocation_count();
-                let operations = u64::try_from(ITERATIONS * frames.len()).unwrap();
+                let operations = u64::try_from(ITERATIONS * records.len()).unwrap();
                 let elapsed_nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX).max(1);
                 results.push(serde_json::json!({
                     "codec": codec.as_str(),
                     "class": class,
                     "iterations": ITERATIONS,
                     "operations": operations,
+                    "record_count": operations,
                     "decoded_bytes": decoded_bytes,
                     "wire_bytes": wire_bytes,
                     "wire_ratio": wire_bytes as f64 / decoded_bytes.max(1) as f64,

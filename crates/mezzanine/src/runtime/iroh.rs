@@ -1553,7 +1553,9 @@ async fn serve_runtime_iroh_control_connection(
         )
         .await
     });
-    let sampler = Arc::new(Mutex::new(connection_guard.sampler(compression_metrics)));
+    let sampler = Arc::new(Mutex::new(
+        connection_guard.sampler(compression_metrics.clone()),
+    ));
     let periodic_sampler = sampler.clone();
     let periodic_connection = connection.clone();
     let mut sample_task = tokio::spawn(async move {
@@ -1635,7 +1637,11 @@ async fn serve_runtime_iroh_control_connection(
                     let _ = sender.send(start);
                 }
                 if let Some(route) = connection_state.take_x11_route_start() {
-                    route.activate(sample_connection.clone())?;
+                    route.activate(
+                        sample_connection.clone(),
+                        compression,
+                        compression_metrics.clone(),
+                    )?;
                 }
                 Ok(())
             },
@@ -4424,7 +4430,7 @@ mod tests {
                 "requested_version": 2,
                 "requested_role": "primary",
                 "x11_forwarding": {
-                    "version": 1,
+                    "version": 2,
                     "mode": "untrusted",
                     "auth_protocol": "MIT-MAGIC-COOKIE-1",
                     "fake_cookie_base64": "EREREREREREREREREREREQ==",

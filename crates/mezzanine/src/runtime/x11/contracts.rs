@@ -10,7 +10,7 @@ use rand::Rng;
 use zeroize::{Zeroize, Zeroizing};
 
 /// Initial X11-over-Iroh contract version.
-pub(crate) const X11_FORWARDING_VERSION: u8 = 1;
+pub(crate) const X11_FORWARDING_VERSION: u8 = 2;
 /// Exact X11 authorization protocol accepted by the forwarding boundary.
 pub(crate) const X11_AUTH_PROTOCOL_NAME: &str = "MIT-MAGIC-COOKIE-1";
 /// Required MIT-MAGIC-COOKIE-1 credential length.
@@ -22,7 +22,7 @@ pub(crate) const X11_STREAM_PREFACE_BYTES: usize = 56;
 
 /// Fixed stream magic, separate from every control/event framing prefix.
 const X11_STREAM_MAGIC: [u8; 8] = *b"MZX11STR";
-/// Reserved bytes in the v1 preface that must remain zero.
+/// Reserved bytes in the v2 preface that must remain zero.
 const X11_STREAM_RESERVED_BYTES: usize = 7;
 
 /// Supported X11 authorization protocol.
@@ -163,7 +163,7 @@ pub(crate) struct X11ForwardingOffer {
     pub(crate) version: u8,
     /// Requested trusted or untrusted credential mode.
     pub(crate) mode: X11ForwardingMode,
-    /// Exact authorization protocol; v1 accepts only MIT-MAGIC-COOKIE-1.
+    /// Exact authorization protocol; v2 accepts only MIT-MAGIC-COOKIE-1.
     pub(crate) auth_protocol: X11AuthProtocol,
     /// Client-generated fake credential published only on the server proxy.
     pub(crate) fake_cookie: X11Cookie,
@@ -184,7 +184,7 @@ pub(crate) struct X11ForwardingResult {
     pub(crate) route_token: X11RouteToken,
 }
 
-/// Fixed preface sent before one raw X11 setup packet on each Iroh stream.
+/// Fixed preface sent before negotiated X11 records on each Iroh stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct X11StreamPreface {
     /// Monotonic route generation expected by the attaching client.
@@ -194,7 +194,7 @@ pub(crate) struct X11StreamPreface {
 }
 
 impl X11StreamPreface {
-    /// Encodes the fixed v1 preface without exposing token material in text.
+    /// Encodes the fixed v2 preface without exposing token material in text.
     pub(crate) fn encode(&self) -> [u8; X11_STREAM_PREFACE_BYTES] {
         let mut encoded = [0u8; X11_STREAM_PREFACE_BYTES];
         encoded[..8].copy_from_slice(&X11_STREAM_MAGIC);
@@ -204,7 +204,7 @@ impl X11StreamPreface {
         encoded
     }
 
-    /// Decodes and validates one exact fixed-size v1 stream preface.
+    /// Decodes and validates one exact fixed-size v2 stream preface.
     pub(crate) fn decode(encoded: &[u8]) -> Result<Self, X11StreamPrefaceError> {
         if encoded.len() != X11_STREAM_PREFACE_BYTES {
             return Err(X11StreamPrefaceError::InvalidLength);
@@ -300,7 +300,7 @@ mod tests {
         );
 
         let mut encoded = preface.encode();
-        encoded[8] = 2;
+        encoded[8] = 1;
         assert_eq!(
             X11StreamPreface::decode(&encoded),
             Err(X11StreamPrefaceError::UnsupportedVersion)

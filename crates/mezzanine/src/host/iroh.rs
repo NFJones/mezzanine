@@ -1025,7 +1025,7 @@ async fn serve_routed_initialize_inner(
 
     let mut connection_state = initialized.connection;
     if let Some(route) = connection_state.take_x11_route_start() {
-        route.activate(connection.clone())?;
+        route.activate(connection.clone(), compression, compression_metrics.clone())?;
     }
     let client_id = connection_state
         .caller_client_id()

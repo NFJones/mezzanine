@@ -21,7 +21,7 @@ use tokio::task::JoinSet;
 use zeroize::Zeroizing;
 
 use crate::error::{MezError, Result};
-use crate::runtime::RuntimeIrohX11Policy;
+use crate::runtime::{IrohCompressionMetrics, IrohCompressionPolicy, RuntimeIrohX11Policy};
 
 use super::authority::{
     ensure_private_directory, write_empty_private_xauthority, write_private_xauthority,
@@ -33,6 +33,7 @@ use super::contracts::{
 use super::protocol::{
     X11_MAX_SETUP_BYTES, X11SetupProgress, parse_x11_setup, validate_x11_setup_cookie,
 };
+use super::transport::{X11IrohDecoder, X11IrohEncoder};
 
 /// X11 TCP base port assigned to display zero.
 const X11_TCP_BASE_PORT: u16 = 6000;
@@ -86,16 +87,27 @@ impl Eq for RuntimeX11RouteLease {}
 
 impl RuntimeX11RouteLease {
     /// Publishes the reserved fake cookie and exact transport only after initialization flushed.
-    pub(crate) fn activate(&self, connection: iroh::endpoint::Connection) -> Result<()> {
+    pub(crate) fn activate(
+        &self,
+        connection: iroh::endpoint::Connection,
+        compression: IrohCompressionPolicy,
+        compression_metrics: IrohCompressionMetrics,
+    ) -> Result<()> {
         let connection_id = format!("iroh-{}", connection.stable_id());
         if connection_id != self.inner.owner.connection_id {
             return Err(MezError::invalid_state(
                 "X11 route activation used a different Iroh connection",
             ));
         }
-        self.inner
-            .proxy
-            .activate_route(&self.inner.owner, self.inner.generation, Some(connection))
+        self.inner.proxy.activate_route(
+            &self.inner.owner,
+            self.inner.generation,
+            Some(RuntimeX11ActiveTransport {
+                connection,
+                compression,
+                compression_metrics,
+            }),
+        )
     }
 
     /// Publishes authority state without a transport for registry-only tests.
@@ -361,7 +373,7 @@ impl RuntimeX11ProxyHandle {
             fake_cookie: offer.fake_cookie,
             route_token: route_token.clone(),
             active: false,
-            connection: None,
+            transport: None,
             permits: Arc::new(Semaphore::new(self.inner.policy.max_connections_per_route)),
             cancellation: watch::channel(false).0,
         });
@@ -388,7 +400,7 @@ impl RuntimeX11ProxyHandle {
         &self,
         owner: &RuntimeX11RouteOwner,
         generation: u64,
-        connection: Option<iroh::endpoint::Connection>,
+        transport: Option<RuntimeX11ActiveTransport>,
     ) -> Result<()> {
         let mut routes =
             self.inner.routes.lock().map_err(|_| {
@@ -406,7 +418,7 @@ impl RuntimeX11ProxyHandle {
             return Ok(());
         }
         self.publish_route_authority(&route.fake_cookie)?;
-        route.connection = connection;
+        route.transport = transport;
         route.active = true;
         self.inner
             .diagnostics
@@ -497,7 +509,7 @@ impl RuntimeX11ProxyHandle {
             generation: route.generation,
             fake_cookie: route.fake_cookie.clone(),
             route_token: route.route_token.clone(),
-            connection: route.connection.as_ref()?.clone(),
+            transport: route.transport.as_ref()?.clone(),
             setup_timeout: self.inner.policy.setup_timeout,
             permits: route.permits.clone(),
             cancellation: route.cancellation.subscribe(),
@@ -541,9 +553,17 @@ struct RuntimeX11RouteState {
     fake_cookie: X11Cookie,
     route_token: X11RouteToken,
     active: bool,
-    connection: Option<iroh::endpoint::Connection>,
+    transport: Option<RuntimeX11ActiveTransport>,
     permits: Arc<Semaphore>,
     cancellation: watch::Sender<bool>,
+}
+
+/// Immutable negotiated transport state owned by one active route generation.
+#[derive(Clone)]
+struct RuntimeX11ActiveTransport {
+    connection: iroh::endpoint::Connection,
+    compression: IrohCompressionPolicy,
+    compression_metrics: IrohCompressionMetrics,
 }
 
 /// Cloneable generation snapshot retained by exactly one proxy worker.
@@ -551,7 +571,7 @@ struct RuntimeX11ActiveRoute {
     generation: u64,
     fake_cookie: X11Cookie,
     route_token: X11RouteToken,
-    connection: iroh::endpoint::Connection,
+    transport: RuntimeX11ActiveTransport,
     setup_timeout: std::time::Duration,
     permits: Arc<Semaphore>,
     cancellation: watch::Receiver<bool>,
@@ -714,7 +734,7 @@ async fn relay_server_x11_socket(
             setup_deadline,
         ) => result?,
     };
-    let open = tokio::time::timeout_at(setup_deadline, route.connection.open_bi());
+    let open = tokio::time::timeout_at(setup_deadline, route.transport.connection.open_bi());
     let (mut send, mut recv) = tokio::select! {
         biased;
         () = wait_for_route_cancellation(&mut route.cancellation) => {
@@ -731,10 +751,19 @@ async fn relay_server_x11_socket(
         }
         .encode(),
     );
+    let mut upstream_encoder = X11IrohEncoder::new(route.transport.compression)?;
+    let mut downstream_decoder = X11IrohDecoder::new(route.transport.compression)?;
     let publish = tokio::time::timeout_at(setup_deadline, async {
-        send.write_all(&*preface).await?;
-        send.write_all(&setup).await?;
-        send.flush().await
+        send.write_all(&*preface)
+            .await
+            .map_err(|_| MezError::invalid_state("failed to write X11 Iroh stream preface"))?;
+        upstream_encoder
+            .write_setup(
+                &mut send,
+                &setup,
+                Some(&route.transport.compression_metrics),
+            )
+            .await
     });
     tokio::select! {
         biased;
@@ -748,13 +777,32 @@ async fn relay_server_x11_socket(
     let (mut local_read, mut local_write) = local.into_split();
     let relay = async move {
         let upstream = async {
-            tokio::io::copy(&mut local_read, &mut send).await?;
+            let result = upstream_encoder
+                .relay(
+                    &mut local_read,
+                    &mut send,
+                    Some(&route.transport.compression_metrics),
+                )
+                .await;
+            if result.is_err() {
+                let _ = send.reset(iroh::endpoint::VarInt::from_u32(1));
+            }
+            result?;
             let _ = send.finish();
-            Ok::<(), std::io::Error>(())
+            Ok::<(), MezError>(())
         };
         let downstream = async {
-            tokio::io::copy(&mut recv, &mut local_write).await?;
-            local_write.shutdown().await
+            let result = downstream_decoder
+                .relay(
+                    &mut recv,
+                    &mut local_write,
+                    Some(&route.transport.compression_metrics),
+                )
+                .await;
+            if result.is_err() {
+                let _ = recv.stop(iroh::endpoint::VarInt::from_u32(1));
+            }
+            result
         };
         tokio::try_join!(upstream, downstream)?;
         Ok::<(), MezError>(())
@@ -1171,7 +1219,7 @@ mod tests {
         let (route, lease) = handle
             .reserve_route(owner, route_offer([0x61; 16], false))
             .unwrap();
-        lease.activate(server_connection).unwrap();
+        activate_test_route(&lease, server_connection);
         let proxy_task = tokio::spawn(proxy.serve());
 
         let remote_route = route.clone();
@@ -1251,7 +1299,7 @@ mod tests {
         let (route, lease) = handle
             .reserve_route(owner, route_offer([0x71; 16], false))
             .unwrap();
-        lease.activate(server_connection).unwrap();
+        activate_test_route(&lease, server_connection);
         let proxy_task = tokio::spawn(proxy.serve());
 
         let mut local = connect_proxy(&handle).await;
@@ -1324,7 +1372,7 @@ mod tests {
         let (route, lease) = handle
             .reserve_route(owner, route_offer([0x73; 16], false))
             .unwrap();
-        lease.activate(server_connection).unwrap();
+        activate_test_route(&lease, server_connection);
         let proxy_task = tokio::spawn(proxy.serve());
 
         let mut stalled = connect_proxy(&handle).await;
@@ -1392,7 +1440,7 @@ mod tests {
         let (route, lease) = handle
             .reserve_route(owner, route_offer([0x72; 16], false))
             .unwrap();
-        lease.activate(server_connection).unwrap();
+        activate_test_route(&lease, server_connection);
         let proxy_task = tokio::spawn(proxy.serve());
 
         let _stalled = connect_proxy(&handle).await;
@@ -1456,7 +1504,7 @@ mod tests {
         }
     }
 
-    /// Builds one version-1 untrusted route offer for focused registry tests.
+    /// Builds one version-2 untrusted route offer for focused registry tests.
     fn route_offer(cookie: [u8; 16], takeover: bool) -> X11ForwardingOffer {
         X11ForwardingOffer {
             version: X11_FORWARDING_VERSION,
@@ -1525,6 +1573,19 @@ mod tests {
         };
         let (client_connection, server_connection) = tokio::join!(client_side, server_side);
         (server, client, server_connection, client_connection)
+    }
+
+    /// Activates one test route with the uncompressed negotiated transport.
+    fn activate_test_route(lease: &RuntimeX11RouteLease, connection: iroh::endpoint::Connection) {
+        let compression = IrohCompressionPolicy::new(
+            crate::runtime::RuntimeIrohCompressionCodec::None,
+            0,
+            3,
+            64 * 1024,
+        )
+        .unwrap();
+        let metrics = IrohCompressionMetrics::new(compression.codec());
+        lease.activate(connection, compression, metrics).unwrap();
     }
 
     /// Connects one loopback X client to the stable session proxy.

@@ -3125,7 +3125,7 @@ route.
 
 X11 capability and route setup MUST be negotiated through
 `control/initialize`; Mezzanine MUST NOT add an X11-specific ALPN family. A
-successful version-1 negotiation MUST bind the requested mode, exact
+successful version-2 negotiation MUST bind the requested mode, exact
 `MIT-MAGIC-COOKIE-1` authorization protocol, a client-generated 16-byte fake
 cookie, route generation, and a random 32-byte route token. The client's real
 X cookie, local `DISPLAY` target, and local authority path MUST remain on the
@@ -3134,14 +3134,27 @@ logs, snapshots, or diagnostics.
 
 Each accepted server-side X socket MUST map to one server-opened Iroh
 bidirectional stream on the exact owning connection. The stream MUST begin
-with the fixed version-1 `MZX11STR` preface, seven zero reserved bytes, an
+with the fixed version-2 `MZX11STR` preface, seven zero reserved bytes, an
 unsigned 64-bit big-endian route generation, and the 32-byte route token.
-After the preface, bytes MUST be the ordinary X11 setup and application byte
-stream. X11 bytes MUST NOT use Content-Length, JSON, event framing, the Iroh
-application compression envelope, or an application-idle timeout. Enabling
-X11 MUST NOT change the server's single client-opened control-stream limit;
-the client MAY grant separate bounded credit for host-opened X11 streams only
-after successful negotiation.
+The preface MUST remain raw and excluded from compression history and metrics.
+After it, `none` MUST preserve the ordinary X11 byte stream, version-2 codecs
+MUST use bounded `MZC2` records, and version-3 codecs MUST use bounded compact
+streaming records. The validated setup request MUST be one identity record;
+streaming codecs MUST reset history before and after it so credential bytes
+cannot seed reusable history. Each later source read MUST become one eligible
+record of at most 65536 decoded bytes and MUST be flushed without a batching
+delay. X11 records MUST NOT use Content-Length, JSON, event framing, or an
+application-idle timeout. Enabling X11 MUST NOT change the server's single
+client-opened control-stream limit; the client MAY grant separate bounded
+credit for host-opened X11 streams only after successful negotiation.
+
+Encoder and decoder state MUST be fresh for each X11 stream direction and MUST
+NOT be shared with the reverse direction, another X11 stream, control or event
+traffic, another route generation, or another Iroh connection. Malformed,
+truncated, oversized, or undecodable records MUST reset or stop only the
+offending X11 stream. Successful encoded and decoded X11 records MUST be
+included exactly once in the owning connection's aggregate compression
+metrics; the raw preface MUST remain excluded.
 
 Both forwarding endpoints MUST parse the X11 setup request incrementally,
 support byte-order markers `l` and `B`, require protocol 11.0, use checked
