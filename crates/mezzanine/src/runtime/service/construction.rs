@@ -183,9 +183,6 @@ impl RuntimeSessionService {
         let terminal_emoji_width = mez_terminal::TerminalEmojiWidth::Wide;
         if options.apply_global_terminal_policy {
             mez_terminal::set_terminal_emoji_width(terminal_emoji_width);
-            crate::host::terminal::set_agent_wrap_column_cap(
-                crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
-            );
         }
         let external_editor = if options.apply_global_terminal_policy {
             let runtime_root = socket_path

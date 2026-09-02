@@ -480,7 +480,7 @@ context_window_tokens = 40000
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    let pane_text_unwrapped = pane_text.replace('\n', "").replace("▐ ", "");
+    let pane_text_unwrapped = normalized_pane_log_text(&pane_text);
     assert!(
         pane_text_unwrapped.contains(
             "provider rejected context as too large; requesting model-backed context compaction"
@@ -747,7 +747,7 @@ max_input_tokens = 1
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    let pane_text_unwrapped = pane_text.replace('\n', "").replace("▐ ", "");
+    let pane_text_unwrapped = normalized_pane_log_text(&pane_text);
     assert!(
         pane_text_unwrapped
             .contains("configured input cap is smaller than fixed provider request overhead"),
@@ -1421,7 +1421,7 @@ context_window_tokens = 40000
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    let pane_text_unwrapped = pane_text.replace('\n', "").replace("▐ ", "");
+    let pane_text_unwrapped = normalized_pane_log_text(&pane_text);
     assert!(
         pane_text_unwrapped.contains(
             "provider rejected context as too large; requesting model-backed context compaction"
@@ -1578,7 +1578,7 @@ context_window_tokens = 40000
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    let pane_text_unwrapped = pane_text.replace('\n', "").replace("▐ ", "");
+    let pane_text_unwrapped = normalized_pane_log_text(&pane_text);
     assert!(
         pane_text_unwrapped.contains(
             "provider rejected context as too large; requesting model-backed context compaction"
@@ -1879,7 +1879,7 @@ context_window_tokens = 100000
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    let pane_text_unwrapped = pane_text.replace('\n', "").replace("▐ ", "");
+    let pane_text_unwrapped = normalized_pane_log_text(&pane_text);
     assert!(
         pane_text_unwrapped.contains(
             "provider rejected context as too large; requesting model-backed context compaction"

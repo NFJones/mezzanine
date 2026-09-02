@@ -507,8 +507,9 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
+    let normalized_pane_text = normalized_pane_log_text(&pane_text);
     assert!(
-        pane_text.contains("recovery unavailable: action result(s) are still pend"),
+        normalized_pane_text.contains("recovery unavailable: action result(s) are still pending"),
         "{pane_text}"
     );
     assert!(

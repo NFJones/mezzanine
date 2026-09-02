@@ -22,9 +22,9 @@ use super::text::{
     wrapped_prefixed_agent_terminal_lines,
 };
 use super::{
-    AGENT_COPY_SKIP_LINE, AgentAction, RichTextLine, TerminalStyleSpan, UnicodeWidthStr,
-    diff_section_path, frame_markdown_lines, parse_unified_diff_sections, prefix_rich_text_lines,
-    wrap_rich_text_lines_to_width,
+    AGENT_COPY_SKIP_LINE, AgentAction, RichTextLine, RichTextLineKind, TerminalStyleSpan,
+    UnicodeWidthStr, diff_section_path, frame_markdown_lines, parse_unified_diff_sections,
+    prefix_rich_text_lines, wrap_rich_text_lines_to_width,
 };
 use crate::runtime::render::{
     ActionResult, AgentPresentationEntry, MezError, Result, RuntimeAgentShellPreviewOwner,
@@ -36,7 +36,9 @@ use mez_agent::{
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentShellVisibility, agent_output_content_type_is_diff,
     agent_output_content_type_is_markdown,
 };
-use mez_mux::render::markdown_block_copy_lines;
+use mez_mux::render::{
+    markdown_block_copy_lines, wrap_rich_text_line_to_width_with_source_ranges_hard,
+};
 
 /// Content type for width-independent styled agent presentation records.
 const AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE: &str =
@@ -271,9 +273,12 @@ impl RuntimeSessionService {
     /// Returns the display cells available after the agent transcript gutter.
     fn agent_terminal_markdown_frame_width(&self, pane_id: &str) -> Result<usize> {
         let columns = self.agent_terminal_presentation_columns(pane_id)?;
-        Ok(bounded_agent_terminal_presentation_columns(columns)
-            .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
-            .max(1))
+        Ok(bounded_agent_terminal_presentation_columns(
+            columns,
+            self.presentation.settings.terminal_agent_wrap_column_cap,
+        )
+        .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
+        .max(1))
     }
 
     /// Returns display cells available after the agent transcript gutter.
@@ -487,11 +492,10 @@ impl RuntimeSessionService {
                             source_text,
                             &self.presentation.settings.ui_theme,
                         );
-                        self.append_agent_terminal_rendered_lines_to_buffer(
+                        self.append_agent_terminal_log_rendered_lines_to_buffer(
                             pane_id,
                             AgentTerminalPresentationStyle::Status,
                             &[rendered_line],
-                            &[],
                             Some((source_text, source_content_type)),
                         )?;
                         continue;
@@ -1286,15 +1290,32 @@ impl RuntimeSessionService {
         pane_id: &str,
         bytes: &[u8],
     ) -> Result<()> {
-        let lines = String::from_utf8_lossy(bytes)
+        let source_lines = String::from_utf8_lossy(bytes)
             .trim_end_matches(['\r', '\n'])
             .lines()
             .map(sanitized_agent_terminal_line)
             .filter(|line| !line.trim().is_empty())
             .collect::<Vec<_>>();
-        if lines.is_empty() {
+        if source_lines.is_empty() {
             return Ok(());
         }
+        let content_width = self.agent_terminal_markdown_frame_width(pane_id)?;
+        let lines = source_lines
+            .into_iter()
+            .flat_map(|line| {
+                wrap_rich_text_line_to_width_with_source_ranges_hard(
+                    RichTextLine {
+                        display: line,
+                        style_spans: Vec::new(),
+                        copy_text: None,
+                        kind: RichTextLineKind::Normal,
+                    },
+                    content_width,
+                )
+                .into_iter()
+                .map(|wrapped| wrapped.line.display)
+            })
+            .collect::<Vec<_>>();
         self.ensure_current_agent_presentation_screen(pane_id)?;
         self.retire_agent_streaming_say_before_pane_write(pane_id)?;
         let ui_theme = self.presentation.settings.ui_theme.clone();
@@ -1344,12 +1365,12 @@ impl RuntimeSessionService {
         text: &str,
     ) -> Result<()> {
         if self.agent_thinking_enabled(pane_id) {
-            let columns = self.agent_terminal_presentation_columns(pane_id)?;
+            let content_width = self.agent_terminal_markdown_frame_width(pane_id)?;
             let rendition = agent_terminal_label_rendition(
                 AgentTerminalPresentationStyle::Status,
                 &self.presentation.settings.ui_theme,
             );
-            let rendered_lines = agent_thinking_display_lines_for_width(text, columns)
+            let rendered_lines = agent_thinking_display_lines_for_width(text, content_width)
                 .into_iter()
                 .map(|display| {
                     let length = UnicodeWidthStr::width(display.as_str());
@@ -1385,13 +1406,13 @@ impl RuntimeSessionService {
         total_steps: usize,
         status: &str,
     ) -> Result<()> {
-        let columns = self.agent_terminal_presentation_columns(pane_id)?;
+        let content_width = self.agent_terminal_markdown_frame_width(pane_id)?;
         let rendered_lines = agent_macro_lifecycle_display_lines_for_width(
             macro_name,
             step_index,
             total_steps,
             status,
-            columns,
+            content_width,
         )
         .into_iter()
         .map(|display| RichTextLine {
@@ -1423,13 +1444,13 @@ impl RuntimeSessionService {
         total_steps: usize,
         status: &str,
     ) -> Result<()> {
-        let columns = self.agent_terminal_presentation_columns(pane_id)?;
+        let content_width = self.agent_terminal_markdown_frame_width(pane_id)?;
         let rendered_lines = agent_macro_lifecycle_display_lines_for_width(
             macro_name,
             Some(step_index),
             total_steps,
             status,
-            columns,
+            content_width,
         )
         .into_iter()
         .map(|display| RichTextLine {
@@ -1511,7 +1532,10 @@ impl RuntimeSessionService {
                     .map(|descriptor| usize::from(descriptor.size.columns))
             })
             .unwrap_or(80);
-        let display_columns = bounded_agent_terminal_presentation_columns(columns);
+        let display_columns = bounded_agent_terminal_presentation_columns(
+            columns,
+            self.presentation.settings.terminal_agent_wrap_column_cap,
+        );
         let prefix_width =
             UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX) + UnicodeWidthStr::width("$ ");
         let content_columns = display_columns.saturating_sub(prefix_width).max(1);
@@ -1613,6 +1637,32 @@ impl RuntimeSessionService {
         if styled_lines.is_empty() {
             return Ok(());
         }
+        let content_width = self.agent_terminal_markdown_frame_width(pane_id)?;
+        let mut wrapped_styled_lines = Vec::new();
+        let mut wrapped_copy_lines = Vec::new();
+        for (style, line) in styled_lines {
+            let wrapped = wrap_rich_text_line_to_width_with_source_ranges_hard(
+                RichTextLine {
+                    display: line.clone(),
+                    style_spans: Vec::new(),
+                    copy_text: None,
+                    kind: RichTextLineKind::Normal,
+                },
+                content_width,
+            );
+            wrapped_copy_lines.extend((0..wrapped.len()).map(|index| {
+                if index == 0 {
+                    line.clone()
+                } else {
+                    AGENT_COPY_SKIP_LINE.to_string()
+                }
+            }));
+            wrapped_styled_lines.extend(
+                wrapped
+                    .into_iter()
+                    .map(|wrapped| (*style, wrapped.line.display)),
+            );
+        }
         self.ensure_current_agent_presentation_screen(pane_id)?;
         self.retire_agent_streaming_say_before_pane_write(pane_id)?;
         let ui_theme = self.presentation.settings.ui_theme.clone();
@@ -1630,7 +1680,7 @@ impl RuntimeSessionService {
             } else {
                 bytes.push_str("\r\n");
             }
-            for (style, line) in styled_lines {
+            for (style, line) in &wrapped_styled_lines {
                 append_styled_agent_terminal_line(&mut bytes, *style, line, &ui_theme);
                 bytes.push_str("\x1b[0m\r\n");
             }
@@ -1639,6 +1689,7 @@ impl RuntimeSessionService {
                 bytes.as_bytes(),
                 "appending styled agent lines",
             )?;
+            screen.set_recent_normal_copy_texts(&wrapped_copy_lines, AGENT_COPY_SKIP_LINE);
             bytes
         };
         self.install_agent_shell_preview_write(
@@ -1649,18 +1700,15 @@ impl RuntimeSessionService {
         )?;
         self.persist_agent_presentation_entry(
             pane_id,
-            styled_lines
+            wrapped_styled_lines
                 .iter()
                 .map(|(style, _line)| style.persistence_name().to_string())
                 .collect(),
-            styled_lines
+            wrapped_styled_lines
                 .iter()
                 .map(|(_style, line)| line.clone())
                 .collect(),
-            styled_lines
-                .iter()
-                .map(|(_style, line)| line.clone())
-                .collect(),
+            wrapped_copy_lines,
             ansi_text,
             serde_json::to_string(
                 &styled_lines
@@ -1673,6 +1721,37 @@ impl RuntimeSessionService {
             .map(|source| (source, AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE)),
         );
         Ok(())
+    }
+
+    /// Appends cap-aware rich pane-log rows while retaining style spans.
+    ///
+    /// This path is intentionally separate from general rendered transcript
+    /// output: Markdown tables, diagrams, diffs, and command previews own
+    /// specialized wrapping policies that the pane-log hard cap must not replace.
+    fn append_agent_terminal_log_rendered_lines_to_buffer(
+        &mut self,
+        pane_id: &str,
+        style: AgentTerminalPresentationStyle,
+        rendered_lines: &[RichTextLine],
+        source: Option<(&str, &str)>,
+    ) -> Result<()> {
+        let content_width = self.agent_terminal_markdown_frame_width(pane_id)?;
+        let wrapped_lines = rendered_lines
+            .iter()
+            .cloned()
+            .flat_map(|line| {
+                wrap_rich_text_line_to_width_with_source_ranges_hard(line, content_width)
+                    .into_iter()
+                    .map(|wrapped| wrapped.line)
+            })
+            .collect::<Vec<_>>();
+        self.append_agent_terminal_rendered_lines_to_buffer(
+            pane_id,
+            style,
+            &wrapped_lines,
+            &[],
+            source,
+        )
     }
 
     /// Appends transformed assistant display lines while preserving raw copy text.
@@ -2415,7 +2494,7 @@ impl RuntimeSessionService {
                     style: AgentTerminalPresentationStyle::Status,
                     rendered_lines: agent_thinking_display_lines_for_width(
                         &source.text,
-                        work.presentation_columns,
+                        work.frame_width,
                     )
                     .into_iter()
                     .map(|display| {
@@ -2436,13 +2515,10 @@ impl RuntimeSessionService {
                 }
             })
         });
-        let command_content_columns =
-            bounded_agent_terminal_presentation_columns(usize::from(work.screen_size.columns))
-                .saturating_sub(
-                    UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX)
-                        .saturating_add(UnicodeWidthStr::width("$ ")),
-                )
-                .max(1);
+        let command_content_columns = work
+            .frame_width
+            .saturating_sub(UnicodeWidthStr::width("$ "))
+            .max(1);
         let command_projections = work
             .shell_commands
             .iter()
@@ -3716,11 +3792,10 @@ impl RuntimeSessionService {
         }
         let rendered_line =
             agent_action_execution_rendered_line(header, &self.presentation.settings.ui_theme);
-        self.append_agent_terminal_rendered_lines_to_buffer(
+        self.append_agent_terminal_log_rendered_lines_to_buffer(
             pane_id,
             AgentTerminalPresentationStyle::Status,
             &[rendered_line],
-            &[],
             Some((header, AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE)),
         )?;
         Ok(())

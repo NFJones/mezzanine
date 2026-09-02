@@ -114,8 +114,8 @@ pub(crate) use screen::parse_mez_shell_transaction_osc;
 
 use client_loop::borrow_raw_fd;
 pub(crate) use render::{
-    DEFAULT_AGENT_WRAP_COLUMN_CAP, agent_log_wrap_width, agent_wrap_column_cap,
-    set_agent_wrap_column_cap, window_iroh_status_slot_layout, wrap_agent_log_lines,
+    DEFAULT_AGENT_WRAP_COLUMN_CAP, agent_log_wrap_width, window_iroh_status_slot_layout,
+    wrap_agent_log_lines,
 };
 
 /// Exposes the tests module boundary.

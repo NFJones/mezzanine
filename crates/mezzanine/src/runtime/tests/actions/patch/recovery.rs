@@ -1057,7 +1057,7 @@ fn runtime_unrecovered_apply_patch_failure_respects_log_level() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    let pane_text_flat = pane_text.replace("▐ ", "").replace('\n', "");
+    let pane_text_flat = normalized_pane_log_text(&pane_text);
     assert!(
         pane_text_flat.contains(
             "failed; recovery unavailable: no model-correction continuation was queued after the apply_patch failure"

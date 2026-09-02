@@ -269,7 +269,8 @@ resize_debounce_ms = 200
 render_rate_limit_fps = 30
 # Hidden shell-output previews retain this many visual rows.
 shell_output_preview_lines = 5
-# Maximum display width for Mezzanine-owned agent rows.
+# Maximum display width for structured Mezzanine-owned agent log and transcript
+# rows. Legacy ANSI-only replay remains byte-preserving.
 agent_wrap_column_cap = 120
 # Cursor shape: "block", "underline", or "bar".
 cursor_style = "block"

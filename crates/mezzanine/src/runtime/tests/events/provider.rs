@@ -2628,9 +2628,9 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
         pane_text.contains("agent warning: URL fetch failed (HTTP 404)"),
         "{pane_text}"
     );
+    let normalized_pane_text = normalized_pane_log_text(&pane_text);
     assert!(
-        pane_text.contains("model received the response detail")
-            && pane_text.contains("for recovery"),
+        normalized_pane_text.contains("model received the response details for recovery"),
         "{pane_text}"
     );
     let audit = fs::read_to_string(&audit_path).unwrap();

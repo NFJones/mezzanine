@@ -414,7 +414,7 @@ fn command_preview_hard_wraps_unbroken_tokens_when_needed() {
 #[test]
 fn agent_thinking_lines_wrap_with_label_indent() {
     assert_eq!(
-        agent_thinking_display_lines_for_width("alpha beta gamma", 18),
+        agent_thinking_display_lines_for_width("alpha beta gamma", 16),
         vec![
             "thinking: alpha".to_string(),
             "          beta".to_string(),

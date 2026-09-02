@@ -2,11 +2,10 @@
 
 use super::style::{
     AGENT_ACTION_RESULT_DISPLAY_MAX_BYTES, AGENT_ACTION_RESULT_DISPLAY_MAX_LINES,
-    AGENT_TERMINAL_MESSAGE_PREFIX, agent_text_foreground_rendition,
+    agent_text_foreground_rendition,
 };
 use super::text::{
-    agent_terminal_text_width, bounded_agent_terminal_presentation_columns,
-    sanitized_agent_terminal_line, wrap_agent_terminal_text,
+    agent_terminal_text_width, sanitized_agent_terminal_line, wrap_agent_terminal_text,
 };
 use super::{
     AgentAction, AgentActionPayload, GraphicRendition, RichTextLine, RichTextLineKind,
@@ -270,9 +269,7 @@ pub(crate) fn agent_thinking_display_text(text: &str) -> String {
 pub(crate) fn agent_thinking_display_lines_for_width(text: &str, columns: usize) -> Vec<String> {
     let prefix = "thinking: ";
     let prefix_width = UnicodeWidthStr::width(prefix);
-    let content_width = bounded_agent_terminal_presentation_columns(columns)
-        .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
-        .max(1);
+    let content_width = columns.max(1);
     let segment_width = content_width.saturating_sub(prefix_width).max(1);
     let continuation = " ".repeat(prefix_width);
     agent_thinking_display_text(text)
@@ -303,9 +300,7 @@ pub(crate) fn agent_macro_lifecycle_display_lines_for_width(
     status: &str,
     columns: usize,
 ) -> Vec<String> {
-    let content_width = bounded_agent_terminal_presentation_columns(columns)
-        .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
-        .max(1);
+    let content_width = columns.max(1);
     let macro_name = macro_name.split_whitespace().collect::<Vec<_>>().join(" ");
     let status = status.split_whitespace().collect::<Vec<_>>().join(" ");
     let text = match step_index {

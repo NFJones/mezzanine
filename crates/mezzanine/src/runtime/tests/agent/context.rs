@@ -1112,7 +1112,7 @@ context_window_tokens = 40000
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    let retry_notice_unwrapped = retry_notice.replace('\n', "").replace("▐ ", "");
+    let retry_notice_unwrapped = normalized_pane_log_text(&retry_notice);
     assert!(
         retry_notice_unwrapped.contains(
             "provider rejected context as too large; requesting model-backed context compaction"

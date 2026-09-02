@@ -97,10 +97,7 @@ pub use prompt::{
     compose_prompt_overlay_presentation, compose_prompt_region_presentation_with_styles,
     compose_readline_prompt_client_presentation, render_readline_prompt_status_row,
 };
-pub(crate) use text::{
-    DEFAULT_AGENT_WRAP_COLUMN_CAP, agent_log_wrap_width, agent_wrap_column_cap,
-    set_agent_wrap_column_cap, wrap_agent_log_lines,
-};
+pub(crate) use text::{DEFAULT_AGENT_WRAP_COLUMN_CAP, agent_log_wrap_width, wrap_agent_log_lines};
 
 /// Defines the DEFAULT PANE FRAME TEMPLATE const used by this subsystem.
 ///

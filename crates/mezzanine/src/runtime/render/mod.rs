@@ -1401,7 +1401,6 @@ impl RuntimePresentationComponent {
         settings: RuntimePresentationSettings,
     ) -> Option<RenderInvalidationReason> {
         let invalidation_reason = self.settings.invalidation_reason(&settings);
-        crate::host::terminal::set_agent_wrap_column_cap(settings.terminal_agent_wrap_column_cap);
         self.settings = settings;
         self.agent_presentation_projection_cache.clear();
         self.agent_presentation_replay_cache.clear_entries();

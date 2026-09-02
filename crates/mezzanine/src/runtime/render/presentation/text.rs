@@ -9,7 +9,7 @@ use super::{
     GraphicRendition, MARKDOWN_DARK_MUTED_FOREGROUND, MARKDOWN_DARK_NEUTRAL_FOREGROUND,
     MARKDOWN_LIGHT_NEUTRAL_FOREGROUND, RenderedClientView, RichTextLine, RichTextLineKind,
     RichTextTheme, ShellClassification, TerminalColor, TerminalStyleSpan, TerminalStyledLine,
-    UiTheme, UnicodeSegmentation, UnicodeWidthStr, agent_wrap_column_cap, append_syntax_spans,
+    UiTheme, UnicodeSegmentation, UnicodeWidthStr, append_syntax_spans,
     overlay_fixed_column_style_spans, overlay_text_cells, prefix_rich_text_lines, render_markdown,
     render_markdown_with_fenced_block_renderer, runtime_mezzanine_error_code,
     terminal_grapheme_width, wrap_rich_text_lines_to_width,
@@ -511,12 +511,16 @@ pub(crate) fn take_agent_terminal_word_wrapped_segment(
         })
 }
 
-/// Bounds agent transcript presentation width to the pane width or 120 cells.
+/// Bounds agent transcript presentation width to its service-local cap.
 ///
 /// # Parameters
 /// - `columns`: The current pane width in terminal display cells.
-pub(crate) fn bounded_agent_terminal_presentation_columns(columns: usize) -> usize {
-    columns.clamp(1, agent_wrap_column_cap())
+/// - `column_cap`: The configured positive maximum presentation width.
+pub(crate) fn bounded_agent_terminal_presentation_columns(
+    columns: usize,
+    column_cap: usize,
+) -> usize {
+    columns.clamp(1, column_cap.max(1))
 }
 
 /// Returns the display width of agent transcript text.

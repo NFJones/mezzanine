@@ -525,6 +525,9 @@ pub fn rendered_line_continuation_indent(display: &str, display_width: usize) ->
     if display.starts_with("user> ") {
         return " ".repeat(5.min(display_width.saturating_sub(1)));
     }
+    if display.starts_with("agent: ") {
+        return " ".repeat(7.min(display_width.saturating_sub(1)));
+    }
     let prompt = "mez> ";
     let indent_width = if let Some(rest) = display.strip_prefix(prompt) {
         terminal_text_width(prompt) + markdown_local_continuation_indent_width(rest)

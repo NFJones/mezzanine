@@ -224,8 +224,8 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
         "{pane_text}"
     );
     assert!(
-        pane_text.contains("model received the response detail")
-            && pane_text.contains("for recovery"),
+        pane_text.contains("model received the response")
+            && pane_text.contains("details for recovery"),
         "{pane_text}"
     );
     assert!(

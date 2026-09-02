@@ -321,7 +321,7 @@ rollout](../operations/iroh-production-operations-and-rollout.md).
 | `terminal.resize_debounce_ms` | integer | `200` | Milliseconds to debounce resize redraws. |
 | `terminal.render_rate_limit_fps` | integer | `30` | Maximum burst render frames per second; `0` disables render rate limiting. |
 | `terminal.shell_output_preview_lines` | integer | `5` | Maximum visual rows shown for each transient shell-command output preview after grapheme-safe wrapping at the current pane width; must be positive. Long unbroken output is hard-wrapped before the newest-row tail is selected. |
-| `terminal.agent_wrap_column_cap` | integer | `120` | Maximum presentation width for persisted agent logs and transcripts; must be positive. |
+| `terminal.agent_wrap_column_cap` | integer | `120` | Maximum display-cell width for structured agent log and transcript rows, including status, error, diagnostic, action, result, and structured replay-fallback rows; must be positive. Continuations repeat the agent gutter, and unbroken ordinary log tokens split at grapheme boundaries. Retained legacy ANSI-only bytes are not rewrapped to this configured cap; they replay byte-for-byte and may instead wrap at the physical pane width. |
 | `terminal.cursor_style` | string | `"block"` | Cursor style: `block`, `underline`, or `bar`. |
 | `terminal.cursor_blink` | boolean | `false` | Whether Mezzanine-rendered cursors blink. |
 | `terminal.cursor_blink_interval_ms` | integer | `500` | Full blink cycle length in milliseconds. |

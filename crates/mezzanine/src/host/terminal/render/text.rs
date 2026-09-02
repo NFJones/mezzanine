@@ -1,33 +1,16 @@
-//! Product agent-log wrapping configuration and helpers.
+//! Product agent-log wrapping defaults and legacy persistence helpers.
 //!
 //! `mez-terminal` owns Unicode segmentation and display-width measurement,
-//! while `mez-mux` owns neutral wrapping. This module retains only the
-//! process-wide Mezzanine agent-row cap and binds that configured product
-//! policy to the mux wrapping engine.
-
-use std::sync::atomic::{AtomicUsize, Ordering};
+//! while `mez-mux` owns neutral wrapping. Live runtime rendering applies each
+//! service's configured cap directly. This module retains the product default
+//! used to normalize source-free persisted presentation records.
 
 /// Default maximum display-cell width for Mezzanine-owned agent log rows.
 pub(crate) const DEFAULT_AGENT_WRAP_COLUMN_CAP: usize = 120;
 
-static AGENT_WRAP_COLUMN_CAP: AtomicUsize = AtomicUsize::new(DEFAULT_AGENT_WRAP_COLUMN_CAP);
-
-/// Applies the process-wide maximum display width for Mezzanine-owned agent rows.
-///
-/// # Parameters
-/// - `columns`: The positive display-cell cap to use for agent transcript rows.
-pub(crate) fn set_agent_wrap_column_cap(columns: usize) {
-    AGENT_WRAP_COLUMN_CAP.store(columns.max(1), Ordering::Relaxed);
-}
-
-/// Returns the process-wide maximum display width for Mezzanine-owned agent rows.
-pub(crate) fn agent_wrap_column_cap() -> usize {
-    AGENT_WRAP_COLUMN_CAP.load(Ordering::Relaxed).max(1)
-}
-
 /// Returns the bounded display width used for Mezzanine-owned agent log rows.
 pub(crate) fn agent_log_wrap_width(terminal_width: u16) -> usize {
-    usize::from(terminal_width).clamp(1, agent_wrap_column_cap())
+    usize::from(terminal_width).clamp(1, DEFAULT_AGENT_WRAP_COLUMN_CAP)
 }
 
 /// Word-wraps one Mezzanine-owned agent log text block for terminal display.
@@ -50,47 +33,22 @@ pub(crate) fn wrap_agent_log_lines(lines: &[String], terminal_width: u16) -> Vec
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DEFAULT_AGENT_WRAP_COLUMN_CAP, agent_log_wrap_width, set_agent_wrap_column_cap,
-        wrap_agent_log_text,
-    };
+    use super::{DEFAULT_AGENT_WRAP_COLUMN_CAP, agent_log_wrap_width, wrap_agent_log_text};
     use mez_terminal::active_terminal_text_width;
-    use std::sync::Mutex;
-
-    static AGENT_WRAP_COLUMN_CAP_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// Verifies agent log wrapping uses the pane width until the default cap
     /// applies, so very wide terminals do not create unbounded transcript rows.
     #[test]
     fn agent_log_wrap_width_caps_terminal_width_at_default_columns() {
-        let _guard = AGENT_WRAP_COLUMN_CAP_TEST_LOCK.lock().unwrap();
-        set_agent_wrap_column_cap(DEFAULT_AGENT_WRAP_COLUMN_CAP);
-
         assert_eq!(agent_log_wrap_width(0), 1);
         assert_eq!(agent_log_wrap_width(80), 80);
         assert_eq!(agent_log_wrap_width(200), DEFAULT_AGENT_WRAP_COLUMN_CAP);
-    }
-
-    /// Verifies the process-wide agent row cap controls the maximum wrap width.
-    ///
-    /// Runtime config applies this shared cap before transcript rows are rendered
-    /// or persisted, so the low-level wrapper must stop using a fixed constant.
-    #[test]
-    fn agent_log_wrap_width_uses_configured_column_cap() {
-        let _guard = AGENT_WRAP_COLUMN_CAP_TEST_LOCK.lock().unwrap();
-        set_agent_wrap_column_cap(96);
-
-        assert_eq!(agent_log_wrap_width(200), 96);
-
-        set_agent_wrap_column_cap(DEFAULT_AGENT_WRAP_COLUMN_CAP);
     }
 
     /// Verifies the 120-column cap is applied even when the active pane is
     /// wider, protecting persisted replay rows from host-width drift.
     #[test]
     fn wrap_agent_log_text_applies_global_column_cap() {
-        let _guard = AGENT_WRAP_COLUMN_CAP_TEST_LOCK.lock().unwrap();
-        set_agent_wrap_column_cap(DEFAULT_AGENT_WRAP_COLUMN_CAP);
         let wrapped = wrap_agent_log_text(&"x".repeat(130), 200);
 
         assert_eq!(active_terminal_text_width(&wrapped[0]), 120);

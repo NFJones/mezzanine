@@ -18,6 +18,15 @@ emoji width, and agent transcript wrapping. `xterm-compatible` is a supported
 subset, not a claim to emulate every xterm feature. Use `terminal.emoji_width`
 when status glyphs occupy the wrong number of cells in the host terminal.
 
+`terminal.agent_wrap_column_cap` limits structured Mezzanine-owned agent rows,
+including transcript text, statuses, errors, diagnostics, action headers,
+result previews, and structured persistence fallbacks. The limit applies per
+runtime service and never widens beyond the pane. Continuation rows repeat the
+agent gutter; ordinary log rows preserve a leading `agent: ` hanging indent and
+split unbroken text only at grapheme boundaries. Legacy ANSI-only presentation
+records remain byte-preserving and can therefore wrap at the physical pane
+width instead.
+
 `keys` configures the prefix and direct bindings; `frames` configures window
 and pane status presentation; `theme`, `themes`, and aliases configure colors.
 Use `Ctrl+A ?` or the `list-keys` terminal command to inspect effective bindings

@@ -842,10 +842,16 @@ context_window_tokens = 128000
         .unwrap()
         .normal_content_lines()
         .join("\n");
+    let normalized_pane_text = pane_text
+        .lines()
+        .map(|line| line.strip_prefix("▐ ").unwrap_or(line).trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
     assert!(
-        pane_text
-            .contains("provider response hit output limit again; starting one fresh compact re")
-            && pane_text.contains("covery request"),
+        normalized_pane_text.contains(
+            "provider response hit output limit again; starting one fresh compact recovery request"
+        ),
         "{pane_text}"
     );
     assert!(pane_text.contains("agent: turn turn-"), "{pane_text}");

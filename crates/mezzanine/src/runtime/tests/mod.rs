@@ -183,6 +183,19 @@ fn display_column_for_fragment(line: &str, needle: &str) -> usize {
     UnicodeWidthStr::width(&line[..byte_index])
 }
 
+/// Rejoins physical agent-log rows for assertions about semantic message text.
+///
+/// Pane-log presentation may insert a repeated gutter and hanging indentation
+/// at configured wrap boundaries. Tests that do not care about those physical
+/// boundaries should compare this normalized logical text instead.
+fn normalized_pane_log_text(text: &str) -> String {
+    text.lines()
+        .map(|line| line.strip_prefix("▐ ").unwrap_or(line).trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Returns the expected full-width markdown frame row for a pane.
 fn expected_markdown_block_divider_line(columns: usize) -> String {
     format!(

@@ -26,6 +26,288 @@ fn runtime_uses_product_render_rate_default_when_config_key_is_absent() {
     assert_eq!(config.render_rate_limit_fps, 30);
 }
 
+/// Verifies ordinary structured pane-log rows honor the configured agent
+/// column cap even when the owning pane is wider than that cap. Continuation
+/// rows must retain the agent gutter instead of relying on terminal soft wrap.
+#[test]
+fn runtime_structured_pane_log_rows_honor_configured_column_cap() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nagent_wrap_column_cap = 24\n".to_string(),
+        }])
+        .unwrap();
+    // Another runtime must not reset this service's configured wrap policy.
+    let _unrelated_service = test_runtime_service();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 40).unwrap(), 200).unwrap(),
+    );
+
+    let status = "agent: provider recovery continues after a temporary outage";
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", status)
+        .unwrap();
+    service
+        .append_agent_error_text_to_terminal_buffer(
+            "%1",
+            "agent error: provider request failed after the configured timeout",
+        )
+        .unwrap();
+    service
+        .append_agent_pty_diagnostic_bytes_to_terminal_buffer(
+            "%1",
+            b"pty diagnostic: child process emitted a long sanitized warning",
+        )
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: "mcp-long-header".to_string(),
+        rationale: String::new(),
+        payload: mez_agent::AgentActionPayload::McpCall {
+            server: "github".to_string(),
+            tool: "search_issues_with_a_long_name".to_string(),
+            arguments_json: r#"{"query":"pane log wrapping"}"#.to_string(),
+        },
+    };
+    assert!(
+        service
+            .append_agent_action_execution_text_to_terminal_buffer("%1", &action)
+            .unwrap()
+    );
+    let result = mez_agent::ActionResult {
+        protocol: "maap/1".to_string(),
+        turn_id: "turn-pane-log-wrap".to_string(),
+        agent_id: "agent-%1".to_string(),
+        action_id: action.id.clone(),
+        action_type: "mcp_call",
+        status: ActionStatus::Succeeded,
+        content: Vec::new(),
+        structured_content_json: None,
+        permission_evaluation: None,
+        is_error: false,
+        error: None,
+    };
+    service
+        .append_agent_action_result_text_to_terminal_buffer(
+            "%1",
+            &action,
+            &result,
+            "result preview contains averyveryverylongunbrokentoken and trailing context",
+        )
+        .unwrap();
+
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines()
+        .into_iter()
+        .filter(|line| !line.text.trim().is_empty())
+        .collect::<Vec<_>>();
+    assert!(rows.len() > 1, "{rows:?}");
+    assert!(
+        rows.iter()
+            .all(|line| UnicodeWidthStr::width(line.text.as_str()) <= 24),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter().all(|line| line.text.starts_with("▐ ")),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|line| line.text.starts_with("▐        recovery")),
+        "{rows:?}"
+    );
+
+    let theme = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .ui_theme;
+    let action_line = rows
+        .iter()
+        .find(|line| line.text.contains("mcp call"))
+        .unwrap();
+    let action_column = display_column_for_fragment(&action_line.text, "mcp call");
+    let action_rendition = styled_line_rendition_at(action_line, action_column);
+    assert_eq!(
+        action_rendition.foreground,
+        Some(theme.colors.agent_transcript_command.foreground)
+    );
+    assert!(action_rendition.bold);
+    let error_line = rows
+        .iter()
+        .find(|line| line.text.contains("agent error:"))
+        .unwrap();
+    let error_column = display_column_for_fragment(&error_line.text, "agent error:");
+    let error_rendition = styled_line_rendition_at(error_line, error_column);
+    assert_eq!(
+        error_rendition.foreground,
+        Some(theme.colors.agent_transcript_error.foreground)
+    );
+
+    let copy_mode = ensure_agent_copy_mode_for_test(&mut service, "%1");
+    let status_start = copy_mode
+        .lines()
+        .iter()
+        .position(|line| line.contains("agent: provider"))
+        .unwrap();
+    let status_end = copy_mode
+        .lines()
+        .iter()
+        .enumerate()
+        .skip(status_start.saturating_add(1))
+        .find(|(_index, line)| line.contains("agent error:"))
+        .map(|(index, _line)| index.saturating_sub(1))
+        .unwrap();
+    let status_end_column = UnicodeWidthStr::width(copy_mode.lines()[status_end].as_str());
+    copy_mode
+        .select_range(
+            CopyPosition {
+                line: status_start,
+                column: 0,
+            },
+            CopyPosition {
+                line: status_end,
+                column: status_end_column,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        copy_mode
+            .copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+            .unwrap(),
+        status
+    );
+}
+
+/// Verifies snapshot-only structured presentation rows are capped when replay
+/// falls back to saved display text rather than a semantic source renderer.
+#[test]
+fn runtime_structured_pane_log_replay_fallback_honors_configured_column_cap() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nagent_wrap_column_cap = 24\n".to_string(),
+        }])
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 20).unwrap(), 200).unwrap(),
+    );
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let source = "agent: legacy structured status continues beyond the configured cap";
+    let entry = crate::storage::transcript::AgentPresentationEntry {
+        conversation_id,
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        pane_id: "%1".to_string(),
+        turn_id: None,
+        terminal_width: 80,
+        style_names: vec!["status".to_string()],
+        display_lines: vec![source.to_string()],
+        copy_lines: vec![source.to_string()],
+        ansi_text: None,
+        source_text: None,
+        source_content_type: None,
+    };
+
+    assert!(
+        service
+            .replay_agent_presentation_entries_to_terminal_buffer("%1", &[entry])
+            .unwrap()
+    );
+    let rows = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .into_iter()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    assert!(rows.len() > 1, "{rows:?}");
+    assert!(
+        rows.iter()
+            .all(|line| UnicodeWidthStr::width(line.as_str()) <= 24),
+        "{rows:?}"
+    );
+    assert!(rows.iter().all(|line| line.starts_with("▐ ")), "{rows:?}");
+}
+
+/// Verifies legacy ANSI-only presentation records remain byte-stream replay
+/// inputs. Rewrapping escape-bearing bytes could alter terminal controls, so
+/// this compatibility path deliberately relies on the pane's physical width.
+#[test]
+fn runtime_legacy_raw_ansi_replay_is_not_rewrapped_to_agent_column_cap() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nagent_wrap_column_cap = 24\n".to_string(),
+        }])
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(80, 10).unwrap(), 200).unwrap(),
+    );
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let display = "▐ legacy raw ANSI projection remains wider than the cap";
+    let entry = crate::storage::transcript::AgentPresentationEntry {
+        conversation_id,
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        pane_id: "%1".to_string(),
+        turn_id: None,
+        terminal_width: 80,
+        style_names: vec!["status".to_string()],
+        display_lines: vec![display.to_string()],
+        copy_lines: vec![display.to_string()],
+        ansi_text: Some(format!("\r\x1b[2m{display}\x1b[0m\r\n")),
+        source_text: None,
+        source_content_type: None,
+    };
+
+    assert!(
+        service
+            .replay_agent_presentation_entries_to_terminal_buffer("%1", &[entry])
+            .unwrap()
+    );
+    let row = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .into_iter()
+        .find(|line| line.contains("legacy raw ANSI"))
+        .unwrap();
+    assert_eq!(row, display);
+    assert!(UnicodeWidthStr::width(row.as_str()) > 24, "{row:?}");
+}
+
 /// Verifies that terminal cursor presentation settings are parsed from runtime
 /// configuration layers and applied to attached-terminal render configuration.
 #[test]

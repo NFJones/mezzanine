@@ -2287,15 +2287,19 @@ user-facing response, MUST remain visible by default so the agent never appears
 silent. These agent-authored lines, their gutter prefix characters, and their
 speaker labels MUST be visually distinct through named theme colors while
 preserving their plain-text content for copy mode, history export, and terminal
-observation. Agent-mode log rows and rendered transcript presentation rows MUST
-wrap at the smaller of the pane terminal width or the configured `terminal.agent_wrap_column_cap` display-cell limit (120 by default) before they
-are persisted or replayed, and hard splits MUST occur only at terminal grapheme
-boundaries when an unbroken token exceeds that limit. When agent-authored
-transcript text soft-wraps in the pane, Mezzanine MUST repeat the display-only
-agent gutter prefix on continuation rows, and resize reflow MUST preserve that
-visual gutter without treating it as agent-authored content for copy or
-observation semantics. Markdown transcript presentation MUST preserve the
-relevant speaker, quote, list, or code indentation on continuation rows.
+observation. Structured agent-mode log rows and rendered transcript
+presentation rows MUST wrap at the smaller of the pane terminal width or the
+configured `terminal.agent_wrap_column_cap` display-cell limit (120 by default)
+before they are persisted or replayed. This includes status, lifecycle, error,
+PTY-diagnostic, action-header, and non-diff action-result rows. Ordinary
+non-Markdown pane-log rows MUST hard-split only at terminal grapheme boundaries
+when an unbroken token exceeds that limit. When agent-authored text wraps in the
+pane, Mezzanine MUST repeat the display-only agent gutter prefix on continuation
+rows. Status rows beginning with `agent: ` MUST align continuation text beneath
+the text after that label. Resize reflow MUST preserve the visual gutter and
+continuation indentation without treating either as agent-authored content for
+copy or observation semantics. Markdown transcript presentation MUST preserve
+the relevant speaker, quote, list, or code indentation on continuation rows.
 Non-table markdown rows MUST wrap at the nearest whitespace boundary before the
 presentation limit; if no whitespace boundary exists in the overflowing
 segment, Mezzanine SHOULD leave the segment intact and rely on normal terminal
@@ -2303,7 +2307,15 @@ soft wrapping instead of inserting a hard split.
 Markdown table rows MUST preserve their table layout until they exceed the
 pane terminal width; that configured cap MUST NOT force table rows to wrap on
 wider terminals.
-Durable agent presentation records MUST retain semantic source and renderer media type whenever available. On `/resume`, Mezzanine MUST rerender source-backed records at the active pane geometry and MUST treat saved rows or ANSI bytes only as optional projections. Legacy snapshot-only records MAY use their saved projection fallback; mixed histories MUST preserve presentation order.
+Durable agent presentation records MUST retain semantic source and renderer
+media type whenever available. On `/resume`, Mezzanine MUST rerender
+source-backed records at the active pane geometry and MUST treat saved rows or
+ANSI bytes only as optional projections. Source-free structured row fallbacks
+MUST apply the active structured pane-log wrapping policy. Legacy ANSI-only
+records MAY instead replay their byte stream unchanged and rely on physical
+pane wrapping, because inserting boundaries into escape-bearing terminal data
+could change control semantics. Mixed histories MUST preserve presentation
+order.
 Process presentation geometry, agent transcript geometry, and actual PTY
 interaction geometry MUST be calculated independently. A pane resize MUST
 reflow the retained process screen at the full process presentation geometry,
