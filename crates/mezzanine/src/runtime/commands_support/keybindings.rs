@@ -116,7 +116,10 @@ pub(crate) fn runtime_list_key_bindings_display(service: &RuntimeSessionService)
     );
 
     for (chord, command) in runtime_default_prefix_bindings(service.key_bindings().escape) {
-        if service.command_bindings().contains_key(&chord) {
+        if service.command_bindings().contains_key(&chord)
+            || mez_mux::input::classify_default_prefix_binding(chord, service.key_bindings())
+                .is_none()
+        {
             continue;
         }
         rows.push(RuntimeKeyBindingDisplayRow {
@@ -294,7 +297,11 @@ pub(crate) fn runtime_default_prefix_bindings(escape: KeyChord) -> Vec<(KeyChord
         (KeyChord::new(KeyCode::Char('d')), "detach-client"),
         (KeyChord::new(KeyCode::Char('D')), "choose-client"),
         (KeyChord::new(KeyCode::Char('G')), "choose-group"),
+        (KeyChord::new(KeyCode::Char('C')), "new-group"),
+        (KeyChord::new(KeyCode::Char('(')), "previous-group"),
+        (KeyChord::new(KeyCode::Char(')')), "next-group"),
         (KeyChord::new(KeyCode::Char('c')), "new-window"),
+        (KeyChord::new(KeyCode::Char('a')), "agent-shell"),
         (KeyChord::new(KeyCode::Char(',')), "rename-window"),
         (KeyChord::new(KeyCode::Char('&')), "kill-window --force"),
         (KeyChord::new(KeyCode::Char('w')), "choose-window"),

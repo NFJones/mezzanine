@@ -137,7 +137,8 @@ escape = "C-a"
 # Prefix suffix for external prompt editing (`Ctrl+A e` by default). Set to
 # another chord to remap it or `null` to disable it.
 # edit_prompt = "e"
-# Direct bindings are disabled by default; uncomment any desired chord.
+# Direct bindings are disabled by default. Uncommenting a chord replaces that
+# action's built-in prefix binding; setting a field to null disables both paths.
 # split_vertical = "A-\\"
 # split_horizontal = "A--"
 # new_window = "A-="

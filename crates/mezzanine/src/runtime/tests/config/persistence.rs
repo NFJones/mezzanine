@@ -1,6 +1,7 @@
 //! Runtime tests for config persistence behavior.
 
 use super::*;
+use mez_mux::input::{TerminalInputClassification, classify_terminal_input};
 
 /// Verifies a persisted mutation restores exact existing file contents when
 /// the candidate configuration cannot be applied to the live runtime.
@@ -783,6 +784,10 @@ fn runtime_key_preset_switching_updates_live_input_bindings() {
         service.key_bindings().escape,
         KeyChord::ctrl(KeyCode::Char('a'))
     );
+    assert_eq!(
+        classify_terminal_input(b"\x01c", service.key_bindings()).unwrap(),
+        TerminalInputClassification::UnboundPrefix(KeyChord::new(KeyCode::Char('c')))
+    );
 
     service
         .execute_terminal_command(&primary, "set-key-preset default")
@@ -794,6 +799,104 @@ fn runtime_key_preset_switching_updates_live_input_bindings() {
     assert_eq!(
         service.key_bindings().escape,
         KeyChord::ctrl(KeyCode::Char('a'))
+    );
+    assert_eq!(
+        classify_terminal_input(b"\x01c", service.key_bindings()).unwrap(),
+        TerminalInputClassification::Mux(MuxAction::NewWindow)
+    );
+}
+
+/// A top-level direct action declaration replaces its built-in prefix path in
+/// both input dispatch and the effective `list-keys` report.
+#[test]
+fn runtime_configured_direct_binding_replaces_default_prefix_binding() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[keys]\nnew_window = \"A-n\"\n".to_string(),
+        }])
+        .unwrap();
+
+    assert_eq!(
+        classify_terminal_input(b"\x1bn", service.key_bindings()).unwrap(),
+        TerminalInputClassification::Mux(MuxAction::NewWindow)
+    );
+    assert_eq!(
+        classify_terminal_input(b"\x01c", service.key_bindings()).unwrap(),
+        TerminalInputClassification::UnboundPrefix(KeyChord::new(KeyCode::Char('c')))
+    );
+    assert_eq!(
+        classify_terminal_input(b"\x01%", service.key_bindings()).unwrap(),
+        TerminalInputClassification::Mux(MuxAction::SplitPaneVertical)
+    );
+    let keys = service
+        .execute_terminal_command(&primary, "list-keys")
+        .unwrap();
+    let keys: serde_json::Value = serde_json::from_str(&keys).unwrap();
+    let keys = keys["outcomes"][0]["body"].as_str().unwrap();
+    assert!(
+        keys.lines()
+            .any(|line| line.starts_with("A-n ") && line.ends_with("new-window")),
+        "{keys}"
+    );
+    assert!(
+        !keys.lines().any(|line| line.starts_with("C-a c ")),
+        "{keys}"
+    );
+    assert!(
+        keys.lines().any(|line| line.starts_with("C-a % ")),
+        "{keys}"
+    );
+}
+
+/// An explicit null declaration disables both the direct action and its
+/// built-in prefix path without affecting another action's default binding.
+#[test]
+fn runtime_disabled_direct_binding_removes_matching_prefix_default() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Json,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"{"keys":{"new_window":null}}"#.to_string(),
+        }])
+        .unwrap();
+
+    assert_eq!(service.key_bindings().new_window, None);
+    assert_eq!(
+        classify_terminal_input(b"\x01c", service.key_bindings()).unwrap(),
+        TerminalInputClassification::UnboundPrefix(KeyChord::new(KeyCode::Char('c')))
+    );
+    assert_eq!(
+        classify_terminal_input(b"\x01%", service.key_bindings()).unwrap(),
+        TerminalInputClassification::Mux(MuxAction::SplitPaneVertical)
+    );
+    let keys = service
+        .execute_terminal_command(&primary, "list-keys")
+        .unwrap();
+    let keys: serde_json::Value = serde_json::from_str(&keys).unwrap();
+    let keys = keys["outcomes"][0]["body"].as_str().unwrap();
+    assert!(
+        !keys.lines().any(|line| line.starts_with("C-a c ")),
+        "{keys}"
+    );
+    assert!(
+        keys.lines().any(|line| line.starts_with("C-a % ")),
+        "{keys}"
     );
 }
 

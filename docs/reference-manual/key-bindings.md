@@ -72,10 +72,17 @@ configuration sources and command expansions. Do not assume a key arrives when
 a terminal emulator or nested multiplexer intercepts it; configure the binding
 or outer environment deliberately.
 
+For each configurable action, an omitted direct field retains the prefix
+binding listed above. Setting that field to a chord replaces the matching
+prefix binding; setting it to `null` disables both paths. `list-keys` reports
+only the resulting effective bindings. A configured prefix command still
+shadows any remaining built-in action on the same suffix.
+
 Run `list-key-presets` to choose from the interactive preset table. The
 `default` preset preserves the prefix-only defaults above. The `simple` preset
-keeps `Ctrl+A` as the prefix and adds direct Alt bindings for splits, windows,
-groups, and the agent shell plus Ctrl+Alt navigation bindings. Use
+keeps `Ctrl+A` as the prefix and replaces the corresponding prefix actions with
+direct Alt bindings for splits, windows, groups, and the agent shell plus
+Ctrl+Alt navigation bindings. Use
 `set-key-preset <name>` to apply and persist a built-in or configured preset.
 
 ## Related pages

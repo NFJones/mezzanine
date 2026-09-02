@@ -362,33 +362,37 @@ Project overlays cannot change this host execution setting.
 
 ### `keys`
 
-The prefix key table remains available even when direct bindings are omitted.
+The prefix key table remains available for actions whose direct fields are
+omitted. Setting a direct action field replaces that action's built-in prefix
+binding; setting it to `null` disables both paths. `list-keys` shows only the
+effective result.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
 | `keys.escape` | string | `"C-a"` | Prefix key. |
 | `keys.edit_prompt` | string or null | `"e"` | Prefix suffix for external agent-prompt editing. `null` disables it; it must not collide with another prefix action or command binding. |
-| `keys.split_vertical` | string | omitted | Optional direct vertical split key. Prefix default is `Ctrl+A %`. |
-| `keys.split_horizontal` | string | omitted | Optional direct horizontal split key. Prefix default is `Ctrl+A "`. |
-| `keys.new_window` | string | omitted | Optional direct new-window key. Prefix default is `Ctrl+A c`. |
-| `keys.new_group` | string | omitted | Optional direct new-group key. Prefix default is `Ctrl+A C`. |
-| `keys.agent_shell` | string | omitted | Optional direct agent-shell key. Prefix default is `Ctrl+A a`. |
-| `keys.focus_up` | string | omitted | Optional direct focus-up key. Prefix default is `Ctrl+A Up`. |
-| `keys.focus_down` | string | omitted | Optional direct focus-down key. Prefix default is `Ctrl+A Down`. |
-| `keys.focus_left` | string | omitted | Optional direct focus-left key. Prefix default is `Ctrl+A Left`. |
-| `keys.focus_right` | string | omitted | Optional direct focus-right key. Prefix default is `Ctrl+A Right`. |
-| `keys.focus_previous_window` | string | omitted | Optional direct previous-window key. Prefix default is `Ctrl+A p`. |
-| `keys.focus_next_window` | string | omitted | Optional direct next-window key. Prefix default is `Ctrl+A n`. |
-| `keys.focus_previous_group` | string | omitted | Optional direct previous-group key. Prefix default is `Ctrl+A (`. |
-| `keys.focus_next_group` | string | omitted | Optional direct next-group key. Prefix default is `Ctrl+A )`. |
+| `keys.split_vertical` | string or null | omitted | Direct vertical split key. When set, it replaces `Ctrl+A %`; `null` disables both bindings. |
+| `keys.split_horizontal` | string or null | omitted | Direct horizontal split key. When set, it replaces `Ctrl+A "`; `null` disables both bindings. |
+| `keys.new_window` | string or null | omitted | Direct new-window key. When set, it replaces `Ctrl+A c`; `null` disables both bindings. |
+| `keys.new_group` | string or null | omitted | Direct new-group key. When set, it replaces `Ctrl+A C`; `null` disables both bindings. |
+| `keys.agent_shell` | string or null | omitted | Direct agent-shell key. When set, it replaces `Ctrl+A a`; `null` disables both bindings. |
+| `keys.focus_up` | string or null | omitted | Direct focus-up key. When set, it replaces `Ctrl+A Up`; `null` disables both bindings. |
+| `keys.focus_down` | string or null | omitted | Direct focus-down key. When set, it replaces `Ctrl+A Down`; `null` disables both bindings. |
+| `keys.focus_left` | string or null | omitted | Direct focus-left key. When set, it replaces `Ctrl+A Left`; `null` disables both bindings. |
+| `keys.focus_right` | string or null | omitted | Direct focus-right key. When set, it replaces `Ctrl+A Right`; `null` disables both bindings. |
+| `keys.focus_previous_window` | string or null | omitted | Direct previous-window key. When set, it replaces `Ctrl+A p`; `null` disables both bindings. |
+| `keys.focus_next_window` | string or null | omitted | Direct next-window key. When set, it replaces `Ctrl+A n`; `null` disables both bindings. |
+| `keys.focus_previous_group` | string or null | omitted | Direct previous-group key. When set, it replaces `Ctrl+A (`; `null` disables both bindings. |
+| `keys.focus_next_group` | string or null | omitted | Direct next-group key. When set, it replaces `Ctrl+A )`; `null` disables both bindings. |
 | `keys.command_bindings` | map | `{}` | User-defined key to Mezzanine command bindings. |
 
 ### `key_preset` and `key_presets`
 
 `key_preset.active` selects a built-in or configured key-assignment preset.
 The generated default is `default`, which preserves the prefix-only bindings.
-The built-in `simple` preset keeps `C-a` as the prefix and adds the direct
-bindings documented by `list-key-presets`.
+The built-in `simple` preset keeps `C-a` as the prefix and replaces the
+corresponding prefix actions with the direct bindings documented by
+`list-key-presets`.
 
 Configured presets live under `key_presets.<name>` and accept the same fields
 as `keys`. Omitted fields inherit the `default` preset; `null` explicitly

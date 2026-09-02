@@ -2,9 +2,9 @@
 
 use crate::MuxErrorKind;
 use crate::input::{
-    GroupFocusTarget, KeyBindings, KeyChord, KeyCode, MuxAction, PaneFocusDirection,
-    PasteBufferTarget, TerminalInputClassification, WindowFocusTarget, classify_terminal_input,
-    key_chord_input_bytes,
+    ConfigurableKeyAction, GroupFocusTarget, KeyBindings, KeyChord, KeyCode, MuxAction,
+    PaneFocusDirection, PasteBufferTarget, TerminalInputClassification, WindowFocusTarget,
+    classify_terminal_input, key_chord_input_bytes,
 };
 use mez_terminal::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers};
 
@@ -166,6 +166,30 @@ fn classifies_default_direct_mux_key_bindings() {
     assert_eq!(
         classify_terminal_input(b"\x1b]0;title\x07", &bindings).unwrap(),
         TerminalInputClassification::ForwardToPane
+    );
+}
+
+/// An explicit direct action binding replaces only that action's built-in
+/// prefix path while every unrelated default remains effective.
+#[test]
+fn configured_direct_action_replaces_matching_prefix_default() {
+    let mut bindings = KeyBindings {
+        new_window: Some(KeyChord::alt(KeyCode::Char('n'))),
+        ..KeyBindings::default()
+    };
+    bindings.replace_default_prefix_action(ConfigurableKeyAction::NewWindow);
+
+    assert_eq!(
+        classify_terminal_input(b"\x1bn", &bindings).unwrap(),
+        TerminalInputClassification::Mux(MuxAction::NewWindow)
+    );
+    assert_eq!(
+        classify_terminal_input(b"\x01c", &bindings).unwrap(),
+        TerminalInputClassification::UnboundPrefix(KeyChord::new(KeyCode::Char('c')))
+    );
+    assert_eq!(
+        classify_terminal_input(b"\x01%", &bindings).unwrap(),
+        TerminalInputClassification::Mux(MuxAction::SplitPaneVertical)
     );
 }
 

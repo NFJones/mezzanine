@@ -6,7 +6,7 @@
 //! shape. It preserves an existing preset selection and idempotently applies
 //! the pane TERM default before advancing the reconciled document.
 
-use mez_mux::input::{KeyBindings, KeyChord};
+use mez_mux::input::{ConfigurableKeyAction, KeyBindings, KeyChord};
 use mez_mux::key_preset::builtin_key_preset_bindings;
 
 use super::ops::{
@@ -93,35 +93,38 @@ fn classify_legacy_keys(root: &serde_json::Value) -> Result<&'static str> {
 
 /// Materializes the legacy effective key map for typed preset comparison.
 fn legacy_bindings(root: &serde_json::Value) -> Result<KeyBindings> {
-    let defaults = KeyBindings::default();
+    let mut bindings = KeyBindings::default();
     let Some(keys) = root.get("keys").and_then(serde_json::Value::as_object) else {
-        return Ok(defaults);
+        return Ok(bindings);
     };
-    Ok(KeyBindings {
-        escape: required_chord(keys, "escape", defaults.escape)?,
-        split_vertical: optional_chord(keys, "split_vertical", defaults.split_vertical)?,
-        split_horizontal: optional_chord(keys, "split_horizontal", defaults.split_horizontal)?,
-        new_window: optional_chord(keys, "new_window", defaults.new_window)?,
-        new_group: optional_chord(keys, "new_group", defaults.new_group)?,
-        agent_shell: optional_chord(keys, "agent_shell", defaults.agent_shell)?,
-        edit_prompt: defaults.edit_prompt,
-        focus_up: optional_chord(keys, "focus_up", defaults.focus_up)?,
-        focus_down: optional_chord(keys, "focus_down", defaults.focus_down)?,
-        focus_left: optional_chord(keys, "focus_left", defaults.focus_left)?,
-        focus_right: optional_chord(keys, "focus_right", defaults.focus_right)?,
-        focus_previous_window: optional_chord(
-            keys,
-            "focus_previous_window",
-            defaults.focus_previous_window,
-        )?,
-        focus_next_window: optional_chord(keys, "focus_next_window", defaults.focus_next_window)?,
-        focus_previous_group: optional_chord(
-            keys,
-            "focus_previous_group",
-            defaults.focus_previous_group,
-        )?,
-        focus_next_group: optional_chord(keys, "focus_next_group", defaults.focus_next_group)?,
-    })
+    bindings.escape = required_chord(keys, "escape", bindings.escape)?;
+    bindings.split_vertical = optional_chord(keys, "split_vertical", bindings.split_vertical)?;
+    bindings.split_horizontal =
+        optional_chord(keys, "split_horizontal", bindings.split_horizontal)?;
+    bindings.new_window = optional_chord(keys, "new_window", bindings.new_window)?;
+    bindings.new_group = optional_chord(keys, "new_group", bindings.new_group)?;
+    bindings.agent_shell = optional_chord(keys, "agent_shell", bindings.agent_shell)?;
+    bindings.focus_up = optional_chord(keys, "focus_up", bindings.focus_up)?;
+    bindings.focus_down = optional_chord(keys, "focus_down", bindings.focus_down)?;
+    bindings.focus_left = optional_chord(keys, "focus_left", bindings.focus_left)?;
+    bindings.focus_right = optional_chord(keys, "focus_right", bindings.focus_right)?;
+    bindings.focus_previous_window = optional_chord(
+        keys,
+        "focus_previous_window",
+        bindings.focus_previous_window,
+    )?;
+    bindings.focus_next_window =
+        optional_chord(keys, "focus_next_window", bindings.focus_next_window)?;
+    bindings.focus_previous_group =
+        optional_chord(keys, "focus_previous_group", bindings.focus_previous_group)?;
+    bindings.focus_next_group =
+        optional_chord(keys, "focus_next_group", bindings.focus_next_group)?;
+    for action in ConfigurableKeyAction::ALL {
+        if keys.contains_key(action.config_field()) {
+            bindings.replace_default_prefix_action(action);
+        }
+    }
+    Ok(bindings)
 }
 
 /// Parses one required legacy binding, falling back to its former default.

@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::input::{KeyBindings, KeyChord, KeyCode, KeyModifiers};
+use crate::input::{ConfigurableKeyAction, KeyBindings, KeyChord, KeyCode, KeyModifiers};
 
 /// Built-in key-preset names accepted by `key_preset.active`.
 pub const BUILTIN_KEY_PRESET_NAMES: &[&str] = &["default", "simple"];
@@ -57,6 +57,49 @@ impl KeyPresetDefinition {
     pub fn materialize(&self, mut bindings: KeyBindings) -> KeyBindings {
         if let Some(chord) = self.escape {
             bindings.escape = chord;
+        }
+        for (declared, action) in [
+            (
+                self.split_vertical.is_some(),
+                ConfigurableKeyAction::SplitVertical,
+            ),
+            (
+                self.split_horizontal.is_some(),
+                ConfigurableKeyAction::SplitHorizontal,
+            ),
+            (self.new_window.is_some(), ConfigurableKeyAction::NewWindow),
+            (self.new_group.is_some(), ConfigurableKeyAction::NewGroup),
+            (
+                self.agent_shell.is_some(),
+                ConfigurableKeyAction::AgentShell,
+            ),
+            (self.focus_up.is_some(), ConfigurableKeyAction::FocusUp),
+            (self.focus_down.is_some(), ConfigurableKeyAction::FocusDown),
+            (self.focus_left.is_some(), ConfigurableKeyAction::FocusLeft),
+            (
+                self.focus_right.is_some(),
+                ConfigurableKeyAction::FocusRight,
+            ),
+            (
+                self.focus_previous_window.is_some(),
+                ConfigurableKeyAction::FocusPreviousWindow,
+            ),
+            (
+                self.focus_next_window.is_some(),
+                ConfigurableKeyAction::FocusNextWindow,
+            ),
+            (
+                self.focus_previous_group.is_some(),
+                ConfigurableKeyAction::FocusPreviousGroup,
+            ),
+            (
+                self.focus_next_group.is_some(),
+                ConfigurableKeyAction::FocusNextGroup,
+            ),
+        ] {
+            if declared {
+                bindings.replace_default_prefix_action(action);
+            }
         }
         apply_optional(&mut bindings.split_vertical, self.split_vertical);
         apply_optional(&mut bindings.split_horizontal, self.split_horizontal);
@@ -247,7 +290,7 @@ mod tests {
     }
 
     /// Verifies the simple preset captures representative direct actions and
-    /// all thirteen requested direct bindings without changing the prefix.
+    /// marks all thirteen matching prefix defaults as replaced.
     #[test]
     fn simple_preset_materializes_requested_direct_bindings() {
         let bindings = builtin_key_preset_bindings("simple").unwrap();
@@ -266,6 +309,11 @@ mod tests {
                 .unwrap()
                 .direct_binding_count(),
             13
+        );
+        assert!(bindings.default_prefix_action_is_replaced(ConfigurableKeyAction::NewWindow));
+        assert_eq!(
+            crate::input::classify_prefix_binding(KeyChord::new(KeyCode::Char('c')), &bindings),
+            None
         );
     }
 

@@ -3695,15 +3695,20 @@ The `keys` table MUST support `escape`, `edit_prompt`, `split_vertical`, `split_
 map. The `escape` setting defines the prefix table entry point. `edit_prompt`
 MUST default to the prefix suffix `e`, MAY be remapped or disabled with `null`,
 and MUST be rejected when it collides with another prefix action or configured
-prefix command. Direct key
-settings in this table are convenience accelerators and MUST NOT replace the
-default prefix table.
+prefix command. An omitted direct-action field MUST retain that action's
+built-in prefix binding. An explicit string direct-action field MUST replace
+the corresponding built-in prefix binding with the configured chord, and an
+explicit `null` MUST disable both the direct and built-in prefix paths for that
+action. Dispatch and `list-keys` MUST use the same effective replacement
+policy. Configured prefix command bindings MUST retain precedence over any
+remaining built-in prefix binding on the same suffix.
 
 The `key_preset` table MUST support an `active` preset name and MUST default to
 `default`. Mezzanine MUST provide built-in `default` and `simple` presets.
 `default` MUST preserve the generated prefix-only key behavior. `simple` MUST
-keep `C-a` as the prefix and provide the documented direct split, window,
-group, agent-shell, pane-focus, window-focus, and group-focus bindings.
+keep `C-a` as the prefix and replace the corresponding prefix actions with the
+documented direct split, window, group, agent-shell, pane-focus, window-focus,
+and group-focus bindings.
 `key_presets` MUST be a map of configured presets accepting the same fixed key
 fields and command-binding map as `keys`; omitted fields MUST inherit from
 `default`, while `null` MUST explicitly disable an optional binding.

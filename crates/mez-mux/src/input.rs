@@ -5,7 +5,7 @@
 //! Mezzanine until those responsibilities can move without importing runtime,
 //! mouse-presentation, or agent behavior.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mez_terminal::{MouseEvent, parse_sgr_mouse};
 
@@ -837,6 +837,75 @@ pub fn classify_terminal_input_with_command_bindings(
         .unwrap_or(TerminalInputClassification::ForwardToPane))
 }
 
+/// Configurable actions whose explicit direct declarations replace prefix defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConfigurableKeyAction {
+    /// Vertical pane splitting.
+    SplitVertical,
+    /// Horizontal pane splitting.
+    SplitHorizontal,
+    /// Window creation.
+    NewWindow,
+    /// Window-group creation.
+    NewGroup,
+    /// Agent-shell visibility.
+    AgentShell,
+    /// Upward pane focus.
+    FocusUp,
+    /// Downward pane focus.
+    FocusDown,
+    /// Leftward pane focus.
+    FocusLeft,
+    /// Rightward pane focus.
+    FocusRight,
+    /// Previous-window focus.
+    FocusPreviousWindow,
+    /// Next-window focus.
+    FocusNextWindow,
+    /// Previous-group focus.
+    FocusPreviousGroup,
+    /// Next-group focus.
+    FocusNextGroup,
+}
+
+impl ConfigurableKeyAction {
+    /// Complete fixed action inventory accepted by direct binding configuration.
+    pub const ALL: [Self; 13] = [
+        Self::SplitVertical,
+        Self::SplitHorizontal,
+        Self::NewWindow,
+        Self::NewGroup,
+        Self::AgentShell,
+        Self::FocusUp,
+        Self::FocusDown,
+        Self::FocusLeft,
+        Self::FocusRight,
+        Self::FocusPreviousWindow,
+        Self::FocusNextWindow,
+        Self::FocusPreviousGroup,
+        Self::FocusNextGroup,
+    ];
+
+    /// Returns the exact configuration field whose declaration replaces this default.
+    pub const fn config_field(self) -> &'static str {
+        match self {
+            Self::SplitVertical => "split_vertical",
+            Self::SplitHorizontal => "split_horizontal",
+            Self::NewWindow => "new_window",
+            Self::NewGroup => "new_group",
+            Self::AgentShell => "agent_shell",
+            Self::FocusUp => "focus_up",
+            Self::FocusDown => "focus_down",
+            Self::FocusLeft => "focus_left",
+            Self::FocusRight => "focus_right",
+            Self::FocusPreviousWindow => "focus_previous_window",
+            Self::FocusNextWindow => "focus_next_window",
+            Self::FocusPreviousGroup => "focus_previous_group",
+            Self::FocusNextGroup => "focus_next_group",
+        }
+    }
+}
+
 /// Configurable key chords that bypass or enter multiplexer prefix routing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyBindings {
@@ -870,6 +939,8 @@ pub struct KeyBindings {
     pub focus_previous_group: Option<KeyChord>,
     /// Optional direct next-group binding.
     pub focus_next_group: Option<KeyChord>,
+    /// Prefix defaults replaced by explicit direct action declarations.
+    pub replaced_default_prefix_actions: BTreeSet<ConfigurableKeyAction>,
 }
 
 impl Default for KeyBindings {
@@ -890,7 +961,20 @@ impl Default for KeyBindings {
             focus_next_window: None,
             focus_previous_group: None,
             focus_next_group: None,
+            replaced_default_prefix_actions: BTreeSet::new(),
         }
+    }
+}
+
+impl KeyBindings {
+    /// Marks one configurable action's default prefix binding as replaced.
+    pub fn replace_default_prefix_action(&mut self, action: ConfigurableKeyAction) {
+        self.replaced_default_prefix_actions.insert(action);
+    }
+
+    /// Reports whether an explicit declaration replaced one prefix default.
+    pub fn default_prefix_action_is_replaced(&self, action: ConfigurableKeyAction) -> bool {
+        self.replaced_default_prefix_actions.contains(&action)
     }
 }
 
@@ -943,11 +1027,22 @@ pub fn classify_prefix_binding(chord: KeyChord, bindings: &KeyBindings) -> Optio
     if bindings.edit_prompt == Some(chord) {
         return Some(MuxAction::EditAgentPrompt);
     }
+    classify_default_prefix_binding(chord, bindings)
+}
+
+/// Classifies one built-in prefix binding after configured replacement policy.
+pub fn classify_default_prefix_binding(
+    chord: KeyChord,
+    bindings: &KeyBindings,
+) -> Option<MuxAction> {
+    if chord == bindings.escape {
+        return Some(MuxAction::SendPrefixToPane);
+    }
     if chord.modifiers != KeyModifiers::default() {
         return None;
     }
 
-    match chord.code {
+    let action = match chord.code {
         KeyCode::Char(':') => Some(MuxAction::EnterCommandPrompt),
         KeyCode::Char('?') => Some(MuxAction::ListKeyBindings),
         KeyCode::Char('d') => Some(MuxAction::DetachPrimaryClient),
@@ -995,6 +1090,37 @@ pub fn classify_prefix_binding(chord: KeyChord, bindings: &KeyBindings) -> Optio
         )),
         KeyCode::Char('-') => Some(MuxAction::DeleteMostRecentPasteBuffer),
         KeyCode::Char('~') => Some(MuxAction::ShowMessages),
+        _ => None,
+    }?;
+    configurable_key_action_for_mux(&action)
+        .filter(|action| bindings.default_prefix_action_is_replaced(*action))
+        .map_or(Some(action), |_| None)
+}
+
+/// Maps configurable direct actions to their corresponding prefix defaults.
+fn configurable_key_action_for_mux(action: &MuxAction) -> Option<ConfigurableKeyAction> {
+    match action {
+        MuxAction::SplitPaneVertical => Some(ConfigurableKeyAction::SplitVertical),
+        MuxAction::SplitPaneHorizontal => Some(ConfigurableKeyAction::SplitHorizontal),
+        MuxAction::NewWindow => Some(ConfigurableKeyAction::NewWindow),
+        MuxAction::NewGroup => Some(ConfigurableKeyAction::NewGroup),
+        MuxAction::ToggleAgentShell => Some(ConfigurableKeyAction::AgentShell),
+        MuxAction::FocusPane(PaneFocusDirection::Up) => Some(ConfigurableKeyAction::FocusUp),
+        MuxAction::FocusPane(PaneFocusDirection::Down) => Some(ConfigurableKeyAction::FocusDown),
+        MuxAction::FocusPane(PaneFocusDirection::Left) => Some(ConfigurableKeyAction::FocusLeft),
+        MuxAction::FocusPane(PaneFocusDirection::Right) => Some(ConfigurableKeyAction::FocusRight),
+        MuxAction::FocusWindow(WindowFocusTarget::Previous) => {
+            Some(ConfigurableKeyAction::FocusPreviousWindow)
+        }
+        MuxAction::FocusWindow(WindowFocusTarget::Next) => {
+            Some(ConfigurableKeyAction::FocusNextWindow)
+        }
+        MuxAction::FocusGroup(GroupFocusTarget::Previous) => {
+            Some(ConfigurableKeyAction::FocusPreviousGroup)
+        }
+        MuxAction::FocusGroup(GroupFocusTarget::Next) => {
+            Some(ConfigurableKeyAction::FocusNextGroup)
+        }
         _ => None,
     }
 }
