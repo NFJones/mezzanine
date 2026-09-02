@@ -316,15 +316,16 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         action: MouseAction,
         queue_for_adapter: bool,
-    ) -> Result<bool> {
+        suppress_host_clipboard_copy: bool,
+    ) -> Result<(bool, Option<String>)> {
         match action {
-            MouseAction::Ignore => Ok(true),
-            MouseAction::ForwardToPane => Ok(false),
+            MouseAction::Ignore => Ok((true, None)),
+            MouseAction::ForwardToPane => Ok((false, None)),
             MouseAction::FocusWindow { index } => {
                 self.session
                     .select_window(primary_client_id, &index.to_string())?;
                 self.acknowledge_focused_pane_completion();
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::FocusGroup { index } => {
                 let effects = self
@@ -332,11 +333,11 @@ impl RuntimeSessionService {
                     .select_group_transition(primary_client_id, &index.to_string())?;
                 self.sync_pane_resize_effects(&effects)?;
                 self.acknowledge_focused_pane_completion();
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::PressWindowAction { action } => {
                 self.presentation.pressed_window_action = Some(action);
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::ReleaseWindowAction { action } => {
                 let should_run = self.presentation.pressed_window_action.as_ref() == Some(&action);
@@ -344,15 +345,15 @@ impl RuntimeSessionService {
                 if should_run {
                     self.apply_window_frame_action(primary_client_id, action)?;
                 }
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::CancelWindowAction => {
                 self.presentation.pressed_window_action = None;
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::OpenPaneAgentStatusSelector { pane_index, field } => {
                 self.open_pane_agent_status_selector(primary_client_id, pane_index, field)?;
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::HoverPaneAgentStatusSelector {
                 pane_index,
@@ -360,7 +361,7 @@ impl RuntimeSessionService {
                 item_index,
             } => {
                 self.hover_pane_agent_status_selector(pane_index, field, item_index);
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::SelectPaneAgentStatusSelector {
                 pane_index,
@@ -373,7 +374,7 @@ impl RuntimeSessionService {
                     field,
                     item_index,
                 )?;
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::ScrollPaneAgentStatusSelector {
                 pane_index,
@@ -381,21 +382,21 @@ impl RuntimeSessionService {
                 lines,
             } => {
                 self.scroll_pane_agent_status_selector(pane_index, field, lines);
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::ClosePaneAgentStatusSelector => {
                 self.presentation.pane_agent_status_selector = None;
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::BeginDisplayOverlaySelection { .. }
             | MouseAction::UpdateDisplayOverlaySelection { .. }
-            | MouseAction::FinishDisplayOverlaySelection { .. } => Ok(false),
+            | MouseAction::FinishDisplayOverlaySelection { .. } => Ok((false, None)),
             MouseAction::SelectDisplayOverlay { .. } | MouseAction::ScrollDisplayOverlay { .. } => {
-                Ok(false)
+                Ok((false, None))
             }
             MouseAction::ShowWindowChooser { .. } => {
                 self.execute_attached_display_command(primary_client_id, "choose-window")?;
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::FocusPane(position) => {
                 let target = self
@@ -416,7 +417,7 @@ impl RuntimeSessionService {
                 )? {
                     self.presentation.mouse_selection_drag_state = None;
                     self.presentation.last_mouse_click_state = None;
-                    return Ok(true);
+                    return Ok((true, None));
                 }
                 let now = current_unix_millis();
                 if self
@@ -433,12 +434,12 @@ impl RuntimeSessionService {
                 {
                     self.presentation.mouse_selection_drag_state = None;
                     self.presentation.last_mouse_click_state = None;
-                    self.copy_word_at_pane_position(
+                    return self.copy_word_at_pane_position(
                         primary_client_id,
                         pane_id.as_str(),
                         target.position,
-                    )?;
-                    return Ok(true);
+                        suppress_host_clipboard_copy,
+                    );
                 }
                 self.presentation.last_mouse_click_state = Some(RuntimeMouseClickState {
                     pane_id: pane_id.clone(),
@@ -453,7 +454,7 @@ impl RuntimeSessionService {
                     origin_position: position,
                     autoscroll_position: None,
                 });
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::CopyWord(position) => {
                 let target = self
@@ -466,6 +467,7 @@ impl RuntimeSessionService {
                     primary_client_id,
                     target.pane_id.as_str(),
                     target.position,
+                    suppress_host_clipboard_copy,
                 )
             }
             MouseAction::FocusPaneOnly(position) => {
@@ -479,7 +481,7 @@ impl RuntimeSessionService {
                     .select_pane_global(primary_client_id, target.pane_id.as_str())?;
                 self.acknowledge_focused_pane_completion();
                 self.presentation.mouse_selection_drag_state = None;
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::PasteClipboard(position) => {
                 self.presentation.mouse_selection_drag_state = None;
@@ -493,15 +495,17 @@ impl RuntimeSessionService {
                     .select_pane_global(primary_client_id, target.pane_id.as_str())?;
                 self.acknowledge_focused_pane_completion();
                 let Some(descriptor) = self.find_pane_descriptor(target.pane_id.as_str()) else {
-                    return Ok(true);
+                    return Ok((true, None));
                 };
                 match self.paste_clipboard_or_most_recent_buffer_to_text_entry_or_pane(
                     primary_client_id,
                     &descriptor,
                     queue_for_adapter,
                 ) {
-                    Ok(_) => Ok(true),
-                    Err(err) if err.kind() == crate::error::MezErrorKind::NotFound => Ok(true),
+                    Ok(_) => Ok((true, None)),
+                    Err(err) if err.kind() == crate::error::MezErrorKind::NotFound => {
+                        Ok((true, None))
+                    }
                     Err(err) => Err(err),
                 }
             }
@@ -514,7 +518,7 @@ impl RuntimeSessionService {
                         rows: row.saturating_add(1).max(MIN_PANE_ROWS),
                     };
                     self.resize_pane_pty(primary_client_id, Some(pane_id.as_str()), size)?;
-                    return Ok(true);
+                    return Ok((true, None));
                 };
                 let effects = self
                     .session
@@ -523,13 +527,13 @@ impl RuntimeSessionService {
                         update.geometries,
                     )?;
                 self.sync_pane_resize_effects(&effects)?;
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::FinishResizePane => {
                 self.presentation.mouse_resize_drag_state = None;
                 self.presentation
                     .redispatch_pending_agent_presentation_resizes();
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::ScrollHistory { lines, position } => {
                 self.presentation.mouse_selection_drag_state = None;
@@ -549,7 +553,7 @@ impl RuntimeSessionService {
                 } else {
                     self.mark_presented_surface_scrollback_copy_mode(target.pane_id.as_str());
                 }
-                Ok(true)
+                Ok((true, None))
             }
             MouseAction::CopySelectionStart(position) => {
                 let target = self.mouse_selection_target_at(position)?;
@@ -568,14 +572,20 @@ impl RuntimeSessionService {
                 let copy_mode = self.ensure_mouse_selection_copy_mode(pane_id.as_str())?;
                 let position = runtime_copy_position_for_view(copy_mode, target.position);
                 copy_mode.select_range(position, position)?;
-                Ok(true)
+                Ok((true, None))
             }
-            MouseAction::CopySelectionUpdate(position) => {
-                self.apply_mouse_selection_update(primary_client_id, position, false)
-            }
-            MouseAction::CopySelectionFinish(position) => {
-                self.apply_mouse_selection_update(primary_client_id, position, true)
-            }
+            MouseAction::CopySelectionUpdate(position) => self.apply_mouse_selection_update(
+                primary_client_id,
+                position,
+                false,
+                suppress_host_clipboard_copy,
+            ),
+            MouseAction::CopySelectionFinish(position) => self.apply_mouse_selection_update(
+                primary_client_id,
+                position,
+                true,
+                suppress_host_clipboard_copy,
+            ),
         }
     }
 
@@ -1042,7 +1052,8 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         position: CopyPosition,
         finish: bool,
-    ) -> Result<bool> {
+        suppress_host_clipboard_copy: bool,
+    ) -> Result<(bool, Option<String>)> {
         if self
             .presentation
             .mouse_selection_drag_state
@@ -1052,7 +1063,7 @@ impl RuntimeSessionService {
             })
         {
             self.presentation.mouse_selection_drag_state = None;
-            return Ok(true);
+            return Ok((true, None));
         }
         let target = self.mouse_selection_target_at(position)?;
         self.session
@@ -1080,7 +1091,7 @@ impl RuntimeSessionService {
                 .is_none()
         {
             self.presentation.mouse_selection_drag_state = None;
-            return Ok(true);
+            return Ok((true, None));
         }
         let copied = {
             let copy_mode = self.ensure_mouse_selection_copy_mode(pane_id.as_str())?;
@@ -1101,10 +1112,13 @@ impl RuntimeSessionService {
             if let Some(copied) = copied {
                 self.copy_text_to_buffer_and_host_clipboard(
                     "mouse",
-                    copied,
+                    copied.clone(),
                     format!("pane:{pane_id}:mouse"),
+                    suppress_host_clipboard_copy,
                 )?;
+                return Ok((true, Some(copied)));
             }
+            return Ok((true, None));
         } else {
             self.presentation.mouse_selection_drag_state = Some(MouseSelectionDragState {
                 pane_id,
@@ -1114,7 +1128,7 @@ impl RuntimeSessionService {
                 autoscroll_position: target.edge.map(|_| position),
             });
         }
-        Ok(true)
+        Ok((true, None))
     }
 
     /// Ensures mouse drag selection has a copy buffer for the selected pane.
@@ -1158,7 +1172,8 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
         position: CopyPosition,
-    ) -> Result<bool> {
+        suppress_host_clipboard_copy: bool,
+    ) -> Result<(bool, Option<String>)> {
         self.session
             .select_pane_global(primary_client_id, pane_id)?;
         self.acknowledge_focused_pane_completion();
@@ -1184,10 +1199,11 @@ impl RuntimeSessionService {
         )));
         self.copy_text_to_buffer_and_host_clipboard(
             "mouse",
-            copied,
+            copied.clone(),
             format!("pane:{pane_id}:mouse-word"),
+            suppress_host_clipboard_copy,
         )?;
-        Ok(true)
+        Ok((true, Some(copied)))
     }
 
     /// Runs the mouse resize drag update operation for this subsystem.

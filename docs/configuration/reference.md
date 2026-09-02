@@ -327,10 +327,12 @@ rollout](../operations/iroh-production-operations-and-rollout.md).
 | `terminal.cursor_blink_interval_ms` | integer | `500` | Full blink cycle length in milliseconds. |
 
 An Iroh primary that negotiates event-stream v2 and the explicit
-`client_clipboard_write` capability also writes completed copy-mode selections
-to the attaching machine's clipboard. The server still updates its internal
-paste buffer and attempts its own host clipboard write independently. Client
-writes are best-effort, bounded to 8 MiB, and use only the attaching client's
+`client_clipboard_write` capability also routes completed copy-mode and mouse
+text selections to the attaching machine's clipboard. The server updates its
+internal paste buffer, and while a client clipboard route is active it
+suppresses its own server-host clipboard commands instead of delivering the
+copy twice. Client writes are best-effort, bounded to 8 MiB, and use only the
+attaching client's
 local clipboard command configuration. Observers, Unix attachments, legacy v1
 peers, headless clients without a working clipboard provider, and
 capability-disabled sessions retain existing behavior. Clipboard reads and

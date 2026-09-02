@@ -192,7 +192,7 @@ impl RuntimeSessionService {
         self.presentation.activate_client_state(primary_client_id);
         self.session.activate_client_navigation(primary_client_id)?;
         let result = self
-            .apply_attached_terminal_step_plan_inner(primary_client_id, step, false, false)
+            .apply_attached_terminal_step_plan_inner(primary_client_id, step, false, false, false)
             .map(|(application, _)| application);
         self.presentation.capture_projected_client_state();
         result
@@ -203,6 +203,24 @@ impl RuntimeSessionService {
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         step: &AttachedTerminalClientStepPlan,
+    ) -> Result<(AttachedClientStepApplication, RuntimeTransition)> {
+        self.apply_attached_terminal_step_transition_with_clipboard_policy(
+            primary_client_id,
+            step,
+            false,
+        )
+    }
+
+    /// Applies one planned client step with an explicit host-clipboard policy.
+    ///
+    /// When the acting primary owns a client transport clipboard route, the
+    /// copied text is delivered to the client adapter instead of the server
+    /// host, so host-side clipboard commands are suppressed for that step.
+    pub(crate) fn apply_attached_terminal_step_transition_with_clipboard_policy(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        step: &AttachedTerminalClientStepPlan,
+        suppress_host_clipboard_copy: bool,
     ) -> Result<(AttachedClientStepApplication, RuntimeTransition)> {
         if !self.session.is_attached_primary(primary_client_id) {
             return Err(MezError::forbidden(
@@ -236,8 +254,13 @@ impl RuntimeSessionService {
                         })
                         .collect()
                 });
-        let result =
-            self.apply_attached_terminal_step_plan_inner(primary_client_id, step, true, true);
+        let result = self.apply_attached_terminal_step_plan_inner(
+            primary_client_id,
+            step,
+            true,
+            true,
+            suppress_host_clipboard_copy,
+        );
         self.presentation.capture_projected_client_state();
         let (application, mut side_effects) = result?;
         let render_reason = self.attached_terminal_step_render_reason(&application, step);
@@ -457,6 +480,7 @@ impl RuntimeSessionService {
         step: &AttachedTerminalClientStepPlan,
         defer_pane_io: bool,
         queue_external_effects: bool,
+        suppress_host_clipboard_copy: bool,
     ) -> Result<(AttachedClientStepApplication, Vec<RuntimeSideEffect>)> {
         self.require_live()?;
         if !self.session.is_attached_primary(primary_client_id) {
@@ -522,7 +546,17 @@ impl RuntimeSessionService {
             let primary_display_overlay_requires_full_redraw =
                 self.primary_display_overlay_action_requires_full_redraw(action);
             if self.presentation.primary_display_overlay.is_some() {
-                if self.apply_primary_display_overlay_terminal_action(primary_client_id, action)? {
+                if let (true, client_clipboard_write) = self
+                    .apply_primary_display_overlay_terminal_action(
+                        primary_client_id,
+                        action,
+                        suppress_host_clipboard_copy,
+                    )?
+                {
+                    if report.client_clipboard_write.is_none() {
+                        report.client_clipboard_write =
+                            client_clipboard_write.map(AttachedClientClipboardWrite::new);
+                    }
                     report.view_refresh_required = true;
                     if primary_display_overlay_requires_full_redraw {
                         report.full_redraw_required = true;
@@ -783,12 +817,15 @@ impl RuntimeSessionService {
                         primary_client_id,
                         action.clone(),
                         queue_external_effects,
+                        suppress_host_clipboard_copy,
                     ) {
-                        Ok(true) => {
+                        Ok((true, client_clipboard_write)) => {
                             report.mouse_actions_reported =
                                 report.mouse_actions_reported.saturating_add(1);
                             report.registry_persistence_required |=
                                 Self::mouse_action_requires_registry_persistence(action);
+                            report.client_clipboard_write =
+                                client_clipboard_write.map(AttachedClientClipboardWrite::new);
                             report.view_refresh_required = true;
                             if Self::mouse_action_requires_full_redraw(action.clone())
                                 || overlay_was_open
@@ -797,7 +834,7 @@ impl RuntimeSessionService {
                                 report.full_redraw_required = true;
                             }
                         }
-                        Ok(false) => {
+                        Ok((false, _)) => {
                             report.mouse_actions_reported =
                                 report.mouse_actions_reported.saturating_add(1);
                             report
@@ -808,7 +845,9 @@ impl RuntimeSessionService {
                     }
                 }
                 TerminalClientLoopAction::HandleCopyMode(action) => {
-                    match self.apply_attached_copy_mode_action(*action) {
+                    match self
+                        .apply_attached_copy_mode_action(*action, suppress_host_clipboard_copy)
+                    {
                         Ok((true, client_clipboard_write)) => {
                             report.view_refresh_required = true;
                             report.client_clipboard_write =

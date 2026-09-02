@@ -2036,7 +2036,8 @@ impl RuntimeSessionService {
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         action: &TerminalClientLoopAction,
-    ) -> Result<bool> {
+        suppress_host_clipboard_copy: bool,
+    ) -> Result<(bool, Option<String>)> {
         match action {
             TerminalClientLoopAction::ForwardToPane(input) => {
                 let mut changed = false;
@@ -2050,32 +2051,43 @@ impl RuntimeSessionService {
                         Err(error) => result = Err(error),
                     }
                 });
-                result.map(|()| changed)
+                result.map(|()| (changed, None))
             }
-            TerminalClientLoopAction::ForwardMouseToPane { input, .. } => {
-                self.apply_primary_display_overlay_input(primary_client_id, input)
-            }
+            TerminalClientLoopAction::ForwardMouseToPane { input, .. } => self
+                .apply_primary_display_overlay_input(primary_client_id, input)
+                .map(|changed| (changed, None)),
             TerminalClientLoopAction::HandleMouse(MouseAction::SelectDisplayOverlay {
                 position,
-            }) => self.apply_primary_display_overlay_selection(primary_client_id, *position),
+            }) => self
+                .apply_primary_display_overlay_selection(primary_client_id, *position)
+                .map(|applied| (applied, None)),
             TerminalClientLoopAction::HandleMouse(MouseAction::BeginDisplayOverlaySelection {
                 position,
-            }) => self.begin_primary_display_overlay_mouse_selection(*position),
+            }) => self
+                .begin_primary_display_overlay_mouse_selection(*position)
+                .map(|applied| (applied, None)),
             TerminalClientLoopAction::HandleMouse(MouseAction::UpdateDisplayOverlaySelection {
                 position,
-            }) => self.update_primary_display_overlay_mouse_selection(*position),
+            }) => self
+                .update_primary_display_overlay_mouse_selection(*position)
+                .map(|applied| (applied, None)),
             TerminalClientLoopAction::HandleMouse(MouseAction::FinishDisplayOverlaySelection {
                 position,
-            }) => self.finish_primary_display_overlay_mouse_selection(primary_client_id, *position),
+            }) => self.finish_primary_display_overlay_mouse_selection(
+                primary_client_id,
+                *position,
+                suppress_host_clipboard_copy,
+            ),
             TerminalClientLoopAction::HandleMouse(MouseAction::ScrollDisplayOverlay { lines }) => {
                 self.apply_primary_display_overlay_scroll(*lines)
+                    .map(|applied| (applied, None))
             }
             TerminalClientLoopAction::ExecuteMux(_)
             | TerminalClientLoopAction::ExecuteCommand(_)
             | TerminalClientLoopAction::HandleMouse(_)
             | TerminalClientLoopAction::HandleCopyMode(_)
             | TerminalClientLoopAction::EnterPrefixKeyMode
-            | TerminalClientLoopAction::ReportUnboundPrefix(_) => Ok(false),
+            | TerminalClientLoopAction::ReportUnboundPrefix(_) => Ok((false, None)),
         }
     }
 
@@ -2211,10 +2223,11 @@ impl RuntimeSessionService {
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         position: CopyPosition,
-    ) -> Result<bool> {
+        suppress_host_clipboard_copy: bool,
+    ) -> Result<(bool, Option<String>)> {
         let Some(selection_position) = self.primary_display_overlay_position_for_mouse(position)
         else {
-            return Ok(false);
+            return Ok((false, None));
         };
         let copied = if let Some(overlay) = self.presentation.primary_display_overlay.as_mut() {
             let start = overlay
@@ -2229,12 +2242,14 @@ impl RuntimeSessionService {
         if let Some(copied) = copied.filter(|text| !text.is_empty()) {
             self.copy_text_to_buffer_and_host_clipboard(
                 "mouse",
-                copied,
+                copied.clone(),
                 "display-overlay:mouse".to_string(),
+                suppress_host_clipboard_copy,
             )?;
-            return Ok(true);
+            return Ok((true, Some(copied)));
         }
         self.apply_primary_display_overlay_selection(primary_client_id, position)
+            .map(|applied| (applied, None))
     }
 
     /// Converts one terminal mouse cell to overlay-content coordinates.

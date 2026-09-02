@@ -321,9 +321,13 @@ their responses. If the connection fails after terminal input may have been
 sent, Mez reports that the outcome is unknown, does not reconnect or replay the
 input, and requires an explicit reattach.
 
-For a negotiated primary, copy-mode selections continue to update the server
-session's internal paste buffer and best-effort server-host clipboard, and also
-attempt one write on the attaching machine. The client selects its own
+For a negotiated primary, completed copy-mode and mouse text selections update
+the server session's internal paste buffer and route the copied text to the
+attaching machine. While a client clipboard route is active, server-host
+clipboard commands are suppressed so the copy is delivered through the
+client's configured adapter rather than duplicated on the server host; without
+a negotiated route, copies retain the best-effort server-host clipboard write.
+The client selects its own
 `terminal.clipboard_copy_command`; the server cannot provide or override that
 command. Writes are best-effort, limited to 8 MiB, and supported through the
 same Linux (`wl-copy`, `xclip`, or `xsel`) and macOS (`pbcopy`) adapters used by

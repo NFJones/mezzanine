@@ -3490,8 +3490,10 @@ snapshots, persistence, audit output, diagnostics, metrics labels, or other
 durable channels. Observers, other primaries, other paired devices, Unix
 clients, and version-1 streams MUST receive no client-local clipboard effect.
 Route loss, oversize content, backpressure, timeout, or write failure MUST drop
-only the client-local effect and MUST NOT undo the internal paste-buffer update
-or best-effort server-host clipboard write.
+only the client-local effect and MUST NOT undo the internal paste-buffer update.
+While a client clipboard route is active, the server MUST NOT also invoke
+server-host clipboard commands for the routed copy; sessions without a
+negotiated route retain the best-effort server-host clipboard write.
 
 Every remote event batch MUST re-resolve the current initialized session client
 and project retained events through the existing audience policy. Attached

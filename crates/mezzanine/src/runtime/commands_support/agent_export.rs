@@ -94,6 +94,7 @@ pub(crate) fn runtime_write_agent_context_for_pane(
                         "clipboard",
                         context_dump.dump.clone(),
                         format!("pane:{pane_id}:agent-context"),
+                        false,
                     )?;
                     Ok((
                         format!(
@@ -302,6 +303,7 @@ pub(crate) fn runtime_write_agent_trace_log_for_pane(
                 "clipboard",
                 dump,
                 format!("pane:{pane_id}:agent-trace-log"),
+                false,
             )?;
             Ok((
                 format!(
@@ -371,6 +373,7 @@ pub(crate) fn runtime_write_agent_copy_output_for_pane(
                 "clipboard",
                 output,
                 format!("agent:{turn_id}:say"),
+                false,
             )?;
             Ok((
                 format!(
@@ -442,6 +445,7 @@ pub(crate) fn runtime_write_agent_patches_for_pane(
                 "clipboard",
                 dump,
                 format!("pane:{pane_id}:agent-patches"),
+                false,
             )?;
             Ok((
                 format!(

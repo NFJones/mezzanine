@@ -47,6 +47,7 @@ impl RuntimeSessionService {
                             content.as_str(),
                             format!("terminal-osc52:{}", selection.as_str()),
                             &plan,
+                            false,
                         )?;
                         applied = applied.saturating_add(1);
                     }

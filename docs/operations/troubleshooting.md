@@ -180,8 +180,11 @@ If Windows executable interoperability is disabled, configure an explicit
 may have no usable provider.
 
 Clipboard writes are best-effort and bounded to 8 MiB. A local provider failure
-does not undo the server internal paste buffer or server-host clipboard attempt,
-and it does not interrupt rendering or input. Troubleshoot with payload-free
+does not undo the server internal paste buffer, and it does not interrupt
+rendering or input. With an active client clipboard route, server-host
+clipboard commands are intentionally suppressed for copy-mode and mouse text
+selections; they resume for sessions without a negotiated route. Troubleshoot
+with payload-free
 version, capability, provider availability, and failure-class information;
 never copy clipboard contents into logs or diagnostics. Clipboard reads and
 remote paste are not part of the Iroh client clipboard feature.

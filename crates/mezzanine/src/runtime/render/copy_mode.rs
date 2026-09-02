@@ -17,6 +17,7 @@ impl RuntimeSessionService {
     pub(super) fn apply_attached_copy_mode_action(
         &mut self,
         action: CopyModeKeyAction,
+        suppress_host_clipboard_copy: bool,
     ) -> Result<(bool, Option<String>)> {
         let pane_id = self.active_pane_id()?;
         if self.remove_presented_surface_scrollback_copy_mode(pane_id.as_str()) {
@@ -49,6 +50,7 @@ impl RuntimeSessionService {
                 buffer_name.as_str(),
                 copied,
                 format!("pane:{pane_id}:copy-mode"),
+                suppress_host_clipboard_copy,
             )?;
             if should_exit {
                 self.clear_copy_state_for_presented_surface(pane_id.as_str());
@@ -71,12 +73,14 @@ impl RuntimeSessionService {
         name: &str,
         content: String,
         origin: String,
+        suppress_host_clipboard_copy: bool,
     ) -> Result<()> {
         self.apply_clipboard_write_plan(
             name,
             content.as_str(),
             origin,
             &super::ClipboardWritePlan::text_selection(),
+            suppress_host_clipboard_copy,
         )?;
         Ok(())
     }
@@ -91,6 +95,7 @@ impl RuntimeSessionService {
         content: &str,
         origin: String,
         plan: &super::ClipboardWritePlan,
+        suppress_host_clipboard_copy: bool,
     ) -> Result<()> {
         for intent in plan.intents() {
             match intent {
@@ -102,7 +107,9 @@ impl RuntimeSessionService {
                     )?;
                 }
                 super::ClipboardEffectIntent::CopyToHost => {
-                    let _ = self.presentation.copy.host_clipboard.copy(content);
+                    if !suppress_host_clipboard_copy {
+                        let _ = self.presentation.copy.host_clipboard.copy(content);
+                    }
                 }
             }
         }

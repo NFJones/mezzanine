@@ -121,6 +121,7 @@ pub(super) fn runtime_copy_mode_command(
             name.as_str(),
             copied,
             format!("pane:{pane_id}:copy-mode"),
+            false,
         )?;
     }
     Ok(())
@@ -150,6 +151,7 @@ pub(super) fn runtime_copy_selection_command(
         buffer_name.as_str(),
         copied,
         format!("pane:{pane_id}:copy-mode"),
+        false,
     )?;
     if invocation.has_flag("-x", "--exit") {
         service.clear_copy_state_for_presented_surface(pane_id.as_str());

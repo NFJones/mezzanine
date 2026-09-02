@@ -873,9 +873,16 @@ impl AsyncRuntimeSessionActor {
                         ])?;
                         return Ok(application);
                     }
+                    let suppress_host_clipboard_copy = self
+                        .client_clipboard_routes
+                        .contains_key(&primary_client_id);
                     let (mut application, transition) = self
                         .service
-                        .apply_attached_terminal_step_transition(&primary_client_id, &step)?;
+                        .apply_attached_terminal_step_transition_with_clipboard_policy(
+                            &primary_client_id,
+                            &step,
+                            suppress_host_clipboard_copy,
+                        )?;
                     if let Some(candidate) = application.client_clipboard_write.take()
                         && let Some(pending) =
                             self.client_clipboard_routes.get_mut(&primary_client_id)

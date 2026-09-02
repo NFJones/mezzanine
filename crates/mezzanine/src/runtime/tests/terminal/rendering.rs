@@ -769,7 +769,7 @@ fn runtime_mouse_drag_copies_visible_alternate_screen_content() {
     );
     service.set_pane_screen(pane_id.clone(), screen);
 
-    service
+    let application = service
         .apply_attached_terminal_step_plan(
             &primary,
             &AttachedTerminalClientStepPlan {
@@ -793,6 +793,12 @@ fn runtime_mouse_drag_copies_visible_alternate_screen_content() {
     assert_eq!(
         service.paste_buffers().get("mouse"),
         Some("alpha beta\nsecond")
+    );
+    assert_eq!(
+        application
+            .client_clipboard_write
+            .map(|write| write.into_content()),
+        Some("alpha beta\nsecond".to_string())
     );
     assert!(
         service
