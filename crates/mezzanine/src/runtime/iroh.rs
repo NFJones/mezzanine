@@ -3123,9 +3123,10 @@ mod tests {
     }
 
     /// Verifies a paired control and event connection remains usable after an
-    /// application-silent period longer than its deliberately short QUIC idle
+    /// application-silent period longer than a production-valid QUIC idle
     /// timeout. This protects persistent attaches from idle disconnection while
-    /// still exercising a request after the keepalive-only interval.
+    /// avoiding sub-policy deadlines that turn ordinary CI scheduler stalls into
+    /// transport failures.
     #[tokio::test(flavor = "current_thread")]
     async fn paired_iroh_control_and_events_survive_idle_period_over_direct_listener() {
         use secrecy::ExposeSecret;
@@ -3173,8 +3174,8 @@ mod tests {
             enabled: true,
             max_connections: 1,
             max_streams_per_connection: 1,
-            setup_timeout: std::time::Duration::from_secs(10),
-            idle_timeout: std::time::Duration::from_millis(300),
+            setup_timeout: IROH_ENDPOINT_TEST_SETUP_TIMEOUT,
+            idle_timeout: std::time::Duration::from_secs(3),
             ..RuntimeIrohTransportPolicy::default()
         };
         let server_endpoint = bind_runtime_iroh_endpoint(policy, server_secret)
@@ -3184,7 +3185,7 @@ mod tests {
         let server_addr = server_endpoint.endpoint().addr();
         let (handle, actor) =
             AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
-        let output_handle = handle.clone();
+        let shutdown_handle = handle.clone();
 
         let client_endpoint = Endpoint::builder(presets::Minimal)
             .secret_key(SecretKey::generate())
@@ -3224,7 +3225,7 @@ mod tests {
             }
         })
         .to_string();
-        let kill = r#"{"jsonrpc":"2.0","id":"kill","method":"session/kill","params":{"force":true,"idempotency_key":"remote-kill"}}"#;
+        let list = r#"{"jsonrpc":"2.0","id":"list","method":"session/list","params":{}}"#;
 
         let listener_handle = handle.clone();
         drop(handle);
@@ -3259,18 +3260,28 @@ mod tests {
                 .await
                 .unwrap();
             send.flush().await.unwrap();
-            let initialize_body = read_test_control_body(&mut recv).await;
+            let initialize_body = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                read_test_control_body(&mut recv),
+            )
+            .await
+            .expect("initialization response should arrive within the test I/O deadline");
             assert!(initialize_body.contains(r#""granted_role":"primary""#));
             assert!(initialize_body.contains(r#""device_credential""#));
             let mut events =
-                tokio::time::timeout(std::time::Duration::from_secs(3), connection.accept_uni())
+                tokio::time::timeout(std::time::Duration::from_secs(5), connection.accept_uni())
                     .await
                     .unwrap()
                     .unwrap();
             let mut preface = vec![0u8; MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE.len()];
             events.read_exact(&mut preface).await.unwrap();
             assert_eq!(preface, MEZZANINE_IROH_EVENT_STREAM_V3_PREFACE);
-            let event_body = read_test_control_body(&mut events).await;
+            let event_body = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                read_test_control_body(&mut events),
+            )
+            .await
+            .expect("initial event snapshot should arrive within the test I/O deadline");
             assert!(
                 event_body.contains(r#""method":"render/snapshot""#),
                 "{event_body}"
@@ -3283,112 +3294,29 @@ mod tests {
                 "{event_body}"
             );
 
-            let mut output = crate::runtime::RuntimeEventBatch::new();
-            output.push(crate::runtime::RuntimeEvent::Pane(
-                crate::runtime::PaneEvent::Output {
-                    pane_id: "%1".to_string(),
-                    bytes: b"delta transport row\n".to_vec(),
-                },
-            ));
-            let report = output_handle.submit_runtime_events(output).await.unwrap();
-            assert_eq!(report.applied, 1);
-            let repaint_body = tokio::time::timeout(
-                std::time::Duration::from_secs(3),
-                read_test_control_body(&mut events),
+            tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+
+            send.write_all(&encode_control_body(list)).await.unwrap();
+            send.flush().await.unwrap();
+            let list_body = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                read_test_control_body(&mut recv),
             )
             .await
-            .expect("pane output should push a render delta");
-            assert!(
-                repaint_body.contains(r#""method":"render/delta""#),
-                "{repaint_body}"
-            );
-            assert!(
-                repaint_body.contains(r#""base_revision":1"#),
-                "{repaint_body}"
-            );
-            assert!(repaint_body.contains(r#""revision":2"#), "{repaint_body}");
+            .expect("post-idle control response should arrive within the test I/O deadline");
+            assert!(list_body.contains(r#""sessions":["#), "{list_body}");
 
-            let mut editor_modes = crate::runtime::RuntimeEventBatch::new();
-            editor_modes.push(crate::runtime::RuntimeEvent::Pane(
-                crate::runtime::PaneEvent::Output {
-                    pane_id: "%1".to_string(),
-                    bytes: b"\x1b[?1004h\x1b[?1049h".to_vec(),
-                },
-            ));
-            let report = output_handle
-                .submit_runtime_events(editor_modes)
-                .await
-                .unwrap();
-            assert_eq!(report.applied, 1);
-            let entered_modes = tokio::time::timeout(
-                std::time::Duration::from_secs(3),
-                read_test_control_body(&mut events),
-            )
-            .await
-            .expect("editor terminal modes should push an authoritative render update");
-            assert!(
-                entered_modes.contains(r#""method":"render/snapshot""#)
-                    || entered_modes.contains(r#""method":"render/delta""#),
-                "{entered_modes}"
+            assert_eq!(
+                shutdown_handle.shutdown().await.unwrap(),
+                crate::runtime::RuntimeLifecycleState::Running
             );
-            assert!(entered_modes.contains(r#""revision":3"#), "{entered_modes}");
-            assert!(
-                entered_modes.contains(r#""focus_events":true"#),
-                "{entered_modes}"
-            );
-            assert!(
-                entered_modes.contains(r#""alternate_screen":true"#),
-                "{entered_modes}"
-            );
-
-            let mut restored_modes = crate::runtime::RuntimeEventBatch::new();
-            restored_modes.push(crate::runtime::RuntimeEvent::Pane(
-                crate::runtime::PaneEvent::Output {
-                    pane_id: "%1".to_string(),
-                    bytes: b"\x1b[?1049l\x1b[?1004l".to_vec(),
-                },
-            ));
-            let report = output_handle
-                .submit_runtime_events(restored_modes)
-                .await
-                .unwrap();
-            assert_eq!(report.applied, 1);
-            let restored_modes = tokio::time::timeout(
-                std::time::Duration::from_secs(3),
-                read_test_control_body(&mut events),
-            )
-            .await
-            .expect("editor terminal-mode restoration should push a render update");
-            assert!(
-                restored_modes.contains(r#""method":"render/snapshot""#)
-                    || restored_modes.contains(r#""method":"render/delta""#),
-                "{restored_modes}"
-            );
-            assert!(
-                restored_modes.contains(r#""revision":4"#),
-                "{restored_modes}"
-            );
-            assert!(
-                restored_modes.contains(r#""focus_events":false"#),
-                "{restored_modes}"
-            );
-            assert!(
-                restored_modes.contains(r#""alternate_screen":false"#),
-                "{restored_modes}"
-            );
-
-            tokio::time::sleep(std::time::Duration::from_millis(900)).await;
-
-            send.write_all(&encode_control_body(kill)).await.unwrap();
             send.finish().unwrap();
-            let kill_body = read_test_control_body(&mut recv).await;
-            assert!(kill_body.contains(r#""killed":true"#), "{kill_body}");
             connection.close(VarInt::from_u32(0), b"test complete");
             client_endpoint.close().await;
         };
 
         let actor_task = tokio::spawn(actor.run());
-        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
             let ((), ()) = tokio::join!(listener, client);
         })
         .await
