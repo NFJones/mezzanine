@@ -106,8 +106,10 @@ to trusted mode. `--x11-trusted` also requires the host's explicit
 Only one attachment owns a session's X11 route. A conflict means another
 primary currently owns it. Use `--x11-takeover` only for an intentional
 replacement. Takeover, detach, transport loss, trust or lease revocation, and
-session shutdown close existing streams. After reattach, restart or reconnect
-the GUI application so it opens against the new route credentials.
+session shutdown close existing streams and both directions of the attaching
+client's local X socket, even if the local X server keeps one direction open.
+After reattach, restart or reconnect the GUI application so it opens against
+the new route credentials.
 
 Run `show-metrics` in the affected attached session and inspect only the
 aggregate `[x11 forwarding]` counters: route activity, accepted or rejected

@@ -1151,6 +1151,13 @@ async fn relay_client_x11_stream(
     let (mut local_read, mut local_write) = tokio::io::split(local);
     let mut upstream_encoder = crate::runtime::x11::X11IrohEncoder::new(compression)
         .map_err(|error| ClientX11RelayFailure::new(Stage::ClientUpstreamRelay, error))?;
+    let send_stopped = send.stopped();
+    let route_cancelled = async {
+        match send_stopped.await {
+            Ok(Some(_)) | Err(_) => {}
+            Ok(None) => std::future::pending::<()>().await,
+        }
+    };
     let upstream = async {
         let result = upstream_encoder
             .relay(&mut local_read, &mut send, None)
@@ -1176,7 +1183,38 @@ async fn relay_client_x11_stream(
         }
         Ok::<(), ClientX11RelayFailure>(())
     };
-    if let Err(failure) = tokio::try_join!(upstream, downstream) {
+    let relay_result = {
+        tokio::pin!(route_cancelled, upstream, downstream);
+        let mut upstream_complete = false;
+        let mut downstream_complete = false;
+        loop {
+            let failure = tokio::select! {
+                biased;
+                () = &mut route_cancelled => break Ok(()),
+                result = &mut upstream, if !upstream_complete => match result {
+                    Ok(()) => {
+                        upstream_complete = true;
+                        None
+                    }
+                    Err(failure) => Some(failure),
+                },
+                result = &mut downstream, if !downstream_complete => match result {
+                    Ok(()) => {
+                        downstream_complete = true;
+                        None
+                    }
+                    Err(failure) => Some(failure),
+                },
+            };
+            if let Some(failure) = failure {
+                break Err(failure);
+            }
+            if upstream_complete && downstream_complete {
+                break Ok(());
+            }
+        }
+    };
+    if let Err(failure) = relay_result {
         let code = failure.application_code();
         let _ = send.reset(code);
         let _ = recv.stop(code);
@@ -3160,6 +3198,127 @@ mod tests {
             assert_eq!(&payload, b"ping");
             stream.write_all(b"pong").await.unwrap();
             stream.shutdown().await.unwrap();
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(server, client, local);
+        })
+        .await
+        .unwrap();
+
+        drop(client_connection);
+        client_endpoint.close().await;
+        server_endpoint.close().await;
+    }
+
+    /// Host route teardown must cancel the client relay and close the local X
+    /// socket even when that local peer keeps its outbound direction open.
+    #[tokio::test]
+    async fn iroh_x11_client_route_stop_cancels_non_cooperating_local_peer() {
+        const TEST_ALPN: &[u8] = b"mezzanine/x11-client-route-stop-test/1";
+        let local_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let local_port = local_listener.local_addr().unwrap().port();
+        let display = crate::cli::x11::resolve_local_x11_display(&format!(
+            "127.0.0.1:{}",
+            local_port.checked_sub(6000).unwrap()
+        ))
+        .unwrap();
+        let forwarder = crate::cli::x11::X11ClientForwarder::new_for_test(
+            display,
+            crate::runtime::x11::X11Cookie::new([0x71; 16]),
+            crate::runtime::x11::X11Cookie::new([0x72; 16]),
+        );
+        let route = crate::runtime::x11::X11ForwardingResult {
+            version: crate::runtime::x11::X11_FORWARDING_VERSION,
+            mode: crate::runtime::x11::X11ForwardingMode::Trusted,
+            generation: 17,
+            route_token: crate::runtime::x11::X11RouteToken::new([0x73; 32]),
+        };
+
+        let server_endpoint = Endpoint::builder(presets::Minimal)
+            .alpns(vec![TEST_ALPN.to_vec()])
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let client_endpoint = Endpoint::builder(presets::Minimal)
+            .transport_config(
+                QuicTransportConfig::builder()
+                    .max_concurrent_bidi_streams(VarInt::from_u32(1))
+                    .build(),
+            )
+            .relay_mode(RelayMode::Disabled)
+            .clear_address_lookup()
+            .portmapper_config(PortmapperConfig::Disabled)
+            .bind()
+            .await
+            .unwrap();
+        let server_addr = server_endpoint.addr();
+        let client_side = async {
+            client_endpoint
+                .connect(server_addr, TEST_ALPN)
+                .await
+                .unwrap()
+        };
+        let server_side = async {
+            let incoming = server_endpoint.accept().await.unwrap();
+            incoming.accept().unwrap().await.unwrap()
+        };
+        let (client_connection, server_connection) = tokio::join!(client_side, server_side);
+
+        let server_route = route.clone();
+        let (local_ready_tx, local_ready_rx) = tokio::sync::oneshot::channel();
+        let server = async move {
+            let (mut send, mut recv) = server_connection.open_bi().await.unwrap();
+            let preface = crate::runtime::x11::X11StreamPreface {
+                generation: server_route.generation,
+                route_token: server_route.route_token,
+            }
+            .encode();
+            send.write_all(&preface).await.unwrap();
+            send.write_all(&x11_setup_packet(b'l', &[0x71; 16]))
+                .await
+                .unwrap();
+            local_ready_rx.await.unwrap();
+            recv.stop(VarInt::from_u32(0)).unwrap();
+            send.finish().unwrap();
+        };
+        let relay_connection = client_connection.clone();
+        let client = async move {
+            let (send, recv) = relay_connection.accept_bi().await.unwrap();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                relay_client_x11_stream(
+                    send,
+                    recv,
+                    route,
+                    forwarder,
+                    test_x11_compression(crate::runtime::RuntimeIrohCompressionCodec::None),
+                    std::time::Duration::from_secs(2),
+                ),
+            )
+            .await
+            .expect("route stop should terminate the client relay")
+            .unwrap();
+        };
+        let local = async {
+            let (mut stream, _) = local_listener.accept().await.unwrap();
+            let mut setup = [0u8; 48];
+            stream.read_exact(&mut setup).await.unwrap();
+            crate::runtime::x11::validate_x11_setup_cookie(
+                &setup,
+                &crate::runtime::x11::X11Cookie::new([0x72; 16]),
+            )
+            .unwrap();
+            local_ready_tx.send(()).unwrap();
+            let mut byte = [0u8; 1];
+            let read =
+                tokio::time::timeout(std::time::Duration::from_secs(2), stream.read(&mut byte))
+                    .await
+                    .expect("route stop should close the non-cooperating local X socket")
+                    .unwrap();
+            assert_eq!(read, 0);
         };
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             tokio::join!(server, client, local);

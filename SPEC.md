@@ -3189,6 +3189,11 @@ diagnostics MUST report repair-pending state, and serialized stale cleanup MUST
 NOT overwrite a newer generation's credential. Detach, control or transport
 loss, trust or lease revocation, takeover, and session shutdown MUST
 immediately prevent new connections and close streams from the old generation.
+When host route teardown stops the client-to-host stream, the attaching client
+MUST cancel both copy directions and close the corresponding local X socket
+without waiting for the local X server to cooperate. Ordinary upstream EOF
+without a peer stop MAY retain downstream half-close semantics so a late X11
+reply can still complete.
 Reattach MUST preserve server paths but rotate fake credentials, generation,
 and token; established streams MUST NOT migrate.
 
