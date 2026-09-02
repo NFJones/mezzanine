@@ -55,7 +55,7 @@ configuration error; remove or relocate all but the intended file. See
 [Configuration overview](overview.md) for mutation examples and the layer
 selection workflow.
 
-The current config schema version is `80`. On launch, Mezzanine migrates an
+The current config schema version is `81`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -114,7 +114,7 @@ shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `80` | Config schema version. Do not change this. |
+| `version` | integer | `81` | Config schema version. Do not change this. |
 | `host` | table | see below | Disabled-by-default persistent host, recovery, and durable-lease policy. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
@@ -683,6 +683,8 @@ description.
 | `agents.compaction_raw_retention_percent` | integer | `10` | Initial percent of complete raw groups retained outside model-authored summary input; provider context-limit backoff may grow the exact tail one complete group at a time; 1 to 100. |
 | `agents.routing` | boolean | `false` | Enable pane-local routing selection by default. |
 | `agents.action_failure_retry_limit` | integer | `5` | Self-correction attempts per repeated correctable action failure signature other than `apply_patch`. |
+| `agents.provider_error_retry_limit` | integer | `5` | Retries after eligible transient provider failures; accepts `0` to disable finite retries and values through `4294967295`. Delays begin at one second and use exponential backoff capped at 15 minutes. |
+| `agents.provider_error_retry_unlimited` | boolean | `false` | Continue eligible transport failures, rate limits, retry hints, 5xx responses, and transient provider outages beyond the finite retry count. Context/output-limit recovery and non-retryable failures remain bounded. Stop, cancellation, and runtime shutdown still terminate retry work. |
 | `agents.turn_timeout_ms` | integer | `1800000` | Total wall-clock deadline, in milliseconds, snapshotted for each new agent turn; must be positive. |
 | `agents.loop_limit` | integer | `8` | Maximum iterations for a `/loop`; must be positive. |
 | `agents.custom_system_prompt` | string | `""` | User-owned system prompt appended after built-in prompt content. |

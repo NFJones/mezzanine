@@ -43,9 +43,12 @@ Provider SSE streams require a recognized terminal event such as
 `response.completed`, `response.failed`, `response.incomplete`, `[DONE]`, or
 Anthropic `message_stop`. If the HTTP peer closes first, Mez treats the EOF as
 a retryable transport interruption, discards provisional streamed output, and
-uses the existing bounded actor-owned retry policy. Repeated premature EOF
-usually indicates an unstable provider, proxy, or network path rather than a
-malformed model response.
+uses the actor-owned retry policy. The default is five retries with exponential
+backoff capped at 15 minutes. For a daemonized workflow that should wait through
+an extended outage, explicitly set `agents.provider_error_retry_unlimited =
+true`; `/stop`, cancellation, and runtime shutdown remain effective. Repeated
+premature EOF usually indicates an unstable provider, proxy, or network path
+rather than a malformed model response.
 
 ## Project behavior is missing or blocked
 

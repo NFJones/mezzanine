@@ -26,9 +26,10 @@ use super::{
     runtime_max_subagent_panes_per_window_from_config,
     runtime_max_subagents_per_subagent_from_config, runtime_mcp_registry_from_config,
     runtime_preset_registry_from_config, runtime_provider_auth_refresh_leeway_seconds_from_config,
-    runtime_provider_registry_from_config, runtime_saved_session_retention_policy_from_config,
-    runtime_shell_mode_from_config, runtime_subagent_profiles_from_config,
-    runtime_subagent_wait_policy_from_config, runtime_terminal_emoji_width_from_config,
+    runtime_provider_error_retry_policy_from_config, runtime_provider_registry_from_config,
+    runtime_saved_session_retention_policy_from_config, runtime_shell_mode_from_config,
+    runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
+    runtime_terminal_emoji_width_from_config,
     runtime_terminal_shell_output_preview_lines_from_config, runtime_terminal_term_from_config,
 };
 use crate::runtime::config::{
@@ -437,6 +438,8 @@ impl RuntimeSessionService {
             let max_concurrent_agents = runtime_max_concurrent_agents_from_config(&structured)?;
             let max_queued_agent_turns = runtime_max_queued_agent_turns_from_config(&structured)?;
             let max_queued_agent_bytes = runtime_max_queued_agent_bytes_from_config(&structured)?;
+            let provider_retry_policy =
+                runtime_provider_error_retry_policy_from_config(&structured)?;
             self.configure_subagent_policy(
                 runtime_max_subagent_panes_per_window_from_config(&structured)?,
                 runtime_max_root_subagents_from_config(&structured)?,
@@ -466,6 +469,7 @@ impl RuntimeSessionService {
                 max_queued_agent_turns,
                 max_queued_agent_bytes,
             )?;
+            self.configure_provider_retry_policy(provider_retry_policy);
             self.start_ready_agent_turns()?;
             self.integration
                 .replace_subagent_profiles(runtime_subagent_profiles_from_config(&structured)?);

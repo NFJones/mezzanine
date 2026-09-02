@@ -159,7 +159,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 80
+version = 81
 
 # Persistent multi-session host policy. The host and inbound Iroh listener are
 # disabled until explicitly started or enabled by the primary user.
@@ -538,6 +538,10 @@ compaction_raw_retention_percent = 10
 routing = false
 # Maximum recovery attempts after action execution failures.
 action_failure_retry_limit = 5
+# Maximum retries after retryable provider errors.
+provider_error_retry_limit = 5
+# Retry transient provider outages indefinitely at the 15-minute delay cap.
+provider_error_retry_unlimited = false
 # Total wall-clock budget snapshotted for each new agent turn.
 turn_timeout_ms = 1800000
 # Agent shell command execution mode. `native` spawns a fresh shell process

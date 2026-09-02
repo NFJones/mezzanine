@@ -281,6 +281,43 @@ fn runtime_config_reload_applies_action_failure_retry_limit() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies runtime config reload updates provider retry count and unlimited
+/// mode independently without replacing the scheduler or its delay bounds.
+#[test]
+fn runtime_config_reload_applies_provider_error_retry_policy() {
+    let mut service = test_runtime_service();
+    assert_eq!(
+        service.provider_retry_scheduler_mut().policy(),
+        mez_agent::DEFAULT_PROVIDER_RETRY_POLICY
+    );
+    let root = temp_root("runtime-provider-error-retry-policy");
+    let path = root.join("config.toml");
+    fs::write(
+        &path,
+        "[agents]\nprovider_error_retry_limit = 2\nprovider_error_retry_unlimited = true\n",
+    )
+    .unwrap();
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: fs::read_to_string(&path).unwrap(),
+        }])
+        .unwrap();
+
+    let policy = service.provider_retry_scheduler_mut().policy();
+    assert_eq!(policy.max_attempts, 2);
+    assert!(policy.unlimited);
+    assert_eq!(policy.initial_delay_ms, 1_000);
+    assert_eq!(policy.max_delay_ms, 15 * 60 * 1_000);
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies runtime config reload changes the deadline used by future turns.
 ///
 /// Existing turns retain their snapshotted absolute deadline in their turn

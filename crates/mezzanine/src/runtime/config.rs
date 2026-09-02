@@ -44,7 +44,8 @@ pub(super) use agents::{
     runtime_max_concurrent_agents_from_config, runtime_max_queued_agent_bytes_from_config,
     runtime_max_queued_agent_turns_from_config, runtime_max_root_subagents_from_config,
     runtime_max_subagent_depth_from_config, runtime_max_subagent_panes_per_window_from_config,
-    runtime_max_subagents_per_subagent_from_config, runtime_shell_mode_from_config,
+    runtime_max_subagents_per_subagent_from_config,
+    runtime_provider_error_retry_policy_from_config, runtime_shell_mode_from_config,
     runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
 };
 pub(super) use audit::runtime_audit_config_present;
@@ -373,7 +374,8 @@ mod tests {
 
     use super::{
         ActiveTurnSleepInhibition, runtime_active_turn_sleep_inhibition_from_config,
-        runtime_fit_status_line, runtime_terminal_agent_wrap_column_cap_from_config,
+        runtime_fit_status_line, runtime_provider_error_retry_policy_from_config,
+        runtime_terminal_agent_wrap_column_cap_from_config,
         runtime_terminal_emoji_width_from_config, runtime_terminal_streaming_output_from_config,
     };
 
@@ -402,6 +404,39 @@ mod tests {
         assert!(
             runtime_active_turn_sleep_inhibition_from_config(&serde_json::json!({
                 "agents": { "active_turn_sleep_inhibition": "always" }
+            }))
+            .is_err()
+        );
+    }
+
+    /// Verifies provider retry configuration keeps a finite five-attempt
+    /// default while accepting an independent zero-or-greater limit and
+    /// explicit unlimited transport-retry mode.
+    #[test]
+    fn parses_provider_error_retry_policy_from_config() {
+        assert_eq!(
+            runtime_provider_error_retry_policy_from_config(&serde_json::json!({})).unwrap(),
+            mez_agent::DEFAULT_PROVIDER_RETRY_POLICY
+        );
+        let configured = runtime_provider_error_retry_policy_from_config(&serde_json::json!({
+            "agents": {
+                "provider_error_retry_limit": 0,
+                "provider_error_retry_unlimited": true
+            }
+        }))
+        .unwrap();
+        assert_eq!(configured.max_attempts, 0);
+        assert!(configured.unlimited);
+        assert_eq!(configured.max_delay_ms, 15 * 60 * 1_000);
+        assert!(
+            runtime_provider_error_retry_policy_from_config(&serde_json::json!({
+                "agents": { "provider_error_retry_limit": -1 }
+            }))
+            .is_err()
+        );
+        assert!(
+            runtime_provider_error_retry_policy_from_config(&serde_json::json!({
+                "agents": { "provider_error_retry_unlimited": "yes" }
             }))
             .is_err()
         );

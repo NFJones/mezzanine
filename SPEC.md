@@ -3007,10 +3007,17 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 79 is the current implemented configuration schema version for this
+schema version 81 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
+
+The `79 -> 80` migration MUST add the disabled-by-default
+`transport.iroh.x11` forwarding policy without enabling X11 or changing the
+existing Iroh listener policy. The `80 -> 81` migration MUST add
+`agents.provider_error_retry_limit = 5` and
+`agents.provider_error_retry_unlimited = false` when absent while preserving
+either explicitly configured value.
 
 The `78 -> 79` migration MUST add `external_editor.command` and
 `external_editor.fallback` as structured argv candidates while preserving the
@@ -3819,8 +3826,9 @@ The `issues` table MUST support `enabled` and `database_path`.
 
 The `agents` table MUST support `default_provider`, `default_model_profile`,
 `active_turn_sleep_inhibition`, `shell_only`, `compaction_raw_retention_percent`, `routing`,
-`shell_mode`, `action_failure_retry_limit`, `turn_timeout_ms`, `loop_limit`,
-`custom_system_prompt`, `default_personality`, `subagent_placement`,
+`shell_mode`, `action_failure_retry_limit`, `provider_error_retry_limit`,
+`provider_error_retry_unlimited`, `turn_timeout_ms`, `loop_limit`, `custom_system_prompt`,
+`default_personality`, `subagent_placement`,
 `max_concurrent_agents`, `max_queued_turns`, `max_queued_bytes`,
 `max_root_subagents`, `max_subagents_per_subagent`,
 `max_subagent_panes_per_window`, `subagent_wait_policy`, and `max_depth`.
@@ -3856,6 +3864,16 @@ excluded from this bounded recovery budget and MAY be retried until they succeed
 or some other blocker ends the turn. Non-hunk `apply_patch` validation,
 transport, readiness, and precondition failures MUST remain bounded by the
 normal failed-action correction budget.
+`agents.provider_error_retry_limit` MUST be a non-negative integer no greater
+than `4294967295` and MUST default to `5`; zero disables finite retries.
+`agents.provider_error_retry_unlimited` MUST be a boolean and MUST default to
+`false`. When enabled, it MUST bypass only the finite limit for retryable
+transport failures, rate limits, provider retry hints, 5xx responses, and
+transient overload or unavailability. It MUST NOT make malformed requests,
+authentication failures, context-limit recovery, output-limit recovery, or
+non-retryable provider failures infinite. Reloading either setting MUST affect
+the next observed provider failure without invalidating an already scheduled
+retry generation or changing its selected delay.
 `agents.turn_timeout_ms` MUST be a positive integer and MUST default to
 `1800000`. The runtime MUST snapshot this duration as an absolute
 millisecond-resolution deadline when each turn is created. Reloading the
@@ -6904,8 +6922,18 @@ attempts are exhausted.
 
 Rate-limit, transient overload or temporary unavailability responses, and
 retryable transport failures MUST use the runtime retry scheduler's bounded
-exponential backoff policy. The default policy MUST attempt up to five retries
-for one active turn before surfacing the provider failure as terminal.
+exponential backoff policy. The initial local delay MUST be one second, MUST
+double by retry attempt, and MUST never exceed fifteen minutes. Provider
+`Retry-After` advice MAY raise the selected delay but MUST also be capped at
+fifteen minutes. The scheduler MAY jitter local delays below the cap; after the
+exponential delay reaches fifteen minutes, unlimited retries MUST continue at
+that capped delay. The default policy MUST attempt up to five retries for one
+active turn before surfacing the provider failure as terminal. When
+`agents.provider_error_retry_unlimited` is true, eligible transient provider
+outages MUST continue beyond that finite count until the provider succeeds or
+the turn is cancelled or the runtime shuts down. Retry status and lifecycle
+telemetry MUST report the attempt, selected delay, finite reference limit,
+unlimited mode, and a sanitized provider-error category.
 Provider retry attempt, phase, stale-event, eligibility, and backoff decisions
 MUST be owned by the provider-independent `mez-agent` scheduler. The product
 runtime MUST interpret recovery, timer, and dispatch effects using its runtime

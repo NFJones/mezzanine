@@ -79,6 +79,8 @@ pub enum ProviderErrorRetryClass {
 pub struct ProviderRetryPolicy {
     /// Maximum retries accepted after the initial provider failure.
     pub max_attempts: u32,
+    /// Whether retryable failures bypass the finite attempt budget.
+    pub unlimited: bool,
     /// Initial delay used for the first accepted retry.
     pub initial_delay_ms: u64,
     /// Maximum delay applied after exponential growth.
@@ -90,16 +92,19 @@ impl ProviderRetryPolicy {
     /// retry-attempt count.
     pub const fn should_retry(
         self,
-        recorded_attempts: u32,
+        recorded_attempts: u64,
         retry_class: ProviderErrorRetryClass,
     ) -> bool {
-        recorded_attempts < self.max_attempts
-            && matches!(
-                retry_class,
-                ProviderErrorRetryClass::ContextLimit
-                    | ProviderErrorRetryClass::OutputLimit
-                    | ProviderErrorRetryClass::RetryableTransport
-            )
+        let retryable = matches!(
+            retry_class,
+            ProviderErrorRetryClass::ContextLimit
+                | ProviderErrorRetryClass::OutputLimit
+                | ProviderErrorRetryClass::RetryableTransport
+        );
+        let budget_available = recorded_attempts < self.max_attempts as u64
+            || (self.unlimited
+                && matches!(retry_class, ProviderErrorRetryClass::RetryableTransport));
+        retryable && budget_available
     }
 
     /// Returns one bounded, jittered delay for a one-based retry attempt.
@@ -109,20 +114,24 @@ impl ProviderRetryPolicy {
     /// after both local backoff and advice are capped by `max_delay_ms`.
     pub fn delay_ms(
         self,
-        attempt: u32,
+        attempt: u64,
         advised_delay_ms: Option<u64>,
         jitter_sample: Option<u64>,
     ) -> u64 {
-        let exponent = attempt.saturating_sub(1).min(10);
+        let exponent = attempt.saturating_sub(1).min(10) as u32;
         let exponential_delay = self
             .initial_delay_ms
             .saturating_mul(2u64.saturating_pow(exponent))
             .min(self.max_delay_ms);
-        let local_delay = jitter_sample.map_or(exponential_delay, |jitter_sample| {
-            let jitter_floor = exponential_delay / 2;
-            let jitter_span = exponential_delay.saturating_sub(jitter_floor);
-            jitter_floor.saturating_add(jitter_sample % jitter_span.saturating_add(1))
-        });
+        let local_delay = if exponential_delay == self.max_delay_ms {
+            exponential_delay
+        } else {
+            jitter_sample.map_or(exponential_delay, |jitter_sample| {
+                let jitter_floor = exponential_delay / 2;
+                let jitter_span = exponential_delay.saturating_sub(jitter_floor);
+                jitter_floor.saturating_add(jitter_sample % jitter_span.saturating_add(1))
+            })
+        };
         local_delay.max(advised_delay_ms.unwrap_or(0).min(self.max_delay_ms))
     }
 }
@@ -130,8 +139,9 @@ impl ProviderRetryPolicy {
 /// Canonical runtime provider retry budget and backoff settings.
 pub const DEFAULT_PROVIDER_RETRY_POLICY: ProviderRetryPolicy = ProviderRetryPolicy {
     max_attempts: 5,
+    unlimited: false,
     initial_delay_ms: 1_000,
-    max_delay_ms: 30_000,
+    max_delay_ms: 15 * 60 * 1_000,
 };
 
 /// Parses provider `Retry-After` advice from a sanitized failure payload.
@@ -382,7 +392,7 @@ fn provider_error_text_is_output_limit_exceeded(text: &str) -> bool {
 mod tests {
     use super::{
         DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorKind, ProviderErrorRetryClass,
-        classify_provider_error_retry, provider_retry_after_delay_ms,
+        ProviderRetryPolicy, classify_provider_error_retry, provider_retry_after_delay_ms,
     };
 
     /// Verifies retry eligibility accepts recoverable classes only while the
@@ -404,6 +414,23 @@ mod tests {
         );
     }
 
+    /// Verifies unlimited retry mode bypasses only the finite attempt budget
+    /// while non-retryable provider failures remain terminal.
+    #[test]
+    fn provider_retry_policy_supports_explicit_unlimited_mode() {
+        let policy = ProviderRetryPolicy {
+            max_attempts: 2,
+            unlimited: true,
+            initial_delay_ms: 1_000,
+            max_delay_ms: 900_000,
+        };
+
+        assert!(policy.should_retry(u64::MAX, ProviderErrorRetryClass::RetryableTransport));
+        assert!(!policy.should_retry(u64::MAX, ProviderErrorRetryClass::ContextLimit));
+        assert!(!policy.should_retry(u64::MAX, ProviderErrorRetryClass::OutputLimit));
+        assert!(!policy.should_retry(u64::MAX, ProviderErrorRetryClass::NonRetryable));
+    }
+
     /// Verifies exponential delays are one-based, jittered deterministically,
     /// honor bounded provider advice, and saturate at the canonical cap.
     #[test]
@@ -423,11 +450,11 @@ mod tests {
         );
         assert_eq!(
             DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(1, Some(u64::MAX), Some(0)),
-            30_000
+            900_000
         );
         assert_eq!(
-            DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(u32::MAX, None, None),
-            30_000
+            DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(u64::MAX, None, Some(0)),
+            900_000
         );
     }
 

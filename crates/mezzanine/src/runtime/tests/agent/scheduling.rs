@@ -631,6 +631,84 @@ fn runtime_turn_settlement_clears_provider_retry_scheduler_state() {
     assert_eq!(service.agent_provider_retry_turn_ids().count(), 0);
 }
 
+/// Verifies unlimited provider retry scheduling reports its mode, finite
+/// reference limit, delay, and sanitized error kind, while turn settlement
+/// still cancels the backoff generation before it can dispatch more work.
+#[test]
+fn runtime_unlimited_provider_retry_reports_policy_and_remains_cancellable() {
+    let mut service = test_runtime_service();
+    service.configure_provider_retry_policy(mez_agent::ProviderRetryPolicy {
+        max_attempts: 2,
+        unlimited: true,
+        ..mez_agent::DEFAULT_PROVIDER_RETRY_POLICY
+    });
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let turn = service
+        .start_agent_prompt_turn("%1", "wait for the provider")
+        .unwrap();
+    let error = MezError::invalid_state("provider temporarily unavailable")
+        .with_provider_failure_json(r#"{"status_code":503}"#);
+
+    let transition = service
+        .schedule_agent_provider_retry_transition(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            mez_agent::ProviderErrorRetryClass::RetryableTransport,
+            &error,
+        )
+        .unwrap()
+        .expect("unlimited retry should schedule a backoff timer");
+    let retry_key = transition
+        .side_effects
+        .iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::ScheduleTimer { key, delay_ms }
+                if key.kind == crate::runtime::RuntimeTimerKind::ProviderRetry =>
+            {
+                assert!((500..=1_000).contains(delay_ms), "{delay_ms}");
+                Some(key.clone())
+            }
+            _ => None,
+        })
+        .expect("provider retry timer");
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let normalized_pane_text = normalized_pane_log_text(&pane_text);
+    assert!(pane_text.contains("invalid_state"), "{pane_text}");
+    assert!(
+        normalized_pane_text.contains("attempt 1 (unlimited)"),
+        "{pane_text}"
+    );
+    let events = service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::AllPrimaries);
+    assert!(events.iter().any(|event| {
+        event.kind == EventKind::AgentStatus
+            && event.payload.contains(r#""provider_retry":"scheduled""#)
+            && event.payload.contains(r#""attempt":1"#)
+            && event.payload.contains(r#""max_attempts":2"#)
+            && event.payload.contains(r#""unlimited":true"#)
+            && event.payload.contains(r#""error_kind":"invalid_state""#)
+    }));
+
+    service
+        .finish_agent_turn("%1", &turn.turn_id, AgentTurnState::Interrupted)
+        .unwrap();
+    assert_eq!(
+        service
+            .apply_agent_provider_retry_timer_transition(&retry_key.owner_id, retry_key.generation,)
+            .unwrap(),
+        crate::runtime::RuntimeTransition::default()
+    );
+}
+
 /// Verifies that a live config reload starts queued agent work when the new
 /// scheduler limit makes that work runnable. Updating the limit without
 /// draining newly available scheduler capacity would leave prompt turns queued

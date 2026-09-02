@@ -17,6 +17,19 @@ use mez_agent::{
     provider_retry_after_delay_ms,
 };
 
+/// Runtime-facing details for one scheduled provider retry.
+#[derive(Debug, Clone, Copy)]
+struct RuntimeProviderRetrySchedule {
+    /// One-based retry attempt and timer generation.
+    attempt: u64,
+    /// Configured finite retry limit retained for status reporting.
+    max_attempts: u32,
+    /// Whether eligible transient failures bypass the finite limit.
+    unlimited: bool,
+    /// Selected bounded backoff delay.
+    delay_ms: u64,
+}
+
 /// Returns the complete serialized OpenAI Responses body size for one dispatch.
 fn runtime_openai_dispatch_request_shape(
     dispatch: &RuntimeAgentProviderDispatch,
@@ -218,6 +231,7 @@ impl RuntimeSessionService {
             recovery,
             attempt,
             max_attempts,
+            unlimited,
             delay_ms,
             ..
         }) = decision
@@ -234,10 +248,27 @@ impl RuntimeSessionService {
         };
         let recovered = match recovery {
             ProviderRetryRecovery::ContextLimit => self
-                .recover_agent_provider_context_limit_failure(agent_id, turn_id, error, attempt)?,
-            ProviderRetryRecovery::OutputLimit => {
-                self.recover_agent_provider_output_limit_failure(agent_id, turn_id, error, attempt)?
-            }
+                .recover_agent_provider_context_limit_failure(
+                    agent_id,
+                    turn_id,
+                    error,
+                    u32::try_from(attempt).map_err(|_| {
+                        MezError::invalid_state(
+                            "context-limit retry attempt exceeds supported range",
+                        )
+                    })?,
+                )?,
+            ProviderRetryRecovery::OutputLimit => self
+                .recover_agent_provider_output_limit_failure(
+                    agent_id,
+                    turn_id,
+                    error,
+                    u32::try_from(attempt).map_err(|_| {
+                        MezError::invalid_state(
+                            "output-limit retry attempt exceeds supported range",
+                        )
+                    })?,
+                )?,
             ProviderRetryRecovery::None => true,
         };
         if recovered
@@ -273,9 +304,12 @@ impl RuntimeSessionService {
             agent_id,
             turn_id,
             error,
-            attempt,
-            max_attempts,
-            delay_ms,
+            RuntimeProviderRetrySchedule {
+                attempt,
+                max_attempts,
+                unlimited,
+                delay_ms,
+            },
         ) {
             Ok(applied) => applied,
             Err(error) => {
@@ -323,11 +357,7 @@ impl RuntimeSessionService {
             }) => Ok(Some(RuntimeTransition {
                 applied: true,
                 side_effects: vec![RuntimeSideEffect::ScheduleTimer {
-                    key: RuntimeTimerKey::new(
-                        RuntimeTimerKind::ProviderRetry,
-                        turn_id,
-                        u64::from(attempt),
-                    ),
+                    key: RuntimeTimerKey::new(RuntimeTimerKind::ProviderRetry, turn_id, attempt),
                     delay_ms,
                 }],
             })),
@@ -1078,15 +1108,19 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(crate) fn record_agent_provider_retry_event(
+    fn record_agent_provider_retry_event(
         &mut self,
         agent_id: &AgentId,
         turn_id: &str,
         error: &MezError,
-        attempt: u32,
-        max_attempts: u32,
-        delay_ms: u64,
+        schedule: RuntimeProviderRetrySchedule,
     ) -> Result<bool> {
+        let RuntimeProviderRetrySchedule {
+            attempt,
+            max_attempts,
+            unlimited,
+            delay_ms,
+        } = schedule;
         let Some(turn) = self
             .agent_turn_ledger()
             .turns()
@@ -1123,11 +1157,12 @@ impl RuntimeSessionService {
             &turn.pane_id,
             turn_id,
             &format!(
-                "provider_task retry_scheduled provider={} error_kind={} attempt={} max_attempts={} delay_ms={}",
+                "provider_task retry_scheduled provider={} error_kind={} attempt={} max_attempts={} unlimited={} delay_ms={}",
                 model_profile.provider,
                 runtime_mezzanine_error_code(error.kind()),
                 attempt,
                 max_attempts,
+                unlimited,
                 delay_ms
             ),
         )?;
@@ -1139,20 +1174,30 @@ impl RuntimeSessionService {
         )?;
         self.append_agent_status_text_to_terminal_buffer(
             &turn.pane_id,
-            &format!(
-                "agent: provider {} request failed; retrying attempt {attempt}/{max_attempts} in {} ms",
-                model_profile.provider, delay_ms
-            ),
+            &if unlimited {
+                format!(
+                    "agent: provider {} request failed ({}); retrying attempt {attempt} (unlimited) in {delay_ms} ms",
+                    model_profile.provider,
+                    runtime_mezzanine_error_code(error.kind())
+                )
+            } else {
+                format!(
+                    "agent: provider {} request failed ({}); retrying attempt {attempt}/{max_attempts} in {delay_ms} ms",
+                    model_profile.provider,
+                    runtime_mezzanine_error_code(error.kind())
+                )
+            },
         )?;
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
-                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"running","provider":"{}","provider_retry":"scheduled","attempt":{},"max_attempts":{},"delay_ms":{},"error_kind":"{}"}}"#,
+                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"running","provider":"{}","provider_retry":"scheduled","attempt":{},"max_attempts":{},"unlimited":{},"delay_ms":{},"error_kind":"{}"}}"#,
                 json_escape(&turn.pane_id),
                 json_escape(turn_id),
                 json_escape(&model_profile.provider),
                 attempt,
                 max_attempts,
+                unlimited,
                 delay_ms,
                 json_escape(runtime_mezzanine_error_code(error.kind()))
             ),
@@ -1168,7 +1213,7 @@ impl RuntimeSessionService {
     pub(crate) fn queue_agent_provider_retry_task(
         &mut self,
         turn_id: &str,
-        attempt: u32,
+        attempt: u64,
     ) -> Result<bool> {
         let Some(turn) = self
             .agent_turn_ledger()
@@ -1215,9 +1260,6 @@ impl RuntimeSessionService {
         turn_id: &str,
         attempt: u64,
     ) -> Result<RuntimeTransition> {
-        let Ok(attempt) = u32::try_from(attempt) else {
-            return Ok(RuntimeTransition::default());
-        };
         let decision =
             self.agent
                 .provider_retry_scheduler
@@ -1356,7 +1398,7 @@ impl RuntimeSessionService {
                 .provider_retry_scheduler
                 .apply(ProviderRetryEvent::RecoveryCompleted {
                     turn_id: turn_id.to_string(),
-                    attempt,
+                    attempt: u64::from(attempt),
                     result: ProviderRetryRecoveryResult::Ready,
                 });
         if !matches!(
@@ -1372,7 +1414,7 @@ impl RuntimeSessionService {
             .provider_retry_scheduler
             .apply(ProviderRetryEvent::TimerElapsed {
                 turn_id: turn_id.to_string(),
-                attempt,
+                attempt: u64::from(attempt),
             });
         if !matches!(
             timer,
@@ -1382,13 +1424,13 @@ impl RuntimeSessionService {
                 "context compaction retry did not become dispatchable",
             ));
         }
-        let queued = self.queue_agent_provider_retry_task(turn_id, attempt)?;
+        let queued = self.queue_agent_provider_retry_task(turn_id, u64::from(attempt))?;
         let completion =
             self.agent
                 .provider_retry_scheduler
                 .apply(ProviderRetryEvent::DispatchCompleted {
                     turn_id: turn_id.to_string(),
-                    attempt,
+                    attempt: u64::from(attempt),
                     result: if queued {
                         ProviderRetryDispatchResult::Ready
                     } else {

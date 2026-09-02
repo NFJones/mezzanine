@@ -681,6 +681,8 @@ pub(super) const AGENT_KEYS: &[&str] = &[
     "compaction_raw_retention_percent",
     "routing",
     "action_failure_retry_limit",
+    "provider_error_retry_limit",
+    "provider_error_retry_unlimited",
     "turn_timeout_ms",
     "loop_limit",
     "custom_system_prompt",

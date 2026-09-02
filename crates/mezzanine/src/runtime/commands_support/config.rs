@@ -1040,6 +1040,8 @@ pub(crate) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "agents.routing"
                 | "agents.active_turn_sleep_inhibition"
                 | "agents.action_failure_retry_limit"
+                | "agents.provider_error_retry_limit"
+                | "agents.provider_error_retry_unlimited"
                 | "agents.turn_timeout_ms"
                 | "agents.loop_limit"
                 | "agents.shell_only"

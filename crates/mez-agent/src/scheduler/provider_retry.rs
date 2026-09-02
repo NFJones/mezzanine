@@ -79,7 +79,7 @@ pub enum ProviderRetryEvent {
         /// Stable active-turn identity.
         turn_id: String,
         /// One-based retry attempt from the recovery effect.
-        attempt: u32,
+        attempt: u64,
         /// Observed recovery result.
         result: ProviderRetryRecoveryResult,
     },
@@ -88,14 +88,14 @@ pub enum ProviderRetryEvent {
         /// Stable active-turn identity.
         turn_id: String,
         /// One-based retry attempt encoded in the timer generation.
-        attempt: u32,
+        attempt: u64,
     },
     /// Product dispatch preparation for one elapsed timer completed.
     DispatchCompleted {
         /// Stable active-turn identity.
         turn_id: String,
         /// One-based retry attempt from the dispatch effect.
-        attempt: u32,
+        attempt: u64,
         /// Observed dispatch-preparation result.
         result: ProviderRetryDispatchResult,
     },
@@ -116,9 +116,11 @@ pub enum ProviderRetryEffect {
         /// Product-independent recovery kind.
         recovery: ProviderRetryRecovery,
         /// One-based retry attempt.
-        attempt: u32,
+        attempt: u64,
         /// Configured maximum retry attempts.
         max_attempts: u32,
+        /// Whether retryable failures bypass the configured finite limit.
+        unlimited: bool,
         /// Delay requested after successful recovery.
         delay_ms: u64,
     },
@@ -127,7 +129,7 @@ pub enum ProviderRetryEffect {
         /// Stable active-turn identity.
         turn_id: String,
         /// One-based retry attempt used as the timer generation.
-        attempt: u32,
+        attempt: u64,
         /// Deterministically planned timer delay.
         delay_ms: u64,
     },
@@ -136,7 +138,7 @@ pub enum ProviderRetryEffect {
         /// Stable active-turn identity.
         turn_id: String,
         /// One-based retry attempt used for stale-event validation.
-        attempt: u32,
+        attempt: u64,
     },
 }
 
@@ -172,7 +174,7 @@ enum ProviderRetryPhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProviderRetryState {
     /// Latest one-based retry attempt.
-    attempt: u32,
+    attempt: u64,
     /// Delay selected once when this attempt was planned.
     delay_ms: u64,
     /// Current effect boundary for the attempt.
@@ -201,6 +203,19 @@ impl ProviderRetryScheduler {
             policy,
             turns: BTreeMap::new(),
         }
+    }
+
+    /// Returns the retry budget and backoff policy used for new failures.
+    pub const fn policy(&self) -> ProviderRetryPolicy {
+        self.policy
+    }
+
+    /// Replaces retry policy without discarding active turn generations.
+    ///
+    /// Delays already emitted to product timers remain immutable; the new
+    /// policy applies when the next provider failure is observed.
+    pub fn set_policy(&mut self, policy: ProviderRetryPolicy) {
+        self.policy = policy;
     }
 
     /// Applies one observed event and returns the next effect or terminal state.
@@ -240,7 +255,7 @@ impl ProviderRetryScheduler {
     }
 
     /// Returns the latest planned or dispatched attempt for one turn.
-    pub fn attempt(&self, turn_id: &str) -> u32 {
+    pub fn attempt(&self, turn_id: &str) -> u64 {
         self.turns
             .get(turn_id)
             .map(|state| state.attempt)
@@ -293,6 +308,7 @@ impl ProviderRetryScheduler {
             recovery,
             attempt,
             max_attempts: self.policy.max_attempts,
+            unlimited: self.policy.unlimited,
             delay_ms,
         })
     }
@@ -301,7 +317,7 @@ impl ProviderRetryScheduler {
     fn complete_recovery(
         &mut self,
         turn_id: &str,
-        attempt: u32,
+        attempt: u64,
         result: ProviderRetryRecoveryResult,
     ) -> ProviderRetryTransition {
         if !self.state_matches(turn_id, attempt, ProviderRetryPhase::Recovering) {
@@ -332,7 +348,7 @@ impl ProviderRetryScheduler {
     }
 
     /// Accepts only the current scheduled timer and requests dispatch preparation.
-    fn observe_timer(&mut self, turn_id: &str, attempt: u32) -> ProviderRetryTransition {
+    fn observe_timer(&mut self, turn_id: &str, attempt: u64) -> ProviderRetryTransition {
         if !self.state_matches(turn_id, attempt, ProviderRetryPhase::TimerPending) {
             return ProviderRetryTransition::Ignored;
         }
@@ -349,7 +365,7 @@ impl ProviderRetryScheduler {
     fn complete_dispatch(
         &mut self,
         turn_id: &str,
-        attempt: u32,
+        attempt: u64,
         result: ProviderRetryDispatchResult,
     ) -> ProviderRetryTransition {
         if !self.state_matches(turn_id, attempt, ProviderRetryPhase::Dispatching) {
@@ -370,7 +386,7 @@ impl ProviderRetryScheduler {
     }
 
     /// Reports whether one event identifies the current attempt and phase.
-    fn state_matches(&self, turn_id: &str, attempt: u32, phase: ProviderRetryPhase) -> bool {
+    fn state_matches(&self, turn_id: &str, attempt: u64, phase: ProviderRetryPhase) -> bool {
         self.turns
             .get(turn_id)
             .is_some_and(|state| state.attempt == attempt && state.phase == phase)
@@ -414,6 +430,7 @@ mod tests {
                 recovery: ProviderRetryRecovery::None,
                 attempt: 1,
                 max_attempts: 5,
+                unlimited: false,
                 delay_ms: 1_000,
             }
         );
@@ -636,6 +653,103 @@ mod tests {
             ProviderRetryTransition::Terminal
         );
         assert_eq!(scheduler.attempt("turn-1"), 0);
+    }
+
+    /// Verifies explicit unlimited mode continues transient provider retries
+    /// beyond the finite count while preserving the fifteen-minute delay cap.
+    #[test]
+    fn provider_retry_reducer_continues_unlimited_transport_retries_at_delay_cap() {
+        let mut scheduler = ProviderRetryScheduler::new(ProviderRetryPolicy {
+            max_attempts: 2,
+            unlimited: true,
+            initial_delay_ms: 1_000,
+            max_delay_ms: 900_000,
+        });
+        for attempt in 1..=12 {
+            let ProviderRetryEffect::Recover {
+                attempt: observed_attempt,
+                max_attempts,
+                unlimited,
+                delay_ms,
+                ..
+            } = observe_retry(
+                &mut scheduler,
+                "turn-unlimited",
+                ProviderErrorRetryClass::RetryableTransport,
+            )
+            else {
+                panic!("unlimited retry should request recovery")
+            };
+            assert_eq!(observed_attempt, attempt);
+            assert_eq!(max_attempts, 2);
+            assert!(unlimited);
+            if attempt >= 11 {
+                assert_eq!(delay_ms, 900_000);
+            }
+            scheduler.apply(ProviderRetryEvent::RecoveryCompleted {
+                turn_id: "turn-unlimited".to_string(),
+                attempt,
+                result: ProviderRetryRecoveryResult::Ready,
+            });
+            scheduler.apply(ProviderRetryEvent::TimerElapsed {
+                turn_id: "turn-unlimited".to_string(),
+                attempt,
+            });
+            scheduler.apply(ProviderRetryEvent::DispatchCompleted {
+                turn_id: "turn-unlimited".to_string(),
+                attempt,
+                result: ProviderRetryDispatchResult::Ready,
+            });
+        }
+        assert_eq!(scheduler.attempt("turn-unlimited"), 12);
+    }
+
+    /// Verifies a live policy replacement affects the next failure without
+    /// invalidating a timer already emitted for the active retry generation.
+    #[test]
+    fn provider_retry_reducer_preserves_active_state_across_policy_update() {
+        let mut scheduler = ProviderRetryScheduler::default();
+        observe_retry(
+            &mut scheduler,
+            "turn-reconfigured",
+            ProviderErrorRetryClass::RetryableTransport,
+        );
+        scheduler.apply(ProviderRetryEvent::RecoveryCompleted {
+            turn_id: "turn-reconfigured".to_string(),
+            attempt: 1,
+            result: ProviderRetryRecoveryResult::Ready,
+        });
+        scheduler.set_policy(ProviderRetryPolicy {
+            max_attempts: 1,
+            unlimited: true,
+            ..DEFAULT_PROVIDER_RETRY_POLICY
+        });
+
+        assert!(matches!(
+            scheduler.apply(ProviderRetryEvent::TimerElapsed {
+                turn_id: "turn-reconfigured".to_string(),
+                attempt: 1,
+            }),
+            ProviderRetryTransition::Effect(ProviderRetryEffect::DispatchProvider { .. })
+        ));
+        scheduler.apply(ProviderRetryEvent::DispatchCompleted {
+            turn_id: "turn-reconfigured".to_string(),
+            attempt: 1,
+            result: ProviderRetryDispatchResult::Ready,
+        });
+        assert!(matches!(
+            observe_retry(
+                &mut scheduler,
+                "turn-reconfigured",
+                ProviderErrorRetryClass::RetryableTransport,
+            ),
+            ProviderRetryEffect::Recover {
+                attempt: 2,
+                max_attempts: 1,
+                unlimited: true,
+                ..
+            }
+        ));
     }
 
     /// Verifies cancellation and shutdown settlement remove retry state from

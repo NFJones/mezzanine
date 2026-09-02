@@ -667,6 +667,50 @@ fn rejects_invalid_action_failure_retry_limit_values() {
     );
 }
 
+/// Verifies provider retry count accepts zero as an explicit disable while
+/// rejecting negative, fractional, quoted, or out-of-range values.
+#[test]
+fn validates_provider_error_retry_limit_values() {
+    for value in ["-1", "1.5", "\"5\"", "4294967296"] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[agents]\nprovider_error_retry_limit = {value}\n"),
+            ConfigScope::Primary,
+        );
+        assert!(!validation.valid, "accepted provider retry limit {value}");
+        assert!(validation.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "agents.provider_error_retry_limit"
+                && diagnostic.message.contains("non-negative integer")
+        }));
+    }
+    assert!(
+        validate_config_text(
+            ConfigFormat::Toml,
+            "[agents]\nprovider_error_retry_limit = 0\n",
+            ConfigScope::Primary,
+        )
+        .valid
+    );
+}
+
+/// Verifies unlimited provider retries require an explicit boolean rather
+/// than overloading the finite retry-count field or accepting string aliases.
+#[test]
+fn validates_provider_error_retry_unlimited_values() {
+    for value in ["\"true\"", "1", "[]"] {
+        let validation = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[agents]\nprovider_error_retry_unlimited = {value}\n"),
+            ConfigScope::Primary,
+        );
+        assert!(!validation.valid, "accepted unlimited retry value {value}");
+        assert!(validation.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "agents.provider_error_retry_unlimited"
+                && diagnostic.message.contains("true or false")
+        }));
+    }
+}
+
 /// Verifies agent-turn deadlines reject zero and non-integer values.
 ///
 /// A turn must always have a finite positive wall-clock budget so runtime

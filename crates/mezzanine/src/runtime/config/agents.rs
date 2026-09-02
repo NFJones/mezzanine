@@ -17,7 +17,10 @@ use super::{
     runtime_config_permission_preset, runtime_cooperation_mode, runtime_json_bool,
     runtime_json_object, runtime_json_string, runtime_json_string_array, runtime_json_string_map,
 };
-use mez_agent::{AutoSizingRoutingPolicy, DEFAULT_AGENT_TURN_TIMEOUT_MS};
+use mez_agent::{
+    AutoSizingRoutingPolicy, DEFAULT_AGENT_TURN_TIMEOUT_MS, DEFAULT_PROVIDER_RETRY_POLICY,
+    ProviderRetryPolicy,
+};
 
 /// User-selected policy for idle sleep inhibition during active agent turns.
 ///
@@ -198,6 +201,30 @@ pub(crate) fn runtime_agent_action_failure_retry_limit_from_config(root: &Value)
         "action_failure_retry_limit",
         DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
     )
+}
+
+/// Parses provider-error retry count and explicit unlimited mode.
+pub(crate) fn runtime_provider_error_retry_policy_from_config(
+    root: &Value,
+) -> Result<ProviderRetryPolicy> {
+    let mut policy = DEFAULT_PROVIDER_RETRY_POLICY;
+    let Some(agents) = runtime_json_object(root, "agents") else {
+        return Ok(policy);
+    };
+    if let Some(value) = agents.get("provider_error_retry_limit") {
+        let limit = value.as_u64().ok_or_else(|| {
+            MezError::config("agents.provider_error_retry_limit must be a non-negative integer")
+        })?;
+        policy.max_attempts = u32::try_from(limit).map_err(|_| {
+            MezError::config("agents.provider_error_retry_limit must not exceed 4294967295")
+        })?;
+    }
+    if let Some(value) = agents.get("provider_error_retry_unlimited") {
+        policy.unlimited = runtime_json_bool(Some(value)).ok_or_else(|| {
+            MezError::config("agents.provider_error_retry_unlimited must be a boolean")
+        })?;
+    }
+    Ok(policy)
 }
 
 /// Parses the total wall-clock deadline snapshotted for each new agent turn.

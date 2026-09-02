@@ -309,6 +309,7 @@ pub fn validate_config_text(
     };
     let values = extract_config_values(format, text);
     diagnostics.extend(validate_agent_turn_timeout_config(format, text));
+    diagnostics.extend(validate_provider_retry_config(format, text));
     diagnostics.extend(validate_host_config(format, text));
     diagnostics.extend(validate_iroh_transport_config(format, text));
     diagnostics.extend(validate_external_editor_config(format, text));
@@ -1247,6 +1248,38 @@ fn validate_agent_turn_timeout_config(format: ConfigFormat, text: &str) -> Vec<C
             message: "agents.turn_timeout_ms must be a positive integer".to_string(),
         }]
     }
+}
+
+/// Validates provider retry count and unlimited mode with scalar types intact.
+fn validate_provider_retry_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
+    let Ok(root) = parse_config_json_value(format, text) else {
+        return Vec::new();
+    };
+    let Some(agents) = root.get("agents").and_then(serde_json::Value::as_object) else {
+        return Vec::new();
+    };
+    let mut diagnostics = Vec::new();
+    if let Some(value) = agents.get("provider_error_retry_limit")
+        && !value
+            .as_u64()
+            .is_some_and(|limit| u32::try_from(limit).is_ok())
+    {
+        diagnostics.push(ConfigDiagnostic {
+            path: "agents.provider_error_retry_limit".to_string(),
+            message:
+                "agents.provider_error_retry_limit must be a non-negative integer no greater than 4294967295"
+                    .to_string(),
+        });
+    }
+    if let Some(value) = agents.get("provider_error_retry_unlimited")
+        && value.as_bool().is_none()
+    {
+        diagnostics.push(ConfigDiagnostic {
+            path: "agents.provider_error_retry_unlimited".to_string(),
+            message: "agents.provider_error_retry_unlimited must be true or false".to_string(),
+        });
+    }
+    diagnostics
 }
 
 /// Validates schema-v49 group whitelist names without consulting NSS.

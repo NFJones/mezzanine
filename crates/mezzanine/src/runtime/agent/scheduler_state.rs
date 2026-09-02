@@ -5,6 +5,7 @@
 //! remains private to `RuntimeAgentComponent`.
 
 use super::{AgentScheduler, ProviderRetryScheduler, Result, RuntimeSessionService, ScheduledWork};
+use mez_agent::ProviderRetryPolicy;
 
 impl RuntimeSessionService {
     /// Returns the agent scheduler for read-only diagnostics and prompt context.
@@ -45,6 +46,14 @@ impl RuntimeSessionService {
             .agent_scheduler
             .set_queue_limits(max_queued_turns, max_queued_bytes)?;
         Ok(())
+    }
+
+    /// Applies provider retry policy to subsequent failure observations.
+    ///
+    /// Active retry generations and already-scheduled timer delays remain
+    /// intact; the replacement policy takes effect at the next failure.
+    pub(crate) fn configure_provider_retry_policy(&mut self, policy: ProviderRetryPolicy) {
+        self.agent.provider_retry_scheduler.set_policy(policy);
     }
 
     /// Enqueues one validated unit of agent work.

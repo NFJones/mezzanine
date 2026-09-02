@@ -21,6 +21,19 @@ with reasoning, latency, capability, policy, and non-secret option overrides.
 Use `/model`, `/routing`, and `/thinking` for pane-scoped runtime choices where
 supported.
 
+Provider outages use actor-owned exponential backoff. By default, Mez retries
+eligible transport failures, rate limits, retry hints, 5xx responses, and
+temporary provider unavailability five times. Configure the finite count with
+`agents.provider_error_retry_limit`; `0` disables those finite retries. Delays
+start at one second and grow to a maximum of 15 minutes.
+
+Set `agents.provider_error_retry_unlimited = true` only for daemonized work that
+should wait through an extended provider outage. This separate switch ignores
+the finite count for eligible transient provider failures and continues at the
+15-minute cap. It does not retry authentication, malformed-request, context-
+limit, output-limit, or other non-retryable failures indefinitely. `/stop`,
+session cancellation, and runtime shutdown still terminate retry work.
+
 Profile fields override configured model fields; configured model fields
 override provider discovery; discovery fills gaps ahead of built-in and
 conservative fallbacks. Lists replace lower-precedence lists, while option maps
