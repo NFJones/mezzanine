@@ -19,24 +19,47 @@ use crate::error::{MezError, Result};
 
 use super::contracts::{X11_AUTH_PROTOCOL_NAME, X11Cookie};
 
-/// Xauthority family value for an IPv4 Internet address.
-const XAUTH_FAMILY_INTERNET: u16 = 0;
-/// Loopback address used by the session-side TCP display proxy.
-const XAUTH_LOOPBACK_ADDRESS: [u8; 4] = [127, 0, 0, 1];
+/// Xauthority family value used by Xlib for local displays.
+const XAUTH_FAMILY_LOCAL: u16 = 256;
 
-/// Encodes one loopback MIT-MAGIC-COOKIE-1 Xauthority record.
+/// Encodes one local-host MIT-MAGIC-COOKIE-1 Xauthority record.
 pub(crate) fn encode_xauthority_record(
     display: u16,
     cookie: &X11Cookie,
 ) -> Result<Zeroizing<Vec<u8>>> {
     let display = display.to_string();
+    let hostname = current_hostname()?;
     let mut record = Zeroizing::new(Vec::with_capacity(64));
-    record.extend_from_slice(&XAUTH_FAMILY_INTERNET.to_be_bytes());
-    append_counted(&mut record, &XAUTH_LOOPBACK_ADDRESS)?;
+    record.extend_from_slice(&XAUTH_FAMILY_LOCAL.to_be_bytes());
+    append_counted(&mut record, &hostname)?;
     append_counted(&mut record, display.as_bytes())?;
     append_counted(&mut record, X11_AUTH_PROTOCOL_NAME.as_bytes())?;
     append_counted(&mut record, cookie.as_bytes())?;
     Ok(record)
+}
+
+/// Reads the local hostname Xlib uses to match FamilyLocal authority records.
+fn current_hostname() -> Result<Vec<u8>> {
+    let mut hostname = [0u8; 256];
+    // SAFETY: `hostname` is writable for its full declared length and remains
+    // alive for the duration of the libc call.
+    let result =
+        unsafe { libc::gethostname(hostname.as_mut_ptr().cast::<libc::c_char>(), hostname.len()) };
+    if result != 0 {
+        return Err(MezError::invalid_state(
+            "local hostname is unavailable for X11 authority matching",
+        ));
+    }
+    let length = hostname
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(|| MezError::invalid_state("local hostname exceeds the X11 match limit"))?;
+    if length == 0 {
+        return Err(MezError::invalid_state(
+            "local hostname is empty for X11 authority matching",
+        ));
+    }
+    Ok(hostname[..length].to_vec())
 }
 
 /// Atomically publishes one private Xauthority record at a stable path.
@@ -175,18 +198,19 @@ fn temporary_name(path: &Path) -> String {
 mod tests {
     use super::*;
 
-    /// Xauthority encoding must use big-endian counted fields for IPv4
-    /// loopback, decimal display number, auth name, and the exact cookie.
+    /// Xauthority encoding must use big-endian counted fields for the local
+    /// hostname selector, decimal display number, auth name, and exact cookie.
     #[test]
-    fn encodes_loopback_mit_magic_cookie_record() {
+    fn encodes_local_mit_magic_cookie_record() {
         let cookie = X11Cookie::new([0x66; 16]);
+        let hostname = current_hostname().unwrap();
 
         let encoded = encode_xauthority_record(17, &cookie).unwrap();
 
         let mut expected = Vec::new();
-        expected.extend_from_slice(&0u16.to_be_bytes());
-        expected.extend_from_slice(&4u16.to_be_bytes());
-        expected.extend_from_slice(&[127, 0, 0, 1]);
+        expected.extend_from_slice(&XAUTH_FAMILY_LOCAL.to_be_bytes());
+        expected.extend_from_slice(&u16::try_from(hostname.len()).unwrap().to_be_bytes());
+        expected.extend_from_slice(&hostname);
         expected.extend_from_slice(&2u16.to_be_bytes());
         expected.extend_from_slice(b"17");
         expected.extend_from_slice(&18u16.to_be_bytes());
