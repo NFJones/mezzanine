@@ -103,6 +103,12 @@ the selected X server or use no forwarding; do not expect or script a fallback
 to trusted mode. `--x11-trusted` also requires the host's explicit
 `allow_trusted` policy.
 
+Untrusted setup and cleanup run `xauth` under one finite process-lifecycle
+deadline that includes termination and reap. A timeout can leave the X server's
+short-lived authorization active until its own expiry, but it does not retain
+Mez's private authority directory or keep the attaching client waiting without
+bound.
+
 Only one attachment owns a session's X11 route. A conflict means another
 primary currently owns it. Use `--x11-takeover` only for an intentional
 replacement. Takeover, detach, transport loss, trust or lease revocation, and

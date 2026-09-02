@@ -3127,6 +3127,12 @@ an owner MUST require explicit takeover, invalidate the old generation before
 publishing the new one, and ensure stale cleanup cannot deactivate a newer
 route.
 
+Every client-side `xauth` invocation MUST have one finite lifecycle deadline
+covering normal execution, nonblocking termination signalling, and process
+reap. Timeout recovery MUST NOT await kill or reap without a bound. Untrusted
+credential cleanup MUST remove its private authority artifacts even when the
+helper times out or exits unsuccessfully.
+
 X11 capability and route setup MUST be negotiated through
 `control/initialize`; Mezzanine MUST NOT add an X11-specific ALPN family. A
 successful version-2 negotiation MUST bind the requested mode, exact

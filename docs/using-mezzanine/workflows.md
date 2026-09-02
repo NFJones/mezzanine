@@ -51,6 +51,11 @@ server selected on the attaching machine. `--x11` requests an X SECURITY
 untrusted credential and fails closed if the local X server or `xauth` cannot
 create one. It never falls back to trusted forwarding.
 
+Mez also invokes `xauth` when removing an untrusted credential at detach or
+exit. The helper's execution, termination, and reap share one bounded deadline;
+a non-cooperating helper cannot keep the client alive indefinitely, and Mez
+still removes its private authority artifacts on timeout.
+
 Forwarded X11 traffic automatically uses the codec negotiated for the owning
 Iroh connection. There is no X11-specific compression option: `zstd`, `lz4`,
 and their streaming variants compress bounded X11 records, while

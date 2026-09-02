@@ -33,6 +33,8 @@ const XAUTHORITY_MAX_BYTES: u64 = 1024 * 1024;
 /// after this bounded idle period. Local cleanup separately removes the private
 /// authority record immediately.
 const X11_UNTRUSTED_TIMEOUT_SECONDS: u64 = 20 * 60;
+/// Maximum part of one xauth lifecycle budget reserved for termination and reap.
+const XAUTH_TERMINATION_GRACE_MAX: Duration = Duration::from_millis(250);
 
 /// Attach-lifetime credential cleanup state.
 pub(super) enum X11CredentialLease {
@@ -189,6 +191,10 @@ async fn run_xauth(
     arguments: &[OsString],
     timeout: Duration,
 ) -> Result<()> {
+    let started = tokio::time::Instant::now();
+    let termination_grace = (timeout / 4).min(XAUTH_TERMINATION_GRACE_MAX);
+    let execution_deadline = started + timeout.saturating_sub(termination_grace);
+    let lifecycle_deadline = started + timeout;
     let mut command = tokio::process::Command::new(executable);
     command
         .args(arguments)
@@ -200,13 +206,13 @@ async fn run_xauth(
     let mut child = command
         .spawn()
         .map_err(|_| MezError::invalid_state("xauth is unavailable for X11 credential setup"))?;
-    let status = match tokio::time::timeout(timeout, child.wait()).await {
+    let status = match tokio::time::timeout_at(execution_deadline, child.wait()).await {
         Ok(result) => {
             result.map_err(|_| MezError::invalid_state("xauth credential setup failed"))?
         }
         Err(_) => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout_at(lifecycle_deadline, child.wait()).await;
             return Err(MezError::invalid_state("xauth credential setup timed out"));
         }
     };
@@ -501,6 +507,87 @@ mod tests {
         lease.close().await.unwrap();
         assert!(!lease_directory.exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Nonzero xauth exit must remain a distinct bounded setup rejection.
+    #[tokio::test]
+    async fn rejects_nonzero_xauth_exit() {
+        let root = test_root("nonzero");
+        fs::create_dir_all(&root).unwrap();
+        let authority = root.join("authority");
+        write_private_file(&authority, &[]).unwrap();
+        let script = root.join("fake-xauth");
+        fs::write(&script, "#!/bin/sh\nexit 7\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let error = run_xauth(script.as_os_str(), &authority, &[], Duration::from_secs(1))
+            .await
+            .unwrap_err();
+
+        assert!(error.message().contains("rejected"), "{error:?}");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// One absolute deadline must cover normal execution, kill signalling,
+    /// and reap so a non-cooperating helper cannot keep the client alive.
+    #[tokio::test]
+    async fn xauth_timeout_bounds_termination_and_reap() {
+        let root = test_root("timeout");
+        fs::create_dir_all(&root).unwrap();
+        let authority = root.join("authority");
+        write_private_file(&authority, &[]).unwrap();
+        let script = root.join("fake-xauth");
+        fs::write(
+            &script,
+            "#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 1; done\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        let budget = Duration::from_millis(200);
+        let started = tokio::time::Instant::now();
+
+        let error = run_xauth(script.as_os_str(), &authority, &[], budget)
+            .await
+            .unwrap_err();
+
+        assert!(error.message().contains("timed out"), "{error:?}");
+        assert!(
+            started.elapsed() <= Duration::from_millis(500),
+            "xauth timeout recovery exceeded one lifecycle budget: {:?}",
+            started.elapsed()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Timed-out explicit cleanup must still remove private credential files
+    /// before returning the bounded xauth error.
+    #[tokio::test]
+    async fn timed_out_untrusted_cleanup_removes_private_artifacts() {
+        let root = test_root("cleanup-timeout");
+        fs::create_dir_all(&root).unwrap();
+        let authority_path = root.join("authority");
+        write_private_file(&authority_path, &[]).unwrap();
+        let script = root.join("fake-xauth");
+        fs::write(
+            &script,
+            "#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 1; done\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut lease = UntrustedX11CredentialLease {
+            cleanup: Some(XauthCleanup {
+                executable: script.as_os_str().to_os_string(),
+                authority_path,
+                directory: root.clone(),
+                display_name: ":17".to_string(),
+                command_timeout: Duration::from_millis(200),
+            }),
+        };
+
+        let error = lease.close().await.unwrap_err();
+
+        assert!(error.message().contains("timed out"), "{error:?}");
+        assert!(!root.exists());
     }
 
     /// Builds one exact endpoint-matching Xauthority record for tests.
