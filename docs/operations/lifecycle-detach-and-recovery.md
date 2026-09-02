@@ -43,9 +43,12 @@ A role ceiling of `observer` cannot be elevated to primary attachment. Remote
 attach also negotiates an authorized event stream for redraw wakeups. An
 observer receives session-view events only from its atomic attachment cutoff
 onward. Revocation, detach, or stream failure terminates the remote attach and
-requires an explicit reconnect. The configured Iroh setup
-timeout bounds both waiting for that stream and receiving its preface; timeout
-closes the connection instead of leaving attach waiting indefinitely.
+requires an explicit reconnect. The configured Iroh setup timeout bounds both
+waiting for that stream and receiving its preface. It also provides one total
+transport-shutdown budget for the control bridge, X11 and event workers, and
+the endpoint; those stages do not each receive a fresh timeout. Shutdown sends
+the control-stream FIN before closing the connection, then settles or aborts
+the remaining workers concurrently within that shared budget.
 
 Remote terminal input is not retried after an ambiguous connection failure. If
 Mez reports that an input outcome is unknown, treat the command as possibly

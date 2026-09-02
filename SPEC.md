@@ -3089,7 +3089,11 @@ Iroh endpoints MUST send QUIC keepalive probes at an interval below
 `idle_timeout_ms`. A healthy persistent attach MUST NOT disconnect solely
 because no application control frames or terminal events were exchanged during
 that interval; the idle timeout instead bounds detection of an unresponsive
-peer.
+peer. Persistent client shutdown MUST use one absolute budget derived from
+`setup_timeout_ms` rather than assigning that duration independently to the
+control bridge, X11 worker, event worker, and endpoint. The client MUST issue
+the control stream FIN before closing the connection, then settle or abort the
+bridge and independent workers concurrently within the remaining budget.
 The v70 to v71 migration MUST materialize `compression_codecs = ["zstd",
 "lz4", "none"]`, `compression_min_bytes = 512`, and
 `compression_zstd_level = 3` in TOML, JSON, and YAML without enabling the

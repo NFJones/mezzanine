@@ -593,12 +593,12 @@ impl<T> AbortOnDropTask<T> {
         Self { task: Some(task) }
     }
 
-    /// Waits boundedly for graceful completion and aborts a remaining task.
-    async fn join_bounded(mut self, timeout: std::time::Duration) {
+    /// Waits until one shared shutdown deadline and aborts a remaining task.
+    async fn join_until(mut self, deadline: tokio::time::Instant) {
         let Some(mut task) = self.task.take() else {
             return;
         };
-        if tokio::time::timeout(timeout, &mut task).await.is_err() {
+        if tokio::time::timeout_at(deadline, &mut task).await.is_err() {
             task.abort();
             let _ = task.await;
         }
@@ -611,6 +611,20 @@ impl<T> Drop for AbortOnDropTask<T> {
             task.abort();
         }
     }
+}
+
+/// Drains independent attach workers concurrently under one absolute deadline.
+async fn join_persistent_workers_until(
+    x11_task: Option<AbortOnDropTask<()>>,
+    event_task: AbortOnDropTask<()>,
+    deadline: tokio::time::Instant,
+) {
+    let x11 = async move {
+        if let Some(task) = x11_task {
+            task.join_until(deadline).await;
+        }
+    };
+    tokio::join!(x11, event_task.join_until(deadline));
 }
 
 impl PersistentIrohControlChannel {
@@ -648,7 +662,7 @@ impl PersistentIrohControlChannel {
             .ok_or_else(|| MezError::invalid_state("Iroh event receiver was already taken"))
     }
 
-    /// Finishes the control stream and closes the connection and endpoint boundedly.
+    /// Finishes the control stream and closes all transport owners by one deadline.
     pub(super) async fn close(self) {
         let Self {
             _identity,
@@ -664,14 +678,15 @@ impl PersistentIrohControlChannel {
             pushed_render_owner: _,
             setup_timeout,
         } = self;
+        let shutdown_deadline = tokio::time::Instant::now() + setup_timeout;
         drop(event_receiver);
+        let mut bridge = bridge;
+        let _ = bridge.finish_outbound_until(shutdown_deadline).await;
         connection.close(iroh::endpoint::VarInt::from_u32(0), b"attach complete");
-        let _ = bridge.shutdown(setup_timeout).await;
-        if let Some(task) = x11_task {
-            task.join_bounded(setup_timeout).await;
-        }
-        event_task.join_bounded(setup_timeout).await;
-        let _ = tokio::time::timeout(setup_timeout, endpoint.close()).await;
+        let bridge = bridge.settle_until(shutdown_deadline);
+        let workers = join_persistent_workers_until(x11_task, event_task, shutdown_deadline);
+        let endpoint = tokio::time::timeout_at(shutdown_deadline, endpoint.close());
+        let _ = tokio::join!(bridge, workers, endpoint);
         if let Some(client) = x11_client.take() {
             let _ = client.close().await;
         }
@@ -1992,12 +2007,20 @@ mod outbound_policy_tests {
                 crate::host::terminal::TERMINAL_IROH_STATUS_SLOT_WIDTH,
                 "{attach_view}"
             );
-            attach_channel.close().await;
-            create_channel.close().await;
+            tokio::time::timeout(std::time::Duration::from_secs(10), attach_channel.close())
+                .await
+                .expect("observer persistent channel close should remain bounded");
+            tokio::time::timeout(std::time::Duration::from_secs(10), create_channel.close())
+                .await
+                .expect("primary persistent channel close should remain bounded");
             stop.notify_one();
         };
 
-        let (served, ()) = tokio::join!(server, client_work);
+        let (served, ()) = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            tokio::join!(server, client_work)
+        })
+        .await
+        .expect("persistent host and client shutdown should remain bounded");
         assert!(
             served.unwrap() >= 4,
             "pairing and routed create/attach require at least four connections"
@@ -2888,7 +2911,7 @@ mod tests {
         AbortOnDropTask, ClientX11RelayFailure, RemoteRoleCeiling, append_client_x11_diagnostic,
         ensure_iroh_attach_role_allowed, iroh_client_clipboard_negotiated,
         iroh_event_stream_version_candidates, iroh_initialize_rejected_event_stream_version,
-        iroh_pushed_render_negotiated, relay_client_x11_stream,
+        iroh_pushed_render_negotiated, join_persistent_workers_until, relay_client_x11_stream,
         validate_iroh_host_only_initialize_response, validate_iroh_initialize_response,
         validate_iroh_x11_initialize_response, validate_persistent_iroh_initialize_response,
     };
@@ -2991,10 +3014,10 @@ mod tests {
             .unwrap();
     }
 
-    /// Graceful channel cleanup must remain bounded and abort a worker that
-    /// does not stop after connection closure.
+    /// Graceful channel cleanup must abort a worker that remains pending at
+    /// the shared absolute shutdown deadline.
     #[tokio::test]
-    async fn abort_on_drop_task_bounded_join_aborts_pending_worker() {
+    async fn abort_on_drop_task_deadline_aborts_pending_worker() {
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
@@ -3014,12 +3037,26 @@ mod tests {
         let owner = AbortOnDropTask::new(task);
         started_rx.await.unwrap();
         owner
-            .join_bounded(std::time::Duration::from_millis(10))
+            .join_until(tokio::time::Instant::now() + std::time::Duration::from_millis(10))
             .await;
         tokio::time::timeout(std::time::Duration::from_secs(1), dropped_rx)
             .await
-            .expect("bounded join should abort a worker that remains pending")
+            .expect("deadline join should abort a worker that remains pending")
             .unwrap();
+    }
+
+    /// Independent X11 and event workers must consume one shared shutdown
+    /// budget rather than receiving sequential full-duration waits.
+    #[tokio::test(start_paused = true)]
+    async fn persistent_worker_shutdown_uses_one_shared_deadline() {
+        let x11 = AbortOnDropTask::new(tokio::spawn(std::future::pending::<()>()));
+        let event = AbortOnDropTask::new(tokio::spawn(std::future::pending::<()>()));
+        let budget = std::time::Duration::from_secs(5);
+        let started = tokio::time::Instant::now();
+
+        join_persistent_workers_until(Some(x11), event, started + budget).await;
+
+        assert_eq!(tokio::time::Instant::now().duration_since(started), budget);
     }
 
     /// Client X11 failures must retain useful local detail in an owner-private

@@ -643,6 +643,7 @@ impl IrohCompressionPolicy {
 pub(crate) struct IrohCompressionBridge {
     stream: DuplexStream,
     task: tokio::task::JoinHandle<Result<()>>,
+    outbound_done: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 impl IrohCompressionBridge {
@@ -673,17 +674,21 @@ impl IrohCompressionBridge {
         let codec = ProtocolFrameCodec::new(max_content_length)?;
         let (stream, bridge_stream) = tokio::io::duplex(64 * 1024);
         let (bridge_read, bridge_write) = tokio::io::split(bridge_stream);
+        let (outbound_finished_tx, outbound_finished) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
             let activation = policy
                 .is_streaming()
                 .then(|| Arc::new(tokio::sync::Barrier::new(2)));
+            let outbound_metrics = metrics.clone();
+            let outbound_activation = activation.clone();
             let outbound = pump_raw_frames_to_iroh_with_activation(
                 bridge_read,
                 send,
                 policy,
-                metrics.clone(),
+                outbound_metrics,
                 codec,
-                activation.clone(),
+                outbound_activation,
+                Some(outbound_finished_tx),
             );
             let inbound = pump_iroh_frames_to_raw_with_activation(
                 recv,
@@ -696,7 +701,11 @@ impl IrohCompressionBridge {
             tokio::try_join!(outbound, inbound)?;
             Ok(())
         });
-        Ok(Self { stream, task })
+        Ok(Self {
+            stream,
+            task,
+            outbound_done: Some(outbound_finished),
+        })
     }
 
     /// Returns the unchanged raw frame stream consumed by existing adapters.
@@ -704,17 +713,40 @@ impl IrohCompressionBridge {
         &mut self.stream
     }
 
-    /// Stops the local stream and waits boundedly for the bridge task.
-    pub(crate) async fn shutdown(mut self, timeout: std::time::Duration) -> Result<()> {
-        let shutdown = tokio::time::timeout(timeout, async {
+    /// Finishes the outbound Iroh stream by one deadline.
+    ///
+    /// Peer acknowledgement and the inbound pump remain owned by this bridge
+    /// so callers may close the connection after FIN and then drain the full
+    /// bridge.
+    pub(crate) async fn finish_outbound_until(
+        &mut self,
+        deadline: tokio::time::Instant,
+    ) -> Result<()> {
+        let Some(mut outbound_done) = self.outbound_done.take() else {
+            return Ok(());
+        };
+        let result = tokio::time::timeout_at(deadline, async {
             self.stream.shutdown().await?;
-            (&mut self.task).await.map_err(|error| {
-                MezError::invalid_state(format!("Iroh compression bridge task failed: {error}"))
-            })?
+            (&mut outbound_done).await.map_err(|_| {
+                MezError::invalid_state("Iroh compression bridge stopped before outbound FIN")
+            })
         })
         .await;
-        match shutdown {
+        match result {
             Ok(result) => result,
+            Err(_) => Err(MezError::invalid_state(
+                "Iroh compression bridge outbound shutdown timed out",
+            )),
+        }
+    }
+
+    /// Waits for the complete bridge task until one absolute deadline.
+    pub(crate) async fn settle_until(mut self, deadline: tokio::time::Instant) -> Result<()> {
+        let settled = tokio::time::timeout_at(deadline, &mut self.task).await;
+        match settled {
+            Ok(result) => result.map_err(|error| {
+                MezError::invalid_state(format!("Iroh compression bridge task failed: {error}"))
+            })?,
             Err(_) => {
                 self.task.abort();
                 let _ = (&mut self.task).await;
@@ -723,6 +755,17 @@ impl IrohCompressionBridge {
                 ))
             }
         }
+    }
+
+    /// Stops the local stream and waits boundedly for the bridge task.
+    pub(crate) async fn shutdown(mut self, timeout: std::time::Duration) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        if let Err(error) = self.finish_outbound_until(deadline).await {
+            self.task.abort();
+            let _ = (&mut self.task).await;
+            return Err(error);
+        }
+        self.settle_until(deadline).await
     }
 }
 
@@ -742,7 +785,7 @@ async fn pump_raw_frames_to_iroh<R>(
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    pump_raw_frames_to_iroh_with_activation(raw, send, policy, metrics, codec, None).await
+    pump_raw_frames_to_iroh_with_activation(raw, send, policy, metrics, codec, None, None).await
 }
 
 async fn pump_raw_frames_to_iroh_with_activation<R>(
@@ -752,6 +795,7 @@ async fn pump_raw_frames_to_iroh_with_activation<R>(
     metrics: IrohCompressionMetrics,
     codec: ProtocolFrameCodec,
     activation: Option<Arc<tokio::sync::Barrier>>,
+    outbound_finished: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> Result<()>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -789,7 +833,7 @@ where
                 MezError::invalid_state("failed to flush stateful Iroh control frame")
             })?;
         }
-        return finish_iroh_control_send(send).await;
+        return finish_iroh_control_send(send, outbound_finished).await;
     }
     let mut first_frame = true;
     while let Some(frame) = framed.next().await {
@@ -813,12 +857,18 @@ where
         })?;
         first_frame = false;
     }
-    finish_iroh_control_send(send).await
+    finish_iroh_control_send(send, outbound_finished).await
 }
 
-async fn finish_iroh_control_send(mut send: iroh::endpoint::SendStream) -> Result<()> {
+async fn finish_iroh_control_send(
+    mut send: iroh::endpoint::SendStream,
+    outbound_finished: Option<tokio::sync::oneshot::Sender<()>>,
+) -> Result<()> {
     send.finish()
         .map_err(|_| MezError::invalid_state("failed to finish negotiated Iroh control stream"))?;
+    if let Some(outbound_finished) = outbound_finished {
+        let _ = outbound_finished.send(());
+    }
     match send.stopped().await {
         Ok(None) => Ok(()),
         Ok(Some(_)) => Err(MezError::invalid_state(
@@ -1791,6 +1841,54 @@ mod tests {
         assert_eq!(received, frame);
         server_connection.close(0u32.into(), b"test complete");
         client_connection.close(0u32.into(), b"test complete");
+        server.close().await;
+        client.close().await;
+    }
+
+    /// Outbound bridge finalization must complete while the peer's inbound
+    /// control direction remains open, leaving full settlement until close.
+    #[tokio::test(flavor = "current_thread")]
+    async fn outbound_bridge_shutdown_precedes_inbound_peer_eof() {
+        let (
+            server,
+            client,
+            server_connection,
+            client_connection,
+            server_send,
+            server_recv,
+            _client_send,
+            mut client_recv,
+        ) = test_iroh_stream_pair().await;
+        let mut bridge = IrohCompressionBridge::spawn(
+            server_recv,
+            server_send,
+            policy(RuntimeIrohCompressionCodec::None, 1),
+            4096,
+        )
+        .unwrap();
+        let frame = crate::control::encode_control_body(r#"{"final":true}"#);
+        bridge.stream_mut().write_all(&frame).await.unwrap();
+        bridge.stream_mut().flush().await.unwrap();
+
+        let peer = tokio::spawn(async move { client_recv.read_to_end(4096).await.unwrap() });
+        bridge
+            .finish_outbound_until(tokio::time::Instant::now() + std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert_eq!(peer.await.unwrap(), frame);
+
+        server_connection.close(0u32.into(), b"test complete");
+        client_connection.close(0u32.into(), b"test complete");
+        let settlement = bridge
+            .settle_until(tokio::time::Instant::now() + std::time::Duration::from_secs(2))
+            .await;
+        assert!(
+            settlement.is_ok()
+                || settlement
+                    .as_ref()
+                    .is_err_and(|error| error.io_kind() == Some(std::io::ErrorKind::NotConnected)),
+            "intentional connection close returned an unexpected bridge result: {settlement:?}"
+        );
         server.close().await;
         client.close().await;
     }

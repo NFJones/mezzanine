@@ -192,7 +192,7 @@ changes require a daemon restart.
 | `transport.iroh.invitation_ttl_seconds` | integer | `600` | Default invitation lifetime; valid values are 30 through 86400 seconds. |
 | `transport.iroh.max_connections` | integer | `16` | Maximum remote connections; valid values are 1 through 1024. |
 | `transport.iroh.max_streams_per_connection` | integer | `1` | Fixed v1 limit for the single client-opened bidirectional control stream; the only valid value is 1. |
-| `transport.iroh.setup_timeout_ms` | integer | `10000` | Bounded connection setup timeout. |
+| `transport.iroh.setup_timeout_ms` | integer | `10000` | Bounded connection setup timeout and total persistent-client transport-shutdown budget. Shutdown uses one shared deadline rather than one timeout per bridge, worker, or endpoint. |
 | `transport.iroh.idle_timeout_ms` | integer | `300000` | QUIC liveness timeout for an unresponsive peer. Mezzanine sends transport keepalive probes at one third of this interval, so an application-idle but healthy persistent attach remains connected. |
 | `transport.iroh.compression_codecs` | string array | `["zstd", "lz4", "none"]` | Unique application-frame codec policy. Streaming codecs are negotiated before non-streaming codecs, preserving configured order within each class. Valid entries are `zstd-stream`, `lz4-stream`, `zstd`, `lz4`, and `none`; one through five entries are required. Streaming variants are opt-in. |
 | `transport.iroh.compression_min_bytes` | integer | `512` | Complete v2 frames below this decoded size use an identity envelope. Stateful v3 codecs process every frame to preserve synchronized history. Valid values are 0 through 1048576. |
