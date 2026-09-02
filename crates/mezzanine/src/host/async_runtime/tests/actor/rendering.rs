@@ -1,6 +1,7 @@
 //! Async-runtime tests owned by rendering behavior.
 
 use super::super::*;
+use crate::host::terminal::MouseAction;
 
 /// Verifies that a foreground resize signal can wake the render path without
 /// directly mutating geometry in the actor event. The attached terminal service
@@ -813,6 +814,91 @@ async fn async_actor_ignores_stale_resize_debounce_timer_events() {
 
     let ((), exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.commands_processed, 5);
+}
+
+/// Verifies one active timer consumes a released divider commit exactly once
+/// while a duplicate firing is stale.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_consumes_released_divider_commit_once() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    assert!(
+        service
+            .apply_attached_mux_action(&primary, MuxAction::SplitPaneVertical)
+            .unwrap()
+    );
+    let border = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .mouse_border_cells
+        .into_iter()
+        .next()
+        .expect("vertical split should expose a divider");
+    let step = |action| AttachedTerminalClientStepPlan {
+        actions: vec![TerminalClientLoopAction::HandleMouse(action)],
+        output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
+        input_hangup: false,
+        output_hangup: false,
+        error_roles: Vec::new(),
+    };
+    for column in [border.column, border.column.saturating_add(3)] {
+        service
+            .apply_attached_terminal_step_transition(
+                &primary,
+                &step(MouseAction::ResizePane {
+                    column,
+                    row: border.row,
+                }),
+            )
+            .unwrap();
+    }
+    service
+        .apply_attached_terminal_step_transition(&primary, &step(MouseAction::FinishResizePane))
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let key = RuntimeTimerKey::new(RuntimeTimerKind::ResizeDebounce, primary.as_str(), 1);
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+                key: key.clone(),
+                delay_ms: 1,
+            }])
+            .await
+            .unwrap();
+        assert_eq!(handle.drain_timer_side_effects(8).await.unwrap().len(), 1);
+
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Timer(TimerEvent {
+            key: key.clone(),
+            now_ms: 100,
+        }));
+        batch.push(RuntimeEvent::Timer(TimerEvent { key, now_ms: 101 }));
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.accepted, 2);
+        assert_eq!(report.applied, 1);
+        let effects = handle.drain_render_side_effects(8).await.unwrap();
+        assert_eq!(effects.len(), 1);
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            RuntimeSideEffect::RenderClient {
+                client_id,
+                reason: RenderInvalidationReason::FullRedraw,
+            } if client_id == &primary
+        )));
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.runtime_timer_events_ignored, 1);
 }
 
 /// Verifies that render drains coalesce redundant invalidations for the same

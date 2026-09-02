@@ -1320,9 +1320,17 @@ While otherwise idle, attached foreground clients SHOULD continue polling the
 local terminal size often enough to notice host-terminal resizes without
 waiting for user input or daemon-side runtime events. They SHOULD trigger a
 fresh client-local redraw only when that measured size actually changes.
-After terminal or pane resize activity, attached clients SHOULD wait for the
-configured `terminal.resize_debounce_ms` period before forcing one full-surface
-redraw; the built-in default debounce MUST be `200` milliseconds.
+After terminal-size changes, attached clients SHOULD wait for the configured
+`terminal.resize_debounce_ms` period before forcing one full-surface redraw.
+Pane-divider movement MUST update canonical layout geometry and pane PTY sizes
+while the pointer is held, but MUST NOT emit client presentation frames that
+expose the provisional geometry. Releasing a changed divider drag MUST restart
+that debounce period. Exactly one current post-release timer MUST consume the
+pending layout commit and issue a full redraw for the layout owner's projection
+and its observers; stale timers and timers that fire while the divider is held
+MUST be no-ops. Releasing an unchanged drag MUST NOT redraw. Ordinary pane
+output MUST NOT expose deferred divider geometry before the commit is consumed
+or superseded. The built-in default debounce MUST be `200` milliseconds.
 
 Mezzanine MUST present a cursor for the active interactive surface when that
 surface accepts keyboard input. Cursor style MUST be configurable. Cursor blink

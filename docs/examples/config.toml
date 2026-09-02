@@ -109,7 +109,8 @@ streaming_output = true
 enhanced_keyboard_reporting = false
 # Whether completion-attention title pills alternate their attention color.
 completion_attention_flashing = true
-# Coalesce terminal resize events for this many milliseconds.
+# Coalesce terminal resize redraws and the one full redraw after releasing a
+# changed pane-divider drag for this many milliseconds.
 resize_debounce_ms = 200
 # Maximum attached-terminal redraw rate.
 render_rate_limit_fps = 30

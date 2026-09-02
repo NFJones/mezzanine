@@ -3729,11 +3729,15 @@ impl RuntimeSessionService {
                 self.apply_pane_write_failure_event(pane_id, error)?,
                 Some(RenderInvalidationReason::FullRedraw),
             ),
-            PaneEvent::Resized { pane_id, size } => (
-                pane_id.clone(),
-                self.apply_pane_resize_completion_event(pane_id, size)?,
-                Some(RenderInvalidationReason::Layout),
-            ),
+            PaneEvent::Resized { pane_id, size } => {
+                let render_reason = (!self.pane_has_deferred_divider_layout(&pane_id))
+                    .then_some(RenderInvalidationReason::Layout);
+                (
+                    pane_id.clone(),
+                    self.apply_pane_resize_completion_event(pane_id, size)?,
+                    render_reason,
+                )
+            }
             PaneEvent::ForegroundProcess {
                 pane_id,
                 process_name,
@@ -3955,6 +3959,76 @@ impl RuntimeSessionService {
                 reason,
             })
             .collect()
+    }
+
+    /// Prevents queued presentation work from exposing provisional divider geometry.
+    pub(crate) fn reconcile_pending_divider_render_effects(
+        &mut self,
+        side_effects: &mut Vec<RuntimeSideEffect>,
+    ) {
+        let window_ids = self.presentation.deferred_divider_layout_window_ids();
+        if window_ids.is_empty() {
+            return;
+        }
+        let deferred_clients = self
+            .render_effects_for_clients_projecting_windows(
+                &window_ids.iter().cloned().collect::<Vec<_>>(),
+                RenderInvalidationReason::PaneOutput,
+            )
+            .into_iter()
+            .filter_map(|effect| match effect {
+                RuntimeSideEffect::RenderClient { client_id, .. } => Some(client_id),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        let deferred_pane_ids = self
+            .session
+            .windows()
+            .iter()
+            .filter(|window| window_ids.contains(window.id.as_str()))
+            .flat_map(|window| window.panes())
+            .map(|pane| pane.id.to_string())
+            .collect::<std::collections::HashSet<_>>();
+        let superseded = side_effects.iter().any(|effect| {
+            matches!(
+                effect,
+                RuntimeSideEffect::RenderClient {
+                    client_id,
+                    reason: RenderInvalidationReason::Resize
+                        | RenderInvalidationReason::Layout
+                        | RenderInvalidationReason::FullRedraw,
+                } if deferred_clients.contains(client_id)
+            )
+        });
+        if superseded {
+            self.presentation.clear_mouse_resize_drag_state();
+            side_effects.extend(
+                self.presentation
+                    .take_agent_presentation_resize_dispatch_effects(),
+            );
+            return;
+        }
+        side_effects.retain(|effect| match effect {
+            RuntimeSideEffect::RenderClient { client_id, .. } => {
+                !deferred_clients.contains(client_id)
+            }
+            RuntimeSideEffect::DispatchAgentPresentationResize { pane_id, .. } => {
+                !deferred_pane_ids.contains(pane_id)
+            }
+            _ => true,
+        });
+    }
+
+    /// Reports whether one pane belongs to geometry hidden by a divider gesture.
+    fn pane_has_deferred_divider_layout(&self, pane_id: &str) -> bool {
+        let window_ids = self.presentation.deferred_divider_layout_window_ids();
+        self.session.windows().iter().any(|window| {
+            window_ids.contains(window.id.as_str())
+                && window
+                    .panes()
+                    .iter()
+                    .any(|pane| pane.id.as_str() == pane_id)
+        })
     }
 
     /// Builds a pane-scoped transition with render effects for visible projections.

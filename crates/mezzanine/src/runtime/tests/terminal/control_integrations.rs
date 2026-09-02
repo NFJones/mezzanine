@@ -358,3 +358,105 @@ fn runtime_terminal_step_without_inline_view_invalidates_agent_prompt() {
             .is_empty()
     );
 }
+
+/// Verifies framed terminal steps never expose provisional divider geometry,
+/// even when the caller explicitly requests an inline view.
+#[test]
+fn runtime_terminal_step_defers_divider_views_until_release_debounce() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    assert!(
+        service
+            .apply_attached_mux_action(&primary, MuxAction::SplitPaneVertical)
+            .unwrap()
+    );
+    let border = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .mouse_border_cells
+        .into_iter()
+        .next()
+        .expect("vertical split should expose a divider");
+    let moved_column = border.column.saturating_add(3);
+    let movement = format!(
+        "\u{1b}[<0;{};{}M\u{1b}[<32;{};{}M",
+        border.column.saturating_add(1),
+        border.row.saturating_add(1),
+        moved_column.saturating_add(1),
+        border.row.saturating_add(1),
+    )
+    .into_bytes();
+    let movement_request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "divider-move",
+        "method": "terminal/step",
+        "params": {
+            "idempotency_key": "divider-move",
+            "client_size": {"columns": 80, "rows": 24},
+            "render": true,
+            "input_bytes": movement,
+        },
+    })
+    .to_string();
+
+    let movement = service.dispatch_runtime_control_body(&movement_request, &primary);
+    let movement: serde_json::Value = serde_json::from_str(&movement).unwrap();
+    assert_eq!(
+        movement["result"]["application"]["mouse_actions_reported"],
+        2
+    );
+    assert!(movement["result"]["view"].is_null());
+    assert!(
+        service
+            .drain_deferred_effects_transition()
+            .side_effects
+            .is_empty()
+    );
+
+    let release = format!(
+        "\u{1b}[<0;{};{}m",
+        moved_column.saturating_add(1),
+        border.row.saturating_add(1),
+    )
+    .into_bytes();
+    let release_request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "divider-release",
+        "method": "terminal/step",
+        "params": {
+            "idempotency_key": "divider-release",
+            "client_size": {"columns": 80, "rows": 24},
+            "render": true,
+            "input_bytes": release,
+        },
+    })
+    .to_string();
+
+    let release = service.dispatch_runtime_control_body(&release_request, &primary);
+    let release: serde_json::Value = serde_json::from_str(&release).unwrap();
+    assert_eq!(
+        release["result"]["application"]["mouse_actions_reported"],
+        1
+    );
+    assert!(release["result"]["view"].is_null());
+    assert!(
+        service
+            .drain_deferred_effects_transition()
+            .side_effects
+            .is_empty()
+    );
+
+    let commit = service
+        .apply_resize_debounce_timer_transition(primary.as_str(), true)
+        .unwrap();
+    assert!(commit.applied);
+    assert!(commit.side_effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::RenderClient {
+            client_id,
+            reason: crate::runtime::RenderInvalidationReason::FullRedraw,
+        } if client_id == &primary
+    )));
+}

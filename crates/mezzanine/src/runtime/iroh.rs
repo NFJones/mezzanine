@@ -337,10 +337,7 @@ fn iroh_side_effect_render_invalidation(effects: &[super::RuntimeSideEffect]) ->
             continue;
         };
         render_required = true;
-        invalidate_output |= matches!(
-            reason,
-            super::RenderInvalidationReason::ResizeDrag | super::RenderInvalidationReason::Resize
-        );
+        invalidate_output |= matches!(reason, super::RenderInvalidationReason::Resize);
     }
     render_required.then_some(invalidate_output)
 }

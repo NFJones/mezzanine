@@ -124,8 +124,14 @@ impl AsyncRuntimeSessionActor {
     /// on duplicated control-flow logic.
     pub(super) fn queue_runtime_side_effects(
         &mut self,
-        side_effects: Vec<RuntimeSideEffect>,
+        mut side_effects: Vec<RuntimeSideEffect>,
     ) -> Result<()> {
+        self.service
+            .reconcile_pending_divider_render_effects(&mut side_effects);
+        let mut queued_side_effects = self.side_effects.drain(..).collect::<Vec<_>>();
+        self.service
+            .reconcile_pending_divider_render_effects(&mut queued_side_effects);
+        self.side_effects.extend(queued_side_effects);
         let terminal_config_invalidated = side_effects
             .iter()
             .any(runtime_side_effect_invalidates_terminal_config);

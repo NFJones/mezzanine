@@ -339,6 +339,15 @@ struct RuntimeAgentShellPreviewPresentation {
     settled_owners: std::collections::BTreeSet<RuntimeAgentShellPreviewOwner>,
 }
 
+/// Released divider-layout outcome awaiting debounce consumption.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RuntimePendingDividerLayoutCommit {
+    /// A released divider gesture did not change layout geometry.
+    NoChange,
+    /// A released divider gesture changed one window's layout geometry.
+    Changed { window_id: String },
+}
+
 /// Transient terminal interaction state owned by one exact client.
 ///
 /// The runtime still projects these values through the legacy presentation
@@ -354,6 +363,9 @@ struct RuntimeClientPresentationState {
     active_copy_modes: std::collections::BTreeMap<(String, PaneSurfaceKind), CopyMode>,
     scrollback_copy_mode_panes: std::collections::BTreeSet<(String, PaneSurfaceKind)>,
     mouse_resize_drag_state: Option<MouseResizeDragState>,
+    mouse_resize_drag_window_id: Option<String>,
+    mouse_resize_drag_changed: bool,
+    pending_divider_layout_commit: Option<RuntimePendingDividerLayoutCommit>,
     mouse_selection_drag_state: Option<MouseSelectionDragState>,
     last_mouse_click_state: Option<RuntimeMouseClickState>,
     deferred_word_copy_cleanup: Option<(String, PaneSurfaceKind, CopyMode, u64)>,
@@ -434,6 +446,12 @@ pub(crate) struct RuntimePresentationComponent {
         std::collections::BTreeMap<(String, String), Vec<RuntimeRecordBrowserOverlayFrame>>,
     /// Active pane-divider resize gesture.
     mouse_resize_drag_state: Option<MouseResizeDragState>,
+    /// Window whose divider geometry is being changed by the active gesture.
+    mouse_resize_drag_window_id: Option<String>,
+    /// Whether the active divider gesture has changed layout geometry.
+    mouse_resize_drag_changed: bool,
+    /// Released divider outcome awaiting the client's resize debounce timer.
+    pending_divider_layout_commit: Option<RuntimePendingDividerLayoutCommit>,
     /// Active mouse text-selection gesture.
     mouse_selection_drag_state: Option<MouseSelectionDragState>,
     /// Last pane-content click retained for double-click classification.
@@ -1077,10 +1095,9 @@ fn presentation_render_invalidation_priority(reason: RenderInvalidationReason) -
         RenderInvalidationReason::AgentPrompt => 3,
         RenderInvalidationReason::Overlay => 4,
         RenderInvalidationReason::Configuration => 5,
-        RenderInvalidationReason::ResizeDrag => 6,
-        RenderInvalidationReason::Resize => 7,
-        RenderInvalidationReason::Layout => 8,
-        RenderInvalidationReason::FullRedraw => 9,
+        RenderInvalidationReason::Resize => 6,
+        RenderInvalidationReason::Layout => 7,
+        RenderInvalidationReason::FullRedraw => 8,
     }
 }
 
@@ -1150,6 +1167,9 @@ impl RuntimePresentationComponent {
         self.copy.active_copy_modes = state.active_copy_modes;
         self.copy.scrollback_copy_mode_panes = state.scrollback_copy_mode_panes;
         self.mouse_resize_drag_state = state.mouse_resize_drag_state;
+        self.mouse_resize_drag_window_id = state.mouse_resize_drag_window_id;
+        self.mouse_resize_drag_changed = state.mouse_resize_drag_changed;
+        self.pending_divider_layout_commit = state.pending_divider_layout_commit;
         self.mouse_selection_drag_state = state.mouse_selection_drag_state;
         self.last_mouse_click_state = state.last_mouse_click_state;
         self.deferred_word_copy_cleanup
@@ -1178,6 +1198,9 @@ impl RuntimePresentationComponent {
             active_copy_modes: self.copy.active_copy_modes.clone(),
             scrollback_copy_mode_panes: self.copy.scrollback_copy_mode_panes.clone(),
             mouse_resize_drag_state: self.mouse_resize_drag_state.clone(),
+            mouse_resize_drag_window_id: self.mouse_resize_drag_window_id.clone(),
+            mouse_resize_drag_changed: self.mouse_resize_drag_changed,
+            pending_divider_layout_commit: self.pending_divider_layout_commit.clone(),
             mouse_selection_drag_state: self.mouse_selection_drag_state.clone(),
             last_mouse_click_state: self.last_mouse_click_state.clone(),
             deferred_word_copy_cleanup: self.deferred_word_copy_cleanup.borrow().clone(),
@@ -1209,10 +1232,17 @@ impl RuntimePresentationComponent {
 
     /// Removes all transient presentation owned by one detached client.
     pub(crate) fn remove_client_state(&mut self, client_id: &mez_core::ids::ClientId) {
-        self.client_states.remove(client_id);
+        let removed_deferred_divider = self.client_states.remove(client_id).is_some_and(|state| {
+            state.mouse_resize_drag_state.is_some()
+                || state.mouse_resize_drag_window_id.is_some()
+                || state.pending_divider_layout_commit.is_some()
+        });
         self.agent_prompt_selector_refreshes
             .retain(|(candidate, _), _| candidate != client_id);
         if self.projected_client_id.as_ref() == Some(client_id) {
+            let projected_deferred_divider = self.mouse_resize_drag_state.is_some()
+                || self.mouse_resize_drag_window_id.is_some()
+                || self.pending_divider_layout_commit.is_some();
             self.primary_prompt_input = None;
             self.primary_prefix_key_pending = false;
             self.primary_display_overlay = None;
@@ -1220,6 +1250,9 @@ impl RuntimePresentationComponent {
             self.copy.active_copy_modes.clear();
             self.copy.scrollback_copy_mode_panes.clear();
             self.mouse_resize_drag_state = None;
+            self.mouse_resize_drag_window_id = None;
+            self.mouse_resize_drag_changed = false;
+            self.pending_divider_layout_commit = None;
             self.mouse_selection_drag_state = None;
             self.last_mouse_click_state = None;
             self.deferred_word_copy_cleanup.replace(None);
@@ -1227,6 +1260,11 @@ impl RuntimePresentationComponent {
             self.primary_error_status_overlay = None;
             self.pane_agent_status_selector = None;
             self.projected_client_id = None;
+            if projected_deferred_divider {
+                self.redispatch_pending_agent_presentation_resizes();
+            }
+        } else if removed_deferred_divider {
+            self.redispatch_pending_agent_presentation_resizes();
         }
     }
 
@@ -1465,14 +1503,126 @@ impl RuntimePresentationComponent {
         std::mem::take(&mut self.deferred_render_effects)
     }
 
-    /// Clears an in-progress pane-resize gesture after layout mutation.
+    /// Starts a pane-divider gesture and supersedes an older released commit.
+    pub(crate) fn begin_mouse_resize_drag(
+        &mut self,
+        state: MouseResizeDragState,
+        window_id: String,
+    ) {
+        self.mouse_resize_drag_state = Some(state);
+        self.mouse_resize_drag_window_id = Some(window_id);
+        self.mouse_resize_drag_changed = false;
+        self.pending_divider_layout_commit = None;
+    }
+
+    /// Records whether the active divider differs from its starting geometry.
+    pub(crate) fn update_mouse_resize_drag_changed(
+        &mut self,
+        geometries: &[crate::runtime::PaneGeometry],
+    ) {
+        self.mouse_resize_drag_changed =
+            self.mouse_resize_drag_state
+                .as_ref()
+                .is_some_and(|state| match state {
+                    MouseResizeDragState::Vertical {
+                        geometries: initial,
+                        ..
+                    }
+                    | MouseResizeDragState::Horizontal {
+                        geometries: initial,
+                        ..
+                    } => initial != geometries,
+                });
+    }
+
+    /// Releases a divider gesture into one debounce-owned commit outcome.
+    pub(crate) fn finish_mouse_resize_drag(&mut self) {
+        let changed_window_id = self
+            .mouse_resize_drag_state
+            .take()
+            .and_then(|_| {
+                self.mouse_resize_drag_changed
+                    .then(|| self.mouse_resize_drag_window_id.clone())
+            })
+            .flatten();
+        self.mouse_resize_drag_window_id = None;
+        self.mouse_resize_drag_changed = false;
+        if let Some(window_id) = changed_window_id {
+            self.pending_divider_layout_commit =
+                Some(RuntimePendingDividerLayoutCommit::Changed { window_id });
+        } else if self.pending_divider_layout_commit.is_none() {
+            self.pending_divider_layout_commit = Some(RuntimePendingDividerLayoutCommit::NoChange);
+        }
+    }
+
+    /// Consumes one released divider outcome after its debounce timer fires.
+    pub(crate) fn take_pending_divider_layout_commit(
+        &mut self,
+    ) -> Option<RuntimePendingDividerLayoutCommit> {
+        self.pending_divider_layout_commit.take()
+    }
+
+    /// Clears every in-progress or released pane-divider resize operation.
     pub(crate) fn clear_mouse_resize_drag_state(&mut self) {
+        self.capture_projected_client_state();
+        for state in self.client_states.values_mut() {
+            let changed = state.mouse_resize_drag_state.is_some()
+                || state.mouse_resize_drag_window_id.is_some()
+                || state.mouse_resize_drag_changed
+                || state.pending_divider_layout_commit.is_some();
+            state.mouse_resize_drag_state = None;
+            state.mouse_resize_drag_window_id = None;
+            state.mouse_resize_drag_changed = false;
+            state.pending_divider_layout_commit = None;
+            if changed {
+                state.presentation_revision = state.presentation_revision.saturating_add(1);
+            }
+        }
         self.mouse_resize_drag_state = None;
+        self.mouse_resize_drag_window_id = None;
+        self.mouse_resize_drag_changed = false;
+        self.pending_divider_layout_commit = None;
+        self.redispatch_pending_agent_presentation_resizes();
     }
 
     /// Reports whether a pane-divider resize gesture is active.
     pub(crate) fn mouse_resize_drag_active(&self) -> bool {
         self.mouse_resize_drag_state.is_some()
+    }
+
+    /// Reports whether a released divider outcome awaits debounce consumption.
+    pub(crate) fn pending_divider_layout_commit_active(&self) -> bool {
+        self.pending_divider_layout_commit.is_some()
+    }
+
+    /// Returns windows whose provisional divider geometry must remain hidden.
+    pub(crate) fn deferred_divider_layout_window_ids(&self) -> std::collections::BTreeSet<String> {
+        let mut window_ids = self
+            .client_states
+            .iter()
+            .filter(|(client_id, _)| self.projected_client_id.as_ref() != Some(*client_id))
+            .filter_map(|(_, state)| {
+                state.mouse_resize_drag_window_id.clone().or_else(|| {
+                    match state.pending_divider_layout_commit.as_ref() {
+                        Some(RuntimePendingDividerLayoutCommit::Changed { window_id }) => {
+                            Some(window_id.clone())
+                        }
+                        Some(RuntimePendingDividerLayoutCommit::NoChange) | None => None,
+                    }
+                })
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        if let Some(window_id) = self.mouse_resize_drag_window_id.clone().or_else(|| {
+            match self.pending_divider_layout_commit.as_ref() {
+                Some(RuntimePendingDividerLayoutCommit::Changed { window_id }) => {
+                    Some(window_id.clone())
+                }
+                Some(RuntimePendingDividerLayoutCommit::NoChange) | None => None,
+            }
+        }) {
+            window_ids.insert(window_id);
+        }
+        window_ids
     }
 
     /// Rebinds transient projections to one cheap provisional screen resize.
@@ -2310,6 +2460,7 @@ impl RuntimeSessionService {
         client_id: &mez_core::ids::ClientId,
     ) -> Result<AttachedClientStepApplication> {
         self.prepare_client_render(client_id, ClientViewRole::Primary)?;
+        self.presentation.clear_mouse_resize_drag_state();
         self.show_primary_notice_overlay(vec![
             "view changed; pointer input was cancelled".to_string(),
         ])?;

@@ -72,6 +72,14 @@ impl AsyncTerminalClientConfigSnapshot {
     pub fn config(&self) -> &TerminalClientLoopConfig {
         self.config.as_ref()
     }
+
+    /// Carries client-local pane-resize routing state across service batches.
+    pub(in crate::host::async_runtime) fn with_pane_resize_active(mut self, active: bool) -> Self {
+        Arc::make_mut(&mut self.config)
+            .mouse_policy
+            .pane_resize_active = active;
+        self
+    }
 }
 
 impl Deref for AsyncTerminalClientConfigSnapshot {

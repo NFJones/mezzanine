@@ -210,6 +210,192 @@ fn runtime_structural_step_targets_affected_window_projections_only() {
     assert_eq!(rendered_client_ids, vec![source, observer, same_window]);
 }
 
+/// Verifies a changed divider stays invisible through ordinary pane output and
+/// commits once to every client projecting the resized window.
+#[test]
+fn runtime_divider_commit_targets_projecting_clients_after_debounce() {
+    let mut service = test_runtime_service();
+    let size = Size::new(80, 24).unwrap();
+    let source = service.attach_primary("source", true, size, 120).unwrap();
+    let observer = service
+        .session
+        .attach_observer_with_terminal("observer", None, 1)
+        .unwrap();
+    let same_window = service
+        .attach_primary("same-window", true, size, 121)
+        .unwrap();
+    let unrelated = service
+        .attach_primary("unrelated", true, size, 122)
+        .unwrap();
+    service
+        .session
+        .new_window(&unrelated, "background", true)
+        .unwrap();
+    service
+        .session
+        .split_active_pane(&source, SplitDirection::Vertical)
+        .unwrap();
+    let border = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .mouse_border_cells
+        .into_iter()
+        .next()
+        .expect("vertical split should expose a divider");
+    let drag = |column| AttachedTerminalClientStepPlan {
+        actions: vec![TerminalClientLoopAction::HandleMouse(
+            MouseAction::ResizePane {
+                column,
+                row: border.row,
+            },
+        )],
+        output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
+        input_hangup: false,
+        output_hangup: false,
+        error_roles: Vec::new(),
+    };
+    for column in [border.column, border.column.saturating_add(3)] {
+        let (_, transition) = service
+            .apply_attached_terminal_step_transition(&source, &drag(column))
+            .unwrap();
+        assert!(
+            transition
+                .side_effects
+                .iter()
+                .all(|effect| !matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+        );
+    }
+
+    let mut output_effects = service
+        .apply_pane_output_transition("%1", b"output during drag".to_vec())
+        .unwrap()
+        .side_effects;
+    service.reconcile_pending_divider_render_effects(&mut output_effects);
+    assert!(
+        output_effects
+            .iter()
+            .all(|effect| !matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+    );
+
+    let release = AttachedTerminalClientStepPlan {
+        actions: vec![TerminalClientLoopAction::HandleMouse(
+            MouseAction::FinishResizePane,
+        )],
+        output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
+        input_hangup: false,
+        output_hangup: false,
+        error_roles: Vec::new(),
+    };
+    let (_, transition) = service
+        .apply_attached_terminal_step_transition(&source, &release)
+        .unwrap();
+    assert!(
+        transition
+            .side_effects
+            .iter()
+            .all(|effect| !matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+    );
+
+    let commit = service
+        .apply_resize_debounce_timer_transition(source.as_str(), true)
+        .unwrap();
+    let rendered_client_ids = commit
+        .side_effects
+        .iter()
+        .filter_map(|effect| match effect {
+            RuntimeSideEffect::RenderClient {
+                client_id,
+                reason: crate::runtime::RenderInvalidationReason::FullRedraw,
+            } => Some(client_id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(commit.applied);
+    assert_eq!(rendered_client_ids.len(), 3);
+    assert!(rendered_client_ids.contains(&source));
+    assert!(rendered_client_ids.contains(&observer));
+    assert!(rendered_client_ids.contains(&same_window));
+    assert!(!rendered_client_ids.contains(&unrelated));
+}
+
+/// Verifies returning a divider to its starting position and detaching a drag
+/// owner both leave no delayed layout redraw behind.
+#[test]
+fn runtime_divider_noop_and_disconnect_do_not_commit_layout() {
+    let mut service = test_runtime_service();
+    let size = Size::new(80, 24).unwrap();
+    let primary = service.attach_primary("primary", true, size, 120).unwrap();
+    service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    let border = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .mouse_border_cells
+        .into_iter()
+        .next()
+        .expect("vertical split should expose a divider");
+    let step = |action| AttachedTerminalClientStepPlan {
+        actions: vec![TerminalClientLoopAction::HandleMouse(action)],
+        output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
+        input_hangup: false,
+        output_hangup: false,
+        error_roles: Vec::new(),
+    };
+    for column in [
+        border.column,
+        border.column.saturating_add(3),
+        border.column,
+    ] {
+        service
+            .apply_attached_terminal_step_transition(
+                &primary,
+                &step(MouseAction::ResizePane {
+                    column,
+                    row: border.row,
+                }),
+            )
+            .unwrap();
+    }
+    service
+        .apply_attached_terminal_step_transition(&primary, &step(MouseAction::FinishResizePane))
+        .unwrap();
+    let no_change = service
+        .apply_resize_debounce_timer_transition(primary.as_str(), true)
+        .unwrap();
+    assert!(!no_change.applied);
+    assert!(no_change.side_effects.is_empty());
+
+    for column in [border.column, border.column.saturating_add(2)] {
+        service
+            .apply_attached_terminal_step_transition(
+                &primary,
+                &step(MouseAction::ResizePane {
+                    column,
+                    row: border.row,
+                }),
+            )
+            .unwrap();
+    }
+    service
+        .apply_attached_terminal_step_transition(&primary, &step(MouseAction::FinishResizePane))
+        .unwrap();
+    assert!(
+        service
+            .apply_client_disconnect_event(&primary, "divider owner disconnected")
+            .unwrap()
+    );
+    let detached = service
+        .apply_resize_debounce_timer_transition(primary.as_str(), true)
+        .unwrap();
+    assert!(!detached.applied);
+    assert!(detached.side_effects.is_empty());
+}
+
 /// Verifies primary and observer frames render the visibility-selected screen
 /// without allowing hidden process application modes to affect agent input.
 #[test]

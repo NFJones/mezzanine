@@ -22,7 +22,7 @@ use super::{
     runtime_pane_readiness_state_name, runtime_split_direction, runtime_terminal_step_result_json,
     source_pane_target_checked_resolved, window_target_checked_resolved,
 };
-use crate::runtime::RenderInvalidationReason;
+use crate::runtime::{MouseAction, RenderInvalidationReason};
 
 impl RuntimeSessionService {
     /// Runs the dispatch runtime mutating request operation for this subsystem.
@@ -704,9 +704,19 @@ impl RuntimeSessionService {
         };
         let application = self.apply_attached_terminal_step_plan(primary_client_id, &step)?;
         let render_reason = self.attached_terminal_step_render_reason(&application, &step);
-        let view = if render
-            || (render_if_changed
-                && (application.view_refresh_required || application.full_redraw_required))
+        let defer_divider_render = step.actions.iter().any(|action| {
+            matches!(
+                action,
+                TerminalClientLoopAction::HandleMouse(
+                    MouseAction::ResizePane { .. } | MouseAction::FinishResizePane
+                )
+            )
+        }) && (self.presentation.mouse_resize_drag_active()
+            || self.presentation.pending_divider_layout_commit_active());
+        let view = if !defer_divider_render
+            && (render
+                || (render_if_changed
+                    && (application.view_refresh_required || application.full_redraw_required)))
         {
             self.render_client_view_with_resolved_config(
                 ClientViewRole::Primary,

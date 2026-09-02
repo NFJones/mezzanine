@@ -263,7 +263,6 @@ impl RuntimeSessionService {
         );
         self.presentation.capture_projected_client_state();
         let (application, mut side_effects) = result?;
-        let render_reason = self.attached_terminal_step_render_reason(&application, step);
         let structural_mutation = step.actions.iter().any(|action| {
             matches!(
                 action,
@@ -281,6 +280,20 @@ impl RuntimeSessionService {
                 )
             )
         });
+        let divider_resize_only = step.actions.iter().all(|action| {
+            matches!(
+                action,
+                TerminalClientLoopAction::HandleMouse(
+                    MouseAction::ResizePane { .. } | MouseAction::FinishResizePane
+                )
+            )
+        });
+        if structural_mutation || (application.full_redraw_required && !divider_resize_only) {
+            self.presentation.clear_mouse_resize_drag_state();
+            self.presentation
+                .redispatch_pending_agent_presentation_resizes();
+        }
+        let render_reason = self.attached_terminal_step_render_reason(&application, step);
         side_effects.extend(render_reason.map_or_else(Vec::new, |reason| {
             if structural_mutation {
                 let mut window_ids = pre_mutation_window_id.into_iter().collect::<Vec<_>>();
@@ -333,16 +346,21 @@ impl RuntimeSessionService {
         application: &AttachedClientStepApplication,
         step: &AttachedTerminalClientStepPlan,
     ) -> Option<RenderInvalidationReason> {
-        let active_resize_drag = application.full_redraw_required
-            && self.presentation.mouse_resize_drag_active()
-            && step.actions.iter().any(|action| {
+        let deferred_resize_drag = step.actions.iter().any(|action| {
+            matches!(
+                action,
+                TerminalClientLoopAction::HandleMouse(MouseAction::ResizePane { .. })
+            )
+        }) && self.presentation.mouse_resize_drag_active();
+        let deferred_resize_release =
+            step.actions.iter().any(|action| {
                 matches!(
                     action,
-                    TerminalClientLoopAction::HandleMouse(MouseAction::ResizePane { .. })
+                    TerminalClientLoopAction::HandleMouse(MouseAction::FinishResizePane)
                 )
-            });
-        if active_resize_drag {
-            Some(RenderInvalidationReason::ResizeDrag)
+            }) && self.presentation.pending_divider_layout_commit_active();
+        if deferred_resize_drag || deferred_resize_release {
+            None
         } else if application.full_redraw_required {
             Some(RenderInvalidationReason::FullRedraw)
         } else if application.agent_prompt_inputs_applied > 0 {
@@ -930,9 +948,7 @@ impl RuntimeSessionService {
     fn mouse_action_requires_full_redraw(action: MouseAction) -> bool {
         matches!(
             action,
-            MouseAction::ResizePane { .. }
-                | MouseAction::FinishResizePane
-                | MouseAction::ReleaseWindowAction { .. }
+            MouseAction::ResizePane { .. } | MouseAction::ReleaseWindowAction { .. }
         )
     }
 }

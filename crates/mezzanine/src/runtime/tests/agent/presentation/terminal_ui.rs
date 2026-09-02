@@ -3998,13 +3998,12 @@ fn runtime_agent_divider_drag_debounces_source_backed_presentation_replay() {
                 },
             )
             .unwrap();
-        assert!(transition.side_effects.iter().any(|effect| matches!(
-            effect,
-            RuntimeSideEffect::RenderClient {
-                reason: RenderInvalidationReason::ResizeDrag,
-                ..
-            }
-        )));
+        assert!(
+            transition
+                .side_effects
+                .iter()
+                .all(|effect| !matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+        );
     }
 
     assert!(
@@ -4021,7 +4020,7 @@ fn runtime_agent_divider_drag_debounces_source_backed_presentation_replay() {
     let final_size = service.agent_pane_screen("%1").unwrap().size();
 
     let transition = service
-        .apply_resize_debounce_timer_transition(true)
+        .apply_resize_debounce_timer_transition(primary.as_str(), true)
         .unwrap();
 
     assert!(!transition.applied);
@@ -4059,24 +4058,34 @@ fn runtime_agent_divider_drag_debounces_source_backed_presentation_replay() {
         .unwrap();
 
     assert!(release.view_refresh_required);
-    assert!(release.full_redraw_required);
+    assert!(!release.full_redraw_required);
     assert!(
         release_transition
             .side_effects
             .iter()
-            .any(|effect| matches!(
-                effect,
-                RuntimeSideEffect::RenderClient {
-                    reason: RenderInvalidationReason::FullRedraw,
-                    ..
-                }
-            ))
+            .all(|effect| !matches!(effect, RuntimeSideEffect::RenderClient { .. }))
     );
     assert!(
         service
             .presentation
             .agent_presentation_resize_is_deferred("%1")
     );
+    let commit = service
+        .apply_resize_debounce_timer_transition(primary.as_str(), true)
+        .unwrap();
+    assert!(commit.applied);
+    assert!(commit.side_effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::RenderClient {
+            reason: RenderInvalidationReason::FullRedraw,
+            ..
+        }
+    )));
+    assert!(commit.side_effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::DispatchAgentPresentationResize { pane_id, .. }
+            if pane_id == "%1"
+    )));
     let work = service
         .take_agent_presentation_resize_work("%1")
         .unwrap()

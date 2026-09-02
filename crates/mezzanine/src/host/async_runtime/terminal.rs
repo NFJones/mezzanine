@@ -13,7 +13,7 @@ use super::{
     plan_attached_terminal_client_step_with_host_paste_buffer,
     run_async_client_output_flush_service,
 };
-use crate::host::terminal::TerminalClientLoopAction;
+use crate::host::terminal::{MouseAction, TerminalClientLoopAction};
 use mez_mux::presentation::compose_client_presentation_with_styles;
 use std::future::Future;
 use std::time::Duration;
@@ -461,6 +461,14 @@ where
         )?;
         report.host_bracketed_paste_active = host_bracketed_paste_active;
         report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
+        let defer_divider_render = step.actions.iter().any(|action| {
+            matches!(
+                action,
+                TerminalClientLoopAction::HandleMouse(
+                    MouseAction::ResizePane { .. } | MouseAction::FinishResizePane
+                )
+            )
+        });
 
         let agent_prompt_input_action = request.role == ClientViewRole::Primary
             && frame
@@ -518,7 +526,8 @@ where
                 .as_ref()
                 .is_some_and(|application| {
                     application.view_refresh_required || application.full_redraw_required
-                });
+                })
+                || defer_divider_render;
         if !step.output_lines.is_empty() && !agent_prompt_input_action && !pre_action_frame_is_stale
         {
             let output_modes = AttachedTerminalOutputModes {
@@ -612,14 +621,14 @@ where
             None
         };
         if let Some(application) = primary_step_application {
-            if application.full_redraw_required {
+            if application.full_redraw_required && !defer_divider_render {
                 await_attached_terminal_step(
                     "output frame invalidation",
                     io.invalidate_output_frame(),
                 )
                 .await?;
             }
-            if application.view_refresh_required && output_writable {
+            if application.view_refresh_required && output_writable && !defer_divider_render {
                 let refreshed = await_attached_terminal_step(
                     "refreshed client frame render",
                     handle.render_client_frame_with_snapshot(

@@ -520,6 +520,8 @@ impl RuntimeSessionService {
                     self.resize_pane_pty(primary_client_id, Some(pane_id.as_str()), size)?;
                     return Ok((true, None));
                 };
+                self.presentation
+                    .update_mouse_resize_drag_changed(&update.geometries);
                 let effects = self
                     .session
                     .replace_active_window_pane_geometries_transition(
@@ -530,9 +532,7 @@ impl RuntimeSessionService {
                 Ok((true, None))
             }
             MouseAction::FinishResizePane => {
-                self.presentation.mouse_resize_drag_state = None;
-                self.presentation
-                    .redispatch_pending_agent_presentation_resizes();
+                self.presentation.finish_mouse_resize_drag();
                 Ok((true, None))
             }
             MouseAction::ScrollHistory { lines, position } => {
@@ -1223,7 +1223,12 @@ impl RuntimeSessionService {
             return Ok(None);
         };
         let update = mouse_resize_update_from_state(state.clone(), column, row);
-        self.presentation.mouse_resize_drag_state = Some(state);
+        let window_id = self
+            .session
+            .active_window()
+            .map(|window| window.id.to_string())
+            .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
+        self.presentation.begin_mouse_resize_drag(state, window_id);
         Ok(Some(update))
     }
 

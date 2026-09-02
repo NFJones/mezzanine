@@ -1178,6 +1178,165 @@ async fn async_attached_terminal_service_coalesces_resize_storm_timers() {
     assert!(exit.commands_processed >= 13);
 }
 
+/// Verifies releasing a divider cancels the movement timer and starts a fresh
+/// debounce generation even when release arrives in a later input batch.
+#[tokio::test(flavor = "current_thread")]
+async fn async_attached_terminal_service_rearms_resize_debounce_on_drag_release() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    assert!(
+        service
+            .apply_attached_mux_action(&primary, MuxAction::SplitPaneVertical)
+            .unwrap()
+    );
+    let border = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .mouse_border_cells
+        .into_iter()
+        .next()
+        .expect("vertical split should expose a divider");
+    let moved_column = border.column.saturating_add(3);
+    let press_and_move = format!(
+        "\u{1b}[<0;{};{}M\u{1b}[<32;{};{}M",
+        border.column.saturating_add(1),
+        border.row.saturating_add(1),
+        moved_column.saturating_add(1),
+        border.row.saturating_add(1),
+    )
+    .into_bytes();
+    let release = format!(
+        "\u{1b}[<0;{};{}m",
+        moved_column.saturating_add(1),
+        border.row.saturating_add(1),
+    )
+    .into_bytes();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let mut io = FakeAttachedTerminalLoopIo {
+        readiness_batches: vec![
+            vec![
+                AttachedTerminalFdReadiness {
+                    role: AttachedTerminalFdRole::Input,
+                    fd: 0,
+                    interest: TerminalFdInterest::read(),
+                    readable: true,
+                    writable: false,
+                    hangup: false,
+                    error: false,
+                },
+                AttachedTerminalFdReadiness {
+                    role: AttachedTerminalFdRole::Output,
+                    fd: 1,
+                    interest: TerminalFdInterest::write(),
+                    readable: false,
+                    writable: true,
+                    hangup: false,
+                    error: false,
+                },
+            ],
+            vec![
+                AttachedTerminalFdReadiness {
+                    role: AttachedTerminalFdRole::Input,
+                    fd: 0,
+                    interest: TerminalFdInterest::read(),
+                    readable: true,
+                    writable: false,
+                    hangup: false,
+                    error: false,
+                },
+                AttachedTerminalFdReadiness {
+                    role: AttachedTerminalFdRole::Output,
+                    fd: 1,
+                    interest: TerminalFdInterest::write(),
+                    readable: false,
+                    writable: true,
+                    hangup: false,
+                    error: false,
+                },
+            ],
+        ],
+        input_batches: vec![press_and_move, release],
+        written_batches: Vec::new(),
+        write_error_kinds: Vec::new(),
+    };
+
+    let client = async {
+        let report = run_async_attached_terminal_client_service(
+            &handle,
+            &mut io,
+            AsyncAttachedTerminalLoopRequest {
+                role: ClientViewRole::Primary,
+                client_id: primary.clone(),
+                primary_client_id: Some(primary.clone()),
+                client_size: Size::new(80, 24).unwrap(),
+                terminal_config: TerminalClientLoopConfig::default(),
+                loop_config: AttachedTerminalClientLoopConfig {
+                    max_iterations: 1,
+                    max_input_bytes: 128,
+                },
+            },
+            AsyncAttachedTerminalClientServiceConfig { max_batches: 3 },
+            |_| Ok(None),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.action_counts.handle_mouse, 3);
+        assert_eq!(report.loop_report.output_frames, 1);
+        assert_eq!(io.written_batches.len(), 1);
+        let timer_effects = handle.drain_timer_side_effects(8).await.unwrap();
+        let resize_timer_effects = timer_effects
+            .into_iter()
+            .filter(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                | RuntimeSideEffect::CancelTimer { key } => {
+                    key.kind == RuntimeTimerKind::ResizeDebounce
+                }
+                _ => false,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            resize_timer_effects,
+            vec![
+                RuntimeSideEffect::ScheduleTimer {
+                    key: RuntimeTimerKey::new(
+                        RuntimeTimerKind::ResizeDebounce,
+                        primary.as_str(),
+                        1,
+                    ),
+                    delay_ms: 200,
+                },
+                RuntimeSideEffect::CancelTimer {
+                    key: RuntimeTimerKey::new(
+                        RuntimeTimerKind::ResizeDebounce,
+                        primary.as_str(),
+                        1,
+                    ),
+                },
+                RuntimeSideEffect::ScheduleTimer {
+                    key: RuntimeTimerKey::new(
+                        RuntimeTimerKind::ResizeDebounce,
+                        primary.as_str(),
+                        2,
+                    ),
+                    delay_ms: 200,
+                },
+            ]
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed >= 9);
+}
+
 /// Verifies that resize handling immediately invalidates retained foreground
 /// output state and also queues a resize debounce timer. The immediate
 /// invalidation gives the resized terminal a full refresh right away, while the

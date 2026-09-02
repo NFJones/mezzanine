@@ -323,6 +323,9 @@ where
             batch.input_hangups > 0 || batch.output_hangups > 0 || !batch.error_roles.is_empty();
         report.action_counts.record(&batch.actions);
         resized_this_batch |= attached_terminal_actions_include_resize(&batch.actions);
+        if let Some(active) = attached_terminal_actions_pane_resize_active(&batch.actions) {
+            terminal_config = terminal_config.with_pane_resize_active(active);
+        }
         host_bracketed_paste_active = batch.host_bracketed_paste_active;
         host_bracketed_paste_buffer = std::mem::take(&mut batch.host_bracketed_paste_buffer);
         host_bracketed_paste_started_at = batch.host_bracketed_paste_started_at;
@@ -382,8 +385,21 @@ fn attached_terminal_actions_include_resize(actions: &[TerminalClientLoopAction]
     actions.iter().any(|action| {
         matches!(
             action,
-            TerminalClientLoopAction::HandleMouse(MouseAction::ResizePane { .. })
+            TerminalClientLoopAction::HandleMouse(
+                MouseAction::ResizePane { .. } | MouseAction::FinishResizePane
+            )
         )
+    })
+}
+
+/// Returns the final pane-divider routing state represented by one action batch.
+fn attached_terminal_actions_pane_resize_active(
+    actions: &[TerminalClientLoopAction],
+) -> Option<bool> {
+    actions.iter().fold(None, |active, action| match action {
+        TerminalClientLoopAction::HandleMouse(MouseAction::ResizePane { .. }) => Some(true),
+        TerminalClientLoopAction::HandleMouse(MouseAction::FinishResizePane) => Some(false),
+        _ => active,
     })
 }
 
@@ -784,10 +800,9 @@ fn client_render_invalidation_priority(reason: RenderInvalidationReason) -> u8 {
         RenderInvalidationReason::AgentPrompt => 3,
         RenderInvalidationReason::Overlay => 4,
         RenderInvalidationReason::Configuration => 5,
-        RenderInvalidationReason::ResizeDrag => 6,
-        RenderInvalidationReason::Resize => 7,
-        RenderInvalidationReason::Layout => 8,
-        RenderInvalidationReason::FullRedraw => 9,
+        RenderInvalidationReason::Resize => 6,
+        RenderInvalidationReason::Layout => 7,
+        RenderInvalidationReason::FullRedraw => 8,
     }
 }
 
@@ -805,8 +820,7 @@ fn render_invalidation_reason_bypasses_rate_limit(reason: RenderInvalidationReas
 fn render_invalidation_reason_invalidates_frame(reason: RenderInvalidationReason) -> bool {
     matches!(
         reason,
-        RenderInvalidationReason::ResizeDrag
-            | RenderInvalidationReason::Resize
+        RenderInvalidationReason::Resize
             | RenderInvalidationReason::Layout
             | RenderInvalidationReason::FullRedraw
     )

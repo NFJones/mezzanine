@@ -6,6 +6,7 @@ use super::{
     SessionRegistry, TerminalClientLoopConfig, apply_registry_update,
     runtime_status_refresh_interval_ms_for_config, runtime_status_refresh_required_by_config,
 };
+use crate::runtime::render::RuntimePendingDividerLayoutCommit;
 use crate::storage::token_usage::TokenUsageStore;
 
 impl RuntimeSessionService {
@@ -86,13 +87,48 @@ impl RuntimeSessionService {
     /// the resulting render transition for every attached terminal client.
     pub(crate) fn apply_resize_debounce_timer_transition(
         &mut self,
+        owner_id: &str,
         active: bool,
     ) -> Result<RuntimeTransition> {
         if !active {
             return Ok(RuntimeTransition::default());
         }
+        let Some(owner_client_id) = self
+            .session
+            .clients()
+            .iter()
+            .find(|client| {
+                client.id.as_str() == owner_id
+                    && client.state == crate::runtime::ClientState::Attached
+            })
+            .map(|client| client.id.clone())
+        else {
+            return Ok(RuntimeTransition::default());
+        };
+        self.presentation.activate_client_state(&owner_client_id);
         if self.presentation.mouse_resize_drag_active() {
             return Ok(RuntimeTransition::default());
+        }
+        if let Some(commit) = self.presentation.take_pending_divider_layout_commit() {
+            let mut side_effects = match commit {
+                RuntimePendingDividerLayoutCommit::NoChange => Vec::new(),
+                RuntimePendingDividerLayoutCommit::Changed { window_id } => self
+                    .render_effects_for_clients_projecting_windows(
+                        &[window_id],
+                        RenderInvalidationReason::FullRedraw,
+                    ),
+            };
+            self.presentation
+                .redispatch_pending_agent_presentation_resizes();
+            side_effects.extend(
+                self.presentation
+                    .take_agent_presentation_resize_dispatch_effects(),
+            );
+            self.presentation.capture_projected_client_state();
+            return Ok(RuntimeTransition {
+                applied: !side_effects.is_empty(),
+                side_effects,
+            });
         }
         let side_effects = self
             .session
