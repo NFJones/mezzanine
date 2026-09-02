@@ -386,6 +386,11 @@ impl RuntimeSessionService {
         )
     }
 
+    /// Drains exact clients whose latest divider action must rearm debounce.
+    pub(crate) fn take_divider_resize_debounce_requests(&mut self) -> Vec<mez_core::ids::ClientId> {
+        self.presentation.take_divider_resize_debounce_requests()
+    }
+
     /// Plans and applies raw primary-client input as a runtime transition.
     pub(crate) fn apply_client_input_transition(
         &mut self,
@@ -840,6 +845,13 @@ impl RuntimeSessionService {
                         Ok((true, client_clipboard_write)) => {
                             report.mouse_actions_reported =
                                 report.mouse_actions_reported.saturating_add(1);
+                            if matches!(
+                                action,
+                                MouseAction::ResizePane { .. } | MouseAction::FinishResizePane
+                            ) {
+                                self.presentation
+                                    .request_divider_resize_debounce(primary_client_id.clone());
+                            }
                             report.registry_persistence_required |=
                                 Self::mouse_action_requires_registry_persistence(action);
                             report.client_clipboard_write =

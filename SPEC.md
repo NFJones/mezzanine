@@ -1330,7 +1330,10 @@ pending layout commit and issue a full redraw for the layout owner's projection
 and its observers; stale timers and timers that fire while the divider is held
 MUST be no-ops. Releasing an unchanged drag MUST NOT redraw. Ordinary pane
 output MUST NOT expose deferred divider geometry before the commit is consumed
-or superseded. The built-in default debounce MUST be `200` milliseconds.
+or superseded. The serialized runtime actor MUST own debounce generations for
+both direct attached-terminal input and framed Unix or Iroh `terminal/step`
+input; transport adapters MUST NOT maintain independent divider timer state.
+The built-in default debounce MUST be `200` milliseconds.
 
 Mezzanine MUST present a cursor for the active interactive surface when that
 surface accepts keyboard input. Cursor style MUST be configurable. Cursor blink

@@ -390,7 +390,8 @@ impl AsyncRuntimeActorMetrics {
 #[derive(Debug, Default)]
 pub(super) struct RuntimeTimerTracker {
     pub(super) shell_transactions: HashSet<RuntimeTimerKey>,
-    pub(super) resize_debounce: HashSet<RuntimeTimerKey>,
+    pub(super) resize_debounce: HashMap<String, RuntimeTimerKey>,
+    pub(super) next_resize_debounce_generation: u64,
     pub(super) cursor_blink: HashMap<String, RuntimeTimerKey>,
     pub(super) status_refresh: HashMap<String, RuntimeTimerKey>,
     pub(super) provider_poll: Option<RuntimeTimerKey>,

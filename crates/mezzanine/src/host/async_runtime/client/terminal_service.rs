@@ -9,8 +9,8 @@ use super::{
     AsyncTerminalOutputWriteReport, AttachedTerminalClientLoopReport, AttachedTerminalFdReadiness,
     AttachedTerminalFdRole, ClientStatusLine, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
     DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES, MezError, MouseAction,
-    RenderInvalidationReason, Result, RuntimeLifecycleState, RuntimeSideEffect, RuntimeTimerKey,
-    RuntimeTimerKind, TerminalClientLoopAction, TerminalFdInterest, TerminalStyleSpan,
+    RenderInvalidationReason, Result, RuntimeLifecycleState, RuntimeSideEffect,
+    TerminalClientLoopAction, TerminalFdInterest, TerminalStyleSpan,
     empty_attached_terminal_loop_report, is_terminal_runtime_lifecycle_state,
     merge_attached_terminal_loop_report, run_async_attached_terminal_client_loop_with_snapshot,
     sleep, watch,
@@ -200,8 +200,6 @@ where
         stopped_by_lifecycle: false,
         terminal_resizes: 0,
     };
-    let mut pending_resize_debounce_timer: Option<RuntimeTimerKey> = None;
-    let mut resize_debounce_generation = 0u64;
     let mut render_requested = true;
     let mut render_limiter =
         AttachedTerminalRenderRateLimiter::new(terminal_config.render_rate_limit_fps);
@@ -322,7 +320,6 @@ where
         let should_finish =
             batch.input_hangups > 0 || batch.output_hangups > 0 || !batch.error_roles.is_empty();
         report.action_counts.record(&batch.actions);
-        resized_this_batch |= attached_terminal_actions_include_resize(&batch.actions);
         if let Some(active) = attached_terminal_actions_pane_resize_active(&batch.actions) {
             terminal_config = terminal_config.with_pane_resize_active(active);
         }
@@ -333,21 +330,6 @@ where
         merge_attached_terminal_loop_report(&mut report.loop_report, batch);
         if batch_output_frames > 0 {
             render_limiter.mark_flushed();
-        }
-        if resized_this_batch {
-            resize_debounce_generation = resize_debounce_generation.saturating_add(1);
-            let next_key = RuntimeTimerKey::new(
-                RuntimeTimerKind::ResizeDebounce,
-                request.client_id.as_str(),
-                resize_debounce_generation,
-            );
-            queue_resize_debounce_timer(
-                handle,
-                pending_resize_debounce_timer.replace(next_key.clone()),
-                next_key,
-                terminal_config.resize_debounce_ms,
-            )
-            .await?;
         }
         if should_finish {
             return Ok(finish_attached_terminal_client_service_report(
@@ -376,22 +358,6 @@ where
     ))
 }
 
-/// Runs the attached terminal actions include resize operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn attached_terminal_actions_include_resize(actions: &[TerminalClientLoopAction]) -> bool {
-    actions.iter().any(|action| {
-        matches!(
-            action,
-            TerminalClientLoopAction::HandleMouse(
-                MouseAction::ResizePane { .. } | MouseAction::FinishResizePane
-            )
-        )
-    })
-}
-
 /// Returns the final pane-divider routing state represented by one action batch.
 fn attached_terminal_actions_pane_resize_active(
     actions: &[TerminalClientLoopAction],
@@ -401,31 +367,6 @@ fn attached_terminal_actions_pane_resize_active(
         TerminalClientLoopAction::HandleMouse(MouseAction::FinishResizePane) => Some(false),
         _ => active,
     })
-}
-
-/// Runs the queue resize debounce timer operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-async fn queue_resize_debounce_timer(
-    handle: &AsyncRuntimeSessionHandle,
-    previous_key: Option<RuntimeTimerKey>,
-    next_key: RuntimeTimerKey,
-    resize_debounce_ms: u64,
-) -> Result<()> {
-    let mut side_effects = Vec::new();
-    if let Some(key) = previous_key {
-        side_effects.push(RuntimeSideEffect::CancelTimer { key });
-    }
-    side_effects.push(RuntimeSideEffect::ScheduleTimer {
-        key: next_key,
-        delay_ms: resize_debounce_ms.max(1),
-    });
-    handle
-        .queue_runtime_side_effects(side_effects)
-        .await
-        .map(|_| ())
 }
 
 /// Coalesces foreground render invalidations behind a per-client frame cadence.

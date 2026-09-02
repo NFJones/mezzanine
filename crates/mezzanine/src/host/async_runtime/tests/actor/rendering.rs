@@ -1309,6 +1309,198 @@ async fn async_actor_reconciles_live_overlay_timers_for_framed_control_steps() {
     let ((), _) = tokio::join!(client, actor.run());
 }
 
+/// Verifies ordinary framed `terminal/step` ingress owns the complete divider
+/// debounce lifecycle. Unix attach clients use this path, so a changed drag
+/// must schedule and rearm the actor timer without a terminal-service adapter
+/// manually invoking the debounce transition.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_commits_divider_drag_for_framed_control_steps() {
+    assert_actor_commits_divider_drag_for_framed_control_steps(false).await;
+}
+
+/// Verifies snapshot-aware framed `terminal/step` ingress owns the same full
+/// divider debounce lifecycle. Iroh attach clients use this path, so release
+/// must rearm and consume the actor timer without transport-specific help.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_commits_divider_drag_for_snapshot_control_steps() {
+    assert_actor_commits_divider_drag_for_framed_control_steps(true).await;
+}
+
+/// Exercises one complete framed divider drag through the selected control
+/// ingress, including movement suppression, release rearm, and final redraw.
+async fn assert_actor_commits_divider_drag_for_framed_control_steps(snapshot_aware: bool) {
+    use crate::control::{decode_control_frame, encode_control_body};
+    use crate::storage::snapshot::SnapshotRepository;
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-framed-divider-snapshot-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let snapshots = SnapshotRepository::new(root.join("snapshots"));
+
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    assert!(
+        service
+            .apply_attached_mux_action(&primary, MuxAction::SplitPaneVertical)
+            .unwrap()
+    );
+    let border = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .mouse_border_cells
+        .into_iter()
+        .next()
+        .expect("vertical split should expose a divider");
+    let moved_column = border.column.saturating_add(3);
+    let movement = format!(
+        "\u{1b}[<0;{};{}M\u{1b}[<32;{};{}M",
+        border.column.saturating_add(1),
+        border.row.saturating_add(1),
+        moved_column.saturating_add(1),
+        border.row.saturating_add(1),
+    )
+    .into_bytes();
+    let release = format!(
+        "\u{1b}[<0;{};{}m",
+        moved_column.saturating_add(1),
+        border.row.saturating_add(1),
+    )
+    .into_bytes();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let movement_frame = encode_control_body(
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "divider-move",
+                "method": "terminal/step",
+                "params": {
+                    "idempotency_key": "divider-move",
+                    "client_size": {"columns": 80, "rows": 24},
+                    "render": true,
+                    "input_bytes": movement,
+                },
+            })
+            .to_string(),
+        );
+        let connection = ControlConnectionState::trusted_existing_client(primary.clone());
+        let moved = if snapshot_aware {
+            handle
+                .handle_control_input_for_connection_with_snapshots(
+                    movement_frame,
+                    4096,
+                    connection,
+                    snapshots.clone(),
+                )
+                .await
+        } else {
+            handle
+                .handle_control_input_for_connection(movement_frame, 4096, connection)
+                .await
+        }
+        .unwrap();
+        let (moved_body, _) = decode_control_frame(&moved.output, 4096).unwrap();
+        assert!(moved_body.contains(r#""view":null"#), "{moved_body}");
+        let movement_timers = handle.drain_timer_side_effects(8).await.unwrap();
+        let movement_key = movement_timers
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, delay_ms }
+                    if key.kind == RuntimeTimerKind::ResizeDebounce
+                        && key.owner_id == primary.as_str()
+                        && *delay_ms == 200 =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing movement debounce timer: {movement_timers:?}"));
+
+        let release_frame = encode_control_body(
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "divider-release",
+                "method": "terminal/step",
+                "params": {
+                    "idempotency_key": "divider-release",
+                    "client_size": {"columns": 80, "rows": 24},
+                    "render": true,
+                    "input_bytes": release,
+                },
+            })
+            .to_string(),
+        );
+        let released = if snapshot_aware {
+            handle
+                .handle_control_input_for_connection_with_snapshots(
+                    release_frame,
+                    4096,
+                    moved.connection,
+                    snapshots,
+                )
+                .await
+        } else {
+            handle
+                .handle_control_input_for_connection(release_frame, 4096, moved.connection)
+                .await
+        }
+        .unwrap();
+        let (released_body, _) = decode_control_frame(&released.output, 4096).unwrap();
+        assert!(released_body.contains(r#""view":null"#), "{released_body}");
+        let release_timers = handle.drain_timer_side_effects(8).await.unwrap();
+        assert!(release_timers.iter().any(
+            |effect| matches!(effect, RuntimeSideEffect::CancelTimer { key } if key == &movement_key)
+        ));
+        let release_key = release_timers
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, delay_ms }
+                    if key.kind == RuntimeTimerKind::ResizeDebounce
+                        && key.owner_id == primary.as_str()
+                        && *delay_ms == 200 =>
+                {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing release debounce timer: {release_timers:?}"));
+        assert_ne!(release_key, movement_key);
+
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Timer(TimerEvent {
+            now_ms: release_key.generation,
+            key: release_key,
+        }));
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.applied, 1);
+        let renders = handle
+            .drain_render_side_effects_for_client(primary.clone(), 8)
+            .await
+            .unwrap();
+        assert_eq!(
+            renders,
+            vec![RuntimeSideEffect::RenderClient {
+                client_id: primary,
+                reason: RenderInvalidationReason::FullRedraw,
+            }]
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies snapshot-aware framed control ingress applies the same exact-client
 /// live-overlay timer lifecycle as ordinary control ingress. Iroh control
 /// connections use this path even when a frame contains no snapshot method.

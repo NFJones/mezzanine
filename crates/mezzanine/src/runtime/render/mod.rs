@@ -421,6 +421,8 @@ pub(crate) struct RuntimePresentationComponent {
     pending_agent_presentation_resize_sizes: std::collections::BTreeMap<String, Size>,
     /// Panes whose newest resize generation still needs one worker dispatch.
     pending_agent_presentation_resize_dispatches: std::collections::BTreeSet<String>,
+    /// Exact clients whose latest divider input must rearm the actor debounce timer.
+    pending_divider_resize_debounce_clients: std::collections::HashSet<mez_core::ids::ClientId>,
     /// Installed source-backed presentation projections keyed by pane id.
     agent_presentation_projection_cache: std::collections::BTreeMap<String, (String, Size)>,
     /// Bounded decoded-source and canonical-width cache for background replay.
@@ -1237,6 +1239,8 @@ impl RuntimePresentationComponent {
                 || state.mouse_resize_drag_window_id.is_some()
                 || state.pending_divider_layout_commit.is_some()
         });
+        self.pending_divider_resize_debounce_clients
+            .remove(client_id);
         self.agent_prompt_selector_refreshes
             .retain(|(candidate, _), _| candidate != client_id);
         if self.projected_client_id.as_ref() == Some(client_id) {
@@ -1562,6 +1566,21 @@ impl RuntimePresentationComponent {
         self.pending_divider_layout_commit.take()
     }
 
+    /// Records one exact client whose latest divider action must rearm debounce.
+    pub(crate) fn request_divider_resize_debounce(&mut self, client_id: mez_core::ids::ClientId) {
+        self.pending_divider_resize_debounce_clients
+            .insert(client_id);
+    }
+
+    /// Drains coalesced exact-client divider debounce requests for the actor.
+    pub(crate) fn take_divider_resize_debounce_requests(&mut self) -> Vec<mez_core::ids::ClientId> {
+        let mut client_ids = std::mem::take(&mut self.pending_divider_resize_debounce_clients)
+            .into_iter()
+            .collect::<Vec<_>>();
+        client_ids.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        client_ids
+    }
+
     /// Clears every in-progress or released pane-divider resize operation.
     pub(crate) fn clear_mouse_resize_drag_state(&mut self) {
         self.capture_projected_client_state();
@@ -1582,6 +1601,7 @@ impl RuntimePresentationComponent {
         self.mouse_resize_drag_window_id = None;
         self.mouse_resize_drag_changed = false;
         self.pending_divider_layout_commit = None;
+        self.pending_divider_resize_debounce_clients.clear();
         self.redispatch_pending_agent_presentation_resizes();
     }
 

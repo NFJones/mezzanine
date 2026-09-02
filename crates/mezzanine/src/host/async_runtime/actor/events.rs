@@ -427,7 +427,13 @@ impl AsyncRuntimeSessionActor {
                 Ok(transition)
             }
             RuntimeTimerKind::ResizeDebounce => {
-                let active = self.timers.resize_debounce.remove(&timer.key);
+                let active = self.timers.resize_debounce.get(timer.key.owner_id.as_str())
+                    == Some(&timer.key);
+                if active {
+                    self.timers
+                        .resize_debounce
+                        .remove(timer.key.owner_id.as_str());
+                }
                 if !active {
                     self.record_ignored_timer_event();
                 }
@@ -801,7 +807,8 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn queue_deferred_pane_io_side_effects_from_service(&mut self) -> Result<usize> {
-        let side_effects = self.deferred_service_side_effects_from_service();
+        let mut side_effects = self.deferred_service_side_effects_from_service();
+        side_effects.extend(self.pending_divider_resize_debounce_timer_side_effects()?);
         let count = side_effects.len();
         self.queue_runtime_side_effects(side_effects)?;
         Ok(count)

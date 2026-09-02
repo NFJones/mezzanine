@@ -70,11 +70,7 @@ impl AsyncRuntimeSessionActor {
                 }
             }
             RuntimeTimerKind::ResizeDebounce => {
-                if scheduled {
-                    self.timers.resize_debounce.insert(key.clone());
-                } else {
-                    self.timers.resize_debounce.remove(key);
-                }
+                Self::track_owned_timer_key(&mut self.timers.resize_debounce, key, scheduled);
             }
             RuntimeTimerKind::CursorBlink => {
                 Self::track_owned_timer_key(&mut self.timers.cursor_blink, key, scheduled);
@@ -272,6 +268,55 @@ impl AsyncRuntimeSessionActor {
         let queued = side_effects.len();
         self.queue_runtime_side_effects(side_effects)?;
         Ok(queued)
+    }
+
+    /// Rearms the one actor-owned resize debounce generation for a client.
+    pub(super) fn resize_debounce_timer_side_effects(
+        &mut self,
+        client_id: &ClientId,
+    ) -> Result<Vec<RuntimeSideEffect>> {
+        let previous = self
+            .timers
+            .resize_debounce
+            .get(client_id.as_str())
+            .cloned()
+            .into_iter();
+        self.timers.next_resize_debounce_generation = self
+            .timers
+            .next_resize_debounce_generation
+            .saturating_add(1);
+        let next_key = RuntimeTimerKey::new(
+            RuntimeTimerKind::ResizeDebounce,
+            client_id.as_str(),
+            self.timers.next_resize_debounce_generation,
+        );
+        let delay_ms =
+            self.service
+                .terminal_client_loop_config(
+                    crate::host::terminal::TerminalClientLoopConfig::default(),
+                )?
+                .resize_debounce_ms
+                .max(1);
+        let mut side_effects = previous
+            .map(|key| RuntimeSideEffect::CancelTimer { key })
+            .collect::<Vec<_>>();
+        side_effects.push(RuntimeSideEffect::ScheduleTimer {
+            key: next_key,
+            delay_ms,
+        });
+        Ok(side_effects)
+    }
+
+    /// Drains coalesced divider intents into actor-owned timer effects.
+    pub(super) fn pending_divider_resize_debounce_timer_side_effects(
+        &mut self,
+    ) -> Result<Vec<RuntimeSideEffect>> {
+        let client_ids = self.service.take_divider_resize_debounce_requests();
+        let mut side_effects = Vec::new();
+        for client_id in client_ids {
+            side_effects.extend(self.resize_debounce_timer_side_effects(&client_id)?);
+        }
+        Ok(side_effects)
     }
 
     /// Runs the ensure client render timers operation for this subsystem.

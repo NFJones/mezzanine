@@ -978,6 +978,9 @@ impl AsyncRuntimeSessionActor {
                     .resize_attached_primary_terminal(&primary_client_id, size)
                     .and_then(|updates| {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
+                        let resize_timer =
+                            self.resize_debounce_timer_side_effects(&primary_client_id)?;
+                        self.queue_runtime_side_effects(resize_timer)?;
                         self.queue_shell_transaction_timer_side_effects()?;
                         Ok(updates)
                     });
