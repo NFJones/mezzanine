@@ -113,6 +113,7 @@ fn route_mouse_event(
     }
 
     let mut policy = config.mouse_policy;
+    policy.mouse_selection_active = config.mouse_selection_active;
     let pane_region = config
         .mouse_pane_regions
         .iter()

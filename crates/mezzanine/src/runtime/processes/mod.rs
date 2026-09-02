@@ -3966,7 +3966,7 @@ impl RuntimeSessionService {
         &mut self,
         side_effects: &mut Vec<RuntimeSideEffect>,
     ) {
-        let window_ids = self.presentation.deferred_divider_layout_window_ids();
+        let window_ids = self.presentation.deferred_pane_content_window_ids();
         if window_ids.is_empty() {
             return;
         }
@@ -4009,6 +4009,10 @@ impl RuntimeSessionService {
             return;
         }
         side_effects.retain(|effect| match effect {
+            RuntimeSideEffect::RenderClient {
+                reason: RenderInvalidationReason::ResizeDrag,
+                ..
+            } => true,
             RuntimeSideEffect::RenderClient { client_id, .. } => {
                 !deferred_clients.contains(client_id)
             }
@@ -4021,7 +4025,7 @@ impl RuntimeSessionService {
 
     /// Reports whether one pane belongs to geometry hidden by a divider gesture.
     fn pane_has_deferred_divider_layout(&self, pane_id: &str) -> bool {
-        let window_ids = self.presentation.deferred_divider_layout_window_ids();
+        let window_ids = self.presentation.deferred_pane_content_window_ids();
         self.session.windows().iter().any(|window| {
             window_ids.contains(window.id.as_str())
                 && window

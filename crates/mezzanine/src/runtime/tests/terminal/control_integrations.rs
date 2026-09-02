@@ -359,10 +359,11 @@ fn runtime_terminal_step_without_inline_view_invalidates_agent_prompt() {
     );
 }
 
-/// Verifies framed terminal steps never expose provisional divider geometry,
-/// even when the caller explicitly requests an inline view.
+/// Verifies framed terminal steps queue owner-only divider projections while
+/// keeping bounded inline responses free of full terminal views. Pane content
+/// remains deferred until the release debounce commits layout.
 #[test]
-fn runtime_terminal_step_defers_divider_views_until_release_debounce() {
+fn runtime_terminal_step_projects_divider_only_until_release_debounce() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -408,11 +409,12 @@ fn runtime_terminal_step_defers_divider_views_until_release_debounce() {
         2
     );
     assert!(movement["result"]["view"].is_null());
-    assert!(
-        service
-            .drain_deferred_effects_transition()
-            .side_effects
-            .is_empty()
+    assert_eq!(
+        service.drain_deferred_effects_transition().side_effects,
+        vec![RuntimeSideEffect::RenderClient {
+            client_id: primary.clone(),
+            reason: crate::runtime::RenderInvalidationReason::ResizeDrag,
+        }]
     );
 
     let release = format!(

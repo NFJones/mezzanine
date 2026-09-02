@@ -26,6 +26,7 @@ use super::{
     window_frame_action_pillbox_cells, window_frame_pillbox_cells,
     window_group_frame_pillbox_cells,
 };
+use crate::host::terminal::overlay_provisional_pane_dividers;
 
 /// Runs the apply copy mode selection spans operation for this subsystem.
 ///
@@ -256,6 +257,22 @@ impl RuntimeSessionService {
             };
         };
         if let Some(view) = self.external_editor_takeover_view(role, client_size, config, window) {
+            return Ok(Some(view));
+        }
+        if role == ClientViewRole::Primary
+            && let Some(mut view) = self.presentation.mouse_resize_drag_baseline_view.clone()
+        {
+            let plan = self.window_presentation_plan(window).ok_or_else(|| {
+                MezError::invalid_state("cannot plan a window with no visible panes")
+            })?;
+            overlay_provisional_pane_dividers(
+                &mut view,
+                &self.presentation.mouse_resize_drag_baseline_border_cells,
+                &plan.pane_geometries(),
+                plan.body_row_offset,
+                window.active_pane_index(),
+                &config.ui_theme,
+            );
             return Ok(Some(view));
         }
         let active_pane_ids = window
@@ -1045,6 +1062,28 @@ impl RuntimeSessionService {
             return Vec::new();
         };
         mouse_border_cells_for_geometries(&plan.pane_geometries(), plan.body_row_offset)
+    }
+
+    /// Captures the exact client view and divider cells visible when a resize
+    /// gesture begins so later frames can move only the divider projection.
+    pub(super) fn mouse_resize_drag_baseline(
+        &self,
+        primary_client_id: &mez_core::ids::ClientId,
+    ) -> Result<(RenderedClientView, Vec<MouseBorderCell>)> {
+        let client_size = self
+            .session
+            .clients()
+            .iter()
+            .find(|client| client.id == *primary_client_id)
+            .and_then(|client| client.terminal.as_ref())
+            .and_then(|terminal| Size::new(terminal.columns, terminal.rows).ok())
+            .unwrap_or(self.session.authoritative_size);
+        let config = self.terminal_client_loop_config(TerminalClientLoopConfig::default())?;
+        let border_cells = config.mouse_border_cells.clone();
+        let view = self
+            .render_client_view_with_resolved_config(ClientViewRole::Primary, client_size, &config)?
+            .ok_or_else(|| MezError::invalid_state("session has no renderable active window"))?;
+        Ok((view, border_cells))
     }
 
     /// Runs the active window mouse frame cells operation for this subsystem.

@@ -49,6 +49,7 @@ mod prompt;
 
 mod text;
 
+pub(crate) use dividers::overlay_provisional_pane_dividers;
 use dividers::{merged_pane_frame_boundary_style_spans, pane_divider_rendition};
 pub(crate) use frame::window_iroh_status_slot_layout;
 use frame::{

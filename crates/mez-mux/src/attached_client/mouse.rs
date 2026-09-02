@@ -82,7 +82,29 @@ pub fn classify_attached_mouse_event(
             _ => AttachedMouseAction::Ignore,
         };
     }
+    if policy.mouse_selection_active {
+        return match (event.kind, event.button) {
+            (MouseEventKind::Press, MouseButton::Left) => {
+                AttachedMouseAction::CopySelectionStart(mouse_copy_position(event))
+            }
+            (MouseEventKind::Drag, MouseButton::Left) => {
+                AttachedMouseAction::CopySelectionUpdate(mouse_copy_position(event))
+            }
+            (MouseEventKind::Release, MouseButton::Left) => {
+                AttachedMouseAction::CopySelectionFinish(mouse_copy_position(event))
+            }
+            _ => AttachedMouseAction::Ignore,
+        };
+    }
     match (event.kind, event.button) {
+        (MouseEventKind::Press | MouseEventKind::Drag, MouseButton::Left)
+            if policy.over_pane_border =>
+        {
+            AttachedMouseAction::ResizePane {
+                column: event.column,
+                row: event.row,
+            }
+        }
         (MouseEventKind::Press, MouseButton::Left) if policy.copy_mode_active => {
             AttachedMouseAction::CopySelectionStart(mouse_copy_position(event))
         }
@@ -102,14 +124,6 @@ pub fn classify_attached_mouse_event(
             AttachedMouseAction::ScrollHistory {
                 lines: 3,
                 position: mouse_copy_position(event),
-            }
-        }
-        (MouseEventKind::Press | MouseEventKind::Drag, MouseButton::Left)
-            if policy.over_pane_border =>
-        {
-            AttachedMouseAction::ResizePane {
-                column: event.column,
-                row: event.row,
             }
         }
         _ if policy.over_window_frame || policy.over_pane_border => AttachedMouseAction::Ignore,
@@ -314,6 +328,15 @@ mod tests {
         };
         assert_eq!(
             classify_attached_mouse_event(drag, copy_policy),
+            AttachedMouseAction::ResizePane { column: 4, row: 2 }
+        );
+
+        let selection_policy = MousePolicy {
+            mouse_selection_active: true,
+            ..copy_policy
+        };
+        assert_eq!(
+            classify_attached_mouse_event(drag, selection_policy),
             AttachedMouseAction::CopySelectionUpdate(CopyPosition { line: 2, column: 4 })
         );
 

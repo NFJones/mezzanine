@@ -365,6 +365,9 @@ struct RuntimeClientPresentationState {
     mouse_resize_drag_state: Option<MouseResizeDragState>,
     mouse_resize_drag_window_id: Option<String>,
     mouse_resize_drag_changed: bool,
+    mouse_resize_drag_baseline_view: Option<RenderedClientView>,
+    mouse_resize_drag_baseline_border_cells: Vec<MouseBorderCell>,
+    mouse_resize_drag_baseline_geometries: Vec<crate::runtime::PaneGeometry>,
     pending_divider_layout_commit: Option<RuntimePendingDividerLayoutCommit>,
     mouse_selection_drag_state: Option<MouseSelectionDragState>,
     last_mouse_click_state: Option<RuntimeMouseClickState>,
@@ -452,6 +455,12 @@ pub(crate) struct RuntimePresentationComponent {
     mouse_resize_drag_window_id: Option<String>,
     /// Whether the active divider gesture has changed layout geometry.
     mouse_resize_drag_changed: bool,
+    /// Exact pre-drag client view retained while only divider cells move.
+    mouse_resize_drag_baseline_view: Option<RenderedClientView>,
+    /// Absolute divider cells that must be erased from the pre-drag view.
+    mouse_resize_drag_baseline_border_cells: Vec<MouseBorderCell>,
+    /// Pane geometry represented by the retained pre-drag content projection.
+    mouse_resize_drag_baseline_geometries: Vec<crate::runtime::PaneGeometry>,
     /// Released divider outcome awaiting the client's resize debounce timer.
     pending_divider_layout_commit: Option<RuntimePendingDividerLayoutCommit>,
     /// Active mouse text-selection gesture.
@@ -1097,9 +1106,10 @@ fn presentation_render_invalidation_priority(reason: RenderInvalidationReason) -
         RenderInvalidationReason::AgentPrompt => 3,
         RenderInvalidationReason::Overlay => 4,
         RenderInvalidationReason::Configuration => 5,
-        RenderInvalidationReason::Resize => 6,
-        RenderInvalidationReason::Layout => 7,
-        RenderInvalidationReason::FullRedraw => 8,
+        RenderInvalidationReason::ResizeDrag => 6,
+        RenderInvalidationReason::Resize => 7,
+        RenderInvalidationReason::Layout => 8,
+        RenderInvalidationReason::FullRedraw => 9,
     }
 }
 
@@ -1171,6 +1181,10 @@ impl RuntimePresentationComponent {
         self.mouse_resize_drag_state = state.mouse_resize_drag_state;
         self.mouse_resize_drag_window_id = state.mouse_resize_drag_window_id;
         self.mouse_resize_drag_changed = state.mouse_resize_drag_changed;
+        self.mouse_resize_drag_baseline_view = state.mouse_resize_drag_baseline_view;
+        self.mouse_resize_drag_baseline_border_cells =
+            state.mouse_resize_drag_baseline_border_cells;
+        self.mouse_resize_drag_baseline_geometries = state.mouse_resize_drag_baseline_geometries;
         self.pending_divider_layout_commit = state.pending_divider_layout_commit;
         self.mouse_selection_drag_state = state.mouse_selection_drag_state;
         self.last_mouse_click_state = state.last_mouse_click_state;
@@ -1202,6 +1216,13 @@ impl RuntimePresentationComponent {
             mouse_resize_drag_state: self.mouse_resize_drag_state.clone(),
             mouse_resize_drag_window_id: self.mouse_resize_drag_window_id.clone(),
             mouse_resize_drag_changed: self.mouse_resize_drag_changed,
+            mouse_resize_drag_baseline_view: self.mouse_resize_drag_baseline_view.clone(),
+            mouse_resize_drag_baseline_border_cells: self
+                .mouse_resize_drag_baseline_border_cells
+                .clone(),
+            mouse_resize_drag_baseline_geometries: self
+                .mouse_resize_drag_baseline_geometries
+                .clone(),
             pending_divider_layout_commit: self.pending_divider_layout_commit.clone(),
             mouse_selection_drag_state: self.mouse_selection_drag_state.clone(),
             last_mouse_click_state: self.last_mouse_click_state.clone(),
@@ -1237,6 +1258,7 @@ impl RuntimePresentationComponent {
         let removed_deferred_divider = self.client_states.remove(client_id).is_some_and(|state| {
             state.mouse_resize_drag_state.is_some()
                 || state.mouse_resize_drag_window_id.is_some()
+                || state.mouse_resize_drag_baseline_view.is_some()
                 || state.pending_divider_layout_commit.is_some()
         });
         self.pending_divider_resize_debounce_clients
@@ -1246,6 +1268,7 @@ impl RuntimePresentationComponent {
         if self.projected_client_id.as_ref() == Some(client_id) {
             let projected_deferred_divider = self.mouse_resize_drag_state.is_some()
                 || self.mouse_resize_drag_window_id.is_some()
+                || self.mouse_resize_drag_baseline_view.is_some()
                 || self.pending_divider_layout_commit.is_some();
             self.primary_prompt_input = None;
             self.primary_prefix_key_pending = false;
@@ -1256,6 +1279,9 @@ impl RuntimePresentationComponent {
             self.mouse_resize_drag_state = None;
             self.mouse_resize_drag_window_id = None;
             self.mouse_resize_drag_changed = false;
+            self.mouse_resize_drag_baseline_view = None;
+            self.mouse_resize_drag_baseline_border_cells.clear();
+            self.mouse_resize_drag_baseline_geometries.clear();
             self.pending_divider_layout_commit = None;
             self.mouse_selection_drag_state = None;
             self.last_mouse_click_state = None;
@@ -1512,10 +1538,22 @@ impl RuntimePresentationComponent {
         &mut self,
         state: MouseResizeDragState,
         window_id: String,
+        baseline_view: RenderedClientView,
+        baseline_border_cells: Vec<MouseBorderCell>,
     ) {
+        let initial_geometries = match &state {
+            MouseResizeDragState::Vertical { geometries, .. }
+            | MouseResizeDragState::Horizontal { geometries, .. } => geometries.clone(),
+        };
+        if self.mouse_resize_drag_baseline_view.is_none() {
+            self.mouse_resize_drag_baseline_view = Some(baseline_view);
+            self.mouse_resize_drag_baseline_border_cells = baseline_border_cells;
+            self.mouse_resize_drag_baseline_geometries = initial_geometries.clone();
+        }
         self.mouse_resize_drag_state = Some(state);
         self.mouse_resize_drag_window_id = Some(window_id);
-        self.mouse_resize_drag_changed = false;
+        self.mouse_resize_drag_changed =
+            self.mouse_resize_drag_baseline_geometries != initial_geometries;
         self.pending_divider_layout_commit = None;
     }
 
@@ -1524,19 +1562,8 @@ impl RuntimePresentationComponent {
         &mut self,
         geometries: &[crate::runtime::PaneGeometry],
     ) {
-        self.mouse_resize_drag_changed =
-            self.mouse_resize_drag_state
-                .as_ref()
-                .is_some_and(|state| match state {
-                    MouseResizeDragState::Vertical {
-                        geometries: initial,
-                        ..
-                    }
-                    | MouseResizeDragState::Horizontal {
-                        geometries: initial,
-                        ..
-                    } => initial != geometries,
-                });
+        self.mouse_resize_drag_changed = self.mouse_resize_drag_state.is_some()
+            && self.mouse_resize_drag_baseline_geometries != geometries;
     }
 
     /// Releases a divider gesture into one debounce-owned commit outcome.
@@ -1563,7 +1590,13 @@ impl RuntimePresentationComponent {
     pub(crate) fn take_pending_divider_layout_commit(
         &mut self,
     ) -> Option<RuntimePendingDividerLayoutCommit> {
-        self.pending_divider_layout_commit.take()
+        let commit = self.pending_divider_layout_commit.take();
+        if commit.is_some() {
+            self.mouse_resize_drag_baseline_view = None;
+            self.mouse_resize_drag_baseline_border_cells.clear();
+            self.mouse_resize_drag_baseline_geometries.clear();
+        }
+        commit
     }
 
     /// Records one exact client whose latest divider action must rearm debounce.
@@ -1588,10 +1621,14 @@ impl RuntimePresentationComponent {
             let changed = state.mouse_resize_drag_state.is_some()
                 || state.mouse_resize_drag_window_id.is_some()
                 || state.mouse_resize_drag_changed
+                || state.mouse_resize_drag_baseline_view.is_some()
                 || state.pending_divider_layout_commit.is_some();
             state.mouse_resize_drag_state = None;
             state.mouse_resize_drag_window_id = None;
             state.mouse_resize_drag_changed = false;
+            state.mouse_resize_drag_baseline_view = None;
+            state.mouse_resize_drag_baseline_border_cells.clear();
+            state.mouse_resize_drag_baseline_geometries.clear();
             state.pending_divider_layout_commit = None;
             if changed {
                 state.presentation_revision = state.presentation_revision.saturating_add(1);
@@ -1600,6 +1637,9 @@ impl RuntimePresentationComponent {
         self.mouse_resize_drag_state = None;
         self.mouse_resize_drag_window_id = None;
         self.mouse_resize_drag_changed = false;
+        self.mouse_resize_drag_baseline_view = None;
+        self.mouse_resize_drag_baseline_border_cells.clear();
+        self.mouse_resize_drag_baseline_geometries.clear();
         self.pending_divider_layout_commit = None;
         self.pending_divider_resize_debounce_clients.clear();
         self.redispatch_pending_agent_presentation_resizes();
@@ -1615,8 +1655,8 @@ impl RuntimePresentationComponent {
         self.pending_divider_layout_commit.is_some()
     }
 
-    /// Returns windows whose provisional divider geometry must remain hidden.
-    pub(crate) fn deferred_divider_layout_window_ids(&self) -> std::collections::BTreeSet<String> {
+    /// Returns windows whose resized pane content must remain hidden until commit.
+    pub(crate) fn deferred_pane_content_window_ids(&self) -> std::collections::BTreeSet<String> {
         let mut window_ids = self
             .client_states
             .iter()

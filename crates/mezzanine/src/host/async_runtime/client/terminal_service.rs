@@ -741,9 +741,10 @@ fn client_render_invalidation_priority(reason: RenderInvalidationReason) -> u8 {
         RenderInvalidationReason::AgentPrompt => 3,
         RenderInvalidationReason::Overlay => 4,
         RenderInvalidationReason::Configuration => 5,
-        RenderInvalidationReason::Resize => 6,
-        RenderInvalidationReason::Layout => 7,
-        RenderInvalidationReason::FullRedraw => 8,
+        RenderInvalidationReason::ResizeDrag => 6,
+        RenderInvalidationReason::Resize => 7,
+        RenderInvalidationReason::Layout => 8,
+        RenderInvalidationReason::FullRedraw => 9,
     }
 }
 

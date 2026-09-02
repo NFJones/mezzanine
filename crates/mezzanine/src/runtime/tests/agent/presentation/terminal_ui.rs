@@ -3998,11 +3998,12 @@ fn runtime_agent_divider_drag_debounces_source_backed_presentation_replay() {
                 },
             )
             .unwrap();
-        assert!(
-            transition
-                .side_effects
-                .iter()
-                .all(|effect| !matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+        assert_eq!(
+            transition.side_effects,
+            vec![RuntimeSideEffect::RenderClient {
+                client_id: primary.clone(),
+                reason: RenderInvalidationReason::ResizeDrag,
+            }]
         );
     }
 

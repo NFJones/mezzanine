@@ -313,6 +313,11 @@ impl RuntimeSessionService {
                 effects.retain(|effect| !prior_effects.contains(effect));
                 effects.extend(prior_effects);
                 effects
+            } else if reason == RenderInvalidationReason::ResizeDrag {
+                vec![RuntimeSideEffect::RenderClient {
+                    client_id: primary_client_id.clone(),
+                    reason,
+                }]
             } else {
                 self.render_effects_for_primary_projection(primary_client_id, reason)
             }
@@ -359,7 +364,9 @@ impl RuntimeSessionService {
                     TerminalClientLoopAction::HandleMouse(MouseAction::FinishResizePane)
                 )
             }) && self.presentation.pending_divider_layout_commit_active();
-        if deferred_resize_drag || deferred_resize_release {
+        if deferred_resize_drag {
+            Some(RenderInvalidationReason::ResizeDrag)
+        } else if deferred_resize_release {
             None
         } else if application.full_redraw_required {
             Some(RenderInvalidationReason::FullRedraw)
@@ -955,12 +962,8 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Returns true when a mouse action can change pane geometry and therefore
-    /// needs a full attached-frame redraw after the action is applied.
+    /// Returns true when a mouse action invalidates the full attached frame.
     fn mouse_action_requires_full_redraw(action: MouseAction) -> bool {
-        matches!(
-            action,
-            MouseAction::ResizePane { .. } | MouseAction::ReleaseWindowAction { .. }
-        )
+        matches!(action, MouseAction::ReleaseWindowAction { .. })
     }
 }

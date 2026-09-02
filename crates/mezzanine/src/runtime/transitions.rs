@@ -1036,6 +1036,8 @@ pub enum RenderInvalidationReason {
         reason = "render invalidation taxonomy is handled by presentation workers"
     )]
     Configuration,
+    /// An active pane divider moved without exposing resized pane content.
+    ResizeDrag,
     /// Cursor blink phase changed and clients should repaint the cursor.
     CursorBlink,
     /// Runtime status-line fields changed.

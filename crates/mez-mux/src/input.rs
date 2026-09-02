@@ -762,6 +762,8 @@ pub struct MousePolicy {
     pub over_pane_border: bool,
     /// Whether the pointer is over a mux-managed window frame.
     pub over_window_frame: bool,
+    /// Whether an in-progress text-selection gesture owns left-button drag input.
+    pub mouse_selection_active: bool,
     /// Whether copy mode currently owns mouse input.
     pub copy_mode_active: bool,
 }

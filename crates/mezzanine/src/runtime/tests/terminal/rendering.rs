@@ -210,8 +210,10 @@ fn runtime_structural_step_targets_affected_window_projections_only() {
     assert_eq!(rendered_client_ids, vec![source, observer, same_window]);
 }
 
-/// Verifies a changed divider stays invisible through ordinary pane output and
-/// commits once to every client projecting the resized window.
+/// Verifies a changed divider is projected only to its drag owner while pane
+/// content remains frozen, then commits once to every client projecting the
+/// resized window. The owner's rendered divider and mouse hit cells must use
+/// the same live geometry throughout the deferred content redraw.
 #[test]
 fn runtime_divider_commit_targets_projecting_clients_after_debounce() {
     let mut service = test_runtime_service();
@@ -242,6 +244,15 @@ fn runtime_divider_commit_targets_projecting_clients_after_debounce() {
         .into_iter()
         .next()
         .expect("vertical split should expose a divider");
+    let baseline = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            size,
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .expect("split window should render");
+    let moved_column = border.column.saturating_add(3);
     let drag = |column| AttachedTerminalClientStepPlan {
         actions: vec![TerminalClientLoopAction::HandleMouse(
             MouseAction::ResizePane {
@@ -255,15 +266,85 @@ fn runtime_divider_commit_targets_projecting_clients_after_debounce() {
         output_hangup: false,
         error_roles: Vec::new(),
     };
-    for column in [border.column, border.column.saturating_add(3)] {
+    for column in [border.column, moved_column] {
         let (_, transition) = service
             .apply_attached_terminal_step_transition(&source, &drag(column))
             .unwrap();
-        assert!(
-            transition
-                .side_effects
-                .iter()
-                .all(|effect| !matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+        assert_eq!(
+            transition.side_effects,
+            vec![RuntimeSideEffect::RenderClient {
+                client_id: source.clone(),
+                reason: crate::runtime::RenderInvalidationReason::ResizeDrag,
+            }]
+        );
+    }
+
+    let live_config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(
+        live_config
+            .mouse_border_cells
+            .iter()
+            .any(|cell| { cell.column == moved_column && cell.row == border.row })
+    );
+    assert!(
+        !live_config
+            .mouse_border_cells
+            .iter()
+            .any(|cell| { cell.column == border.column && cell.row == border.row })
+    );
+    let live_border_press = format!(
+        "\u{1b}[<0;{};{}M",
+        moved_column.saturating_add(1),
+        border.row.saturating_add(1),
+    );
+    assert_eq!(
+        crate::host::terminal::route_client_input(live_border_press.as_bytes(), &live_config)
+            .unwrap(),
+        TerminalClientLoopAction::HandleMouse(MouseAction::ResizePane {
+            column: moved_column,
+            row: border.row,
+        })
+    );
+    let provisional = service
+        .render_client_view(ClientViewRole::Primary, size, &live_config)
+        .unwrap()
+        .expect("drag owner should receive a provisional divider view");
+    let baseline_row = &baseline.lines[usize::from(border.row)];
+    let provisional_row = &provisional.lines[usize::from(border.row)];
+    assert_eq!(
+        mez_mux::render::line_slice(
+            baseline_row,
+            usize::from(border.column),
+            usize::from(border.column).saturating_add(1),
+        ),
+        "│"
+    );
+    assert_eq!(
+        mez_mux::render::line_slice(
+            provisional_row,
+            usize::from(border.column),
+            usize::from(border.column).saturating_add(1),
+        ),
+        " "
+    );
+    assert_eq!(
+        mez_mux::render::line_slice(
+            provisional_row,
+            usize::from(moved_column),
+            usize::from(moved_column).saturating_add(1),
+        ),
+        "│"
+    );
+    for column in 0..usize::from(size.columns) {
+        if column == usize::from(border.column) || column == usize::from(moved_column) {
+            continue;
+        }
+        assert_eq!(
+            mez_mux::render::line_slice(baseline_row, column, column.saturating_add(1)),
+            mez_mux::render::line_slice(provisional_row, column, column.saturating_add(1)),
+            "non-divider content changed at column {column}"
         );
     }
 
@@ -369,6 +450,49 @@ fn runtime_divider_noop_and_disconnect_do_not_commit_layout() {
         .unwrap();
     assert!(!no_change.applied);
     assert!(no_change.side_effects.is_empty());
+
+    for column in [border.column, border.column.saturating_add(2)] {
+        service
+            .apply_attached_terminal_step_transition(
+                &primary,
+                &step(MouseAction::ResizePane {
+                    column,
+                    row: border.row,
+                }),
+            )
+            .unwrap();
+    }
+    service
+        .apply_attached_terminal_step_transition(&primary, &step(MouseAction::FinishResizePane))
+        .unwrap();
+    for column in [
+        border.column.saturating_add(2),
+        border.column.saturating_add(2),
+    ] {
+        service
+            .apply_attached_terminal_step_transition(
+                &primary,
+                &step(MouseAction::ResizePane {
+                    column,
+                    row: border.row,
+                }),
+            )
+            .unwrap();
+    }
+    service
+        .apply_attached_terminal_step_transition(&primary, &step(MouseAction::FinishResizePane))
+        .unwrap();
+    let chained_commit = service
+        .apply_resize_debounce_timer_transition(primary.as_str(), true)
+        .unwrap();
+    assert!(chained_commit.applied);
+    assert!(chained_commit.side_effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::RenderClient {
+            client_id,
+            reason: crate::runtime::RenderInvalidationReason::FullRedraw,
+        } if client_id == &primary
+    )));
 
     for column in [border.column, border.column.saturating_add(2)] {
         service

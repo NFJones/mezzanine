@@ -256,7 +256,7 @@ pub fn draw_styled_pane_dividers(
             spans.push(TerminalStyleSpan {
                 start: column,
                 length: 1,
-                rendition: if divider_cell_touches_pane(cell, geometries, active_pane_index) {
+                rendition: if pane_divider_cell_touches_pane(cell, geometries, active_pane_index) {
                     active_rendition
                 } else {
                     divider_rendition
@@ -301,7 +301,8 @@ fn merged_pane_frame_boundary_cell(
     (column_start > 0 && column.saturating_add(1) == column_start) || column == column_end
 }
 
-fn divider_cell_touches_pane(
+/// Returns whether one divider cell forms an edge of the requested pane.
+pub fn pane_divider_cell_touches_pane(
     cell: PaneDividerCell,
     geometries: &[PaneGeometry],
     pane_index: usize,

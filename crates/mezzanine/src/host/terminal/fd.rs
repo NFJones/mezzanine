@@ -350,6 +350,7 @@ impl Default for TerminalClientLoopConfig {
                 pane_resize_active: false,
                 over_pane_border: false,
                 over_window_frame: false,
+                mouse_selection_active: false,
                 copy_mode_active: false,
             },
             mouse_selection_active: false,

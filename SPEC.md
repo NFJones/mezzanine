@@ -1323,16 +1323,20 @@ fresh client-local redraw only when that measured size actually changes.
 After terminal-size changes, attached clients SHOULD wait for the configured
 `terminal.resize_debounce_ms` period before forcing one full-surface redraw.
 Pane-divider movement MUST update canonical layout geometry and pane PTY sizes
-while the pointer is held, but MUST NOT emit client presentation frames that
-expose the provisional geometry. Releasing a changed divider drag MUST restart
-that debounce period. Exactly one current post-release timer MUST consume the
-pending layout commit and issue a full redraw for the layout owner's projection
-and its observers; stale timers and timers that fire while the divider is held
-MUST be no-ops. Releasing an unchanged drag MUST NOT redraw. Ordinary pane
-output MUST NOT expose deferred divider geometry before the commit is consumed
-or superseded. The serialized runtime actor MUST own debounce generations for
-both direct attached-terminal input and framed Unix or Iroh `terminal/step`
-input; transport adapters MUST NOT maintain independent divider timer state.
+while the pointer is held. The acting client SHOULD receive rate-limited
+divider-only presentation updates during the gesture: pane content MUST remain
+at its pre-drag projection while the old divider cells are erased and the live
+divider cells are drawn. Mouse hit-testing MUST use the same live divider
+geometry presented to that client. Releasing a changed divider drag MUST
+restart that debounce period. Exactly one current post-release timer MUST
+consume the pending layout commit and issue a full redraw for the layout
+owner's projection and its observers; stale timers and timers that fire while
+the divider is held MUST be no-ops. Releasing an unchanged drag MUST NOT redraw.
+Ordinary pane output MUST NOT expose resized pane content before the commit is
+consumed or superseded. The serialized runtime actor MUST own debounce
+generations for both direct attached-terminal input and framed Unix or Iroh
+`terminal/step` input; transport adapters MUST NOT maintain independent divider
+timer state.
 The built-in default debounce MUST be `200` milliseconds.
 
 Mezzanine MUST present a cursor for the active interactive surface when that

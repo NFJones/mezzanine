@@ -295,9 +295,10 @@ pub(super) fn render_invalidation_reason_priority(reason: RenderInvalidationReas
         RenderInvalidationReason::AgentPrompt => 3,
         RenderInvalidationReason::Overlay => 4,
         RenderInvalidationReason::Configuration => 5,
-        RenderInvalidationReason::Resize => 6,
-        RenderInvalidationReason::Layout => 7,
-        RenderInvalidationReason::FullRedraw => 8,
+        RenderInvalidationReason::ResizeDrag => 6,
+        RenderInvalidationReason::Resize => 7,
+        RenderInvalidationReason::Layout => 8,
+        RenderInvalidationReason::FullRedraw => 9,
     }
 }
 

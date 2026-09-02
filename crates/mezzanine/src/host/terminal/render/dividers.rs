@@ -4,9 +4,66 @@
 //! lower divider cells to product mouse-hit records and applies configured
 //! Mezzanine theme renditions to merged frame boundaries.
 
+use mez_mux::input::MouseBorderCell;
 use mez_mux::layout::PaneGeometry;
+use mez_mux::presentation::RenderedClientView;
 use mez_mux::theme::UiTheme;
 use mez_terminal::{GraphicRendition, TerminalStyleSpan};
+
+/// Replaces the drag-start divider cells in a retained view with the current
+/// canonical divider cells, leaving all pane content at its pre-drag position.
+pub(crate) fn overlay_provisional_pane_dividers(
+    view: &mut RenderedClientView,
+    baseline_cells: &[MouseBorderCell],
+    geometries: &[PaneGeometry],
+    body_row_offset: u16,
+    active_pane_index: usize,
+    ui_theme: &UiTheme,
+) {
+    for cell in baseline_cells {
+        let row = usize::from(cell.row);
+        let column = usize::from(cell.column);
+        let Some((line, spans)) = view
+            .lines
+            .get_mut(row)
+            .zip(view.line_style_spans.get_mut(row))
+        else {
+            continue;
+        };
+        mez_mux::render::overlay_text_cells(line, column, 1, " ");
+        mez_mux::render::overlay_fixed_column_style_spans(spans, column, 1, &[]);
+    }
+
+    for cell in mez_mux::presentation::pane_divider_cells(geometries, true) {
+        let row = usize::from(cell.row.saturating_add(body_row_offset));
+        let column = usize::from(cell.column);
+        let Some((line, spans)) = view
+            .lines
+            .get_mut(row)
+            .zip(view.line_style_spans.get_mut(row))
+        else {
+            continue;
+        };
+        mez_mux::render::overlay_text_cells(line, column, 1, &cell.glyph.to_string());
+        let rendition =
+            if mez_mux::render::pane_divider_cell_touches_pane(cell, geometries, active_pane_index)
+            {
+                super::pane_border_rendition(true, ui_theme)
+            } else {
+                pane_divider_rendition(ui_theme)
+            };
+        mez_mux::render::overlay_fixed_column_style_spans(
+            spans,
+            column,
+            1,
+            &[TerminalStyleSpan {
+                start: 0,
+                length: 1,
+                rendition,
+            }],
+        );
+    }
+}
 
 /// Builds style spans for divider junctions that bound a merged pane status row.
 pub(super) fn merged_pane_frame_boundary_style_spans(

@@ -511,7 +511,8 @@ impl RuntimeSessionService {
             }
             MouseAction::ResizePane { column, row } => {
                 self.presentation.mouse_selection_drag_state = None;
-                let Some(update) = self.mouse_resize_drag_update(column, row)? else {
+                let Some(update) = self.mouse_resize_drag_update(primary_client_id, column, row)?
+                else {
                     let pane_id = self.active_pane_id()?;
                     let size = Size {
                         columns: column.saturating_add(1).max(MIN_PANE_COLUMNS),
@@ -1213,6 +1214,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn mouse_resize_drag_update(
         &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
         column: u16,
         row: u16,
     ) -> Result<Option<MouseResizeDragUpdate>> {
@@ -1228,7 +1230,14 @@ impl RuntimeSessionService {
             .active_window()
             .map(|window| window.id.to_string())
             .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
-        self.presentation.begin_mouse_resize_drag(state, window_id);
+        let (baseline_view, baseline_border_cells) =
+            self.mouse_resize_drag_baseline(primary_client_id)?;
+        self.presentation.begin_mouse_resize_drag(
+            state,
+            window_id,
+            baseline_view,
+            baseline_border_cells,
+        );
         Ok(Some(update))
     }
 

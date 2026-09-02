@@ -704,7 +704,7 @@ impl RuntimeSessionService {
         };
         let application = self.apply_attached_terminal_step_plan(primary_client_id, &step)?;
         let render_reason = self.attached_terminal_step_render_reason(&application, &step);
-        let defer_divider_render = step.actions.iter().any(|action| {
+        let defer_divider_inline_view = step.actions.iter().any(|action| {
             matches!(
                 action,
                 TerminalClientLoopAction::HandleMouse(
@@ -713,7 +713,7 @@ impl RuntimeSessionService {
             )
         }) && (self.presentation.mouse_resize_drag_active()
             || self.presentation.pending_divider_layout_commit_active());
-        let view = if !defer_divider_render
+        let view = if !defer_divider_inline_view
             && (render
                 || (render_if_changed
                     && (application.view_refresh_required || application.full_redraw_required)))
@@ -729,9 +729,15 @@ impl RuntimeSessionService {
         if view.is_none()
             && let Some(reason) = render_reason
         {
-            self.presentation.defer_render_effects(
-                self.render_effects_for_primary_projection(primary_client_id, reason),
-            );
+            let effects = if reason == RenderInvalidationReason::ResizeDrag {
+                vec![RuntimeSideEffect::RenderClient {
+                    client_id: primary_client_id.clone(),
+                    reason,
+                }]
+            } else {
+                self.render_effects_for_primary_projection(primary_client_id, reason)
+            };
+            self.presentation.defer_render_effects(effects);
         }
         let iroh_status_slot = view
             .as_ref()
