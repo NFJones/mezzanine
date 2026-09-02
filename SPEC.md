@@ -2328,13 +2328,18 @@ Mezzanine-owned wrapper commands and wrapper output MUST remain trace-only.
 While a model-authored shell command is running and raw shell output is hidden,
 Mezzanine SHOULD render the latest non-empty cleaned command-output lines as a
 transient preview block immediately below the command preview. The preview block
-MUST be bounded by `terminal.shell_output_preview_lines`, which defaults to 5.
-New command-output lines SHOULD replace that block in place instead of appending
-transcript history, and the next durable agent transcript row SHOULD clear or
-overwrite it. If a PTY read contains both a Mezzanine transaction-end marker and
-the parent shell's next prompt repaint, prompt bytes after the marker MUST NOT
-be considered command output for this transient preview. The transient preview
-SHOULD use the same muted foreground treatment as agent thinking or status text.
+MUST be bounded by `terminal.shell_output_preview_lines`, which defaults to 5,
+after grapheme-safe wrapping at the pane's current content width. Whitespace
+boundaries SHOULD be preferred, but an unbroken overflowing segment MUST be
+hard-wrapped so one logical line cannot consume more visual rows than the
+configured tail permits. New command-output lines SHOULD replace that block in
+place instead of appending transcript history, and pane resize MUST reflow the
+retained logical source before selecting the newest visual-row tail. The next
+durable agent transcript row SHOULD clear or overwrite the preview. If a PTY
+read contains both a Mezzanine transaction-end marker and the parent shell's
+next prompt repaint, prompt bytes after the marker MUST NOT be considered
+command output for this transient preview. The transient preview SHOULD use the
+same muted foreground treatment as agent thinking or status text.
 Concurrent shell previews MUST remain independently owned by their exact turn,
 action, and transaction-marker identity. The runtime actor's accepted-event order
 MUST define their first-seen display order; a newer observation MAY replace only

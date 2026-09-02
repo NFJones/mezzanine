@@ -314,7 +314,7 @@ struct RuntimeAgentShellPreview {
     first_seen_order: u64,
     /// Monotonic producer revision accepted for this owner.
     revision: u64,
-    /// Sanitized terminal-width-fitted preview rows.
+    /// Sanitized logical source rows reflowed at the current pane width.
     lines: Vec<String>,
 }
 

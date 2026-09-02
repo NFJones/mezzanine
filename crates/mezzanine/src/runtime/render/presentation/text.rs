@@ -459,6 +459,26 @@ pub(crate) fn wrap_agent_terminal_text(text: &str, columns: usize) -> Vec<String
     output
 }
 
+/// Wraps shell-output source into display rows and retains the newest row tail.
+pub(crate) fn shell_output_preview_visual_rows(
+    source_lines: &[String],
+    columns: usize,
+    max_rows: usize,
+) -> Vec<String> {
+    if max_rows == 0 {
+        return Vec::new();
+    }
+    let mut rows = source_lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .flat_map(|line| wrap_agent_terminal_text(line, columns.max(1)))
+        .collect::<Vec<_>>();
+    if rows.len() > max_rows {
+        rows.drain(..rows.len() - max_rows);
+    }
+    rows
+}
+
 /// Returns one command-preview segment using whitespace first and a hard cell
 /// boundary only when no whitespace break exists.
 pub(crate) fn take_agent_terminal_word_wrapped_segment(
@@ -489,38 +509,6 @@ pub(crate) fn take_agent_terminal_word_wrapped_segment(
             (boundary_consumed > 0)
                 .then(|| (text[..boundary_consumed].to_string(), boundary_consumed))
         })
-}
-
-/// Runs the fit agent terminal text width operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(crate) fn fit_agent_terminal_text_width(text: &str, columns: usize) -> String {
-    if agent_terminal_text_width(text) <= columns {
-        return text.to_string();
-    }
-
-    let mut width = 0usize;
-    let mut last_space_break = None;
-    for (index, grapheme) in UnicodeSegmentation::grapheme_indices(text, true) {
-        let grapheme_width = agent_terminal_grapheme_width(grapheme);
-        if width > 0 && width.saturating_add(grapheme_width) > columns {
-            break;
-        }
-        if grapheme.chars().all(char::is_whitespace) && width > 0 {
-            last_space_break = Some(index);
-        }
-        width = width.saturating_add(grapheme_width);
-        if width >= columns {
-            break;
-        }
-    }
-
-    last_space_break
-        .filter(|end| *end > 0)
-        .map(|end| text[..end].to_string())
-        .unwrap_or_else(|| text.to_string())
 }
 
 /// Bounds agent transcript presentation width to the pane width or 120 cells.
@@ -810,4 +798,38 @@ pub(super) fn rendered_line_rendition_at_merges_diff_base_with_syntax_foreground
 
     assert_eq!(rendition.foreground, syntax.foreground);
     assert!(rendition.bold);
+}
+
+/// Shell preview limits count newest display rows after whitespace or hard
+/// wrapping rather than counting the newline-delimited source rows.
+#[cfg(test)]
+#[test]
+pub(super) fn shell_output_preview_tail_counts_wrapped_visual_rows() {
+    assert_eq!(
+        shell_output_preview_visual_rows(&["alpha beta gamma".to_string()], 6, 2),
+        vec!["beta".to_string(), "gamma".to_string()]
+    );
+    assert_eq!(
+        shell_output_preview_visual_rows(&["abcdefghijkl".to_string()], 5, 2),
+        vec!["fghij".to_string(), "kl".to_string()]
+    );
+    assert_eq!(
+        shell_output_preview_visual_rows(
+            &["one".to_string(), "two".to_string(), "three".to_string()],
+            80,
+            2,
+        ),
+        vec!["two".to_string(), "three".to_string()]
+    );
+}
+
+/// Shell preview wrapping preserves grapheme clusters and uses their terminal
+/// display width before selecting the newest configured visual rows.
+#[cfg(test)]
+#[test]
+pub(super) fn shell_output_preview_tail_uses_unicode_display_width() {
+    assert_eq!(
+        shell_output_preview_visual_rows(&["界界界".to_string()], 4, 1),
+        vec!["界".to_string()]
+    );
 }

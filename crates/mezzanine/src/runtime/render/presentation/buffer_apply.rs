@@ -17,8 +17,8 @@ use super::text::{
     agent_say_text_is_displayed_patch_block, agent_terminal_label_rendition,
     append_styled_agent_terminal_line, append_styled_agent_terminal_rendered_line,
     bounded_agent_terminal_presentation_columns, bounded_command_preview_source,
-    command_preview_terminal_rendered_lines, fit_agent_terminal_text_width,
-    render_agent_markdown_body_lines, sanitized_agent_terminal_line,
+    command_preview_terminal_rendered_lines, render_agent_markdown_body_lines,
+    sanitized_agent_terminal_line, shell_output_preview_visual_rows,
     wrapped_prefixed_agent_terminal_lines,
 };
 use super::{
@@ -681,16 +681,6 @@ impl RuntimeSessionService {
                     MezError::invalid_state("resized agent presentation lineage disappeared")
                 })?;
             if let Some(mut preview) = preview_to_restore {
-                let content_columns = usize::from(size.columns)
-                    .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
-                    .max(1);
-                for state in preview.previews.values_mut() {
-                    state.lines = state
-                        .lines
-                        .iter()
-                        .map(|line| fit_agent_terminal_text_width(line, content_columns))
-                        .collect();
-                }
                 preview.installed_lineage = durable_lineage;
                 preview.baseline_screen = std::sync::Arc::new(durable_screen.clone());
                 self.presentation
@@ -2210,10 +2200,12 @@ impl RuntimeSessionService {
         let mut composite_screen = provider_screen.clone();
         if let Some(preview) = preview_presentation.as_ref() {
             let ui_theme = self.presentation.settings.ui_theme.clone();
+            let max_preview_rows = self.terminal_shell_output_preview_lines();
             Self::append_agent_shell_previews_to_screen(
                 &mut composite_screen,
                 &preview.previews,
                 &ui_theme,
+                max_preview_rows,
             )?;
         }
         let installed_lineage = self
@@ -3177,9 +3169,13 @@ impl RuntimeSessionService {
             super::super::RuntimeAgentShellPreview,
         >,
         ui_theme: &mez_mux::theme::UiTheme,
+        max_visual_rows: usize,
     ) -> Result<()> {
         let mut ordered = previews.values().collect::<Vec<_>>();
         ordered.sort_by_key(|preview| preview.first_seen_order);
+        let content_columns = usize::from(screen.size().columns)
+            .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
+            .max(1);
         let mut bytes = String::new();
         let cursor = screen.cursor_state();
         let current_line_has_content = screen
@@ -3193,7 +3189,9 @@ impl RuntimeSessionService {
         }
         let mut first_line = true;
         for preview in ordered {
-            for line in &preview.lines {
+            for line in
+                shell_output_preview_visual_rows(&preview.lines, content_columns, max_visual_rows)
+            {
                 if !first_line {
                     bytes.push_str("\r\n");
                 }
@@ -3201,7 +3199,7 @@ impl RuntimeSessionService {
                 append_styled_agent_terminal_line(
                     &mut bytes,
                     AgentTerminalPresentationStyle::Status,
-                    line,
+                    &line,
                     ui_theme,
                 );
                 bytes.push_str("\x1b[0m");
@@ -3275,10 +3273,12 @@ impl RuntimeSessionService {
         let mut presentation = presentation;
         if let Some(presentation) = presentation.as_ref() {
             let ui_theme = self.presentation.settings.ui_theme.clone();
+            let max_preview_rows = self.terminal_shell_output_preview_lines();
             Self::append_agent_shell_previews_to_screen(
                 &mut composite_screen,
                 &presentation.previews,
                 &ui_theme,
+                max_preview_rows,
             )?;
         }
         let installed_lineage = self
@@ -3319,25 +3319,10 @@ impl RuntimeSessionService {
             return Ok(());
         }
         self.ensure_current_agent_presentation_screen(pane_id)?;
-        let columns = usize::from(
-            self.agent_pane_screen(pane_id)
-                .ok_or_else(|| {
-                    MezError::invalid_state(
-                        "agent terminal presentation screen was not initialized",
-                    )
-                })?
-                .size()
-                .columns,
-        );
-        let content_columns = columns
-            .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
-            .max(1);
         let lines = lines
             .iter()
             .filter(|line| !line.trim().is_empty())
-            .map(|line| {
-                fit_agent_terminal_text_width(&sanitized_agent_terminal_line(line), content_columns)
-            })
+            .map(|line| sanitized_agent_terminal_line(line))
             .collect::<Vec<_>>();
         if lines.is_empty() {
             return Ok(());
@@ -3417,11 +3402,13 @@ impl RuntimeSessionService {
             },
         );
         let ui_theme = self.presentation.settings.ui_theme.clone();
+        let max_preview_rows = self.terminal_shell_output_preview_lines();
         let mut candidate = presentation.baseline_screen.as_ref().clone();
         Self::append_agent_shell_previews_to_screen(
             &mut candidate,
             &presentation.previews,
             &ui_theme,
+            max_preview_rows,
         )?;
         let installed_lineage = self
             .update_agent_pane_screen_preserving_interaction(pane_id, &conversation_id, candidate)
@@ -3522,10 +3509,12 @@ impl RuntimeSessionService {
             let mut candidate = presentation.baseline_screen.as_ref().clone();
             if !presentation.previews.is_empty() {
                 let ui_theme = self.presentation.settings.ui_theme.clone();
+                let max_preview_rows = self.terminal_shell_output_preview_lines();
                 Self::append_agent_shell_previews_to_screen(
                     &mut candidate,
                     &presentation.previews,
                     &ui_theme,
+                    max_preview_rows,
                 )?;
             }
             let installed_lineage = self

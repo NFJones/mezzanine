@@ -320,7 +320,7 @@ rollout](../operations/iroh-production-operations-and-rollout.md).
 | `terminal.completion_attention_flashing` | boolean | `true` | Whether completion-attention title pills alternate their attention color. |
 | `terminal.resize_debounce_ms` | integer | `200` | Milliseconds to debounce resize redraws. |
 | `terminal.render_rate_limit_fps` | integer | `30` | Maximum burst render frames per second; `0` disables render rate limiting. |
-| `terminal.shell_output_preview_lines` | integer | `5` | Maximum preview lines shown for shell-command output; must be positive. |
+| `terminal.shell_output_preview_lines` | integer | `5` | Maximum visual rows shown for each transient shell-command output preview after grapheme-safe wrapping at the current pane width; must be positive. Long unbroken output is hard-wrapped before the newest-row tail is selected. |
 | `terminal.agent_wrap_column_cap` | integer | `120` | Maximum presentation width for persisted agent logs and transcripts; must be positive. |
 | `terminal.cursor_style` | string | `"block"` | Cursor style: `block`, `underline`, or `bar`. |
 | `terminal.cursor_blink` | boolean | `false` | Whether Mezzanine-rendered cursors blink. |

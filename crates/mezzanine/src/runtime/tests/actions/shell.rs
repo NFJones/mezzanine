@@ -405,6 +405,43 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
     assert!(final_text.contains("agent: next stage"), "{final_text}");
 }
 
+/// Hidden shell output limits must count terminal visual rows after wrapping,
+/// including hard wrapping for a long source line without whitespace.
+#[test]
+fn runtime_shell_output_preview_limit_counts_visual_rows() {
+    let mut service = test_runtime_service();
+    let mut screen = TerminalScreen::new(Size::new(12, 12).unwrap(), 20).unwrap();
+    screen.feed(b"ready\n");
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service.set_agent_pane_screen("%1", conversation_id, screen);
+    let owner = crate::runtime::render::RuntimeAgentShellPreviewOwner {
+        turn_id: "turn-visual-tail".to_string(),
+        action_id: "shell-visual-tail".to_string(),
+        marker: "marker-visual-tail".to_string(),
+    };
+    let source = "x".repeat(100);
+
+    service
+        .update_agent_shell_output_preview("%1", owner.clone(), 1, std::slice::from_ref(&source))
+        .unwrap();
+
+    let visible = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    let preview_rows = visible.iter().filter(|line| line.contains('x')).count();
+    assert_eq!(preview_rows, 5, "{visible:?}");
+    assert_eq!(
+        service.agent_shell_output_previews_for_tests("%1"),
+        vec![(owner, 0, 1, vec![source])]
+    );
+}
+
 /// Verifies concurrent shell previews retain actor chronology and durable rows.
 ///
 /// Each running action owns an independent preview slot. Updating one owner

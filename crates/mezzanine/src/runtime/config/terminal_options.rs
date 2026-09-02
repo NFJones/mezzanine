@@ -352,7 +352,7 @@ pub(crate) fn runtime_terminal_render_rate_limit_fps_from_config(root: &Value) -
     })
 }
 
-/// Returns the configured hidden shell-output preview tail line count.
+/// Returns the configured hidden shell-output preview visual-row tail count.
 pub(crate) fn runtime_terminal_shell_output_preview_lines_from_config(
     root: &Value,
 ) -> Result<usize> {

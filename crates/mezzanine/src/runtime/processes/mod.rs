@@ -978,7 +978,7 @@ struct RuntimeProcessSettings {
     pane_spawn_policy: PaneSpawnPolicy,
     /// Emoji-width policy represented by the currently modeled pane screens.
     terminal_emoji_width: mez_terminal::TerminalEmojiWidth,
-    /// Hidden shell output tail lines retained in action previews.
+    /// Hidden shell output visual rows retained in each action preview.
     terminal_shell_output_preview_lines: usize,
 }
 
@@ -1920,7 +1920,7 @@ impl RuntimeSessionService {
         &self.process.settings.terminal_term
     }
 
-    /// Returns the configured transient shell-output tail line count.
+    /// Returns the configured transient shell-output visual-row tail count.
     pub(crate) fn terminal_shell_output_preview_lines(&self) -> usize {
         self.process.settings.terminal_shell_output_preview_lines
     }
