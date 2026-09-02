@@ -219,3 +219,80 @@ fn openai_responses_request_body_uses_stable_derived_prompt_cache_key() {
         execution_value["prompt_cache_key"]
     );
 }
+
+#[test]
+/// Verifies routine capability acquisition appends controller evidence without
+/// changing OpenAI's front-loaded instructions or prompt-cache lineage.
+fn capability_continuation_preserves_openai_instruction_prefix() {
+    let profile = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-test".to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+    let mut original = assemble_model_request(
+        &profile,
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "inspect the repository".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    mez_agent::append_request_state_transition(&mut original);
+    let mut continuation = mez_agent::capability_continuation_request(
+        &original,
+        &[mez_agent::CapabilityRequest {
+            capability: mez_agent::AgentCapability::Shell,
+            reason: "inspect repository state".to_string(),
+        }],
+    );
+    mez_agent::append_request_state_transition(&mut continuation);
+
+    let original_body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&original).unwrap()).unwrap();
+    let continuation_body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&continuation).unwrap()).unwrap();
+
+    assert_eq!(
+        original_body["instructions"],
+        continuation_body["instructions"]
+    );
+    assert_eq!(
+        original_body["prompt_cache_key"],
+        continuation_body["prompt_cache_key"]
+    );
+    let original_input = original_body["input"].as_array().unwrap();
+    let continuation_input = continuation_body["input"].as_array().unwrap();
+    assert_eq!(
+        original_input,
+        &continuation_input[..original_input.len()],
+        "capability continuation must append after the complete prior input"
+    );
+    assert!(
+        continuation_body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| message.to_string().contains("[capability continuation]"))
+    );
+    assert!(
+        continuation_body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| message.to_string().contains("generation=2"))
+    );
+    assert!(
+        !continuation_body["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("capability_continuation")
+    );
+}

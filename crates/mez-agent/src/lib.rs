@@ -544,6 +544,6 @@ pub use turn_ledger::{AgentTurnLedger, AgentTurnRecord};
 pub use turn_runner::{
     AgentTurnEnvironment, AgentTurnLimits, AgentTurnProviderFailure,
     DEFAULT_AGENT_TURN_INTERACTION_LIMIT, DEFAULT_MAAP_REPAIR_ATTEMPT_LIMIT,
-    apply_model_request_control, run_agent_turn_async, run_agent_turn_async_with_limits,
-    select_model_interaction_kind,
+    append_request_state_transition, apply_model_request_control, run_agent_turn_async,
+    run_agent_turn_async_with_limits, select_model_interaction_kind,
 };

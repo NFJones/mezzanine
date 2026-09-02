@@ -204,6 +204,7 @@ pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
             )));
         }
         provider_interactions = provider_interactions.saturating_add(1);
+        append_request_state_transition(&mut request);
         let response_request = request.clone();
         let mut response = match environment.send_request(&request).await {
             Ok(response) => response,
@@ -462,6 +463,58 @@ pub fn apply_model_request_control(
     if let Some(interaction_kind) = interaction_kind {
         select_model_interaction_kind(request, interaction_kind);
     }
+}
+
+/// Appends the authoritative action surface as an immutable chronological
+/// transition when it differs from the latest state already sent this turn.
+///
+/// Provider loops call this immediately before each concrete request. Because
+/// continuations clone the prior request, earlier generations remain in place
+/// and the newly authoritative state extends rather than rewrites the
+/// provider-visible input.
+pub fn append_request_state_transition(request: &mut ModelRequest) {
+    const REQUEST_STATE_HEADER: &str = "[Mezzanine request state]";
+
+    if !request.interaction_kind.expects_maap_batch() {
+        return;
+    }
+    let state = format!(
+        "interaction_kind={}\nallowed_actions={}",
+        request.interaction_kind.as_str(),
+        request.allowed_actions.action_type_names().join(",")
+    );
+    let latest_state = request.messages.iter().rev().find(|message| {
+        message.source == crate::ContextSourceKind::RuntimeHint
+            && message.placement == crate::ContextPlacement::ConversationAppend
+            && message.content.starts_with(REQUEST_STATE_HEADER)
+    });
+    if latest_state.is_some_and(|message| message.content.ends_with(&state)) {
+        return;
+    }
+    let generation = request
+        .messages
+        .iter()
+        .filter(|message| {
+            message.source == crate::ContextSourceKind::RuntimeHint
+                && message.placement == crate::ContextPlacement::ConversationAppend
+                && message.content.starts_with(REQUEST_STATE_HEADER)
+        })
+        .count()
+        .saturating_add(1);
+    let insert_at = request
+        .messages
+        .iter()
+        .position(|message| message.placement == crate::ContextPlacement::EphemeralTail)
+        .unwrap_or(request.messages.len());
+    request.messages.insert(
+        insert_at,
+        ModelMessage {
+            role: crate::ModelMessageRole::Context,
+            source: crate::ContextSourceKind::RuntimeHint,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: format!("{REQUEST_STATE_HEADER}\ngeneration={generation}\n{state}"),
+        },
+    );
 }
 
 /// Applies one controller-owned exceptional interaction before provider gates

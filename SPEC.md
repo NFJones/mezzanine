@@ -4681,11 +4681,15 @@ and MUST NOT manufacture a late user restatement.
 Capability continuation, MAAP repair, output-limit retry, failure summary,
 routed handoff and repair, routed presentation and failure explanation,
 auto-sizing, and macro judging MUST be represented by typed interaction modes.
-Mode-static behavioral rules belong in the mode's system instruction profile;
-dynamic errors and prior output belong in chronological evidence or one bounded
-factual live-state block. The runtime MUST replace older state for the same
-mode rather than accumulate retry prompts. Context diagnostics MUST label the
-intentional instruction-profile change as an expected cache break.
+Mode-static behavioral rules for exceptional repair, retry, routing, and
+summary requests belong in the mode's system instruction profile; dynamic
+errors and prior output belong in chronological evidence or one bounded factual
+live-state block. Routine capability-continuation guidance MUST instead append
+with the accepted controller decision so capability acquisition does not alter
+the conversation's front-loaded instruction profile. The runtime MUST replace
+older state for the same exceptional mode rather than accumulate retry prompts.
+Context diagnostics MUST label only intentional instruction-profile changes as
+expected cache breaks; capability continuation is not such a break.
 An accepted capability decision MUST become a neutral controller-evidence event
 at its actual occurrence boundary before the assistant action response it
 enabled. It MUST NOT become a late task prelude, direct-user message, or

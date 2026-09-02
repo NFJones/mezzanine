@@ -323,7 +323,13 @@ pub fn capability_continuation_request(
         lines.join("\n")
     };
     select_model_interaction_kind(&mut request, ModelInteractionKind::CapabilityContinuation);
-    append_chronological_controller_evidence(&mut request, content);
+    let instruction = ModelInteractionKind::CapabilityContinuation
+        .chronological_instruction()
+        .unwrap_or_default();
+    append_chronological_controller_evidence(
+        &mut request,
+        format!("[capability continuation]\n{instruction}\n{content}"),
+    );
     request
 }
 
@@ -705,7 +711,8 @@ mod tests {
     }
 
     /// A granted capability continuation preserves request identity, exposes
-    /// the corresponding actions, and records the deterministic decision.
+    /// the corresponding actions, and records the deterministic decision
+    /// without changing the cache-sensitive instruction prefix.
     #[test]
     fn capability_continuation_exposes_granted_actions_and_context() {
         let original = request();
@@ -738,14 +745,25 @@ mod tests {
                 .last()
                 .unwrap()
                 .content
+                .contains("[capability continuation]")
+        );
+        assert!(
+            continuation
+                .messages
+                .last()
+                .unwrap()
+                .content
                 .contains("[controller capability decision]")
         );
-        assert!(continuation.messages.iter().any(|message| {
-            message.placement == crate::ContextPlacement::StablePrefix
-                && message
-                    .content
-                    .contains("[Mezzanine interaction mode: capability_continuation]")
+        assert!(!continuation.messages.iter().any(|message| {
+            message
+                .content
+                .contains("[Mezzanine interaction mode: capability_continuation]")
         }));
+        assert_eq!(
+            ModelInteractionKind::CapabilityContinuation.expected_cache_break_reason(),
+            None
+        );
     }
 
     /// A disallowed executable action is converted into capability routing when

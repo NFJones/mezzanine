@@ -114,9 +114,7 @@ impl ModelInteractionKind {
     /// interactions that share the ordinary MAAP response envelope.
     pub fn system_instruction(self) -> Option<&'static str> {
         match self {
-            ModelInteractionKind::CapabilityContinuation => Some(
-                "Continue the active task using the appended controller capability decisions and the currently allowed action surface. Do not repeat the capability request or describe the controller negotiation unless it affects the user-facing result.",
-            ),
+            ModelInteractionKind::CapabilityContinuation => None,
             ModelInteractionKind::MaapRepair => Some(
                 "The previous provider response failed MAAP validation before any action executed. Return exactly one corrected MAAP action batch on the currently allowed surface. Do not mention the repair process to the user.",
             ),
@@ -150,11 +148,10 @@ impl ModelInteractionKind {
     /// request's stable instruction profile.
     pub fn expected_cache_break_reason(self) -> Option<&'static str> {
         match self {
-            ModelInteractionKind::CapabilityDecision | ModelInteractionKind::ActionExecution => {
-                None
-            }
-            ModelInteractionKind::CapabilityContinuation
-            | ModelInteractionKind::MaapRepair
+            ModelInteractionKind::CapabilityDecision
+            | ModelInteractionKind::ActionExecution
+            | ModelInteractionKind::CapabilityContinuation => None,
+            ModelInteractionKind::MaapRepair
             | ModelInteractionKind::AutoSizing
             | ModelInteractionKind::MacroJudge
             | ModelInteractionKind::SandboxFailureAssessment
@@ -164,6 +161,17 @@ impl ModelInteractionKind {
             | ModelInteractionKind::RoutedPresentation
             | ModelInteractionKind::RoutedFailureExplanation
             | ModelInteractionKind::FailureSummary => Some(self.as_str()),
+        }
+    }
+
+    /// Returns mode guidance that belongs at the chronological transition
+    /// boundary instead of in the cache-sensitive system instruction prefix.
+    pub fn chronological_instruction(self) -> Option<&'static str> {
+        match self {
+            ModelInteractionKind::CapabilityContinuation => Some(
+                "Continue the active task using the appended controller capability decisions and the currently allowed action surface. Do not repeat the capability request or describe the controller negotiation unless it affects the user-facing result.",
+            ),
+            _ => None,
         }
     }
 }
