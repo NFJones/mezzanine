@@ -127,10 +127,13 @@ contributes to exactly one of completed, cancelled, or failed. These
 diagnostics intentionally omit cookies, route tokens, local display targets,
 authority paths, and X11 bytes.
 `authority_repair_pending = true` means logical route ownership has already
-been revoked but the private Xauthority file could not be atomically replaced;
+been revoked while deferred empty-authority publication is still running or
+the private Xauthority file could not be atomically replaced. A brief pending
+interval immediately after detach or revocation is expected. If it persists,
 repair the session Xauthority directory or storage. A later successful route
 publication clears the flag, while `authority_publication_failures` retains the
-aggregate failure count.
+aggregate failure count. Detach acknowledgement and stream cancellation do not
+wait for this durability work.
 
 The attaching client also appends the exact local relay error to
 `~/.config/mezzanine/x11-client.diagnostics.log`. The file is owner-private,

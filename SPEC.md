@@ -3181,11 +3181,16 @@ path before any initial or restored pane process starts. It MUST expose a
 stable TCP-loopback `DISPLAY` and stable `XAUTHORITY` path to every pane process
 for the session, with directory mode 0700 and file mode 0600. No-route state
 MUST publish no usable credential and reject new proxy sockets. Route changes
-MUST atomically replace the authority file. Detach, control or transport loss,
-trust or lease revocation, takeover, and session shutdown MUST immediately
-prevent new connections and close streams from the old generation. Reattach
-MUST preserve server paths but rotate fake credentials, generation, and token;
-established streams MUST NOT migrate.
+MUST atomically replace the authority file. Logical revocation and stream
+cancellation MUST complete without waiting for authority-file durability;
+empty-authority publication MAY finish asynchronously after the detach or
+revocation acknowledgement. While publication is pending or has failed,
+diagnostics MUST report repair-pending state, and serialized stale cleanup MUST
+NOT overwrite a newer generation's credential. Detach, control or transport
+loss, trust or lease revocation, takeover, and session shutdown MUST
+immediately prevent new connections and close streams from the old generation.
+Reattach MUST preserve server paths but rotate fake credentials, generation,
+and token; established streams MUST NOT migrate.
 
 The version 2 Iroh application-frame foundation MUST map `zstd` to ALPN
 `mezzanine/transport/2/zstd`, `lz4` to

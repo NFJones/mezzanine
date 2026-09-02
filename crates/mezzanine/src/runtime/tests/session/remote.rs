@@ -45,6 +45,25 @@ fn request(
     serde_json::from_str(&body).unwrap()
 }
 
+/// Waits for deferred Xauthority repair after logical route ownership ended.
+async fn wait_for_empty_x11_authority(
+    proxy: &crate::runtime::x11::RuntimeX11ProxyHandle,
+    authority_path: &std::path::Path,
+) {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if !proxy.diagnostics().authority_repair_pending
+                && fs::read(authority_path).is_ok_and(|authority| authority.is_empty())
+            {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("deferred X11 authority repair should complete promptly");
+}
+
 /// Initializes one host-routed-style primary with a connection-owned X11
 /// route and publishes that route through the same post-flush lease boundary
 /// used by the concrete Iroh adapters.
@@ -688,7 +707,7 @@ async fn runtime_x11_route_tracks_rpc_self_detach_not_targeted_detach() {
         Some(&serde_json::json!(true))
     );
     assert!(!proxy_handle.diagnostics().route_active);
-    assert_eq!(fs::read(&authority_path).unwrap(), Vec::<u8>::new());
+    wait_for_empty_x11_authority(&proxy_handle, &authority_path).await;
 
     let mut replacement = initialized_x11_primary(
         &mut service,
@@ -736,7 +755,7 @@ async fn runtime_x11_route_ends_on_interactive_detach_step() {
         "{detached}"
     );
     assert!(!proxy_handle.diagnostics().route_active);
-    assert_eq!(fs::read(&authority_path).unwrap(), Vec::<u8>::new());
+    wait_for_empty_x11_authority(&proxy_handle, &authority_path).await;
     assert!(!owner.deactivate_x11_route().unwrap());
 
     drop(proxy);

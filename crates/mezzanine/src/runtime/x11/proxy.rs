@@ -359,6 +359,7 @@ impl RuntimeX11ProxyHandle {
                 "the session already has an active X11 route owner",
             ));
         }
+        let mut replaced_route = false;
         if let Some(current) = routes.current.take() {
             current.cancellation.send_replace(true);
             self.inner
@@ -370,7 +371,7 @@ impl RuntimeX11ProxyHandle {
                 .route_active
                 .store(false, Ordering::Relaxed);
             drop(current);
-            self.publish_empty_authority()?;
+            replaced_route = true;
         }
         routes.next_generation = routes
             .next_generation
@@ -390,6 +391,9 @@ impl RuntimeX11ProxyHandle {
             cancellation: watch::channel(false).0,
         });
         drop(routes);
+        if replaced_route {
+            self.schedule_empty_authority_publication();
+        }
 
         let result = X11ForwardingResult {
             version: X11_FORWARDING_VERSION,
@@ -414,22 +418,55 @@ impl RuntimeX11ProxyHandle {
         generation: u64,
         transport: Option<RuntimeX11ActiveTransport>,
     ) -> Result<()> {
+        let _publication = self.inner.authority_io.lock().map_err(|_| {
+            MezError::invalid_state("session X11 authority publication is unavailable")
+        })?;
+        let fake_cookie = {
+            let routes = self.inner.routes.lock().map_err(|_| {
+                MezError::invalid_state("session X11 route registry is unavailable")
+            })?;
+            let route = routes.current.as_ref().ok_or_else(|| {
+                MezError::invalid_state("session X11 route reservation is no longer current")
+            })?;
+            if route.generation != generation || &route.owner != owner {
+                return Err(MezError::conflict(
+                    "session X11 route ownership changed before activation",
+                ));
+            }
+            if route.active {
+                return Ok(());
+            }
+            route.fake_cookie.clone()
+        };
+        let publication = write_private_xauthority(
+            &self.inner.authority_path,
+            self.inner.display_number,
+            &fake_cookie,
+        );
+        if publication.is_err() {
+            self.record_authority_publication(&publication);
+            return publication;
+        }
         let mut routes =
             self.inner.routes.lock().map_err(|_| {
                 MezError::invalid_state("session X11 route registry is unavailable")
             })?;
-        let route = routes.current.as_mut().ok_or_else(|| {
-            MezError::invalid_state("session X11 route reservation is no longer current")
-        })?;
+        let Some(route) = routes.current.as_mut() else {
+            drop(routes);
+            self.mark_authority_repair_pending();
+            self.schedule_empty_authority_publication();
+            return Err(MezError::invalid_state(
+                "session X11 route reservation ended during activation",
+            ));
+        };
         if route.generation != generation || &route.owner != owner {
+            drop(routes);
+            self.mark_authority_repair_pending();
+            self.schedule_empty_authority_publication();
             return Err(MezError::conflict(
-                "session X11 route ownership changed before activation",
+                "session X11 route ownership changed during activation",
             ));
         }
-        if route.active {
-            return Ok(());
-        }
-        self.publish_route_authority(&route.fake_cookie)?;
         route.transport = transport;
         route.active = true;
         self.inner
@@ -440,6 +477,8 @@ impl RuntimeX11ProxyHandle {
             .diagnostics
             .route_active
             .store(true, Ordering::Relaxed);
+        drop(routes);
+        self.record_authority_publication(&publication);
         Ok(())
     }
 
@@ -473,26 +512,98 @@ impl RuntimeX11ProxyHandle {
             .route_active
             .store(false, Ordering::Relaxed);
         drop(route);
-        self.publish_empty_authority()?;
+        drop(routes);
+        self.schedule_empty_authority_publication();
         Ok(true)
     }
 
-    /// Publishes an empty authority database and records whether repair is needed.
-    fn publish_empty_authority(&self) -> Result<()> {
-        let result = write_empty_private_xauthority(&self.inner.authority_path);
+    /// Queues empty authority publication without delaying route revocation.
+    fn schedule_empty_authority_publication(&self) {
+        self.mark_authority_repair_pending();
+        let should_spawn = match self.inner.authority_publication.lock() {
+            Ok(mut publication) => {
+                publication.empty_pending = true;
+                if publication.worker_running {
+                    false
+                } else {
+                    publication.worker_running = true;
+                    true
+                }
+            }
+            Err(_) => {
+                self.record_authority_publication(&Err(MezError::invalid_state(
+                    "session X11 authority publication state is unavailable",
+                )));
+                false
+            }
+        };
+        if !should_spawn {
+            return;
+        }
+        let handle = self.clone();
+        if std::thread::Builder::new()
+            .name("mez-x11-authority".to_string())
+            .spawn(move || handle.run_empty_authority_publication_worker())
+            .is_err()
+        {
+            if let Ok(mut publication) = self.inner.authority_publication.lock() {
+                publication.worker_running = false;
+            }
+            self.record_authority_publication(&Err(MezError::invalid_state(
+                "session X11 authority publication worker could not start",
+            )));
+        }
+    }
+
+    /// Coalesces queued empty publications and skips stale work after activation.
+    fn run_empty_authority_publication_worker(&self) {
+        loop {
+            let pending = match self.inner.authority_publication.lock() {
+                Ok(mut publication) if publication.empty_pending => {
+                    publication.empty_pending = false;
+                    true
+                }
+                Ok(mut publication) => {
+                    publication.worker_running = false;
+                    false
+                }
+                Err(_) => false,
+            };
+            if !pending {
+                return;
+            }
+            let _ = self.publish_empty_authority_if_route_inactive();
+        }
+    }
+
+    /// Publishes empty state only while no serialized activation is current.
+    fn publish_empty_authority_if_route_inactive(&self) -> Result<()> {
+        let _publication = self.inner.authority_io.lock().map_err(|_| {
+            MezError::invalid_state("session X11 authority publication is unavailable")
+        })?;
+        let route_is_active = self
+            .inner
+            .routes
+            .lock()
+            .map_err(|_| MezError::invalid_state("session X11 route registry is unavailable"))?
+            .current
+            .as_ref()
+            .is_some_and(|route| route.active);
+        let result = if route_is_active {
+            Ok(())
+        } else {
+            write_empty_private_xauthority(&self.inner.authority_path)
+        };
         self.record_authority_publication(&result);
         result
     }
 
-    /// Publishes one active route credential and records whether repair is needed.
-    fn publish_route_authority(&self, cookie: &X11Cookie) -> Result<()> {
-        let result = write_private_xauthority(
-            &self.inner.authority_path,
-            self.inner.display_number,
-            cookie,
-        );
-        self.record_authority_publication(&result);
-        result
+    /// Marks published authority state stale before deferred repair begins.
+    fn mark_authority_repair_pending(&self) {
+        self.inner
+            .diagnostics
+            .authority_repair_pending
+            .store(true, Ordering::Relaxed);
     }
 
     /// Updates privacy-safe publication health without retaining error details.
@@ -545,9 +656,20 @@ struct RuntimeX11ProxyState {
     display: String,
     display_number: u16,
     authority_path: PathBuf,
+    directory: PathBuf,
+    base_directory: PathBuf,
     policy: RuntimeIrohX11Policy,
     routes: Mutex<RuntimeX11RouteRegistry>,
+    authority_io: Mutex<()>,
+    authority_publication: Mutex<RuntimeX11AuthorityPublicationState>,
     diagnostics: Arc<RuntimeX11ProxyDiagnostics>,
+}
+
+impl Drop for RuntimeX11ProxyState {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+        let _ = fs::remove_dir(&self.base_directory);
+    }
 }
 
 /// Session-local generation counter and optional current owner.
@@ -555,6 +677,13 @@ struct RuntimeX11ProxyState {
 struct RuntimeX11RouteRegistry {
     next_generation: u64,
     current: Option<RuntimeX11RouteState>,
+}
+
+/// Coalesced deferred authority repair state independent from route ownership.
+#[derive(Default)]
+struct RuntimeX11AuthorityPublicationState {
+    empty_pending: bool,
+    worker_running: bool,
 }
 
 /// Reserved or active route state. Secret fields retain redacted `Debug` behavior.
@@ -594,8 +723,6 @@ struct RuntimeX11ActiveRoute {
 pub(crate) struct RuntimeX11Proxy {
     listener: tokio::net::TcpListener,
     handle: RuntimeX11ProxyHandle,
-    directory: PathBuf,
-    base_directory: PathBuf,
 }
 
 impl fmt::Debug for RuntimeX11Proxy {
@@ -646,17 +773,16 @@ impl RuntimeX11Proxy {
                 display: format!("127.0.0.1:{display_number}.0"),
                 display_number,
                 authority_path,
+                directory,
+                base_directory,
                 policy,
                 routes: Mutex::new(RuntimeX11RouteRegistry::default()),
+                authority_io: Mutex::new(()),
+                authority_publication: Mutex::new(RuntimeX11AuthorityPublicationState::default()),
                 diagnostics: Arc::new(RuntimeX11ProxyDiagnostics::default()),
             }),
         };
-        Ok(Self {
-            listener,
-            handle,
-            directory,
-            base_directory,
-        })
+        Ok(Self { listener, handle })
     }
 
     /// Returns the stable runtime handle retained after the listener is moved.
@@ -825,6 +951,20 @@ async fn relay_server_x11_socket(
 
     let (mut local_read, mut local_write) = local.into_split();
     let stopped = send.stopped();
+    let stopped_with_error = async {
+        match stopped.await {
+            Ok(Some(code)) => {
+                match u32::try_from(code.into_inner())
+                    .ok()
+                    .and_then(X11StreamFailureStage::from_application_code)
+                {
+                    Some(stage) => stage,
+                    None => std::future::pending::<X11StreamFailureStage>().await,
+                }
+            }
+            Ok(None) | Err(_) => std::future::pending::<X11StreamFailureStage>().await,
+        }
+    };
     let relay = async move {
         let upstream = async {
             let result = upstream_encoder
@@ -861,13 +1001,7 @@ async fn relay_server_x11_socket(
         result = relay => result
             .map(|()| RuntimeX11StreamOutcome::Completed)
             .map_err(|error| ServerX11RelayFailure::new(Stage::HostRelay, error)),
-        stopped = stopped => {
-            let stage = stopped
-                .ok()
-                .flatten()
-                .and_then(|code| u32::try_from(code.into_inner()).ok())
-                .and_then(X11StreamFailureStage::from_application_code)
-                .unwrap_or(Stage::Unknown);
+        stage = stopped_with_error => {
             Err(ServerX11RelayFailure::new(
                 stage,
                 MezError::invalid_state(format!(
@@ -921,13 +1055,6 @@ async fn wait_for_route_cancellation(cancellation: &mut watch::Receiver<bool>) {
         return;
     }
     let _ = cancellation.changed().await;
-}
-
-impl Drop for RuntimeX11Proxy {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.directory);
-        let _ = fs::remove_dir(&self.base_directory);
-    }
 }
 
 /// Binds the first available display in the arithmetic-safe proxy range.
@@ -1033,6 +1160,7 @@ mod tests {
 
         task.abort();
         let _ = task.await;
+        drop(handle);
         assert!(!directory.exists());
         let _ = fs::remove_dir_all(root);
     }
@@ -1129,6 +1257,7 @@ mod tests {
             .reserve_route(second_owner.clone(), route_offer([0x22; 16], true))
             .unwrap();
         assert!(second_result.generation > first_result.generation);
+        wait_for_proxy_metrics(&handle, |metrics| !metrics.authority_repair_pending).await;
         assert_eq!(fs::read(handle.authority_path()).unwrap(), Vec::<u8>::new());
         assert_eq!(handle.diagnostics().route_takeovers, 1);
         assert!(!handle.diagnostics().route_active);
@@ -1142,6 +1271,7 @@ mod tests {
         drop(second_lease);
         assert!(handle.route_is_active(&second_owner, second_result.generation));
         drop(retained);
+        wait_for_proxy_metrics(&handle, |metrics| !metrics.authority_repair_pending).await;
         assert_eq!(fs::read(handle.authority_path()).unwrap(), Vec::<u8>::new());
         assert_eq!(handle.diagnostics().route_deactivations, 1);
         assert!(!handle.diagnostics().route_active);
@@ -1176,11 +1306,14 @@ mod tests {
 
         fs::remove_file(handle.authority_path()).unwrap();
         fs::create_dir(handle.authority_path()).unwrap();
-        let error = first_lease.deactivate().unwrap_err();
-        assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+        assert!(first_lease.deactivate().unwrap());
         assert!(*cancellation.borrow_and_update());
         assert!(!handle.diagnostics().route_active);
         assert!(handle.diagnostics().authority_repair_pending);
+        wait_for_proxy_metrics(&handle, |metrics| {
+            metrics.authority_publication_failures == 1
+        })
+        .await;
         assert_eq!(handle.diagnostics().authority_publication_failures, 1);
         assert!(handle.inner.routes.lock().unwrap().current.is_none());
 
@@ -1199,8 +1332,62 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// Failed takeover publication must leave the old generation cancelled
-    /// and no replacement owner registered until storage has been repaired.
+    /// Logical revocation must not wait for authority I/O, and delayed empty
+    /// publication must never overwrite a replacement generation's cookie.
+    #[tokio::test]
+    async fn deactivation_does_not_wait_for_stalled_authority_publication() {
+        let root = test_root("deactivation-stalled-publication");
+        let proxy = RuntimeX11Proxy::prepare(&root).unwrap();
+        let handle = proxy.handle();
+        let owner = route_owner("client-stalled", "connection-stalled");
+        let (_route, lease) = handle
+            .reserve_route(owner, route_offer([0x35; 16], false))
+            .unwrap();
+        lease.activate_without_transport().unwrap();
+        let mut cancellation = handle
+            .inner
+            .routes
+            .lock()
+            .unwrap()
+            .current
+            .as_ref()
+            .unwrap()
+            .cancellation
+            .subscribe();
+
+        let authority_io = handle.inner.authority_io.lock().unwrap();
+        let started = std::time::Instant::now();
+        assert!(lease.deactivate().unwrap());
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "logical revocation waited for authority publication: {:?}",
+            started.elapsed()
+        );
+        assert!(*cancellation.borrow_and_update());
+        assert!(!handle.diagnostics().route_active);
+        assert!(handle.diagnostics().authority_repair_pending);
+        assert!(handle.inner.routes.lock().unwrap().current.is_none());
+        assert!(!fs::read(handle.authority_path()).unwrap().is_empty());
+
+        let replacement_owner = route_owner("client-replacement", "connection-replacement");
+        let (replacement_route, replacement_lease) = handle
+            .reserve_route(replacement_owner.clone(), route_offer([0x36; 16], false))
+            .unwrap();
+        drop(authority_io);
+        replacement_lease.activate_without_transport().unwrap();
+        wait_for_proxy_metrics(&handle, |metrics| !metrics.authority_repair_pending).await;
+        assert!(handle.route_is_active(&replacement_owner, replacement_route.generation));
+        let authority = fs::read(handle.authority_path()).unwrap();
+        assert!(authority.ends_with(&[0x36; 16]));
+
+        assert!(replacement_lease.deactivate().unwrap());
+        wait_for_proxy_metrics(&handle, |metrics| !metrics.authority_repair_pending).await;
+        drop(proxy);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Failed takeover activation must leave the old generation cancelled and
+    /// allow the inactive replacement reservation to be revoked after repair.
     #[tokio::test]
     async fn takeover_failure_leaves_no_owner_and_recovers_after_repair() {
         let root = test_root("takeover-publication-failure");
@@ -1215,24 +1402,26 @@ mod tests {
 
         fs::remove_file(handle.authority_path()).unwrap();
         fs::create_dir(handle.authority_path()).unwrap();
-        let error = handle
+        let (_second_result, second_lease) = handle
             .reserve_route(second_owner.clone(), route_offer([0x42; 16], true))
-            .unwrap_err();
+            .unwrap();
+        let error = second_lease.activate_without_transport().unwrap_err();
         assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
         assert!(!handle.diagnostics().route_active);
         assert_eq!(handle.diagnostics().route_takeovers, 1);
         assert!(handle.diagnostics().authority_repair_pending);
-        assert!(handle.inner.routes.lock().unwrap().current.is_none());
         assert!(!first_lease.deactivate().unwrap());
+        assert!(second_lease.deactivate().unwrap());
+        assert!(handle.inner.routes.lock().unwrap().current.is_none());
 
         fs::remove_dir(handle.authority_path()).unwrap();
-        let (_second_result, second_lease) = handle
+        let (_repaired_result, repaired_lease) = handle
             .reserve_route(second_owner, route_offer([0x42; 16], false))
             .unwrap();
-        second_lease.activate_without_transport().unwrap();
+        repaired_lease.activate_without_transport().unwrap();
         assert!(handle.diagnostics().route_active);
         assert!(!handle.diagnostics().authority_repair_pending);
-        second_lease.deactivate().unwrap();
+        repaired_lease.deactivate().unwrap();
 
         drop(proxy);
         let _ = fs::remove_dir_all(root);
